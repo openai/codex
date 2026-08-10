@@ -349,6 +349,7 @@ fn install_remote_plugin(client: &mut CodexClient, plugin: &RemotePluginExpectat
             params: PluginInstallParams {
                 marketplace_path: None,
                 remote_marketplace_name: Some(plugin.marketplace_name.clone()),
+                install_attempt_id: None,
                 plugin_name: plugin.remote_plugin_id.clone(),
             },
         },

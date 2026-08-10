@@ -1479,13 +1479,18 @@ impl PluginRequestProcessor {
         let PluginInstallParams {
             marketplace_path,
             remote_marketplace_name,
+            install_attempt_id,
             plugin_name,
         } = params;
         let marketplace_path = match (marketplace_path, remote_marketplace_name) {
             (Some(marketplace_path), None) => marketplace_path,
             (None, Some(remote_marketplace_name)) => {
                 return self
-                    .remote_plugin_install_response(remote_marketplace_name, plugin_name)
+                    .remote_plugin_install_response(
+                        remote_marketplace_name,
+                        plugin_name,
+                        install_attempt_id,
+                    )
                     .await;
             }
             (Some(_), Some(_)) | (None, None) => {
@@ -1580,6 +1585,7 @@ impl PluginRequestProcessor {
         &self,
         remote_marketplace_name: String,
         remote_plugin_id: String,
+        install_attempt_id: Option<String>,
     ) -> Result<PluginInstallResponse, JSONRPCErrorError> {
         let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
         if !config.features.enabled(Feature::Plugins) {
@@ -1701,13 +1707,24 @@ impl PluginRequestProcessor {
         // Cache first so a backend install cannot succeed when local materialization fails.
         // If this backend call fails, the cache entry is harmless because remote installed state
         // is still backend-gated.
-        let install_result = codex_core_plugins::remote::install_remote_plugin(
-            &remote_plugin_service_config,
-            auth.as_ref(),
-            &actual_remote_marketplace_name,
-            &remote_plugin_id,
-        )
-        .await
+        let install_result = if let Some(install_attempt_id) = install_attempt_id.as_deref() {
+            codex_core_plugins::remote::install_remote_plugin_with_install_attempt_id(
+                &remote_plugin_service_config,
+                auth.as_ref(),
+                &actual_remote_marketplace_name,
+                &remote_plugin_id,
+                install_attempt_id,
+            )
+            .await
+        } else {
+            codex_core_plugins::remote::install_remote_plugin(
+                &remote_plugin_service_config,
+                auth.as_ref(),
+                &actual_remote_marketplace_name,
+                &remote_plugin_id,
+            )
+            .await
+        }
         .map_err(|err| {
             let error_type = remote_plugin_catalog_error_type(&err);
             let sub_error_type = err.sub_error_type();

@@ -7,6 +7,13 @@
     }
   },
   "properties": {
+    "installAttemptId": {
+      "description": "Client-generated identifier used to correlate one installation attempt.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "marketplacePath": {
       "anyOf": [
         {

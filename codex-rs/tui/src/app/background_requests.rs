@@ -1134,6 +1134,7 @@ pub(super) async fn fetch_plugin_install(
             params: PluginInstallParams {
                 marketplace_path,
                 remote_marketplace_name,
+                install_attempt_id: None,
                 plugin_name,
             },
         })

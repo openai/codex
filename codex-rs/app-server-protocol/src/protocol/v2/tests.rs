@@ -3758,12 +3758,14 @@ fn plugin_install_params_serialization_omits_force_remote_sync() {
         serde_json::to_value(PluginInstallParams {
             marketplace_path: Some(marketplace_path.clone()),
             remote_marketplace_name: None,
+            install_attempt_id: Some("94c79f7b-cceb-4415-9a3e-b51b2f718d43".to_string()),
             plugin_name: "gmail".to_string(),
         })
         .unwrap(),
         json!({
             "marketplacePath": marketplace_path_json,
             "remoteMarketplaceName": null,
+            "installAttemptId": "94c79f7b-cceb-4415-9a3e-b51b2f718d43",
             "pluginName": "gmail",
         }),
     );
@@ -3778,6 +3780,7 @@ fn plugin_install_params_serialization_omits_force_remote_sync() {
         PluginInstallParams {
             marketplace_path: Some(marketplace_path),
             remote_marketplace_name: None,
+            install_attempt_id: None,
             plugin_name: "gmail".to_string(),
         },
     );
@@ -3792,6 +3795,7 @@ fn plugin_install_params_serialization_omits_force_remote_sync() {
         PluginInstallParams {
             marketplace_path: None,
             remote_marketplace_name: Some("openai-curated-remote".to_string()),
+            install_attempt_id: None,
             plugin_name: "gmail".to_string(),
         },
     );

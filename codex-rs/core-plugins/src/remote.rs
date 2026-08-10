@@ -1475,11 +1475,50 @@ fn app_declarations_from_remote_app_ids(app_ids: &[String]) -> Vec<AppDeclaratio
         .collect()
 }
 
+#[derive(Serialize)]
+struct RemotePluginInstallRequest<'a> {
+    install_attempt_id: &'a str,
+}
+
 pub async fn install_remote_plugin(
+    config: &RemotePluginServiceConfig,
+    auth: Option<&CodexAuth>,
+    marketplace_name: &str,
+    plugin_id: &str,
+) -> Result<RemotePluginInstallResult, RemotePluginCatalogError> {
+    install_remote_plugin_inner(
+        config,
+        auth,
+        marketplace_name,
+        plugin_id,
+        /*install_attempt_id*/ None,
+    )
+    .await
+}
+
+pub async fn install_remote_plugin_with_install_attempt_id(
+    config: &RemotePluginServiceConfig,
+    auth: Option<&CodexAuth>,
+    marketplace_name: &str,
+    plugin_id: &str,
+    install_attempt_id: &str,
+) -> Result<RemotePluginInstallResult, RemotePluginCatalogError> {
+    install_remote_plugin_inner(
+        config,
+        auth,
+        marketplace_name,
+        plugin_id,
+        Some(install_attempt_id),
+    )
+    .await
+}
+
+async fn install_remote_plugin_inner(
     config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
     _marketplace_name: &str,
     plugin_id: &str,
+    install_attempt_id: Option<&str>,
 ) -> Result<RemotePluginInstallResult, RemotePluginCatalogError> {
     let auth = ensure_chatgpt_auth(auth)?;
     // Remote plugin IDs uniquely identify remote plugins, so the caller-provided
@@ -1492,6 +1531,11 @@ pub async fn install_remote_plugin(
         .append_pair("includeAppsNeedingAuth", "true");
     let url = url.to_string();
     let request = authenticated_request(config.http_request(Method::POST, &url), auth);
+    let request = if let Some(install_attempt_id) = install_attempt_id {
+        request.json(&RemotePluginInstallRequest { install_attempt_id })
+    } else {
+        request
+    };
     let response: RemotePluginMutationResponse = send_and_decode(request, &url).await?;
     if response.id != plugin_id {
         return Err(RemotePluginCatalogError::UnexpectedPluginId {
