@@ -13,8 +13,8 @@ use crate::exec_env::inject_session_id_env;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
-use crate::session::turn_context::EnvironmentConfig;
 use crate::session::turn_context::TurnEnvironment;
+use crate::session::turn_context::TurnEnvironmentConfig;
 use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::tools::context::FunctionToolOutput;
@@ -114,7 +114,7 @@ async fn shell_command_handler_to_exec_params_uses_selected_environment() {
         PathUri::from_abs_path(&selected_cwd),
         Vec::new(),
         Some(selected_shell),
-        EnvironmentConfig {
+        TurnEnvironmentConfig {
             allow_login_shell: true,
             permission_profile: PermissionProfileSnapshot::active(
                 permission_profile,

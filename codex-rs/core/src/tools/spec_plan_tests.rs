@@ -912,7 +912,7 @@ async fn zsh_fork_unified_exec_keeps_shell_parameter_when_remote_environment_ava
                     remote_cwd,
                     Vec::new(),
                     /*shell*/ None,
-                    crate::session::turn_context::EnvironmentConfig {
+                    crate::session::turn_context::TurnEnvironmentConfig {
                         allow_login_shell: true,
                         permission_profile: turn
                             .config

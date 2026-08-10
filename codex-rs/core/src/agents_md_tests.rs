@@ -4,8 +4,8 @@ use crate::config::PermissionProfileSnapshot;
 use crate::context::ContextualUserFragment;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::environment_selection::TurnEnvironmentState;
-use crate::session::turn_context::EnvironmentConfig;
 use crate::session::turn_context::TurnEnvironment;
+use crate::session::turn_context::TurnEnvironmentConfig;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigRequirements;
@@ -340,7 +340,7 @@ fn resolved_local_environments<const N: usize>(
                     PathUri::from_abs_path(&cwd),
                     Vec::new(),
                     /*shell*/ None,
-                    EnvironmentConfig {
+                    TurnEnvironmentConfig {
                         allow_login_shell: true,
                         permission_profile: PermissionProfileSnapshot::legacy(
                             PermissionProfile::read_only(),

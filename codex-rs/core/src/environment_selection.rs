@@ -22,9 +22,9 @@ use futures::future::BoxFuture;
 use futures::future::Shared;
 use tokio_util::task::AbortOnDropHandle;
 
-use crate::session::turn_context::EnvironmentConfig;
 use crate::session::turn_context::ShellSnapshotTask;
 use crate::session::turn_context::TurnEnvironment;
+use crate::session::turn_context::TurnEnvironmentConfig;
 use crate::shell::Shell;
 use crate::shell_snapshot::ShellSnapshot;
 
@@ -60,7 +60,7 @@ struct ResolvedEnvironment {
 struct SelectedTurnEnvironment {
     selection: TurnEnvironmentSelection,
     // Temporary: copied from thread settings until environments supply their own config.
-    config: EnvironmentConfig,
+    config: TurnEnvironmentConfig,
     environment: Arc<Environment>,
     // Selection clones share one listener; the final handle drop aborts it.
     connection_events_task: Option<Arc<AbortOnDropHandle<()>>>,
@@ -70,7 +70,7 @@ struct SelectedTurnEnvironment {
 #[derive(Clone)]
 pub(crate) struct StartingTurnEnvironment {
     pub(crate) selection: TurnEnvironmentSelection,
-    config: EnvironmentConfig,
+    config: TurnEnvironmentConfig,
     resolution: TurnEnvironmentResolution,
 }
 
@@ -103,7 +103,7 @@ impl ThreadEnvironments {
     pub(crate) fn new(
         environment_manager: Arc<EnvironmentManager>,
         local_shell: Shell,
-        thread_environment_config: EnvironmentConfig,
+        thread_environment_config: TurnEnvironmentConfig,
         shell_snapshot: ShellSnapshot,
         current: TurnEnvironmentSnapshot,
         non_blocking_snapshots: bool,
@@ -149,7 +149,7 @@ impl ThreadEnvironments {
     pub(crate) fn update_selections(
         &self,
         environments: &[TurnEnvironmentSelection],
-        thread_environment_config: &EnvironmentConfig,
+        thread_environment_config: &TurnEnvironmentConfig,
     ) {
         let previous = self.environments.load();
         let mut seen_environment_ids = HashSet::with_capacity(environments.len());
@@ -227,7 +227,7 @@ impl ThreadEnvironments {
         }
     }
 
-    pub(crate) fn update_environment_configs(&self, config: &EnvironmentConfig) {
+    pub(crate) fn update_environment_configs(&self, config: &TurnEnvironmentConfig) {
         let environments = self
             .environments
             .load()
@@ -554,8 +554,8 @@ mod tests {
 
     use super::*;
 
-    fn test_environment_config() -> EnvironmentConfig {
-        EnvironmentConfig {
+    fn test_environment_config() -> TurnEnvironmentConfig {
+        TurnEnvironmentConfig {
             allow_login_shell: true,
             permission_profile: PermissionProfileSnapshot::legacy(PermissionProfile::read_only()),
         }
@@ -718,7 +718,7 @@ url = "ws://127.0.0.1:8765"
             shell_type: crate::shell::ShellType::Zsh,
             shell_path: std::path::PathBuf::from("/configured/zsh"),
         };
-        let expected_config = EnvironmentConfig {
+        let expected_config = TurnEnvironmentConfig {
             allow_login_shell: false,
             permission_profile: PermissionProfileSnapshot::active_with_profile_workspace_roots(
                 PermissionProfile::read_only(),
@@ -910,7 +910,7 @@ url = "ws://127.0.0.1:8765"
             .await,
         );
         let cwd = AbsolutePathBuf::current_dir().expect("cwd");
-        let expected_config = EnvironmentConfig {
+        let expected_config = TurnEnvironmentConfig {
             allow_login_shell: false,
             permission_profile: PermissionProfileSnapshot::active_with_profile_workspace_roots(
                 PermissionProfile::read_only(),
@@ -1054,7 +1054,7 @@ url = "ws://127.0.0.1:8765"
                 /*connect_timeout*/ None,
             )
             .expect("replacement environment");
-        let next_config = EnvironmentConfig {
+        let next_config = TurnEnvironmentConfig {
             allow_login_shell: false,
             ..test_environment_config()
         };
@@ -1204,7 +1204,7 @@ url = "ws://127.0.0.1:8765"
                 /*connect_timeout*/ None,
             )
             .expect("replacement environment");
-        let child_config = EnvironmentConfig {
+        let child_config = TurnEnvironmentConfig {
             allow_login_shell: false,
             permission_profile: PermissionProfileSnapshot::active_with_profile_workspace_roots(
                 PermissionProfile::read_only(),

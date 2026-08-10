@@ -1,6 +1,6 @@
 use super::*;
 use crate::config::PermissionProfileSnapshot;
-use crate::session::turn_context::EnvironmentConfig;
+use crate::session::turn_context::TurnEnvironmentConfig;
 use crate::tools::approvals::ApprovalCacheKey;
 use codex_exec_server::Environment;
 use codex_protocol::models::PermissionProfile;
@@ -20,7 +20,7 @@ async fn approval_key_uses_path_uri_and_includes_environment_id() {
             PathUri::from_abs_path(&cwd),
             Vec::new(),
             /*shell*/ None,
-            EnvironmentConfig {
+            TurnEnvironmentConfig {
                 allow_login_shell: true,
                 permission_profile: PermissionProfileSnapshot::legacy(
                     PermissionProfile::read_only(),

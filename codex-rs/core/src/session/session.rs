@@ -5,7 +5,7 @@ use crate::agents_md_manager::AgentsMdManager;
 use crate::config::ConstraintError;
 use crate::environment_selection::ThreadEnvironments;
 use crate::environment_selection::TurnEnvironmentSnapshot;
-use crate::session::turn_context::EnvironmentConfig;
+use crate::session::turn_context::TurnEnvironmentConfig;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillError;
 use crate::state::ActiveTurn;
@@ -160,8 +160,8 @@ impl SessionConfiguration {
         &self.permission_profile_state
     }
 
-    pub(super) fn environment_config(&self) -> EnvironmentConfig {
-        EnvironmentConfig {
+    pub(super) fn turn_environment_config(&self) -> TurnEnvironmentConfig {
+        TurnEnvironmentConfig {
             allow_login_shell: self
                 .original_config_do_not_use
                 .permissions
@@ -1061,14 +1061,14 @@ impl Session {
                 environment_manager,
                 default_shell.clone(),
                 // Temporary: preserve thread-level behavior until environments supply config.
-                session_configuration.environment_config(),
+                session_configuration.turn_environment_config(),
                 shell_snapshot,
                 inherited_environments.unwrap_or_default(),
                 config.features.enabled(Feature::DeferredExecutor),
             ));
             turn_environments.update_selections(
                 session_configuration.environment_selections(),
-                &session_configuration.environment_config(),
+                &session_configuration.turn_environment_config(),
             );
             let resolved_environments = turn_environments.snapshot().await;
             let agents_md_manager = Arc::new(AgentsMdManager::new(user_instructions));

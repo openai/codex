@@ -4870,14 +4870,14 @@ async fn resolved_environments_for_configuration(
     let turn_environments = ThreadEnvironments::new(
         Arc::clone(&environment_manager),
         default_user_shell(),
-        session_configuration.environment_config(),
+        session_configuration.turn_environment_config(),
         ShellSnapshot::disabled(),
         TurnEnvironmentSnapshot::default(),
         /*non_blocking_snapshots*/ false,
     );
     turn_environments.update_selections(
         session_configuration.environment_selections(),
-        &session_configuration.environment_config(),
+        &session_configuration.turn_environment_config(),
     );
     (environment_manager, turn_environments.snapshot().await)
 }
@@ -5737,7 +5737,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let turn_environments = Arc::new(ThreadEnvironments::new(
         environment_manager,
         default_user_shell(),
-        session_configuration.environment_config(),
+        session_configuration.turn_environment_config(),
         ShellSnapshot::disabled(),
         resolved_environments,
         /*non_blocking_snapshots*/ false,
@@ -7996,7 +7996,7 @@ where
     let turn_environments = Arc::new(ThreadEnvironments::new(
         environment_manager,
         default_user_shell(),
-        session_configuration.environment_config(),
+        session_configuration.turn_environment_config(),
         ShellSnapshot::disabled(),
         resolved_turn_environments.clone(),
         /*non_blocking_snapshots*/ false,

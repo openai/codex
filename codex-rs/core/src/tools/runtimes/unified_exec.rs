@@ -483,7 +483,7 @@ mod tests {
     use super::*;
     use crate::config::PermissionProfileSnapshot;
     use crate::exec::DEFAULT_EXEC_COMMAND_TIMEOUT_MS;
-    use crate::session::turn_context::EnvironmentConfig;
+    use crate::session::turn_context::TurnEnvironmentConfig;
     use crate::tools::sandboxing::ToolRuntime;
     use codex_exec_server::Environment;
     use codex_exec_server::LOCAL_ENVIRONMENT_ID;
@@ -502,7 +502,7 @@ mod tests {
             cwd,
             Vec::new(),
             /*shell*/ None,
-            EnvironmentConfig {
+            TurnEnvironmentConfig {
                 allow_login_shell: true,
                 permission_profile: PermissionProfileSnapshot::legacy(
                     PermissionProfile::read_only(),

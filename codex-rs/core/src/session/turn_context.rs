@@ -29,7 +29,7 @@ pub(crate) type ShellSnapshotTask = Shared<BoxFuture<'static, Option<Arc<ShellSn
 
 /// Effective per-environment config; fields move here as executor config is migrated.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct EnvironmentConfig {
+pub(crate) struct TurnEnvironmentConfig {
     pub(crate) allow_login_shell: bool,
     pub(crate) permission_profile: PermissionProfileSnapshot,
 }
@@ -41,7 +41,7 @@ pub(crate) struct TurnEnvironment {
     cwd: PathUri,
     workspace_roots: Vec<PathUri>,
     pub(crate) shell: Option<shell::Shell>,
-    pub(crate) config: EnvironmentConfig,
+    pub(crate) config: TurnEnvironmentConfig,
     pub(crate) shell_snapshot: ShellSnapshotTask,
 }
 
@@ -52,7 +52,7 @@ impl TurnEnvironment {
         cwd: PathUri,
         workspace_roots: Vec<PathUri>,
         shell: Option<shell::Shell>,
-        config: EnvironmentConfig,
+        config: TurnEnvironmentConfig,
     ) -> Self {
         Self {
             environment_id,
@@ -650,12 +650,13 @@ impl Session {
                     });
                     let new_config = notify_config_contributors
                         .then(|| Self::build_effective_session_config(&next));
-                    let environment_config = next.environment_config();
+                    let environment_config = next.turn_environment_config();
                     if updates.environments.is_some() {
                         self.services
                             .turn_environments
                             .update_selections(next.environment_selections(), &environment_config);
-                    } else if state.session_configuration.environment_config() != environment_config
+                    } else if state.session_configuration.turn_environment_config()
+                        != environment_config
                     {
                         self.services
                             .turn_environments
