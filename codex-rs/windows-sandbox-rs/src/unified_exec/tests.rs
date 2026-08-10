@@ -1,6 +1,8 @@
 #![cfg(target_os = "windows")]
 
+use super::WindowsSandboxSessionRequest;
 use super::spawn_windows_sandbox_session_elevated_for_permission_profile;
+use super::spawn_windows_sandbox_session_for_level;
 use super::spawn_windows_sandbox_session_legacy;
 use crate::WindowsSandboxCancellationToken;
 use crate::ipc_framed::Message;
@@ -9,6 +11,7 @@ use crate::ipc_framed::read_frame;
 use crate::run_windows_sandbox_capture;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_pty::ProcessDriver;
@@ -219,6 +222,43 @@ async fn collect_stdout_and_exit(
         })
         .expect("stdout task join");
     (stdout, exit_code)
+}
+
+#[test]
+fn restricted_token_rejects_managed_network_before_spawn() {
+    current_thread_runtime().block_on(async {
+        let cwd = sandbox_cwd();
+        let codex_home = sandbox_home("restricted-token-managed-network");
+        let permission_profile = PermissionProfile::workspace_write();
+        let error = spawn_windows_sandbox_session_for_level(WindowsSandboxSessionRequest {
+            permission_profile: &permission_profile,
+            workspace_roots: &[],
+            codex_home: codex_home.path(),
+            command: Vec::new(),
+            cwd: cwd.as_path(),
+            env_map: HashMap::new(),
+            windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
+            proxy_enforced: true,
+            network_proxy_restricting_sid: None,
+            proxy_settings_mode: crate::WindowsSandboxProxySettingsMode::Preserve,
+            timeout_ms: None,
+            read_roots_override: None,
+            read_roots_include_platform_defaults: false,
+            write_roots_override: None,
+            deny_read_paths_override: &[],
+            deny_write_paths_override: &[],
+            tty: false,
+            stdin_open: false,
+            use_private_desktop: false,
+        })
+        .await
+        .expect_err("managed networking must fail before spawning an unelevated sandbox");
+
+        assert_eq!(
+            error.to_string(),
+            "managed networking requires the elevated Windows sandbox backend"
+        );
+    });
 }
 
 #[test]

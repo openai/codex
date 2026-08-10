@@ -398,18 +398,12 @@ fn windows_restricted_token_supports_read_only_profiles() {
 }
 
 #[test]
-fn windows_proxy_enforcement_uses_elevated_backend() {
+fn windows_sandbox_backend_honors_unelevated_configuration() {
     assert!(!windows_sandbox_uses_elevated_backend(
-        WindowsSandboxLevel::RestrictedToken,
-        /*proxy_enforced*/ false,
+        WindowsSandboxLevel::RestrictedToken
     ));
     assert!(windows_sandbox_uses_elevated_backend(
-        WindowsSandboxLevel::RestrictedToken,
-        /*proxy_enforced*/ true,
-    ));
-    assert!(windows_sandbox_uses_elevated_backend(
-        WindowsSandboxLevel::Elevated,
-        /*proxy_enforced*/ false,
+        WindowsSandboxLevel::Elevated
     ));
 }
 

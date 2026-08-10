@@ -1028,6 +1028,43 @@ async fn unified_exec_short_lived_network_denial_emits_failed_end_event() -> Res
     Ok(())
 }
 
+#[cfg(windows)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_rejects_unelevated_windows_sandbox_with_managed_network() -> Result<()> {
+    let server = start_mock_server().await;
+    let (test, permission_profile) = unified_exec_network_denial_test(&server).await?;
+    let call_id = "uexec-unelevated-managed-network";
+    let args = json!({
+        "cmd": "echo should not run",
+        "yield_time_ms": 1_000,
+    });
+    let responses = mount_unified_exec_network_denial_responses(&server, call_id, &args).await?;
+
+    submit_unified_exec_turn(
+        &test,
+        "run an unelevated managed-network command",
+        permission_profile,
+    )
+    .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let output_item = responses
+        .last_request()
+        .expect("model should receive the rejected tool call output")
+        .function_call_output(call_id);
+    let output = extract_output_text(&output_item)
+        .expect("rejected tool call should include model-visible text");
+    assert!(
+        output.contains("managed networking requires the elevated Windows sandbox backend"),
+        "unexpected output: {output}"
+    );
+
+    Ok(())
+}
+
 async fn unified_exec_network_denial_test(
     server: &wiremock::MockServer,
 ) -> Result<(TestCodex, PermissionProfile)> {
@@ -1070,6 +1107,8 @@ allow_local_binding = true
                 .permissions
                 .set_permission_profile(permission_profile_for_config)
                 .expect("set permission profile");
+            #[cfg(windows)]
+            config.set_windows_sandbox_enabled(/*value*/ true);
         });
     let test = builder.build_with_auto_env(server).await?;
     assert!(

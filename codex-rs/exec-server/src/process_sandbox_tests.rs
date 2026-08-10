@@ -17,6 +17,8 @@ use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
+#[cfg(windows)]
+use test_case::test_case;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::time::timeout;
@@ -379,8 +381,10 @@ async fn disabled_remote_proxy_config_is_rejected_before_exporting_ports() {
 }
 
 #[cfg(windows)]
+#[test_case(WindowsSandboxLevel::RestrictedToken ; "unelevated is rejected")]
+#[test_case(WindowsSandboxLevel::Elevated ; "elevated is accepted")]
 #[tokio::test]
-async fn managed_network_selects_elevated_windows_spawn() {
+async fn managed_network_honors_windows_sandbox_level(windows_sandbox_level: WindowsSandboxLevel) {
     let cwd: AbsolutePathBuf = std::env::current_dir()
         .expect("current directory")
         .try_into()
@@ -393,7 +397,7 @@ async fn managed_network_selects_elevated_windows_spawn() {
         permissions.clone(),
         cwd_uri.clone(),
     );
-    sandbox.windows_sandbox_level = WindowsSandboxLevel::RestrictedToken;
+    sandbox.windows_sandbox_level = windows_sandbox_level;
     sandbox.windows_sandbox_proxy_settings_mode =
         Some(codex_sandboxing::WindowsSandboxProxySettingsMode::Preserve);
     let proxy_config = RemoteNetworkProxyConfig::from_effective_config(&NetworkProxyConfig {
@@ -417,32 +421,34 @@ async fn managed_network_selects_elevated_windows_spawn() {
         network_proxy: Some(RemoteNetworkProxyLaunchConfig::new(proxy_config)),
     };
 
-    let mut prepared = prepare_exec_request(
+    let prepared = prepare_exec_request(
         &params,
         HashMap::new(),
         Some(&runtime_paths),
         /*network_policy_decider*/ None,
     )
-    .await
-    .expect("prepare sandboxed request");
-    {
-        let spawn = prepared
-            .windows_sandbox_spawn_request()
-            .expect("Windows sandbox spawn request");
+    .await;
 
-        assert_eq!(
-            spawn.windows_sandbox_level,
-            WindowsSandboxLevel::RestrictedToken
+    if windows_sandbox_level == WindowsSandboxLevel::RestrictedToken {
+        let error = prepared
+            .err()
+            .expect("managed networking must reject an unelevated Windows sandbox");
+        assert_eq!(error.code, -32602);
+        assert!(
+            error
+                .message
+                .contains("managed networking requires the elevated Windows sandbox backend")
         );
-        assert!(spawn.proxy_enforced);
-        assert!(spawn.network_proxy_restricting_sid.is_some());
-        assert_eq!(
-            spawn.proxy_settings_mode,
-            codex_sandboxing::WindowsSandboxProxySettingsMode::Preserve
-        );
-        assert_eq!(spawn.permission_profile, &permissions);
-        assert_eq!(spawn.workspace_roots, std::slice::from_ref(&cwd));
+        return;
     }
+
+    let mut prepared = prepared.expect("managed networking accepts an elevated Windows sandbox");
+    let spawn = prepared
+        .windows_sandbox_spawn_request()
+        .expect("Windows sandbox spawn request");
+    assert_eq!(spawn.windows_sandbox_level, WindowsSandboxLevel::Elevated);
+    assert!(spawn.proxy_enforced);
+    assert!(spawn.network_proxy_restricting_sid.is_some());
     prepared
         .network_proxy_handle
         .take()

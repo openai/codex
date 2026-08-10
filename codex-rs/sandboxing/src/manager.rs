@@ -404,11 +404,20 @@ impl SandboxManager {
                 )
             }
             #[cfg(target_os = "windows")]
-            SandboxType::WindowsRestrictedToken => (
-                os_argv_to_strings(argv),
-                None,
-                Some(pending_sandboxed_request?),
-            ),
+            SandboxType::WindowsRestrictedToken => {
+                if enforce_managed_network && windows_sandbox_level != WindowsSandboxLevel::Elevated
+                {
+                    return Err(SandboxTransformError::WindowsSandboxPreparation(
+                        "managed networking requires the elevated Windows sandbox backend"
+                            .to_string(),
+                    ));
+                }
+                (
+                    os_argv_to_strings(argv),
+                    None,
+                    Some(pending_sandboxed_request?),
+                )
+            }
             #[cfg(not(target_os = "windows"))]
             SandboxType::WindowsRestrictedToken => (
                 os_argv_to_strings(argv),
@@ -524,8 +533,7 @@ fn wrap_windows_sandbox_exec_request_for_direct_spawn(
                 })
         })
         .transpose()?;
-    let use_elevated =
-        windows_sandbox_uses_elevated_backend(request.windows_sandbox_level, proxy_enforced);
+    let use_elevated = windows_sandbox_uses_elevated_backend(request.windows_sandbox_level);
     let overrides = if use_elevated {
         resolve_windows_elevated_filesystem_overrides(
             request.sandbox,
