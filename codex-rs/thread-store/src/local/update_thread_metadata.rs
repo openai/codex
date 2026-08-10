@@ -897,6 +897,7 @@ mod tests {
             Some(codex_state::ThreadSection {
                 id: codex_state::PINNED_THREAD_SECTION_ID.to_string(),
                 name: codex_state::PINNED_THREAD_SECTION_NAME.to_string(),
+                appearance: None,
             })
         );
         let pinned_metadata = runtime
@@ -909,6 +910,7 @@ mod tests {
             Some(codex_state::ThreadSection {
                 id: codex_state::PINNED_THREAD_SECTION_ID.to_string(),
                 name: codex_state::PINNED_THREAD_SECTION_NAME.to_string(),
+                appearance: None,
             })
         );
         assert_eq!(pinned_metadata.preview.as_deref(), Some("Hello from user"));
@@ -951,6 +953,7 @@ mod tests {
             Some(codex_state::ThreadSection {
                 id: codex_state::PINNED_THREAD_SECTION_ID.to_string(),
                 name: codex_state::PINNED_THREAD_SECTION_NAME.to_string(),
+                appearance: None,
             })
         );
         assert_eq!(

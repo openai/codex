@@ -102,16 +102,18 @@ INSERT INTO threads (
         .expect("legacy thread insert should succeed");
     }
 
-    let registered_sections =
-        sqlx::query_as::<_, (String, String)>("SELECT id, name FROM thread_sections ORDER BY id")
-            .fetch_all(&pool)
-            .await
-            .expect("independent thread sections should load");
+    let registered_sections = sqlx::query_as::<_, (String, String, Option<String>)>(
+        "SELECT id, name, appearance FROM thread_sections ORDER BY id",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("independent thread sections should load");
     assert_eq!(
         registered_sections,
         vec![(
             PINNED_THREAD_SECTION_ID.to_string(),
             PINNED_THREAD_SECTION_NAME.to_string(),
+            None,
         )]
     );
 

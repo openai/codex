@@ -51,13 +51,13 @@ impl StateRuntime {
         &self,
         id: &str,
     ) -> anyhow::Result<Option<crate::ThreadSection>> {
-        let row = sqlx::query_as::<_, (String, String)>(
-            "SELECT id, name FROM thread_sections WHERE id = ?",
+        let row = sqlx::query_as::<_, (String, String, Option<String>)>(
+            "SELECT id, name, appearance FROM thread_sections WHERE id = ?",
         )
         .bind(id)
         .fetch_optional(self.pool.as_ref())
         .await?;
-        Ok(row.map(|(id, name)| crate::ThreadSection { id, name }))
+        row.map(crate::ThreadSection::from_row).transpose()
     }
 
     /// List independently persisted sections in stable, cursor-paginated identifier order.
@@ -68,9 +68,9 @@ impl StateRuntime {
     ) -> anyhow::Result<crate::ThreadSectionsPage> {
         let page_size = limit.max(1);
         let fetch_limit = i64::try_from(page_size.saturating_add(1))?;
-        let rows = sqlx::query_as::<_, (String, String)>(
+        let rows = sqlx::query_as::<_, (String, String, Option<String>)>(
             r#"
-SELECT id, name
+SELECT id, name, appearance
 FROM thread_sections
 WHERE (? IS NULL OR id > ?)
 ORDER BY id
@@ -84,8 +84,8 @@ LIMIT ?
         .await?;
         let mut sections = rows
             .into_iter()
-            .map(|(id, name)| crate::ThreadSection { id, name })
-            .collect::<Vec<_>>();
+            .map(crate::ThreadSection::from_row)
+            .collect::<anyhow::Result<Vec<_>>>()?;
         let next_cursor = if sections.len() > page_size {
             sections.pop();
             sections.last().map(|section| section.id.clone())

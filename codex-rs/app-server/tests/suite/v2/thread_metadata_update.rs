@@ -102,6 +102,7 @@ async fn thread_section_move_pins_and_unpins_with_filtered_recency_pagination() 
     let pinned_section = ThreadSection {
         id: PINNED_THREAD_SECTION_ID.to_string(),
         name: PINNED_THREAD_SECTION_NAME.to_string(),
+        appearance: None,
     };
     let section_list_id = mcp
         .send_raw_request(
@@ -162,6 +163,7 @@ async fn thread_section_move_pins_and_unpins_with_filtered_recency_pagination() 
             Some(codex_state::ThreadSection {
                 id: pinned_section.id.clone(),
                 name: pinned_section.name.clone(),
+                appearance: None,
             })
         );
     }

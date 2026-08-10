@@ -39,6 +39,11 @@ SELECT
         FROM thread_sections
         WHERE thread_sections.id = threads.thread_section_id
     ) AS section_name,
+    (
+        SELECT thread_sections.appearance
+        FROM thread_sections
+        WHERE thread_sections.id = threads.thread_section_id
+    ) AS section_appearance,
     threads.section_position,
     threads.section_entered_at_ms,
     threads.git_sha,
@@ -1245,6 +1250,11 @@ SELECT
         FROM thread_sections
         WHERE thread_sections.id = threads.thread_section_id
     ) AS section_name,
+    (
+        SELECT thread_sections.appearance
+        FROM thread_sections
+        WHERE thread_sections.id = threads.thread_section_id
+    ) AS section_appearance,
     threads.section_position,
     threads.section_entered_at_ms,
     threads.git_sha,
@@ -1607,6 +1617,7 @@ mod tests {
             metadata.section = section.map(|id| crate::ThreadSection {
                 id: id.to_string(),
                 name: crate::PINNED_THREAD_SECTION_NAME.to_string(),
+                appearance: None,
             });
             runtime.upsert_thread(&metadata).await.unwrap();
         }
@@ -1636,6 +1647,7 @@ mod tests {
             Some(crate::ThreadSection {
                 id: crate::PINNED_THREAD_SECTION_ID.to_string(),
                 name: crate::PINNED_THREAD_SECTION_NAME.to_string(),
+                appearance: None,
             })
         );
         let second_page = runtime
@@ -1736,6 +1748,7 @@ mod tests {
             metadata.section = Some(crate::ThreadSection {
                 id: CUSTOM_THREAD_SECTION_ID.to_string(),
                 name: "Custom section".to_string(),
+                appearance: None,
             });
             metadata.section_position = Some(position);
             metadata.section_entered_at = Some(metadata.updated_at);

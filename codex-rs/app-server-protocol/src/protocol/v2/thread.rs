@@ -7,6 +7,7 @@ use super::Thread;
 use super::ThreadHistoryMode;
 use super::ThreadItem;
 use super::ThreadSection;
+use super::ThreadSectionAppearance;
 use super::ThreadSource;
 use super::Turn;
 use super::TurnEnvironmentParams;
@@ -1146,6 +1147,9 @@ pub struct ThreadSectionListResponse {
 pub struct ThreadSectionCreateParams {
     /// The user-visible name of the section.
     pub name: String,
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub appearance: Option<ThreadSectionAppearance>,
 }
 
 /// The independently persisted section created by the server.
@@ -1165,6 +1169,16 @@ pub struct ThreadSectionUpdateParams {
     pub section_id: String,
     /// The updated user-visible name of the section.
     pub name: String,
+    /// Omit to preserve appearance, use `null` to clear it, or provide a replacement.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::protocol::serde_helpers::serialize_double_option",
+        deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option"
+    )]
+    #[schemars(with = "Option<ThreadSectionAppearance>")]
+    #[ts(optional = nullable, as = "Option<ThreadSectionAppearance>")]
+    pub appearance: Option<Option<ThreadSectionAppearance>>,
 }
 
 /// The independently persisted section after its name is updated.

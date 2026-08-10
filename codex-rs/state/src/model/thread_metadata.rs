@@ -53,13 +53,37 @@ pub struct Anchor {
     pub id: Option<ThreadId>,
 }
 
-/// An independently persisted thread section and its user-facing name.
+/// Visual presentation metadata owned by a thread section.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadSectionAppearance {
+    pub icon: Option<String>,
+    pub color: Option<String>,
+}
+
+/// An independently persisted thread section and its user-facing presentation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ThreadSection {
     /// Opaque UUIDv7 identifying the section independently of its name.
     pub id: String,
     /// User-facing section name.
     pub name: String,
+    #[serde(default)]
+    pub appearance: Option<ThreadSectionAppearance>,
+}
+
+impl ThreadSection {
+    pub(crate) fn from_row(
+        (id, name, appearance): (String, String, Option<String>),
+    ) -> Result<Self> {
+        Ok(Self {
+            id,
+            name,
+            appearance: appearance
+                .map(|appearance| serde_json::from_str(&appearance))
+                .transpose()?,
+        })
+    }
 }
 
 /// A cursor-paginated page of independently persisted thread sections.
@@ -453,6 +477,7 @@ pub(crate) struct ThreadRow {
     archived_at: Option<i64>,
     section: Option<String>,
     section_name: Option<String>,
+    section_appearance: Option<String>,
     section_position: Option<i64>,
     section_entered_at_ms: Option<i64>,
     git_sha: Option<String>,
@@ -489,6 +514,7 @@ impl ThreadRow {
             archived_at: row.try_get("archived_at")?,
             section: row.try_get("section")?,
             section_name: row.try_get("section_name")?,
+            section_appearance: row.try_get("section_appearance")?,
             section_position: row.try_get("section_position")?,
             section_entered_at_ms: row.try_get("section_entered_at_ms")?,
             git_sha: row.try_get("git_sha")?,
@@ -529,6 +555,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             archived_at,
             section,
             section_name,
+            section_appearance,
             section_position,
             section_entered_at_ms,
             git_sha,
@@ -541,7 +568,9 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             .map_err(anyhow::Error::msg)?;
         let history_mode = history_mode.parse().map_err(anyhow::Error::msg)?;
         let section = match (section, section_name) {
-            (Some(id), Some(name)) => Some(ThreadSection { id, name }),
+            (Some(id), Some(name)) => {
+                Some(ThreadSection::from_row((id, name, section_appearance))?)
+            }
             (None, None) => None,
             (Some(id), None) => {
                 return Err(anyhow::anyhow!(
@@ -688,6 +717,7 @@ mod tests {
             archived_at: None,
             section: None,
             section_name: None,
+            section_appearance: None,
             section_position: None,
             section_entered_at_ms: None,
             git_sha: None,

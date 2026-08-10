@@ -14,8 +14,18 @@ async fn deleting_custom_section_preserves_threads_and_clears_section_ordering()
         "test-provider".to_string(),
     )
     .await?;
-    let deleted_section = runtime.create_thread_section("Research").await?;
-    let retained_section = runtime.create_thread_section("Planning").await?;
+    let deleted_section = runtime
+        .create_thread_section(
+            "Research",
+            Some(crate::ThreadSectionAppearance {
+                icon: Some("folder".to_string()),
+                color: Some("purple".to_string()),
+            }),
+        )
+        .await?;
+    let retained_section = runtime
+        .create_thread_section("Planning", /*appearance*/ None)
+        .await?;
     let first = ThreadId::new();
     let second = ThreadId::new();
     let retained = ThreadId::new();
@@ -75,7 +85,9 @@ async fn concurrent_section_deletion_and_membership_moves_preserve_thread_invari
         "test-provider".to_string(),
     )
     .await?;
-    let section = runtime.create_thread_section("Research").await?;
+    let section = runtime
+        .create_thread_section("Research", /*appearance*/ None)
+        .await?;
     let thread_id = ThreadId::new();
     runtime
         .upsert_thread(&test_thread_metadata(

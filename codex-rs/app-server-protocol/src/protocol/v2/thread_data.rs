@@ -180,6 +180,18 @@ pub struct ThreadSection {
     pub id: String,
     /// The current user-visible section name.
     pub name: String,
+    /// Optional appearance synchronized across clients.
+    #[serde(default)]
+    pub appearance: Option<ThreadSectionAppearance>,
+}
+
+/// Extensible visual presentation for a custom thread section.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSectionAppearance {
+    pub icon: Option<String>,
+    pub color: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]

@@ -481,6 +481,7 @@ export type { ThreadRollbackResponse } from "./ThreadRollbackResponse";
 export type { ThreadSearchResult } from "./ThreadSearchResult";
 export type { ThreadSearchSortKey } from "./ThreadSearchSortKey";
 export type { ThreadSection } from "./ThreadSection";
+export type { ThreadSectionAppearance } from "./ThreadSectionAppearance";
 export type { ThreadSectionCreateParams } from "./ThreadSectionCreateParams";
 export type { ThreadSectionCreateResponse } from "./ThreadSectionCreateResponse";
 export type { ThreadSectionDeleteParams } from "./ThreadSectionDeleteParams";

@@ -1,7 +1,38 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ThreadSectionAppearance": {
+      "description": "Extensible visual presentation for a custom thread section.",
+      "properties": {
+        "color": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "icon": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
   "description": "Parameters for creating an independently persisted thread section.",
   "properties": {
+    "appearance": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ThreadSectionAppearance"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "name": {
       "description": "The user-visible name of the section.",
       "type": "string"

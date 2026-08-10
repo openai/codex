@@ -1461,6 +1461,7 @@ fn fill_missing_thread_item_metadata_preserves_identity_and_prefers_state_git_fi
         section: Some(codex_state::ThreadSection {
             id: codex_state::PINNED_THREAD_SECTION_ID.to_string(),
             name: codex_state::PINNED_THREAD_SECTION_NAME.to_string(),
+            appearance: None,
         }),
         cwd: Some(PathBuf::from("/tmp/state-cwd")),
         git_branch: Some("state-branch".to_string()),
@@ -1487,6 +1488,7 @@ fn fill_missing_thread_item_metadata_preserves_identity_and_prefers_state_git_fi
         Some(codex_state::ThreadSection {
             id: codex_state::PINNED_THREAD_SECTION_ID.to_string(),
             name: codex_state::PINNED_THREAD_SECTION_NAME.to_string(),
+            appearance: None,
         })
     );
     assert_eq!(

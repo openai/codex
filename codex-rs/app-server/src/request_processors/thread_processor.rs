@@ -5,6 +5,7 @@ use super::*;
 use crate::error_code::method_not_found;
 use codex_app_server_protocol::SelectedCapabilityRoot;
 use codex_app_server_protocol::ThreadSection;
+use codex_app_server_protocol::ThreadSectionAppearance;
 use codex_app_server_protocol::ThreadSectionMoveParams;
 use codex_app_server_protocol::ThreadSectionMoveResponse;
 use codex_extension_api::ExtensionDataInit;
@@ -5242,6 +5243,12 @@ pub(crate) fn thread_from_stored_thread(
         section: thread.section.map(|section| ThreadSection {
             id: section.id,
             name: section.name,
+            appearance: section
+                .appearance
+                .map(|appearance| ThreadSectionAppearance {
+                    icon: appearance.icon,
+                    color: appearance.color,
+                }),
         }),
         section_entered_at: thread
             .section_entered_at

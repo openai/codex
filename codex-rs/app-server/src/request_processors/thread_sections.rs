@@ -7,6 +7,7 @@ use crate::error_code::method_not_found;
 use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ThreadSection;
+use codex_app_server_protocol::ThreadSectionAppearance;
 use codex_app_server_protocol::ThreadSectionCreateParams;
 use codex_app_server_protocol::ThreadSectionCreateResponse;
 use codex_app_server_protocol::ThreadSectionDeleteParams;
@@ -20,7 +21,10 @@ use codex_thread_store::CreateThreadSectionParams as StoreCreateThreadSectionPar
 use codex_thread_store::DeleteThreadSectionParams as StoreDeleteThreadSectionParams;
 use codex_thread_store::ListThreadSectionsParams as StoreListThreadSectionsParams;
 use codex_thread_store::RenameThreadSectionParams as StoreRenameThreadSectionParams;
+use codex_thread_store::StoredThreadSection;
 use codex_thread_store::ThreadStoreError;
+
+const MAX_THREAD_SECTION_APPEARANCE_FIELD_BYTES: usize = 64;
 
 impl ThreadRequestProcessor {
     pub(crate) async fn thread_section_list(
@@ -45,14 +49,7 @@ impl ThreadRequestProcessor {
 
         Ok(Some(
             ThreadSectionListResponse {
-                data: page
-                    .sections
-                    .into_iter()
-                    .map(|section| ThreadSection {
-                        id: section.id,
-                        name: section.name,
-                    })
-                    .collect(),
+                data: page.sections.into_iter().map(api_thread_section).collect(),
                 next_cursor: page.next_cursor,
             }
             .into(),
@@ -69,20 +66,21 @@ impl ThreadRequestProcessor {
         if name.is_empty() {
             return Err(invalid_params("section name must not be empty"));
         }
+        if let Some(appearance) = params.appearance.as_ref() {
+            validate_thread_section_appearance(appearance)?;
+        }
         let section = self
             .thread_store
             .create_thread_section(StoreCreateThreadSectionParams {
                 name: name.to_string(),
+                appearance: params.appearance.map(state_thread_section_appearance),
             })
             .await
             .map_err(|err| thread_section_store_error(OPERATION, err))?;
 
         Ok(Some(
             ThreadSectionCreateResponse {
-                section: ThreadSection {
-                    id: section.id,
-                    name: section.name,
-                },
+                section: api_thread_section(section),
             }
             .into(),
         ))
@@ -106,11 +104,17 @@ impl ThreadRequestProcessor {
                 "the built-in pinned section cannot be renamed",
             ));
         }
+        if let Some(Some(appearance)) = params.appearance.as_ref() {
+            validate_thread_section_appearance(appearance)?;
+        }
         let section = self
             .thread_store
             .rename_thread_section(StoreRenameThreadSectionParams {
                 section_id: params.section_id.clone(),
                 name: name.to_string(),
+                appearance: params
+                    .appearance
+                    .map(|appearance| appearance.map(state_thread_section_appearance)),
             })
             .await
             .map_err(|err| thread_section_store_error(OPERATION, err))?
@@ -120,10 +124,7 @@ impl ThreadRequestProcessor {
 
         Ok(Some(
             ThreadSectionUpdateResponse {
-                section: ThreadSection {
-                    id: section.id,
-                    name: section.name,
-                },
+                section: api_thread_section(section),
             }
             .into(),
         ))
@@ -169,6 +170,44 @@ impl ThreadRequestProcessor {
         } else {
             Err(unsupported_thread_section_operation(operation))
         }
+    }
+}
+
+fn validate_thread_section_appearance(
+    appearance: &ThreadSectionAppearance,
+) -> Result<(), JSONRPCErrorError> {
+    for (field, value) in [
+        ("icon", appearance.icon.as_ref()),
+        ("color", appearance.color.as_ref()),
+    ] {
+        if value.is_some_and(|value| value.len() > MAX_THREAD_SECTION_APPEARANCE_FIELD_BYTES) {
+            return Err(invalid_params(format!(
+                "section appearance {field} must not exceed {MAX_THREAD_SECTION_APPEARANCE_FIELD_BYTES} bytes"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn api_thread_section(section: StoredThreadSection) -> ThreadSection {
+    ThreadSection {
+        id: section.id,
+        name: section.name,
+        appearance: section
+            .appearance
+            .map(|appearance| ThreadSectionAppearance {
+                icon: appearance.icon,
+                color: appearance.color,
+            }),
+    }
+}
+
+fn state_thread_section_appearance(
+    appearance: ThreadSectionAppearance,
+) -> codex_state::ThreadSectionAppearance {
+    codex_state::ThreadSectionAppearance {
+        icon: appearance.icon,
+        color: appearance.color,
     }
 }
 

@@ -105,6 +105,7 @@ async fn thread_unarchive_moves_rollout_back_into_sessions_directory() -> Result
     let pinned_section = ThreadSection {
         id: PINNED_THREAD_SECTION_ID.to_string(),
         name: PINNED_THREAD_SECTION_NAME.to_string(),
+        appearance: None,
     };
     let pin_id = mcp
         .send_thread_section_move_request(ThreadSectionMoveParams {

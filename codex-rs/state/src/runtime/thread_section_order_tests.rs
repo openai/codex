@@ -91,14 +91,17 @@ async fn thread_sections_paginate_and_require_registered_identities() {
     let before_pinned = crate::ThreadSection {
         id: "01984de2-8f74-7c91-a3b2-5c5e937cf317".to_string(),
         name: "Before pinned".to_string(),
+        appearance: None,
     };
     let pinned = crate::ThreadSection {
         id: crate::PINNED_THREAD_SECTION_ID.to_string(),
         name: crate::PINNED_THREAD_SECTION_NAME.to_string(),
+        appearance: None,
     };
     let after_pinned = crate::ThreadSection {
         id: "01984de2-8f74-7c91-a3b2-5c5e937cf319".to_string(),
         name: "After pinned".to_string(),
+        appearance: None,
     };
 
     for section in [&before_pinned, &after_pinned] {
@@ -236,6 +239,7 @@ async fn thread_section_moves_round_trip_and_survive_rollout_reconciliation() {
             Some(&crate::ThreadSection {
                 id: crate::PINNED_THREAD_SECTION_ID.to_string(),
                 name: crate::PINNED_THREAD_SECTION_NAME.to_string(),
+                appearance: None,
             }),
             Some(1_000_000),
         )
@@ -590,6 +594,7 @@ async fn section_moves_preserve_entry_order_and_renumber_exhausted_ranks() {
         Some(crate::ThreadSection {
             id: OTHER_THREAD_SECTION_ID.to_string(),
             name: "Other section".to_string(),
+            appearance: None,
         })
     );
     assert_eq!(moved_across_sections.section_position, Some(500_000));

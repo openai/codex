@@ -26,6 +26,7 @@ pub(super) async fn list_thread_sections(
             .map(|section| StoredThreadSection {
                 id: section.id,
                 name: section.name,
+                appearance: section.appearance,
             })
             .collect(),
         next_cursor: page.next_cursor,
@@ -38,13 +39,14 @@ pub(super) async fn create_thread_section(
 ) -> ThreadStoreResult<StoredThreadSection> {
     let state_db = state_db(store, "threadSection/create")?;
     let section = state_db
-        .create_thread_section(&params.name)
+        .create_thread_section(&params.name, params.appearance)
         .await
         .map_err(|err| section_error("create", err))?;
 
     Ok(StoredThreadSection {
         id: section.id,
         name: section.name,
+        appearance: section.appearance,
     })
 }
 
@@ -54,13 +56,14 @@ pub(super) async fn rename_thread_section(
 ) -> ThreadStoreResult<Option<StoredThreadSection>> {
     let state_db = state_db(store, "threadSection/update")?;
     let section = state_db
-        .rename_thread_section(&params.section_id, &params.name)
+        .rename_thread_section(&params.section_id, &params.name, params.appearance)
         .await
         .map_err(|err| section_error("update", err))?;
 
     Ok(section.map(|section| StoredThreadSection {
         id: section.id,
         name: section.name,
+        appearance: section.appearance,
     }))
 }
 

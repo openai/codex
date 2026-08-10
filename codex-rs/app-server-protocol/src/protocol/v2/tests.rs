@@ -255,6 +255,7 @@ fn thread_resume_response_round_trips_initial_turns_page() {
             section: Some(ThreadSection {
                 id: "01984de2-8f74-7c91-a3b2-5c5e937cf318".to_string(),
                 name: "Pinned".to_string(),
+                appearance: None,
             }),
             section_entered_at: Some(1),
             history_mode: Default::default(),
@@ -302,6 +303,7 @@ fn thread_resume_response_round_trips_initial_turns_page() {
         json!({
             "id": "01984de2-8f74-7c91-a3b2-5c5e937cf318",
             "name": "Pinned",
+            "appearance": null,
         })
     );
     assert_eq!(value["thread"]["sectionEnteredAt"], json!(1));
@@ -496,6 +498,13 @@ fn thread_list_params_accepts_section_id_filter() {
 
 #[test]
 fn thread_section_list_params_and_response_round_trip() {
+    let legacy = serde_json::from_value::<ThreadSection>(json!({
+        "id": "legacy",
+        "name": "Legacy",
+    }))
+    .expect("legacy sections without appearance should deserialize");
+    assert_eq!(legacy.appearance, None);
+
     let params = serde_json::from_value::<ThreadSectionListParams>(json!({
         "cursor": "section-cursor",
         "limit": 25,
@@ -513,6 +522,7 @@ fn thread_section_list_params_and_response_round_trip() {
         data: vec![ThreadSection {
             id: "01984de2-8f74-7c91-a3b2-5c5e937cf318".to_string(),
             name: "Pinned".to_string(),
+            appearance: None,
         }],
         next_cursor: None,
     };
@@ -523,6 +533,7 @@ fn thread_section_list_params_and_response_round_trip() {
             "data": [{
                 "id": "01984de2-8f74-7c91-a3b2-5c5e937cf318",
                 "name": "Pinned",
+                "appearance": null,
             }],
             "nextCursor": null,
         })
@@ -532,6 +543,21 @@ fn thread_section_list_params_and_response_round_trip() {
             .expect("section list should deserialize"),
         response
     );
+}
+
+#[test]
+fn thread_section_updates_distinguish_omitted_and_cleared_appearance() {
+    for (value, appearance) in [
+        (json!({ "sectionId": "section", "name": "Work" }), None),
+        (
+            json!({ "sectionId": "section", "name": "Work", "appearance": null }),
+            Some(None),
+        ),
+    ] {
+        let params = serde_json::from_value::<ThreadSectionUpdateParams>(value)
+            .expect("section update should deserialize");
+        assert_eq!(params.appearance, appearance);
+    }
 }
 
 #[test]

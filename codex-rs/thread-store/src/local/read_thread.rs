@@ -686,6 +686,7 @@ mod tests {
         metadata.section = Some(codex_state::ThreadSection {
             id: codex_state::PINNED_THREAD_SECTION_ID.to_string(),
             name: codex_state::PINNED_THREAD_SECTION_NAME.to_string(),
+            appearance: None,
         });
         metadata.section_position = Some(2_000_000);
         metadata.section_entered_at = Some(recency_at);

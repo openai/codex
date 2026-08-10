@@ -56,6 +56,7 @@ pub use model::ThreadMetadata;
 pub use model::ThreadMetadataBuilder;
 pub use model::ThreadRelationFilter;
 pub use model::ThreadSection;
+pub use model::ThreadSectionAppearance;
 pub use model::ThreadSectionsPage;
 pub use model::ThreadsPage;
 pub use runtime::ExternalAgentConfigImportDetailsRecord;

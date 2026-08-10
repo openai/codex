@@ -1019,6 +1019,7 @@ fn stored_thread_from_state(
                     id.clone()
                 },
                 id,
+                appearance: None,
             }),
         section_position: state.section_positions.get(&thread_id).copied(),
         section_entered_at: state.section_entered_at.get(&thread_id).copied(),

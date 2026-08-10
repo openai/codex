@@ -19,6 +19,7 @@ async fn local_thread_sections_require_sqlite_and_preserve_section_identity() {
         unsupported_store
             .create_thread_section(CreateThreadSectionParams {
                 name: "Research".to_string(),
+                appearance: None,
             })
             .await,
         Err(ThreadStoreError::Unsupported {
@@ -35,9 +36,14 @@ async fn local_thread_sections_require_sqlite_and_preserve_section_identity() {
     let store = LocalThreadStore::new(config, Some(runtime));
     assert!(store.supports_thread_sections());
 
+    let appearance = codex_state::ThreadSectionAppearance {
+        icon: Some("folder".to_string()),
+        color: Some("purple".to_string()),
+    };
     let section = store
         .create_thread_section(CreateThreadSectionParams {
             name: "Research".to_string(),
+            appearance: Some(appearance.clone()),
         })
         .await
         .expect("create section");
@@ -54,6 +60,7 @@ async fn local_thread_sections_require_sqlite_and_preserve_section_identity() {
         .rename_thread_section(RenameThreadSectionParams {
             section_id: section.id.clone(),
             name: "Planning".to_string(),
+            appearance: None,
         })
         .await
         .expect("rename section");
@@ -62,6 +69,7 @@ async fn local_thread_sections_require_sqlite_and_preserve_section_identity() {
         Some(StoredThreadSection {
             id: section.id.clone(),
             name: "Planning".to_string(),
+            appearance: Some(appearance),
         })
     );
 

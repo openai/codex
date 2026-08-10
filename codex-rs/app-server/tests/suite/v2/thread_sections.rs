@@ -13,6 +13,7 @@ use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadSection;
+use codex_app_server_protocol::ThreadSectionAppearance;
 use codex_app_server_protocol::ThreadSectionCreateParams;
 use codex_app_server_protocol::ThreadSectionCreateResponse;
 use codex_app_server_protocol::ThreadSectionDeleteParams;
@@ -67,6 +68,10 @@ async fn custom_sections_remain_discoverable_across_ordered_updates_and_restart(
             request_id,
             params: ThreadSectionCreateParams {
                 name: "  Work  ".to_string(),
+                appearance: Some(ThreadSectionAppearance {
+                    icon: Some("folder".to_string()),
+                    color: Some("purple".to_string()),
+                }),
             },
         })
         .await?;
@@ -78,6 +83,7 @@ async fn custom_sections_remain_discoverable_across_ordered_updates_and_restart(
             request_id,
             params: ThreadSectionCreateParams {
                 name: "Personal".to_string(),
+                appearance: None,
             },
         })
         .await?;
@@ -103,7 +109,11 @@ async fn custom_sections_remain_discoverable_across_ordered_updates_and_restart(
     let second_rename = server
         .send_raw_request(
             "threadSection/update",
-            Some(json!({ "sectionId": created.section.id, "name": "  Projects  " })),
+            Some(json!({
+                "sectionId": created.section.id,
+                "name": "  Projects  ",
+                "appearance": { "icon": "star", "color": "blue" },
+            })),
         )
         .await?;
     let listed_after_renames = server
@@ -123,6 +133,10 @@ async fn custom_sections_remain_discoverable_across_ordered_updates_and_restart(
         ThreadSection {
             id: created.section.id,
             name: "Projects".to_string(),
+            appearance: Some(ThreadSectionAppearance {
+                icon: Some("star".to_string()),
+                color: Some("blue".to_string()),
+            }),
         }
     );
     assert!(observed.data.contains(&renamed.section));
@@ -147,11 +161,24 @@ async fn custom_sections_remain_discoverable_across_ordered_updates_and_restart(
             ThreadSection {
                 id: PINNED_THREAD_SECTION_ID.to_string(),
                 name: PINNED_THREAD_SECTION_NAME.to_string(),
+                appearance: None,
             },
             renamed.section,
             retained.section,
         ]
     );
+
+    let cleared: ThreadSectionUpdateResponse = restarted
+        .request(|request_id| ClientRequest::ThreadSectionUpdate {
+            request_id,
+            params: ThreadSectionUpdateParams {
+                section_id: persisted.data[1].id.clone(),
+                name: "Projects".to_string(),
+                appearance: Some(None),
+            },
+        })
+        .await?;
+    assert_eq!(cleared.section.appearance, None);
 
     Ok(())
 }
@@ -194,6 +221,10 @@ async fn deleting_custom_sections_unassigns_active_and_archived_members() -> Res
             request_id,
             params: ThreadSectionCreateParams {
                 name: "Work".to_string(),
+                appearance: Some(ThreadSectionAppearance {
+                    icon: Some("folder".to_string()),
+                    color: Some("purple".to_string()),
+                }),
             },
         })
         .await?;
@@ -224,6 +255,7 @@ async fn deleting_custom_sections_unassigns_active_and_archived_members() -> Res
             params: ThreadSectionUpdateParams {
                 section_id: created.section.id.clone(),
                 name: "Projects".to_string(),
+                appearance: None,
             },
         })
         .await?;
@@ -339,6 +371,25 @@ async fn custom_section_management_rejects_empty_names_missing_ids_and_pinned_mu
         let error = section_request_error(&mut server, method, params).await?;
         assert_eq!(error.error.code, INVALID_PARAMS_ERROR_CODE);
         assert_eq!(error.error.message, message);
+    }
+
+    for (method, field) in [
+        ("threadSection/create", "icon"),
+        ("threadSection/create", "color"),
+        ("threadSection/update", "icon"),
+        ("threadSection/update", "color"),
+    ] {
+        let mut params = json!({ "name": "Work", "appearance": {} });
+        params["appearance"][field] = json!("x".repeat(65));
+        if method == "threadSection/update" {
+            params["sectionId"] = json!(&missing_id);
+        }
+        let error = section_request_error(&mut server, method, params).await?;
+        assert_eq!(error.error.code, INVALID_PARAMS_ERROR_CODE);
+        assert_eq!(
+            error.error.message,
+            format!("section appearance {field} must not exceed 64 bytes")
+        );
     }
 
     for (method, params) in [

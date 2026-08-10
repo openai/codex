@@ -168,6 +168,7 @@ mod tests {
         metadata.section = Some(codex_state::ThreadSection {
             id: codex_state::PINNED_THREAD_SECTION_ID.to_string(),
             name: codex_state::PINNED_THREAD_SECTION_NAME.to_string(),
+            appearance: None,
         });
         runtime
             .upsert_thread(&metadata)
