@@ -1585,10 +1585,15 @@ impl ThreadManagerState {
         } = options;
         let client_mcp_extensions = self.client_mcp_extensions_for_child(parent_thread_id).await;
         let thread_source = initial_history.get_resumed_thread_source();
+        let environments = inherited_environments
+            .as_ref()
+            .filter(|_| initial_history.get_multi_agent_version() == Some(MultiAgentVersion::V2))
+            .map(TurnEnvironmentSnapshot::to_selections);
         let options = StartThreadOptions {
             initial_history,
             session_source: Some(session_source),
             thread_source,
+            environments,
             client_mcp_extensions,
             ..StartThreadOptions::new(config)
         };
