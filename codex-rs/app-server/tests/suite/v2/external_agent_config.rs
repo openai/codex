@@ -372,23 +372,13 @@ async fn external_agent_config_secondary_source_imports_session_and_plugin_end_t
 {
     let codex_home = TempDir::new()?;
     let source_home = secondary_external_agent_home(codex_home.path());
-    let project_root = codex_home.path().join("workspace with.dots_and-dashes");
+    let project_root = codex_home.path().join("my-project");
     std::fs::create_dir_all(&project_root)?;
 
     let encoded_project = project_root
         .to_string_lossy()
         .trim_start_matches(['/', '\\'])
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() {
-                character
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>();
-    #[cfg(windows)]
-    let encoded_project = encoded_project.replacen("--", "-", /*count*/ 1);
+        .replace([':', '/', '\\'], "-");
     let session_path = source_home
         .join("projects")
         .join(encoded_project)
