@@ -1,0 +1,235 @@
+diff --git a/windows/private/extensions/windows_sdk.bzl b/windows/private/extensions/windows_sdk.bzl
+index 420cee4..16d2cf3 100644
+--- a/windows/private/extensions/windows_sdk.bzl
++++ b/windows/private/extensions/windows_sdk.bzl
+@@ -133,19 +133,18 @@ def _repository_fs_is_case_sensitive(repository_ctx):
+ def _apply_transformations(repository_ctx):
+     transformations = repository_ctx.attr.transformations
+     if not transformations:
+-        return
++        return []
+ 
+     sysroot = repository_ctx.path(_SYSROOT_DIR)
+     if not sysroot.exists:
+-        return
+-    if not _repository_fs_is_case_sensitive(repository_ctx):
+-        # Case-only aliases cannot be materialized on case-insensitive filesystems.
+-        return
++        return []
++    repository_fs_is_case_sensitive = _repository_fs_is_case_sensitive(repository_ctx)
+ 
+     all_files = []
+     _collect_files_recursive(sysroot, all_files)
+     all_rel_files = [_relative_to_repo_root(repository_ctx, f) for f in all_files]
+     created = {}
++    logical_aliases = []
+ 
+     for src_pattern, transform in transformations.items():
+         src_pattern = _normalize_relpath(src_pattern)
+@@ -165,11 +164,18 @@ def _apply_transformations(repository_ctx):
+             if not dst_rel or dst_rel == src_rel or created.get(dst_rel, False):
+                 continue
+             if repository_ctx.path(dst_rel).exists:
++                if not repository_fs_is_case_sensitive and src_rel.lower() == dst_rel.lower():
++                    # Keep the alternate spelling as a Bazel source label. Bazel then
++                    # preserves that spelling in a case-sensitive remote input tree.
++                    logical_aliases.append(dst_rel)
++                    created[dst_rel] = True
+                 continue
+ 
+             repository_ctx.symlink(src_rel, dst_rel)
+             created[dst_rel] = True
+ 
++    return sorted(logical_aliases)
++
+ def _windows_sdk_repository_impl(repository_ctx):
+     if not repository_ctx.attr.windows_sdk_version:
+         fail("windows_sdk_version must be set")
+@@ -220,8 +226,8 @@ def _windows_sdk_repository_impl(repository_ctx):
+         "windows_sdk_include_versions",
+     )
+ 
+-    _apply_transformations(repository_ctx)
+     _keep_exposed_windows_sdk_files(repository_ctx, _SYSROOT_DIR, include_version, requested_architectures)
++    logical_aliases = _apply_transformations(repository_ctx)
+ 
+     repository_ctx.template(
+         "BUILD.bazel",
+@@ -229,6 +235,7 @@ def _windows_sdk_repository_impl(repository_ctx):
+         substitutions = {
+             "__WINSDK_DIR__": _SYSROOT_DIR,
+             "__WINSDK_INCLUDE_VERSION__": include_version,
++            "__WINSDK_LOGICAL_ALIASES__": repr(logical_aliases),
+         },
+     )
+ 
+@@ -258,7 +265,9 @@ _WINDOWS_SDK_ATTR = {
+     "transformations": attr.string_dict(
+         default = {},
+         doc = """
+-            Dict of source path patterns to transformations applied when run on case-sensitive filesystems.
++            Dict of source path patterns to transformations applied to extracted Windows SDK files.
++            Case-only transformations are Bazel aliases on case-insensitive filesystems and symlinks on
++            case-sensitive filesystems.
+ 
+             Supports exact paths and `**/*.ext` patterns. Use value `lowercase` to create lowercase aliases.
+ 
+diff --git a/windows/private/extensions/windows_sdk.BUILD.bazel b/windows/private/extensions/windows_sdk.BUILD.bazel
+index 0d03f4e..199fdf0 100644
+--- a/windows/private/extensions/windows_sdk.BUILD.bazel
++++ b/windows/private/extensions/windows_sdk.BUILD.bazel
+@@ -5,6 +5,8 @@ load("@bazel_skylib//rules/directory:subdirectory.bzl", "subdirectory")
+ 
+ package(default_visibility = ["//visibility:public"])
+ 
++_LOGICAL_ALIASES = __WINSDK_LOGICAL_ALIASES__
++
+ config_setting(
+     name = "windows_aarch64",
+     constraint_values = [
+@@ -18,7 +20,7 @@ directory(
+     srcs = glob(
+         ["__WINSDK_DIR__/**"],
+         allow_empty = True,
+-    ),
++    ) + _LOGICAL_ALIASES,
+ )
+ 
+ subdirectory(
+@@ -32,7 +34,11 @@ directory(
+     srcs = glob(
+         ["__WINSDK_DIR__/base/c/Include/__WINSDK_INCLUDE_VERSION__/ucrt/**"],
+         allow_empty = True,
+-    ),
++    ) + [
++        f
++        for f in _LOGICAL_ALIASES
++        if f.startswith("__WINSDK_DIR__/base/c/Include/__WINSDK_INCLUDE_VERSION__/ucrt/")
++    ],
+ )
+ 
+ subdirectory(
+@@ -46,7 +52,11 @@ directory(
+     srcs = glob(
+         ["__WINSDK_DIR__/base/c/Include/__WINSDK_INCLUDE_VERSION__/shared/**"],
+         allow_empty = True,
+-    ),
++    ) + [
++        f
++        for f in _LOGICAL_ALIASES
++        if f.startswith("__WINSDK_DIR__/base/c/Include/__WINSDK_INCLUDE_VERSION__/shared/")
++    ],
+ )
+ 
+ subdirectory(
+@@ -60,7 +70,11 @@ directory(
+     srcs = glob(
+         ["__WINSDK_DIR__/base/c/Include/__WINSDK_INCLUDE_VERSION__/um/**"],
+         allow_empty = True,
+-    ),
++    ) + [
++        f
++        for f in _LOGICAL_ALIASES
++        if f.startswith("__WINSDK_DIR__/base/c/Include/__WINSDK_INCLUDE_VERSION__/um/")
++    ],
+ )
+ 
+ subdirectory(
+@@ -74,7 +88,11 @@ directory(
+     srcs = glob(
+         ["__WINSDK_DIR__/base/c/Include/__WINSDK_INCLUDE_VERSION__/winrt/**"],
+         allow_empty = True,
+-    ),
++    ) + [
++        f
++        for f in _LOGICAL_ALIASES
++        if f.startswith("__WINSDK_DIR__/base/c/Include/__WINSDK_INCLUDE_VERSION__/winrt/")
++    ],
+ )
+ 
+ subdirectory(
+@@ -88,7 +106,11 @@ directory(
+     srcs = glob(
+         ["__WINSDK_DIR__/arm64/c/ucrt/arm64/**"],
+         allow_empty = True,
+-    ),
++    ) + [
++        f
++        for f in _LOGICAL_ALIASES
++        if f.startswith("__WINSDK_DIR__/arm64/c/ucrt/arm64/")
++    ],
+ )
+ 
+ subdirectory(
+@@ -102,7 +124,11 @@ directory(
+     srcs = glob(
+         ["__WINSDK_DIR__/x64/c/ucrt/x64/**"],
+         allow_empty = True,
+-    ),
++    ) + [
++        f
++        for f in _LOGICAL_ALIASES
++        if f.startswith("__WINSDK_DIR__/x64/c/ucrt/x64/")
++    ],
+ )
+ 
+ subdirectory(
+@@ -116,7 +142,11 @@ directory(
+     srcs = glob(
+         ["__WINSDK_DIR__/arm64/c/um/arm64/**"],
+         allow_empty = True,
+-    ),
++    ) + [
++        f
++        for f in _LOGICAL_ALIASES
++        if f.startswith("__WINSDK_DIR__/arm64/c/um/arm64/")
++    ],
+ )
+ 
+ subdirectory(
+@@ -130,7 +160,11 @@ directory(
+     srcs = glob(
+         ["__WINSDK_DIR__/x64/c/um/x64/**"],
+         allow_empty = True,
+-    ),
++    ) + [
++        f
++        for f in _LOGICAL_ALIASES
++        if f.startswith("__WINSDK_DIR__/x64/c/um/x64/")
++    ],
+ )
+ 
+ subdirectory(
+@@ -160,7 +194,7 @@ filegroup(
+     srcs = glob(
+         ["**"],
+         allow_empty = True,
+-    ),
++    ) + _LOGICAL_ALIASES,
+ )
+ 
+ filegroup(
+@@ -177,7 +211,11 @@ filegroup(
+             "**/*.hpp",
+         ],
+         allow_empty = True,
+-    ),
++    ) + [
++        f
++        for f in _LOGICAL_ALIASES
++        if f.endswith(".h") or f.endswith(".hh") or f.endswith(".hpp")
++    ],
+ )
+ 
+ filegroup(
+@@ -185,5 +223,9 @@ filegroup(
+     srcs = glob(
+         ["**/*.lib"],
+         allow_empty = True,
+-    ),
++    ) + [
++        f
++        for f in _LOGICAL_ALIASES
++        if f.endswith(".lib")
++    ],
+ )
