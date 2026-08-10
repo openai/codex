@@ -551,8 +551,12 @@ mod tests {
     use crate::metrics::API_CALL_COUNT_METRIC;
     use crate::metrics::API_CALL_DURATION_METRIC;
     use crate::metrics::MetricsExporter;
+    use crate::metrics::RESPONSES_API_ENGINE_IAPI_TTFT_DURATION_METRIC;
+    use crate::metrics::RESPONSES_API_ENGINE_SERVICE_TBT_DURATION_METRIC;
+    use crate::metrics::RESPONSES_API_ENGINE_SERVICE_TTFT_DURATION_METRIC;
     use crate::metrics::TOOL_CALL_COUNT_METRIC;
     use crate::metrics::TOOL_CALL_DURATION_METRIC;
+    use crate::metrics::TURN_TOKEN_USAGE_METRIC;
     use opentelemetry_sdk::metrics::InMemoryMetricExporter;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
@@ -658,7 +662,7 @@ mod tests {
     }
 
     #[test]
-    fn statsig_runtime_only_metrics_are_not_exported() -> Result<(), Box<dyn Error>> {
+    fn statsig_disabled_metrics_are_not_exported() -> Result<(), Box<dyn Error>> {
         let exporter = InMemoryMetricExporter::default();
         let mut config = MetricsConfig::otlp(
             "test",
@@ -671,8 +675,25 @@ mod tests {
 
         metrics.counter(API_CALL_COUNT_METRIC, /*inc*/ 1, &[])?;
         metrics.record_duration(API_CALL_DURATION_METRIC, Duration::from_millis(100), &[])?;
+        metrics.counter("codex.conversation.turn.count", /*inc*/ 1, &[])?;
+        metrics.record_duration(
+            RESPONSES_API_ENGINE_IAPI_TTFT_DURATION_METRIC,
+            Duration::from_millis(100),
+            &[],
+        )?;
+        metrics.record_duration(
+            RESPONSES_API_ENGINE_SERVICE_TBT_DURATION_METRIC,
+            Duration::from_millis(100),
+            &[],
+        )?;
+        metrics.record_duration(
+            RESPONSES_API_ENGINE_SERVICE_TTFT_DURATION_METRIC,
+            Duration::from_millis(100),
+            &[],
+        )?;
         metrics.counter(TOOL_CALL_COUNT_METRIC, /*inc*/ 1, &[])?;
         metrics.record_duration(TOOL_CALL_DURATION_METRIC, Duration::from_millis(25), &[])?;
+        metrics.histogram(TURN_TOKEN_USAGE_METRIC, /*value*/ 100, &[])?;
         metrics.counter("codex.turns", /*inc*/ 1, &[])?;
         metrics.shutdown()?;
 
