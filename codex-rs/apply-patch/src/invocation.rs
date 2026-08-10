@@ -232,6 +232,13 @@ async fn try_verify_apply_patch_args(
     let mut changes = HashMap::new();
     for hunk in hunks {
         let path = hunk.resolve_path(&effective_cwd)?;
+        if changes.contains_key(&path) {
+            return Err(ParseError::InvalidPatchError(format!(
+                "multiple operations target {}",
+                path.inferred_native_path_string()
+            ))
+            .into());
+        }
         match hunk {
             Hunk::AddFile { contents, .. } => {
                 changes.insert(path, ApplyPatchFileChange::Add { content: contents });

@@ -438,6 +438,60 @@ D delete.txt
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_patch_cli_preserves_distinct_updated_paths() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = apply_patch_harness().await?;
+    harness.write_file("first.txt", "first before\n").await?;
+    harness.write_file("second.txt", "second before\n").await?;
+
+    let patch = "*** Begin Patch\n*** Update File: first.txt\n@@\n-first before\n+first after\n*** Update File: second.txt\n@@\n-second before\n+second after\n*** End Patch";
+    let call_id = "apply-distinct-updates";
+    mount_apply_patch(&harness, call_id, patch, "done").await;
+
+    harness.submit("please update both files").await?;
+
+    assert_regex_match(
+        r"(?s)^Exit code: 0.*Success\. Updated the following files:\nM first\.txt\nM second\.txt\n?$",
+        &harness.apply_patch_output(call_id).await,
+    );
+    assert_eq!(harness.read_file_text("first.txt").await?, "first after\n");
+    assert_eq!(
+        harness.read_file_text("second.txt").await?,
+        "second after\n"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_patch_cli_rejects_duplicate_resolved_paths() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = apply_patch_harness().await?;
+    harness.write_file("duplicate.txt", "before\n").await?;
+
+    let patch = "*** Begin Patch\n*** Update File: duplicate.txt\n@@\n-before\n+first after\n*** Update File: ./duplicate.txt\n@@\n-before\n+second after\n*** End Patch";
+    let call_id = "apply-duplicate-resolved-path";
+    mount_apply_patch(&harness, call_id, patch, "done").await;
+
+    harness.submit("please apply both updates").await?;
+
+    let out = harness.apply_patch_output(call_id).await;
+    assert!(
+        out.contains("apply_patch verification failed"),
+        "expected verification failure: {out}"
+    );
+    assert!(
+        out.contains("multiple operations target"),
+        "expected duplicate-path diagnostics: {out}"
+    );
+    assert_eq!(harness.read_file_text("duplicate.txt").await?, "before\n");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_cli_multiple_chunks() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
