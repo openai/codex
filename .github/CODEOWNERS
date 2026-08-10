@@ -8,6 +8,7 @@
 /codex-rs/exec-server/ @openai/codex-core-agent-team
 /codex-rs/exec-server-protocol/ @openai/codex-core-agent-team
 /codex-rs/ext/extension-api/ @openai/codex-core-agent-team
+/codex-rs/history/ @openai/codex-core-agent-team
 /codex-rs/model-provider/ @openai/codex-core-agent-team
 /codex-rs/models-manager/ @openai/codex-core-agent-team
 /codex-rs/prompts/ @openai/codex-core-agent-team

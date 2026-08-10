@@ -1,13 +1,13 @@
 use codex_core::UserMessageAdmission;
 use codex_core::config::Constrained;
+use codex_history::RolloutItem;
+use codex_history::RolloutLine;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;

@@ -2144,8 +2144,10 @@ dependencies = [
  "codex-app-server-protocol-noop-macros",
  "codex-experimental-api-macros",
  "codex-extension-items",
+ "codex-history",
  "codex-internal-extra-config",
  "codex-protocol",
+ "codex-rollout",
  "codex-secrets",
  "codex-shell-command",
  "codex-utils-absolute-path",
@@ -2390,6 +2392,7 @@ dependencies = [
  "codex-features",
  "codex-git-attribution",
  "codex-git-utils",
+ "codex-history",
  "codex-home",
  "codex-http-client",
  "codex-install-context",
@@ -2748,6 +2751,7 @@ dependencies = [
  "codex-feedback",
  "codex-file-system",
  "codex-git-utils",
+ "codex-history",
  "codex-home",
  "codex-hooks",
  "codex-http-client",
@@ -2855,6 +2859,7 @@ dependencies = [
  "codex-exec-server",
  "codex-extension-api",
  "codex-features",
+ "codex-history",
  "codex-home",
  "codex-image-generation-extension",
  "codex-login",
@@ -2942,6 +2947,7 @@ dependencies = [
  "codex-core",
  "codex-feedback",
  "codex-git-utils",
+ "codex-history",
  "codex-login",
  "codex-model-provider-info",
  "codex-otel",
@@ -3254,6 +3260,7 @@ dependencies = [
  "codex-extension-api",
  "codex-otel",
  "codex-protocol",
+ "codex-rollout",
  "codex-state",
  "codex-tools",
  "codex-utils-absolute-path",
@@ -3273,6 +3280,18 @@ dependencies = [
  "codex-core",
  "codex-extension-api",
  "codex-protocol",
+]
+
+[[package]]
+name = "codex-history"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-protocol",
+ "pretty_assertions",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -4030,6 +4049,7 @@ dependencies = [
  "codex-extension-items",
  "codex-file-search",
  "codex-git-utils",
+ "codex-history",
  "codex-otel",
  "codex-protocol",
  "codex-state",
@@ -4208,6 +4228,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "codex-git-utils",
+ "codex-history",
  "codex-protocol",
  "codex-utils-absolute-path",
  "libsqlite3-sys",
@@ -4344,6 +4365,7 @@ dependencies = [
  "codex-feedback",
  "codex-file-search",
  "codex-git-utils",
+ "codex-history",
  "codex-http-client",
  "codex-install-context",
  "codex-login",

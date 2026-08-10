@@ -22,8 +22,8 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::fs::PermissionsExt;
 
 use codex_protocol::ThreadId;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
+use codex_rollout::RolloutItem;
+use codex_rollout::RolloutLine;
 use tokio::fs::File;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;

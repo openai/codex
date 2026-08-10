@@ -1,5 +1,5 @@
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::RolloutItem;
+use codex_rollout::RolloutItem;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 

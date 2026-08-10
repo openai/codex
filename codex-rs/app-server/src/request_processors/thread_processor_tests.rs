@@ -45,12 +45,12 @@ mod persisted_resume_approval_policy_tests {
     use codex_protocol::models::PermissionProfile;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::EventMsg;
-    use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::SandboxPolicy;
     use codex_protocol::protocol::ThreadSettingsAppliedEvent;
     use codex_protocol::protocol::ThreadSettingsSnapshot;
     use codex_protocol::protocol::TurnContextItem;
     use codex_protocol::protocol::TurnStartedEvent;
+    use codex_rollout::RolloutItem;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
 
@@ -1130,9 +1130,9 @@ mod thread_processor_behavior_tests {
 
     #[tokio::test]
     async fn read_summary_from_rollout_returns_empty_preview_when_no_user_message() -> Result<()> {
-        use codex_protocol::protocol::RolloutItem;
-        use codex_protocol::protocol::RolloutLine;
         use codex_protocol::protocol::SessionMetaLine;
+        use codex_rollout::RolloutItem;
+        use codex_rollout::RolloutLine;
         use std::fs;
         use std::fs::FileTimes;
 
@@ -1188,9 +1188,9 @@ mod thread_processor_behavior_tests {
 
     #[tokio::test]
     async fn read_summary_from_rollout_preserves_agent_nickname() -> Result<()> {
-        use codex_protocol::protocol::RolloutItem;
-        use codex_protocol::protocol::RolloutLine;
         use codex_protocol::protocol::SessionMetaLine;
+        use codex_rollout::RolloutItem;
+        use codex_rollout::RolloutLine;
         use std::fs;
 
         let temp_dir = TempDir::new()?;
@@ -1240,9 +1240,9 @@ mod thread_processor_behavior_tests {
 
     #[tokio::test]
     async fn read_summary_from_rollout_preserves_forked_from_id() -> Result<()> {
-        use codex_protocol::protocol::RolloutItem;
-        use codex_protocol::protocol::RolloutLine;
         use codex_protocol::protocol::SessionMetaLine;
+        use codex_rollout::RolloutItem;
+        use codex_rollout::RolloutLine;
         use std::fs;
 
         let temp_dir = TempDir::new()?;

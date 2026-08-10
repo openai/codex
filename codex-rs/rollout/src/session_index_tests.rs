@@ -1,8 +1,8 @@
 #![allow(warnings, clippy::all)]
 
 use super::*;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
+use crate::RolloutItem;
+use crate::RolloutLine;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;

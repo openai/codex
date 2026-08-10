@@ -9,7 +9,7 @@
 //! into paginated history.
 
 use chrono::DateTime;
-use codex_protocol::protocol::RolloutLine;
+use codex_rollout::RolloutLine;
 use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathUri;
 use serde_json::Map;

@@ -23,7 +23,7 @@ use crate::protocol::common::EXPERIMENTAL_SERVER_METHODS;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
-use codex_protocol::protocol::RolloutLine;
+use codex_history::RolloutLine;
 use schemars::schema_for;
 use serde::Serialize;
 use serde_json::Map;

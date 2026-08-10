@@ -6,7 +6,7 @@
 //! the model.
 
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::RolloutItem;
+use codex_rollout::RolloutItem;
 
 use super::rollback;
 

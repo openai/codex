@@ -46,6 +46,7 @@ members = [
     "core-plugins",
     "diagnostics",
     "hooks",
+    "history",
     "http-client",
     "secrets",
     "exec",
@@ -209,6 +210,7 @@ codex-file-search = { path = "file-search" }
 codex-file-watcher = { path = "file-watcher" }
 codex-git-utils = { path = "git-utils" }
 codex-hooks = { path = "hooks" }
+codex-history = { path = "history" }
 codex-internal-extra-config = { path = "internal-extra-config" } # copybara:strip-for-public
 codex-internal-history-notes-extension = { path = "internal-history-notes-extension" } # copybara:strip-for-public
 codex-internal-persistent-mode = { path = "internal-persistent-mode" } # copybara:strip-for-public

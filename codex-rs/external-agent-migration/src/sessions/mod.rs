@@ -9,7 +9,7 @@ pub(crate) mod records_cur;
 mod title;
 
 use codex_protocol::ThreadId;
-use codex_protocol::protocol::RolloutItem;
+use codex_rollout::RolloutItem;
 use std::collections::BTreeSet;
 use std::io;
 use std::path::Path;

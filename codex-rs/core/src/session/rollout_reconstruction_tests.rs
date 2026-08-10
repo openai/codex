@@ -2,14 +2,14 @@ use super::*;
 
 use super::tests::build_world_state_from_turn_context;
 use super::tests::make_session_and_context;
+use codex_history::CompactedItem;
+use codex_history::InitialHistory;
+use codex_history::ResumedHistory;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::CompactedItem;
-use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
-use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::SessionContextWindow;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;

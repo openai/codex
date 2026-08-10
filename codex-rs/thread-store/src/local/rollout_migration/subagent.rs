@@ -12,11 +12,11 @@
 use std::fs::File;
 use std::path::PathBuf;
 
-use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_rollout::ModelContextScan;
 use codex_rollout::ModelContextScanProgress;
 use codex_rollout::ReverseJsonlScanner;
+use codex_rollout::RolloutItem;
 use codex_rollout::ScanOutcome;
 use serde_json::Value;
 

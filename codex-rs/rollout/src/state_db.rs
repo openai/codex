@@ -1,3 +1,4 @@
+use crate::RolloutItem;
 use crate::config::RolloutConfig;
 use crate::config::RolloutConfigView;
 use crate::list::Cursor;
@@ -9,7 +10,6 @@ use anyhow::Context;
 use chrono::DateTime;
 use chrono::Utc;
 use codex_protocol::ThreadId;
-use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadHistoryMode;
 pub use codex_state::LogEntry;

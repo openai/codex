@@ -10,11 +10,11 @@ use std::collections::HashMap;
 
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::UserMessageEvent;
+use codex_rollout::CompactedItem;
+use codex_rollout::RolloutItem;
+use codex_rollout::RolloutLine;
 
 use super::migration_error;
 use super::rollback;

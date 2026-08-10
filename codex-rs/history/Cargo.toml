@@ -1,0 +1,23 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-history"
+version.workspace = true
+
+[lib]
+doctest = false
+name = "codex_history"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-protocol = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+pretty_assertions = { workspace = true }
+serde_json = { workspace = true }

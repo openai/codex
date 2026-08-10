@@ -327,7 +327,7 @@ async fn read_thread_from_rollout_path(
 
 pub(super) async fn load_history_items(
     path: &std::path::Path,
-) -> ThreadStoreResult<Vec<codex_protocol::protocol::RolloutItem>> {
+) -> ThreadStoreResult<Vec<codex_rollout::RolloutItem>> {
     let (items, _, _) = RolloutRecorder::load_rollout_items(path)
         .await
         .map_err(|err| ThreadStoreError::Internal {
@@ -577,11 +577,11 @@ mod tests {
     use codex_protocol::items::UserMessageItem;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::ItemCompletedEvent;
-    use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::SandboxPolicy;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::ThreadHistoryMode;
     use codex_protocol::user_input::UserInput;
+    use codex_rollout::RolloutItem;
     use codex_state::ThreadMetadataBuilder;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;

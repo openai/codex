@@ -1,8 +1,8 @@
 use crate::model::ThreadMetadata;
+use codex_history::RolloutItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::UserMessageEvent;
@@ -168,6 +168,7 @@ mod tests {
     use crate::model::ThreadMetadata;
     use chrono::DateTime;
     use chrono::Utc;
+    use codex_history::RolloutItem;
     use codex_protocol::ThreadId;
     use codex_protocol::config_types::ApprovalsReviewer;
     use codex_protocol::config_types::CollaborationMode;
@@ -183,7 +184,6 @@ mod tests {
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::ItemCompletedEvent;
-    use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::SandboxPolicy;
     use codex_protocol::protocol::SessionMeta;
     use codex_protocol::protocol::SessionMetaLine;

@@ -20,6 +20,8 @@ use time::macros::format_description;
 use uuid::Uuid;
 
 use crate::INTERACTIVE_SESSION_SOURCES;
+use crate::RolloutItem;
+use crate::RolloutLine;
 use crate::find_thread_path_by_id_str;
 use crate::list::Cursor;
 use crate::list::ThreadItem;
@@ -33,8 +35,6 @@ use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;

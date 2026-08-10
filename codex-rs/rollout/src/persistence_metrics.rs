@@ -2,12 +2,12 @@ use std::io::Write;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use crate::RolloutItem;
 use codex_otel::MetricsClient;
 use codex_protocol::ThreadId;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::ThreadHistoryMode;
 
 use crate::policy::is_persisted_rollout_item;

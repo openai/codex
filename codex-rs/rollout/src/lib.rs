@@ -21,6 +21,11 @@ pub(crate) mod session_index;
 mod sqlite_metrics;
 pub mod state_db;
 
+pub use codex_history::CompactedItem;
+pub use codex_history::InitialHistory;
+pub use codex_history::ResumedHistory;
+pub use codex_history::RolloutItem;
+pub use codex_history::RolloutLine;
 pub(crate) use codex_protocol::protocol;
 
 pub const SESSIONS_SUBDIR: &str = "sessions";

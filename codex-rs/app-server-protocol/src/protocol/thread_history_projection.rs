@@ -4,8 +4,8 @@
 //! `ItemCompleted(TurnItem)` records, not legacy event-only rollouts.
 
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
+use codex_rollout::RolloutItem;
+use codex_rollout::RolloutLine;
 
 use crate::protocol::thread_history::ThreadHistoryChangeSet;
 use crate::protocol::thread_history::ThreadHistoryItemChange;

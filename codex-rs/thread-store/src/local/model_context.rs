@@ -2,13 +2,13 @@ use std::fs::File;
 use std::io;
 
 use codex_protocol::protocol::HistoryPosition;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_rollout::ModelContextScan;
 use codex_rollout::ModelContextScanProgress;
 use codex_rollout::ReverseJsonlScanner;
+use codex_rollout::RolloutItem;
+use codex_rollout::RolloutLine;
 use codex_rollout::ScanOutcome;
 
 use super::LocalThreadStore;

@@ -1,6 +1,8 @@
 #![allow(warnings, clippy::all)]
 
 use super::*;
+use crate::RolloutItem;
+use crate::RolloutLine;
 use crate::config::RolloutConfig;
 use chrono::TimeZone;
 use codex_protocol::SessionId;
@@ -10,8 +12,6 @@ use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HistoryPosition;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;

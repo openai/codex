@@ -6,14 +6,14 @@ use std::time::Duration;
 
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_rollout::RolloutConfig;
+use codex_rollout::RolloutItem;
+use codex_rollout::RolloutLine;
 use codex_rollout::RolloutRecorder;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;

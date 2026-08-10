@@ -1,4 +1,5 @@
 use crate::ARCHIVED_SESSIONS_SUBDIR;
+use crate::RolloutItem;
 use crate::SESSIONS_SUBDIR;
 use crate::compression;
 use crate::list::parse_timestamp_uuid_from_filename;
@@ -10,7 +11,6 @@ use chrono::Timelike;
 use chrono::Utc;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
