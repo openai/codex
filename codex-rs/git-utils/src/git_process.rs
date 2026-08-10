@@ -2,6 +2,7 @@ use std::process::Output;
 use std::process::Stdio;
 use std::time::Duration;
 
+use codex_protocol::shell_environment::scrub_non_inheritable_env_vars;
 #[cfg(windows)]
 use codex_utils_pty::JobObject;
 #[cfg(unix)]
@@ -29,7 +30,7 @@ impl Drop for KillGitProcessTreeOnDrop {
 }
 
 fn spawn_git_command(command: &mut Command) -> Option<(Child, KillGitProcessTreeOnDrop)> {
-    crate::scrub_non_inheritable_environment(command.as_std_mut());
+    scrub_non_inheritable_env_vars(command.as_std_mut());
     #[cfg(unix)]
     command.process_group(0);
     command.kill_on_drop(true);

@@ -4,6 +4,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
+use codex_protocol::shell_environment::scrub_non_inheritable_env_vars;
+
 use crate::GitToolingError;
 
 const DISABLED_HOOKS_PATH: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
@@ -120,7 +122,7 @@ where
         }
     }
     command.args(&args_vec);
-    crate::scrub_non_inheritable_environment(&mut command);
+    scrub_non_inheritable_env_vars(&mut command);
     let output = command.output()?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
