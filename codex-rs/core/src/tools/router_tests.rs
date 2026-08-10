@@ -471,15 +471,22 @@ async fn specs_filter_deferred_dynamic_tools() -> anyhow::Result<()> {
         Vec::new(),
         &dynamic_tools,
     );
+    let visible_specs = router.model_visible_specs();
 
+    assert!(Arc::ptr_eq(&visible_specs, &router.model_visible_specs()));
     assert_eq!(
-        namespace_function_names(&router.model_visible_specs(), "codex_app"),
+        namespace_function_names(&visible_specs, "codex_app"),
         vec![visible_tool.to_string()]
     );
     assert_eq!(
         router.deferred_tool_namespaces(),
         BTreeMap::from([("codex_app".to_string(), "Codex app tools.".to_string())])
     );
+
+    let updated_router = test_tool_router(step_context.as_ref(), Vec::new(), Vec::new(), &[]);
+    let updated_specs = updated_router.model_visible_specs();
+    assert!(!Arc::ptr_eq(&visible_specs, &updated_specs));
+    assert!(namespace_function_names(&updated_specs, "codex_app").is_empty());
 
     Ok(())
 }

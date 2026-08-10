@@ -80,7 +80,7 @@ struct ToolPlanProbe {
 
 impl ToolPlanProbe {
     fn from_router(router: ToolRouter) -> Self {
-        let visible_specs = router.model_visible_specs();
+        let visible_specs = router.model_visible_specs().to_vec();
         let visible_names = visible_specs
             .iter()
             .map(|spec| spec.name().to_string())

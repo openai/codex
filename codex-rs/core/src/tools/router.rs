@@ -67,7 +67,7 @@ pub(crate) fn tool_log_payload<'a>(
 
 pub struct ToolRouter {
     registry: ToolRegistry,
-    model_visible_specs: Vec<ToolSpec>,
+    model_visible_specs: Arc<[ToolSpec]>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -102,12 +102,12 @@ impl ToolRouter {
     pub(crate) fn from_parts(registry: ToolRegistry, model_visible_specs: Vec<ToolSpec>) -> Self {
         Self {
             registry,
-            model_visible_specs,
+            model_visible_specs: model_visible_specs.into(),
         }
     }
 
-    pub(crate) fn model_visible_specs(&self) -> Vec<ToolSpec> {
-        self.model_visible_specs.clone()
+    pub(crate) fn model_visible_specs(&self) -> Arc<[ToolSpec]> {
+        Arc::clone(&self.model_visible_specs)
     }
 
     pub(crate) fn deferred_tool_namespaces(&self) -> BTreeMap<String, String> {
