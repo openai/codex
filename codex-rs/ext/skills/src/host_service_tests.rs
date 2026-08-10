@@ -5,6 +5,7 @@ use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigRequirementsToml;
 use codex_exec_server::LOCAL_FS;
+use codex_skills::ImplicitSkillLookup;
 use codex_skills::LoadedSkillRoot;
 use codex_skills::SkillRootSnapshotCache;
 use codex_skills::SkillRootSnapshots;
@@ -662,10 +663,9 @@ async fn skills_for_config_disables_plugin_skills_by_name() {
     assert_eq!(skill.path_to_skills_md, skill_path);
     assert!(outcome.disabled_paths.contains(&skill.path_to_skills_md));
     assert!(
-        !outcome
-            .allowed_skills_for_implicit_invocation()
-            .iter()
-            .any(|allowed_skill| allowed_skill.path_to_skills_md == skill.path_to_skills_md)
+        outcome
+            .implicit_skill_for_doc_path(&skill.path_to_skills_md)
+            .is_none()
     );
 }
 

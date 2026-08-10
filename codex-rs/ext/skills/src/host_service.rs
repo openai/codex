@@ -40,10 +40,10 @@ use crate::loader::load_and_merge_host_skill_roots_with_request_snapshots;
 
 #[derive(Debug, Clone)]
 pub struct HostSkillsLoadInput {
-    pub cwd: AbsolutePathBuf,
-    pub effective_skill_roots: Vec<PluginSkillRoot>,
-    pub config_layer_stack: ConfigLayerStack,
-    pub bundled_skills_enabled: bool,
+    cwd: AbsolutePathBuf,
+    effective_skill_roots: Vec<PluginSkillRoot>,
+    config_layer_stack: ConfigLayerStack,
+    bundled_skills_enabled: bool,
     plugin_skill_snapshots: Option<SkillRootSnapshots<PluginSkillRoot>>,
 }
 

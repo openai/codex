@@ -27,7 +27,7 @@ pub struct SkillLoadOutcome {
 
 impl SkillLoadOutcome {
     /// Builds an already-composed outcome while retaining the filesystem that supplied each skill.
-    pub fn from_parts(
+    pub(crate) fn from_parts(
         skills: Vec<SkillMetadata>,
         errors: Vec<SkillError>,
         skill_roots: Vec<AbsolutePathBuf>,
@@ -52,25 +52,13 @@ impl SkillLoadOutcome {
         !self.disabled_paths.contains(&skill.path_to_skills_md)
     }
 
-    pub fn is_skill_allowed_for_implicit_invocation(&self, skill: &SkillMetadata) -> bool {
-        self.is_skill_enabled(skill) && skill.allows_implicit_invocation()
-    }
-
-    pub fn allowed_skills_for_implicit_invocation(&self) -> Vec<SkillMetadata> {
-        self.skills
-            .iter()
-            .filter(|skill| self.is_skill_allowed_for_implicit_invocation(skill))
-            .cloned()
-            .collect()
-    }
-
-    pub fn skills_with_enabled(&self) -> impl Iterator<Item = (&SkillMetadata, bool)> {
+    pub(crate) fn skills_with_enabled(&self) -> impl Iterator<Item = (&SkillMetadata, bool)> {
         self.skills
             .iter()
             .map(|skill| (skill, self.is_skill_enabled(skill)))
     }
 
-    pub fn with_disabled_paths(mut self, disabled_paths: HashSet<AbsolutePathBuf>) -> Self {
+    pub(crate) fn with_disabled_paths(mut self, disabled_paths: HashSet<AbsolutePathBuf>) -> Self {
         self.disabled_paths = disabled_paths;
         let mut by_scripts_dir = HashMap::new();
         let mut by_doc_path = HashMap::new();
@@ -92,18 +80,18 @@ impl SkillLoadOutcome {
         self
     }
 
-    pub fn is_agent_plugin_skill(&self, skill: &SkillMetadata) -> bool {
+    pub(crate) fn is_agent_plugin_skill(&self, skill: &SkillMetadata) -> bool {
         self.agent_plugin_skill_paths
             .contains(&skill.path_to_skills_md)
     }
 
     /// Returns the discovery root that supplied a loaded skill path.
-    pub fn skill_root_for_path(&self, path: &AbsolutePathBuf) -> Option<&AbsolutePathBuf> {
+    pub(crate) fn skill_root_for_path(&self, path: &AbsolutePathBuf) -> Option<&AbsolutePathBuf> {
         self.skill_root_by_path.get(path)
     }
 
     /// Returns the logical path used to discover a canonical skill path.
-    pub fn skill_discovery_path_for_path(
+    pub(crate) fn skill_discovery_path_for_path(
         &self,
         path: &AbsolutePathBuf,
     ) -> Option<&AbsolutePathBuf> {
@@ -111,7 +99,7 @@ impl SkillLoadOutcome {
     }
 
     /// Returns loaded skill roots in discovery order.
-    pub fn skill_roots_in_discovery_order(&self) -> impl Iterator<Item = &AbsolutePathBuf> {
+    pub(crate) fn skill_roots_in_discovery_order(&self) -> impl Iterator<Item = &AbsolutePathBuf> {
         self.skill_roots.iter()
     }
 
@@ -124,7 +112,7 @@ impl SkillLoadOutcome {
     }
 
     /// Reads one loaded skill through the filesystem that discovered it.
-    pub async fn read_skill_text(&self, skill: &SkillMetadata) -> io::Result<String> {
+    pub(crate) async fn read_skill_text(&self, skill: &SkillMetadata) -> io::Result<String> {
         let fs = self
             .file_system_for_skill(skill)
             .unwrap_or_else(|| Arc::clone(&LOCAL_FS));
