@@ -176,6 +176,94 @@ fn rejects_ambiguous_encoded_project_cwd() {
 }
 
 #[test]
+fn resolves_cur_project_names_with_common_separators() {
+    for (project_name, encoded_name) in [
+        ("project", "project"),
+        ("my-project", "my-project"),
+        ("my--project", "my-project"),
+        ("my project", "my-project"),
+        ("my.project", "my-project"),
+        ("my..project", "my-project"),
+        ("my_project", "my-project"),
+        ("my+project", "my-project"),
+        ("my@project", "my-project"),
+        ("my&project", "my-project"),
+        ("my-awesome-project", "my-awesome-project"),
+        ("my-awesome-cool-project", "my-awesome-cool-project"),
+    ] {
+        let root = TempDir::new().expect("tempdir");
+        let project = root.path().join(project_name);
+        fs::create_dir_all(&project).expect("project root");
+        let encoded = format!("{}-{encoded_name}", encode_project_path(root.path()));
+
+        assert_eq!(decode_cur_project_path(&encoded), Some(project));
+    }
+}
+
+#[test]
+fn rejects_ambiguous_cur_project_without_a_direct_match() {
+    let root = TempDir::new().expect("tempdir");
+    for project_name in ["my-project", "my project", "my+project"] {
+        fs::create_dir_all(root.path().join(project_name)).expect("project root");
+    }
+    let encoded = format!("{}-my-project", encode_project_path(root.path()));
+
+    assert_eq!(decode_cur_project_path(&encoded), None);
+}
+
+#[test]
+fn rejects_ambiguous_cur_project_with_punctuated_ancestor() {
+    let root = TempDir::new().expect("tempdir");
+    let punctuated_ancestor = root.path().join("a-b").join("c");
+    let punctuated_leaf = root.path().join("a").join("b-c");
+    fs::create_dir_all(&punctuated_ancestor).expect("punctuated ancestor project");
+    fs::create_dir_all(&punctuated_leaf).expect("punctuated leaf project");
+    let encoded = encode_project_path(&punctuated_ancestor);
+
+    assert_eq!(encoded, encode_project_path(&punctuated_leaf));
+    assert_eq!(decode_cur_project_path(&encoded), None);
+}
+
+#[test]
+fn rejects_ambiguous_cur_project_with_multiple_punctuated_ancestors() {
+    for (first, second) in [
+        (&["a-b", "c-d", "e"][..], &["a", "b", "c", "d-e"][..]),
+        (&["a-b", "c-d"][..], &["a", "b", "c", "d"][..]),
+    ] {
+        let root = TempDir::new().expect("tempdir");
+        let first = first
+            .iter()
+            .fold(root.path().to_path_buf(), |path, component| {
+                path.join(component)
+            });
+        let second = second
+            .iter()
+            .fold(root.path().to_path_buf(), |path, component| {
+                path.join(component)
+            });
+        fs::create_dir_all(&first).expect("first project");
+        fs::create_dir_all(&second).expect("second project");
+        let encoded = encode_project_path(&first);
+
+        assert_eq!(encoded, encode_project_path(&second));
+        assert_eq!(decode_cur_project_path(&encoded), None);
+    }
+}
+
+#[test]
+fn parses_windows_cursor_fixture_project_directory() {
+    assert_eq!(
+        decode_cur_windows_project_drive("C--Users-fixture-Cursor"),
+        Some(('C', "-Users-fixture-Cursor"))
+    );
+    assert_eq!(
+        decode_cur_windows_project_drive("C-Users-fixture-Cursor"),
+        Some(('C', "Users-fixture-Cursor"))
+    );
+    assert_eq!(decode_cur_windows_project_drive("1-Users-fixture"), None);
+}
+
+#[test]
 fn ignores_cur_sessions_older_than_import_window() {
     let root = TempDir::new().expect("tempdir");
     let project_root = root.path().join("workspace");
@@ -333,10 +421,12 @@ fn set_modified_at(path: &Path, modified_at: SystemTime) {
 
 #[cfg(windows)]
 fn encode_project_path(path: &Path) -> String {
-    cur_project_path_slug(path).replacen("--", "-", 1)
+    path.to_string_lossy().replace([':', '\\', '/'], "-")
 }
 
 #[cfg(not(windows))]
 fn encode_project_path(path: &Path) -> String {
-    cur_project_path_slug(path)
+    path.to_string_lossy()
+        .trim_start_matches('/')
+        .replace('/', "-")
 }

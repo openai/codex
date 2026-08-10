@@ -8,6 +8,10 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 
+const MAX_CUR_PROJECT_PATH_PROBES: usize = 128;
+const CUR_PROJECT_SEPARATORS: [&str; 11] =
+    ["-", "_", ".", " ", "--", "..", "__", "  ", "+", "@", "&"];
+
 pub fn detect_recent_cur_sessions(
     external_agent_home: &Path,
     codex_home: &Path,
@@ -93,84 +97,126 @@ fn cur_project_cwd(project_storage: &Path, external_agent_home: &Path) -> Option
     decode_cur_project_path(encoded)
 }
 
-#[cfg(not(windows))]
 fn decode_cur_project_path(encoded: &str) -> Option<PathBuf> {
-    let root = Path::new("/");
-    let mut matches = Vec::new();
-    collect_cur_project_paths(encoded, root, root, /*depth*/ 0, &mut matches);
-    if let Some(encoded) = encoded.strip_prefix('-') {
-        collect_cur_project_paths(encoded, root, root, /*depth*/ 0, &mut matches);
+    #[cfg(not(windows))]
+    let mut path = PathBuf::from("/");
+
+    #[cfg(windows)]
+    let (encoded, mut path) = {
+        let (drive, encoded) = decode_cur_windows_project_drive(encoded)?;
+        (encoded, PathBuf::from(format!("{drive}:\\")))
+    };
+
+    let encoded = encoded.strip_prefix('-').unwrap_or(encoded);
+    for component in encoded.split('-') {
+        if component.is_empty()
+            || matches!(component, "." | "..")
+            || component.contains(['/', '\\', ':'])
+        {
+            return None;
+        }
+        path.push(component);
     }
-    unique_path(matches)
+
+    let mut matched_path = None;
+    let mut probes = 0;
+    let mut inspect = |candidate: PathBuf| {
+        if probes >= MAX_CUR_PROJECT_PATH_PROBES {
+            return None;
+        }
+        probes += 1;
+        if candidate.is_dir() {
+            if matched_path
+                .as_ref()
+                .is_some_and(|matched_path| matched_path != &candidate)
+            {
+                return None;
+            }
+            matched_path = Some(candidate);
+        }
+        Some(())
+    };
+    inspect(path.clone())?;
+
+    for suffix_length in 2..=4 {
+        let mut parent = path.as_path();
+        let mut suffix = Vec::with_capacity(suffix_length);
+        for _ in 0..suffix_length {
+            let Some(component) = parent.file_name().and_then(|name| name.to_str()) else {
+                break;
+            };
+            suffix.push(component);
+            let Some(ancestor) = parent.parent() else {
+                break;
+            };
+            parent = ancestor;
+        }
+        if suffix.len() != suffix_length {
+            break;
+        }
+        suffix.reverse();
+
+        for separator in CUR_PROJECT_SEPARATORS {
+            inspect(parent.join(suffix.join(separator)))?;
+        }
+    }
+
+    let mut ancestor = path.parent();
+    while let Some(right) = ancestor {
+        let Some(right_name) = right.file_name().and_then(|name| name.to_str()) else {
+            break;
+        };
+        let Some(left) = right.parent() else {
+            break;
+        };
+        let Some(left_name) = left.file_name().and_then(|name| name.to_str()) else {
+            break;
+        };
+        let Some(prefix) = left.parent() else {
+            break;
+        };
+        let Ok(trailing) = path.strip_prefix(right) else {
+            return None;
+        };
+
+        for separator in CUR_PROJECT_SEPARATORS {
+            let merged_prefix = prefix.join(format!("{left_name}{separator}{right_name}"));
+            if probes >= MAX_CUR_PROJECT_PATH_PROBES {
+                return None;
+            }
+            probes += 1;
+            if !merged_prefix.is_dir() {
+                continue;
+            }
+
+            if probes >= MAX_CUR_PROJECT_PATH_PROBES {
+                return None;
+            }
+            probes += 1;
+            let candidate = merged_prefix.join(trailing);
+            if !candidate.is_dir()
+                || matched_path
+                    .as_ref()
+                    .is_some_and(|matched_path| matched_path != &candidate)
+            {
+                return None;
+            }
+            matched_path = Some(candidate);
+        }
+        ancestor = Some(left);
+    }
+
+    matched_path
 }
 
-#[cfg(windows)]
-fn decode_cur_project_path(encoded: &str) -> Option<PathBuf> {
+#[cfg(any(windows, test))]
+fn decode_cur_windows_project_drive(encoded: &str) -> Option<(char, &str)> {
     let drive = encoded.as_bytes().first().copied()?;
     if !drive.is_ascii_alphabetic() || encoded.as_bytes().get(1) != Some(&b'-') {
         return None;
     }
-    let encoded = encoded.get(2..)?;
-    let base = PathBuf::from(format!("{}:\\", char::from(drive)));
-    let mut matches = Vec::new();
-    collect_cur_project_paths(encoded, &base, &base, /*depth*/ 0, &mut matches);
-    unique_path(matches)
-}
 
-fn collect_cur_project_paths(
-    encoded: &str,
-    base: &Path,
-    root: &Path,
-    depth: usize,
-    matches: &mut Vec<PathBuf>,
-) {
-    if encoded.is_empty() || depth > 32 || matches.len() > 1 {
-        return;
-    }
-    let Ok(entries) = fs::read_dir(base) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        if matches.len() > 1 {
-            break;
-        }
-        let candidate = entry.path();
-        if !candidate.is_dir() {
-            continue;
-        }
-        let Ok(candidate_from_root) = candidate.strip_prefix(root) else {
-            continue;
-        };
-        let candidate_slug = cur_project_path_slug(candidate_from_root);
-        if candidate_slug == encoded {
-            if !matches.contains(&candidate) {
-                matches.push(candidate);
-            }
-        } else if encoded
-            .strip_prefix(&candidate_slug)
-            .is_some_and(|remaining| remaining.starts_with('-'))
-        {
-            collect_cur_project_paths(encoded, &candidate, root, depth + 1, matches);
-        }
-    }
-}
-
-fn cur_project_path_slug(path: &Path) -> String {
-    path.to_string_lossy()
-        .trim_start_matches(['/', '\\'])
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() {
-                character
-            } else {
-                '-'
-            }
-        })
-        .collect()
-}
-
-fn unique_path(mut matches: Vec<PathBuf>) -> Option<PathBuf> {
-    (matches.len() == 1).then(|| matches.swap_remove(0))
+    Some((char::from(drive), encoded.get(2..)?))
 }
 
 #[cfg(test)]
