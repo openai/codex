@@ -1,6 +1,7 @@
 pub use codex_apply_patch::CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR;
 use codex_features::Feature;
 use codex_features::Features;
+use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 #[cfg(test)]
 use codex_protocol::config_types::EnvironmentVariablePattern;
@@ -9,6 +10,7 @@ use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::shell_environment;
 use std::collections::HashMap;
 
+pub use codex_protocol::shell_environment::CODEX_SESSION_ID_ENV_VAR;
 pub use codex_protocol::shell_environment::CODEX_THREAD_ID_ENV_VAR;
 
 /// Informational name of the active permission profile. Child processes can
@@ -31,6 +33,11 @@ pub fn create_env(
 ) -> HashMap<String, String> {
     let thread_id = thread_id.map(|thread_id| thread_id.to_string());
     shell_environment::create_env(policy, thread_id.as_deref())
+}
+
+/// Exposes the shared root-session identity to model-reachable shell commands.
+pub(crate) fn inject_session_id_env(env: &mut HashMap<String, String>, session_id: SessionId) {
+    env.insert(CODEX_SESSION_ID_ENV_VAR.to_string(), session_id.to_string());
 }
 
 /// Injects the selected named permission profile into a shell tool's environment.

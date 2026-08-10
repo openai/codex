@@ -9,6 +9,7 @@ use crate::config::PermissionProfileSnapshot;
 use crate::exec_env::CODEX_PERMISSION_PROFILE_ENV_VAR;
 use crate::exec_env::create_env;
 use crate::exec_env::inject_permission_profile_env;
+use crate::exec_env::inject_session_id_env;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
@@ -125,6 +126,7 @@ async fn shell_command_handler_to_exec_params_uses_selected_environment() {
         &turn_context.config.permissions.shell_environment_policy,
         Some(session.thread_id),
     );
+    inject_session_id_env(&mut expected_env, session.session_id());
     inject_permission_profile_env(&mut expected_env, Some(&active_permission_profile));
 
     let params = ShellCommandToolCallParams {

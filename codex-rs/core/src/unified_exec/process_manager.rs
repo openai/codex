@@ -18,6 +18,7 @@ use crate::exec_env::CODEX_THREAD_ID_ENV_VAR;
 use crate::exec_env::create_env;
 use crate::exec_env::inject_apply_patch_env;
 use crate::exec_env::inject_permission_profile_env;
+use crate::exec_env::inject_session_id_env;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecRequest;
@@ -1160,6 +1161,7 @@ impl UnifiedExecProcessManager {
             CODEX_THREAD_ID_ENV_VAR.to_string(),
             context.session.thread_id.to_string(),
         );
+        inject_session_id_env(&mut env, context.session.session_id());
         inject_apply_patch_env(&mut env, &turn.config.features);
         let active_permission_profile = request.turn_environment.active_permission_profile();
         inject_permission_profile_env(&mut env, active_permission_profile.as_ref());

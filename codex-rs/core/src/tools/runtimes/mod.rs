@@ -5,6 +5,7 @@ Concrete ToolRuntime implementations for specific tools. Each runtime stays
 small and focused and reuses the orchestrator for approvals + sandbox + retry.
 */
 use crate::exec_env::CODEX_PERMISSION_PROFILE_ENV_VAR;
+use crate::exec_env::CODEX_SESSION_ID_ENV_VAR;
 use crate::exec_env::CODEX_THREAD_ID_ENV_VAR;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
@@ -269,6 +270,7 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
         .collect::<String>();
     let mut override_env = explicit_env_overrides.clone();
     for key in [
+        CODEX_SESSION_ID_ENV_VAR,
         CODEX_THREAD_ID_ENV_VAR,
         CODEX_PERMISSION_PROFILE_ENV_VAR,
         CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR,
