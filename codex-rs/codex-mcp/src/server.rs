@@ -17,8 +17,6 @@ use codex_login::CodexAuth;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_rmcp_client::StoredOAuthCredentialSnapshot;
 use codex_rmcp_client::StoredOAuthTokens;
-use codex_rmcp_client::stored_oauth_credential_snapshot;
-use codex_rmcp_client::stored_oauth_credentials;
 use rmcp::model::ElicitationCapability;
 use tracing::warn;
 
@@ -99,6 +97,7 @@ pub(crate) struct McpServerConnectionIdentity {
     environment_id: String,
     oauth_store: Option<(OAuthCredentialsStoreMode, AuthKeyringBackendKind)>,
     oauth_credentials: Result<Option<StoredOAuthCredentialSnapshot>, String>,
+    pub(crate) oauth_store_was_contended: bool,
     resolved_environment: Result<Option<Arc<Environment>>, String>,
     local_stdio_fallback_cwd: Option<PathBuf>,
     referenced_environment_variables: Vec<(String, Option<OsString>)>,
@@ -124,8 +123,14 @@ impl McpServerConnectionIdentity {
         codex_apps_cache_identity: Option<(PathBuf, ConnectorRuntimeContextKey)>,
         client_elicitation_capability: ElicitationCapability,
         client_mcp_extensions: ClientMcpExtensions,
+        previous_identity: Option<&Self>,
     ) -> Self {
         let config = server.config();
+        let valid_http_header_value = |value: &str| {
+            value
+                .bytes()
+                .all(|byte| byte == b'\t' || (byte >= b' ' && byte != 0x7f))
+        };
         let stored_oauth_url = if runtime_auth_provider.is_none()
             && (!matches!(config.auth, McpServerAuth::ChatGpt) || config.is_local_environment())
         {
@@ -133,20 +138,44 @@ impl McpServerConnectionIdentity {
                 McpServerTransportConfig::StreamableHttp {
                     url,
                     bearer_token_env_var: None,
-                    ..
-                } => Some(url),
-                McpServerTransportConfig::StreamableHttp {
-                    bearer_token_env_var: Some(_),
-                    ..
+                    http_headers,
+                    env_http_headers,
+                } if !http_headers.as_ref().is_some_and(|headers| {
+                    headers.iter().any(|(name, value)| {
+                        name.eq_ignore_ascii_case("authorization") && valid_http_header_value(value)
+                    })
+                }) && !env_http_headers.as_ref().is_some_and(|headers| {
+                    headers.iter().any(|(name, env_var)| {
+                        name.eq_ignore_ascii_case("authorization")
+                            && std::env::var(env_var).is_ok_and(|value| {
+                                !value.trim().is_empty() && valid_http_header_value(&value)
+                            })
+                    })
+                }) =>
+                {
+                    Some(url)
                 }
+                McpServerTransportConfig::StreamableHttp { .. }
                 | McpServerTransportConfig::Stdio { .. } => None,
             }
         } else {
             None
         };
         let oauth_credentials = stored_oauth_url.map_or(Ok(None), |url| {
-            stored_oauth_credential_snapshot(
-                config.oauth_credential_name(server_name).as_ref(),
+            let credential_name = config.oauth_credential_name(server_name);
+            StoredOAuthCredentialSnapshot::for_runtime_refresh(
+                previous_identity.and_then(|previous_identity| {
+                    previous_identity
+                        .oauth_credentials
+                        .as_ref()
+                        .ok()
+                        .and_then(Option::as_ref)
+                        .filter(|_| {
+                            previous_identity.oauth_store
+                                == Some((store_mode, keyring_backend_kind))
+                        })
+                }),
+                credential_name.as_ref(),
                 url,
                 store_mode,
                 keyring_backend_kind,
@@ -165,6 +194,11 @@ impl McpServerConnectionIdentity {
         let referenced_environment_variables = referenced_environment_variables(config);
         let runtime_auth = runtime_auth_provider.and(auth).cloned();
         let runtime_auth_token = runtime_auth.as_ref().and_then(|auth| auth.get_token().ok());
+        let oauth_store_was_contended = oauth_credentials
+            .as_ref()
+            .ok()
+            .and_then(Option::as_ref)
+            .is_some_and(StoredOAuthCredentialSnapshot::store_was_contended);
 
         Self {
             transport: config.transport.clone(),
@@ -173,6 +207,7 @@ impl McpServerConnectionIdentity {
                 .is_some()
                 .then_some((store_mode, keyring_backend_kind)),
             oauth_credentials,
+            oauth_store_was_contended,
             resolved_environment: resolved_environment.clone(),
             local_stdio_fallback_cwd,
             referenced_environment_variables,
@@ -241,12 +276,14 @@ impl McpServerConnectionIdentity {
                 store_mode,
                 keyring_backend_kind,
             ),
-            Ok(None) | Err(_) => stored_oauth_credentials(
+            Ok(None) | Err(_) => StoredOAuthCredentialSnapshot::for_runtime_refresh(
+                /*previous*/ None,
                 credential_name.as_ref(),
                 url,
                 store_mode,
                 keyring_backend_kind,
-            ),
+            )
+            .map(|snapshot| snapshot.map(|snapshot| snapshot.credentials().clone())),
         };
 
         match current_credentials {

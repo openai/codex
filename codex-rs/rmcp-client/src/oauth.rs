@@ -72,6 +72,7 @@ use codex_utils_home_dir::find_codex_home;
 pub(crate) use self::resolved_store::ResolvedOAuthCredentialStore;
 pub(crate) use self::resolved_store::ResolvedOAuthTokens;
 pub(crate) use self::resolved_store::resolve_oauth_tokens_from_store_policy;
+use self::resolved_store::try_resolve_oauth_tokens_from_store_policy;
 
 const KEYRING_SERVICE: &str = "Codex MCP Credentials";
 const MCP_OAUTH_SECRET_PREFIX: &str = "MCP_OAUTH";
@@ -88,10 +89,17 @@ pub struct StoredOAuthTokens {
 }
 
 /// OAuth credentials paired with the concrete store selected for their client lifecycle.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct StoredOAuthCredentialSnapshot {
     credentials: StoredOAuthTokens,
     store: ResolvedOAuthCredentialStore,
+    store_was_contended: bool,
+}
+
+impl PartialEq for StoredOAuthCredentialSnapshot {
+    fn eq(&self, other: &Self) -> bool {
+        self.credentials == other.credentials && self.store == other.store
+    }
 }
 
 impl StoredOAuthCredentialSnapshot {
@@ -100,7 +108,49 @@ impl StoredOAuthCredentialSnapshot {
         &self.credentials
     }
 
-    /// Rereads the selected authority, allowing Auto login to migrate File credentials to keyring.
+    /// Returns whether this snapshot was retained because its store could not be read.
+    pub fn store_was_contended(&self) -> bool {
+        self.store_was_contended
+    }
+
+    /// Refreshes a runtime snapshot without waiting or discarding its last known authority.
+    pub fn for_runtime_refresh(
+        previous: Option<&Self>,
+        server_name: &str,
+        url: &str,
+        store_mode: OAuthCredentialsStoreMode,
+        keyring_backend_kind: AuthKeyringBackendKind,
+    ) -> Result<Option<Self>> {
+        match try_resolve_oauth_tokens_from_store_policy(
+            &DefaultKeyringStore,
+            server_name,
+            url,
+            store_mode,
+            keyring_backend_kind,
+        ) {
+            Ok(Some(mut resolved)) => {
+                resolved.tokens.token_response.0.set_expires_in(None);
+                Ok(Some(Self {
+                    credentials: resolved.tokens,
+                    store: resolved.store,
+                    store_was_contended: false,
+                }))
+            }
+            Ok(None) => Ok(None),
+            Err(error) if oauth_store_is_contended(&error) => Ok(previous
+                .filter(|previous| {
+                    previous.credentials.server_name == server_name
+                        && previous.credentials.url == url
+                })
+                .map(|previous| Self {
+                    store_was_contended: true,
+                    ..previous.clone()
+                })),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Rereads the selected authority without waiting for a contended credential-store lock.
     pub fn reload(
         &self,
         server_name: &str,
@@ -111,10 +161,21 @@ impl StoredOAuthCredentialSnapshot {
         if self.store == ResolvedOAuthCredentialStore::File
             && store_mode == OAuthCredentialsStoreMode::Auto
         {
-            return stored_oauth_credentials(server_name, url, store_mode, keyring_backend_kind);
+            return Self::for_runtime_refresh(
+                /*previous*/ None,
+                server_name,
+                url,
+                store_mode,
+                keyring_backend_kind,
+            )
+            .map(|snapshot| snapshot.map(|snapshot| snapshot.credentials));
         }
 
-        let credentials = self.store.load(&DefaultKeyringStore, server_name, url)?;
+        let credentials = match self.store.try_load(&DefaultKeyringStore, server_name, url) {
+            Ok(credentials) => credentials,
+            Err(error) if oauth_store_is_contended(&error) => return Ok(None),
+            Err(error) => return Err(error),
+        };
         Ok(normalized_oauth_credentials(credentials.as_ref()))
     }
 }
@@ -194,7 +255,16 @@ pub fn stored_oauth_credential_snapshot(
     Ok(Some(StoredOAuthCredentialSnapshot {
         credentials,
         store: resolved.store,
+        store_was_contended: false,
     }))
+}
+
+fn oauth_store_is_contended(error: &Error) -> bool {
+    matches!(
+        error.downcast_ref::<OAuthStoreLockFailure>(),
+        Some(OAuthStoreLockFailure::Timeout { acquire_timeout, .. })
+            if acquire_timeout.is_zero()
+    )
 }
 
 fn normalized_oauth_credentials(tokens: Option<&StoredOAuthTokens>) -> Option<StoredOAuthTokens> {
@@ -283,6 +353,14 @@ fn load_oauth_tokens_from_secrets_keyring<K: KeyringStore + Clone + 'static>(
     url: &str,
 ) -> std::result::Result<Option<StoredOAuthTokens>, OAuthKeyringLoadError> {
     let _store_lock = OAuthStoreLock::acquire_for_read(OAuthStore::Secrets)?;
+    load_oauth_tokens_from_secrets_keyring_with_lock_held(keyring_store, server_name, url)
+}
+
+fn load_oauth_tokens_from_secrets_keyring_with_lock_held<K: KeyringStore + Clone + 'static>(
+    keyring_store: &K,
+    server_name: &str,
+    url: &str,
+) -> std::result::Result<Option<StoredOAuthTokens>, OAuthKeyringLoadError> {
     let codex_home = find_codex_home().map_err(anyhow::Error::from)?;
     let manager = SecretsManager::new_with_keyring_store_and_namespace(
         codex_home.to_path_buf(),
@@ -682,6 +760,13 @@ struct FallbackTokenEntry {
 
 fn load_oauth_tokens_from_file(server_name: &str, url: &str) -> Result<Option<StoredOAuthTokens>> {
     let _store_lock = OAuthStoreLock::acquire_for_read(OAuthStore::File)?;
+    load_oauth_tokens_from_file_with_lock_held(server_name, url)
+}
+
+fn load_oauth_tokens_from_file_with_lock_held(
+    server_name: &str,
+    url: &str,
+) -> Result<Option<StoredOAuthTokens>> {
     let Some(store) = read_fallback_file_unlocked()? else {
         return Ok(None);
     };

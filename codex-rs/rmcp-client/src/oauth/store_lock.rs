@@ -59,15 +59,28 @@ enum OAuthStoreLockMode {
 
 impl OAuthStoreLock {
     pub(super) fn acquire_for_write(store: OAuthStore) -> Result<Self, OAuthStoreLockFailure> {
-        Self::acquire_with_mode(store, OAuthStoreLockMode::Exclusive)
+        Self::acquire_with_timeout(
+            store,
+            STORE_LOCK_ACQUIRE_TIMEOUT,
+            OAuthStoreLockMode::Exclusive,
+        )
     }
 
     pub(super) fn acquire_for_read(store: OAuthStore) -> Result<Self, OAuthStoreLockFailure> {
-        Self::acquire_with_mode(store, OAuthStoreLockMode::Shared)
+        Self::acquire_with_timeout(
+            store,
+            STORE_LOCK_ACQUIRE_TIMEOUT,
+            OAuthStoreLockMode::Shared,
+        )
     }
 
-    fn acquire_with_mode(
+    pub(super) fn try_acquire_for_read(store: OAuthStore) -> Result<Self, OAuthStoreLockFailure> {
+        Self::acquire_with_timeout(store, Duration::ZERO, OAuthStoreLockMode::Shared)
+    }
+
+    fn acquire_with_timeout(
         store: OAuthStore,
+        acquire_timeout: Duration,
         mode: OAuthStoreLockMode,
     ) -> Result<Self, OAuthStoreLockFailure> {
         // This lock intentionally follows the existing local File/Secrets credential-store
@@ -77,7 +90,7 @@ impl OAuthStoreLock {
         // provide its own matching lock authority instead of using this local path.
         let codex_home = find_codex_home()
             .map_err(|source| OAuthStoreLockFailure::CodexHome { store, source })?;
-        Self::acquire_in_with_mode(&codex_home, store, STORE_LOCK_ACQUIRE_TIMEOUT, mode)
+        Self::acquire_in_with_mode(&codex_home, store, acquire_timeout, mode)
     }
 
     fn acquire_in_with_mode(

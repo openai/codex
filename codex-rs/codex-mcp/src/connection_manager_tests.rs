@@ -88,6 +88,7 @@ impl McpConnectionSet {
     ) -> Self {
         Self {
             servers: HashMap::new(),
+            protocol_mode: crate::McpProtocolMode::Legacy,
             required_servers: Vec::new(),
             optional_startup_deadline: OnceLock::new(),
             tool_catalog_revision: Arc::new(RwLock::new(0)),
@@ -3034,6 +3035,7 @@ async fn executor_owned_chatgpt_mcp_accepts_only_safe_explicit_authorization() -
                 /*codex_apps_cache_identity*/ None,
                 ElicitationCapability::default(),
                 ClientMcpExtensions::default(),
+                /*previous_identity*/ None,
             )
         };
         let direct_keyring_identity = connection_identity(AuthKeyringBackendKind::Direct);
@@ -3486,6 +3488,7 @@ fn reusable_server_identity(
         /*codex_apps_cache_identity*/ None,
         ElicitationCapability::default(),
         ClientMcpExtensions::default(),
+        /*previous_identity*/ None,
     )
 }
 
@@ -4021,6 +4024,7 @@ async fn connection_identity_distinguishes_accounts_with_the_same_token() -> any
             /*codex_apps_cache_identity*/ None,
             ElicitationCapability::default(),
             ClientMcpExtensions::default(),
+            /*previous_identity*/ None,
         )
     };
 
@@ -4072,6 +4076,7 @@ async fn connection_identity_distinguishes_agent_account_runtime_and_task() -> a
             /*codex_apps_cache_identity*/ None,
             ElicitationCapability::default(),
             ClientMcpExtensions::default(),
+            /*previous_identity*/ None,
         )
     };
     let previous_identity = connection_identity(&previous_auth);

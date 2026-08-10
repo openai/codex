@@ -1025,19 +1025,27 @@ impl RmcpClient {
                     && auth_provider.is_none()
                     && !default_headers.contains_key(AUTHORIZATION)
                 {
-                    if let Some(store) = pinned_credential_store.get().copied() {
-                        // Rebuilds reread the source selected during first construction. Only the
-                        // initial construction below evaluates configured store policy.
-                        store
-                            .load(&DefaultKeyringStore, server_name, url)?
-                            .map(|tokens| ResolvedOAuthTokens { tokens, store })
-                    } else {
+                    let oauth_server_name = server_name.clone();
+                    let oauth_url = url.clone();
+                    let oauth_store_mode = *store_mode;
+                    let oauth_keyring_backend_kind = *keyring_backend_kind;
+                    let pinned_credential_store = Arc::clone(pinned_credential_store);
+
+                    tokio::task::spawn_blocking(move || -> Result<Option<ResolvedOAuthTokens>> {
+                        if let Some(store) = pinned_credential_store.get().copied() {
+                            // Rebuilds reread the source selected during first construction. Only
+                            // initial construction below evaluates configured store policy.
+                            return store
+                                .load(&DefaultKeyringStore, &oauth_server_name, &oauth_url)
+                                .map(|tokens| tokens.map(|tokens| ResolvedOAuthTokens { tokens, store }));
+                        }
+
                         match resolve_oauth_tokens_from_store_policy(
                             &DefaultKeyringStore,
-                            server_name,
-                            url,
-                            *store_mode,
-                            *keyring_backend_kind,
+                            &oauth_server_name,
+                            &oauth_url,
+                            oauth_store_mode,
+                            oauth_keyring_backend_kind,
                         ) {
                             Ok(tokens) => {
                                 if let Some(resolved) = tokens.as_ref() {
@@ -1045,18 +1053,22 @@ impl RmcpClient {
                                     // first concrete source so Auto is not reevaluated mid-client.
                                     pinned_credential_store.set(resolved.store).map_err(|_| {
                                         anyhow!(
-                                            "OAuth credential store pinned concurrently for MCP server `{server_name}`"
+                                            "OAuth credential store pinned concurrently for MCP server `{oauth_server_name}`"
                                         )
                                     })?;
                                 }
-                                tokens
+                                Ok(tokens)
                             }
                             Err(err) => {
-                                warn!("failed to read tokens for server `{server_name}`: {err}");
-                                None
+                                warn!(
+                                    "failed to read tokens for server `{oauth_server_name}`: {err}"
+                                );
+                                Ok(None)
                             }
                         }
-                    }
+                    })
+                    .await
+                    .map_err(|error| anyhow!("OAuth credential loading task failed: {error}"))??
                 } else {
                     None
                 };
