@@ -41,6 +41,8 @@ impl From<LoaderOverrides> for ConfigLoadOptions {
 /// LoaderOverrides overrides managed configuration inputs (primarily for tests).
 #[derive(Debug, Default, Clone)]
 pub struct LoaderOverrides {
+    /// Optional configuration file supplied with the installed Codex package.
+    pub packaged_defaults_path: Option<AbsolutePathBuf>,
     pub user_config_path: Option<AbsolutePathBuf>,
     pub user_config_profile: Option<ProfileV2Name>,
     pub managed_config_path: Option<PathBuf>,
@@ -64,6 +66,7 @@ impl LoaderOverrides {
     pub fn without_managed_config_for_tests() -> Self {
         let base = std::env::temp_dir().join("codex-config-tests");
         Self {
+            packaged_defaults_path: None,
             user_config_path: None,
             user_config_profile: None,
             managed_config_path: Some(base.join("managed_config.toml")),
@@ -212,6 +215,7 @@ impl ConfigLayerEntry {
     // Get the `.codex/` folder associated with this config layer, if any.
     pub fn config_folder(&self) -> Option<AbsolutePathBuf> {
         match &self.name {
+            ConfigLayerSource::PackagedDefaults { .. } => None,
             ConfigLayerSource::Mdm { .. } => None,
             ConfigLayerSource::System { file } => file.parent(),
             ConfigLayerSource::EnterpriseManaged { .. } => None,

@@ -13,6 +13,9 @@ use codex_config::ConfigLayerSource;
 /// function instead of a `From` implementation.
 pub(crate) fn config_layer_source_to_api(source: ConfigLayerSource) -> ApiConfigLayerSource {
     match source {
+        ConfigLayerSource::PackagedDefaults { file } => {
+            ApiConfigLayerSource::PackagedDefaults { file }
+        }
         ConfigLayerSource::Mdm { domain, key } => ApiConfigLayerSource::Mdm { domain, key },
         ConfigLayerSource::System { file } => ApiConfigLayerSource::System { file },
         ConfigLayerSource::EnterpriseManaged { id, name } => {

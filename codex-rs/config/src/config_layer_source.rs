@@ -4,6 +4,8 @@ use serde_json::Value as JsonValue;
 /// Provenance for one layer in the effective Codex configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigLayerSource {
+    /// Default configuration supplied with the installed Codex package.
+    PackagedDefaults { file: AbsolutePathBuf },
     /// Managed preferences delivered by MDM.
     Mdm { domain: String, key: String },
     /// Host-wide configuration loaded from a file.
@@ -30,6 +32,7 @@ impl ConfigLayerSource {
     /// from a layer with a lower precedence.
     pub fn precedence(&self) -> i16 {
         match self {
+            ConfigLayerSource::PackagedDefaults { .. } => -10,
             ConfigLayerSource::Mdm { .. } => 0,
             ConfigLayerSource::System { .. } => 10,
             ConfigLayerSource::EnterpriseManaged { .. } => 15,
@@ -74,6 +77,9 @@ pub struct ConfigLayer {
 
 pub fn format_config_layer_source(source: &ConfigLayerSource, config_toml_file: &str) -> String {
     match source {
+        ConfigLayerSource::PackagedDefaults { file } => {
+            format!("packaged defaults ({})", file.as_path().display())
+        }
         ConfigLayerSource::Mdm { domain, key } => {
             format!("MDM ({domain}:{key})")
         }

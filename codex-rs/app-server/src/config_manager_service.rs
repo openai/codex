@@ -781,6 +781,9 @@ fn value_at_semantic_path<'a>(root: &'a TomlValue, segments: &[String]) -> Optio
 
 fn override_message(layer: &ConfigLayerSource) -> String {
     match layer {
+        ConfigLayerSource::PackagedDefaults { file } => {
+            format!("Overridden by packaged defaults: {}", file.display())
+        }
         ConfigLayerSource::Mdm { domain, key: _ } => {
             format!("Overridden by managed policy (MDM): {domain}")
         }

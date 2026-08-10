@@ -375,7 +375,8 @@ fn load_toml_hooks_from_layer(
 
 fn config_toml_source_path(layer: &ConfigLayerEntry) -> AbsolutePathBuf {
     match &layer.name {
-        ConfigLayerSource::System { file }
+        ConfigLayerSource::PackagedDefaults { file }
+        | ConfigLayerSource::System { file }
         | ConfigLayerSource::User { file, .. }
         | ConfigLayerSource::LegacyManagedConfigTomlFromFile { file } => file.clone(),
         ConfigLayerSource::Project { dot_codex_folder } => layer
@@ -716,6 +717,7 @@ fn hook_trusted_hash(is_managed: bool, state: Option<&HookStateToml>) -> Option<
 
 fn hook_metadata_for_config_layer_source(source: &ConfigLayerSource) -> (HookSource, bool) {
     match source {
+        ConfigLayerSource::PackagedDefaults { .. } => (HookSource::Unknown, false),
         ConfigLayerSource::System { .. } => (HookSource::System, true),
         ConfigLayerSource::User { .. } => (HookSource::User, false),
         ConfigLayerSource::Project { .. } => (HookSource::Project, false),
