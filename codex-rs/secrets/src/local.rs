@@ -4,6 +4,8 @@ use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::PoisonError;
 use std::sync::atomic::Ordering;
 use std::sync::atomic::compiler_fence;
 use std::time::SystemTime;
@@ -24,6 +26,8 @@ use rand::TryRngCore;
 use rand::rngs::OsRng;
 use serde::Deserialize;
 use serde::Serialize;
+use sha2::Digest;
+use sha2::Sha256;
 use tracing::warn;
 
 use super::SecretListEntry;
@@ -37,6 +41,7 @@ const SECRETS_VERSION: u8 = 1;
 const LOCAL_SECRETS_FILENAME: &str = "local.age";
 const CODEX_AUTH_SECRETS_FILENAME: &str = "codex_auth.age";
 const MCP_OAUTH_SECRETS_FILENAME: &str = "mcp_oauth.age";
+static MCP_OAUTH_CACHE: Mutex<Option<CachedMcpSecrets>> = Mutex::new(None);
 
 /// Selects the local encrypted file used by a `LocalSecretsBackend`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -54,6 +59,13 @@ pub enum LocalSecretsNamespace {
 struct SecretsFile {
     version: u8,
     secrets: BTreeMap<String, String>,
+}
+
+struct CachedMcpSecrets {
+    path: PathBuf,
+    ciphertext_hash: [u8; 32],
+    passphrase_hash: [u8; 32],
+    file: Arc<SecretsFile>,
 }
 
 impl SecretsFile {
@@ -157,6 +169,23 @@ impl LocalSecretsBackend {
         let ciphertext = fs::read(&path)
             .with_context(|| format!("failed to read secrets file at {}", path.display()))?;
         let passphrase = self.load_or_create_passphrase()?;
+        let cache = (self.namespace == LocalSecretsNamespace::McpOAuth).then(|| {
+            let ciphertext_hash: [u8; 32] = Sha256::digest(&ciphertext).into();
+            let passphrase_hash: [u8; 32] =
+                Sha256::digest(passphrase.expose_secret().as_bytes()).into();
+            let cache = MCP_OAUTH_CACHE
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            (cache, ciphertext_hash, passphrase_hash)
+        });
+        if let Some((cache, ciphertext_hash, passphrase_hash)) = cache.as_ref()
+            && let Some(cached) = cache.as_ref()
+            && cached.path == path
+            && cached.ciphertext_hash == *ciphertext_hash
+            && cached.passphrase_hash == *passphrase_hash
+        {
+            return Ok(cached.file.as_ref().clone());
+        }
         let plaintext = decrypt_with_passphrase(&ciphertext, &passphrase)?;
         let mut parsed: SecretsFile = serde_json::from_slice(&plaintext).with_context(|| {
             format!(
@@ -173,6 +202,14 @@ impl LocalSecretsBackend {
             parsed.version,
             SECRETS_VERSION
         );
+        if let Some((mut cache, ciphertext_hash, passphrase_hash)) = cache {
+            *cache = Some(CachedMcpSecrets {
+                path,
+                ciphertext_hash,
+                passphrase_hash,
+                file: Arc::new(parsed.clone()),
+            });
+        }
         Ok(parsed)
     }
 
@@ -186,6 +223,14 @@ impl LocalSecretsBackend {
         let ciphertext = encrypt_with_passphrase(&plaintext, &passphrase)?;
         let path = self.secrets_path();
         write_file_atomically(&path, &ciphertext)?;
+        if self.namespace == LocalSecretsNamespace::McpOAuth {
+            let mut cache = MCP_OAUTH_CACHE
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if cache.as_ref().is_some_and(|cached| cached.path == path) {
+                *cache = None;
+            }
+        }
         Ok(())
     }
 
@@ -376,6 +421,8 @@ mod tests {
     use keyring::Error as KeyringError;
     use pretty_assertions::assert_eq;
 
+    static MCP_OAUTH_CACHE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
     #[test]
     fn load_file_rejects_newer_schema_versions() -> Result<()> {
         let codex_home = tempfile::tempdir().expect("tempdir");
@@ -446,11 +493,21 @@ mod tests {
             .collect();
         assert_eq!(filenames, vec![LOCAL_SECRETS_FILENAME.to_string()]);
         assert_eq!(backend.get(&scope, &name)?, Some("two".to_string()));
+        assert!(
+            MCP_OAUTH_CACHE
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .as_ref()
+                .is_none_or(|cached| cached.path != backend.secrets_path())
+        );
         Ok(())
     }
 
     #[test]
     fn local_namespaces_write_separate_files() -> Result<()> {
+        let _cache_lock = MCP_OAUTH_CACHE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         let codex_home = tempfile::tempdir().expect("tempdir");
         let keyring = Arc::new(MockKeyringStore::default());
         let codex_auth_backend = LocalSecretsBackend::new_with_namespace(
@@ -473,6 +530,13 @@ mod tests {
             codex_auth_backend.get(&scope, &name)?,
             Some("codex-auth-value".to_string())
         );
+        assert!(
+            MCP_OAUTH_CACHE
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .as_ref()
+                .is_none_or(|cached| cached.path != codex_auth_backend.secrets_path())
+        );
         assert_eq!(
             mcp_backend.get(&scope, &name)?,
             Some("mcp-value".to_string())
@@ -492,6 +556,80 @@ mod tests {
                 .exists()
         );
         assert!(!codex_home.path().join("secrets").join("local.age").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_oauth_cache_reuses_plaintext_and_invalidates_when_ciphertext_changes() -> Result<()> {
+        let _cache_lock = MCP_OAUTH_CACHE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let keyring = Arc::new(MockKeyringStore::default());
+        let first = LocalSecretsBackend::new_with_namespace(
+            codex_home.path().to_path_buf(),
+            keyring.clone(),
+            LocalSecretsNamespace::McpOAuth,
+        );
+        let second = LocalSecretsBackend::new_with_namespace(
+            codex_home.path().to_path_buf(),
+            keyring,
+            LocalSecretsNamespace::McpOAuth,
+        );
+        let scope = SecretScope::Global;
+        let name = SecretName::new("TEST_SECRET")?;
+        let cached_file = || {
+            Arc::clone(
+                &MCP_OAUTH_CACHE
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .as_ref()
+                    .expect("MCP OAuth credentials should be cached")
+                    .file,
+            )
+        };
+
+        first.set(&scope, &name, "one")?;
+        let (first_cached, second_cached) = std::thread::scope(|threads| {
+            let first_reader = threads.spawn(|| {
+                assert_eq!(first.get(&scope, &name)?, Some("one".to_string()));
+                Ok::<_, anyhow::Error>(cached_file())
+            });
+            let second_reader = threads.spawn(|| {
+                assert_eq!(second.get(&scope, &name)?, Some("one".to_string()));
+                Ok::<_, anyhow::Error>(cached_file())
+            });
+            Ok::<_, anyhow::Error>((
+                first_reader.join().expect("first credential reader")?,
+                second_reader.join().expect("second credential reader")?,
+            ))
+        })?;
+        assert!(Arc::ptr_eq(&first_cached, &second_cached));
+
+        assert_eq!(second.get(&scope, &name)?, Some("one".to_string()));
+        assert!(Arc::ptr_eq(&first_cached, &cached_file()));
+
+        first.set(&scope, &name, "two")?;
+        assert!(
+            MCP_OAUTH_CACHE
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .as_ref()
+                .is_none_or(|cached| cached.path != first.secrets_path())
+        );
+        assert_eq!(second.get(&scope, &name)?, Some("two".to_string()));
+        assert!(!Arc::ptr_eq(&first_cached, &cached_file()));
+
+        assert!(first.delete(&scope, &name)?);
+        assert!(
+            MCP_OAUTH_CACHE
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .as_ref()
+                .is_none_or(|cached| cached.path != first.secrets_path())
+        );
+        assert_eq!(second.get(&scope, &name)?, None);
+
         Ok(())
     }
 }

@@ -282,7 +282,7 @@ fn load_oauth_tokens_from_secrets_keyring<K: KeyringStore + Clone + 'static>(
     server_name: &str,
     url: &str,
 ) -> std::result::Result<Option<StoredOAuthTokens>, OAuthKeyringLoadError> {
-    let _store_lock = OAuthStoreLock::acquire(OAuthStore::Secrets)?;
+    let _store_lock = OAuthStoreLock::acquire_for_read(OAuthStore::Secrets)?;
     let codex_home = find_codex_home().map_err(anyhow::Error::from)?;
     let manager = SecretsManager::new_with_keyring_store_and_namespace(
         codex_home.to_path_buf(),
@@ -386,7 +386,7 @@ fn save_oauth_tokens_to_secrets_keyring<K: KeyringStore + Clone + 'static>(
     tokens: &StoredOAuthTokens,
 ) -> Result<()> {
     let serialized = serde_json::to_string(tokens).context("failed to serialize OAuth tokens")?;
-    let _store_lock = OAuthStoreLock::acquire(OAuthStore::Secrets)?;
+    let _store_lock = OAuthStoreLock::acquire_for_write(OAuthStore::Secrets)?;
     save_oauth_tokens_to_secrets_keyring_with_lock_held(
         keyring_store,
         server_name,
@@ -541,7 +541,7 @@ fn delete_oauth_tokens_from_secrets_keyring<K: KeyringStore + Clone + 'static>(
     server_name: &str,
     url: &str,
 ) -> Result<bool> {
-    let _store_lock = OAuthStoreLock::acquire(OAuthStore::Secrets)?;
+    let _store_lock = OAuthStoreLock::acquire_for_write(OAuthStore::Secrets)?;
     let codex_home = find_codex_home()?;
     let manager = SecretsManager::new_with_keyring_store_and_namespace(
         codex_home.to_path_buf(),
@@ -681,7 +681,7 @@ struct FallbackTokenEntry {
 }
 
 fn load_oauth_tokens_from_file(server_name: &str, url: &str) -> Result<Option<StoredOAuthTokens>> {
-    let _store_lock = OAuthStoreLock::acquire(OAuthStore::File)?;
+    let _store_lock = OAuthStoreLock::acquire_for_read(OAuthStore::File)?;
     let Some(store) = read_fallback_file_unlocked()? else {
         return Ok(None);
     };
@@ -739,7 +739,7 @@ fn load_oauth_tokens_from_file(server_name: &str, url: &str) -> Result<Option<St
 /// Saves one credential while holding the File aggregate-store lock across the full
 /// read-modify-write operation.
 fn save_oauth_tokens_to_file(tokens: &StoredOAuthTokens) -> Result<()> {
-    let _store_lock = OAuthStoreLock::acquire(OAuthStore::File)?;
+    let _store_lock = OAuthStoreLock::acquire_for_write(OAuthStore::File)?;
     save_oauth_tokens_to_file_with_lock_held(tokens)
 }
 
@@ -779,7 +779,7 @@ fn save_oauth_tokens_to_file_with_lock_held(tokens: &StoredOAuthTokens) -> Resul
 }
 
 fn delete_oauth_tokens_from_file(key: &str) -> Result<bool> {
-    let _store_lock = OAuthStoreLock::acquire(OAuthStore::File)?;
+    let _store_lock = OAuthStoreLock::acquire_for_write(OAuthStore::File)?;
     let mut store = match read_fallback_file_unlocked()? {
         Some(store) => store,
         None => return Ok(false),
