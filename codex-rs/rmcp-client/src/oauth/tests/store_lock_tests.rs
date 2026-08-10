@@ -28,6 +28,7 @@ use super::OAuthStore;
 use super::OAuthStoreLock;
 use super::OAuthStoreLockFailure;
 use super::OAuthStoreLockMode;
+use crate::oauth::StoredOAuthCredentialSnapshot;
 use crate::oauth::StoredOAuthTokens;
 use crate::oauth::WrappedOAuthTokenResponse;
 use crate::oauth::fallback_file_path;
@@ -39,6 +40,7 @@ use crate::oauth::save_oauth_tokens_to_file_with_lock_held;
 use crate::oauth::save_oauth_tokens_to_secrets_keyring_with_lock_held;
 use crate::oauth::save_oauth_tokens_with_keyring;
 use crate::oauth::save_oauth_tokens_with_keyring_with_fallback_to_file;
+use crate::oauth::stored_oauth_credential_snapshot;
 use crate::oauth::test_support::TempCodexHome;
 use codex_config::types::OAuthCredentialsStoreMode;
 
@@ -276,6 +278,73 @@ fn auto_load_secrets_lock_failure_does_not_fall_back_to_file() -> Result<()> {
     let loaded = load_oauth_tokens_from_file(&tokens.server_name, &tokens.url)?
         .expect("fallback File should remain independently readable");
     assert_tokens_match_without_expiry(&loaded, &tokens);
+    Ok(())
+}
+
+#[test]
+fn oauth_credential_probes_skip_contended_file_and_secrets_stores() -> Result<()> {
+    let _env = TempCodexHome::new();
+    let tokens = sample_tokens();
+    let file = OAuthCredentialsStoreMode::File;
+    let auto = OAuthCredentialsStoreMode::Auto;
+    let direct = AuthKeyringBackendKind::Direct;
+    let secrets = AuthKeyringBackendKind::Secrets;
+    save_oauth_tokens_to_file(&tokens)?;
+    let snapshot =
+        stored_oauth_credential_snapshot(&tokens.server_name, &tokens.url, file, direct)?
+            .expect("fallback credentials should exist before contention");
+    let reload = |store_mode, keyring_backend_kind| {
+        snapshot.reload(
+            &tokens.server_name,
+            &tokens.url,
+            store_mode,
+            keyring_backend_kind,
+        )
+    };
+    let probe = |store_mode, keyring_backend_kind| {
+        StoredOAuthCredentialSnapshot::for_runtime_refresh(
+            /*previous*/ None,
+            &tokens.server_name,
+            &tokens.url,
+            store_mode,
+            keyring_backend_kind,
+        )
+    };
+    let refresh = |url| {
+        StoredOAuthCredentialSnapshot::for_runtime_refresh(
+            Some(&snapshot),
+            &tokens.server_name,
+            url,
+            file,
+            direct,
+        )
+    };
+
+    {
+        let _lock = OAuthStoreLock::acquire_for_write(OAuthStore::File)?;
+        assert_eq!(reload(file, direct)?, None);
+        assert_eq!(reload(auto, secrets)?, None);
+        assert_eq!(probe(file, direct)?, None);
+        let contended = refresh(&tokens.url)?.expect("the previous snapshot should be retained");
+        assert!(contended.store_was_contended());
+        assert_eq!(contended, snapshot);
+        assert_eq!(
+            refresh("https://another.example.test")?,
+            None,
+            "store contention must not replay credentials for another endpoint",
+        );
+    }
+
+    assert_eq!(reload(file, direct)?, Some(snapshot.credentials().clone()));
+    let refreshed = refresh(&tokens.url)?.expect("the unlocked store should still contain tokens");
+    assert!(!refreshed.store_was_contended());
+
+    let _lock = OAuthStoreLock::acquire_for_write(OAuthStore::Secrets)?;
+    assert_eq!(
+        probe(auto, secrets)?,
+        None,
+        "a locked Secrets authority must not fall back to the stale File entry",
+    );
     Ok(())
 }
 

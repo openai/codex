@@ -3076,8 +3076,28 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
 
     let call_id = "call-789";
     let server_name = "rmcp_http_oauth";
+    let discovered_server_name = "rmcp_http_oauth_discovered";
     let namespace = format!("mcp__{server_name}");
 
+    mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_assistant_message("msg-contended", "OAuth sign-in is still pending."),
+            responses::ev_completed("resp-contended"),
+        ]),
+    )
+    .await;
+    mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_assistant_message(
+                "msg-discovered",
+                "A newly discovered OAuth server is still starting.",
+            ),
+            responses::ev_completed("resp-discovered"),
+        ]),
+    )
+    .await;
     let response_mock = mount_sse_once(
         &server,
         responses::sse(vec![
@@ -3121,6 +3141,11 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
     // server so the test does not share credentials with other suite cases.
     let temp_home = Arc::new(tempdir()?);
     let _codex_home_guard = EnvVarGuard::set("CODEX_HOME", temp_home.path().as_os_str());
+    let unset_authorization_env_var = format!(
+        "CODEX_TEST_UNSET_MCP_OAUTH_AUTHORIZATION_{}",
+        std::process::id()
+    );
+    assert!(std::env::var_os(&unset_authorization_env_var).is_none());
     let environment_id = remote_aware_environment_id();
     let credential_config: McpServerConfig = serde_json::from_value(json!({
         "url": &server_url,
@@ -3135,6 +3160,16 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
         refresh_token,
         OAuthCredentialExpiry::Expired,
     )?;
+    let discovered_credential_name =
+        credential_config.oauth_credential_name(discovered_server_name);
+    write_fallback_oauth_tokens(
+        discovered_credential_name.as_ref(),
+        &server_url,
+        client_id,
+        expected_token,
+        refresh_token,
+        OAuthCredentialExpiry::Valid,
+    )?;
 
     // Phase 4: configure Codex with the OAuth-backed Streamable HTTP MCP
     // server and build the fixture in the active local or remote-aware mode.
@@ -3142,10 +3177,7 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
         .with_model_info_override("gpt-5.4", |model| model.supports_search_tool = false)
         .with_home(temp_home.clone())
         .with_config(move |config| {
-            // Keep OAuth credentials isolated to this test home because Bazel
-            // runs the full core suite in one process.
-            config.mcp_oauth_credentials_store_mode = serde_json::from_value(json!("file"))
-                .expect("`file` should deserialize as OAuthCredentialsStoreMode");
+            config.mcp_oauth_credentials_store_mode = OAuthCredentialsStoreMode::Auto;
             insert_mcp_server(
                 config,
                 server_name,
@@ -3153,7 +3185,10 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
                     url: server_url,
                     bearer_token_env_var: None,
                     http_headers: None,
-                    env_http_headers: None,
+                    env_http_headers: Some(HashMap::from([(
+                        "Authorization".to_string(),
+                        unset_authorization_env_var,
+                    )])),
                 },
                 TestMcpServerOptions {
                     environment_id,
@@ -3184,6 +3219,151 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
         failure_reason,
         Some(McpStartupFailureReason::ReauthenticationRequired),
     );
+
+    let store_lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(temp_home.path().join("mcp-oauth-locks/file-store.lock"))?;
+    store_lock.try_lock()?;
+    fixture
+        .codex
+        .submit(read_only_user_turn(
+            &fixture,
+            "continue while OAuth credentials are locked",
+        ))
+        .await?;
+    let (contended_turn, refreshed_failure_reason, refreshed_failed_servers) =
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let mut contended_turn = None;
+            let mut refreshed_failure_reason = None;
+            let mut refreshed_failed_servers = None;
+            let mut refreshed_starting = false;
+            while contended_turn.is_none()
+                || refreshed_failure_reason.is_none()
+                || refreshed_failed_servers.is_none()
+            {
+                match fixture.codex.next_event().await?.msg {
+                    EventMsg::McpStartupUpdate(update) if update.server == server_name => {
+                        match update.status {
+                            McpStartupStatus::Starting => refreshed_starting = true,
+                            McpStartupStatus::Failed { reason, .. } => {
+                                assert!(refreshed_starting);
+                                refreshed_failure_reason = Some(reason);
+                            }
+                            McpStartupStatus::Ready | McpStartupStatus::Cancelled => {}
+                        }
+                    }
+                    EventMsg::McpStartupComplete(startup) => {
+                        refreshed_failed_servers = Some(startup.failed);
+                    }
+                    EventMsg::TurnComplete(turn) => contended_turn = Some(turn),
+                    _ => {}
+                }
+            }
+            Ok::<_, anyhow::Error>((
+                contended_turn.expect("turn completion was observed"),
+                refreshed_failure_reason.expect("failure status was observed"),
+                refreshed_failed_servers.expect("startup summary was observed"),
+            ))
+        })
+        .await
+        .context("OAuth credential-store contention blocked the user turn or startup status")??;
+    assert_eq!(
+        refreshed_failure_reason,
+        Some(McpStartupFailureReason::ReauthenticationRequired),
+    );
+    assert_eq!(
+        refreshed_failed_servers
+            .into_iter()
+            .map(|failure| failure.server)
+            .collect::<Vec<_>>(),
+        vec![server_name.to_string()],
+    );
+    assert!(
+        contended_turn.error.is_none(),
+        "the user turn failed while OAuth credentials were locked: {:?}",
+        contended_turn.error,
+    );
+    assert_eq!(
+        contended_turn.last_agent_message.as_deref(),
+        Some("OAuth sign-in is still pending."),
+    );
+
+    let mut refreshed_config = fixture.config.clone();
+    let mut refreshed_servers = refreshed_config.mcp_servers.get().clone();
+    let discovered_server = refreshed_servers
+        .get(server_name)
+        .cloned()
+        .expect("the initial OAuth server should be configured");
+    refreshed_servers.insert(discovered_server_name.to_string(), discovered_server);
+    refreshed_config
+        .mcp_servers
+        .set(refreshed_servers)
+        .expect("test MCP servers should accept the discovered OAuth server");
+    let discovered_turn = tokio::time::timeout(Duration::from_secs(5), async {
+        fixture
+            .codex
+            .refresh_runtime_config(refreshed_config.clone())
+            .await;
+        fixture
+            .codex
+            .submit(read_only_user_turn(
+                &fixture,
+                "continue while a newly discovered OAuth server is starting",
+            ))
+            .await?;
+        loop {
+            if let EventMsg::TurnComplete(turn) = fixture.codex.next_event().await?.msg {
+                return Ok::<_, anyhow::Error>(turn);
+            }
+        }
+    })
+    .await
+    .context("a newly discovered OAuth server blocked the user turn during store contention")??;
+    assert!(
+        discovered_turn.error.is_none(),
+        "the user turn failed while a newly discovered OAuth server was locked: {:?}",
+        discovered_turn.error,
+    );
+    assert_eq!(
+        discovered_turn.last_agent_message.as_deref(),
+        Some("A newly discovered OAuth server is still starting."),
+    );
+    drop(store_lock);
+
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        wait_for_mcp_server(&fixture.codex, discovered_server_name),
+    )
+    .await
+    .context("the newly discovered OAuth server did not recover after its store was unlocked")??;
+
+    assert!(codex_rmcp_client::delete_oauth_tokens(
+        discovered_credential_name.as_ref(),
+        http_server.url(),
+        OAuthCredentialsStoreMode::File,
+        codex_config::types::AuthKeyringBackendKind::default(),
+    )?);
+    fixture.codex.refresh_runtime_config(refreshed_config).await;
+    let logged_out_startup = tokio::time::timeout(
+        Duration::from_secs(5),
+        wait_for_event(&fixture.codex, |event| {
+            matches!(event, EventMsg::McpStartupComplete(_))
+        }),
+    )
+    .await
+    .context("MCP startup did not finish after the discovered OAuth server was logged out")?;
+    let EventMsg::McpStartupComplete(logged_out_startup) = logged_out_startup else {
+        unreachable!("event guard guarantees McpStartupComplete");
+    };
+    assert!(
+        logged_out_startup
+            .failed
+            .iter()
+            .any(|failure| failure.server == discovered_server_name),
+        "the logged-out MCP server reused its authenticated connection: {logged_out_startup:?}",
+    );
+
     write_fallback_oauth_tokens(
         credential_name.as_ref(),
         http_server.url(),

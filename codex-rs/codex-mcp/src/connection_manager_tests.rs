@@ -4076,6 +4076,74 @@ async fn reconciliation_reuses_an_unchanged_ready_server() {
 }
 
 #[tokio::test]
+async fn reconciliation_retries_non_oauth_authentication_failures() {
+    let runtime_context = reusable_server_runtime_context();
+    let config = reusable_server_config("http://127.0.0.1:1");
+    let mut previous =
+        manager_with_reusable_ready_server(&config, &runtime_context, Vec::new()).await;
+    let connection =
+        Arc::get_mut(&mut previous.servers.get_mut("docs").expect("server").connection)
+            .expect("test server has one connection owner");
+    connection.client.client = futures::future::ready(Err(StartupOutcomeError::Failed {
+        error: "bearer token rejected".to_string(),
+        is_authentication_required: true,
+    }))
+    .boxed()
+    .shared();
+
+    let reconciled = reconcile_reusable_server(&previous, config, runtime_context).await;
+
+    assert!(!previous.shares_test_connection_with(&reconciled, "docs"));
+}
+
+#[test]
+fn connection_identity_uses_effective_authorization_headers() {
+    let runtime_context = reusable_server_runtime_context();
+    let missing_env_var = format!("CODEX_TEST_UNSET_MCP_AUTHORIZATION_{}", std::process::id());
+    assert!(std::env::var_os(&missing_env_var).is_none());
+
+    for (static_header, environment_header, has_authorization) in [
+        (Some("Bearer configured-token"), None, true),
+        (Some("invalid\nheader"), None, false),
+        (None, Some("PATH"), true),
+        (None, Some(missing_env_var.as_str()), false),
+    ] {
+        let mut config = reusable_server_config("http://127.0.0.1:1");
+        config.transport = McpServerTransportConfig::StreamableHttp {
+            url: "http://127.0.0.1:1".to_string(),
+            bearer_token_env_var: None,
+            http_headers: static_header
+                .map(|value| HashMap::from([("aUtHoRiZaTiOn".to_string(), value.to_string())])),
+            env_http_headers: environment_header
+                .map(|value| HashMap::from([("aUtHoRiZaTiOn".to_string(), value.to_string())])),
+        };
+        let server = EffectiveMcpServer::configured(config);
+        let identity = |keyring_backend_kind| {
+            McpServerConnectionIdentity::new(
+                "docs",
+                &server,
+                OAuthCredentialsStoreMode::File,
+                keyring_backend_kind,
+                &Ok(None),
+                &runtime_context,
+                /*runtime_auth_provider*/ None,
+                /*auth*/ None,
+                /*codex_apps_cache_identity*/ None,
+                ElicitationCapability::default(),
+                ClientMcpExtensions::default(),
+                /*previous_identity*/ None,
+            )
+        };
+
+        assert_eq!(
+            identity(AuthKeyringBackendKind::Direct)
+                .has_same_connection_config(&identity(AuthKeyringBackendKind::Secrets)),
+            has_authorization,
+        );
+    }
+}
+
+#[tokio::test]
 async fn reconciliation_reuses_legacy_stdio_server_with_existing_protocol_marker() {
     let runtime_context = McpRuntimeContext::new(
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
