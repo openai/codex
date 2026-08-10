@@ -11,6 +11,7 @@ use crate::responses_metadata::TurnToolFunctionInfo;
 use crate::responses_metadata::TurnToolNamespaceInfo;
 use crate::responses_metadata::TurnToolSource;
 use crate::responses_metadata::WINDOW_ID_KEY;
+use crate::responses_metadata::validate_extra_metadata;
 use crate::sandbox_tags::permission_profile_sandbox_tag;
 use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
@@ -630,8 +631,16 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
         WindowsSandboxLevel::Disabled,
         /*enforce_managed_network*/ false,
     );
+    state.set_responses_api_metadata(BTreeMap::from([(
+        "codex_security_surface".to_string(),
+        "sdk".to_string(),
+    )]));
     state.set_parent_turn_id("parent-turn-a".to_string());
     state.set_responsesapi_client_metadata(HashMap::from([
+        (
+            "codex_security_surface".to_string(),
+            "client-supplied".to_string(),
+        ),
         ("fiber_run_id".to_string(), "fiber-123".to_string()),
         ("origin".to_string(), "東京".to_string()),
         ("workspace_kind".to_string(), "projectless".to_string()),
@@ -710,6 +719,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
     assert_eq!(json["fiber_run_id"].as_str(), Some("fiber-123"));
     assert_eq!(json["origin"].as_str(), Some("東京"));
     assert_eq!(json["workspace_kind"].as_str(), Some("projectless"));
+    assert_eq!(json["codex_security_surface"].as_str(), Some("sdk"));
     assert_eq!(json["model"].as_str(), Some("client-supplied"));
     assert_eq!(json["reasoning_effort"].as_str(), Some("client-supplied"));
     assert_eq!(json["session_id"].as_str(), Some("session-a"));
@@ -767,6 +777,10 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
         Some("automation")
     );
     assert_eq!(
+        model_request_json["codex_security_surface"].as_str(),
+        Some("sdk")
+    );
+    assert_eq!(
         model_request_json[INSTALLATION_ID_KEY].as_str(),
         Some("installation-a")
     );
@@ -810,6 +824,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
     assert!(meta.get(TOOL_NAMESPACES_INFO_KEY).is_none());
     assert!(meta.get(PARENT_TURN_ID_KEY).is_none());
     assert!(meta.get(WINDOW_ID_KEY).is_none());
+    assert!(meta.get("codex_security_surface").is_none());
     assert_eq!(state.workspace_kind().as_deref(), Some("projectless"));
 }
 
@@ -831,6 +846,10 @@ fn turn_metadata_state_overlays_compaction_only_on_compaction_requests() {
         WindowsSandboxLevel::Disabled,
         /*enforce_managed_network*/ false,
     );
+    state.set_responses_api_metadata(BTreeMap::from([(
+        "codex_security_surface".to_string(),
+        "sdk".to_string(),
+    )]));
     state.set_responsesapi_client_metadata(HashMap::from([(
         "compaction".to_string(),
         "client-supplied".to_string(),
@@ -850,6 +869,7 @@ fn turn_metadata_state_overlays_compaction_only_on_compaction_requests() {
     assert_eq!(compact_json["request_kind"].as_str(), Some("compaction"));
     assert_eq!(compact_json["turn_id"].as_str(), Some("turn-a"));
     assert_eq!(compact_json[WINDOW_ID_KEY].as_str(), Some("thread-a:2"));
+    assert_eq!(compact_json["codex_security_surface"].as_str(), Some("sdk"));
     assert_eq!(
         compact_json["compaction"],
         serde_json::json!({
@@ -865,7 +885,18 @@ fn turn_metadata_state_overlays_compaction_only_on_compaction_requests() {
     let regular_json: Value = serde_json::from_str(&regular_header).expect("json");
     assert_eq!(regular_json["request_kind"].as_str(), Some("turn"));
     assert_eq!(regular_json[WINDOW_ID_KEY].as_str(), Some("thread-a:3"));
+    assert_eq!(regular_json["codex_security_surface"].as_str(), Some("sdk"));
     assert!(regular_json.get("compaction").is_none());
+}
+
+#[test]
+fn responses_api_metadata_rejects_reserved_keys() {
+    assert_eq!(
+        validate_extra_metadata(
+            BTreeMap::from([("thread_source".to_string(), "sdk".to_string())]).iter()
+        ),
+        Err("responses_api_metadata contains a reserved key")
+    );
 }
 
 #[tokio::test]

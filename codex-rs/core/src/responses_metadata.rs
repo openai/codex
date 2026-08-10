@@ -71,6 +71,9 @@ const RESERVED_METADATA_KEYS: &[&str] = &[
     SANDBOX_MODE_KEY,
     WORKSPACES_KEY,
 ];
+const MAX_EXTRA_METADATA_ENTRIES: usize = 16;
+const MAX_EXTRA_METADATA_KEY_BYTES: usize = 64;
+const MAX_EXTRA_METADATA_VALUE_BYTES: usize = 128;
 
 /// Metadata attached to model requests whose purpose is conversation compaction.
 ///
@@ -348,9 +351,9 @@ impl CodexResponsesMetadata {
             tool_namespaces_info: self.tool_namespaces_info.as_ref(),
             turn_started_at_unix_ms: self.turn_started_at_unix_ms,
             compaction,
-            // responsesapi_client_metadata enriches the Codex turn metadata blob, not literal
-            // top-level Responses client_metadata. Reserved Codex-owned keys are filtered when
-            // these extras enter turn state.
+            // Extra metadata enriches the Codex turn metadata blob, not literal top-level
+            // Responses client_metadata. Product metadata is validated while loading config;
+            // app-server metadata has reserved Codex-owned keys filtered when it enters turn state.
             extra: &self.extra,
         }
     }
@@ -396,11 +399,41 @@ fn insert_header(headers: &mut ApiHeaderMap, name: &'static str, value: &str) {
     }
 }
 
-pub(crate) fn filter_extra_metadata(extra: HashMap<String, String>) -> BTreeMap<String, String> {
+pub(crate) fn validate_extra_metadata<'a>(
+    extra: impl IntoIterator<Item = (&'a String, &'a String)>,
+) -> Result<(), &'static str> {
+    let mut count = 0;
+    for (key, value) in extra {
+        count += 1;
+        if count > MAX_EXTRA_METADATA_ENTRIES {
+            return Err("responses_api_metadata may contain at most 16 entries");
+        }
+        if key.len() > MAX_EXTRA_METADATA_KEY_BYTES || !valid_extra_metadata_key(key) {
+            return Err("responses_api_metadata keys must be short ASCII identifiers");
+        }
+        if RESERVED_METADATA_KEYS.contains(&key.as_str()) {
+            return Err("responses_api_metadata contains a reserved key");
+        }
+        if value.len() > MAX_EXTRA_METADATA_VALUE_BYTES {
+            return Err("responses_api_metadata values may contain at most 128 bytes");
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn filter_extra_metadata(
+    extra: impl IntoIterator<Item = (String, String)>,
+) -> BTreeMap<String, String> {
     extra
         .into_iter()
         .filter(|(key, _)| !RESERVED_METADATA_KEYS.contains(&key.as_str()))
         .collect()
+}
+
+fn valid_extra_metadata_key(key: &str) -> bool {
+    let mut bytes = key.bytes();
+    bytes.next().is_some_and(|byte| byte.is_ascii_alphabetic())
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'))
 }
 
 fn non_empty_workspaces(

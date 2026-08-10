@@ -281,6 +281,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
         respect_system_proxy: false,
         apps_mcp_product_sku: None,
+        responses_api_metadata: BTreeMap::new(),
         realtime_audio: RealtimeAudioConfig::default(),
         experimental_realtime_ws_base_url: None,
         experimental_realtime_webrtc_call_base_url: None,

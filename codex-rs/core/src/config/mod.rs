@@ -145,6 +145,7 @@ use crate::config::permissions::validate_user_permission_profile_names;
 use crate::config_lock::config_without_lock_controls;
 use crate::config_lock::lock_layer_from_config;
 use crate::config_lock::read_config_lock_from_path;
+use crate::responses_metadata::validate_extra_metadata;
 use codex_network_proxy::NetworkProxyConfig;
 use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
@@ -999,6 +1000,9 @@ pub struct Config {
 
     /// Optional product SKU forwarded to the host-owned apps MCP server.
     pub apps_mcp_product_sku: Option<String>,
+
+    /// Bounded, product-owned metadata attached to every Responses API request.
+    pub responses_api_metadata: BTreeMap<String, String>,
 
     /// Machine-local realtime audio device preferences used by realtime voice.
     pub realtime_audio: RealtimeAudioConfig,
@@ -3245,6 +3249,11 @@ impl Config {
 
         validate_model_providers(&cfg.model_providers)
             .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
+        if let Some(responses_api_metadata) = cfg.responses_api_metadata.as_ref() {
+            validate_extra_metadata(responses_api_metadata.iter()).map_err(|message| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, message)
+            })?;
+        }
         let orchestrator = cfg.orchestrator.as_ref();
         let orchestrator_skills_enabled =
             resolve_orchestrator_feature_enabled(orchestrator.and_then(|value| value.skills.as_ref()));
@@ -4260,6 +4269,7 @@ impl Config {
             respect_system_proxy,
             psp: psp.unwrap_or_default(),
             apps_mcp_product_sku: cfg.apps_mcp_product_sku.clone(),
+            responses_api_metadata: cfg.responses_api_metadata.unwrap_or_default(),
             realtime_audio: cfg
                 .audio
                 .map_or_else(RealtimeAudioConfig::default, |audio| RealtimeAudioConfig {

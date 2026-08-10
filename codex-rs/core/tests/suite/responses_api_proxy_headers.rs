@@ -33,7 +33,8 @@ const SPAWN_CALL_ID: &str = "spawn-call-1";
 const REQUEST_POLL_INTERVAL: Duration = Duration::from_millis(/*millis*/ 20);
 const TURN_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 60);
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_api_parent_and_subagent_requests_include_identity_headers() -> Result<()> {
+async fn responses_api_parent_and_subagent_requests_include_identity_headers_and_product_metadata()
+-> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -90,6 +91,9 @@ async fn responses_api_parent_and_subagent_requests_include_identity_headers() -
             .features
             .disable(Feature::EnableRequestCompression)
             .expect("test config should allow feature update");
+        config
+            .responses_api_metadata
+            .insert("codex_security_surface".to_string(), "sdk".to_string());
     });
     let test = builder.build(&server).await?;
     submit_turn_with_timeout(&test, PARENT_PROMPT).await?;
@@ -126,6 +130,12 @@ async fn responses_api_parent_and_subagent_requests_include_identity_headers() -
         child.header("x-codex-parent-thread-id").as_deref(),
         Some(parent_thread_id)
     );
+    let parent_turn_metadata: serde_json::Value = serde_json::from_str(
+        &parent
+            .header("x-codex-turn-metadata")
+            .ok_or_else(|| anyhow!("parent request missing x-codex-turn-metadata"))?,
+    )?;
+    assert_eq!(parent_turn_metadata["codex_security_surface"], json!("sdk"));
     let child_turn_metadata: serde_json::Value = serde_json::from_str(
         &child
             .header("x-codex-turn-metadata")
@@ -136,6 +146,7 @@ async fn responses_api_parent_and_subagent_requests_include_identity_headers() -
         child_turn_metadata["parent_thread_id"].as_str(),
         Some(parent_thread_id)
     );
+    assert_eq!(child_turn_metadata["codex_security_surface"], json!("sdk"));
 
     Ok(())
 }

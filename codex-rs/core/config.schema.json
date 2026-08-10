@@ -5819,6 +5819,13 @@
       "default": null,
       "description": "Experimental / do not use. Realtime websocket session selection. `version` controls v1/v2 and `type` controls conversational/transcription."
     },
+    "responses_api_metadata": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Bounded, product-owned metadata attached to every Responses API request.",
+      "type": "object"
+    },
     "review_model": {
       "description": "Review model override used by the `/review` feature.",
       "type": "string"

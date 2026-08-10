@@ -369,6 +369,9 @@ pub struct ConfigToml {
     /// Optional product SKU forwarded on host-owned Codex Apps MCP requests.
     pub apps_mcp_product_sku: Option<String>,
 
+    /// Bounded, product-owned metadata attached to every Responses API request.
+    pub responses_api_metadata: Option<BTreeMap<String, String>>,
+
     /// Orchestrator-owned feature settings.
     pub orchestrator: Option<OrchestratorToml>,
 
