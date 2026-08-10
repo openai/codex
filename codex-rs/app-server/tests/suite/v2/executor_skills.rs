@@ -296,7 +296,6 @@ stream_max_retries = 0
             "main",
             "read",
             json!({
-                "authority": {"kind": "executor", "id": authority_id},
                 "package": package.clone(),
                 "resource": main_resource.clone(),
             }),
@@ -305,8 +304,11 @@ stream_max_retries = 0
             "reference",
             "read",
             json!({
-                "authority": {"kind": "executor", "id": authority_id},
                 "package": package.clone(),
+                "authority": {
+                    "kind": "executor",
+                    "id": authority_id,
+                },
                 "resource": reference_resource.clone(),
             }),
         ),
@@ -342,7 +344,6 @@ stream_max_retries = 0
                 "approved-reference",
                 "read",
                 json!({
-                    "authority": {"kind": "executor", "id": authority_id},
                     "package": package.clone(),
                     "resource": reference_resource.clone(),
                 }),

@@ -828,8 +828,10 @@ async fn explicit_only_orchestrator_skill_is_hidden_but_can_be_invoked() -> Resu
                     "skills",
                     "read",
                     &json!({
-                        "authority": { "kind": "orchestrator" },
                         "package": SKILL_PACKAGE,
+                        "authority": {
+                            "kind": "orchestrator",
+                        },
                         "resource": REFERENCED_RESOURCE,
                     })
                     .to_string(),
@@ -1076,7 +1078,7 @@ async fn production_turn_aliases_discovered_singleton_orchestrator_root() -> Res
     assert!(
         developer_text.lines().any(|line| {
             line.starts_with("- demo:search:")
-                && line.ends_with("(orchestrator resource: o0/search)")
+                && line.ends_with("(orchestrator package: o0/search)")
         }),
         "model request should include the aliased orchestrator skill: {developer_text}"
     );
@@ -1267,14 +1269,14 @@ async fn production_turn_aliases_combined_skill_catalogs_under_shared_budget() -
             "model request should include the {alias} skill root: {developer_text}"
         );
     }
-    for (source, alias, prefix) in [
-        ("environment resource", "e0", "executor"),
-        ("orchestrator resource", "o0", "orchestrator"),
-        ("file", "r0", "host"),
+    for (source, alias, prefix, suffix) in [
+        ("environment resource", "e0", "executor", "/SKILL.md"),
+        ("orchestrator package", "o0", "orchestrator", ""),
+        ("file", "r0", "host", "/SKILL.md"),
     ] {
         for name in ["search", "review", "summarize"] {
             assert!(
-                developer_text.contains(&format!("{source}: {alias}/{prefix}-{name}/SKILL.md")),
+                developer_text.contains(&format!("{source}: {alias}/{prefix}-{name}{suffix}")),
                 "model request should retain the aliased {prefix}-{name} skill: {developer_text}"
             );
         }
@@ -2021,8 +2023,9 @@ async fn production_turn_keeps_orchestrator_world_state_incremental_across_turns
 
     let requests = response.requests();
     assert_eq!(requests.len(), 2);
-    let expected_line =
-        format!("- {skill_name}: {skill_description} (orchestrator resource: {skill_resource})");
+    let expected_line = format!(
+        "- {skill_name}: {skill_description} (orchestrator package: orchestrator/orchestrator-search)"
+    );
     for (index, request) in requests.iter().enumerate() {
         let developer_texts = request.message_input_texts("developer");
         let occurrences = developer_texts
@@ -2033,6 +2036,9 @@ async fn production_turn_keeps_orchestrator_world_state_incremental_across_turns
             occurrences, 1,
             "request {index} should contain the orchestrator catalog exactly once: {developer_texts:?}"
         );
+        assert!(developer_texts.iter().any(|text| {
+            text.contains("Read an orchestrator package directly with `skills.read")
+        }));
     }
 
     Ok(())

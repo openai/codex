@@ -161,18 +161,6 @@ impl SkillToolAuthority {
             }
         }
     }
-
-    fn matches(&self, authority: &SkillAuthority) -> bool {
-        match self {
-            Self::Orchestrator => {
-                authority.kind == SkillSourceKind::Orchestrator
-                    && authority.id == CODEX_APPS_MCP_SERVER_NAME
-            }
-            Self::Executor { id } => {
-                authority.kind == SkillSourceKind::Executor && authority.id == *id
-            }
-        }
-    }
 }
 
 fn skill_tool_name(name: &str) -> ToolName {
