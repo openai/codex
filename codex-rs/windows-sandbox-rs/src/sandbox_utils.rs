@@ -30,9 +30,9 @@ pub fn ensure_codex_home_exists(p: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Adds a git safe.directory entry to the environment when running inside a repository.
-/// git will not otherwise allow the Sandbox user to run git commands on the repo directory
-/// which is owned by the primary user.
+/// Adds git safe.directory entries for the repository and nested repositories.
+/// git will not otherwise allow the Sandbox user to run git commands on repositories
+/// which are owned by the primary user.
 pub fn inject_git_safe_directory(env_map: &mut HashMap<String, String>, cwd: &Path) {
     if let Some(git_root) = find_git_worktree_root_for_safe_directory(cwd) {
         let mut cfg_count: usize = env_map
@@ -40,12 +40,15 @@ pub fn inject_git_safe_directory(env_map: &mut HashMap<String, String>, cwd: &Pa
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(0);
         let git_path = git_root.to_string_lossy().replace("\\\\", "/");
-        env_map.insert(
-            format!("GIT_CONFIG_KEY_{cfg_count}"),
-            "safe.directory".to_string(),
-        );
-        env_map.insert(format!("GIT_CONFIG_VALUE_{cfg_count}"), git_path);
-        cfg_count += 1;
+        let nested_git_path = format!("{git_path}/*");
+        for git_path in [git_path, nested_git_path] {
+            env_map.insert(
+                format!("GIT_CONFIG_KEY_{cfg_count}"),
+                "safe.directory".to_string(),
+            );
+            env_map.insert(format!("GIT_CONFIG_VALUE_{cfg_count}"), git_path);
+            cfg_count += 1;
+        }
         env_map.insert("GIT_CONFIG_COUNT".to_string(), cfg_count.to_string());
     }
 }
@@ -77,13 +80,13 @@ mod tests {
         let mut env_map = HashMap::new();
         inject_git_safe_directory(&mut env_map, &nested);
 
+        let git_path = safe_directory_value(&repo);
         let expected = HashMap::from([
-            ("GIT_CONFIG_COUNT".to_string(), "1".to_string()),
+            ("GIT_CONFIG_COUNT".to_string(), "2".to_string()),
             ("GIT_CONFIG_KEY_0".to_string(), "safe.directory".to_string()),
-            (
-                "GIT_CONFIG_VALUE_0".to_string(),
-                safe_directory_value(&repo),
-            ),
+            ("GIT_CONFIG_VALUE_0".to_string(), git_path.clone()),
+            ("GIT_CONFIG_KEY_1".to_string(), "safe.directory".to_string()),
+            ("GIT_CONFIG_VALUE_1".to_string(), format!("{git_path}/*")),
         ]);
         assert_eq!(env_map, expected);
     }
@@ -103,13 +106,13 @@ mod tests {
         let mut env_map = HashMap::new();
         inject_git_safe_directory(&mut env_map, &nested);
 
+        let git_path = safe_directory_value(&repo);
         let expected = HashMap::from([
-            ("GIT_CONFIG_COUNT".to_string(), "1".to_string()),
+            ("GIT_CONFIG_COUNT".to_string(), "2".to_string()),
             ("GIT_CONFIG_KEY_0".to_string(), "safe.directory".to_string()),
-            (
-                "GIT_CONFIG_VALUE_0".to_string(),
-                safe_directory_value(&repo),
-            ),
+            ("GIT_CONFIG_VALUE_0".to_string(), git_path.clone()),
+            ("GIT_CONFIG_KEY_1".to_string(), "safe.directory".to_string()),
+            ("GIT_CONFIG_VALUE_1".to_string(), format!("{git_path}/*")),
         ]);
         assert_eq!(env_map, expected);
     }
