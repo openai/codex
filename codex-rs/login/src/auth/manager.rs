@@ -224,9 +224,46 @@ pub trait ExternalAuth: Send + Sync {
 
     /// Refreshes auth and makes the returned value current for future `resolve()` calls.
     fn refresh(&self, context: ExternalAuthRefreshContext) -> ExternalAuthFuture<'_, CodexAuth>;
+
+    /// Maps a provider error into the retry policy used by configured-auth reload and recovery.
+    fn classify_error(&self, error: std::io::Error) -> RefreshTokenError {
+        RefreshTokenError::Transient(error)
+    }
 }
 
 pub type ExternalAuthFuture<'a, T> = Pin<Box<dyn Future<Output = std::io::Result<T>> + Send + 'a>>;
+
+#[derive(Clone)]
+enum ExternalAuthSource {
+    Configured(Arc<dyn ExternalAuth>),
+    Runtime(Arc<dyn ExternalAuth>),
+}
+
+impl ExternalAuthSource {
+    fn provider(&self) -> Arc<dyn ExternalAuth> {
+        match self {
+            Self::Configured(provider) | Self::Runtime(provider) => Arc::clone(provider),
+        }
+    }
+
+    fn is_runtime(&self) -> bool {
+        matches!(self, Self::Runtime(_))
+    }
+
+    fn classify_provider_error(&self, error: std::io::Error) -> RefreshTokenError {
+        match self {
+            Self::Configured(provider) => provider.classify_error(error),
+            Self::Runtime(_) => RefreshTokenError::Transient(error),
+        }
+    }
+}
+
+fn permanent_external_auth_error(message: impl Into<String>) -> RefreshTokenError {
+    RefreshTokenError::Permanent(RefreshTokenFailedError::new(
+        RefreshTokenFailedReason::Other,
+        message,
+    ))
+}
 
 impl RefreshTokenError {
     pub fn failed_reason(&self) -> Option<RefreshTokenFailedReason> {
@@ -1951,7 +1988,7 @@ pub struct AuthManager {
     refresh_lock: Semaphore,
     agent_identity_lock: Semaphore,
     agent_identity_bootstrap_cooldown: Mutex<AgentIdentityBootstrapCooldown>,
-    external_auth: RwLock<Option<Arc<dyn ExternalAuth>>>,
+    external_auth: RwLock<Option<ExternalAuthSource>>,
     auth_route_config: AuthRouteConfig,
 }
 
@@ -2197,9 +2234,9 @@ impl AuthManager {
             refresh_lock: Semaphore::new(/*permits*/ 1),
             agent_identity_lock: Semaphore::new(/*permits*/ 1),
             agent_identity_bootstrap_cooldown: Mutex::default(),
-            external_auth: RwLock::new(Some(
-                Arc::new(BearerTokenRefresher::new(config)) as Arc<dyn ExternalAuth>
-            )),
+            external_auth: RwLock::new(Some(ExternalAuthSource::Runtime(Arc::new(
+                BearerTokenRefresher::new(config),
+            )))),
             // External bearer auth refreshes by running the provider's command and never makes
             // auth-owned HTTP requests, so this route is intentionally inert.
             auth_route_config: AuthRouteConfig::from_http_client_factory(HttpClientFactory::new(
@@ -2361,9 +2398,11 @@ impl AuthManager {
             (None, None) => true,
             (Some(a), Some(b)) => match (a.api_auth_mode(), b.api_auth_mode()) {
                 (AuthMode::ApiKey, AuthMode::ApiKey) => a.api_key() == b.api_key(),
-                (AuthMode::Chatgpt, AuthMode::Chatgpt)
-                | (AuthMode::ChatgptAuthTokens, AuthMode::ChatgptAuthTokens) => {
+                (AuthMode::Chatgpt, AuthMode::Chatgpt) => {
                     a.get_current_auth_json() == b.get_current_auth_json()
+                }
+                (AuthMode::ChatgptAuthTokens, AuthMode::ChatgptAuthTokens) => {
+                    a.get_current_token_data() == b.get_current_token_data()
                 }
                 (AuthMode::Headers, AuthMode::Headers) => a == b,
                 (AuthMode::AgentIdentity, AuthMode::AgentIdentity) => match (a, b) {
@@ -2408,12 +2447,30 @@ impl AuthManager {
     }
 
     async fn load_auth(&self) -> Option<CodexAuth> {
-        if let Some(external_auth) = self.external_auth() {
-            return match self.resolve_external_auth(&external_auth).await {
+        if let Some(source) = self.external_auth_source() {
+            let cached_auth = self.auth_cached();
+            if !source.is_runtime()
+                && cached_auth
+                    .as_ref()
+                    .is_some_and(|auth| self.refresh_failure_for_auth(auth).is_some())
+            {
+                return cached_auth;
+            }
+            return match self.resolve_external_auth(&source).await {
                 Ok(auth) => Some(auth),
                 Err(err) => {
                     tracing::error!("Failed to resolve external auth: {err}");
-                    None
+                    if let (Some(auth), RefreshTokenError::Permanent(error)) =
+                        (cached_auth.as_ref(), &err)
+                        && !source.is_runtime()
+                    {
+                        self.record_permanent_refresh_failure_if_unchanged(auth, error);
+                    }
+                    if source.is_runtime() {
+                        None
+                    } else {
+                        cached_auth
+                    }
                 }
             };
         }
@@ -2468,17 +2525,65 @@ impl AuthManager {
         &self,
         external_auth: Arc<dyn ExternalAuth>,
     ) -> Result<(), RefreshTokenError> {
-        let auth = self.resolve_external_auth(&external_auth).await?;
-        *self.external_auth.write().map_err(|_| {
+        if self.has_configured_external_auth() {
+            return Err(permanent_external_auth_error(
+                "configuration-backed external auth cannot be replaced at runtime",
+            ));
+        }
+        let external_auth_source = ExternalAuthSource::Runtime(external_auth);
+        let auth = self.resolve_external_auth(&external_auth_source).await?;
+        let mut source_slot = self.external_auth.write().map_err(|_| {
             RefreshTokenError::Transient(std::io::Error::other("external auth lock is poisoned"))
-        })? = Some(external_auth);
-        self.commit_external_auth(auth)
+        })?;
+        if matches!(
+            source_slot.as_ref(),
+            Some(ExternalAuthSource::Configured(_))
+        ) {
+            return Err(permanent_external_auth_error(
+                "configuration-backed external auth cannot be replaced at runtime",
+            ));
+        }
+        *source_slot = Some(external_auth_source.clone());
+        drop(source_slot);
+        self.commit_external_auth(auth, &external_auth_source)
     }
 
+    /// Installs an external auth source selected from process configuration at startup.
+    ///
+    /// Unlike [`Self::set_external_auth`], configured auth is host-owned: runtime account APIs
+    /// cannot replace or clear it, and its credentials are not copied into the process-wide auth
+    /// store. Call this once while constructing the manager, before exposing it to clients.
+    pub async fn set_configured_external_auth(
+        &self,
+        external_auth: Arc<dyn ExternalAuth>,
+    ) -> Result<(), RefreshTokenError> {
+        if self.has_external_auth() {
+            return Err(permanent_external_auth_error(
+                "external auth is already configured",
+            ));
+        }
+        let external_auth_source = ExternalAuthSource::Configured(external_auth);
+        let auth = self.resolve_external_auth(&external_auth_source).await?;
+        let mut source = self
+            .external_auth
+            .write()
+            .map_err(|_| permanent_external_auth_error("external auth lock is poisoned"))?;
+        if source.is_some() {
+            return Err(permanent_external_auth_error(
+                "external auth is already configured",
+            ));
+        }
+        *source = Some(external_auth_source.clone());
+        drop(source);
+        self.commit_external_auth(auth, &external_auth_source)
+    }
+
+    /// Clears only auth installed through the runtime API. Configured auth is immutable.
     pub fn clear_external_auth(&self) {
         if let Ok(mut external_auth) = self.external_auth.write()
-            && external_auth.take().is_some()
+            && matches!(external_auth.as_ref(), Some(ExternalAuthSource::Runtime(_)))
         {
+            external_auth.take();
             self.set_cached_auth(/*new_auth*/ None);
         }
     }
@@ -2519,7 +2624,13 @@ impl AuthManager {
     }
 
     pub fn has_external_auth(&self) -> bool {
-        self.external_auth().is_some()
+        self.external_auth_source().is_some()
+    }
+
+    pub fn has_configured_external_auth(&self) -> bool {
+        self.external_auth.read().ok().is_some_and(|source| {
+            matches!(source.as_ref(), Some(ExternalAuthSource::Configured(_)))
+        })
     }
 
     pub fn is_external_chatgpt_auth_active(&self) -> bool {
@@ -2589,11 +2700,11 @@ impl AuthManager {
         UnauthorizedRecovery::new(Arc::clone(self))
     }
 
-    fn external_auth(&self) -> Option<Arc<dyn ExternalAuth>> {
+    fn external_auth_source(&self) -> Option<ExternalAuthSource> {
         self.external_auth
             .read()
             .ok()
-            .and_then(|external_auth| external_auth.as_ref().map(Arc::clone))
+            .and_then(|external_auth| external_auth.clone())
     }
 
     fn has_external_api_key_auth(&self) -> bool {
@@ -2606,13 +2717,14 @@ impl AuthManager {
 
     async fn resolve_external_auth(
         &self,
-        external_auth: &Arc<dyn ExternalAuth>,
+        source: &ExternalAuthSource,
     ) -> Result<CodexAuth, RefreshTokenError> {
+        let external_auth = source.provider();
         let auth = external_auth
             .resolve()
             .await
-            .map_err(RefreshTokenError::Transient)?;
-        self.validate_external_auth(&auth)?;
+            .map_err(|error| source.classify_provider_error(error))?;
+        self.validate_external_auth(&auth, source)?;
         Ok(auth)
     }
 
@@ -2714,6 +2826,7 @@ impl AuthManager {
     /// reloads the in‑memory auth cache so callers immediately observe the
     /// unauthenticated state.
     pub async fn logout(&self) -> std::io::Result<bool> {
+        self.ensure_logout_allowed()?;
         let removed = logout_all_stores(
             &self.codex_home,
             self.auth_credentials_store_mode,
@@ -2726,6 +2839,7 @@ impl AuthManager {
     }
 
     pub async fn logout_with_revoke(&self) -> std::io::Result<bool> {
+        self.ensure_logout_allowed()?;
         let auth_dot_json = self
             .auth_cached()
             .and_then(|auth| auth.get_current_auth_json());
@@ -2742,6 +2856,16 @@ impl AuthManager {
         self.clear_external_auth();
         self.reload().await;
         Ok(result)
+    }
+
+    fn ensure_logout_allowed(&self) -> std::io::Result<()> {
+        if self.has_configured_external_auth() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "configuration-backed external auth is managed by the host and cannot be logged out",
+            ));
+        }
+        Ok(())
     }
 
     /// Returns the precise kind of credentials backing the current authentication.
@@ -2787,11 +2911,12 @@ impl AuthManager {
         &self,
         reason: ExternalAuthRefreshReason,
     ) -> Result<(), RefreshTokenError> {
-        let Some(external_auth) = self.external_auth() else {
+        let Some(source) = self.external_auth_source() else {
             return Err(RefreshTokenError::Transient(std::io::Error::other(
                 "external auth is not configured",
             )));
         };
+        let external_auth = source.provider();
         let previous_account_id = self
             .auth_cached()
             .as_ref()
@@ -2804,14 +2929,18 @@ impl AuthManager {
         let refreshed = external_auth
             .refresh(context)
             .await
-            .map_err(RefreshTokenError::Transient)?;
-        self.validate_external_auth(&refreshed)?;
-        self.commit_external_auth(refreshed)?;
+            .map_err(|error| source.classify_provider_error(error))?;
+        self.validate_external_auth(&refreshed, &source)?;
+        self.commit_external_auth(refreshed, &source)?;
         Ok(())
     }
 
-    fn commit_external_auth(&self, auth: CodexAuth) -> Result<(), RefreshTokenError> {
-        if auth.is_external_chatgpt_tokens() {
+    fn commit_external_auth(
+        &self,
+        auth: CodexAuth,
+        source: &ExternalAuthSource,
+    ) -> Result<(), RefreshTokenError> {
+        if source.is_runtime() && auth.is_external_chatgpt_tokens() {
             let auth_dot_json = auth.get_current_auth_json().ok_or_else(|| {
                 RefreshTokenError::Transient(std::io::Error::other(
                     "external ChatGPT auth tokens are missing auth state",
@@ -2832,15 +2961,24 @@ impl AuthManager {
         Ok(())
     }
 
-    fn validate_external_auth(&self, auth: &CodexAuth) -> Result<(), RefreshTokenError> {
+    fn validate_external_auth(
+        &self,
+        auth: &CodexAuth,
+        source: &ExternalAuthSource,
+    ) -> Result<(), RefreshTokenError> {
         let allowed_login_methods = self.allowed_login_methods();
-        validate_auth_restrictions(
+        let result = validate_auth_restrictions(
             Some(&allowed_login_methods),
             self.effective_chatgpt_workspaces().as_deref(),
             auth,
-        )
-        .map_err(std::io::Error::other)?;
-        Ok(())
+        );
+        match result {
+            Ok(()) => Ok(()),
+            Err(error) if source.is_runtime() => {
+                Err(RefreshTokenError::Transient(std::io::Error::other(error)))
+            }
+            Err(error) => Err(permanent_external_auth_error(error)),
+        }
     }
 
     // Refreshes ChatGPT OAuth tokens, persists the updated auth state, and
