@@ -14,11 +14,11 @@ use crate::cloud_config_layers_from_fragments;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
 use futures::future::FutureExt;
-use futures::future::Shared;
 use serde::Deserialize;
 use serde::Serialize;
 use std::fmt;
 use std::future::Future;
+use std::sync::Arc;
 use thiserror::Error;
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -177,7 +177,12 @@ impl CloudConfigBundleLoadError {
 
 #[derive(Clone)]
 pub struct CloudConfigBundleLoader {
-    fut: Shared<BoxFuture<'static, Result<Option<CloudConfigBundle>, CloudConfigBundleLoadError>>>,
+    getter: Arc<
+        dyn Fn()
+                -> BoxFuture<'static, Result<Option<CloudConfigBundle>, CloudConfigBundleLoadError>>
+            + Send
+            + Sync,
+    >,
 }
 
 impl CloudConfigBundleLoader {
@@ -187,13 +192,26 @@ impl CloudConfigBundleLoader {
             + Send
             + 'static,
     {
+        let fut = fut.boxed().shared();
+        Self::from_getter(move || fut.clone())
+    }
+
+    /// Creates a loader that requests the latest bundle on every call.
+    pub fn from_getter<F, Fut>(getter: F) -> Self
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Option<CloudConfigBundle>, CloudConfigBundleLoadError>>
+            + Send
+            + 'static,
+    {
         Self {
-            fut: fut.boxed().shared(),
+            getter: Arc::new(move || getter().boxed()),
         }
     }
 
+    /// Returns the current bundle snapshot.
     pub async fn get(&self) -> Result<Option<CloudConfigBundle>, CloudConfigBundleLoadError> {
-        self.fut.clone().await
+        (self.getter)().await
     }
 }
 

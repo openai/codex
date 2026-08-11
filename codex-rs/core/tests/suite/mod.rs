@@ -48,6 +48,7 @@ mod catalog_permission_messages;
 mod cli_stream;
 mod client;
 mod client_websockets;
+mod cloud_config;
 mod code_mode;
 mod code_mode_elicitation;
 mod codex_delegate;
