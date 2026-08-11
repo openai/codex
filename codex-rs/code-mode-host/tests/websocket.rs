@@ -1,22 +1,17 @@
-use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
 use codex_code_mode::CellId;
-use codex_code_mode::CodeModeNestedToolCall;
 use codex_code_mode::CodeModeSessionCellExecutionLimits;
-use codex_code_mode::CodeModeSessionDelegate;
 use codex_code_mode::CodeModeSessionProvider;
 use codex_code_mode::CodeModeToolKind;
 use codex_code_mode::ExecuteRequest;
 use codex_code_mode::FunctionCallOutputContentItem;
 use codex_code_mode::NoopCodeModeSessionDelegate;
-use codex_code_mode::NotificationFuture;
 use codex_code_mode::RuntimeResponse;
 use codex_code_mode::ToolDefinition;
-use codex_code_mode::ToolInvocationFuture;
 use codex_code_mode::WebSocketCodeModeSessionProvider;
 use codex_code_mode_protocol::host::Capability;
 use codex_code_mode_protocol::host::CapabilitySet;
@@ -54,8 +49,6 @@ use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
 use tokio::net::TcpStream;
-use tokio::process::Child;
-use tokio::process::Command;
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
 use tokio_tungstenite::MaybeTlsStream;
@@ -69,88 +62,24 @@ use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::http::StatusCode;
 use tokio_tungstenite::tungstenite::http::header::ORIGIN;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
-use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
+
+#[path = "support/host.rs"]
+mod host;
+#[path = "support/large_tool_delegate.rs"]
+mod large_tool_delegate;
+
+use host::HostHarness;
+use large_tool_delegate::LargeToolResultDelegate;
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_WEBSOCKET_FRAME_BYTES: usize = MAX_FRAME_BYTES + std::mem::size_of::<u32>();
-
-struct HostHarness {
-    child: Child,
-    websocket_url: String,
-}
 
 struct HostClient {
     websocket: WebSocketStream<MaybeTlsStream<TcpStream>>,
 }
 
-struct LargeToolResultDelegate {
-    started: Semaphore,
-    release: Semaphore,
-}
-
-impl CodeModeSessionDelegate for LargeToolResultDelegate {
-    fn invoke_tool<'a>(
-        &'a self,
-        invocation: CodeModeNestedToolCall,
-        _cancellation_token: CancellationToken,
-    ) -> ToolInvocationFuture<'a> {
-        Box::pin(async move {
-            assert_eq!(invocation.tool_name, ToolName::plain("large"));
-            self.started.add_permits(1);
-            let permit = self
-                .release
-                .acquire()
-                .await
-                .map_err(|_| "large tool release closed".to_string())?;
-            permit.forget();
-            Ok(json!({ "value": "x".repeat(8 * 1024 * 1024) }))
-        })
-    }
-
-    fn notify<'a>(
-        &'a self,
-        _call_id: String,
-        _cell_id: CellId,
-        _text: String,
-        _cancellation_token: CancellationToken,
-    ) -> NotificationFuture<'a> {
-        Box::pin(async { Ok(()) })
-    }
-
-    fn cell_closed(&self, _cell_id: &CellId) {}
-}
-
 impl HostHarness {
-    async fn start() -> Result<Self> {
-        let host_program = codex_utils_cargo_bin::cargo_bin("codex-code-mode-host")?;
-        let mut command = Command::new(host_program);
-        command
-            .args(["--listen", "ws://127.0.0.1:0"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        let mut child = command.spawn().context("failed to start code-mode host")?;
-        let stdout = child
-            .stdout
-            .take()
-            .context("code-mode host stdout was not captured")?;
-        let mut lines = BufReader::new(stdout).lines();
-        let websocket_url = timeout(TEST_TIMEOUT, lines.next_line())
-            .await
-            .context("timed out waiting for code-mode host websocket URL")??
-            .context("code-mode host exited before publishing its websocket URL")?;
-        if !websocket_url.starts_with("ws://127.0.0.1:") {
-            anyhow::bail!("unexpected code-mode host websocket URL `{websocket_url}`");
-        }
-
-        Ok(Self {
-            child,
-            websocket_url,
-        })
-    }
-
     async fn connect(&self) -> Result<HostClient> {
         let config = WebSocketConfig::default()
             .max_frame_size(Some(MAX_WEBSOCKET_FRAME_BYTES))
@@ -158,7 +87,7 @@ impl HostHarness {
         let (websocket, _) = timeout(
             TEST_TIMEOUT,
             connect_async_with_config(
-                self.websocket_url.as_str(),
+                self.endpoint.as_str(),
                 Some(config),
                 /*disable_nagle*/ false,
             ),
@@ -280,9 +209,9 @@ impl HostClient {
 
 #[tokio::test]
 async fn websocket_listener_serves_readiness_endpoint() -> Result<()> {
-    let host = HostHarness::start().await?;
+    let host = HostHarness::start("ws://127.0.0.1:0").await?;
     let address = host
-        .websocket_url
+        .endpoint
         .strip_prefix("ws://")
         .context("code-mode host websocket URL should use ws://")?;
 
@@ -317,7 +246,7 @@ async fn websocket_listener_serves_readiness_endpoint() -> Result<()> {
 
 #[tokio::test]
 async fn websocket_listener_executes_cells_and_forwards_tool_callbacks() -> Result<()> {
-    let host = HostHarness::start().await?;
+    let host = HostHarness::start("ws://127.0.0.1:0").await?;
     let mut client = host.connect().await?;
     client.negotiate(CapabilitySet::empty()).await?;
 
@@ -410,8 +339,8 @@ async fn websocket_listener_executes_cells_and_forwards_tool_callbacks() -> Resu
 #[tokio::test]
 async fn production_websocket_client_runs_nested_tools_while_other_sessions_progress() -> Result<()>
 {
-    let host = HostHarness::start().await?;
-    let provider = WebSocketCodeModeSessionProvider::new(host.websocket_url.clone());
+    let host = HostHarness::start("ws://127.0.0.1:0").await?;
+    let provider = WebSocketCodeModeSessionProvider::new(host.endpoint.clone());
     let delegate = Arc::new(LargeToolResultDelegate {
         started: Semaphore::new(/*permits*/ 0),
         release: Semaphore::new(/*permits*/ 0),
@@ -547,9 +476,9 @@ async fn production_websocket_client_runs_nested_tools_while_other_sessions_prog
 #[tokio::test]
 async fn websocket_dual_connections_route_notifications_and_tool_callbacks_to_separate_lanes()
 -> Result<()> {
-    let host = HostHarness::start().await?;
+    let host = HostHarness::start("ws://127.0.0.1:0").await?;
     let mut control = host.connect().await?;
-    let mut bulk = control.negotiate_dual(&host.websocket_url).await?;
+    let mut bulk = control.negotiate_dual(&host.endpoint).await?;
     let session_id = SessionId::new("dual-websocket-session")?;
     control.open_session(session_id.clone()).await?;
 
@@ -693,9 +622,9 @@ async fn websocket_dual_connections_route_notifications_and_tool_callbacks_to_se
 
 #[tokio::test]
 async fn websocket_control_operations_bypass_an_incomplete_bulk_frame() -> Result<()> {
-    let host = HostHarness::start().await?;
+    let host = HostHarness::start("ws://127.0.0.1:0").await?;
     let mut control = host.connect().await?;
-    let mut bulk = control.negotiate_dual(&host.websocket_url).await?;
+    let mut bulk = control.negotiate_dual(&host.endpoint).await?;
     let session_id = SessionId::new("bulk-priority-session")?;
     control.open_session(session_id.clone()).await?;
 
@@ -781,9 +710,9 @@ async fn websocket_control_operations_bypass_an_incomplete_bulk_frame() -> Resul
 
 #[tokio::test]
 async fn websocket_bulk_lane_rejects_control_messages() -> Result<()> {
-    let host = HostHarness::start().await?;
+    let host = HostHarness::start("ws://127.0.0.1:0").await?;
     let mut control = host.connect().await?;
-    let mut bulk = control.negotiate_dual(&host.websocket_url).await?;
+    let mut bulk = control.negotiate_dual(&host.endpoint).await?;
     let session_id = SessionId::new("wrong-lane-session")?;
     control.open_session(session_id.clone()).await?;
 
@@ -811,9 +740,9 @@ async fn websocket_bulk_lane_rejects_control_messages() -> Result<()> {
 
 #[tokio::test]
 async fn websocket_bulk_pairing_rejects_unknown_tokens() -> Result<()> {
-    let host = HostHarness::start().await?;
+    let host = HostHarness::start("ws://127.0.0.1:0").await?;
     let unknown_token = Uuid::new_v4();
-    let url = format!("{}/bulk/{unknown_token}", host.websocket_url);
+    let url = format!("{}/bulk/{unknown_token}", host.endpoint);
     let error = match connect_async(url).await {
         Ok(_) => anyhow::bail!("unknown bulk pairing token should be rejected"),
         Err(error) => error,
@@ -827,7 +756,7 @@ async fn websocket_bulk_pairing_rejects_unknown_tokens() -> Result<()> {
 
 #[tokio::test]
 async fn websocket_listener_accepts_frames_larger_than_default_websocket_limit() -> Result<()> {
-    let host = HostHarness::start().await?;
+    let host = HostHarness::start("ws://127.0.0.1:0").await?;
     let mut client = host.connect().await?;
     let capability = Capability::new("x".repeat((16 * 1024 * 1024) + 1))?;
 
@@ -838,7 +767,7 @@ async fn websocket_listener_accepts_frames_larger_than_default_websocket_limit()
 
 #[tokio::test]
 async fn websocket_listener_keeps_connections_and_session_ids_isolated() -> Result<()> {
-    let host = HostHarness::start().await?;
+    let host = HostHarness::start("ws://127.0.0.1:0").await?;
     let mut first = host.connect().await?;
     let mut second = host.connect().await?;
     first.negotiate(CapabilitySet::empty()).await?;
@@ -852,9 +781,9 @@ async fn websocket_listener_keeps_connections_and_session_ids_isolated() -> Resu
 
 #[tokio::test]
 async fn malformed_websocket_frame_does_not_stop_the_listener() -> Result<()> {
-    let mut host = HostHarness::start().await?;
+    let mut host = HostHarness::start("ws://127.0.0.1:0").await?;
     let stderr = host
-        .child
+        ._child
         .stderr
         .take()
         .context("code-mode host stderr was not captured")?;
@@ -895,8 +824,8 @@ async fn malformed_websocket_frame_does_not_stop_the_listener() -> Result<()> {
 
 #[tokio::test]
 async fn websocket_listener_rejects_browser_origin_handshakes() -> Result<()> {
-    let host = HostHarness::start().await?;
-    let mut request = host.websocket_url.as_str().into_client_request()?;
+    let host = HostHarness::start("ws://127.0.0.1:0").await?;
+    let mut request = host.endpoint.as_str().into_client_request()?;
     request
         .headers_mut()
         .insert(ORIGIN, HeaderValue::from_static("https://evil.example"));

@@ -1,7 +1,6 @@
 #![allow(clippy::expect_used)]
 
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -33,12 +32,11 @@ use tokio::sync::Semaphore;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-#[derive(Default)]
-struct RecordingDelegate {
-    invocations: Mutex<Vec<CodeModeNestedToolCall>>,
-    notifications: Mutex<Vec<(String, CellId, String)>>,
-    closed_cells: Mutex<Vec<CellId>>,
-}
+#[path = "support/recording_delegate.rs"]
+mod recording_delegate;
+
+use recording_delegate::RecordingDelegate;
+use recording_delegate::cell_id;
 
 #[derive(Debug, Eq, PartialEq)]
 enum CallbackEvent {
@@ -164,45 +162,6 @@ impl CodeModeSessionDelegate for CancellationDelegate {
             .events_tx
             .send(CallbackEvent::CellClosed(cell_id.clone()));
     }
-}
-
-impl CodeModeSessionDelegate for RecordingDelegate {
-    fn invoke_tool<'a>(
-        &'a self,
-        invocation: CodeModeNestedToolCall,
-        _cancellation_token: CancellationToken,
-    ) -> ToolInvocationFuture<'a> {
-        self.invocations
-            .lock()
-            .expect("invocations lock")
-            .push(invocation);
-        Box::pin(async { Ok(json!({ "value": "output" })) })
-    }
-
-    fn notify<'a>(
-        &'a self,
-        call_id: String,
-        cell_id: CellId,
-        text: String,
-        _cancellation_token: CancellationToken,
-    ) -> NotificationFuture<'a> {
-        self.notifications
-            .lock()
-            .expect("notifications lock")
-            .push((call_id, cell_id, text));
-        Box::pin(async { Ok(()) })
-    }
-
-    fn cell_closed(&self, cell_id: &CellId) {
-        self.closed_cells
-            .lock()
-            .expect("closed cells lock")
-            .push(cell_id.clone());
-    }
-}
-
-fn cell_id(value: &str) -> CellId {
-    CellId::new(value.to_string())
 }
 
 fn execute_request(source: &str) -> ExecuteRequest {
