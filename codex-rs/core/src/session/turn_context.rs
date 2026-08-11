@@ -571,6 +571,10 @@ impl Session {
             &model_info,
         );
         let permission_profile = per_turn_config.permissions.effective_permission_profile();
+        let auto_review_enabled = crate::guardian::routes_approval_policy_to_guardian(
+            per_turn_config.permissions.approval_policy.value(),
+            per_turn_config.approvals_reviewer,
+        );
         let per_turn_config = Arc::new(per_turn_config);
         let turn_metadata_state = Arc::new(TurnMetadataState::new(
             session_id.to_string(),
@@ -584,6 +588,7 @@ impl Session {
             &permission_profile,
             session_configuration.windows_sandbox_level,
             network.is_some(),
+            auto_review_enabled,
         ));
         turn_metadata_state
             .set_responses_api_metadata(per_turn_config.responses_api_metadata.clone());

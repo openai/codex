@@ -107,6 +107,7 @@ pub(crate) struct TurnMetadataState {
     turn_id: String,
     sandbox: Option<String>,
     sandbox_mode: Option<String>,
+    auto_review_enabled: bool,
     enriched_workspaces: RwLock<Option<BTreeMap<String, TurnMetadataWorkspace>>>,
     tool_namespaces_info: RwLock<Option<TurnToolNamespacesInfo>>,
     turn_started_at_unix_ms: RwLock<Option<i64>>,
@@ -130,6 +131,7 @@ impl TurnMetadataState {
         permission_profile: &PermissionProfile,
         windows_sandbox_level: WindowsSandboxLevel,
         enforce_managed_network: bool,
+        auto_review_enabled: bool,
     ) -> Self {
         let repo_root = get_git_repo_root(&cwd);
         let sandbox = Some(
@@ -156,6 +158,7 @@ impl TurnMetadataState {
             turn_id,
             sandbox,
             sandbox_mode,
+            auto_review_enabled,
             enriched_workspaces: RwLock::new(None),
             tool_namespaces_info: RwLock::new(None),
             turn_started_at_unix_ms: RwLock::new(None),
@@ -304,6 +307,7 @@ impl TurnMetadataState {
             thread_source: self.thread_source.clone(),
             sandbox: self.sandbox.clone(),
             sandbox_mode: self.sandbox_mode.clone(),
+            auto_review_enabled: Some(self.auto_review_enabled),
             workspaces: self.current_workspaces(),
             tool_namespaces_info: self
                 .tool_namespaces_info

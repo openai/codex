@@ -100,6 +100,10 @@ pub(super) async fn spawn_review_thread(
     };
     per_turn_config.service_tier = service_tier;
 
+    let auto_review_enabled = crate::guardian::routes_approval_policy_to_guardian(
+        per_turn_config.permissions.approval_policy.value(),
+        per_turn_config.approvals_reviewer,
+    );
     let per_turn_config = Arc::new(per_turn_config);
     let review_turn_id = sub_id.to_string();
     let turn_metadata_state = Arc::new(TurnMetadataState::new(
@@ -115,6 +119,7 @@ pub(super) async fn spawn_review_thread(
         &parent_turn_context.permission_profile(),
         parent_turn_context.windows_sandbox_level,
         parent_turn_context.network.is_some(),
+        auto_review_enabled,
     ));
 
     let extension_data = Arc::new(codex_extension_api::ExtensionData::new(

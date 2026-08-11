@@ -212,6 +212,10 @@ async fn guardian_prewarm_and_review_skip_redundant_git_enrichment() -> Result<(
     let user_turn = user_turn.body_json();
     let guardian_turn = guardian_turn.body_json();
     assert_eq!(
+        turn_metadata(&user_turn)?["auto_review_enabled"].as_bool(),
+        Some(true)
+    );
+    assert_eq!(
         turn_metadata(&user_turn)?["workspaces"],
         expected_workspace(repo.path(), &head, /*has_changes*/ true)
     );
