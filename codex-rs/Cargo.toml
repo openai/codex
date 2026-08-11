@@ -6,6 +6,7 @@ members = [
     "agent-identity",
     "backend-client",
     "bwrap",
+    "build-info",
     "ansi-escape",
     "async-utils",
     "app-server",

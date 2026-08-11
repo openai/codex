@@ -2332,6 +2332,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-build-info"
+version = "0.0.0"
+dependencies = [
+ "codex-install-context",
+ "pretty_assertions",
+ "semver",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "codex-bwrap"
 version = "0.0.0"
 dependencies = [

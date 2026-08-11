@@ -99,6 +99,8 @@ jobs:
           target: ${{ matrix.target }}
 
       - name: Cargo build (Windows binaries)
+        env:
+          STABLE_GIT_COMMIT: ${{ github.sha }}
         shell: bash
         run: |
           target="${{ matrix.target }}"

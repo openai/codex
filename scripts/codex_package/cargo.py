@@ -63,11 +63,25 @@ def build_source_binaries(
         for binary in binaries:
             cmd.extend(["--bin", binary])
 
-        cargo_env = None
+        cargo_env = os.environ.copy()
+        if "STABLE_GIT_COMMIT" not in cargo_env:
+            if github_sha := cargo_env.get("GITHUB_SHA"):
+                cargo_env["STABLE_GIT_COMMIT"] = github_sha
+            else:
+                git_head = subprocess.run(
+                    ["git", "rev-parse", "--verify", "HEAD"],
+                    cwd=REPO_ROOT,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                if git_head.returncode == 0:
+                    cargo_env["STABLE_GIT_COMMIT"] = git_head.stdout.strip()
+
         if entrypoint_bin is None or code_mode_host_bin is None:
             codex_v8_env = resolve_codex_v8_cargo_env(spec)
             if codex_v8_env:
-                cargo_env = {**os.environ, **codex_v8_env}
+                cargo_env.update(codex_v8_env)
 
         print("+", " ".join(cmd))
         subprocess.run(

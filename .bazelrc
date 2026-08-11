@@ -11,6 +11,9 @@ startup --experimental_remote_repo_contents_cache
 
 common --experimental_platform_in_output_dir
 
+build --workspace_status_command=./scripts/workspace-status.sh
+build:windows --workspace_status_command=./scripts/workspace-status.cmd
+
 # Runfiles strategy rationale: codex-rs/utils/cargo-bin/README.md
 common --noenable_runfiles
 

@@ -1,0 +1,23 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-build-info"
+version.workspace = true
+
+[lib]
+doctest = false
+name = "codex_build_info"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-install-context = { workspace = true }
+semver = { workspace = true, features = ["serde"] }
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
