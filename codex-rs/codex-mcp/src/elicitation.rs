@@ -418,7 +418,7 @@ impl ElicitationRequestManager {
                     router: router.clone(),
                     key: request_key,
                 };
-                let _ = tx_event
+                tx_event
                     .send(Event {
                         id: "mcp_elicitation_request".to_string(),
                         msg: EventMsg::ElicitationRequest(ElicitationRequestEvent {
@@ -428,7 +428,8 @@ impl ElicitationRequestManager {
                             request,
                         }),
                     })
-                    .await;
+                    .await
+                    .context("failed to deliver MCP elicitation request")?;
                 rx.await
                     .context("elicitation request channel closed unexpectedly")
             }

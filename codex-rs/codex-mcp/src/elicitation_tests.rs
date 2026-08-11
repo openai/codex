@@ -118,6 +118,52 @@ async fn assert_declined(marker: Value, response: Option<ReviewerResponse>) {
     assert!(events.is_empty());
 }
 
+#[test]
+fn closed_event_channel_immediately_cleans_up_pending_elicitation() {
+    let active_elicitations = Arc::new(AtomicUsize::new(0));
+    let registrations = active_elicitations.clone();
+    let lifecycle = ElicitationLifecycle::new(move || {
+        registrations.fetch_add(/*val*/ 1, Relaxed);
+        LifecycleRegistration(registrations.clone())
+    });
+    let (manager, events, sender) = elicitation_fixture(
+        AskForApproval::OnRequest,
+        PermissionProfile::Disabled,
+        /*reviewer*/ None,
+    );
+    assert!(manager.update(
+        AskForApproval::OnRequest,
+        PermissionProfile::Disabled,
+        /*reviewer*/ None,
+        Some(lifecycle),
+    ));
+    drop(events);
+
+    let elicitation = Elicitation::Mcp(ElicitRequestParams::FormElicitationParams {
+        meta: None,
+        message: "Review this request".to_string(),
+        requested_schema: ElicitationSchema::builder().build().unwrap(),
+    });
+    let error = sender(RequestId::Number(7), elicitation)
+        .now_or_never()
+        .expect("closed event channel must not leave an elicitation pending")
+        .expect_err("closed event channel must fail the elicitation");
+
+    assert_eq!(
+        error.to_string(),
+        "failed to deliver MCP elicitation request"
+    );
+    assert!(
+        manager
+            .router
+            .requests
+            .lock()
+            .expect("pending request router should be available")
+            .is_empty()
+    );
+    assert_eq!(active_elicitations.load(Relaxed), 0);
+}
+
 #[tokio::test]
 async fn strict_auto_review_respects_explicit_elicitation_denials() {
     for policy in [
