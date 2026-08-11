@@ -65,6 +65,9 @@ pub fn default_filter() -> Targets {
         // SQLite log database, but remain available to explicit TRACE subscribers.
         .with_target("codex_http_client::transport", LevelFilter::DEBUG)
         .with_target("codex_api::sse", LevelFilter::DEBUG)
+        // Per-chunk streaming traces otherwise flood the bounded SQLite log queue.
+        .with_target("codex_tui::streaming::controller", LevelFilter::DEBUG)
+        .with_target("codex_tui::streaming::table_holdback", LevelFilter::DEBUG)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
