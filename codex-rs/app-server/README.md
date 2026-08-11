@@ -93,15 +93,11 @@ extended forms, clients must handle the request envelope, including a fallback
 for unsupported field types. `mcpServerOpenaiFormElicitation: true` remains a
 legacy alias for declaring the `openai/form` extension.
 
-`openai/standard-form-input` indicates support for collecting and returning
-input from standard MCP forms.
-
 ```json
 {
   "capabilities": {
     "extensions": {
       "openai/form": {},
-      "openai/standard-form-input": {},
       "io.modelcontextprotocol/ui": {
         "mimeTypes": ["text/html;profile=mcp-app"]
       }
