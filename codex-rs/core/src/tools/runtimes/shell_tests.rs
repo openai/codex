@@ -25,6 +25,7 @@ async fn approval_key_uses_path_uri_and_includes_environment_id() {
                 permission_profile: PermissionProfileSnapshot::legacy(
                     PermissionProfile::read_only(),
                 ),
+                selected_capability_roots: None,
             },
         ),
         shell_type: None,

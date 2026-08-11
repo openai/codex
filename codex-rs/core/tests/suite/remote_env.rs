@@ -4,6 +4,8 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_api::AuthProvider;
 use codex_config::types::ApprovalsReviewer;
+use codex_core::EnvironmentConfig;
+use codex_core::StartThreadOptions;
 use codex_core::WaitForEnvironmentToolConfig;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::config::Config;
@@ -22,6 +24,7 @@ use codex_exec_server::REMOTE_ENVIRONMENT_ID;
 use codex_exec_server::RemoteEnvironmentConfig;
 use codex_exec_server::RemoveOptions;
 use codex_extension_api::ContextContributor;
+use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::RenderedWorldStateFragment;
@@ -951,6 +954,164 @@ async fn wait_for_response_request_count(response_mock: &ResponseMock, expected_
     })
     .await
     .expect("timed out waiting for Responses API request");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shared_executor_keeps_ready_capability_roots_scoped_to_each_attachment() -> Result<()> {
+    let server = start_mock_server().await;
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.prompt_contributor(Arc::new(ReadyCapabilityRootsTestExtension));
+    let mut builder = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .with_config(|config| {
+            config.use_experimental_unified_exec_tool = true;
+            assert!(config.features.enable(Feature::UnifiedExec).is_ok());
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    let selection = test
+        .codex
+        .environment_selections()
+        .await
+        .into_iter()
+        .next()
+        .context("thread should select its executor environment")?;
+    let root = |id: &str| SelectedCapabilityRoot {
+        id: id.to_string(),
+        location: CapabilityRootLocation::Environment {
+            environment_id: selection.environment_id.clone(),
+            path: selection.cwd.clone(),
+        },
+    };
+
+    let mut second_thread_init = ExtensionDataInit::new();
+    second_thread_init.insert(vec![root("startup-root")]);
+    let second = test
+        .thread_manager
+        .start_thread(StartThreadOptions {
+            environments: Some(vec![selection.clone()]),
+            thread_extension_init: second_thread_init,
+            ..StartThreadOptions::new(test.config.clone())
+        })
+        .await?;
+
+    test.codex
+        .environment_ready(
+            &selection,
+            EnvironmentConfig {
+                allow_login_shell: false,
+                selected_capability_roots: vec![root("first-root")],
+            },
+        )
+        .await?;
+    second
+        .thread
+        .environment_ready(
+            &selection,
+            EnvironmentConfig {
+                allow_login_shell: true,
+                selected_capability_roots: vec![root("startup-root"), root("second-root")],
+            },
+        )
+        .await?;
+
+    assert_eq!(
+        test.codex.inspect_selected_capability_roots().ready_roots,
+        vec![root("first-root")]
+    );
+    assert_eq!(
+        second
+            .thread
+            .inspect_selected_capability_roots()
+            .ready_roots,
+        vec![root("startup-root"), root("second-root")]
+    );
+
+    let response_mock = mount_sse_sequence(
+        &server,
+        ["first", "second", "first-updated", "second-again"]
+            .into_iter()
+            .map(|response_id| {
+                sse(vec![
+                    ev_response_created(response_id),
+                    ev_completed(response_id),
+                ])
+            })
+            .collect(),
+    )
+    .await;
+
+    for (index, (thread, prompt)) in [
+        (&test.codex, "first"),
+        (&second.thread, "second"),
+        (&test.codex, "first-updated"),
+        (&second.thread, "second-again"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if index == 2 {
+            test.codex
+                .environment_ready(
+                    &selection,
+                    EnvironmentConfig {
+                        allow_login_shell: false,
+                        selected_capability_roots: vec![root("first-updated-root")],
+                    },
+                )
+                .await?;
+        }
+
+        thread
+            .submit(
+                vec![UserInput::Text {
+                    text: prompt.to_string(),
+                    text_elements: Vec::new(),
+                }]
+                .into(),
+            )
+            .await?;
+        wait_for_event(thread, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    }
+
+    let requests = response_mock.requests();
+    let root_fragments = requests
+        .iter()
+        .map(|request| {
+            request
+                .message_input_texts("user")
+                .into_iter()
+                .rfind(|text| text.contains("<ready_capability_roots>"))
+                .context("ready capability roots should be model-visible")
+        })
+        .collect::<Result<Vec<_>>>()?;
+    assert_eq!(
+        root_fragments,
+        vec![
+            "<ready_capability_roots>first-root</ready_capability_roots>",
+            "<ready_capability_roots>startup-root,second-root</ready_capability_roots>",
+            "<ready_capability_roots>first-updated-root</ready_capability_roots>",
+            "<ready_capability_roots>startup-root,second-root</ready_capability_roots>",
+        ]
+    );
+
+    let login_shells = requests
+        .iter()
+        .map(|request| {
+            let body = request.body_json();
+            let exec_command = body["tools"]
+                .as_array()
+                .context("tools should be an array")?
+                .iter()
+                .find(|tool| tool["name"] == "exec_command")
+                .context("exec_command should be available")?;
+            Ok(exec_command["parameters"]["properties"]
+                .get("login")
+                .is_some())
+        })
+        .collect::<Result<Vec<_>>>()?;
+    assert_eq!(login_shells, vec![false, true, false, true]);
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

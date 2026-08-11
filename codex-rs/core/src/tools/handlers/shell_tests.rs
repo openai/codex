@@ -120,6 +120,7 @@ async fn shell_command_handler_to_exec_params_uses_selected_environment() {
                 permission_profile,
                 active_permission_profile.clone(),
             ),
+            selected_capability_roots: None,
         },
     );
     let mut expected_env = create_env(

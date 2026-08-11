@@ -1,6 +1,7 @@
 use crate::agent::AgentStatus;
 use crate::config::ConstraintResult;
 use crate::elicitation::ElicitationRegistration;
+use crate::environment_config::EnvironmentConfig;
 use crate::session::SessionIo;
 use crate::session::SessionSettingsUpdate;
 use crate::session::SteerInputError;
@@ -768,13 +769,18 @@ impl CodexThread {
         self.session.thread_environment_selections().await
     }
 
+    /// Installs resolved environment configuration and capability roots on this thread.
+    pub async fn environment_ready(
+        &self,
+        selection: &TurnEnvironmentSelection,
+        config: EnvironmentConfig,
+    ) -> CodexResult<()> {
+        self.session.environment_ready(selection, config).await
+    }
+
     /// Passively inspects the selected capability roots whose environments are ready now.
     pub fn inspect_selected_capability_roots(&self) -> SelectedCapabilityRootsStatus {
-        self.session
-            .services
-            .turn_environments
-            .environment_manager()
-            .inspect_selected_capability_roots(&self.session.services.selected_capability_roots)
+        self.session.inspect_selected_capability_roots()
     }
 
     pub async fn read_mcp_resource(

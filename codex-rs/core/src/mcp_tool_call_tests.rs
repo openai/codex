@@ -1107,6 +1107,7 @@ async fn mcp_sandbox_cwd_uses_matching_server_environment_uri() -> anyhow::Resul
                     .permissions
                     .permission_profile_state()
                     .snapshot(),
+                selected_capability_roots: None,
             },
         )));
 

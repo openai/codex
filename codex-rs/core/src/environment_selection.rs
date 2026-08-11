@@ -11,6 +11,11 @@ use codex_exec_server::EnvironmentConnectionState;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecServerError;
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::SelectedCapabilityRootsStatus;
+use codex_protocol::capabilities::CapabilityRootLocation;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::EnvironmentConnectionEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -22,6 +27,7 @@ use futures::future::BoxFuture;
 use futures::future::Shared;
 use tokio_util::task::AbortOnDropHandle;
 
+use crate::environment_config::EnvironmentConfig;
 use crate::session::turn_context::ShellSnapshotTask;
 use crate::session::turn_context::TurnEnvironment;
 use crate::session::turn_context::TurnEnvironmentConfig;
@@ -59,7 +65,6 @@ struct ResolvedEnvironment {
 #[derive(Clone)]
 struct SelectedTurnEnvironment {
     selection: TurnEnvironmentSelection,
-    // Temporary: copied from thread settings until environments supply their own config.
     config: TurnEnvironmentConfig,
     environment: Arc<Environment>,
     // Selection clones share one listener; the final handle drop aborts it.
@@ -72,6 +77,21 @@ pub(crate) struct StartingTurnEnvironment {
     pub(crate) selection: TurnEnvironmentSelection,
     config: TurnEnvironmentConfig,
     resolution: TurnEnvironmentResolution,
+}
+
+impl SelectedTurnEnvironment {
+    fn has_installed_environment_config(&self) -> bool {
+        self.config.selected_capability_roots.is_some()
+    }
+
+    // Thread settings still own permissions, but cannot overwrite shell policy
+    // that was installed specifically for this environment attachment.
+    fn update_thread_config(&mut self, config: &TurnEnvironmentConfig) {
+        if !self.has_installed_environment_config() {
+            self.config.allow_login_shell = config.allow_login_shell;
+        }
+        self.config.permission_profile = config.permission_profile.clone();
+    }
 }
 
 impl fmt::Debug for StartingTurnEnvironment {
@@ -118,6 +138,7 @@ impl ThreadEnvironments {
                 };
                 let selection = environment.selection();
                 let selected_environment = Arc::clone(&environment.environment);
+                let inherited_config = environment.config;
                 let resolution: TurnEnvironmentResolution =
                     futures::future::ready(Ok(ResolvedEnvironment {
                         environment: environment.environment,
@@ -126,14 +147,17 @@ impl ThreadEnvironments {
                     }))
                     .boxed()
                     .shared();
-                Some(SelectedTurnEnvironment {
+                let mut inherited_environment = SelectedTurnEnvironment {
                     selection,
-                    // Child threads can have different environment config from their parent.
-                    config: thread_environment_config.clone(),
+                    config: inherited_config,
                     environment: selected_environment,
                     connection_events_task: None,
                     resolution,
-                })
+                };
+                // Child threads get their own settings, but inherit any
+                // environment-owned policy that was already installed.
+                inherited_environment.update_thread_config(&thread_environment_config);
+                Some(inherited_environment)
             })
             .collect();
         Self {
@@ -164,7 +188,7 @@ impl ThreadEnvironments {
                 && !matches!(environment.resolution.clone().now_or_never(), Some(Err(_)))
             {
                 let mut environment = environment.clone();
-                environment.config = thread_environment_config.clone();
+                environment.update_thread_config(thread_environment_config);
                 next.push(environment);
                 continue;
             }
@@ -234,11 +258,66 @@ impl ThreadEnvironments {
             .iter()
             .map(|environment| {
                 let mut environment = environment.clone();
-                environment.config = config.clone();
+                environment.update_thread_config(config);
                 environment
             })
             .collect();
         self.environments.store(Arc::new(environments));
+    }
+
+    /// Installs owner-provided config and roots on their exact thread attachment.
+    /// Additional environment-owned settings should be applied to its config here.
+    pub(crate) fn environment_ready(
+        &self,
+        selection: &TurnEnvironmentSelection,
+        config: EnvironmentConfig,
+    ) -> CodexResult<()> {
+        let mut environments = Vec::clone(&self.environments.load());
+        let Some(environment) = environments.iter_mut().find(|environment| {
+            environment.selection.environment_id == selection.environment_id
+                && environment.selection.cwd == selection.cwd
+        }) else {
+            return Err(CodexErr::InvalidRequest(format!(
+                "environment `{}` is not selected on this thread with the requested cwd",
+                selection.environment_id
+            )));
+        };
+
+        environment.config.allow_login_shell = config.allow_login_shell;
+        environment.config.selected_capability_roots = Some(config.selected_capability_roots);
+        self.environments.store(Arc::new(environments));
+        Ok(())
+    }
+
+    /// Combines persisted thread roots with installed attachment roots, keeping
+    /// thread roots first and hiding attachments that are not ready yet.
+    pub(crate) fn inspect_selected_capability_roots(
+        &self,
+        thread_selected_capability_roots: &[SelectedCapabilityRoot],
+    ) -> SelectedCapabilityRootsStatus {
+        let environments = self.environments.load();
+        let mut selected_capability_roots = thread_selected_capability_roots.to_vec();
+        for environment in environments.iter() {
+            if let Some(roots) = &environment.config.selected_capability_roots {
+                selected_capability_roots.extend(roots.iter().cloned());
+            }
+        }
+        let mut seen_root_ids = HashSet::with_capacity(selected_capability_roots.len());
+        selected_capability_roots.retain(|root| seen_root_ids.insert(root.id.clone()));
+
+        let mut status = self
+            .environment_manager
+            .inspect_selected_capability_roots(&selected_capability_roots);
+        status.ready_roots.retain(|root| {
+            let CapabilityRootLocation::Environment { environment_id, .. } = &root.location;
+            environments
+                .iter()
+                .find(|environment| &environment.selection.environment_id == environment_id)
+                .is_none_or(|environment| {
+                    matches!(environment.resolution.clone().now_or_never(), Some(Ok(_)))
+                })
+        });
+        status
     }
 
     fn spawn_connection_event_listener(
@@ -558,6 +637,7 @@ mod tests {
         TurnEnvironmentConfig {
             allow_login_shell: true,
             permission_profile: PermissionProfileSnapshot::legacy(PermissionProfile::read_only()),
+            selected_capability_roots: None,
         }
     }
 
@@ -725,6 +805,7 @@ url = "ws://127.0.0.1:8765"
                 ActivePermissionProfile::read_only(),
                 vec![cwd.join("profile-root")],
             ),
+            selected_capability_roots: None,
         };
         let turn_environments = ThreadEnvironments::new(
             Arc::new(EnvironmentManager::default_for_tests()),
@@ -917,6 +998,7 @@ url = "ws://127.0.0.1:8765"
                 ActivePermissionProfile::read_only(),
                 vec![cwd.join("profile-root")],
             ),
+            selected_capability_roots: None,
         };
         let cwd = PathUri::from_abs_path(&cwd);
         let remote = TurnEnvironmentSelection {
@@ -1042,7 +1124,28 @@ url = "ws://127.0.0.1:8765"
         environments
             .update_selections(std::slice::from_ref(&selection), &test_environment_config());
         let failed_resolution = environments.environments.load()[0].resolution.clone();
-        assert!(failed_resolution.clone().await.is_err());
+        let error = failed_resolution
+            .clone()
+            .await
+            .err()
+            .expect("environment should fail to start");
+        let selected_root = SelectedCapabilityRoot {
+            id: "failed-root".to_string(),
+            location: CapabilityRootLocation::Environment {
+                environment_id: selection.environment_id.clone(),
+                path: selection.cwd.clone(),
+            },
+        };
+        assert_eq!(
+            environments.inspect_selected_capability_roots(&[selected_root]),
+            SelectedCapabilityRootsStatus {
+                ready_roots: Vec::new(),
+                warnings: vec![format!(
+                    "selected capability environment `{}` is unavailable: {error}",
+                    selection.environment_id
+                )],
+            }
+        );
 
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -1211,6 +1314,7 @@ url = "ws://127.0.0.1:8765"
                 ActivePermissionProfile::read_only(),
                 vec![cwd.join("child-profile-root")],
             ),
+            selected_capability_roots: None,
         };
         let environments = ThreadEnvironments::new(
             manager,
@@ -1229,6 +1333,92 @@ url = "ws://127.0.0.1:8765"
         let inherited = snapshot.primary().expect("inherited environment");
         assert!(Arc::ptr_eq(&inherited.environment, &inherited_environment));
         assert_eq!(inherited.config, child_config);
+    }
+
+    #[tokio::test]
+    async fn installed_environment_config_is_inherited_and_reset_for_new_cwd() {
+        let cwd = AbsolutePathBuf::current_dir().expect("cwd");
+        let selection = TurnEnvironmentSelection {
+            environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
+            cwd: PathUri::from_abs_path(&cwd),
+            workspace_roots: Vec::new(),
+        };
+        let root = |id: &str| SelectedCapabilityRoot {
+            id: id.to_string(),
+            location: CapabilityRootLocation::Environment {
+                environment_id: selection.environment_id.clone(),
+                path: selection.cwd.clone(),
+            },
+        };
+        let manager = Arc::new(EnvironmentManager::default_for_tests());
+        let parent =
+            resolve_turn_environments(Arc::clone(&manager), std::slice::from_ref(&selection)).await;
+        parent
+            .environment_ready(
+                &selection,
+                EnvironmentConfig {
+                    allow_login_shell: false,
+                    selected_capability_roots: vec![root("parent-root")],
+                },
+            )
+            .expect("install environment config");
+
+        let child_thread_config = TurnEnvironmentConfig {
+            permission_profile: PermissionProfileSnapshot::legacy(
+                PermissionProfile::workspace_write(),
+            ),
+            ..test_environment_config()
+        };
+        let child = ThreadEnvironments::new(
+            manager,
+            crate::shell::default_user_shell(),
+            child_thread_config.clone(),
+            ShellSnapshot::disabled(),
+            parent.snapshot().await,
+            /*non_blocking_snapshots*/ false,
+        );
+        let child_snapshot = child.snapshot().await;
+        let child_environment = child_snapshot.primary().expect("child environment");
+
+        parent
+            .environment_ready(
+                &selection,
+                EnvironmentConfig {
+                    allow_login_shell: false,
+                    selected_capability_roots: Vec::new(),
+                },
+            )
+            .expect("clear parent roots");
+        let cleared_snapshot = parent.snapshot().await;
+        assert_eq!(
+            cleared_snapshot
+                .primary()
+                .expect("environment with cleared roots")
+                .config,
+            TurnEnvironmentConfig {
+                allow_login_shell: false,
+                selected_capability_roots: Some(Vec::new()),
+                ..test_environment_config()
+            }
+        );
+        assert_eq!(
+            child_environment.config,
+            TurnEnvironmentConfig {
+                allow_login_shell: false,
+                selected_capability_roots: Some(vec![root("parent-root")]),
+                ..child_thread_config
+            }
+        );
+
+        let changed_selection = TurnEnvironmentSelection {
+            cwd: PathUri::from_abs_path(&cwd.join("changed")),
+            ..selection
+        };
+        let new_thread_config = test_environment_config();
+        parent.update_selections(std::slice::from_ref(&changed_selection), &new_thread_config);
+        let changed_snapshot = parent.snapshot().await;
+        let changed_environment = changed_snapshot.primary().expect("changed environment");
+        assert_eq!(changed_environment.config, new_thread_config);
     }
 
     #[tokio::test]

@@ -164,6 +164,7 @@ impl SessionConfiguration {
                 .permissions
                 .allow_login_shell,
             permission_profile: self.permission_profile_state.snapshot(),
+            selected_capability_roots: None,
         }
     }
 

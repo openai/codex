@@ -26,6 +26,7 @@ fn test_turn_environment(environment_id: &str) -> crate::session::turn_context::
         TurnEnvironmentConfig {
             allow_login_shell: true,
             permission_profile: PermissionProfileSnapshot::legacy(PermissionProfile::read_only()),
+            selected_capability_roots: None,
         },
     )
 }

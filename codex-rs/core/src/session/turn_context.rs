@@ -10,6 +10,7 @@ use codex_file_system::FileSystemSandboxContext;
 use codex_model_provider::SharedModelProvider;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::openai_models::MODEL_SPECIALTY_CYBER;
 use codex_protocol::openai_models::ModelInfo;
@@ -34,6 +35,8 @@ pub(crate) type ShellSnapshotTask = Shared<BoxFuture<'static, Option<Arc<ShellSn
 pub(crate) struct TurnEnvironmentConfig {
     pub(crate) allow_login_shell: bool,
     pub(crate) permission_profile: PermissionProfileSnapshot,
+    /// None preserves legacy executor roots; Some, including empty, is owner-installed.
+    pub(crate) selected_capability_roots: Option<Vec<SelectedCapabilityRoot>>,
 }
 
 #[derive(Clone)]

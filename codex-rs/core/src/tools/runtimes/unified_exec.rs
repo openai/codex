@@ -507,6 +507,7 @@ mod tests {
                 permission_profile: PermissionProfileSnapshot::legacy(
                     PermissionProfile::read_only(),
                 ),
+                selected_capability_roots: None,
             },
         )
     }
