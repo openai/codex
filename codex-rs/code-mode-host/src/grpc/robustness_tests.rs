@@ -18,6 +18,7 @@ use tonic::Request;
 use tonic::Status;
 use uuid::Uuid;
 
+use super::ExecutionAdmission;
 use super::GrpcCodeModeHost;
 use super::tests::execute_events;
 use super::tests::execute_request;
@@ -123,6 +124,31 @@ async fn rejects_oversized_identifiers_tool_metadata_and_subscription_filters() 
     }];
     assert_invalid(host.execute(Request::new(request)).await);
     assert!(host.state.session(&session_id).is_ok());
+}
+
+#[tokio::test]
+async fn dropping_execution_before_admission_releases_its_reservation() {
+    let host = GrpcCodeModeHost::new();
+    let (session_id, _events) = open_session(&host).await;
+    let session = host.state.session(&session_id).expect("open session");
+    let execution_id = "execution-abandoned-before-admission".to_string();
+    session
+        .reserve_execution(&execution_id)
+        .expect("reserve execution");
+
+    drop(ExecutionAdmission {
+        session: Arc::clone(&session),
+        execution_id: Some(execution_id.clone()),
+    });
+
+    let error = session
+        .admit_execution(
+            execution_id,
+            "cell".to_string(),
+            host.state.cell_permit().expect("reserve cell permit"),
+        )
+        .expect_err("abandoned execution must not admit a runtime cell");
+    assert_eq!(error.code(), Code::Cancelled);
 }
 
 #[tokio::test]

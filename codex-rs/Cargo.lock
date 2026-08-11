@@ -2567,10 +2567,13 @@ dependencies = [
  "codex-websocket-client",
  "futures",
  "pretty_assertions",
+ "serde_json",
  "tokio",
  "tokio-tungstenite",
  "tokio-util",
+ "tonic",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

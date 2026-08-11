@@ -62,27 +62,31 @@ pub struct StartedCell {
 
 impl StartedCell {
     pub fn new(cell_id: CellId, initial_response_rx: oneshot::Receiver<RuntimeResponse>) -> Self {
-        Self {
-            cell_id,
-            initial_response: Box::pin(async move {
-                initial_response_rx
-                    .await
-                    .map_err(|_| "exec runtime ended unexpectedly".to_string())
-            }),
-        }
+        Self::from_future(cell_id, async move {
+            initial_response_rx
+                .await
+                .map_err(|_| "exec runtime ended unexpectedly".to_string())
+        })
     }
 
     pub fn from_result_receiver(
         cell_id: CellId,
         initial_response_rx: oneshot::Receiver<Result<RuntimeResponse, String>>,
     ) -> Self {
+        Self::from_future(cell_id, async move {
+            initial_response_rx
+                .await
+                .map_err(|_| "exec runtime ended unexpectedly".to_string())?
+        })
+    }
+
+    pub fn from_future(
+        cell_id: CellId,
+        initial_response: impl Future<Output = Result<RuntimeResponse, String>> + Send + 'static,
+    ) -> Self {
         Self {
             cell_id,
-            initial_response: Box::pin(async move {
-                initial_response_rx
-                    .await
-                    .map_err(|_| "exec runtime ended unexpectedly".to_string())?
-            }),
+            initial_response: Box::pin(initial_response),
         }
     }
 

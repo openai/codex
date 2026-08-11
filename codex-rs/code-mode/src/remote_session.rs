@@ -32,7 +32,7 @@ use crate::NoopCodeModeSessionDelegate;
 
 mod connection;
 
-type ShutdownResultReceiver = watch::Receiver<Option<Result<(), String>>>;
+pub(crate) type ShutdownResultReceiver = watch::Receiver<Option<Result<(), String>>>;
 
 /// Creates code-mode sessions backed by one lazily spawned process host.
 pub struct ProcessOwnedCodeModeSessionProvider {
@@ -547,7 +547,7 @@ enum ShutdownAction {
     Close(SessionBinding),
 }
 
-async fn wait_for_watch<T>(
+pub(crate) async fn wait_for_watch<T>(
     mut result_rx: watch::Receiver<Option<Result<T, String>>>,
 ) -> Result<T, String>
 where

@@ -134,7 +134,8 @@ message CellClosed {
   string execution_id = 1;
   string cell_id = 2;
 
-  // All lower sequences must be observed before the client retires the cell.
+  // Last tool-call sequence issued before closure. Clients may retire the cell
+  // immediately and reject tool calls delivered after its closure.
   uint64 final_tool_call_sequence = 3;
 }
 
