@@ -4,6 +4,7 @@ use std::time::Duration;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_protocol::mcp::Resource;
 use codex_protocol::mcp::ResourceContent;
+use codex_protocol::protocol::SkillScope;
 use url::Url;
 
 use crate::catalog::SkillAuthority;
@@ -253,7 +254,8 @@ fn catalog_entry_from_resource(resource: &Resource) -> Option<SkillCatalogEntry>
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(true);
     let skill_name = normalized_label(meta.get("skill_name")?.as_str()?, MAX_SKILL_NAME_CHARS)?;
-    let name = if meta.get("source").and_then(|value| value.as_str()) == Some("user") {
+    let user_owned = meta.get("source").and_then(|value| value.as_str()) == Some("user");
+    let name = if user_owned {
         skill_name
     } else {
         let plugin_name =
@@ -265,7 +267,7 @@ fn catalog_entry_from_resource(resource: &Resource) -> Option<SkillCatalogEntry>
     let description = normalized_description(resource.description.as_deref().unwrap_or_default())?;
     let main_prompt = main_prompt_uri(uri);
 
-    let entry = SkillCatalogEntry::new(
+    let mut entry = SkillCatalogEntry::new(
         SkillPackageId(uri.to_string()),
         SkillAuthority::new(SkillSourceKind::Orchestrator, CODEX_APPS_MCP_SERVER_NAME),
         name,
@@ -274,6 +276,11 @@ fn catalog_entry_from_resource(resource: &Resource) -> Option<SkillCatalogEntry>
     )
     .with_display_path(uri)
     .with_alias_root(format!("skill://{namespace}"));
+    entry.canonical_skill_id = meta
+        .get("skill_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    entry.analytics_scope = user_owned.then_some(SkillScope::User);
 
     Some(if allow_implicit_invocation {
         entry

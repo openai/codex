@@ -57,11 +57,13 @@ use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use sha1::Digest;
 use tempfile::TempDir;
 use tokio::time::Duration;
 use tokio::time::Instant;
 use toml::toml;
 use wiremock::Mock;
+use wiremock::MockServer;
 use wiremock::Request;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
@@ -260,6 +262,34 @@ fn catalog_extensions(
         }
     });
     (Arc::new(extensions.build()), event_rx)
+}
+
+async fn wait_for_analytics_events(
+    server: &MockServer,
+    event_type: &str,
+    expected_count: usize,
+) -> Vec<Value> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let events = server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|request| request.url.path() == "/codex/analytics-events/events")
+            .filter_map(|request| serde_json::from_slice::<Value>(&request.body).ok())
+            .flat_map(|payload| payload["events"].as_array().cloned().unwrap_or_default())
+            .filter(|event| event["event_type"] == event_type)
+            .collect::<Vec<_>>();
+        if events.len() >= expected_count {
+            return events;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {event_type} analytics"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 fn configure_catalog_test(config: &mut Config) {
@@ -815,6 +845,10 @@ async fn explicit_only_orchestrator_skill_is_hidden_but_can_be_invoked() -> Resu
     const REFERENCED_RESOURCE: &str = "skill://demo/explicit-only/references/guide.md";
     const REFERENCED_CONTENTS: &str = "# Referenced guide";
     const READ_CALL_ID: &str = "read-explicit-only-resource";
+    const MAIN_READ_CALL_ID: &str = "read-explicit-only-main";
+    const REPEATED_MAIN_READ_CALL_ID: &str = "read-explicit-only-main-again";
+    const INVALID_CURSOR_CALL_ID: &str = "read-explicit-only-invalid-cursor";
+    const MISSING_PACKAGE_CALL_ID: &str = "read-missing-package";
 
     let server = responses::start_mock_server().await;
     let apps_server = AppsTestServer::mount(&server).await?;
@@ -839,6 +873,35 @@ async fn explicit_only_orchestrator_skill_is_hidden_but_can_be_invoked() -> Resu
                 ev_completed("resp-1"),
             ]),
             sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+            sse(vec![
+                ev_response_created("resp-3"),
+                responses::ev_function_call_with_namespace(
+                    MAIN_READ_CALL_ID,
+                    "skills",
+                    "read",
+                    &json!({ "package": SKILL_PACKAGE }).to_string(),
+                ),
+                responses::ev_function_call_with_namespace(
+                    REPEATED_MAIN_READ_CALL_ID,
+                    "skills",
+                    "read",
+                    &json!({ "package": SKILL_PACKAGE, "resource": MAIN_RESOURCE }).to_string(),
+                ),
+                responses::ev_function_call_with_namespace(
+                    INVALID_CURSOR_CALL_ID,
+                    "skills",
+                    "read",
+                    &json!({ "package": SKILL_PACKAGE, "cursor": "invalid" }).to_string(),
+                ),
+                responses::ev_function_call_with_namespace(
+                    MISSING_PACKAGE_CALL_ID,
+                    "skills",
+                    "read",
+                    &json!({ "package": "skill://demo/missing" }).to_string(),
+                ),
+                ev_completed("resp-3"),
+            ]),
+            sse(vec![ev_response_created("resp-4"), ev_completed("resp-4")]),
         ],
     )
     .await;
@@ -990,6 +1053,39 @@ async fn explicit_only_orchestrator_skill_is_hidden_but_can_be_invoked() -> Resu
             "next_cursor": null,
         })
     );
+    let events = wait_for_analytics_events(&server, "skill_invocation", /*expected_count*/ 1).await;
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["skill_name"], "demo:explicit-only");
+    assert_eq!(events[0]["event_params"]["invoke_type"], "explicit");
+
+    test.submit_turn("Continue without explicitly selecting a skill.")
+        .await?;
+    let requests = response.requests();
+    assert_eq!(requests.len(), 4);
+    for call_id in [MAIN_READ_CALL_ID, REPEATED_MAIN_READ_CALL_ID] {
+        let output = requests[3]
+            .function_call_output_text(call_id)
+            .expect("skills.read should return the main resource");
+        assert_eq!(
+            serde_json::from_str::<Value>(&output)?["resource"],
+            MAIN_RESOURCE
+        );
+    }
+    for call_id in [INVALID_CURSOR_CALL_ID, MISSING_PACKAGE_CALL_ID] {
+        assert!(
+            requests[3].function_call_output_text(call_id).is_some(),
+            "failed skills.read should return a tool error for {call_id}"
+        );
+    }
+
+    let events = wait_for_analytics_events(&server, "skill_invocation", /*expected_count*/ 2).await;
+    assert_eq!(events.len(), 2, "repeated main reads must be deduplicated");
+    assert_eq!(events[1]["skill_name"], "demo:explicit-only");
+    assert_eq!(
+        events[1]["skill_id"],
+        format!("{:x}", sha1::Sha1::digest(MAIN_RESOURCE.as_bytes()))
+    );
+    assert_eq!(events[1]["event_params"]["invoke_type"], "implicit");
 
     Ok(())
 }
@@ -1635,29 +1731,9 @@ async fn production_turn_uses_provider_host_catalog_and_core_snapshot_injection(
     let user_text = request.message_input_texts("user").join("\n");
     assert!(user_text.contains(&snapshot_contents));
     assert!(!user_text.contains(provider_contents));
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let app_mentioned_event = loop {
-        let requests = server.received_requests().await.unwrap_or_default();
-        if let Some(event) = requests
-            .into_iter()
-            .filter(|request| request.url.path() == "/codex/analytics-events/events")
-            .find_map(|request| {
-                let payload: serde_json::Value = serde_json::from_slice(&request.body).ok()?;
-                payload["events"].as_array().and_then(|events| {
-                    events
-                        .iter()
-                        .find(|event| event["event_type"] == "codex_app_mentioned")
-                        .cloned()
-                })
-            })
-        {
-            break event;
-        }
-        if Instant::now() >= deadline {
-            panic!("timed out waiting for app mentioned analytics");
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    };
+    let app_mentioned_events =
+        wait_for_analytics_events(&server, "codex_app_mentioned", /*expected_count*/ 1).await;
+    let app_mentioned_event = &app_mentioned_events[0];
     assert_eq!(
         app_mentioned_event["event_params"]["connector_id"],
         "calendar"

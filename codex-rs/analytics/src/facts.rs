@@ -380,11 +380,23 @@ impl From<InputError> for TurnSteerRejectionReason {
 #[derive(Clone, Debug)]
 pub struct SkillInvocation {
     pub skill_name: String,
-    pub skill_scope: SkillScope,
-    pub skill_path: PathBuf,
+    pub location: SkillInvocationLocation,
     pub plugin_id: Option<String>,
     pub remote_plugin_id: Option<String>,
     pub invocation_type: InvocationType,
+}
+
+#[derive(Clone, Debug)]
+pub enum SkillInvocationLocation {
+    Host {
+        path: PathBuf,
+        scope: SkillScope,
+    },
+    Resource {
+        id: String,
+        skill_id: Option<String>,
+        scope: Option<SkillScope>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]

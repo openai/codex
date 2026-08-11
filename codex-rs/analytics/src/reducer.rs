@@ -91,11 +91,13 @@ use crate::facts::HookRunInput;
 use crate::facts::ImagePreparationFact;
 use crate::facts::ImagePreparationMetadata;
 use crate::facts::InternalToolInputLog; // copybara:strip-for-public
+use crate::facts::InvocationType;
 use crate::facts::PluginInstallFailedInput;
 use crate::facts::PluginInstallRequestedInput;
 use crate::facts::PluginState;
 use crate::facts::PluginStateChangedInput;
 use crate::facts::PluginUsedInput;
+use crate::facts::SkillInvocationLocation;
 use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
@@ -158,6 +160,7 @@ use codex_protocol::request_permissions::PermissionGrantScope as CorePermissionG
 use codex_protocol::request_permissions::RequestPermissionsResponse as CoreRequestPermissionsResponse;
 use sha1::Digest;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
@@ -406,6 +409,7 @@ struct TurnState {
     latest_diff: Option<String>,
     steer_count: usize,
     tool_counts: TurnToolCounts,
+    resource_skill_invocations: HashSet<String>,
 }
 
 #[derive(Clone, Hash, Eq, PartialEq)]
@@ -1140,26 +1144,54 @@ impl AnalyticsReducer {
             invocations,
         } = input;
         for invocation in invocations {
-            let skill_scope = match invocation.skill_scope {
-                SkillScope::User => "user",
-                SkillScope::Repo => "repo",
-                SkillScope::System => "system",
-                SkillScope::Admin => "admin",
+            let (skill_id, repo_url, skill_scope) = match invocation.location {
+                SkillInvocationLocation::Host { path, scope } => {
+                    let skill_scope = match scope {
+                        SkillScope::User => "user",
+                        SkillScope::Repo => "repo",
+                        SkillScope::System => "system",
+                        SkillScope::Admin => "admin",
+                    };
+                    let repo_root = get_git_repo_root(path.as_path());
+                    let repo_url = if let Some(root) = repo_root.as_ref() {
+                        collect_git_info(root)
+                            .await
+                            .and_then(|info| info.repository_url)
+                    } else {
+                        None
+                    };
+                    let skill_id = skill_id_for_local_skill(
+                        repo_url.as_deref(),
+                        repo_root.as_deref(),
+                        path.as_path(),
+                        invocation.skill_name.as_str(),
+                    );
+                    (skill_id, repo_url, Some(skill_scope.to_string()))
+                }
+                SkillInvocationLocation::Resource {
+                    id,
+                    skill_id,
+                    scope,
+                } => {
+                    if matches!(invocation.invocation_type, InvocationType::Implicit) {
+                        let turn_state = self.turns.entry(tracking.turn_id.clone()).or_default();
+                        if !turn_state.resource_skill_invocations.insert(id.clone()) {
+                            continue;
+                        }
+                    }
+                    let skill_id = skill_id
+                        .unwrap_or_else(|| format!("{:x}", sha1::Sha1::digest(id.as_bytes())));
+                    let skill_scope = scope
+                        .map(|scope| match scope {
+                            SkillScope::User => "user",
+                            SkillScope::Repo => "repo",
+                            SkillScope::System => "system",
+                            SkillScope::Admin => "admin",
+                        })
+                        .map(str::to_owned);
+                    (skill_id, None, skill_scope)
+                }
             };
-            let repo_root = get_git_repo_root(invocation.skill_path.as_path());
-            let repo_url = if let Some(root) = repo_root.as_ref() {
-                collect_git_info(root)
-                    .await
-                    .and_then(|info| info.repository_url)
-            } else {
-                None
-            };
-            let skill_id = skill_id_for_local_skill(
-                repo_url.as_deref(),
-                repo_root.as_deref(),
-                invocation.skill_path.as_path(),
-                invocation.skill_name.as_str(),
-            );
             out.push(TrackEventRequest::SkillInvocation(
                 SkillInvocationEventRequest {
                     event_type: "skill_invocation",
@@ -1172,7 +1204,7 @@ impl AnalyticsReducer {
                         model_slug: Some(tracking.model_slug.clone()),
                         product_client_id: Some(tracking.product_client_id.clone()),
                         repo_url,
-                        skill_scope: Some(skill_scope.to_string()),
+                        skill_scope,
                         plugin_id: invocation.plugin_id,
                         remote_plugin_id: invocation.remote_plugin_id,
                     },

@@ -64,6 +64,7 @@ pub use facts::PluginInstallRequested;
 pub use facts::PluginInstallRequestedPlugin;
 pub use facts::PluginInstallSource;
 pub use facts::SkillInvocation;
+pub use facts::SkillInvocationLocation;
 pub use facts::SubAgentThreadStartedInput;
 pub use facts::ThreadInitializationMode;
 pub use facts::TrackEventsContext;

@@ -81,6 +81,7 @@ use crate::facts::PluginState;
 use crate::facts::PluginStateChangedInput;
 use crate::facts::PluginUsedInput;
 use crate::facts::SkillInvocation;
+use crate::facts::SkillInvocationLocation;
 use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
@@ -3824,8 +3825,10 @@ async fn reducer_ingests_skill_invoked_fact() {
                 tracking,
                 invocations: vec![SkillInvocation {
                     skill_name: "doc".to_string(),
-                    skill_scope: codex_protocol::protocol::SkillScope::User,
-                    skill_path,
+                    location: SkillInvocationLocation::Host {
+                        path: skill_path,
+                        scope: codex_protocol::protocol::SkillScope::User,
+                    },
                     plugin_id: None,
                     remote_plugin_id: None,
                     invocation_type: InvocationType::Explicit,
@@ -3871,8 +3874,10 @@ async fn reducer_includes_plugin_ids_for_plugin_skill_invocations() {
                 tracking,
                 invocations: vec![SkillInvocation {
                     skill_name: "sample:doc".to_string(),
-                    skill_scope: codex_protocol::protocol::SkillScope::User,
-                    skill_path,
+                    location: SkillInvocationLocation::Host {
+                        path: skill_path,
+                        scope: codex_protocol::protocol::SkillScope::User,
+                    },
                     plugin_id: Some("sample@test".to_string()),
                     remote_plugin_id: Some("plugins~Plugin_sample".to_string()),
                     invocation_type: InvocationType::Explicit,

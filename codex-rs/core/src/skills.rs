@@ -3,6 +3,7 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use codex_analytics::InvocationType;
 use codex_analytics::SkillInvocation;
+use codex_analytics::SkillInvocationLocation;
 use codex_analytics::TrackEventsContext;
 use codex_analytics::build_track_events_context;
 use codex_extension_api::SkillInvocationInput;
@@ -64,8 +65,10 @@ pub(crate) fn emit_explicit_skill_invocations(
         .iter()
         .map(|skill| SkillInvocation {
             skill_name: skill.name.clone(),
-            skill_scope: skill.scope,
-            skill_path: skill.path_to_skills_md.to_path_buf(),
+            location: SkillInvocationLocation::Host {
+                path: skill.path_to_skills_md.to_path_buf(),
+                scope: skill.scope,
+            },
             plugin_id: skill.plugin_id.clone(),
             remote_plugin_id: skill.remote_plugin_id.clone(),
             invocation_type: InvocationType::Explicit,
@@ -89,21 +92,23 @@ pub(crate) async fn maybe_emit_implicit_skill_invocation(
     ) else {
         return;
     };
-    let invocation = SkillInvocation {
-        skill_name: candidate.name,
-        skill_scope: candidate.scope,
-        skill_path: candidate.path_to_skills_md.to_path_buf(),
-        plugin_id: candidate.plugin_id,
-        remote_plugin_id: candidate.remote_plugin_id,
-        invocation_type: InvocationType::Implicit,
-    };
-    let skill_scope = match invocation.skill_scope {
+    let skill_scope = match candidate.scope {
         SkillScope::User => "user",
         SkillScope::Repo => "repo",
         SkillScope::System => "system",
         SkillScope::Admin => "admin",
     };
-    let skill_path = invocation.skill_path.to_string_lossy();
+    let skill_path = candidate.path_to_skills_md.to_string_lossy().into_owned();
+    let invocation = SkillInvocation {
+        skill_name: candidate.name,
+        location: SkillInvocationLocation::Host {
+            path: candidate.path_to_skills_md.to_path_buf(),
+            scope: candidate.scope,
+        },
+        plugin_id: candidate.plugin_id,
+        remote_plugin_id: candidate.remote_plugin_id,
+        invocation_type: InvocationType::Implicit,
+    };
     let skill_name = invocation.skill_name.clone();
     let seen_key = format!("{skill_scope}:{skill_path}:{skill_name}");
     let inserted = {
@@ -125,7 +130,7 @@ pub(crate) async fn maybe_emit_implicit_skill_invocation(
                 thread_store: &sess.services.thread_extension_data,
                 turn_store: turn_context.extension_data.as_ref(),
                 turn_id: turn_context.sub_id.as_str(),
-                skill_resource: skill_path.as_ref(),
+                skill_resource: skill_path.as_str(),
                 kind: SkillInvocationKind::Implicit,
             })
             .await;

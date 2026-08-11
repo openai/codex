@@ -1,3 +1,4 @@
+use codex_analytics::InvocationType;
 use codex_extension_api::FunctionCallError;
 use codex_extension_api::ToolCall;
 use codex_extension_api::ToolExecutor;
@@ -177,7 +178,21 @@ impl ToolExecutor<ToolCall> for ReadTool {
                 ));
             }
             let response = page_response(result.resource.as_str(), &result.contents, start)?;
-            skill_json_output(&response, output_authority)
+            let output = skill_json_output(&response, output_authority)?;
+
+            if requested_resource == main_prompt
+                && args.cursor.is_none()
+                && let Some(analytics) = self.context.analytics.as_ref()
+            {
+                analytics.track_skill_invocation(
+                    &skill_entry,
+                    call.model.clone(),
+                    call.turn_id.clone(),
+                    InvocationType::Implicit,
+                );
+            }
+
+            Ok(output)
         })
     }
 }
