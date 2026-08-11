@@ -21,7 +21,6 @@ use codex_config::ResidencyRequirement;
 use codex_config::SandboxModeRequirement;
 use codex_config::Sourced;
 use codex_config::ThreadConfigLoader;
-use codex_config::config_toml::ConfigLockfileToml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::DEFAULT_PROJECT_DOC_MAX_BYTES;
 use codex_config::config_toml::ProjectConfig;
@@ -142,9 +141,6 @@ use crate::config::permissions::default_builtin_permission_profile_name;
 use crate::config::permissions::get_readable_roots_required_for_codex_runtime;
 use crate::config::permissions::network_proxy_config_for_profile_selection;
 use crate::config::permissions::validate_user_permission_profile_names;
-use crate::config_lock::config_without_lock_controls;
-use crate::config_lock::lock_layer_from_config;
-use crate::config_lock::read_config_lock_from_path;
 use crate::responses_metadata::validate_extra_metadata;
 use codex_network_proxy::NetworkProxyConfig;
 use toml::Value as TomlValue;
@@ -915,20 +911,6 @@ pub struct Config {
     /// Directory where Codex writes log files (defaults to `$CODEX_HOME/log`).
     pub log_dir: PathBuf,
 
-    /// Directory where Codex writes effective session config lock files.
-    pub config_lock_export_dir: Option<AbsolutePathBuf>,
-
-    /// Whether config lock replay ignores Codex version drift between the
-    /// lock metadata and the regenerated lock.
-    pub config_lock_allow_codex_version_mismatch: bool,
-
-    /// Whether config lock creation saves values resolved from the model
-    /// catalog/session configuration.
-    pub config_lock_save_fields_resolved_from_model_catalog: bool,
-
-    /// Effective config lock used for strict replay validation.
-    pub config_lock_toml: Option<Arc<ConfigLockfileToml>>,
-
     /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
     pub history: History,
 
@@ -1520,45 +1502,6 @@ impl ConfigBuilder {
                 return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, err));
             }
         };
-        let config_lock_settings = config_toml
-            .debug
-            .as_ref()
-            .and_then(|debug| debug.config_lockfile.as_ref());
-        if let Some(config_lock_load_path) =
-            config_lock_settings.and_then(|config_lock| config_lock.load_path.as_ref())
-        {
-            let allow_codex_version_mismatch = config_lock_settings
-                .and_then(|config_lock| config_lock.allow_codex_version_mismatch)
-                .unwrap_or(false);
-            let save_fields_resolved_from_model_catalog = config_lock_settings
-                .and_then(|config_lock| config_lock.save_fields_resolved_from_model_catalog)
-                .unwrap_or(true);
-            let lockfile_toml = read_config_lock_from_path(config_lock_load_path).await?;
-            let expected_lock_config = lockfile_toml.clone();
-            let lock_layer = lock_layer_from_config(config_lock_load_path, &lockfile_toml)?;
-            let lock_config_toml = config_without_lock_controls(&lockfile_toml.config);
-            let lock_config_layer_stack = ConfigLayerStack::new(
-                vec![lock_layer],
-                config_layer_stack.requirements().clone(),
-                config_layer_stack.requirements_toml().clone(),
-            )?;
-            let mut config = Config::load_config_with_layer_stack(
-                LOCAL_FS.as_ref(),
-                lock_config_toml,
-                harness_overrides,
-                codex_home,
-                lock_config_layer_stack,
-            )
-            .await?;
-            if let Some(provenance) = lockfile_toml.base_instructions_provenance {
-                config.base_instructions_provenance = Some(provenance);
-            }
-            config.config_lock_toml = Some(Arc::new(expected_lock_config));
-            config.config_lock_allow_codex_version_mismatch = allow_codex_version_mismatch;
-            config.config_lock_save_fields_resolved_from_model_catalog =
-                save_fields_resolved_from_model_catalog;
-            return Ok(config);
-        }
         Config::load_config_with_layer_stack(
             LOCAL_FS.as_ref(),
             config_toml,
@@ -4223,24 +4166,6 @@ impl Config {
             codex_home,
             sqlite: codex_state::SqliteConfig::from_sqlite_home(sqlite_home),
             log_dir,
-            config_lock_export_dir: cfg
-                .debug
-                .as_ref()
-                .and_then(|debug| debug.config_lockfile.as_ref())
-                .and_then(|config_lock| config_lock.export_dir.clone()),
-            config_lock_allow_codex_version_mismatch: cfg
-                .debug
-                .as_ref()
-                .and_then(|debug| debug.config_lockfile.as_ref())
-                .and_then(|config_lock| config_lock.allow_codex_version_mismatch)
-                .unwrap_or(false),
-            config_lock_save_fields_resolved_from_model_catalog: cfg
-                .debug
-                .as_ref()
-                .and_then(|debug| debug.config_lockfile.as_ref())
-                .and_then(|config_lock| config_lock.save_fields_resolved_from_model_catalog)
-                .unwrap_or(true),
-            config_lock_toml: None,
             config_layer_stack,
             history,
             ephemeral: ephemeral.unwrap_or_default(),

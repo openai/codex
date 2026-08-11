@@ -619,7 +619,6 @@ async fn review_uses_updated_turn_permissions_and_approval_policy() {
         .with_config(|config| {
             config.review_model = Some("gpt-5.4".to_string());
             config.model_context_window = Some(128_000);
-            config.config_lock_export_dir = Some(config.codex_home.join("review-config-locks"));
             config.service_tier = Some(ServiceTier::Fast.request_value().to_string());
             config
                 .features

@@ -85,9 +85,6 @@ pub(crate) struct SessionConfiguration {
     /// Base instructions for the session.
     pub(super) base_instructions: String,
 
-    /// Compact prompt override.
-    pub(super) compact_prompt: Option<String>,
-
     /// When to escalate for approval for execution
     pub(super) approval_policy: Constrained<AskForApproval>,
     pub(super) approvals_reviewer: ApprovalsReviewer,
@@ -1101,17 +1098,6 @@ impl Session {
                 );
             }
             session_configuration.thread_name = thread_name.clone();
-            validate_config_lock_if_configured(
-                &session_configuration,
-                base_instructions_provenance.as_ref(),
-            )
-            .await?;
-            export_config_lock_if_configured(
-                &session_configuration,
-                thread_id,
-                base_instructions_provenance.as_ref(),
-            )
-            .await?;
             let mut state = SessionState::new_with_auto_compact_window_ids(
                 session_configuration.clone(),
                 initial_auto_compact_window_ids,

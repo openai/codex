@@ -706,13 +706,6 @@ impl Features {
 }
 
 impl FeaturesToml {
-    /// Removes compatibility-only inputs that no longer affect runtime
-    /// behavior or belong in newly materialized config.
-    pub fn clear_removed_compatibility_entries(&mut self) {
-        self.removed_apps_mcp_path_override = None;
-        self.entries.remove("apps_mcp_path_override");
-    }
-
     pub fn entries(&self) -> BTreeMap<String, bool> {
         let mut entries = self.entries.clone();
         if let Some(enabled) = self.code_mode.as_ref().and_then(FeatureToml::enabled) {
@@ -749,58 +742,6 @@ impl FeaturesToml {
         }
         entries
     }
-
-    pub fn materialize_resolved_enabled(&mut self, features: &Features) {
-        self.clear_removed_compatibility_entries();
-        let Self {
-            tool_registry: _,
-            code_mode,
-            code_mode_host,
-            non_prefixed_mcp_tool_names,
-            multi_agent_v2,
-            token_budget,
-            rollout_budget,
-            current_time_reminder,
-            removed_apps_mcp_path_override: _,
-            network_proxy,
-            entries,
-        } = self;
-        for key in legacy::legacy_feature_keys() {
-            entries.remove(key);
-        }
-        for spec in FEATURES {
-            let enabled = features.enabled(spec.id);
-            if spec.id == Feature::CodeMode {
-                materialize_resolved_feature_enabled(code_mode, enabled);
-            } else if spec.id == Feature::CodeModeHost {
-                materialize_resolved_feature_enabled(code_mode_host, enabled);
-            } else if spec.id == Feature::NonPrefixedMcpToolNames {
-                materialize_resolved_feature_enabled(non_prefixed_mcp_tool_names, enabled);
-            } else if spec.id == Feature::MultiAgentV2 {
-                materialize_resolved_feature_enabled(multi_agent_v2, enabled);
-            } else if spec.id == Feature::TokenBudget {
-                materialize_resolved_feature_enabled(token_budget, enabled);
-            } else if spec.id == Feature::RolloutBudget {
-                materialize_resolved_feature_enabled(rollout_budget, enabled);
-            } else if spec.id == Feature::CurrentTimeReminder {
-                materialize_resolved_feature_enabled(current_time_reminder, enabled);
-            } else if spec.id == Feature::NetworkProxy {
-                materialize_resolved_feature_enabled(network_proxy, enabled);
-            } else {
-                entries.insert(spec.key.to_string(), enabled);
-            }
-        }
-    }
-}
-
-fn materialize_resolved_feature_enabled<T: FeatureConfig>(
-    feature: &mut Option<FeatureToml<T>>,
-    enabled: bool,
-) {
-    match feature {
-        Some(feature) => feature.set_enabled(enabled),
-        None => *feature = Some(FeatureToml::Enabled(enabled)),
-    }
 }
 
 impl From<BTreeMap<String, bool>> for FeaturesToml {
@@ -828,20 +769,12 @@ impl<T: FeatureConfig> FeatureToml<T> {
             Self::Config(config) => config.enabled(),
         }
     }
-
-    pub fn set_enabled(&mut self, enabled: bool) {
-        match self {
-            Self::Enabled(value) => *value = enabled,
-            Self::Config(config) => config.set_enabled(enabled),
-        }
-    }
 }
 
 // A trait to be implemented by custom feature config structs when defining a feature that needs more configuration than
 // just enabled/disabled.
 pub trait FeatureConfig {
     fn enabled(&self) -> Option<bool>;
-    fn set_enabled(&mut self, enabled: bool);
 }
 
 /// Single, easy-to-read registry of all feature definitions.

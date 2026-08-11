@@ -37,10 +37,6 @@ impl FeatureConfig for CodeModeConfigToml {
     fn enabled(&self) -> Option<bool> {
         self.enabled
     }
-
-    fn set_enabled(&mut self, enabled: bool) {
-        self.enabled = Some(enabled);
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
@@ -57,10 +53,6 @@ impl FeatureConfig for CodeModeHostConfigToml {
     fn enabled(&self) -> Option<bool> {
         self.enabled
     }
-
-    fn set_enabled(&mut self, enabled: bool) {
-        self.enabled = Some(enabled);
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
@@ -76,10 +68,6 @@ pub struct NonPrefixedMcpToolNamesConfigToml {
 impl FeatureConfig for NonPrefixedMcpToolNamesConfigToml {
     fn enabled(&self) -> Option<bool> {
         self.enabled
-    }
-
-    fn set_enabled(&mut self, enabled: bool) {
-        self.enabled = Some(enabled);
     }
 }
 
@@ -134,10 +122,6 @@ impl FeatureConfig for MultiAgentV2ConfigToml {
     fn enabled(&self) -> Option<bool> {
         self.enabled
     }
-
-    fn set_enabled(&mut self, enabled: bool) {
-        self.enabled = Some(enabled);
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
@@ -172,10 +156,6 @@ impl FeatureConfig for TokenBudgetConfigToml {
     fn enabled(&self) -> Option<bool> {
         self.enabled
     }
-
-    fn set_enabled(&mut self, enabled: bool) {
-        self.enabled = Some(enabled);
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
@@ -200,10 +180,6 @@ pub struct RolloutBudgetConfigToml {
 impl FeatureConfig for RolloutBudgetConfigToml {
     fn enabled(&self) -> Option<bool> {
         self.enabled
-    }
-
-    fn set_enabled(&mut self, enabled: bool) {
-        self.enabled = Some(enabled);
     }
 }
 
@@ -245,10 +221,6 @@ pub struct CurrentTimeReminderConfigToml {
 impl FeatureConfig for CurrentTimeReminderConfigToml {
     fn enabled(&self) -> Option<bool> {
         self.enabled
-    }
-
-    fn set_enabled(&mut self, enabled: bool) {
-        self.enabled = Some(enabled);
     }
 }
 
@@ -293,10 +265,6 @@ pub struct NetworkProxyConfigToml {
 impl FeatureConfig for NetworkProxyConfigToml {
     fn enabled(&self) -> Option<bool> {
         self.enabled
-    }
-
-    fn set_enabled(&mut self, enabled: bool) {
-        self.enabled = Some(enabled);
     }
 }
 

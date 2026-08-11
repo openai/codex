@@ -25,7 +25,6 @@ mod compact_remote;
 mod compact_remote_history;
 mod compact_remote_v2;
 mod compact_token_budget;
-mod config_lock;
 mod user_message_admission;
 pub use codex_thread::BackgroundTerminalInfo;
 pub use codex_thread::CodexThread;

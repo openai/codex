@@ -1,13 +1,10 @@
 use anyhow::Result;
-use codex_config::config_toml::ConfigLockfileToml;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::config::Config;
 use codex_core::config::TokenBudgetConfig;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_features::Feature;
-use codex_features::FeatureToml;
-use codex_features::TokenBudgetConfigToml;
 use codex_model_provider_info::built_in_model_providers;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::items::TurnItem;
@@ -58,7 +55,6 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use tempfile::TempDir;
 
 const CONFIGURED_CONTEXT_WINDOW: i64 = 128_000;
 const AUTO_COMPACT_FALLBACK_PROMPT: &str = "Save the important state before rollover.";
@@ -377,126 +373,6 @@ async fn token_budget_explicit_default_template_overrides_model_defaults() -> Re
             .iter()
             .any(|text| text.contains("Use the model-owned context-window guidance.")),
         "an explicitly configured default template must not inherit model-owned settings"
-    );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn token_budget_model_defaults_survive_config_lock_replay() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    let responses = mount_sse_sequence(
-        &server,
-        vec![sse_completed("resp-1"), sse_completed("resp-2")],
-    )
-    .await;
-    let home = Arc::new(TempDir::new()?);
-    let initial = test_codex()
-        .with_home(Arc::clone(&home))
-        .with_model_info_override("gpt-5.2", |model_info| {
-            model_info
-                .model_messages
-                .as_mut()
-                .expect("bundled model should have model messages")
-                .token_budget = Some(model_token_budget_config());
-        })
-        .with_config(|config| {
-            config.model_context_window = Some(CONFIGURED_CONTEXT_WINDOW);
-            config.config_lock_export_dir = Some(config.codex_home.join("memento-config-locks"));
-            config
-                .features
-                .enable(Feature::TokenBudget)
-                .expect("test config should allow token budget");
-        })
-        .build_with_auto_env(&server)
-        .await?;
-    initial
-        .submit_turn("inspect guidance before lock replay")
-        .await?;
-
-    let lock_path = initial
-        .codex_home_path()
-        .join("memento-config-locks")
-        .join(format!(
-            "{}.config.lock.toml",
-            initial.session_configured.thread_id
-        ));
-    let lock: ConfigLockfileToml = toml::from_str(&std::fs::read_to_string(&lock_path)?)?;
-    assert_eq!(
-        lock.config
-            .features
-            .as_ref()
-            .and_then(|features| features.token_budget.as_ref()),
-        Some(&FeatureToml::Config(TokenBudgetConfigToml {
-            enabled: Some(true),
-            reminder_threshold_tokens: Some(6_144),
-            reminder_message_template: Some(
-                "Model reminder: {n_remaining} tokens remain.".to_string()
-            ),
-            guidance_message: Some("Use the model-owned context-window guidance.".to_string()),
-            auto_compact_fallback_prompt: Some(AUTO_COMPACT_FALLBACK_PROMPT.to_string()),
-            auto_compact_fallback_buffer_tokens: Some(16_384),
-        }))
-    );
-    let replay = test_codex()
-        .with_home(home)
-        .with_pre_build_hook(move |home| {
-            std::fs::write(
-                home.join("config.toml"),
-                format!("[debug.config_lockfile]\nload_path = {lock_path:?}\n"),
-            )
-            .expect("write exported config lock replay settings");
-        })
-        .with_model_info_override("gpt-5.2", |model_info| {
-            let mut updated_defaults = model_token_budget_config();
-            updated_defaults.reminder_threshold_tokens = 4_096;
-            updated_defaults.reminder_message_template =
-                "Updated model reminder: {n_remaining} tokens remain.".to_string();
-            updated_defaults.guidance_message =
-                "Use the updated model-owned context-window guidance.".to_string();
-            updated_defaults.auto_compact_fallback_prompt =
-                "Use the updated fallback before rollover.".to_string();
-            updated_defaults.auto_compact_fallback_buffer_tokens = 8_192;
-            model_info
-                .model_messages
-                .as_mut()
-                .expect("bundled model should have model messages")
-                .token_budget = Some(updated_defaults);
-        })
-        .with_config(|config| {
-            config.model_context_window = Some(CONFIGURED_CONTEXT_WINDOW);
-        })
-        .build_with_auto_env(&server)
-        .await?;
-    core_test_support::submit_thread_settings(
-        &replay.codex,
-        ThreadSettingsOverrides {
-            model: Some("gpt-5.4".to_string()),
-            ..Default::default()
-        },
-    )
-    .await?;
-    replay
-        .submit_text_turn("inspect guidance after lock replay and model switch")
-        .await?;
-
-    let requests = responses.requests();
-    assert_eq!(requests.len(), 2);
-    for request in &requests {
-        assert!(
-            request.body_contains_text("Use the model-owned context-window guidance."),
-            "exporting and replaying a config lock must preserve model-owned guidance"
-        );
-    }
-    assert_eq!(requests[1].body_json()["model"], "gpt-5.4");
-    assert!(
-        requests[1]
-            .message_input_texts("developer")
-            .iter()
-            .any(|text| text.contains("<model_switch>")),
-        "replaying model-owned instructions must not override the new model's template"
     );
 
     Ok(())
