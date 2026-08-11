@@ -595,6 +595,20 @@ impl CodexThread {
 
     /// Record raw Responses API items without starting a new turn.
     pub async fn inject_response_items(&self, items: Vec<ResponseItem>) -> CodexResult<()> {
+        self.inject_response_items_for_turn(items).await?;
+        self.session.flush_rollout().await?;
+        Ok(())
+    }
+
+    /// Record raw Responses API items immediately before admitting a user turn.
+    ///
+    /// The caller must submit the associated user input while retaining its
+    /// thread-operation lock. The subsequent turn persistence includes both
+    /// these items and the user input, without an independent rollout flush.
+    pub async fn inject_response_items_for_turn(
+        &self,
+        items: Vec<ResponseItem>,
+    ) -> CodexResult<()> {
         if items.is_empty() {
             return Err(CodexErr::InvalidRequest(
                 "items must not be empty".to_string(),
@@ -615,7 +629,6 @@ impl CodexThread {
         self.session
             .inject_no_new_turn(items, Some(turn_context.as_ref()))
             .await;
-        self.session.flush_rollout().await?;
         Ok(())
     }
 

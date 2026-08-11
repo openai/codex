@@ -54,7 +54,7 @@ async fn default_turn_start_persists_developer_and_user_input_before_model_reque
         .await
         .expect("build default thread-store session");
     test.codex
-        .inject_response_items(vec![ResponseItem::Message {
+        .inject_response_items_for_turn(vec![ResponseItem::Message {
             id: None,
             role: "developer".to_string(),
             content: vec![ContentItem::InputText {
