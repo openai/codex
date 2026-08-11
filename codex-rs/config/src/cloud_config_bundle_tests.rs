@@ -1,7 +1,15 @@
 use super::*;
+use crate::AbsolutePathBufGuard;
 use crate::ConfigLayerSource;
 use crate::ConfigRequirementsToml;
+use crate::FilesystemDenyReadPattern;
+use crate::SandboxModeRequirement;
 use crate::compose_requirements;
+use crate::compose_requirements_for_hostname;
+use crate::config_requirements::FilesystemRequirementsToml;
+use crate::config_requirements::PermissionsRequirementsToml;
+use crate::config_toml::ConfigToml;
+use crate::types::SandboxWorkspaceWrite;
 use codex_protocol::protocol::AskForApproval;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
@@ -160,6 +168,92 @@ fn bundle_layers_can_strict_validate_enterprise_managed_config() {
                 name: "Cloud config".to_string(),
             },
             message: "unknown configuration field `unknown_key`".to_string(),
+        }
+    );
+}
+
+#[test]
+fn bundle_layers_resolve_paths_and_requirements_for_the_execution_host() {
+    let temp_dir = tempdir().expect("temporary directories");
+    let executor_home = temp_dir.path().join("executor-home");
+    let executor_codex_home = AbsolutePathBuf::from_absolute_path(executor_home.join(".codex"))
+        .expect("absolute executor Codex home");
+    let bundle = CloudConfigBundle {
+        config_toml: CloudConfigTomlBundle {
+            enterprise_managed: vec![CloudConfigFragment {
+                id: "config".to_string(),
+                name: "Executor config".to_string(),
+                contents: r#"
+[sandbox_workspace_write]
+writable_roots = ["~/cloud-root", "./relative-root"]
+"#
+                .to_string(),
+            }],
+        },
+        requirements_toml: CloudRequirementsTomlBundle {
+            enterprise_managed: vec![CloudRequirementsFragment {
+                id: "requirements".to_string(),
+                name: "Executor requirements".to_string(),
+                contents: r#"
+[permissions.filesystem]
+deny_read = ["~/private"]
+
+[[remote_sandbox_config]]
+hostname_patterns = ["executor-*"]
+allowed_sandbox_modes = ["read-only"]
+"#
+                .to_string(),
+            }],
+        },
+    };
+
+    let (config, requirements) = AbsolutePathBufGuard::with_home_directory(&executor_home, || {
+        let layers =
+            CloudConfigBundleLayers::from_bundle_strict_config(bundle, &executor_codex_home)
+                .expect("executor bundle should convert into layers");
+        let config: ConfigToml = layers.enterprise_managed_config[0]
+            .config
+            .clone()
+            .try_into()
+            .expect("deserialize executor config");
+        let requirements = compose_requirements_for_hostname(
+            layers.enterprise_managed_requirements,
+            Some("executor-01"),
+        )
+        .expect("compose executor requirements")
+        .expect("executor requirements should be present")
+        .into_toml();
+        (config, requirements)
+    });
+
+    assert_eq!(
+        config.sandbox_workspace_write,
+        Some(SandboxWorkspaceWrite {
+            writable_roots: vec![
+                AbsolutePathBuf::from_absolute_path(executor_home.join("cloud-root"))
+                    .expect("absolute cloud root"),
+                AbsolutePathBuf::from_absolute_path(
+                    executor_codex_home.as_path().join("relative-root"),
+                )
+                .expect("absolute relative root"),
+            ],
+            ..Default::default()
+        })
+    );
+    assert_eq!(
+        requirements,
+        ConfigRequirementsToml {
+            allowed_sandbox_modes: Some(vec![SandboxModeRequirement::ReadOnly]),
+            permissions: Some(PermissionsRequirementsToml {
+                filesystem: Some(FilesystemRequirementsToml {
+                    deny_read: Some(vec![FilesystemDenyReadPattern::from(
+                        AbsolutePathBuf::from_absolute_path(executor_home.join("private"))
+                            .expect("absolute private root"),
+                    )]),
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
         }
     );
 }

@@ -63,8 +63,8 @@ pub fn compose_requirements(
     compose_requirements_with_hostname_resolver(layers, crate::host_name)
 }
 
-#[cfg(test)]
-pub(super) fn compose_requirements_for_hostname(
+/// Composes requirements using an explicitly supplied execution-host hostname.
+pub fn compose_requirements_for_hostname(
     layers: impl IntoIterator<Item = RequirementsLayerEntry>,
     hostname: Option<&str>,
 ) -> Result<Option<ConfigRequirementsWithSources>, RequirementsCompositionError> {
