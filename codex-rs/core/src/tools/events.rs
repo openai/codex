@@ -3,8 +3,14 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::sandboxing::ToolError;
+use codex_analytics::ArtifactOperation;
+use codex_analytics::ArtifactOperationLifecycle;
+use codex_analytics::build_track_events_context;
 use codex_apply_patch::AppliedPatchDelta;
 use codex_core_plugins::PluginCommandAttribution;
+use codex_core_plugins::recognize_artifact_operation;
+use codex_otel::ARTIFACT_OPERATION_EXPECTED_OUTPUT_COUNT_METRIC;
+use codex_otel::ARTIFACT_OPERATION_STARTED_METRIC;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::SandboxErr;
 use codex_protocol::exec_output::ExecToolCallOutput;
@@ -101,6 +107,52 @@ fn tracker_update_for_known_delta<'a>(
 }
 
 async fn emit_exec_command_begin(ctx: ToolEventCtx<'_>, exec_input: &ExecCommandInput<'_>) {
+    if exec_input.source == ExecCommandSource::UnifiedExecStartup
+        && let Some(attribution) = exec_input.plugin_attribution
+        && let Some(operation) = recognize_artifact_operation(Some(attribution), exec_input.command)
+    {
+        let metric_tags = [
+            ("skill", operation.plugin_name),
+            ("artifact_type", operation.artifact_type),
+            ("operation_kind", operation.operation_kind),
+            ("output_format", operation.output_format),
+            ("execution_backend", "unified_exec"),
+        ];
+        ctx.turn.session_telemetry.counter(
+            ARTIFACT_OPERATION_STARTED_METRIC,
+            /*inc*/ 1,
+            &metric_tags,
+        );
+        ctx.turn.session_telemetry.histogram(
+            ARTIFACT_OPERATION_EXPECTED_OUTPUT_COUNT_METRIC,
+            i64::from(operation.expected_output_count),
+            &metric_tags,
+        );
+        ctx.session
+            .services
+            .analytics_events_client
+            .track_artifact_operation(
+                build_track_events_context(
+                    ctx.turn.model_info.slug.clone(),
+                    ctx.session.thread_id.to_string(),
+                    ctx.turn.sub_id.clone(),
+                    ctx.turn.originator.clone(),
+                ),
+                ArtifactOperation {
+                    item_id: ctx.call_id.to_string(),
+                    lifecycle: ArtifactOperationLifecycle::Started,
+                    occurred_at_ms: codex_analytics::now_unix_millis(),
+                    plugin_id: attribution.plugin_id.as_key(),
+                    script_path: operation.script_path.to_string(),
+                    skill: operation.plugin_name.to_string(),
+                    artifact_type: operation.artifact_type.to_string(),
+                    operation_kind: operation.operation_kind.to_string(),
+                    expected_output_count: operation.expected_output_count,
+                    output_format: operation.output_format.to_string(),
+                    execution_backend: "unified_exec".to_string(),
+                },
+            );
+    }
     let (plugin_id, script_path) = plugin_attribution_fields(exec_input.plugin_attribution);
     ctx.session
         .emit_turn_item_started(

@@ -488,11 +488,32 @@ fn managed_local_marketplace_name(codex_home: &Path, root: &Path) -> Option<&'st
         }
     }
 
-    let runtime_root = dirs::cache_dir()?
-        .join("codex-runtimes/codex-primary-runtime/plugins")
-        .join(OPENAI_PRIMARY_RUNTIME_MARKETPLACE_NAME);
+    let runtime_root = primary_runtime_marketplace_root()?;
     paths_match_after_normalization(root, &runtime_root)
         .then_some(OPENAI_PRIMARY_RUNTIME_MARKETPLACE_NAME)
+}
+
+pub(crate) fn primary_runtime_marketplace_root() -> Option<PathBuf> {
+    Some(
+        primary_runtime_cache_dir()?
+            .join("codex-runtimes/codex-primary-runtime/plugins")
+            .join(OPENAI_PRIMARY_RUNTIME_MARKETPLACE_NAME),
+    )
+}
+
+#[cfg(target_os = "windows")]
+fn primary_runtime_cache_dir() -> Option<PathBuf> {
+    primary_runtime_cache_dir_from_user_profile(std::env::var_os("USERPROFILE").map(PathBuf::from))
+}
+
+#[cfg(target_os = "windows")]
+fn primary_runtime_cache_dir_from_user_profile(user_profile: Option<PathBuf>) -> Option<PathBuf> {
+    user_profile.map(|profile| profile.join(".cache"))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn primary_runtime_cache_dir() -> Option<PathBuf> {
+    dirs::cache_dir()
 }
 
 fn git_hostname(url: &str) -> Option<String> {

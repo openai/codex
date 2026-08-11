@@ -466,12 +466,25 @@ impl UnifiedExecProcessManager {
             &context.call_id,
             /*turn_diff_tracker*/ None,
         );
-        let plugin_attribution = cwd.to_abs_path().ok().and_then(|cwd| {
+        let plugin_attribution = if request.turn_environment.environment.is_remote() {
+            let file_system = request.turn_environment.environment.get_filesystem();
             context
                 .step_context
                 .turn
-                .plugin_attribution_for_command(&request.command, &cwd)
-        });
+                .plugin_attribution_for_executor_command(
+                    &request.command,
+                    &cwd,
+                    file_system.as_ref(),
+                )
+                .await
+        } else {
+            cwd.to_abs_path().ok().and_then(|cwd| {
+                context
+                    .step_context
+                    .turn
+                    .plugin_attribution_for_command(&request.command, &cwd)
+            })
+        };
         let emitter = ToolEmitter::unified_exec(
             &request.command,
             cwd.clone(),

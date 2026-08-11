@@ -9,6 +9,8 @@ use crate::facts::AnalyticsJsonRpcError;
 use crate::facts::AppInvocation;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
+use crate::facts::ArtifactOperation;
+use crate::facts::ArtifactOperationInput;
 use crate::facts::CodexGoalEvent;
 use crate::facts::CustomAnalyticsFact;
 use crate::facts::ExternalAgentConfigImportCompletedInput;
@@ -406,6 +408,19 @@ impl AnalyticsEventsClient {
                 invocations,
             },
         )));
+    }
+
+    pub fn track_artifact_operation(
+        &self,
+        tracking: TrackEventsContext,
+        operation: ArtifactOperation,
+    ) {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::ArtifactOperation(ArtifactOperationInput {
+                tracking,
+                operation,
+            }),
+        ));
     }
 
     pub fn track_initialize(

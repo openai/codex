@@ -10,6 +10,7 @@ use crate::test_support::write_curated_plugin_sha_with;
 use crate::test_support::write_openai_api_curated_marketplace;
 use crate::test_support::write_openai_curated_marketplace;
 use codex_plugin::PluginLoadOutcome;
+use codex_utils_path_uri::PathUri;
 use codex_utils_plugins::SkillDiscoveryMode;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
@@ -93,11 +94,151 @@ fn script_fixture() -> (TempDir, AbsolutePathBuf, AbsolutePathBuf) {
     let script = script.canonicalize().expect("canonical script");
     (temp, root, script)
 }
+
+#[test]
+fn resolves_primary_runtime_scripts_from_the_installed_plugin_cache() {
+    let temp = TempDir::new().expect("temp dir");
+    let marketplace_root = temp.path().join("openai-primary-runtime");
+    let source_root = marketplace_root.join("plugins/presentations");
+    fs::create_dir_all(source_root.join(".codex-plugin")).expect("create manifest directory");
+    fs::write(
+        source_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"presentations","version":"0.1.29"}"#,
+    )
+    .expect("write plugin manifest");
+    let relative_script_path =
+        "skills/presentations/container_tools/mark_artifact_operation_started.mjs";
+    let source_script = source_root.join(relative_script_path);
+    fs::create_dir_all(source_script.parent().expect("script parent")).expect("create scripts");
+    fs::write(&source_script, "#!/usr/bin/env node\n").expect("write script");
+    fs::create_dir_all(marketplace_root.join(".agents/plugins"))
+        .expect("create marketplace directory");
+    fs::write(
+        marketplace_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "openai-primary-runtime",
+  "plugins": [
+    {
+      "name": "presentations",
+      "source": {
+        "source": "local",
+        "path": "./plugins/presentations"
+      }
+    }
+  ]
+}"#,
+    )
+    .expect("write marketplace manifest");
+    let plugin_id = PluginId::parse("presentations@openai-primary-runtime").expect("plugin id");
+    let plugin_root = PluginStore::new(temp.path().to_path_buf())
+        .install(path(&source_root), plugin_id.clone())
+        .expect("install plugin")
+        .installed_path;
+    let script = plugin_root.join(relative_script_path);
+    let store = PluginStore::new(temp.path().to_path_buf());
+    assert_eq!(
+        TrustedPluginRoots::expected_plugin_root(
+            &store,
+            temp.path(),
+            &plugin_id,
+            Some(&marketplace_root),
+        ),
+        Some(plugin_root.clone())
+    );
+    let roots = TrustedPluginRoots {
+        roots: vec![TrustedPluginRoot {
+            plugin_id: plugin_id.clone(),
+            root: plugin_root.canonicalize().expect("canonical plugin root"),
+        }],
+    };
+
+    assert_eq!(
+        roots.resolve_attribution(
+            &command(&[
+                "node",
+                script.to_string_lossy().as_ref(),
+                "--operation-kind",
+                "create",
+            ]),
+            &path(temp.path()),
+        ),
+        Some(PluginCommandAttribution {
+            plugin_id,
+            normalized_relative_path: relative_script_path.to_string(),
+        })
+    );
+}
 fn roots_for(codex_home: &Path, plugins: Vec<LoadedPlugin>) -> TrustedPluginRoots {
     TrustedPluginRoots::from_plugin_load_outcome(
         &PluginLoadOutcome::from_plugins(plugins),
         codex_home,
     )
+}
+
+#[tokio::test]
+async fn resolves_relocated_script_through_executor_filesystem() {
+    let (temp, root, script) = script_fixture();
+    let roots = roots_for(
+        temp.path(),
+        vec![loaded_plugin(
+            "sample@openai-curated",
+            root.as_path(),
+            ENABLED,
+        )],
+    );
+    let executor = TempDir::new().expect("executor temp dir");
+    let executor_root = executor
+        .path()
+        .join("plugins/cache/openai-curated/sample/remote-version");
+    let executor_script = executor_root.join("scripts/run.py");
+    fs::create_dir_all(executor_script.parent().expect("script parent"))
+        .expect("create executor scripts");
+    fs::copy(script.as_path(), &executor_script).expect("copy script to executor");
+    let cwd = PathUri::from_host_native_path(&executor_root).expect("executor root URI");
+    let environment =
+        codex_exec_server::Environment::create_for_tests(/*exec_server_url*/ None)
+            .expect("local executor environment");
+
+    assert_eq!(
+        roots
+            .resolve_executor_attribution(
+                &command(&["python", "scripts/run.py"]),
+                &cwd,
+                environment.get_filesystem().as_ref(),
+            )
+            .await,
+        Some(PluginCommandAttribution {
+            plugin_id: PluginId::parse("sample@openai-curated").expect("plugin id"),
+            normalized_relative_path: "scripts/run.py".to_string(),
+        })
+    );
+
+    fs::write(&executor_script, "print('modified')\n").expect("modify executor script");
+    assert_eq!(
+        roots
+            .resolve_executor_attribution(
+                &command(&["python", "scripts/run.py"]),
+                &cwd,
+                environment.get_filesystem().as_ref(),
+            )
+            .await,
+        None
+    );
+}
+
+#[test]
+fn recognizes_windows_executor_plugin_cache_root() {
+    let attribution = PluginCommandAttribution {
+        plugin_id: PluginId::parse("presentations@openai-primary-runtime").expect("plugin id"),
+        normalized_relative_path:
+            "skills/presentations/container_tools/mark_artifact_operation_started.mjs".to_string(),
+    };
+    let script = PathUri::parse(
+        "file:///C:/Users/user/.codex/plugins/cache/openai-primary-runtime/presentations/0.1.29/skills/presentations/container_tools/mark_artifact_operation_started.mjs",
+    )
+    .expect("Windows script URI");
+
+    assert!(executor_plugin_root_matches(&script, &attribution));
 }
 fn assert_untrusted(codex_home: &Path, config_name: &str, root: &Path) {
     assert!(
@@ -243,6 +384,17 @@ fn resolves_local_attribution_for_safe_interpreters_and_wrappers() {
     ] {
         assert_eq!(roots.resolve_attribution(&command, &root), expected);
     }
+
+    let wrapped_command = command(&[
+        "bash",
+        "-lc",
+        &format!("node {script} --operation-kind create"),
+    ]);
+    assert_eq!(roots.resolve_attribution(&wrapped_command, &root), expected);
+    assert_eq!(
+        command_script_arguments(&wrapped_command),
+        Some(command(&["--operation-kind", "create"]))
+    );
 }
 
 #[test]

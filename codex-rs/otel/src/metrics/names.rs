@@ -1,6 +1,9 @@
 pub const TOOL_CALL_COUNT_METRIC: &str = "codex.tool.call";
 pub const TOOL_CALL_DURATION_METRIC: &str = "codex.tool.call.duration_ms";
 pub const TOOL_CALL_UNIFIED_EXEC_METRIC: &str = "codex.tool.unified_exec";
+pub const ARTIFACT_OPERATION_STARTED_METRIC: &str = "codex.artifact.operation.started";
+pub const ARTIFACT_OPERATION_EXPECTED_OUTPUT_COUNT_METRIC: &str =
+    "codex.artifact.operation.expected_output_count";
 pub const PROCESS_START_METRIC: &str = "codex.process.start";
 pub const API_CALL_COUNT_METRIC: &str = "codex.api_request";
 pub const API_CALL_DURATION_METRIC: &str = "codex.api_request.duration_ms";

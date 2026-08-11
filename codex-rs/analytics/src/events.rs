@@ -2,6 +2,8 @@ use std::time::Instant;
 
 use crate::facts::AcceptedLineFingerprint;
 use crate::facts::AppInvocation;
+use crate::facts::ArtifactOperation;
+use crate::facts::ArtifactOperationLifecycle;
 use crate::facts::CodexCompactionEvent;
 use crate::facts::CodexErrKind;
 use crate::facts::CodexGoalEvent;
@@ -72,6 +74,7 @@ pub(crate) enum TrackEventRequest {
     Goal(Box<CodexGoalEventRequest>),
     TurnEvent(Box<CodexTurnEventRequest>),
     TurnSteer(CodexTurnSteerEventRequest),
+    ArtifactOperation(CodexArtifactOperationEventRequest),
     CommandExecution(CodexCommandExecutionEventRequest),
     FileChange(CodexFileChangeEventRequest),
     McpToolCall(CodexMcpToolCallEventRequest),
@@ -96,6 +99,59 @@ pub(crate) enum TrackEventRequest {
     // copybara:strip-for-public end
 }
 
+#[derive(Serialize)]
+pub(crate) struct CodexArtifactOperationEventParams {
+    pub(crate) thread_id: String,
+    pub(crate) turn_id: String,
+    pub(crate) item_id: String,
+    pub(crate) lifecycle: ArtifactOperationLifecycle,
+    pub(crate) occurred_at_ms: u64,
+    pub(crate) product_client_id: String,
+    pub(crate) runtime: CodexRuntimeMetadata,
+    pub(crate) model_slug: String,
+    pub(crate) plugin_id: String,
+    pub(crate) script_path: String,
+    pub(crate) skill: String,
+    pub(crate) artifact_type: String,
+    pub(crate) operation_kind: String,
+    pub(crate) expected_output_count: u32,
+    pub(crate) output_format: String,
+    pub(crate) execution_backend: String,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexArtifactOperationEventRequest {
+    pub(crate) event_type: &'static str,
+    pub(crate) event_params: CodexArtifactOperationEventParams,
+}
+
+pub(crate) fn codex_artifact_operation_event_request(
+    tracking: TrackEventsContext,
+    operation: ArtifactOperation,
+) -> CodexArtifactOperationEventRequest {
+    CodexArtifactOperationEventRequest {
+        event_type: "codex_artifact_operation",
+        event_params: CodexArtifactOperationEventParams {
+            thread_id: tracking.thread_id,
+            turn_id: tracking.turn_id,
+            item_id: operation.item_id,
+            lifecycle: operation.lifecycle,
+            occurred_at_ms: operation.occurred_at_ms,
+            product_client_id: tracking.product_client_id,
+            runtime: current_runtime_metadata(),
+            model_slug: tracking.model_slug,
+            plugin_id: operation.plugin_id,
+            script_path: operation.script_path,
+            skill: operation.skill,
+            artifact_type: operation.artifact_type,
+            operation_kind: operation.operation_kind,
+            expected_output_count: operation.expected_output_count,
+            output_format: operation.output_format,
+            execution_backend: operation.execution_backend,
+        },
+    }
+}
+
 impl TrackEventRequest {
     pub(crate) fn should_send_in_isolated_request(&self) -> bool {
         // copybara:replace-for-public begin
@@ -113,6 +169,7 @@ impl TrackEventRequest {
             Self::PluginUsed(event) => event.event_params.plugin.plugin_id.is_some(),
             Self::SkillInvocation(event) => event.event_params.plugin_id.is_some(),
             Self::McpToolCall(event) => event.event_params.plugin_id.is_some(),
+            Self::ArtifactOperation(event) => !event.event_params.plugin_id.is_empty(),
             _ => false,
         }
     }

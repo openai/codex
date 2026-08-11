@@ -43,8 +43,16 @@ use crate::events::ThreadArchiveEventParams;
 #[cfg(debug_assertions)]
 use crate::events::ToolItemTerminalStatus;
 use crate::events::TrackEventRequest;
+#[cfg(debug_assertions)]
+use crate::events::codex_artifact_operation_event_request;
 use crate::facts::AnalyticsFact;
+#[cfg(debug_assertions)]
+use crate::facts::ArtifactOperation;
+#[cfg(debug_assertions)]
+use crate::facts::ArtifactOperationLifecycle;
 use crate::facts::InvocationType;
+#[cfg(debug_assertions)]
+use crate::facts::TrackEventsContext;
 use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval as AppServerAskForApproval;
 use codex_app_server_protocol::ClientRequest;
@@ -148,6 +156,32 @@ fn sample_skill_track_event(thread_id: &str, plugin_id: Option<&str>) -> TrackEv
             model_slug: Some("gpt-5.1-codex".to_string()),
         },
     })
+}
+
+#[cfg(debug_assertions)]
+fn sample_artifact_operation_event(thread_id: &str) -> TrackEventRequest {
+    TrackEventRequest::ArtifactOperation(codex_artifact_operation_event_request(
+        TrackEventsContext {
+            model_slug: "gpt-5.1-codex".to_string(),
+            thread_id: thread_id.to_string(),
+            turn_id: "turn-1".to_string(),
+            product_client_id: "codex_desktop".to_string(),
+        },
+        ArtifactOperation {
+            item_id: format!("item-{thread_id}"),
+            lifecycle: ArtifactOperationLifecycle::Started,
+            occurred_at_ms: 1,
+            plugin_id: "presentations@openai-primary-runtime".to_string(),
+            script_path: "skills/presentations/container_tools/mark_artifact_operation_started.mjs"
+                .to_string(),
+            skill: "presentations".to_string(),
+            artifact_type: "presentation".to_string(),
+            operation_kind: "create".to_string(),
+            expected_output_count: 1,
+            output_format: "pptx".to_string(),
+            execution_backend: "unified_exec".to_string(),
+        },
+    ))
 }
 
 fn sample_regular_track_event(thread_id: &str) -> TrackEventRequest {
@@ -415,6 +449,7 @@ async fn api_key_auth_sends_only_plugin_events_to_codex_backend() {
             sample_plugin_used_track_event("plugin-used", Some("sample@test")),
             sample_skill_track_event("plugin-skill", Some("sample@test")),
             sample_mcp_tool_call_event("plugin-mcp", Some("sample@test")),
+            sample_artifact_operation_event("plugin-artifact"),
         ],
     )
     .await;
@@ -463,6 +498,11 @@ async fn api_key_auth_sends_only_plugin_events_to_codex_backend() {
                 "event_type": "codex_mcp_tool_call_event",
                 "plugin_id": "sample@test",
                 "thread_id": "plugin-mcp",
+            }),
+            serde_json::json!({
+                "event_type": "codex_artifact_operation",
+                "plugin_id": "presentations@openai-primary-runtime",
+                "thread_id": "plugin-artifact",
             }),
         ]
     );

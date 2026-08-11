@@ -1,4 +1,5 @@
 mod app_mcp_routing;
+mod artifact_operation;
 mod command_migration;
 mod discoverable;
 mod error_subtype;
@@ -43,6 +44,8 @@ pub type LoadedPlugin = codex_plugin::LoadedPlugin<codex_config::McpServerConfig
 pub type PluginLoadOutcome = codex_plugin::PluginLoadOutcome<codex_config::McpServerConfig>;
 
 pub use app_mcp_routing::apps_route_available;
+pub use artifact_operation::ArtifactOperation;
+pub use artifact_operation::recognize_artifact_operation;
 pub use command_migration::CommandDescriptionMode;
 pub use command_migration::CommandMigrationProfile;
 pub use command_migration::RewriteProfile as CommandRewriteProfile;
@@ -78,3 +81,4 @@ pub use remote::RecommendedPlugin;
 pub use remote::RecommendedPluginsMode;
 pub use script_attribution::PluginCommandAttribution;
 pub use script_attribution::TrustedPluginRoots;
+pub use script_attribution::command_script_arguments;

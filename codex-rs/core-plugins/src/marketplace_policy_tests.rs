@@ -7,10 +7,21 @@ use codex_config::RequirementsLayerEntry;
 use codex_config::compose_requirements;
 use pretty_assertions::assert_eq;
 use std::fs;
+#[cfg(target_os = "windows")]
+use std::path::PathBuf;
 use tempfile::TempDir;
 
 fn config_layer_stack(requirements_toml: &str) -> ConfigLayerStack {
     config_layer_stack_with_user_config(requirements_toml, /*user_config*/ None)
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn primary_runtime_cache_uses_user_profile_on_windows() {
+    assert_eq!(
+        primary_runtime_cache_dir_from_user_profile(Some(PathBuf::from(r"C:\Users\user"))),
+        Some(PathBuf::from(r"C:\Users\user\.cache"))
+    );
 }
 
 fn config_layer_stack_with_user_config(

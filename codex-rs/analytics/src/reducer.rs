@@ -65,6 +65,7 @@ use crate::events::ToolItemTerminalStatus;
 use crate::events::TrackEventRequest;
 use crate::events::WebSearchActionKind;
 use crate::events::codex_app_metadata;
+use crate::events::codex_artifact_operation_event_request;
 use crate::events::codex_compaction_event_params;
 use crate::events::codex_goal_event_params;
 use crate::events::codex_hook_run_metadata;
@@ -78,6 +79,7 @@ use crate::facts::AnalyticsFact;
 use crate::facts::AnalyticsJsonRpcError;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
+use crate::facts::ArtifactOperationInput;
 use crate::facts::CodeModeToolCallFact;
 use crate::facts::CodeModeToolCallStatus;
 use crate::facts::CodexCompactionEvent;
@@ -562,6 +564,9 @@ impl AnalyticsReducer {
                 self.ingest_server_request_aborted(completed_at_ms, request_id, out);
             }
             AnalyticsFact::Custom(input) => match input {
+                CustomAnalyticsFact::ArtifactOperation(input) => {
+                    self.ingest_artifact_operation(input, out);
+                }
                 CustomAnalyticsFact::CodeModeToolCall(input) => {
                     self.ingest_code_mode_tool_call(input, out);
                 }
@@ -628,6 +633,16 @@ impl AnalyticsReducer {
                 } // copybara:strip-for-public end
             },
         }
+    }
+
+    fn ingest_artifact_operation(
+        &mut self,
+        input: ArtifactOperationInput,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        out.push(TrackEventRequest::ArtifactOperation(
+            codex_artifact_operation_event_request(input.tracking, input.operation),
+        ));
     }
 
     fn ingest_code_mode_tool_call(

@@ -5,6 +5,7 @@ use crate::shell_snapshot::ShellSnapshotFile;
 use crate::tools::sandboxing::executor_windows_sandbox_level;
 use codex_core_plugins::PluginCommandAttribution;
 use codex_core_plugins::TrustedPluginRoots;
+use codex_exec_server::ExecutorFileSystem;
 use codex_file_system::FileSystemSandboxContext;
 use codex_model_provider::SharedModelProvider;
 use codex_protocol::SessionId;
@@ -203,6 +204,18 @@ impl TurnContext {
         self.extension_data
             .get::<TrustedPluginRoots>()?
             .resolve_attribution(command, cwd)
+    }
+
+    pub(crate) async fn plugin_attribution_for_executor_command(
+        &self,
+        command: &[String],
+        cwd: &PathUri,
+        file_system: &dyn ExecutorFileSystem,
+    ) -> Option<PluginCommandAttribution> {
+        self.extension_data
+            .get::<TrustedPluginRoots>()?
+            .resolve_executor_attribution(command, cwd, file_system)
+            .await
     }
 
     pub(crate) fn approval_policy(&self) -> AskForApproval {
