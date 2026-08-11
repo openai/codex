@@ -2,6 +2,7 @@ use super::*;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::exec_policy::AllowPrefixRules;
 use crate::shell_snapshot::ShellSnapshotFile;
+use crate::tools::sandboxing::executor_windows_sandbox_level;
 use codex_core_plugins::PluginCommandAttribution;
 use codex_core_plugins::TrustedPluginRoots;
 use codex_file_system::FileSystemSandboxContext;
@@ -378,7 +379,10 @@ impl TurnContext {
             permissions: permissions.into(),
             cwd: Some(environment.cwd().clone()),
             workspace_roots: environment.workspace_roots().to_vec(),
-            windows_sandbox_level: self.windows_sandbox_level,
+            windows_sandbox_level: executor_windows_sandbox_level(
+                self.windows_sandbox_level,
+                environment.cwd(),
+            ),
             windows_sandbox_private_desktop: self
                 .config
                 .permissions

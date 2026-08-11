@@ -756,6 +756,10 @@ pub(crate) async fn assert_sandboxed_canonicalize_resolves_directory_alias(
 /// Verifies that effective additional permissions extend a read-only sandbox with a writable root.
 #[test_case(FileSystemImplementation::Local ; "local")]
 #[test_case(FileSystemImplementation::Remote ; "remote")]
+#[cfg_attr(
+    windows,
+    ignore = "Windows restricted-token sandbox cannot enforce split writable roots"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn file_system_sandboxed_write_allows_additional_write_root(
     implementation: FileSystemImplementation,

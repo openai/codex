@@ -266,7 +266,11 @@ fn exec_server_env_keeps_command_native_and_carries_sandbox_context() {
             permissions: exec_server_permissions.clone().into(),
             cwd: Some(cwd_uri.clone()),
             workspace_roots: vec![cwd_uri.clone()],
-            windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
+            windows_sandbox_level: if cfg!(windows) {
+                codex_protocol::config_types::WindowsSandboxLevel::RestrictedToken
+            } else {
+                codex_protocol::config_types::WindowsSandboxLevel::Disabled
+            },
             windows_sandbox_private_desktop: false,
             windows_sandbox_proxy_settings_mode: None,
             use_legacy_landlock: false,

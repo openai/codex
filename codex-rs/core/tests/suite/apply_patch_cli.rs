@@ -136,6 +136,10 @@ fn restrictive_workspace_write_profile() -> PermissionProfile {
 }
 
 fn workspace_write_with_read_only_root(read_only_root: AbsolutePathBuf) -> PermissionProfile {
+    if cfg!(windows) {
+        return restrictive_workspace_write_profile();
+    }
+
     let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry {
             path: FileSystemPath::Path {
@@ -996,6 +1000,10 @@ async fn apply_patch_cli_preserves_existing_hard_link_outside_workspace() -> Res
     let harness_work_dir = work_dir.clone();
     let harness = apply_patch_harness_with(move |builder| {
         builder.with_config(move |config| {
+            config.workspace_roots = vec![harness_work_dir.clone()];
+            config
+                .permissions
+                .set_workspace_roots(config.workspace_roots.clone());
             config.cwd = harness_work_dir;
         })
     })

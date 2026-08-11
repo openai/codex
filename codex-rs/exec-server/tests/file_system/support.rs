@@ -7,11 +7,13 @@ use codex_exec_server::ExecServerRuntimePaths;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::LocalFileSystem;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
@@ -103,9 +105,25 @@ pub(crate) fn workspace_write_sandbox(
     }])
 }
 
-fn sandbox_context(entries: Vec<FileSystemSandboxEntry>) -> FileSystemSandboxContext {
-    FileSystemSandboxContext::from_permission_profile(PermissionProfile::from_runtime_permissions(
-        &FileSystemSandboxPolicy::restricted(entries),
-        NetworkSandboxPolicy::Restricted,
-    ))
+fn sandbox_context(mut entries: Vec<FileSystemSandboxEntry>) -> FileSystemSandboxContext {
+    if cfg!(windows) {
+        // Restricted-token sandboxing cannot enforce read restrictions, so leave the root
+        // readable while exercising the requested write restrictions.
+        entries.push(FileSystemSandboxEntry::new(
+            FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            FileSystemAccessMode::Read,
+        ));
+    }
+    let mut sandbox = FileSystemSandboxContext::from_permission_profile(
+        PermissionProfile::from_runtime_permissions(
+            &FileSystemSandboxPolicy::restricted(entries),
+            NetworkSandboxPolicy::Restricted,
+        ),
+    );
+    if cfg!(windows) {
+        sandbox.windows_sandbox_level = WindowsSandboxLevel::RestrictedToken;
+    }
+    sandbox
 }

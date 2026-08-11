@@ -238,23 +238,6 @@ impl ExecCommandHandler {
         )
         .map_err(FunctionCallError::RespondToModel)?;
         let command = resolved_command.command;
-        if environment.is_remote()
-            && !cwd_uses_native_convention
-            && !turn_environment
-                .permission_profile()
-                .file_system_sandbox_policy()
-                .has_full_disk_write_access()
-            && matches!(
-                codex_apply_patch::maybe_parse_apply_patch(&command, &cwd),
-                codex_apply_patch::MaybeApplyPatch::Body(_)
-            )
-        {
-            // CA-781: patch verification reads executor files before process sandboxing applies.
-            manager.release_process_id(process_id).await;
-            return Err(FunctionCallError::RespondToModel(
-                "cross-platform remote apply_patch is unavailable until executor-side filesystem sandboxing is supported".to_string(),
-            ));
-        }
         let shell_type = resolved_command.shell_type;
         let command_for_display = codex_shell_command::parse_command::shlex_join(&command);
 
@@ -329,7 +312,7 @@ impl ExecCommandHandler {
             }
         };
 
-        if let Some(output) = intercept_apply_patch(
+        let intercepted_patch = intercept_apply_patch(
             &command,
             &cwd,
             fs.as_ref(),
@@ -340,8 +323,13 @@ impl ExecCommandHandler {
             &context.call_id,
             "exec_command",
         )
-        .await?
-        {
+        .await;
+        // Keep the reservation when interception returns `Ok(None)`: the normal command below
+        // still needs this process ID.
+        if intercepted_patch.is_err() {
+            manager.release_process_id(process_id).await;
+        }
+        if let Some(output) = intercepted_patch? {
             manager.release_process_id(process_id).await;
             return Ok(boxed_tool_output(ExecCommandToolOutput {
                 event_call_id: String::new(),

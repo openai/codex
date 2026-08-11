@@ -18,34 +18,7 @@ pub fn is_likely_sandbox_denied(
         return false;
     }
 
-    // Quick rejects: well-known non-sandbox shell exit codes
-    // 2: misuse of shell builtins
-    // 126: permission denied
-    // 127: command not found
-    const SANDBOX_DENIED_KEYWORDS: [&str; 7] = [
-        "operation not permitted",
-        "permission denied",
-        "read-only file system",
-        "seccomp",
-        "sandbox",
-        "landlock",
-        "failed to write file",
-    ];
-
-    let has_sandbox_keyword = [
-        &exec_output.stderr.text,
-        &exec_output.stdout.text,
-        &exec_output.aggregated_output.text,
-    ]
-    .into_iter()
-    .any(|section| {
-        let lower = section.to_lowercase();
-        SANDBOX_DENIED_KEYWORDS
-            .iter()
-            .any(|needle| lower.contains(needle))
-    });
-
-    if has_sandbox_keyword {
+    if is_likely_executor_managed_sandbox_denied(exec_output) {
         return true;
     }
 
@@ -66,4 +39,34 @@ pub fn is_likely_sandbox_denied(
     }
 
     false
+}
+
+/// Detect executor-managed sandbox denials when its concrete backend is unknown.
+pub fn is_likely_executor_managed_sandbox_denied(exec_output: &ExecToolCallOutput) -> bool {
+    if exec_output.exit_code == 0 {
+        return false;
+    }
+
+    const SANDBOX_DENIED_KEYWORDS: [&str; 7] = [
+        "operation not permitted",
+        "permission denied",
+        "read-only file system",
+        "seccomp",
+        "sandbox",
+        "landlock",
+        "failed to write file",
+    ];
+
+    [
+        &exec_output.stderr.text,
+        &exec_output.stdout.text,
+        &exec_output.aggregated_output.text,
+    ]
+    .into_iter()
+    .any(|section| {
+        let lower = section.to_lowercase();
+        SANDBOX_DENIED_KEYWORDS
+            .iter()
+            .any(|needle| lower.contains(needle))
+    })
 }
