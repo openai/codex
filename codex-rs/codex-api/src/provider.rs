@@ -85,10 +85,6 @@ impl Provider {
         }
     }
 
-    pub fn is_azure_responses_endpoint(&self) -> bool {
-        is_azure_responses_provider(&self.name, Some(&self.base_url))
-    }
-
     pub fn websocket_url_for_path(&self, path: &str) -> Result<Url, url::ParseError> {
         let mut url = Url::parse(&self.url_for_path(path))?;
 

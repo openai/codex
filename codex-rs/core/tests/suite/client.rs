@@ -3028,7 +3028,7 @@ async fn includes_developer_instructions_message_in_request() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn azure_responses_request_includes_store_and_prefixed_item_ids() {
+async fn azure_responses_request_does_not_store_and_preserves_prefixed_item_ids() {
     skip_if_no_network!();
 
     let server = MockServer::start().await;
@@ -3222,7 +3222,7 @@ async fn azure_responses_request_includes_store_and_prefixed_item_ids() {
     assert_eq!(request.path(), "/openai/responses");
     let body = request.body_json();
 
-    assert_eq!(body["store"], serde_json::Value::Bool(true));
+    assert_eq!(body["store"], serde_json::Value::Bool(false));
     assert_eq!(body["stream"], serde_json::Value::Bool(true));
     assert_eq!(body["input"].as_array().map(Vec::len), Some(10));
     assert_eq!(body["input"][0]["id"].as_str(), Some("rs_reasoning-id"));
