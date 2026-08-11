@@ -56,7 +56,10 @@ impl CodeModeSessionDelegate for GrpcDelegate {
                     &cancellation,
                 )
                 .await?;
-            let mut pending = PendingCallback::tool(Arc::clone(&session), invocation_id);
+            let mut pending = PendingToolCall {
+                session: Arc::clone(&session),
+                id: Some(invocation_id),
+            };
             let result = tokio::select! {
                 biased;
                 result = receiver => result
@@ -69,7 +72,7 @@ impl CodeModeSessionDelegate for GrpcDelegate {
                 }
             };
             if result.is_ok() {
-                pending.disarm();
+                pending.id = None;
             }
             result
         })
@@ -92,38 +95,18 @@ impl CodeModeSessionDelegate for GrpcDelegate {
                 .execution_id(cell_id.as_str(), &cancellation)
                 .await?;
             let notification_id = Uuid::new_v4();
-            let (response, receiver) = oneshot::channel();
             session
-                .begin_notification(
-                    notification_id,
-                    proto::Notification {
+                .send_event(
+                    proto::session_event::Event::Notification(proto::Notification {
                         notification_id: notification_id.to_string(),
                         execution_id,
                         cell_id: cell_id.to_string(),
                         call_id,
                         text,
-                    },
-                    response,
+                    }),
                     &cancellation,
                 )
-                .await?;
-            let mut pending = PendingCallback::notification(Arc::clone(&session), notification_id);
-            tokio::select! {
-                biased;
-                result = receiver => {
-                    result.map_err(|_| {
-                        "code-mode client closed before acknowledging notification".to_string()
-                    })?;
-                    pending.disarm();
-                    Ok(())
-                }
-                _ = cancellation.cancelled() => {
-                    Err("code mode notification cancelled".to_string())
-                }
-                _ = session.closed.cancelled() => {
-                    Err("code-mode session closed before acknowledging notification".to_string())
-                }
-            }
+                .await
         })
     }
 
@@ -134,47 +117,15 @@ impl CodeModeSessionDelegate for GrpcDelegate {
     }
 }
 
-enum CallbackKind {
-    Tool,
-    Notification,
-}
-
-struct PendingCallback {
+struct PendingToolCall {
     session: Arc<GrpcSession>,
     id: Option<Uuid>,
-    kind: CallbackKind,
 }
 
-impl PendingCallback {
-    fn tool(session: Arc<GrpcSession>, id: Uuid) -> Self {
-        Self {
-            session,
-            id: Some(id),
-            kind: CallbackKind::Tool,
-        }
-    }
-
-    fn notification(session: Arc<GrpcSession>, id: Uuid) -> Self {
-        Self {
-            session,
-            id: Some(id),
-            kind: CallbackKind::Notification,
-        }
-    }
-
-    fn disarm(&mut self) {
-        self.id = None;
-    }
-}
-
-impl Drop for PendingCallback {
+impl Drop for PendingToolCall {
     fn drop(&mut self) {
-        let Some(id) = self.id.take() else {
-            return;
-        };
-        match self.kind {
-            CallbackKind::Tool => self.session.cancel_invocation(id),
-            CallbackKind::Notification => self.session.cancel_notification(id),
+        if let Some(id) = self.id.take() {
+            self.session.cancel_invocation(id);
         }
     }
 }

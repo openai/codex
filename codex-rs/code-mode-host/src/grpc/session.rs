@@ -64,8 +64,6 @@ pub(super) struct SessionState {
     pub(super) next_subscription: usize,
     pub(super) pending_invocations: HashMap<Uuid, PendingInvocation>,
     pub(super) seen_invocations: BoundedIds<Uuid>,
-    pub(super) pending_notifications: HashMap<Uuid, oneshot::Sender<()>>,
-    pub(super) seen_notifications: BoundedIds<Uuid>,
     pub(super) waits: HashMap<String, ActiveWait>,
     pub(super) seen_waits: BoundedIds,
     pub(super) cancelled_waits: BoundedIds,
@@ -253,7 +251,6 @@ impl GrpcSession {
                 wait.cancellation.cancel();
             }
             state.pending_invocations.clear();
-            state.pending_notifications.clear();
             state.subscriptions.clear();
         }
         let result = self.runtime.shutdown().await.map_err(Status::internal);

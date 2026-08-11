@@ -286,18 +286,16 @@ async fn cancellation_before_wait_admission_is_preserved() {
 }
 
 #[tokio::test]
-async fn terminating_a_cell_cancels_unacknowledged_notifications() {
+async fn notifications_do_not_delay_cell_completion() {
     let host = GrpcCodeModeHost::new();
     let (session_id, mut session_events) = open_session(&host).await;
-    let (cell_id, mut execution) = execute_events(
-        &host,
-        execute_request(
-            &session_id,
-            "execution-notify",
-            r#"notify("pending"); await new Promise(() => {});"#,
-        ),
-    )
-    .await;
+    let mut request = execute_request(
+        &session_id,
+        "execution-notify",
+        r#"notify("pending"); text("done");"#,
+    );
+    request.yield_time_ms = Some(60_000);
+    let (cell_id, mut execution) = execute_events(&host, request).await;
     let event = session_events.next().await.unwrap().unwrap();
     let Some(proto::session_event::Event::Notification(notification)) = event.event else {
         panic!("expected pending notification");
@@ -306,35 +304,15 @@ async fn terminating_a_cell_cancels_unacknowledged_notifications() {
     assert_eq!(notification.cell_id, cell_id);
     assert_eq!(notification.call_id, "outer-call");
     assert_eq!(notification.text, "pending");
-    execution.next().await.unwrap().unwrap();
-
-    let terminated = host
-        .terminate(Request::new(proto::TerminateRequest {
-            session_id,
-            cell_id: cell_id.clone(),
-        }))
-        .await
-        .unwrap()
-        .into_inner();
     assert!(matches!(
-        terminated.state,
-        Some(proto::wait_response::State::LiveCell(
+        execution.next().await.unwrap().unwrap().event,
+        Some(proto::execute_event::Event::Outcome(
             proto::ExecutionOutcome {
-                outcome: Some(proto::execution_outcome::Outcome::Terminated(_)),
+                outcome: Some(proto::execution_outcome::Outcome::Completed(_)),
                 ..
             }
         ))
     ));
-    assert_eq!(
-        session_events.next().await.unwrap().unwrap(),
-        proto::SessionEvent {
-            event: Some(proto::session_event::Event::NotificationCancelled(
-                proto::NotificationCancelled {
-                    notification_id: notification.notification_id,
-                },
-            )),
-        }
-    );
     assert_eq!(
         session_events.next().await.unwrap().unwrap(),
         proto::SessionEvent {
@@ -345,4 +323,10 @@ async fn terminating_a_cell_cancels_unacknowledged_notifications() {
             })),
         }
     );
+    host.acknowledge_notification(Request::new(proto::AcknowledgeNotificationRequest {
+        session_id,
+        notification_id: notification.notification_id,
+    }))
+    .await
+    .expect("legacy notification acknowledgments remain accepted");
 }
