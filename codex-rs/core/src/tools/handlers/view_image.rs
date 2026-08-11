@@ -49,6 +49,8 @@ impl ViewImageHandler {
 
 const VIEW_IMAGE_UNSUPPORTED_MESSAGE: &str =
     "view_image is not allowed because you do not support image inputs";
+const VIEW_IMAGE_INVALID_MESSAGE: &str =
+    "unable to process image: invalid or unsupported image data";
 
 #[derive(Deserialize)]
 struct ViewImageArgs {
@@ -173,6 +175,11 @@ impl ViewImageHandler {
                     "unable to read image at `{model_visible_path}`: {error}"
                 ))
             })?;
+        // Reject non-images before their bytes can reach code mode without changing
+        // valid image bytes, metadata, or centralized image preparation.
+        image::load_from_memory(&file_bytes).map_err(|_| {
+            FunctionCallError::RespondToModel(VIEW_IMAGE_INVALID_MESSAGE.to_string())
+        })?;
 
         let can_request_original_detail = can_request_original_image_detail(&turn.model_info);
         let use_original_detail = self.options.unified_image_budget
@@ -183,7 +190,7 @@ impl ViewImageHandler {
             DEFAULT_IMAGE_DETAIL
         };
 
-        // The history insertion path owns image decoding and resizing.
+        // The history insertion path owns image preparation and resizing.
         let image_url = data_url_from_bytes("application/octet-stream", &file_bytes);
 
         let item = TurnItem::ImageView(ImageViewItem {
@@ -262,8 +269,12 @@ mod tests {
     use codex_utils_absolute_path::AbsolutePathBuf;
     use codex_utils_path_uri::PathUri;
     use core_test_support::TempDirExt;
+    use image::ImageBuffer;
+    use image::ImageFormat;
+    use image::Rgba;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use std::io::Cursor;
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
@@ -282,6 +293,19 @@ mod tests {
             current.shell,
             current.config,
         ));
+    }
+
+    fn tiny_png() -> Vec<u8> {
+        let image = ImageBuffer::from_pixel(
+            /*width*/ 1,
+            /*height*/ 1,
+            Rgba([255u8, 0, 0, 255]),
+        );
+        let mut bytes = Vec::new();
+        image
+            .write_to(&mut Cursor::new(&mut bytes), ImageFormat::Png)
+            .expect("encode test image");
+        bytes
     }
 
     #[test]
@@ -324,7 +348,7 @@ mod tests {
 
         replace_primary_environment_cwd(&mut turn, image_cwd.clone());
         let image_path = image_cwd.join("image.png");
-        std::fs::write(image_path.as_path(), b"not a real image").expect("write test image");
+        std::fs::write(image_path.as_path(), tiny_png()).expect("write test image");
         Arc::make_mut(&mut turn.config)
             .permissions
             .set_permission_profile(PermissionProfile::Disabled)
@@ -400,7 +424,7 @@ mod tests {
 
         replace_primary_environment_cwd(&mut turn, image_cwd.clone());
         let image_path = image_cwd.join("image.png");
-        std::fs::write(image_path.as_path(), b"not a real image").expect("write test image");
+        std::fs::write(image_path.as_path(), tiny_png()).expect("write test image");
         let TurnEnvironmentState::Ready(environment) = &mut turn.environments.environments[0]
         else {
             panic!("primary environment should be ready");
@@ -426,5 +450,48 @@ mod tests {
             .await;
 
         result.expect("explicit high detail should be accepted");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn handle_rejects_invalid_image_before_returning_output_to_code_mode() {
+        let (session, mut turn) = make_session_and_context().await;
+        let image_dir = tempfile::tempdir().expect("create image temp dir");
+        let image_cwd = image_dir.abs();
+
+        replace_primary_environment_cwd(&mut turn, image_cwd.clone());
+        let image_path = image_cwd.join("not-an-image.txt");
+        std::fs::write(image_path.as_path(), b"arbitrary file contents")
+            .expect("write invalid image");
+        let TurnEnvironmentState::Ready(environment) = &mut turn.environments.environments[0]
+        else {
+            panic!("primary environment should be ready");
+        };
+        environment.config.permission_profile =
+            PermissionProfileSnapshot::legacy(PermissionProfile::Disabled);
+        let turn = Arc::new(turn);
+
+        let result = ViewImageHandler::default()
+            .handle(ToolInvocation {
+                session: Arc::new(session),
+                step_context: StepContext::for_test(Arc::clone(&turn)),
+                turn,
+                cancellation_token: tokio_util::sync::CancellationToken::new(),
+                tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+                call_id: "call-view-image".to_string(),
+                tool_name: codex_tools::ToolName::plain("view_image"),
+                source: ToolCallSource::CodeMode {
+                    cell_id: "cell-1".to_string(),
+                    runtime_tool_call_id: "tool-1".to_string(),
+                },
+                payload: ToolPayload::Function {
+                    arguments: json!({ "path": "not-an-image.txt" }).to_string(),
+                },
+            })
+            .await;
+
+        let Err(FunctionCallError::RespondToModel(message)) = result else {
+            panic!("expected invalid image error");
+        };
+        assert_eq!(message, VIEW_IMAGE_INVALID_MESSAGE);
     }
 }
