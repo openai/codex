@@ -358,6 +358,13 @@ impl CodexThread {
                 ),
             ));
         }
+        if matches!(&op, Op::UserInput { items, .. } if items.is_empty()) {
+            return Err(UserMessageAdmissionError::Admission(
+                CodexErr::InvalidRequest(
+                    "user message admission requires nonempty user input".to_string(),
+                ),
+            ));
+        }
         self.submit_user_input_and_wait_for_admission_inner(
             op,
             trace,
@@ -374,18 +381,11 @@ impl CodexThread {
         client_user_message_id: Option<String>,
         state: PendingUserMessageAdmissionState,
     ) -> Result<UserMessageAdmission, UserMessageAdmissionError> {
-        let Op::UserInput { items, .. } = &op else {
+        let Op::UserInput { .. } = &op else {
             return Err(UserMessageAdmissionError::Admission(
                 CodexErr::InvalidRequest("user message admission requires user input".to_string()),
             ));
         };
-        if items.is_empty() {
-            return Err(UserMessageAdmissionError::Admission(
-                CodexErr::InvalidRequest(
-                    "user message admission requires nonempty user input".to_string(),
-                ),
-            ));
-        }
         self.session
             .services
             .agent_control
