@@ -1,4 +1,5 @@
 use codex_code_mode_protocol::CellId;
+use codex_code_mode_protocol::CodeModeNestedToolCall;
 use codex_code_mode_protocol::CodeModeToolKind;
 use codex_code_mode_protocol::ExecuteRequest;
 use codex_code_mode_protocol::FunctionCallOutputContentItem;
@@ -7,6 +8,7 @@ use codex_code_mode_protocol::RuntimeResponse;
 use codex_code_mode_protocol::ToolDefinition;
 use codex_code_mode_protocol::WaitOutcome;
 use codex_code_mode_protocol::grpc;
+use codex_protocol::ToolName;
 
 pub(super) fn execute_request(
     session_id: &str,
@@ -54,6 +56,35 @@ fn tool_definition(definition: ToolDefinition) -> Result<grpc::ToolDefinition, S
             .map(|schema| serde_json::to_vec(&schema))
             .transpose()
             .map_err(|error| format!("failed to encode code-mode tool output schema: {error}"))?,
+    })
+}
+
+pub(super) fn tool_call(call: grpc::ToolCall) -> Result<CodeModeNestedToolCall, String> {
+    let name = call
+        .tool_name
+        .ok_or_else(|| "code-mode tool invocation omitted its tool name".to_string())?;
+    let kind = match grpc::ToolKind::try_from(call.tool_kind) {
+        Ok(grpc::ToolKind::Function) => CodeModeToolKind::Function,
+        Ok(grpc::ToolKind::Freeform) => CodeModeToolKind::Freeform,
+        Ok(grpc::ToolKind::Unspecified) | Err(_) => {
+            return Err(format!(
+                "code-mode tool invocation has invalid kind {}",
+                call.tool_kind
+            ));
+        }
+    };
+    let input = call
+        .input_json
+        .map(|input| serde_json::from_slice(&input))
+        .transpose()
+        .map_err(|error| format!("code-mode tool invocation contains invalid JSON: {error}"))?;
+
+    Ok(CodeModeNestedToolCall {
+        cell_id: CellId::new(call.cell_id),
+        runtime_tool_call_id: call.runtime_tool_call_id,
+        tool_name: ToolName::new(name.namespace, name.name),
+        tool_kind: kind,
+        input,
     })
 }
 

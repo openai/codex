@@ -5,3 +5,4 @@ pub use code_mode_proto::codex::code_mode::v1::*;
 tonic::include_proto!("codex.code_mode.v1");
 
 pub const MAX_IDENTIFIER_BYTES: usize = 256;
+pub const MAX_TOOL_ERROR_BYTES: usize = 64 * 1_024;

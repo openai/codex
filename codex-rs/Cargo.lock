@@ -2567,6 +2567,7 @@ dependencies = [
  "codex-websocket-client",
  "futures",
  "pretty_assertions",
+ "prost",
  "serde_json",
  "tokio",
  "tokio-tungstenite",

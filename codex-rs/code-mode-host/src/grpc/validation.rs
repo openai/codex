@@ -3,10 +3,10 @@ use tonic::Status;
 use uuid::Uuid;
 
 pub(super) use codex_code_mode_protocol::grpc::MAX_IDENTIFIER_BYTES;
+pub(super) use codex_code_mode_protocol::grpc::MAX_TOOL_ERROR_BYTES;
 pub(super) const MAX_TOOL_FILTERS: usize = 64;
 pub(super) const MAX_TOOL_DEFINITIONS: usize = 1_024;
 pub(super) const MAX_TOOL_DESCRIPTION_BYTES: usize = 16 * 1_024;
-pub(super) const MAX_TOOL_ERROR_BYTES: usize = 64 * 1_024;
 
 pub(super) fn identifier(value: &str, field: &str) -> Result<(), Status> {
     if value.is_empty() {

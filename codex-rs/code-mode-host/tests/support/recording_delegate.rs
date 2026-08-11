@@ -7,12 +7,14 @@ use codex_code_mode::CodeModeSessionDelegate;
 use codex_code_mode::NotificationFuture;
 use codex_code_mode::ToolInvocationFuture;
 use serde_json::json;
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Default)]
 pub(crate) struct RecordingDelegate {
     pub(crate) invocations: Mutex<Vec<CodeModeNestedToolCall>>,
     pub(crate) notifications: Mutex<Vec<(String, CellId, String)>>,
+    pub(crate) notification_delivered: Notify,
     pub(crate) closed_cells: Mutex<Vec<CellId>>,
 }
 
@@ -40,6 +42,7 @@ impl CodeModeSessionDelegate for RecordingDelegate {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push((call_id, cell_id, text));
+        self.notification_delivered.notify_one();
         Box::pin(async { Ok(()) })
     }
 

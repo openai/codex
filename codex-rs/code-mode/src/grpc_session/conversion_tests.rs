@@ -1,4 +1,5 @@
 use codex_code_mode_protocol::CellId;
+use codex_code_mode_protocol::CodeModeNestedToolCall;
 use codex_code_mode_protocol::CodeModeToolKind;
 use codex_code_mode_protocol::ExecuteRequest;
 use codex_code_mode_protocol::FunctionCallOutputContentItem;
@@ -13,6 +14,7 @@ use serde_json::json;
 
 use super::execute_request;
 use super::runtime_response;
+use super::tool_call;
 use super::wait_outcome;
 
 #[test]
@@ -52,6 +54,35 @@ fn execute_request_preserves_tool_schemas_namespaces_and_limits() {
             }],
             yield_time_ms: Some(25),
             max_output_tokens: Some(128),
+        })
+    );
+}
+
+#[test]
+fn tool_call_decodes_structured_input_and_namespace() {
+    let call = grpc::ToolCall {
+        session_id: "session".to_string(),
+        execution_id: "execution".to_string(),
+        cell_id: "cell".to_string(),
+        invocation_id: "invocation".to_string(),
+        runtime_tool_call_id: "runtime-call".to_string(),
+        tool_name: Some(grpc::ToolName {
+            name: "search".to_string(),
+            namespace: Some("work".to_string()),
+        }),
+        tool_kind: grpc::ToolKind::Function as i32,
+        input_json: Some(br#"{"query":"hello"}"#.to_vec()),
+        sequence: 1,
+    };
+
+    assert_eq!(
+        tool_call(call),
+        Ok(CodeModeNestedToolCall {
+            cell_id: CellId::new("cell".to_string()),
+            runtime_tool_call_id: "runtime-call".to_string(),
+            tool_name: ToolName::namespaced("work", "search"),
+            tool_kind: CodeModeToolKind::Function,
+            input: Some(json!({"query": "hello"})),
         })
     );
 }

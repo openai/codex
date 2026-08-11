@@ -72,7 +72,7 @@ impl SessionInner {
         self.state
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .begin_execution(execution_id.clone())?;
+            .begin_execution(&request)?;
         let ownership = ExecutionOwnership {
             session: Arc::clone(self),
             execution_id,
@@ -202,18 +202,25 @@ impl SessionInner {
                 Err(error) => Err(error),
             },
         };
-        let outcome = outcome.and_then(|response| {
-            if runtime_response_cell_id(&response) != &cell_id {
+        let outcome = match outcome {
+            Ok(response) if runtime_response_cell_id(&response) != &cell_id => {
                 let error = format!(
                     "gRPC code-mode execution returned cell {} instead of {cell_id}",
                     runtime_response_cell_id(&response)
                 );
                 self.fail(error.clone());
                 Err(error)
-            } else {
+            }
+            Ok(response) => {
+                tokio::select! {
+                    biased;
+                    _ = response_tx.closed() => return,
+                    _ = self.settle_notifications(&response) => {}
+                }
                 Ok(response)
             }
-        });
+            Err(error) => Err(error),
+        };
         let _ = response_tx.send(outcome);
     }
 
@@ -276,7 +283,7 @@ impl SessionInner {
         cancellation.disarm();
         self.prune_wait_slots();
         let outcome = conversion::wait_outcome(response?.into_inner())?;
-        self.validate_wait_cell(&expected_cell_id, outcome)
+        self.validate_wait_cell(&expected_cell_id, outcome).await
     }
 
     pub(super) async fn terminate(&self, cell_id: CellId) -> Result<WaitOutcome, String> {
@@ -294,19 +301,18 @@ impl SessionInner {
         .await?
         .into_inner();
         let outcome = conversion::wait_outcome(response)?;
-        self.validate_wait_cell(&cell_id, outcome)
+        self.validate_wait_cell(&cell_id, outcome).await
     }
 
-    fn validate_wait_cell(
+    async fn validate_wait_cell(
         &self,
         expected_cell_id: &CellId,
         outcome: WaitOutcome,
     ) -> Result<WaitOutcome, String> {
-        let actual_cell_id = match &outcome {
-            WaitOutcome::LiveCell(response) | WaitOutcome::MissingCell(response) => {
-                runtime_response_cell_id(response)
-            }
+        let response = match &outcome {
+            WaitOutcome::LiveCell(response) | WaitOutcome::MissingCell(response) => response,
         };
+        let actual_cell_id = runtime_response_cell_id(response);
         if actual_cell_id != expected_cell_id {
             let error = format!(
                 "gRPC code-mode host returned cell {actual_cell_id} instead of {expected_cell_id}"
@@ -314,7 +320,31 @@ impl SessionInner {
             self.fail(error.clone());
             return Err(error);
         }
+        self.settle_notifications(response).await;
         Ok(outcome)
+    }
+
+    async fn settle_notifications(&self, response: &RuntimeResponse) {
+        match response {
+            RuntimeResponse::Yielded { .. } => {}
+            RuntimeResponse::Terminated { cell_id, .. } => self
+                .state
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .cancel_notifications(cell_id),
+            RuntimeResponse::Result { cell_id, .. } => {
+                let cancellation = self
+                    .state
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .notification_cancellation(cell_id);
+                if let Some(cancellation) = cancellation {
+                    // CellClosed follows notifications on the lease stream and cancels this
+                    // token only after every admitted notification has finished.
+                    cancellation.cancelled().await;
+                }
+            }
+        }
     }
 
     fn prune_wait_slots(&self) {

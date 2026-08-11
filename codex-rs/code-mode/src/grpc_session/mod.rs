@@ -34,6 +34,7 @@ use crate::remote_session::ShutdownResultReceiver;
 use crate::remote_session::wait_for_watch;
 
 mod callbacks;
+mod completion;
 mod conversion;
 mod deadline;
 mod operations;
@@ -116,6 +117,23 @@ impl GrpcCodeModeSessionProvider {
             inner: Some(Arc::clone(&inner)),
         };
         inner.spawn_session_events(lease);
+
+        let request = grpc::SubscribeToToolCallsRequest {
+            session_id: inner.id.clone(),
+            tool_names: Vec::new(),
+        };
+        let mut client = inner.client();
+        let response =
+            match deadline::startup("tool subscription", client.subscribe_to_tool_calls(request))
+                .await
+            {
+                Ok(response) => response,
+                Err(error) => {
+                    let _ = wait_for_watch(inner.request_shutdown()).await;
+                    return Err(error);
+                }
+            };
+        inner.spawn_tool_subscription(response.into_inner());
         inner.require_open()?;
         opening.inner = None;
         Ok(Arc::new(GrpcCodeModeSession { inner }))

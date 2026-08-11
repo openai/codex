@@ -4,33 +4,96 @@ use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_code_mode::CellId;
+use codex_code_mode::CodeModeNestedToolCall;
 use codex_code_mode::CodeModeSession;
 use codex_code_mode::CodeModeSessionCellExecutionLimits;
+use codex_code_mode::CodeModeSessionDelegate;
 use codex_code_mode::CodeModeSessionProvider;
+use codex_code_mode::CodeModeToolKind;
 use codex_code_mode::ExecuteRequest;
 use codex_code_mode::FunctionCallOutputContentItem;
 use codex_code_mode::GrpcCodeModeSessionProvider;
 use codex_code_mode::NoopCodeModeSessionDelegate;
+use codex_code_mode::NotificationFuture;
 use codex_code_mode::RuntimeResponse;
+use codex_code_mode::ToolDefinition;
+use codex_code_mode::ToolInvocationFuture;
 use codex_code_mode::WaitOutcome;
 use codex_code_mode::WaitRequest;
 use codex_code_mode_protocol::grpc;
 use codex_code_mode_protocol::grpc::code_mode_host_client::CodeModeHostClient;
+use codex_protocol::ToolName;
 use futures::FutureExt;
 use pretty_assertions::assert_eq;
+use serde_json::json;
+use tokio::sync::Semaphore;
 use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
 use tonic::Code;
 
 #[path = "support/host.rs"]
 mod host;
+#[path = "support/large_tool_delegate.rs"]
+mod large_tool_delegate;
 #[path = "support/recording_delegate.rs"]
 mod recording_delegate;
 
 use host::HostHarness;
+use large_tool_delegate::LargeToolResultDelegate;
 use recording_delegate::RecordingDelegate;
 use recording_delegate::cell_id;
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(20);
+
+struct PanickingDelegate;
+
+struct SelfCancellingToolDelegate;
+
+impl CodeModeSessionDelegate for PanickingDelegate {
+    fn invoke_tool<'a>(
+        &'a self,
+        _invocation: CodeModeNestedToolCall,
+        _cancellation: CancellationToken,
+    ) -> ToolInvocationFuture<'a> {
+        panic!("synchronous tool delegate panic")
+    }
+
+    fn notify<'a>(
+        &'a self,
+        _call_id: String,
+        _cell_id: CellId,
+        _text: String,
+        _cancellation: CancellationToken,
+    ) -> NotificationFuture<'a> {
+        panic!("synchronous notification delegate panic")
+    }
+
+    fn cell_closed(&self, _cell_id: &CellId) {}
+}
+
+impl CodeModeSessionDelegate for SelfCancellingToolDelegate {
+    fn invoke_tool<'a>(
+        &'a self,
+        _invocation: CodeModeNestedToolCall,
+        cancellation: CancellationToken,
+    ) -> ToolInvocationFuture<'a> {
+        cancellation.cancel();
+        Box::pin(async { Err("tool delegate cancelled itself".to_string()) })
+    }
+
+    fn notify<'a>(
+        &'a self,
+        _call_id: String,
+        _cell_id: CellId,
+        _text: String,
+        _cancellation: CancellationToken,
+    ) -> NotificationFuture<'a> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn cell_closed(&self, _cell_id: &CellId) {}
+}
 
 fn request(source: &str) -> ExecuteRequest {
     ExecuteRequest {
@@ -39,6 +102,17 @@ fn request(source: &str) -> ExecuteRequest {
         source: source.to_string(),
         yield_time_ms: Some(/*value*/ 5_000),
         max_output_tokens: Some(/*value*/ 1_000),
+    }
+}
+
+fn tool(name: &str) -> ToolDefinition {
+    ToolDefinition {
+        name: name.to_string(),
+        tool_name: ToolName::plain(name),
+        description: String::new(),
+        kind: CodeModeToolKind::Function,
+        input_schema: None,
+        output_schema: None,
     }
 }
 
@@ -92,7 +166,7 @@ async fn start_active_wait(
 }
 
 #[tokio::test]
-async fn tcp_session_persists_values_and_reports_cell_closure() -> Result<()> {
+async fn tcp_session_persists_values_and_forwards_tools_notifications_and_closure() -> Result<()> {
     let host = HostHarness::start("grpc://127.0.0.1:0").await?;
     assert!(host.endpoint.starts_with("http://127.0.0.1:"));
     let provider = GrpcCodeModeSessionProvider::new(host.endpoint);
@@ -111,9 +185,37 @@ async fn tcp_session_persists_values_and_reports_cell_closure() -> Result<()> {
         }
     );
 
+    let mut callback = request(
+        r#"const result = await tools.echo({ value: String(load("key")) }); notify("notice"); text(result.value);"#,
+    );
+    callback.tool_call_id = "call-2".to_string();
+    callback.enabled_tools = vec![tool("echo")];
     assert_eq!(
-        execute(&session, request(r#"text(String(load("key")));"#)).await?,
-        text_response("2", "persisted")
+        execute(&session, callback).await?,
+        text_response("2", "output")
+    );
+    timeout(TEST_TIMEOUT, delegate.notification_delivered.notified())
+        .await
+        .context("notification was not delivered")?;
+    assert_eq!(
+        *delegate
+            .invocations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner),
+        vec![CodeModeNestedToolCall {
+            cell_id: cell_id("2"),
+            runtime_tool_call_id: "tool-1".to_string(),
+            tool_name: ToolName::plain("echo"),
+            tool_kind: CodeModeToolKind::Function,
+            input: Some(json!({ "value": "persisted" })),
+        }]
+    );
+    assert_eq!(
+        *delegate
+            .notifications
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner),
+        vec![("call-2".to_string(), cell_id("2"), "notice".to_string())]
     );
 
     session.shutdown().await.map_err(anyhow::Error::msg)?;
@@ -345,6 +447,66 @@ async fn dropping_an_initial_response_terminates_its_pending_remote_execution() 
 }
 
 #[tokio::test]
+async fn synchronous_delegate_panics_do_not_orphan_callbacks_or_close_the_session() -> Result<()> {
+    let host = HostHarness::start("grpc://127.0.0.1:0").await?;
+    let provider = GrpcCodeModeSessionProvider::new(host.endpoint);
+    let session = provider
+        .create_session(Arc::new(PanickingDelegate))
+        .await
+        .map_err(anyhow::Error::msg)?;
+
+    let mut tool_panic = request(
+        r#"try { await tools.echo({}); text("unexpected"); } catch (_) { text("tool recovered"); }"#,
+    );
+    tool_panic.enabled_tools = vec![tool("echo")];
+    assert_eq!(
+        execute(&session, tool_panic).await?,
+        text_response("1", "tool recovered")
+    );
+
+    assert_eq!(
+        execute(
+            &session,
+            request(r#"notify("panic"); text("notification recovered");"#),
+        )
+        .await?,
+        text_response("2", "notification recovered")
+    );
+    assert_eq!(
+        execute(&session, request(r#"text("still alive");"#)).await?,
+        text_response("3", "still alive")
+    );
+
+    session.shutdown().await.map_err(anyhow::Error::msg)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn tool_delegate_self_cancellation_returns_an_error_without_hanging() -> Result<()> {
+    let host = HostHarness::start("grpc://127.0.0.1:0").await?;
+    let provider = GrpcCodeModeSessionProvider::new(host.endpoint);
+    let session = provider
+        .create_session(Arc::new(SelfCancellingToolDelegate))
+        .await
+        .map_err(anyhow::Error::msg)?;
+
+    let mut callback =
+        request(r#"try { await tools.echo({}); } catch (_) { text("tool recovered"); }"#);
+    callback.enabled_tools = vec![tool("echo")];
+    assert_eq!(
+        execute(&session, callback).await?,
+        text_response("1", "tool recovered")
+    );
+    assert_eq!(
+        execute(&session, request(r#"text("still alive");"#)).await?,
+        text_response("2", "still alive")
+    );
+
+    session.shutdown().await.map_err(anyhow::Error::msg)?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn concurrent_wait_rejects_without_displacing_the_active_observer() -> Result<()> {
     let host = HostHarness::start("grpc://127.0.0.1:0").await?;
     let provider = GrpcCodeModeSessionProvider::new(host.endpoint);
@@ -518,6 +680,100 @@ async fn dropping_a_session_off_runtime_retires_its_active_cells() -> Result<()>
     .await
     .context("dropping a session outside Tokio did not retire its active cell")?;
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn large_unary_tool_completion_does_not_block_an_independent_session() -> Result<()> {
+    let host = HostHarness::start("grpc://127.0.0.1:0").await?;
+    let provider = GrpcCodeModeSessionProvider::new(host.endpoint);
+    let delegate = Arc::new(LargeToolResultDelegate {
+        started: Semaphore::new(/*permits*/ 0),
+        release: Semaphore::new(/*permits*/ 0),
+    });
+    let slow_session = provider
+        .create_session(delegate.clone())
+        .await
+        .map_err(anyhow::Error::msg)?;
+    let fast_session = provider
+        .create_session(Arc::new(NoopCodeModeSessionDelegate))
+        .await
+        .map_err(anyhow::Error::msg)?;
+    let mut slow_request = request(
+        r#"const result = await tools.large({ value: "request" }); text(String(result.value.length));"#,
+    );
+    slow_request.enabled_tools = vec![tool("large")];
+    slow_request.yield_time_ms = Some(/*value*/ 20_000);
+    let slow_cell = slow_session
+        .execute(slow_request)
+        .await
+        .map_err(anyhow::Error::msg)?;
+    timeout(TEST_TIMEOUT, delegate.started.acquire())
+        .await
+        .context("large tool callback did not start")??
+        .forget();
+
+    assert_eq!(
+        execute(&fast_session, request(r#"text("fast-before");"#)).await?,
+        text_response("1", "fast-before")
+    );
+
+    delegate.release.add_permits(/*n*/ 1);
+    let slow_response = timeout(TEST_TIMEOUT, slow_cell.initial_response());
+    let fast_response = execute(&fast_session, request(r#"text("fast-during");"#));
+    let (slow_response, fast_response) = tokio::join!(slow_response, fast_response);
+
+    assert_eq!(fast_response?, text_response("2", "fast-during"));
+    assert_eq!(
+        slow_response
+            .context("large unary tool response did not complete")?
+            .map_err(anyhow::Error::msg)?,
+        text_response("1", "8388608")
+    );
+    slow_session.shutdown().await.map_err(anyhow::Error::msg)?;
+    fast_session.shutdown().await.map_err(anyhow::Error::msg)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn single_subscription_processes_slow_and_fast_tools_concurrently() -> Result<()> {
+    let host = HostHarness::start("grpc://127.0.0.1:0").await?;
+    let provider = GrpcCodeModeSessionProvider::new(host.endpoint);
+    let delegate = Arc::new(LargeToolResultDelegate {
+        started: Semaphore::new(/*permits*/ 0),
+        release: Semaphore::new(/*permits*/ 0),
+    });
+    let session = provider
+        .create_session(delegate.clone())
+        .await
+        .map_err(anyhow::Error::msg)?;
+
+    let mut slow =
+        request(r#"const result = await tools.large({}); text(String(result.value.length));"#);
+    slow.enabled_tools = vec![tool("large")];
+    slow.yield_time_ms = Some(/*value*/ 20_000);
+    let slow_cell = session.execute(slow).await.map_err(anyhow::Error::msg)?;
+    timeout(TEST_TIMEOUT, delegate.started.acquire())
+        .await
+        .context("slow tool did not start")??
+        .forget();
+
+    let mut fast = request(r#"const result = await tools.fast({}); text(result.value);"#);
+    fast.enabled_tools = vec![tool("fast")];
+    assert_eq!(
+        execute(&session, fast).await?,
+        text_response("2", "isolated")
+    );
+
+    delegate.release.add_permits(/*n*/ 1);
+    assert_eq!(
+        timeout(TEST_TIMEOUT, slow_cell.initial_response())
+            .await
+            .context("slow tool did not finish")?
+            .map_err(anyhow::Error::msg)?,
+        text_response("1", "8388608")
+    );
+    session.shutdown().await.map_err(anyhow::Error::msg)?;
     Ok(())
 }
 
