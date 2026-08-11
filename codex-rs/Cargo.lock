@@ -4025,6 +4025,7 @@ dependencies = [
  "codex-exec-server",
  "codex-http-client",
  "codex-keyring-store",
+ "codex-network-proxy",
  "codex-protocol",
  "codex-secrets",
  "codex-utils-cargo-bin",

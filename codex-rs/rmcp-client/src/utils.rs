@@ -1,6 +1,7 @@
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_config::types::McpServerEnvVar;
+use codex_network_proxy::CUSTOM_CA_ENV_KEYS;
 use codex_protocol::shell_environment::is_non_inheritable_env_var;
 use http::HeaderMap;
 use http::HeaderName;
@@ -22,8 +23,34 @@ pub(crate) fn create_env_for_mcp_server(
         .copied()
         .chain(additional_env_vars)
         .filter_map(|var| env::var_os(var).map(|value| (OsString::from(var), value)))
-        .chain(extra_env.unwrap_or_default())
         .collect();
+    for name in CUSTOM_CA_ENV_KEYS {
+        let Some(value) = env::var_os(name) else {
+            continue;
+        };
+        if value.is_empty() {
+            continue;
+        }
+        let value = std::path::absolute(value)?.into_os_string();
+        #[cfg(windows)]
+        env.retain(|key, _| !key.to_string_lossy().eq_ignore_ascii_case(name));
+        env.insert(OsString::from(name), value);
+    }
+    for (name, value) in extra_env.unwrap_or_default() {
+        if cfg!(windows)
+            || name.to_str().is_some_and(|name| {
+                CUSTOM_CA_ENV_KEYS
+                    .iter()
+                    .any(|ca_name| ca_name.eq_ignore_ascii_case(name))
+            })
+        {
+            env.retain(|key, _| {
+                !key.to_string_lossy()
+                    .eq_ignore_ascii_case(&name.to_string_lossy())
+            });
+        }
+        env.insert(name, value);
+    }
     env.retain(|name, _| {
         name.to_str()
             .is_none_or(|name| !is_non_inheritable_env_var(name))

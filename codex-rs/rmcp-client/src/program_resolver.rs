@@ -44,7 +44,11 @@ pub fn resolve(
     cwd: &Path,
 ) -> std::io::Result<OsString> {
     // Extract PATH from environment for search locations
-    let search_path = env.get(std::ffi::OsStr::new("PATH"));
+    let search_path = env.iter().find_map(|(name, value)| {
+        name.to_string_lossy()
+            .eq_ignore_ascii_case("PATH")
+            .then_some(value)
+    });
 
     // Attempt resolution via which crate
     match which::which_in(&program, search_path, cwd) {
@@ -139,6 +143,16 @@ mod tests {
     #[tokio::test]
     async fn test_resolved_program_executes_successfully() -> Result<()> {
         let env = TestExecutableEnv::new()?;
+        #[cfg(windows)]
+        let env = {
+            let mut env = env;
+            let path = env
+                .mcp_env
+                .remove(std::ffi::OsStr::new("PATH"))
+                .expect("test environment should include PATH");
+            env.mcp_env.insert(OsString::from("Path"), path);
+            env
+        };
         let program = OsString::from(&env.program_name);
 
         // Apply platform-specific resolution
