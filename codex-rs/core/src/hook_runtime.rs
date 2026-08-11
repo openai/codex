@@ -38,6 +38,7 @@ use codex_protocol::protocol::HookStartedEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::WarningEvent;
+use codex_thread_store::PersistContext;
 use codex_thread_store::ReadThreadParams;
 use serde_json::Value;
 use tracing::instrument;
@@ -582,6 +583,7 @@ pub(crate) async fn record_pending_input(
     turn_context: &Arc<TurnContext>,
     pending_input: TurnInput,
     additional_contexts: Vec<String>,
+    persist_context: PersistContext,
 ) -> Result<(), TryStartTurnIfIdleRejectionReason> {
     match pending_input {
         TurnInput::UserInput { content, client_id } => {
@@ -596,10 +598,12 @@ pub(crate) async fn record_pending_input(
                 .filter(|task| Arc::ptr_eq(&task.turn_context, turn_context))
                 .and_then(|task| task.input_persisted.take());
             if awaiting_admission || input_persisted.is_some() {
+                // An admission acknowledgment always requires synchronous persistence.
                 sess.record_user_prompt_and_emit_turn_item(
                     turn_context.as_ref(),
                     content.as_slice(),
                     client_id.clone(),
+                    PersistContext::Standard,
                 )
                 .await;
                 record_additional_contexts(sess, turn_context, additional_contexts).await;
@@ -640,6 +644,7 @@ pub(crate) async fn record_pending_input(
                 turn_context.as_ref(),
                 content.as_slice(),
                 client_id,
+                persist_context,
             )
             .await;
         }

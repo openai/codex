@@ -44,6 +44,7 @@ use crate::DeleteThreadParams;
 use crate::ForkBoundary;
 use crate::ListThreadsParams;
 use crate::ListTurnsParams;
+use crate::PersistContext;
 use crate::PrepareForkParams;
 use crate::PreparedFork;
 use crate::ResumeThreadParams;
@@ -72,7 +73,7 @@ async fn paginated_history_without_state_db_does_not_initialize_sqlite() {
         .await
         .expect("append paginated rollout");
     store
-        .persist_thread(thread_id)
+        .persist_thread(thread_id, PersistContext::Standard)
         .await
         .expect("persist paginated rollout");
     store
@@ -288,7 +289,7 @@ async fn paginated_live_append_materializes_turn_items_and_state() {
     let thread_id = ThreadId::default();
     create_paginated_thread(&store, thread_id).await;
     store
-        .persist_thread(thread_id)
+        .persist_thread(thread_id, PersistContext::Standard)
         .await
         .expect("persist session metadata");
 
@@ -459,7 +460,7 @@ async fn referenced_paginated_rollout_projects_inherited_ordinal_range() {
     )
     .await;
     store
-        .persist_thread(child_id)
+        .persist_thread(child_id, PersistContext::Standard)
         .await
         .expect("persist child metadata");
     assert_eq!(
@@ -563,7 +564,7 @@ async fn named_fork_boundaries_reject_invisible_and_noncanonical_turns() {
     )
     .await;
     store
-        .persist_thread(child_id)
+        .persist_thread(child_id, PersistContext::Standard)
         .await
         .expect("persist child metadata");
     store
@@ -730,7 +731,7 @@ async fn paginated_fork_materializes_compressed_source_and_ancestor() {
     let ancestor_thread_id = ThreadId::default();
     create_paginated_thread(&store, ancestor_thread_id).await;
     store
-        .persist_thread(ancestor_thread_id)
+        .persist_thread(ancestor_thread_id, PersistContext::Standard)
         .await
         .expect("persist ancestor meta");
     store
@@ -766,7 +767,7 @@ async fn paginated_fork_materializes_compressed_source_and_ancestor() {
     )
     .await;
     store
-        .persist_thread(source_thread_id)
+        .persist_thread(source_thread_id, PersistContext::Standard)
         .await
         .expect("persist source meta");
     store
@@ -863,7 +864,7 @@ async fn cancelled_fork_keeps_source_reserved_until_lineage_materialization_fini
     )
     .await;
     store
-        .persist_thread(source_thread_id)
+        .persist_thread(source_thread_id, PersistContext::Standard)
         .await
         .expect("persist source metadata");
     let source_path = store
@@ -924,7 +925,7 @@ async fn prepared_fork_reserves_source_until_child_reference_is_durable() {
     let source_thread_id = ThreadId::default();
     create_paginated_thread(&store, source_thread_id).await;
     store
-        .persist_thread(source_thread_id)
+        .persist_thread(source_thread_id, PersistContext::Standard)
         .await
         .expect("persist source metadata");
     store
@@ -982,7 +983,7 @@ async fn prepared_fork_reserves_source_until_child_reference_is_durable() {
     )
     .await;
     store
-        .persist_thread(child_thread_id)
+        .persist_thread(child_thread_id, PersistContext::Standard)
         .await
         .expect("persist child history reference");
     drop(prepared);
@@ -1010,7 +1011,7 @@ async fn subagent_prefix_advances_projection_without_materializing_history() {
     )
     .await;
     store
-        .persist_thread(thread_id)
+        .persist_thread(thread_id, PersistContext::Standard)
         .await
         .expect("persist session metadata");
 
@@ -1269,7 +1270,7 @@ async fn summary_items_use_final_answers_and_ignore_commentary() {
     let store = LocalThreadStore::new(config, Some(runtime));
     create_paginated_thread(&store, thread_id).await;
     store
-        .persist_thread(thread_id)
+        .persist_thread(thread_id, PersistContext::Standard)
         .await
         .expect("persist session metadata");
 
@@ -1371,7 +1372,7 @@ async fn paginated_projection_accepts_float_rate_limits_and_later_final_answers(
     let thread_id = ThreadId::default();
     create_paginated_thread(&store, thread_id).await;
     store
-        .persist_thread(thread_id)
+        .persist_thread(thread_id, PersistContext::Standard)
         .await
         .expect("persist session metadata");
     store
@@ -1512,7 +1513,7 @@ async fn next_write_catches_up_unprojected_durable_suffix() {
     let thread_id = ThreadId::default();
     create_paginated_thread(&store, thread_id).await;
     store
-        .persist_thread(thread_id)
+        .persist_thread(thread_id, PersistContext::Standard)
         .await
         .expect("persist session metadata");
 
@@ -1639,7 +1640,7 @@ async fn catch_up_preserves_trailing_partial_line_boundaries() {
     let thread_id = ThreadId::default();
     create_paginated_thread(&store, thread_id).await;
     store
-        .persist_thread(thread_id)
+        .persist_thread(thread_id, PersistContext::Standard)
         .await
         .expect("persist session metadata");
 
@@ -1725,7 +1726,7 @@ async fn catch_up_rejects_invalid_complete_suffixes_without_advancing_state() {
         let thread_id = ThreadId::default();
         create_paginated_thread(&store, thread_id).await;
         store
-            .persist_thread(thread_id)
+            .persist_thread(thread_id, PersistContext::Standard)
             .await
             .expect("persist session metadata");
 
@@ -1796,7 +1797,7 @@ async fn catch_up_rejects_missing_rollout_after_projection() {
     let thread_id = ThreadId::default();
     create_paginated_thread(&store, thread_id).await;
     store
-        .persist_thread(thread_id)
+        .persist_thread(thread_id, PersistContext::Standard)
         .await
         .expect("persist session metadata");
     let rollout_path = store
@@ -1854,7 +1855,7 @@ async fn blank_and_rejected_rollout_lines_do_not_poison_projection() {
     let thread_id = ThreadId::default();
     create_paginated_thread(&store, thread_id).await;
     store
-        .persist_thread(thread_id)
+        .persist_thread(thread_id, PersistContext::Standard)
         .await
         .expect("persist session metadata");
 
@@ -1942,7 +1943,7 @@ async fn unprojectable_rollout_lines_wait_for_later_ordinals() {
         let thread_id = ThreadId::default();
         create_paginated_thread(&store, thread_id).await;
         store
-            .persist_thread(thread_id)
+            .persist_thread(thread_id, PersistContext::Standard)
             .await
             .expect("persist session metadata");
 
@@ -2007,7 +2008,7 @@ async fn event_timestamps_allow_invalid_rollout_timestamps() {
     let thread_id = ThreadId::default();
     create_paginated_thread(&store, thread_id).await;
     store
-        .persist_thread(thread_id)
+        .persist_thread(thread_id, PersistContext::Standard)
         .await
         .expect("persist session metadata");
 
@@ -2066,7 +2067,7 @@ async fn malformed_rollout_lines_skip_inferred_ordinal_gaps() {
     let thread_id = ThreadId::default();
     create_paginated_thread(&store, thread_id).await;
     store
-        .persist_thread(thread_id)
+        .persist_thread(thread_id, PersistContext::Standard)
         .await
         .expect("persist session metadata");
 
@@ -2153,7 +2154,7 @@ async fn delete_waits_for_in_flight_projection_before_removing_rows() {
     let thread_id = ThreadId::default();
     create_paginated_thread(&store, thread_id).await;
     store
-        .persist_thread(thread_id)
+        .persist_thread(thread_id, PersistContext::Standard)
         .await
         .expect("persist session metadata");
     let write_permit = store.live_writer_locks.lock(thread_id).await;

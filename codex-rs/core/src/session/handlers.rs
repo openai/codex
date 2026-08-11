@@ -49,6 +49,7 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputResponse;
+use codex_thread_store::PersistContext;
 
 use crate::context_manager::is_user_turn_boundary;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
@@ -557,7 +558,7 @@ pub(super) async fn persist_thread_memory_mode_update(
     mode: ThreadMemoryMode,
 ) -> anyhow::Result<()> {
     let live_thread = sess.live_thread_for_persistence("update thread memory mode")?;
-    live_thread.persist().await?;
+    live_thread.persist(PersistContext::Standard).await?;
     live_thread.flush().await?;
     live_thread
         .update_memory_mode(mode, /*include_archived*/ false)

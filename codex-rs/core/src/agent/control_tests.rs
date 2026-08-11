@@ -54,6 +54,7 @@ use codex_thread_store::ArchiveThreadParams;
 use codex_thread_store::InMemoryThreadStore;
 use codex_thread_store::LocalThreadStore;
 use codex_thread_store::LocalThreadStoreConfig;
+use codex_thread_store::PersistContext;
 use codex_thread_store::ThreadStore;
 use codex_utils_path_uri::PathUri;
 use core_test_support::responses::strip_response_item_ids;
@@ -353,7 +354,10 @@ async fn persist_thread_for_tree_resume(thread: &Arc<CodexThread>, message: &str
     thread
         .inject_user_message_without_turn(message.to_string())
         .await;
-    thread.session.ensure_rollout_materialized().await;
+    thread
+        .session
+        .ensure_rollout_materialized(PersistContext::Standard)
+        .await;
     thread
         .session
         .flush_rollout()
@@ -1419,7 +1423,10 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
             parent_reference_context_item.clone(),
         )])
         .await;
-    parent_thread.session.ensure_rollout_materialized().await;
+    parent_thread
+        .session
+        .ensure_rollout_materialized(PersistContext::Standard)
+        .await;
     parent_thread
         .session
         .flush_rollout()
@@ -1683,7 +1690,10 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history() {
             RolloutItem::ResponseItem(spawn_agent_call(&parent_spawn_call_id)),
         ])
         .await;
-    parent_thread.session.ensure_rollout_materialized().await;
+    parent_thread
+        .session
+        .ensure_rollout_materialized(PersistContext::Standard)
+        .await;
     parent_thread
         .session
         .flush_rollout()
@@ -1843,7 +1853,10 @@ async fn spawn_agent_full_fork_restores_instructions_after_compaction_discards_p
             RolloutItem::ResponseItem(spawn_agent_call(&parent_spawn_call_id)),
         ])
         .await;
-    parent_thread.session.ensure_rollout_materialized().await;
+    parent_thread
+        .session
+        .ensure_rollout_materialized(PersistContext::Standard)
+        .await;
     parent_thread
         .session
         .flush_rollout()
@@ -1987,7 +2000,10 @@ async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_onc
             .session
             .persist_rollout_items(&rollout_items)
             .await;
-        parent_thread.session.ensure_rollout_materialized().await;
+        parent_thread
+            .session
+            .ensure_rollout_materialized(PersistContext::Standard)
+            .await;
         parent_thread
             .session
             .flush_rollout()
@@ -2180,7 +2196,10 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
             spawn_turn_context.to_turn_context_item(),
         )])
         .await;
-    parent_thread.session.ensure_rollout_materialized().await;
+    parent_thread
+        .session
+        .ensure_rollout_materialized(PersistContext::Standard)
+        .await;
     parent_thread
         .session
         .flush_rollout()
@@ -2303,7 +2322,10 @@ async fn spawn_agent_fork_last_n_turns_drops_parent_startup_prefix_when_under_li
             &[spawn_agent_call(&parent_spawn_call_id)],
         )
         .await;
-    parent_thread.session.ensure_rollout_materialized().await;
+    parent_thread
+        .session
+        .ensure_rollout_materialized(PersistContext::Standard)
+        .await;
     parent_thread
         .session
         .flush_rollout()
@@ -2429,7 +2451,10 @@ async fn spawn_agent_fork_last_n_turns_strips_parent_usage_hints() {
             ],
         )
         .await;
-    parent_thread.session.ensure_rollout_materialized().await;
+    parent_thread
+        .session
+        .ensure_rollout_materialized(PersistContext::Standard)
+        .await;
     parent_thread
         .session
         .flush_rollout()
@@ -3220,7 +3245,10 @@ async fn resume_thread_subagent_restores_stored_metadata() {
         .get_thread(child_thread_id)
         .await
         .expect("child thread should exist");
-    child_thread.session.ensure_rollout_materialized().await;
+    child_thread
+        .session
+        .ensure_rollout_materialized(PersistContext::Standard)
+        .await;
     child_thread
         .session
         .flush_rollout()

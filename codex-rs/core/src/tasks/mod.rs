@@ -51,6 +51,7 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::WarningEvent;
+use codex_thread_store::PersistContext;
 
 use codex_features::Feature;
 use codex_protocol::error::CodexErrorDetails;
@@ -627,7 +628,13 @@ impl Session {
                 ts.token_usage_at_turn_start.clone(),
             )
         };
-        run_hooks_and_record_inputs(self, &turn_context, &pending_input).await;
+        run_hooks_and_record_inputs(
+            self,
+            &turn_context,
+            &pending_input,
+            PersistContext::Standard,
+        )
+        .await;
         task_ended_before_persistence |= self
             .pending_user_message_admissions
             .complete_task_end(&turn_context.sub_id);

@@ -112,6 +112,7 @@ use codex_skills::app_id_from_path;
 use codex_skills::tool_kind_for_path;
 use codex_skills_extension::HostSkillPrompts;
 use codex_skills_extension::InjectedHostSkillPrompts;
+use codex_thread_store::PersistContext;
 use codex_tools::DiscoverableTool;
 use codex_tools::ToolName;
 use codex_tools::filter_request_plugin_install_discoverable_tools_for_client;
@@ -175,7 +176,8 @@ pub(crate) async fn run_turn(
     .await
     {
         if matches!(err.details(), CodexErrorDetails::TurnAborted) {
-            run_hooks_and_record_inputs(&sess, &turn_context, &input).await;
+            run_hooks_and_record_inputs(&sess, &turn_context, &input, PersistContext::Standard)
+                .await;
             return Err(err);
         }
         if matches!(err.details(), CodexErrorDetails::ToolCollision(_)) {
@@ -196,7 +198,8 @@ pub(crate) async fn run_turn(
         {
             Ok(requirements) => requirements,
             Err(err) => {
-                run_hooks_and_record_inputs(&sess, &turn_context, &input).await;
+                run_hooks_and_record_inputs(&sess, &turn_context, &input, PersistContext::Standard)
+                    .await;
                 return Err(err.into());
             }
         };
@@ -212,7 +215,8 @@ pub(crate) async fn run_turn(
     {
         Ok(step_context) => step_context,
         Err(err) if matches!(err.details(), CodexErrorDetails::TurnAborted) => {
-            run_hooks_and_record_inputs(&sess, &turn_context, &input).await;
+            run_hooks_and_record_inputs(&sess, &turn_context, &input, PersistContext::Standard)
+                .await;
             return Err(err);
         }
         Err(err) => return Err(err),
@@ -240,7 +244,7 @@ pub(crate) async fn run_turn(
         return Ok(None);
     }
     let mut can_drain_pending_input = input.is_empty();
-    if run_hooks_and_record_inputs(&sess, &turn_context, &input).await {
+    if run_hooks_and_record_inputs(&sess, &turn_context, &input, PersistContext::TurnStart).await {
         return Ok(None);
     }
 
@@ -288,7 +292,14 @@ pub(crate) async fn run_turn(
             Vec::new()
         };
 
-        if run_hooks_and_record_inputs(&sess, &turn_context, &pending_input).await {
+        if run_hooks_and_record_inputs(
+            &sess,
+            &turn_context,
+            &pending_input,
+            PersistContext::Standard,
+        )
+        .await
+        {
             break;
         }
 
@@ -588,6 +599,7 @@ pub(crate) async fn run_hooks_and_record_inputs(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     input: &[TurnInput],
+    persist_context: PersistContext,
 ) -> bool {
     let mut blocked_input = false;
     let mut accepted_user_input = false;
@@ -607,6 +619,7 @@ pub(crate) async fn run_hooks_and_record_inputs(
                 turn_context,
                 input_item.clone(),
                 hook_outcome.additional_contexts,
+                persist_context,
             )
             .await
             .is_err()

@@ -43,6 +43,15 @@ use crate::UpdateThreadMetadataParams;
 /// Future returned by [`ThreadStore`] operations.
 pub type ThreadStoreFuture<'a, T> = Pin<Box<dyn Future<Output = ThreadStoreResult<T>> + Send + 'a>>;
 
+/// Why thread persistence is being requested.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PersistContext {
+    /// Standard persistence makes the thread and all queued items durable and readable.
+    Standard,
+    /// A turn is about to begin sampling after its input has been recorded.
+    TurnStart,
+}
+
 /// Storage-neutral thread persistence boundary.
 pub trait ThreadStore: Any + Send + Sync {
     /// Return this store as [`Any`] for implementation-owned escape hatches.
@@ -69,7 +78,15 @@ pub trait ThreadStore: Any + Send + Sync {
     fn append_items(&self, params: AppendThreadItemsParams) -> ThreadStoreFuture<'_, ()>;
 
     /// Materializes the thread if persistence is lazy, then persists all queued items.
-    fn persist_thread(&self, thread_id: ThreadId) -> ThreadStoreFuture<'_, ()>;
+    ///
+    /// Standard persistence must complete before returning. Turn-start persistence may complete
+    /// in the background when the implementation enqueues it before returning, fences it with
+    /// subsequent flush or shutdown operations, and surfaces failures through those operations.
+    fn persist_thread(
+        &self,
+        thread_id: ThreadId,
+        context: PersistContext,
+    ) -> ThreadStoreFuture<'_, ()>;
 
     /// Flushes all queued items and returns once they are durable/readable.
     fn flush_thread(&self, thread_id: ThreadId) -> ThreadStoreFuture<'_, ()>;

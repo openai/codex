@@ -32,6 +32,7 @@ pub use local::RolloutMigrationReport;
 pub use local::RolloutMigrationStatus;
 pub use queue_store::LocalQueueStore;
 pub use queue_store::QueueStore;
+pub use store::PersistContext;
 pub use store::ThreadStore;
 pub use store::ThreadStoreFuture;
 pub use thread_sections::CreateThreadSectionParams;

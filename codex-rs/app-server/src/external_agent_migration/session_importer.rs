@@ -36,6 +36,7 @@ use codex_rollout::RolloutItem;
 use codex_rollout::is_persisted_rollout_item;
 use codex_thread_store::AppendThreadItemsParams;
 use codex_thread_store::CreateThreadParams;
+use codex_thread_store::PersistContext;
 use codex_thread_store::ThreadMetadataPatch;
 use codex_thread_store::ThreadPersistenceMetadata;
 use codex_thread_store::ThreadStore;
@@ -576,7 +577,7 @@ impl ExternalAgentSessionImporter {
                 )
             })?;
         self.thread_store
-            .persist_thread(thread_id)
+            .persist_thread(thread_id, PersistContext::Standard)
             .await
             .map_err(|err| {
                 SessionImportStepFailure::new(

@@ -151,6 +151,7 @@ use codex_thread_store::CreateThreadParams;
 use codex_thread_store::LiveThread;
 use codex_thread_store::LiveThreadInitGuard;
 use codex_thread_store::LocalThreadStore;
+use codex_thread_store::PersistContext;
 use codex_thread_store::ReadThreadParams;
 use codex_thread_store::ResumeThreadParams;
 use codex_thread_store::ThreadPersistenceMetadata;
@@ -1223,15 +1224,21 @@ impl Session {
         }
     }
 
-    pub(crate) async fn try_ensure_rollout_materialized(&self) -> std::io::Result<()> {
+    pub(crate) async fn try_ensure_rollout_materialized(
+        &self,
+        context: PersistContext,
+    ) -> std::io::Result<()> {
         if let Some(live_thread) = self.live_thread() {
-            live_thread.persist().await.map_err(std::io::Error::other)?;
+            live_thread
+                .persist(context)
+                .await
+                .map_err(std::io::Error::other)?;
         }
         Ok(())
     }
 
-    pub(crate) async fn ensure_rollout_materialized(&self) {
-        if let Err(e) = self.try_ensure_rollout_materialized().await {
+    pub(crate) async fn ensure_rollout_materialized(&self, context: PersistContext) {
+        if let Err(e) = self.try_ensure_rollout_materialized(context).await {
             warn!("failed to materialize thread persistence: {e}");
         }
     }
@@ -1454,7 +1461,8 @@ impl Session {
                 self.persist_rollout_items(&rollout_items).await;
 
                 // Forked threads should remain file-backed immediately after startup.
-                self.ensure_rollout_materialized().await;
+                self.ensure_rollout_materialized(PersistContext::Standard)
+                    .await;
 
                 // Flush after seeding history and any persisted rollout copy.
                 if !is_subagent {
@@ -3989,6 +3997,7 @@ impl Session {
         turn_context: &TurnContext,
         input: &[UserInput],
         client_id: Option<String>,
+        persist_context: PersistContext,
     ) {
         // Persist the user message to history, but emit the turn item from `UserInput` so
         // UI-only `text_elements` are preserved. `ResponseItem::Message` does not carry
@@ -4001,7 +4010,7 @@ impl Session {
         let turn_item = TurnItem::UserMessage(user_message_item);
         self.emit_turn_item_started(turn_context, &turn_item).await;
         self.emit_turn_item_completed(turn_context, turn_item).await;
-        self.ensure_rollout_materialized().await;
+        self.ensure_rollout_materialized(persist_context).await;
     }
 
     pub(crate) async fn notify_stream_error(
@@ -4152,7 +4161,8 @@ impl Session {
                 return None;
             }
         };
-        self.ensure_rollout_materialized().await;
+        self.ensure_rollout_materialized(PersistContext::Standard)
+            .await;
         Some(rollout_path)
     }
 

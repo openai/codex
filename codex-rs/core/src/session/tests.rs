@@ -4512,7 +4512,9 @@ async fn open_thread_persistence(session: &mut Session) -> PathBuf {
 
 async fn attach_thread_persistence(session: &mut Session) -> PathBuf {
     let rollout_path = open_thread_persistence(session).await;
-    session.ensure_rollout_materialized().await;
+    session
+        .ensure_rollout_materialized(PersistContext::Standard)
+        .await;
     session
         .flush_rollout()
         .await
@@ -9655,7 +9657,9 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
         serde_json::to_value(Some(turn_context.to_turn_context_item()))
             .expect("serialize expected context item")
     );
-    session.ensure_rollout_materialized().await;
+    session
+        .ensure_rollout_materialized(PersistContext::Standard)
+        .await;
     session.flush_rollout().await.expect("rollout should flush");
 
     let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
@@ -9698,7 +9702,9 @@ async fn record_context_updates_and_set_reference_context_item_persists_split_fi
         .record_context_updates_and_set_reference_context_item(&step_context)
         .await
         .expect("world state should build");
-    session.ensure_rollout_materialized().await;
+    session
+        .ensure_rollout_materialized(PersistContext::Standard)
+        .await;
     session.flush_rollout().await.expect("rollout should flush");
 
     let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
@@ -9786,7 +9792,9 @@ async fn record_context_updates_and_set_reference_context_item_persists_full_rei
         .record_context_updates_and_set_reference_context_item(&step_context)
         .await
         .expect("world state should build");
-    session.ensure_rollout_materialized().await;
+    session
+        .ensure_rollout_materialized(PersistContext::Standard)
+        .await;
     session.flush_rollout().await.expect("rollout should flush");
 
     let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
@@ -10007,7 +10015,13 @@ async fn failed_user_message_persistence_stops_turn_processing() {
     ];
 
     assert!(
-        super::turn::run_hooks_and_record_inputs(&session, &turn_context, &input).await,
+        super::turn::run_hooks_and_record_inputs(
+            &session,
+            &turn_context,
+            &input,
+            PersistContext::Standard,
+        )
+        .await,
         "a rollout flush failure should stop turn processing"
     );
     assert!(matches!(

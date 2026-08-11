@@ -4,6 +4,8 @@ use codex_history::RolloutItem;
 use codex_history::RolloutLine;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::items::TurnItem;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::EventMsg;
@@ -35,6 +37,63 @@ fn user_input(text: &str) -> Op {
         additional_context: Default::default(),
         thread_settings: Default::default(),
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn default_turn_start_persists_developer_and_user_input_before_model_request() {
+    let (release_response, response_gate) = oneshot::channel();
+    let (server, _completions) = start_streaming_sse_server(vec![vec![StreamingSseChunk {
+        gate: Some(response_gate),
+        body: responses::sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    }]])
+    .await;
+    let test = test_codex()
+        .with_model("gpt-5.4")
+        .with_history_mode(ThreadHistoryMode::Paginated)
+        .build_with_streaming_server(&server)
+        .await
+        .expect("build default thread-store session");
+    test.codex
+        .inject_response_items(vec![ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "turn-start developer instructions".to_string(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        }])
+        .await
+        .expect("inject developer instructions");
+    test.codex
+        .submit(user_input("turn-start user input"))
+        .await
+        .expect("submit user input");
+
+    timeout(
+        Duration::from_secs(5),
+        server.wait_for_request_count(/*count*/ 1),
+    )
+    .await
+    .expect("turn should reach the model request");
+    let rollout_path = test.codex.rollout_path().expect("local rollout path");
+    let rollout = tokio::fs::read_to_string(rollout_path)
+        .await
+        .expect("read rollout while the model response is blocked");
+    assert!(rollout.contains("turn-start developer instructions"));
+    assert!(rollout.contains("turn-start user input"));
+
+    release_response.send(()).expect("release model response");
+    loop {
+        let event = timeout(Duration::from_secs(5), test.codex.next_event())
+            .await
+            .expect("turn should finish")
+            .expect("event stream should remain available");
+        if matches!(event.msg, EventMsg::TurnComplete(_)) {
+            break;
+        }
+    }
+    server.shutdown().await;
 }
 
 /// Concurrent submissions must start exactly one turn, steer the other message, and persist both client IDs.
