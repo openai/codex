@@ -1,5 +1,8 @@
+# Every rule must include @openai/codex-core-agent-team so a core team member
+# can approve any change without requiring approval from another owner.
+
 # Require approval from a Codex engineer for all internal changes.
-* @openai/codex-eng
+* @openai/codex-eng @openai/codex-core-agent-team
 
 # Core crate ownership.
 /codex-rs/arg0/ @openai/codex-core-agent-team
@@ -16,10 +19,10 @@
 /codex-rs/utils/path-uri/ @openai/codex-core-agent-team
 
 # External agent migration ownership.
-/codex-rs/app-server/src/external_agent_migration/ @stefanstokic-oai @kevinv-openai @jinma-oai @charlesgong-openai
-/codex-rs/app-server/tests/suite/v2/external_agent_*.rs @stefanstokic-oai @kevinv-openai @jinma-oai @charlesgong-openai
-/codex-rs/external-agent-migration/ @stefanstokic-oai @kevinv-openai @jinma-oai @charlesgong-openai
-/codex-rs/tui/src/external_agent_config_migration/ @stefanstokic-oai @kevinv-openai @jinma-oai @charlesgong-openai
+/codex-rs/app-server/src/external_agent_migration/ @stefanstokic-oai @kevinv-openai @jinma-oai @charlesgong-openai @openai/codex-core-agent-team
+/codex-rs/app-server/tests/suite/v2/external_agent_*.rs @stefanstokic-oai @kevinv-openai @jinma-oai @charlesgong-openai @openai/codex-core-agent-team
+/codex-rs/external-agent-migration/ @stefanstokic-oai @kevinv-openai @jinma-oai @charlesgong-openai @openai/codex-core-agent-team
+/codex-rs/tui/src/external_agent_config_migration/ @stefanstokic-oai @kevinv-openai @jinma-oai @charlesgong-openai @openai/codex-core-agent-team
 
 # Keep macOS AKV signing changes reviewed by Codex maintainers.
 /.github/actions/setup-akv-pkcs11-codesigning/ @openai/codex-core-agent-team
