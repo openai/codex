@@ -629,7 +629,6 @@ pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
     let history = sess.clone_history().await;
     let turn_count = history
         .raw_items()
-        .iter()
         .filter(|item| is_user_turn_boundary(item))
         .count();
     sess.services.session_telemetry.counter(

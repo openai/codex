@@ -656,6 +656,10 @@ fn test_model_client_session() -> crate::client::ModelClientSession {
     .new_session()
 }
 
+pub(super) fn raw_history_items(history: &ContextManager) -> Vec<ResponseItem> {
+    history.raw_items().cloned().collect()
+}
+
 fn developer_input_texts(items: &[ResponseItem]) -> Vec<&str> {
     items
         .iter()
@@ -2058,7 +2062,7 @@ async fn record_initial_history_reconstructs_resumed_transcript() {
         .await;
 
     let history = session.state.lock().await.clone_history();
-    assert_eq!(expected, history.raw_items());
+    assert_eq!(expected, raw_history_items(&history));
 }
 
 #[tokio::test]
@@ -2078,8 +2082,8 @@ async fn record_conversation_items_stamps_missing_turn_id_and_preserves_existing
     expected_fresh_item.set_turn_id_if_missing(&turn_context.sub_id);
     let expected_items = vec![expected_fresh_item, existing_item];
     assert_eq!(
-        session.clone_history().await.raw_items(),
-        expected_items.as_slice()
+        raw_history_items(&session.clone_history().await),
+        expected_items
     );
 }
 
@@ -2181,7 +2185,7 @@ async fn record_inter_agent_communication_sets_turn_id_in_rollout_and_resume() {
         .await;
 
     assert_eq!(
-        strip_response_item_ids(session.clone_history().await.raw_items()),
+        strip_response_item_ids(&raw_history_items(&session.clone_history().await)),
         strip_response_item_ids(std::slice::from_ref(&expected_item))
     );
 
@@ -2221,7 +2225,7 @@ async fn record_inter_agent_communication_sets_turn_id_in_rollout_and_resume() {
         .record_initial_history(InitialHistory::Resumed(resumed))
         .await;
     assert_eq!(
-        strip_response_item_ids(resumed_session.clone_history().await.raw_items()),
+        strip_response_item_ids(&raw_history_items(&resumed_session.clone_history().await)),
         strip_response_item_ids(std::slice::from_ref(&expected_item))
     );
 }
@@ -2249,7 +2253,8 @@ async fn record_inter_agent_communication_preserves_item_id_in_rollout_and_resum
         .await;
 
     let live_history = session.clone_history().await;
-    let [live_item] = live_history.raw_items() else {
+    let live_items = raw_history_items(&live_history);
+    let [live_item] = live_items.as_slice() else {
         panic!("expected exactly one live history item");
     };
     let live_item_id = live_item
@@ -2285,7 +2290,8 @@ async fn record_inter_agent_communication_preserves_item_id_in_rollout_and_resum
         .record_initial_history(InitialHistory::Resumed(resumed))
         .await;
     let resumed_history = resumed_session.clone_history().await;
-    let [resumed_item] = resumed_history.raw_items() else {
+    let resumed_items = raw_history_items(&resumed_history);
+    let [resumed_item] = resumed_items.as_slice() else {
         panic!("expected exactly one resumed history item");
     };
     assert_eq!(
@@ -2329,7 +2335,10 @@ async fn prepares_image_failures_before_history_insertion() {
         .await;
 
     let history = session.state.lock().await.clone_history();
-    let id = history.raw_items()[0]
+    let id = history
+        .raw_items()
+        .next()
+        .expect("history should contain one item")
         .id()
         .expect("history item should have an ID");
     let uuid = id
@@ -2357,7 +2366,10 @@ async fn prepares_image_failures_before_history_insertion() {
         },
         internal_chat_message_metadata_passthrough: None,
     }];
-    assert_eq!(strip_metadata_from_items(history.raw_items()), expected);
+    assert_eq!(
+        strip_metadata_from_items(&raw_history_items(&history)),
+        expected
+    );
 }
 
 #[tokio::test]
@@ -2392,8 +2404,8 @@ async fn prepares_resumed_history_before_installing_it() {
         .await;
 
     assert_eq!(
-        session.state.lock().await.clone_history().raw_items(),
-        &[ResponseItem::Message {
+        raw_history_items(&session.state.lock().await.clone_history()),
+        vec![ResponseItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![
@@ -2487,7 +2499,7 @@ async fn record_initial_history_new_defers_initial_context_until_first_turn() {
     session.record_initial_history(InitialHistory::New).await;
 
     let history = session.clone_history().await;
-    assert_eq!(history.raw_items().to_vec(), Vec::<ResponseItem>::new());
+    assert_eq!(raw_history_items(&history), Vec::<ResponseItem>::new());
     assert!(session.reference_context_item().await.is_none());
     assert_eq!(session.previous_turn_settings().await, None);
 }
@@ -2522,7 +2534,7 @@ async fn resumed_history_injects_initial_context_on_first_context_update_only() 
         .await;
 
     let history_before_seed = session.state.lock().await.clone_history();
-    assert_eq!(expected, history_before_seed.raw_items());
+    assert_eq!(expected, raw_history_items(&history_before_seed));
 
     let step_context = StepContext::for_test(Arc::clone(&turn_context));
     session
@@ -2534,7 +2546,7 @@ async fn resumed_history_injects_initial_context_on_first_context_update_only() 
     let history_after_seed = session.clone_history().await;
     assert_eq!(
         strip_response_item_ids(&expected),
-        strip_response_item_ids(history_after_seed.raw_items())
+        strip_response_item_ids(&raw_history_items(&history_after_seed))
     );
 
     session
@@ -2543,8 +2555,8 @@ async fn resumed_history_injects_initial_context_on_first_context_update_only() 
         .expect("world state should build");
     let history_after_second_seed = session.clone_history().await;
     assert_eq!(
-        history_after_seed.raw_items(),
-        history_after_second_seed.raw_items()
+        raw_history_items(&history_after_seed),
+        raw_history_items(&history_after_second_seed)
     );
 }
 
@@ -3152,7 +3164,7 @@ async fn record_initial_history_reconstructs_forked_transcript() {
     let history = session.state.lock().await.clone_history();
     assert_eq!(
         strip_response_item_ids(&expected),
-        strip_response_item_ids(history.raw_items())
+        strip_response_item_ids(&raw_history_items(&history))
     );
 }
 
@@ -3182,13 +3194,8 @@ async fn start_new_context_window_assigns_and_persists_item_ids() {
         .await;
 
     let live_history = session.clone_history().await;
-    assert!(!live_history.raw_items().is_empty());
-    assert!(
-        live_history
-            .raw_items()
-            .iter()
-            .all(|item| item.id().is_some())
-    );
+    assert!(live_history.raw_items().next().is_some());
+    assert!(live_history.raw_items().all(|item| item.id().is_some()));
 
     session.flush_rollout().await.expect("rollout should flush");
     let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
@@ -3208,8 +3215,8 @@ async fn start_new_context_window_assigns_and_persists_item_ids() {
         | RolloutItem::EventMsg(_) => None,
     });
     assert_eq!(
-        persisted_replacement_history.map(Vec::as_slice),
-        Some(live_history.raw_items())
+        persisted_replacement_history.cloned(),
+        Some(raw_history_items(&live_history))
     );
 }
 
@@ -3236,7 +3243,8 @@ async fn record_initial_history_assigns_and_persists_id_for_forked_response_item
         .await;
 
     let live_history = session.clone_history().await;
-    let [live_item] = live_history.raw_items() else {
+    let live_items = raw_history_items(&live_history);
+    let [live_item] = live_items.as_slice() else {
         panic!("expected one forked response item");
     };
     let live_item_id = live_item
@@ -3245,7 +3253,7 @@ async fn record_initial_history_assigns_and_persists_id_for_forked_response_item
         .to_string();
     assert!(live_item_id.starts_with("msg_"));
     expected_item.set_id(live_item.id().cloned());
-    assert_eq!(live_history.raw_items(), &[expected_item]);
+    assert_eq!(raw_history_items(&live_history), vec![expected_item]);
 
     session.flush_rollout().await.expect("rollout should flush");
     let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
@@ -3490,7 +3498,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
             realtime_active: Some(turn_context.realtime_active),
         })
     );
-    assert_eq!(history.raw_items(), &[]);
+    assert_eq!(raw_history_items(&history), Vec::<ResponseItem>::new());
     assert_eq!(
         serde_json::to_value(session.reference_context_item().await)
             .expect("serialize fork reference context item"),
@@ -3548,7 +3556,7 @@ async fn thread_rollback_drops_last_turn_from_history() {
     expected.extend(turn_1);
 
     let history = sess.clone_history().await;
-    assert_eq!(expected, history.raw_items());
+    assert_eq!(expected, raw_history_items(&history));
     assert_eq!(sess.previous_turn_settings().await, None);
     assert!(sess.reference_context_item().await.is_none());
 
@@ -3594,7 +3602,7 @@ async fn thread_rollback_clears_history_when_num_turns_exceeds_existing_turns() 
     assert_eq!(rollback_event.num_turns, 99);
 
     let history = sess.clone_history().await;
-    assert_eq!(initial_context, history.raw_items());
+    assert_eq!(initial_context, raw_history_items(&history));
 }
 
 #[tokio::test]
@@ -3618,8 +3626,8 @@ async fn thread_rollback_fails_without_persisted_thread_history() {
         Some(CodexErrorInfo::ThreadRollbackFailed)
     );
     assert_eq!(
-        sess.clone_history().await.raw_items(),
-        history_before_rollback.raw_items()
+        raw_history_items(&sess.clone_history().await),
+        raw_history_items(&history_before_rollback)
     );
 }
 
@@ -3730,7 +3738,7 @@ async fn thread_rollback_recomputes_previous_turn_settings_and_reference_context
     assert_eq!(rollback_event.num_turns, 1);
 
     assert_eq!(
-        sess.clone_history().await.raw_items(),
+        raw_history_items(&sess.clone_history().await),
         vec![turn_one_user, turn_one_assistant]
     );
     assert_eq!(
@@ -3885,7 +3893,10 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
     let rollback_event = wait_for_thread_rolled_back(&rx).await;
     assert_eq!(rollback_event.num_turns, 1);
 
-    assert_eq!(sess.clone_history().await.raw_items(), compacted_history);
+    assert_eq!(
+        raw_history_items(&sess.clone_history().await),
+        compacted_history
+    );
     assert!(sess.reference_context_item().await.is_none());
     assert_eq!(
         sess.state.lock().await.auto_compact_window_ids(),
@@ -4006,7 +4017,7 @@ async fn thread_rollback_persists_marker_and_replays_cumulatively() {
     assert_eq!(second_rollback.num_turns, 1);
 
     assert_eq!(
-        sess.clone_history().await.raw_items(),
+        raw_history_items(&sess.clone_history().await),
         vec![
             user_message("turn 1 user"),
             assistant_message("turn 1 assistant")
@@ -4046,7 +4057,10 @@ async fn thread_rollback_fails_when_turn_in_progress() {
     );
 
     let history = sess.clone_history().await;
-    assert_eq!(history_before_rollback.raw_items(), history.raw_items());
+    assert_eq!(
+        raw_history_items(&history_before_rollback),
+        raw_history_items(&history)
+    );
 }
 
 #[tokio::test]
@@ -4068,7 +4082,10 @@ async fn thread_rollback_fails_when_num_turns_is_zero() {
     );
 
     let history = sess.clone_history().await;
-    assert_eq!(history_before_rollback.raw_items(), history.raw_items());
+    assert_eq!(
+        raw_history_items(&history_before_rollback),
+        raw_history_items(&history)
+    );
 }
 
 #[tokio::test]
@@ -9051,7 +9068,7 @@ async fn record_context_update_items(
         .await
         .expect("world state should build");
     let history = session.clone_history().await;
-    history.raw_items()[previous_len..].to_vec()
+    history.raw_items().skip(previous_len).cloned().collect()
 }
 
 #[tokio::test]
@@ -9279,7 +9296,8 @@ async fn record_context_updates_includes_turn_context_fragments_on_steady_state_
         .expect("world state should build");
 
     let history = session.clone_history().await;
-    let developer_messages = developer_message_texts(history.raw_items());
+    let history_items = raw_history_items(&history);
+    let developer_messages = developer_message_texts(&history_items);
     assert!(
         developer_messages
             .iter()
@@ -9543,7 +9561,7 @@ async fn record_context_updates_and_set_reference_context_item_injects_full_cont
     let history = session.clone_history().await;
     let initial_context = build_initial_context(&session, &turn_context).await;
     assert_eq!(
-        strip_response_item_ids(history.raw_items()),
+        strip_response_item_ids(&raw_history_items(&history)),
         strip_response_item_ids(&initial_context)
     );
 
@@ -9598,7 +9616,7 @@ async fn record_context_updates_and_set_reference_context_item_reinjects_full_co
     let initial_context = build_initial_context(&session, &turn_context).await;
     expected_history.extend(initial_context);
     assert_eq!(
-        strip_response_item_ids(history.raw_items()),
+        strip_response_item_ids(&raw_history_items(&history)),
         strip_response_item_ids(&expected_history)
     );
 }
@@ -9640,7 +9658,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
         .expect("world state should build");
 
     assert_eq!(
-        session.clone_history().await.raw_items().to_vec(),
+        raw_history_items(&session.clone_history().await),
         retained_world_state
     );
     assert_eq!(
@@ -10031,7 +10049,7 @@ async fn failed_user_message_persistence_stops_turn_processing() {
         item.set_turn_id_if_missing(&turn_context.sub_id);
     }
     let history = session.clone_history().await;
-    let history_items = strip_response_item_ids(history.raw_items());
+    let history_items = strip_response_item_ids(&raw_history_items(&history));
     assert!(
         history_items.ends_with(&strip_response_item_ids(&expected_suffix)),
         "later steer, response, and mailbox inputs should survive the failed queued message"
@@ -10478,7 +10496,7 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
         internal_chat_message_metadata_passthrough: None,
     };
     assert!(
-        strip_response_item_ids(&strip_metadata_from_items(history.raw_items()))
+        strip_response_item_ids(&strip_metadata_from_items(&raw_history_items(&history)))
             .contains(&expected),
         "expected pending input to be persisted into history on turn completion"
     );
@@ -11315,7 +11333,7 @@ async fn abort_review_task_emits_exited_then_aborted_and_records_history() {
     let history = sess.clone_history().await;
     // Verify the `<turn_aborted>` marker is still recorded in history for the model.
     assert!(
-        history.raw_items().iter().any(|item| {
+        history.raw_items().any(|item| {
             let ResponseItem::Message { role, content, .. } = item else {
                 return false;
             };

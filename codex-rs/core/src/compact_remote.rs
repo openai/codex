@@ -27,6 +27,7 @@ use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
 use codex_analytics::CompactionTrigger;
+use codex_history::ResponseItemEnvelope;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::ContextCompactionItem;
@@ -379,15 +380,15 @@ pub(crate) fn trim_function_call_history_to_fit_context_window(
     // saturation in the normal history estimator.
     let base_tokens =
         i128::try_from(approx_token_count(&base_instructions.text)).unwrap_or(i128::MAX);
-    let original_items = history.raw_items();
-    let mut estimated_tokens = history_item_groups(original_items)
+    let original_items = history.annotated_items();
+    let mut estimated_tokens = history_item_groups(original_items.iter().map(|item| &item.item))
         .map(|group| group.estimated_token_count())
         .fold(base_tokens, i128::saturating_add);
     let initial_estimated_tokens = i64::try_from(estimated_tokens).unwrap_or(i64::MAX);
     let mut rewritten_items = Vec::new();
     let mut consumed_items = 0;
 
-    for group in history_item_groups(original_items)
+    for group in history_item_groups(original_items.iter().map(|item| &item.item))
         .collect::<Vec<_>>()
         .into_iter()
         .rev()
@@ -409,8 +410,13 @@ pub(crate) fn trim_function_call_history_to_fit_context_window(
     if rewritten_outputs > 0 {
         let retained_len = original_items.len() - consumed_items;
         let mut items = original_items[..retained_len].to_vec();
-        items.extend(rewritten_items.into_iter().rev());
-        history.replace(items);
+        items.extend(
+            rewritten_items
+                .into_iter()
+                .rev()
+                .map(ResponseItemEnvelope::new),
+        );
+        history.replace_annotated(items);
     }
 
     let final_estimated_tokens = i64::try_from(estimated_tokens).unwrap_or(i64::MAX);

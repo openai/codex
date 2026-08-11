@@ -1,5 +1,8 @@
 //! Model-history and persisted-rollout domain types.
 
+use std::borrow::Borrow;
+use std::ops::Deref;
+use std::ops::DerefMut;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -23,6 +26,42 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
+
+/// A history-owned, in-memory wrapper around a raw response item.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResponseItemEnvelope {
+    pub item: ResponseItem,
+}
+
+impl ResponseItemEnvelope {
+    pub fn new(item: ResponseItem) -> Self {
+        Self { item }
+    }
+
+    pub fn into_item(self) -> ResponseItem {
+        self.item
+    }
+}
+
+impl Deref for ResponseItemEnvelope {
+    type Target = ResponseItem;
+
+    fn deref(&self) -> &Self::Target {
+        &self.item
+    }
+}
+
+impl DerefMut for ResponseItemEnvelope {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.item
+    }
+}
+
+impl Borrow<ResponseItem> for ResponseItemEnvelope {
+    fn borrow(&self) -> &ResponseItem {
+        &self.item
+    }
+}
 
 /// Persisted rollout item used by core history and rollout storage.
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]

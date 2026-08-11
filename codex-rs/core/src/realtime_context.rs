@@ -209,7 +209,9 @@ async fn build_recent_work_section(
     (!sections.is_empty()).then(|| sections.join("\n\n"))
 }
 
-fn build_current_thread_section(items: &[ResponseItem]) -> Option<String> {
+fn build_current_thread_section<'a>(
+    items: impl IntoIterator<Item = &'a ResponseItem>,
+) -> Option<String> {
     let mut turns = Vec::new();
     let mut current_user = Vec::new();
     let mut current_assistant = Vec::new();

@@ -5,6 +5,36 @@ use serde_json::json;
 use super::*;
 
 #[test]
+fn response_item_envelope_accessors_preserve_item() {
+    let expected_item = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "hello".to_string(),
+        }],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let mut envelope = ResponseItemEnvelope::new(expected_item.clone());
+
+    assert_eq!(&*envelope, &expected_item);
+    let borrowed: &ResponseItem = envelope.borrow();
+    assert_eq!(borrowed, &expected_item);
+    let replacement_item = ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: "goodbye".to_string(),
+        }],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
+    *envelope = replacement_item.clone();
+
+    assert_eq!(envelope.into_item(), replacement_item);
+}
+
+#[test]
 fn response_item_rollout_line_preserves_shape() -> Result<()> {
     let legacy_line = json!({
         "timestamp": "2025-01-03T12:00:00.000Z",

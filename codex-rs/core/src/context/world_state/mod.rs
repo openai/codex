@@ -361,20 +361,21 @@ impl WorldState {
     }
 
     /// Falls back to retained model history when no exact persisted snapshot is available.
-    pub(crate) fn render_history_diff(
+    pub(crate) fn render_history_diff<'a>(
         &self,
         previous: Option<&WorldStateSnapshot>,
-        items: &[ResponseItem],
+        items: impl IntoIterator<Item = &'a ResponseItem> + Clone,
     ) -> Vec<Box<dyn ContextualUserFragment>> {
         self.render_with(|id, section| {
             if let Some(previous) = previous.and_then(|previous| previous.sections.get(id)) {
-                if section.has_retained_fragment_matcher() && !has_retained_fragment(items, section)
+                if section.has_retained_fragment_matcher()
+                    && !has_retained_fragment(items.clone(), section)
                 {
                     PreviousSectionState::Absent
                 } else {
                     PreviousSectionState::Known(previous)
                 }
-            } else if has_legacy_fragment(items, section) {
+            } else if has_legacy_fragment(items.clone(), section) {
                 PreviousSectionState::Unknown
             } else {
                 PreviousSectionState::Absent
@@ -393,8 +394,11 @@ impl WorldState {
     }
 }
 
-fn has_retained_fragment(items: &[ResponseItem], section: &dyn ErasedWorldStateSection) -> bool {
-    items.iter().any(|item| {
+fn has_retained_fragment<'a>(
+    items: impl IntoIterator<Item = &'a ResponseItem>,
+    section: &dyn ErasedWorldStateSection,
+) -> bool {
+    items.into_iter().any(|item| {
         matches!(
             item,
             ResponseItem::Message { role, content, .. }
@@ -409,8 +413,11 @@ fn has_retained_fragment(items: &[ResponseItem], section: &dyn ErasedWorldStateS
     })
 }
 
-fn has_legacy_fragment(items: &[ResponseItem], section: &dyn ErasedWorldStateSection) -> bool {
-    items.iter().any(|item| {
+fn has_legacy_fragment<'a>(
+    items: impl IntoIterator<Item = &'a ResponseItem>,
+    section: &dyn ErasedWorldStateSection,
+) -> bool {
+    items.into_iter().any(|item| {
         matches!(
             item,
             ResponseItem::Message { role, content, .. }

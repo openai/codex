@@ -2,6 +2,7 @@ use super::*;
 
 use super::tests::build_world_state_from_turn_context;
 use super::tests::make_session_and_context;
+use super::tests::raw_history_items;
 use codex_history::CompactedItem;
 use codex_history::InitialHistory;
 use codex_history::ResumedHistory;
@@ -129,8 +130,8 @@ async fn record_initial_history_reconstructs_typed_inter_agent_message() {
         .await;
 
     assert_eq!(
-        session.state.lock().await.clone_history().raw_items(),
-        &[communication.to_model_input_item()]
+        raw_history_items(&session.state.lock().await.clone_history()),
+        vec![communication.to_model_input_item()]
     );
 }
 
@@ -169,8 +170,8 @@ async fn record_initial_history_restores_world_state_baseline() {
         .expect("world state should build");
 
     assert_eq!(
-        session.clone_history().await.raw_items(),
-        expected_history.as_slice(),
+        raw_history_items(&session.clone_history().await),
+        expected_history,
     );
 }
 

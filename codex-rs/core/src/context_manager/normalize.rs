@@ -1,3 +1,4 @@
+use codex_history::ResponseItemEnvelope;
 use codex_protocol::ResponseItemId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -17,12 +18,12 @@ const AUDIO_CONTENT_OMITTED_PLACEHOLDER: &str =
 // Changing this value would change model-visible IDs and invalidate prompt caches.
 const SYNTHETIC_OUTPUT_ID_NAMESPACE: Uuid = Uuid::from_u128(0x90d38d3e_6a5b_4d52_bfe2_2f1e634bfac4);
 
-pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
+pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItemEnvelope>) {
     let mut function_output_ids = HashSet::new();
     let mut tool_search_output_ids = HashSet::new();
     let mut custom_tool_output_ids = HashSet::new();
-    for item in items.iter() {
-        match item {
+    for envelope in items.iter() {
+        match &envelope.item {
             ResponseItem::FunctionCallOutput { call_id, .. } => {
                 function_output_ids.insert(call_id.as_str());
             }
@@ -42,22 +43,22 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
     // Collect synthetic outputs to insert immediately after their calls.
     // Store the insertion position (index of call) alongside the item so
     // we can insert in reverse order and avoid index shifting.
-    let mut missing_outputs_to_insert: Vec<(usize, ResponseItem)> = Vec::new();
+    let mut missing_outputs_to_insert: Vec<(usize, ResponseItemEnvelope)> = Vec::new();
 
-    for (idx, item) in items.iter().enumerate() {
-        match item {
+    for (idx, envelope) in items.iter().enumerate() {
+        match &envelope.item {
             ResponseItem::FunctionCall { id, call_id, .. }
                 if !function_output_ids.contains(call_id.as_str()) =>
             {
                 info!("Function call output is missing for call id: {call_id}");
                 missing_outputs_to_insert.push((
                     idx,
-                    ResponseItem::FunctionCallOutput {
+                    ResponseItemEnvelope::new(ResponseItem::FunctionCallOutput {
                         id: synthetic_output_id("fco", id.as_deref()),
                         call_id: call_id.clone(),
                         output: FunctionCallOutputPayload::from_text("aborted".to_string()),
                         internal_chat_message_metadata_passthrough: None,
-                    },
+                    }),
                 ));
             }
             ResponseItem::ToolSearchCall {
@@ -68,14 +69,14 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
                 info!("Tool search output is missing for call id: {call_id}");
                 missing_outputs_to_insert.push((
                     idx,
-                    ResponseItem::ToolSearchOutput {
+                    ResponseItemEnvelope::new(ResponseItem::ToolSearchOutput {
                         id: synthetic_output_id("tso", id.as_deref()),
                         call_id: Some(call_id.clone()),
                         status: "completed".to_string(),
                         execution: "client".to_string(),
                         tools: Vec::new(),
                         internal_chat_message_metadata_passthrough: None,
-                    },
+                    }),
                 ));
             }
             ResponseItem::CustomToolCall { id, call_id, .. }
@@ -86,13 +87,13 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
                 ));
                 missing_outputs_to_insert.push((
                     idx,
-                    ResponseItem::CustomToolCallOutput {
+                    ResponseItemEnvelope::new(ResponseItem::CustomToolCallOutput {
                         id: synthetic_output_id("ctco", id.as_deref()),
                         call_id: call_id.clone(),
                         name: None,
                         output: FunctionCallOutputPayload::from_text("aborted".to_string()),
                         internal_chat_message_metadata_passthrough: None,
-                    },
+                    }),
                 ));
             }
             // LocalShellCall is represented in upstream streams by a FunctionCallOutput
@@ -106,12 +107,12 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
                 ));
                 missing_outputs_to_insert.push((
                     idx,
-                    ResponseItem::FunctionCallOutput {
+                    ResponseItemEnvelope::new(ResponseItem::FunctionCallOutput {
                         id: synthetic_output_id("fco", id.as_deref()),
                         call_id: call_id.clone(),
                         output: FunctionCallOutputPayload::from_text("aborted".to_string()),
                         internal_chat_message_metadata_passthrough: None,
-                    },
+                    }),
                 ));
             }
             _ => {}
@@ -144,10 +145,10 @@ fn synthetic_output_id(prefix: &str, item_id: Option<&str>) -> Option<ResponseIt
     ))
 }
 
-pub(crate) fn remove_orphan_outputs(items: &mut Vec<ResponseItem>) {
+pub(crate) fn remove_orphan_outputs(items: &mut Vec<ResponseItemEnvelope>) {
     let function_call_ids: HashSet<String> = items
         .iter()
-        .filter_map(|i| match i {
+        .filter_map(|envelope| match &envelope.item {
             ResponseItem::FunctionCall { call_id, .. } => Some(call_id.clone()),
             _ => None,
         })
@@ -155,7 +156,7 @@ pub(crate) fn remove_orphan_outputs(items: &mut Vec<ResponseItem>) {
 
     let tool_search_call_ids: HashSet<String> = items
         .iter()
-        .filter_map(|i| match i {
+        .filter_map(|envelope| match &envelope.item {
             ResponseItem::ToolSearchCall {
                 call_id: Some(call_id),
                 ..
@@ -166,7 +167,7 @@ pub(crate) fn remove_orphan_outputs(items: &mut Vec<ResponseItem>) {
 
     let local_shell_call_ids: HashSet<String> = items
         .iter()
-        .filter_map(|i| match i {
+        .filter_map(|envelope| match &envelope.item {
             ResponseItem::LocalShellCall {
                 call_id: Some(call_id),
                 ..
@@ -177,13 +178,13 @@ pub(crate) fn remove_orphan_outputs(items: &mut Vec<ResponseItem>) {
 
     let custom_tool_call_ids: HashSet<String> = items
         .iter()
-        .filter_map(|i| match i {
+        .filter_map(|envelope| match &envelope.item {
             ResponseItem::CustomToolCall { call_id, .. } => Some(call_id.clone()),
             _ => None,
         })
         .collect();
 
-    items.retain(|item| match item {
+    items.retain(|envelope| match &envelope.item {
         ResponseItem::FunctionCallOutput { call_id, .. } => {
             let has_match =
                 function_call_ids.contains(call_id) || local_shell_call_ids.contains(call_id);
@@ -219,7 +220,7 @@ pub(crate) fn remove_orphan_outputs(items: &mut Vec<ResponseItem>) {
     });
 }
 
-pub(crate) fn remove_corresponding_for(items: &mut Vec<ResponseItem>, item: &ResponseItem) {
+pub(crate) fn remove_corresponding_for(items: &mut Vec<ResponseItemEnvelope>, item: &ResponseItem) {
     match item {
         ResponseItem::FunctionCall { call_id, .. } => {
             remove_first_matching(items, |i| {
@@ -232,12 +233,12 @@ pub(crate) fn remove_corresponding_for(items: &mut Vec<ResponseItem>, item: &Res
             });
         }
         ResponseItem::FunctionCallOutput { call_id, .. } => {
-            if let Some(pos) = items.iter().position(|i| {
-                matches!(i, ResponseItem::FunctionCall { call_id: existing, .. } if existing == call_id)
+            if let Some(pos) = items.iter().position(|envelope| {
+                matches!(&envelope.item, ResponseItem::FunctionCall { call_id: existing, .. } if existing == call_id)
             }) {
                 items.remove(pos);
-            } else if let Some(pos) = items.iter().position(|i| {
-                matches!(i, ResponseItem::LocalShellCall { call_id: Some(existing), .. } if existing == call_id)
+            } else if let Some(pos) = items.iter().position(|envelope| {
+                matches!(&envelope.item, ResponseItem::LocalShellCall { call_id: Some(existing), .. } if existing == call_id)
             }) {
                 items.remove(pos);
             }
@@ -306,11 +307,11 @@ pub(crate) fn remove_corresponding_for(items: &mut Vec<ResponseItem>, item: &Res
     }
 }
 
-fn remove_first_matching<F>(items: &mut Vec<ResponseItem>, predicate: F)
+fn remove_first_matching<F>(items: &mut Vec<ResponseItemEnvelope>, predicate: F)
 where
     F: Fn(&ResponseItem) -> bool,
 {
-    if let Some(pos) = items.iter().position(predicate) {
+    if let Some(pos) = items.iter().position(|envelope| predicate(&envelope.item)) {
         items.remove(pos);
     }
 }
@@ -319,15 +320,15 @@ where
 /// When `input_modalities` contains `InputModality::Image`, no stripping is performed.
 pub(crate) fn strip_images_when_unsupported(
     input_modalities: &[InputModality],
-    items: &mut [ResponseItem],
+    items: &mut [ResponseItemEnvelope],
 ) {
     let supports_images = input_modalities.contains(&InputModality::Image);
     if supports_images {
         return;
     }
 
-    for item in items.iter_mut() {
-        match item {
+    for envelope in items.iter_mut() {
+        match &mut envelope.item {
             ResponseItem::Message { content, .. } => {
                 let mut normalized_content = Vec::with_capacity(content.len());
                 for content_item in content.iter() {
@@ -373,14 +374,14 @@ pub(crate) fn strip_images_when_unsupported(
 /// When `input_modalities` contains `InputModality::Audio`, no stripping is performed.
 pub(crate) fn strip_audio_when_unsupported(
     input_modalities: &[InputModality],
-    items: &mut [ResponseItem],
+    items: &mut [ResponseItemEnvelope],
 ) {
     if input_modalities.contains(&InputModality::Audio) {
         return;
     }
 
-    for item in items.iter_mut() {
-        match item {
+    for envelope in items.iter_mut() {
+        match &mut envelope.item {
             ResponseItem::Message { content, .. } => {
                 for content_item in content.iter_mut() {
                     if matches!(content_item, ContentItem::InputAudio { .. }) {

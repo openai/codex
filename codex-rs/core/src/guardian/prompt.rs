@@ -436,8 +436,8 @@ fn render_guardian_transcript_entries_with_offset(
 /// Keep both tool calls and tool results here. The reviewer often needs the
 /// agent's exact queried path / arguments as well as the returned evidence to
 /// decide whether the pending approval is justified.
-pub(crate) fn collect_guardian_transcript_entries(
-    items: &[ResponseItem],
+pub(crate) fn collect_guardian_transcript_entries<'a>(
+    items: impl IntoIterator<Item = &'a ResponseItem>,
 ) -> Vec<GuardianTranscriptEntry> {
     let mut entries = Vec::new();
     let mut tool_names_by_call_id = HashMap::new();

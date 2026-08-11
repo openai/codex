@@ -65,7 +65,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
 
     let trace_input_history = compaction_trace
         .is_enabled()
-        .then(|| history.raw_items().to_vec());
+        .then(|| history.raw_items().cloned().collect());
     let mut input = history.for_prompt(&turn_context.model_info.input_modalities);
     let tool_router = &step_context.tool_router;
     input.push(ResponseItem::CompactionTrigger {});
