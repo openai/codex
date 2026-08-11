@@ -9,6 +9,7 @@ use codex_config::ConfigRequirementsToml;
 use codex_core::StartThreadOptions;
 use codex_core::config::Config;
 use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ExtensionWarning;
@@ -51,6 +52,8 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_remote;
+use core_test_support::skip_if_target_windows;
 use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_mcp_server;
@@ -1253,6 +1256,106 @@ async fn production_turn_aliases_executor_skill_roots() -> Result<()> {
         !executor_catalog.contains("- Root aliases: Expand short locators"),
         "Sol should not include optional resource-alias instructions: {executor_catalog}"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn executor_skill_invocation_is_environment_scoped_and_deduplicated() -> Result<()> {
+    skip_if_target_windows!(Ok(()), "executes a POSIX cat command");
+    skip_if_remote!(Ok(()), "executor fixture uses a host-local skill path");
+    skip_if_no_network!(Ok(()));
+
+    const SELECTED_RESOURCE: &str = "skill://selected-root/demo/SKILL.md";
+
+    let server = responses::start_mock_server().await;
+    let codex_home = Arc::new(TempDir::new()?);
+    let skill_path = codex_home.path().join("executor-skill/SKILL.md");
+    std::fs::create_dir_all(
+        skill_path
+            .parent()
+            .expect("skill path should have a parent"),
+    )?;
+    std::fs::write(&skill_path, "executor skill contents\n")?;
+    let skill_uri = PathUri::from_host_native_path(&skill_path)?;
+    let catalog = SkillCatalog {
+        entries: vec![
+            SkillCatalogEntry::new(
+                SkillPackageId("skill://other-root/demo".to_string()),
+                SkillAuthority::new(SkillSourceKind::Executor, "other-root"),
+                "other-environment-skill",
+                "Skill from another environment.",
+                SkillResourceId::environment(
+                    "skill://other-root/demo/SKILL.md",
+                    "other-environment",
+                    skill_uri.clone(),
+                ),
+            ),
+            SkillCatalogEntry::new(
+                SkillPackageId("skill://selected-root/demo".to_string()),
+                SkillAuthority::new(SkillSourceKind::Executor, "selected-root"),
+                "selected-environment-skill",
+                "Skill from the selected environment.",
+                SkillResourceId::environment(SELECTED_RESOURCE, LOCAL_ENVIRONMENT_ID, skill_uri),
+            ),
+        ],
+        warnings: Vec::new(),
+    };
+    let command = json!({
+        "cmd": format!("cat {}", skill_path.display()),
+        "login": false,
+    })
+    .to_string();
+    let response = responses::mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                responses::ev_function_call("executor-skill-first", "exec_command", &command),
+                responses::ev_function_call("executor-skill-again", "exec_command", &command),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+        ],
+    )
+    .await;
+
+    let (extensions, _) = catalog_extensions(catalog, /*include_host_provider*/ false);
+    let chatgpt_base_url = server.uri();
+    let mut builder = test_codex()
+        .with_home(codex_home)
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_extensions(extensions)
+        .with_config(move |config| {
+            configure_catalog_test(config);
+            config.chatgpt_base_url = chatgpt_base_url;
+            config.use_experimental_unified_exec_tool = true;
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("unified exec should be configurable in tests");
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    test.submit_turn("Read the executor skill twice.").await?;
+
+    for call_id in ["executor-skill-first", "executor-skill-again"] {
+        let output = response
+            .function_call_output_text(call_id)
+            .expect("executor skill command should return output");
+        assert!(
+            output.contains("executor skill contents"),
+            "command output: {output}"
+        );
+    }
+
+    let events = wait_for_analytics_events(&server, "skill_invocation", /*expected_count*/ 1).await;
+    assert_eq!(events.len(), 1, "executor skill should be counted once");
+    assert_eq!(events[0]["skill_name"], "selected-environment-skill");
+    assert_eq!(
+        events[0]["skill_id"],
+        format!("{:x}", sha1::Sha1::digest(SELECTED_RESOURCE.as_bytes()))
+    );
+    assert_eq!(events[0]["event_params"]["invoke_type"], "implicit");
 
     Ok(())
 }

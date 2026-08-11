@@ -3,8 +3,17 @@ use std::path::Path;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_shell_command::parse_command::parse_command_impl;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathConvention;
+use codex_utils_path_uri::PathUri;
 
 use crate::SkillMetadata;
+
+/// A skill document read or script execution identified in a shell command.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ImplicitSkillAccess {
+    Document(PathUri),
+    Script(PathUri),
+}
 
 /// Provides the indexed skill lookups used to recognize implicit invocations.
 pub trait ImplicitSkillLookup {
@@ -26,6 +35,47 @@ pub fn detect_implicit_skill_invocation_for_command(
     }
 
     detect_skill_doc_read(outcome, tokens.as_slice(), &workdir)
+}
+
+/// Resolves statically recognizable skill accesses without consulting the host filesystem.
+pub fn implicit_skill_accesses_for_command(
+    command: &str,
+    workdir: &PathUri,
+) -> Vec<ImplicitSkillAccess> {
+    // Normalize Windows paths and recognize PowerShell reads using existing cat parsing.
+    let tokens = if workdir.infer_path_convention() == Some(PathConvention::Windows) {
+        let mut tokens = tokenize_command(&command.replace('\\', "/"));
+
+        if let Some(executable) = tokens.first_mut()
+            && matches!(
+                executable.to_ascii_lowercase().as_str(),
+                "get-content" | "gc" | "type"
+            )
+        {
+            *executable = "cat".to_owned();
+        }
+
+        tokens
+    } else {
+        tokenize_command(command)
+    };
+    let mut accesses = Vec::new();
+    if let Some(script) = script_run_token(&tokens)
+        && let Ok(path) = workdir.join(script)
+    {
+        accesses.push(ImplicitSkillAccess::Script(path));
+    }
+
+    for parsed in parse_command_impl(&tokens) {
+        if let ParsedCommand::Read { path, .. } = parsed
+            && let Some(path) = path.to_str()
+            && let Ok(path) = workdir.join(path)
+        {
+            accesses.push(ImplicitSkillAccess::Document(path));
+        }
+    }
+
+    accesses
 }
 
 fn tokenize_command(command: &str) -> Vec<String> {

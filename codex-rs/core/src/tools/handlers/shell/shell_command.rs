@@ -1,7 +1,9 @@
+use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_protocol::models::ShellCommandToolCallParams;
 use codex_tools::ShellCommandBackendConfig;
 use codex_tools::ToolName;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecParams;
@@ -208,7 +210,9 @@ impl ShellCommandHandler {
             session.as_ref(),
             turn.as_ref(),
             &params.command,
-            &cwd,
+            &PathUri::from_abs_path(&cwd),
+            Some(&cwd),
+            LOCAL_ENVIRONMENT_ID,
         )
         .await;
         let prefix_rule = params.prefix_rule.clone();

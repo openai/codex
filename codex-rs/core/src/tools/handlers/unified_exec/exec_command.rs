@@ -191,16 +191,15 @@ impl ExecCommandHandler {
         let sandbox_permissions =
             resolve_sandbox_permissions(args.sandbox_permissions, args.justification.as_deref())?;
         let hook_command = args.cmd.clone();
-        // TODO(anp) wire PathUri through implicit skills instead of skipping on foreign paths
-        if let Some(native_cwd) = native_cwd.as_ref() {
-            maybe_emit_implicit_skill_invocation(
-                session.as_ref(),
-                context.step_context.turn.as_ref(),
-                &hook_command,
-                native_cwd,
-            )
-            .await;
-        }
+        maybe_emit_implicit_skill_invocation(
+            session.as_ref(),
+            context.step_context.turn.as_ref(),
+            &hook_command,
+            &cwd,
+            native_cwd.as_ref(),
+            &turn_environment.environment_id,
+        )
+        .await;
         let shell_mode =
             shell_mode_for_environment(&turn.unified_exec_shell_mode, environment.as_ref());
         // Remote environments may use a different OS and must build commands with their native
