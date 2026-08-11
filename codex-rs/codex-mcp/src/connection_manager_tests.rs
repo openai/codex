@@ -1993,8 +1993,11 @@ async fn tool_catalog_cache_sanitizes_tools_and_tracks_environment_generation() 
                 &config,
                 &runtime_context,
                 Some(environment),
-                &ElicitationCapability::default(),
-                &ClientMcpExtensions::default(),
+                (
+                    &ElicitationCapability::default(),
+                    &ClientMcpExtensions::default(),
+                ),
+                /*connection_identity*/ None,
             )
             .expect("cache context")
     };
@@ -2056,8 +2059,11 @@ fn tool_catalog_cache_bypasses_remote_sourced_environment_variables() {
                 &config,
                 &runtime_context,
                 /*resolved_environment*/ None,
-                &ElicitationCapability::default(),
-                &ClientMcpExtensions::default(),
+                (
+                    &ElicitationCapability::default(),
+                    &ClientMcpExtensions::default()
+                ),
+                /*connection_identity*/ None,
             )
             .is_none()
     );
@@ -2374,8 +2380,11 @@ async fn capture_binding_shares_optional_startup_grace_across_connection_sets() 
             &server_config,
             &runtime_context,
             /*resolved_environment*/ None,
-            &ElicitationCapability::default(),
-            &ClientMcpExtensions::default(),
+            (
+                &ElicitationCapability::default(),
+                &ClientMcpExtensions::default(),
+            ),
+            /*connection_identity*/ None,
         )
         .expect("shared pending MCP catalog");
 
@@ -3579,12 +3588,6 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
 
     assert!(manager.contains_server("stdio"));
     assert!(manager.contains_server("http"));
-    assert!(
-        manager
-            .test_client("http")
-            .tool_catalog_cache_context
-            .is_none()
-    );
     assert!(
         !manager
             .wait_for_server_ready("stdio", Duration::from_millis(10))

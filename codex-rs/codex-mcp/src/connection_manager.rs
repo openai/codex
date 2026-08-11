@@ -462,8 +462,12 @@ impl McpConnectionSet {
                     &configured_config,
                     &runtime_context,
                     environment.as_ref(),
-                    &client_elicitation_capability,
-                    &client_mcp_extensions,
+                    (&client_elicitation_capability, &client_mcp_extensions),
+                    Some((
+                        &connection_identity,
+                        protocol_mode,
+                        server.is_agent_plugin(),
+                    )),
                 )
             } else {
                 None

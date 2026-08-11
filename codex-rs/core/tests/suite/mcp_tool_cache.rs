@@ -18,6 +18,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
 use codex_utils_path_uri::PathUri;
+use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::responses;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::mount_sse_once;
@@ -241,6 +242,106 @@ async fn mcp_calls_stay_bound_to_each_thread() -> anyhow::Result<()> {
 
     fixture.codex.shutdown_and_wait().await?;
     second_thread.shutdown_and_wait().await?;
+    responses_server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cached_http_mcp_starts_lazily_for_subagents() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let responses_server = responses::start_mock_server().await;
+    let (http_server, startup_control) =
+        AppsTestServer::mount_with_startup_control(&responses_server).await?;
+    let server_url = format!("{}/api/codex/ps/mcp", http_server.chatgpt_base_url);
+    let fixture = test_codex()
+        .with_model_info_override("gpt-5.4", |model| model.supports_search_tool = false)
+        .with_config(move |config| {
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::Never);
+            config
+                .permissions
+                .set_permission_profile(PermissionProfile::Disabled)
+                .expect("test config should allow disabled permissions");
+            let mut servers = config.mcp_servers.get().clone();
+            servers.insert(
+                SERVER_NAME.to_string(),
+                serde_json::from_value(json!({
+                    "url": server_url,
+                    "http_headers": { "Authorization": "Bearer cached-http-test-token" },
+                    "enabled_tools": ["calendar_create_event"],
+                    "startup_timeout_sec": 10,
+                }))
+                .expect("HTTP MCP server configuration"),
+            );
+            config
+                .mcp_servers
+                .set(servers)
+                .expect("test MCP server configuration");
+        })
+        .build_with_auto_env(&responses_server)
+        .await?;
+    wait_for_mcp_server(&fixture.codex, SERVER_NAME).await?;
+    assert_eq!(startup_control.initialize_attempts(), 1);
+
+    let NewThread {
+        thread: subagent, ..
+    } = fixture
+        .thread_manager
+        .start_thread(StartThreadOptions {
+            session_source: Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: fixture.session_configured.thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+            })),
+            ..StartThreadOptions::new(fixture.config.clone())
+        })
+        .await?;
+    assert_eq!(startup_control.initialize_attempts(), 1);
+
+    let call_id = "http-call";
+    let call_response = mount_sse_once(
+        &responses_server,
+        responses::sse(vec![
+            responses::ev_response_created(call_id),
+            responses::ev_function_call_with_namespace(
+                call_id,
+                NAMESPACE,
+                "calendar_create_event",
+                r#"{"title":"cached","starts_at":"2026-01-01T00:00:00Z"}"#,
+            ),
+            responses::ev_completed(call_id),
+        ]),
+    )
+    .await;
+    let completion_response = mount_sse_once(
+        &responses_server,
+        responses::sse(vec![
+            responses::ev_assistant_message("http-call-message", "done"),
+            responses::ev_completed("http-call-done"),
+        ]),
+    )
+    .await;
+    subagent
+        .submit(user_turn("Call the cached HTTP tool."))
+        .await?;
+    wait_for_event(&subagent, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let request = call_response.single_request();
+    assert!(
+        request
+            .tool_by_name(NAMESPACE, "calendar_create_event")
+            .is_some()
+    );
+    let output = completion_response.function_call_output_text(call_id);
+    assert!(output.is_some());
+    assert_eq!(startup_control.initialize_attempts(), 2);
+
+    fixture.codex.shutdown_and_wait().await?;
+    subagent.shutdown_and_wait().await?;
     responses_server.verify().await;
     Ok(())
 }

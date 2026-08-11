@@ -12,6 +12,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use codex_config::McpServerAuth;
 use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
 use codex_exec_server::Environment;
@@ -22,8 +23,11 @@ use sha1::Digest;
 use sha1::Sha1;
 use tokio::time::Instant;
 
+use crate::McpProtocolMode;
 use crate::McpRuntimeContext;
 use crate::ToolInfo;
+use crate::server::McpServerConnectionIdentity;
+use crate::server::has_explicit_http_authorization;
 
 const TOOL_CATALOG_CACHE_CAPACITY: usize = 32;
 const TOOL_CATALOG_CACHE_TTL: Duration = Duration::from_secs(30 * 60);
@@ -78,16 +82,16 @@ impl McpToolCatalogCache {
         config: &McpServerConfig,
         runtime_context: &McpRuntimeContext,
         resolved_environment: Option<&Arc<Environment>>,
-        client_elicitation_capability: &ElicitationCapability,
-        client_mcp_extensions: &ClientMcpExtensions,
+        client_context: (&ElicitationCapability, &ClientMcpExtensions),
+        connection_identity: Option<(&McpServerConnectionIdentity, McpProtocolMode, bool)>,
     ) -> Option<McpToolCatalogCacheContext> {
         let identity = ToolCatalogIdentity::new(
             server_name,
             config,
             runtime_context,
             resolved_environment,
-            client_elicitation_capability,
-            client_mcp_extensions,
+            client_context,
+            connection_identity,
         )?;
         let entry = lock_unpoisoned(&self.entries)
             .get_or_insert(identity, || Arc::new(ToolCatalogCacheEntry::default()))
@@ -218,14 +222,11 @@ impl ToolCatalogIdentity {
         config: &McpServerConfig,
         runtime_context: &McpRuntimeContext,
         environment: Option<&Arc<Environment>>,
-        client_elicitation_capability: &ElicitationCapability,
-        client_mcp_extensions: &ClientMcpExtensions,
+        client_context: (&ElicitationCapability, &ClientMcpExtensions),
+        connection_identity: Option<(&McpServerConnectionIdentity, McpProtocolMode, bool)>,
     ) -> Option<Self> {
-        let transport = ToolCatalogTransportIdentity::new(
-            config,
-            client_elicitation_capability,
-            client_mcp_extensions,
-        )?;
+        let transport =
+            ToolCatalogTransportIdentity::new(config, client_context, connection_identity)?;
         Some(Self {
             server_name: server_name.to_string(),
             transport,
@@ -242,14 +243,71 @@ impl ToolCatalogIdentity {
 #[derive(PartialEq, Eq, Hash)]
 enum ToolCatalogTransportIdentity {
     Stdio { fingerprint: [u8; 20] },
+    StreamableHttp { fingerprint: [u8; 20] },
 }
 
 impl ToolCatalogTransportIdentity {
     fn new(
         config: &McpServerConfig,
-        client_elicitation_capability: &ElicitationCapability,
-        client_mcp_extensions: &ClientMcpExtensions,
+        client_context: (&ElicitationCapability, &ClientMcpExtensions),
+        connection_identity: Option<(&McpServerConnectionIdentity, McpProtocolMode, bool)>,
     ) -> Option<Self> {
+        let (client_elicitation_capability, client_mcp_extensions) = client_context;
+        if let McpServerTransportConfig::StreamableHttp {
+            url,
+            bearer_token_env_var,
+            http_headers,
+            env_http_headers,
+        } = &config.transport
+        {
+            let (connection_identity, protocol_mode, agent_plugin) = connection_identity?;
+            if config.oauth.is_some()
+                || config.scopes.is_some()
+                || config.oauth_resource.is_some()
+                || (matches!(config.auth, McpServerAuth::ChatGpt)
+                    && !has_explicit_http_authorization(config))
+                || (!has_explicit_http_authorization(config)
+                    && connection_identity.oauth_credentials().ok()?.is_some())
+            {
+                return None;
+            }
+
+            let mut hasher = Sha1::new();
+            hasher.update(
+                serde_json::to_vec(&(
+                    url,
+                    bearer_token_env_var,
+                    http_headers
+                        .as_ref()
+                        .map(|headers| headers.iter().collect::<BTreeMap<_, _>>()),
+                    env_http_headers
+                        .as_ref()
+                        .map(|headers| headers.iter().collect::<BTreeMap<_, _>>()),
+                    &config.auth,
+                    &config.environment_id,
+                    agent_plugin,
+                    protocol_mode.preferred_protocol_version().as_str(),
+                    client_elicitation_capability,
+                    client_mcp_extensions.iter().collect::<BTreeMap<_, _>>(),
+                ))
+                .ok()?,
+            );
+            let mut env_vars = bearer_token_env_var
+                .iter()
+                .chain(env_http_headers.iter().flat_map(|headers| headers.values()))
+                .collect::<Vec<_>>();
+            env_vars.sort_unstable();
+            env_vars.dedup();
+            for name in env_vars {
+                hasher.update(name.as_bytes());
+                let mut value_hasher = DefaultHasher::new();
+                std::env::var_os(name).hash(&mut value_hasher);
+                hasher.update(value_hasher.finish().to_le_bytes());
+            }
+            return Some(Self::StreamableHttp {
+                fingerprint: hasher.finalize().into(),
+            });
+        }
         let McpServerTransportConfig::Stdio {
             command,
             args,
@@ -258,7 +316,6 @@ impl ToolCatalogTransportIdentity {
             cwd,
         } = &config.transport
         else {
-            // HTTP catalogs need a canonical resolved-auth identity before they can be shared.
             return None;
         };
         if env_vars
