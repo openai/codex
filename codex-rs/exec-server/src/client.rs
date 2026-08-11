@@ -331,7 +331,7 @@ pub(crate) struct LazyRemoteExecServerClient {
     pub(crate) transport_params: ExecServerTransportParams,
     http_client_factory: HttpClientFactory,
     recovery_policy: RecoveryPolicy,
-    // Saves the first startup result so callers share it and failures remain final.
+    // Saves the first startup result so callers share it; retryable failures use reconnect.
     startup: Arc<ConnectionAttempt>,
     // The latest successful client, replaced whenever reconnecting succeeds.
     current_client: Arc<StdMutex<Option<ExecServerClient>>>,
@@ -469,6 +469,13 @@ impl LazyRemoteExecServerClient {
     }
 
     async fn initial_client(&self) -> Result<ExecServerClient, ExecServerError> {
+        if let Some(Err(error)) = self.startup.get()
+            && self.can_reconnect()
+            && recovery::is_retryable_recovery_error(error)
+        {
+            return Box::pin(self.reconnect()).await;
+        }
+
         // The first caller starts the work; every other caller waits for that same result.
         let result = self.startup.get_or_init(|| self.connect_once()).await;
         match result {
@@ -2679,6 +2686,77 @@ mod tests {
             panic!("expected saved connection failures");
         };
         assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[tokio::test]
+    async fn retryable_startup_failure_does_not_burn_environment() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let websocket_url = format!(
+            "ws://{}",
+            listener.local_addr().expect("listener should have address")
+        );
+        let (replacement_initialized_tx, replacement_initialized_rx) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut failed_startup, _) = listener.accept().await.expect("startup should arrive");
+            failed_startup
+                .write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n")
+                .await
+                .expect("failed handshake response should write");
+
+            let mut replacement = accept_websocket(&listener).await;
+            complete_websocket_initialize(
+                &mut replacement,
+                "replacement-session",
+                /*expected_resume_session_id*/ None,
+            )
+            .await;
+            replacement_initialized_tx
+                .send(())
+                .expect("replacement initialization should be observed");
+            timeout(Duration::from_secs(1), replacement.next())
+                .await
+                .expect("client should close after the test");
+        });
+        let client = LazyRemoteExecServerClient::new(
+            ExecServerTransportParams::WebSocketUrl {
+                websocket_url,
+                connect_timeout: Duration::from_secs(1),
+                initialize_timeout: Duration::from_secs(1),
+            },
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        );
+
+        let failed_startup = match client.get().await {
+            Ok(_) => panic!("initial connection should fail"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            failed_startup,
+            super::ExecServerError::ConnectionAttempt(_)
+        ));
+        assert!(client.startup_finished());
+        assert!(matches!(
+            client.status().await,
+            EnvironmentObservedStatus::Disconnected { .. }
+        ));
+
+        let (ready, first, second) =
+            tokio::join!(client.wait_until_ready(), client.get(), client.get());
+        ready.expect("later readiness check should retry startup");
+        let first = first.expect("first waiter should receive the replacement client");
+        let second = second.expect("second waiter should receive the same replacement client");
+        assert_eq!(first.session_id().as_deref(), Some("replacement-session"));
+        assert!(Arc::ptr_eq(&first.inner, &second.inner));
+        replacement_initialized_rx
+            .await
+            .expect("server should observe replacement initialization");
+
+        drop(first);
+        drop(second);
+        drop(client);
+        server.await.expect("server task should finish");
     }
 
     #[tokio::test]

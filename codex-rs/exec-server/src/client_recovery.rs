@@ -770,7 +770,7 @@ impl ExecServerClient {
     }
 }
 
-fn is_retryable_recovery_error(error: &ExecServerError) -> bool {
+pub(super) fn is_retryable_recovery_error(error: &ExecServerError) -> bool {
     is_transport_closed_error(error)
         || matches!(
             error,

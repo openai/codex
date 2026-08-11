@@ -961,14 +961,14 @@ impl Environment {
         }
     }
 
-    /// Returns whether initial startup has either succeeded or permanently failed.
+    /// Returns whether the initial startup attempt has completed.
     pub fn startup_finished(&self) -> bool {
         self.remote_client
             .as_ref()
             .is_none_or(LazyRemoteExecServerClient::startup_finished)
     }
 
-    /// Waits for initial startup. A failed startup is never attempted again.
+    /// Waits for initial startup, retrying a previous transient failure when possible.
     pub async fn wait_until_ready(&self) -> Result<(), ExecServerError> {
         match &self.remote_client {
             Some(client) => client.wait_until_ready().await,
