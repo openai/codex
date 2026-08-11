@@ -19,12 +19,15 @@ codex-install-context = { workspace = true }
 codex-protocol = { workspace = true }
 codex-websocket-client = { workspace = true }
 futures = { workspace = true }
+http-body-util = "0.1.3"
 prost = "0.14.3"
+reqwest = { workspace = true, features = ["stream"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt", "sync", "time"] }
 tokio-tungstenite = { workspace = true }
 tokio-util = { workspace = true, features = ["rt"] }
 tonic = { workspace = true }
+tower = { version = "0.5.3", features = ["util"] }
 tracing = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 

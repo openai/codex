@@ -238,6 +238,8 @@ deny = [
     { crate = "reqwest", wrappers = [
         # Intended owner.
         "codex-http-client",
+        # Intentional exception: gRPC uses reqwest directly as tonic's HTTP/2 transport.
+        "codex-code-mode",
         # Intentional exception: this standalone, privileged Responses API proxy owns its blocking
         # upstream HTTP transport independently of Codex.
         "codex-responses-api-proxy",

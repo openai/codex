@@ -21,7 +21,8 @@ use codex_code_mode_protocol::WaitOutcome;
 use codex_code_mode_protocol::WaitRequest;
 use codex_code_mode_protocol::grpc;
 use codex_code_mode_protocol::grpc::code_mode_host_client::CodeModeHostClient;
-use codex_code_mode_protocol::host::MAX_FRAME_BYTES;
+use codex_http_client::HttpClientFactory;
+use codex_http_client::OutboundProxyPolicy;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -29,6 +30,7 @@ use tonic::transport::Channel;
 
 use self::operations::WaitSlot;
 use self::state::SessionState;
+use self::transport::GrpcTransport;
 use self::transport::SharedTransport;
 use crate::remote_session::ShutdownResultReceiver;
 use crate::remote_session::wait_for_watch;
@@ -41,7 +43,7 @@ mod operations;
 mod state;
 mod transport;
 
-type GrpcClient = CodeModeHostClient<Channel>;
+type GrpcClient = CodeModeHostClient<GrpcTransport>;
 
 /// Creates code-mode sessions over an HTTP/2 gRPC connection.
 #[derive(Clone)]
@@ -50,9 +52,20 @@ pub struct GrpcCodeModeSessionProvider {
 }
 
 impl GrpcCodeModeSessionProvider {
-    /// Connects lazily to an `http://` gRPC endpoint.
+    /// Connects lazily to an `http://` or `https://` gRPC endpoint.
     pub fn new(endpoint: impl Into<String>) -> Self {
-        Self::from_transport(SharedTransport::new(endpoint.into()))
+        Self::with_http_client_factory(
+            endpoint,
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        )
+    }
+
+    /// Connects using the application's resolved outbound proxy and custom CA policy.
+    pub fn with_http_client_factory(
+        endpoint: impl Into<String>,
+        http_client_factory: HttpClientFactory,
+    ) -> Self {
+        Self::from_transport(SharedTransport::new(endpoint.into(), http_client_factory))
     }
 
     /// Uses an existing channel, including channels backed by custom transports.
@@ -71,8 +84,7 @@ impl GrpcCodeModeSessionProvider {
         delegate: Arc<dyn CodeModeSessionDelegate>,
         limits: CodeModeSessionCellExecutionLimits,
     ) -> Result<Arc<GrpcCodeModeSession>, String> {
-        let channel = deadline::startup("transport connection", self.transport.channel()).await?;
-        let mut client = grpc_client(channel);
+        let mut client = deadline::startup("transport connection", self.transport.client()).await?;
         let limits = grpc::SessionCellExecutionLimits {
             max_yield_time_ms: limits.max_yield_time_ms,
             max_heap_size_bytes: limits
@@ -326,10 +338,4 @@ fn validate_identifier(value: &str, field: &str) -> Result<(), String> {
         ));
     }
     Ok(())
-}
-
-fn grpc_client(channel: Channel) -> GrpcClient {
-    CodeModeHostClient::new(channel)
-        .max_decoding_message_size(MAX_FRAME_BYTES)
-        .max_encoding_message_size(MAX_FRAME_BYTES)
 }
