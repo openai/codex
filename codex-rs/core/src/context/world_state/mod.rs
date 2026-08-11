@@ -23,6 +23,7 @@ use codex_extension_api::WorldStateSectionContribution;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use indexmap::IndexMap;
+use serde::Deserialize;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Map;
@@ -109,7 +110,8 @@ impl<S: WorldStateSection> ErasedWorldStateSection for S {
         let typed_snapshot;
         let previous = match previous {
             PreviousSectionState::Known(previous) => {
-                match serde_json::from_value::<S::Snapshot>(previous.clone()) {
+                // Deserialize the borrowed snapshot without copying its JSON tree.
+                match S::Snapshot::deserialize(previous) {
                     Ok(previous) => {
                         typed_snapshot = previous;
                         PreviousSectionState::Known(&typed_snapshot)
@@ -283,15 +285,41 @@ impl WorldStateSnapshot {
 
     /// Returns the RFC 7386 merge patch that advances `previous` to `self`.
     pub(crate) fn merge_patch_from(&self, previous: &Self) -> Option<Value> {
-        let previous = Value::Object(previous.sections.clone().into_iter().collect());
-        let current = Value::Object(self.sections.clone().into_iter().collect());
-        create_merge_patch(&previous, &current)
+        let mut patch = Map::new();
+        // Emit removals first to preserve insertion-ordered JSON patch output.
+        for key in previous.sections.keys() {
+            if !self.sections.contains_key(key) {
+                patch.insert(key.clone(), Value::Null);
+            }
+        }
+        for (key, current) in &self.sections {
+            if let Some(previous) = previous.sections.get(key) {
+                if let Some(value) = create_merge_patch(previous, current) {
+                    patch.insert(key.clone(), value);
+                }
+            } else {
+                patch.insert(key.clone(), current.clone());
+            }
+        }
+        (!patch.is_empty()).then_some(Value::Object(patch))
     }
 
     pub(crate) fn apply_merge_patch(&mut self, patch: &Value) -> serde_json::Result<()> {
-        let mut current = self.clone().into_value();
-        apply_merge_patch_value(&mut current, patch);
-        *self = serde_json::from_value(current)?;
+        let Value::Object(patch) = patch else {
+            return serde_json::from_value::<Self>(patch.clone()).map(drop);
+        };
+        // Borrow existing keys; only newly inserted sections need owned keys.
+        for (key, value) in patch {
+            if value.is_null() {
+                self.sections.remove(key);
+            } else if let Some(current) = self.sections.get_mut(key) {
+                apply_merge_patch_value(current, value);
+            } else {
+                let mut current = Value::Null;
+                apply_merge_patch_value(&mut current, value);
+                self.sections.insert(key.clone(), current);
+            }
+        }
         Ok(())
     }
 }
@@ -477,10 +505,12 @@ fn create_merge_patch(previous: &Value, current: &Value) -> Option<Value> {
 }
 
 fn apply_merge_patch_value(target: &mut Value, patch: &Value) {
+    // Nested patches can replace objects with scalars or arrays.
     let Value::Object(patch) = patch else {
         target.clone_from(patch);
         return;
     };
+    // RFC 7386 replaces non-object values with an object before merging.
     if !target.is_object() {
         *target = Value::Object(Map::new());
     }
@@ -488,8 +518,12 @@ fn apply_merge_patch_value(target: &mut Value, patch: &Value) {
         for (key, value) in patch {
             if value.is_null() {
                 target.remove(key);
+            } else if let Some(current) = target.get_mut(key) {
+                apply_merge_patch_value(current, value);
             } else {
-                apply_merge_patch_value(target.entry(key.clone()).or_insert(Value::Null), value);
+                let mut current = Value::Null;
+                apply_merge_patch_value(&mut current, value);
+                target.insert(key.clone(), current);
             }
         }
     }

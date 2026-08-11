@@ -273,4 +273,10 @@ fn snapshot_merge_patch_changes_and_removes_nested_values() {
         .expect("apply world-state merge patch");
     assert_eq!(previous, current);
     assert_eq!(current.merge_patch_from(&current), None);
+
+    for invalid in [Value::Null, json!(true), json!([])] {
+        let original = previous.clone();
+        assert!(previous.apply_merge_patch(&invalid).is_err());
+        assert_eq!(previous, original);
+    }
 }
