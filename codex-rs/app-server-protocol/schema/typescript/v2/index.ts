@@ -255,6 +255,7 @@ export type { McpServerElicitationAction } from "./McpServerElicitationAction";
 export type { McpServerElicitationRequestParams } from "./McpServerElicitationRequestParams";
 export type { McpServerElicitationRequestResponse } from "./McpServerElicitationRequestResponse";
 export type { McpServerMigration } from "./McpServerMigration";
+export type { McpServerOauthClientRegistration } from "./McpServerOauthClientRegistration";
 export type { McpServerOauthLoginCompletedNotification } from "./McpServerOauthLoginCompletedNotification";
 export type { McpServerOauthLoginParams } from "./McpServerOauthLoginParams";
 export type { McpServerOauthLoginResponse } from "./McpServerOauthLoginResponse";

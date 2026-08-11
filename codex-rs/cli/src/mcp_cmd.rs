@@ -31,6 +31,7 @@ use codex_mcp::oauth_login_support;
 use codex_mcp::resolve_oauth_scopes;
 use codex_mcp::should_retry_without_scopes;
 use codex_protocol::protocol::McpAuthStatus;
+use codex_rmcp_client::McpOAuthClientRegistration;
 use codex_rmcp_client::OAuthDiscoveryTimeout;
 use codex_rmcp_client::StreamableHttpRedirectMode;
 use codex_rmcp_client::delete_oauth_tokens;
@@ -151,9 +152,33 @@ pub struct AddMcpStreamableHttpArgs {
     #[arg(long = "oauth-client-id", value_name = "CLIENT_ID", requires = "url")]
     pub oauth_client_id: Option<String>,
 
+    /// OAuth client-registration strategy for the immediate login only.
+    #[arg(
+        long = "oauth-client-registration",
+        value_enum,
+        value_name = "AUTO|DCR",
+        requires = "url"
+    )]
+    pub oauth_client_registration: Option<McpOAuthClientRegistrationArg>,
+
     /// Optional OAuth resource parameter to include during MCP login.
     #[arg(long = "oauth-resource", value_name = "RESOURCE", requires = "url")]
     pub oauth_resource: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum McpOAuthClientRegistrationArg {
+    Auto,
+    Dcr,
+}
+
+impl From<McpOAuthClientRegistrationArg> for McpOAuthClientRegistration {
+    fn from(value: McpOAuthClientRegistrationArg) -> Self {
+        match value {
+            McpOAuthClientRegistrationArg::Auto => Self::Auto,
+            McpOAuthClientRegistrationArg::Dcr => Self::Dcr,
+        }
+    }
 }
 
 #[derive(Debug, clap::Parser)]
@@ -170,6 +195,14 @@ pub struct LoginArgs {
     /// Comma-separated list of OAuth scopes to request.
     #[arg(long, value_delimiter = ',', value_name = "SCOPE,SCOPE")]
     pub scopes: Vec<String>,
+
+    /// OAuth client-registration strategy for this login only.
+    #[arg(
+        long = "oauth-client-registration",
+        value_enum,
+        value_name = "AUTO|DCR"
+    )]
+    pub oauth_client_registration: Option<McpOAuthClientRegistrationArg>,
 }
 
 #[derive(Debug, clap::Parser)]
@@ -235,6 +268,7 @@ async fn perform_oauth_login_retry_without_scopes(
     env_http_headers: Option<HashMap<String, String>>,
     resolved_scopes: &ResolvedMcpOAuthScopes,
     oauth_client_id: Option<&str>,
+    client_registration: McpOAuthClientRegistration,
     oauth_resource: Option<&str>,
     callback_port: Option<u16>,
     callback_url: Option<&str>,
@@ -249,6 +283,7 @@ async fn perform_oauth_login_retry_without_scopes(
         env_http_headers.clone(),
         &resolved_scopes.scopes,
         oauth_client_id,
+        client_registration,
         oauth_resource,
         callback_port,
         callback_url,
@@ -268,6 +303,7 @@ async fn perform_oauth_login_retry_without_scopes(
                 env_http_headers,
                 &[],
                 oauth_client_id,
+                client_registration,
                 oauth_resource,
                 callback_port,
                 callback_url,
@@ -316,7 +352,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
         .await
         .with_context(|| format!("failed to load MCP servers from {}", codex_home.display()))?;
 
-    let (transport, oauth_client_id, oauth_resource) = match transport_args {
+    let (transport, oauth_client_id, client_registration, oauth_resource) = match transport_args {
         AddMcpTransportArgs {
             stdio: Some(stdio), ..
         } => {
@@ -340,6 +376,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
                     cwd: None,
                 },
                 None,
+                McpOAuthClientRegistration::Auto,
                 None,
             )
         }
@@ -349,6 +386,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
                     url,
                     bearer_token_env_var,
                     oauth_client_id,
+                    oauth_client_registration,
                     oauth_resource,
                 }),
             ..
@@ -360,6 +398,9 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
                 env_http_headers: None,
             },
             oauth_client_id,
+            oauth_client_registration
+                .map(McpOAuthClientRegistration::from)
+                .unwrap_or_default(),
             oauth_resource,
         ),
         AddMcpTransportArgs { .. } => bail!("exactly one of --command or --url must be provided"),
@@ -427,6 +468,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
                 oauth_config.env_http_headers,
                 &resolved_scopes,
                 oauth_client_id.as_deref(),
+                client_registration,
                 oauth_resource.as_deref(),
                 config.mcp_oauth_callback_port,
                 config.mcp_oauth_callback_url.as_deref(),
@@ -487,7 +529,14 @@ async fn run_login(config: &Config, login_args: LoginArgs) -> Result<()> {
     let mcp_manager = load_mcp_manager(config).await;
     let mcp_servers = mcp_manager.configured_servers(config).await;
 
-    let LoginArgs { name, scopes } = login_args;
+    let LoginArgs {
+        name,
+        scopes,
+        oauth_client_registration,
+    } = login_args;
+    let client_registration = oauth_client_registration
+        .map(McpOAuthClientRegistration::from)
+        .unwrap_or_default();
 
     let Some(server) = mcp_servers.get(&name) else {
         bail!("No MCP server named '{name}' found.");
@@ -532,6 +581,7 @@ async fn run_login(config: &Config, login_args: LoginArgs) -> Result<()> {
         env_http_headers,
         &resolved_scopes,
         server.oauth_client_id(),
+        client_registration,
         server.oauth_resource.as_deref(),
         config.mcp_oauth_callback_port,
         config.mcp_oauth_callback_url.as_deref(),

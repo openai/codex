@@ -239,7 +239,15 @@ async fn add_streamable_http_without_manual_token() -> Result<()> {
 
     let mut add_cmd = codex_command(codex_home.path())?;
     add_cmd
-        .args(["mcp", "add", "github", "--url", "https://example.com/mcp"])
+        .args([
+            "mcp",
+            "add",
+            "github",
+            "--url",
+            "https://example.com/mcp",
+            "--oauth-client-registration",
+            "dcr",
+        ])
         .assert()
         .success();
 
@@ -260,9 +268,13 @@ async fn add_streamable_http_without_manual_token() -> Result<()> {
         other => panic!("unexpected transport: {other:?}"),
     }
     assert!(github.enabled);
+    assert_eq!(github.oauth, None);
 
     assert!(!codex_home.path().join(".credentials.json").exists());
     assert!(!codex_home.path().join(".env").exists());
+    let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+    assert!(!config.contains("client_registration"));
+    assert!(!config.contains("[mcp_servers.github.oauth]"));
 
     Ok(())
 }

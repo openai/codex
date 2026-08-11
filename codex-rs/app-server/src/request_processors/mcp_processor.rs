@@ -118,9 +118,14 @@ impl McpRequestProcessor {
         let McpServerOauthLoginParams {
             name,
             thread_id,
+            client_registration,
             scopes,
             timeout_secs,
         } = params;
+        let client_registration = match client_registration.unwrap_or_default() {
+            McpServerOauthClientRegistration::Auto => McpOAuthClientRegistration::Auto,
+            McpServerOauthClientRegistration::Dcr => McpOAuthClientRegistration::Dcr,
+        };
 
         let auth = self.auth_manager.auth().await;
         let (mcp_config, runtime_context) = match thread_id.as_deref() {
@@ -201,6 +206,7 @@ impl McpRequestProcessor {
             env_http_headers,
             &resolved_scopes.scopes,
             server.oauth_client_id(),
+            client_registration,
             server.oauth_resource.as_deref(),
             timeout_secs,
             mcp_config.mcp_oauth_callback_port,

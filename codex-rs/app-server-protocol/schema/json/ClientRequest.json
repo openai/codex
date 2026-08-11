@@ -1930,8 +1930,26 @@
       ],
       "type": "object"
     },
+    "McpServerOauthClientRegistration": {
+      "enum": [
+        "auto",
+        "dcr"
+      ],
+      "type": "string"
+    },
     "McpServerOauthLoginParams": {
       "properties": {
+        "clientRegistration": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/McpServerOauthClientRegistration"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Registration strategy for this login only; omission preserves automatic DCR."
+        },
         "name": {
           "type": "string"
         },

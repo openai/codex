@@ -54,6 +54,7 @@ const EXECUTOR_HTTP_MCP_URL: &str = "http://executor-only.invalid/mcp";
 const HTTP_MCP_SERVER_NAME: &str = "executor_http";
 const MCP_SERVER_NAME: &str = "executor_demo";
 const OAUTH_MCP_SERVER_NAME: &str = "executor_oauth";
+const PRE_REGISTERED_OAUTH_MCP_SERVER_NAME: &str = "executor_oauth_preregistered";
 const EXECUTOR_OAUTH_MCP_URL: &str = "http://oauth-only.invalid/oauth-mcp";
 const HOST_OAUTH_ACCESS_TOKEN: &str = "host-access-token";
 const EXECUTOR_OAUTH_ACCESS_TOKEN: &str = "executor-access-token";
@@ -98,10 +99,12 @@ async fn selected_executor_plugin_exposes_its_mcps_only_to_that_thread() -> Resu
                 }
             },
         ));
+    let (registration_request_tx, mut registration_request_rx) = mpsc::unbounded_channel();
     let (token_request_tx, mut token_request_rx) = mpsc::unbounded_channel();
     let oauth_metadata = json!({
         "authorization_endpoint": "https://oauth-only.invalid/authorize",
         "token_endpoint": "http://oauth-only.invalid/token",
+        "registration_endpoint": "http://oauth-only.invalid/register",
         "scopes_supported": ["read", "write"],
         "response_types_supported": ["code"],
         "code_challenge_methods_supported": ["S256"],
@@ -112,6 +115,19 @@ async fn selected_executor_plugin_exposes_its_mcps_only_to_that_thread() -> Resu
             get(move || {
                 let metadata = oauth_metadata.clone();
                 async move { Json(metadata) }
+            }),
+        )
+        .route(
+            "/register",
+            post(move |Json(request): Json<serde_json::Value>| {
+                let registration_request_tx = registration_request_tx.clone();
+                async move {
+                    let _ = registration_request_tx.send(request.clone());
+                    Json(json!({
+                        "client_id": "executor-dcr-client",
+                        "redirect_uris": request["redirect_uris"],
+                    }))
+                }
             }),
         )
         .route(
@@ -205,7 +221,12 @@ HTTP_PROXY = {http_proxy}
                 (OAUTH_MCP_SERVER_NAME): {
                     "url": EXECUTOR_OAUTH_MCP_URL,
                     "environment_id": "local",
-                    "oauth": {"clientId": "executor-oauth-client"},
+                    "startup_timeout_sec": 10,
+                },
+                (PRE_REGISTERED_OAUTH_MCP_SERVER_NAME): {
+                    "url": EXECUTOR_OAUTH_MCP_URL,
+                    "environment_id": "local",
+                    "oauth": {"clientId": "configured-client"},
                     "startup_timeout_sec": 10,
                 }
             }
@@ -255,8 +276,59 @@ startup_timeout_sec = 10
         .send_raw_request(
             "mcpServer/oauth/login",
             Some(json!({
+                "name": PRE_REGISTERED_OAUTH_MCP_SERVER_NAME,
+                "threadId": selected_thread.clone(),
+                "clientRegistration": "dcr",
+                "timeoutSecs": 10,
+            })),
+        )
+        .await?;
+    let response: McpServerOauthLoginResponse =
+        timeout(DEFAULT_READ_TIMEOUT, app_server.read_response(request_id)).await??;
+    let authorization_url = reqwest::Url::parse(&response.authorization_url)?;
+    let parameters = authorization_url
+        .query_pairs()
+        .into_owned()
+        .collect::<BTreeMap<String, String>>();
+    assert_eq!(
+        parameters.get("client_id").map(String::as_str),
+        Some("configured-client")
+    );
+    assert!(
+        registration_request_rx.try_recv().is_err(),
+        "configured OAuth client must skip dynamic registration"
+    );
+    let mut callback_url = reqwest::Url::parse(&parameters["redirect_uri"])?;
+    callback_url
+        .query_pairs_mut()
+        .append_pair("code", "configured-test-code")
+        .append_pair("state", &parameters["state"]);
+    reqwest::Client::builder()
+        .no_proxy()
+        .build()?
+        .get(callback_url)
+        .send()
+        .await?
+        .error_for_status()?;
+    let token_request = timeout(DEFAULT_READ_TIMEOUT, token_request_rx.recv())
+        .await?
+        .expect("configured client should exchange its authorization code");
+    assert!(token_request.contains("client_id=configured-client"));
+    let completed: McpServerOauthLoginCompletedNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app_server.read_notification("mcpServer/oauthLogin/completed"),
+    )
+    .await??;
+    assert_eq!(completed.name, PRE_REGISTERED_OAUTH_MCP_SERVER_NAME);
+    assert!(completed.success);
+
+    let request_id = app_server
+        .send_raw_request(
+            "mcpServer/oauth/login",
+            Some(json!({
                 "name": OAUTH_MCP_SERVER_NAME,
                 "threadId": selected_thread.clone(),
+                "clientRegistration": "dcr",
                 "timeoutSecs": 10,
             })),
         )
@@ -268,12 +340,11 @@ startup_timeout_sec = 10
             .authorization_url
             .starts_with("https://oauth-only.invalid/authorize?")
     );
-    assert!(
-        response
-            .authorization_url
-            .contains("client_id=executor-oauth-client")
-    );
     let authorization_url = reqwest::Url::parse(&response.authorization_url)?;
+    let client_id = authorization_url
+        .query_pairs()
+        .find_map(|(key, value)| (key == "client_id").then(|| value.into_owned()));
+    assert_eq!(client_id.as_deref(), Some("executor-dcr-client"));
     let state = authorization_url
         .query_pairs()
         .find_map(|(key, value)| (key == "state").then(|| value.into_owned()))
@@ -282,6 +353,14 @@ startup_timeout_sec = 10
         .query_pairs()
         .find_map(|(key, value)| (key == "redirect_uri").then(|| value.into_owned()))
         .expect("authorization URL should include redirect_uri");
+    let registration_request = timeout(DEFAULT_READ_TIMEOUT, registration_request_rx.recv())
+        .await?
+        .expect("executor registration endpoint should receive a request");
+    assert_eq!(registration_request["client_name"], json!("Codex"));
+    assert_eq!(
+        registration_request["redirect_uris"],
+        json!([redirect_uri.clone()])
+    );
     let mut callback_url = reqwest::Url::parse(&redirect_uri)?;
     callback_url
         .query_pairs_mut()
@@ -300,6 +379,7 @@ startup_timeout_sec = 10
     assert!(token_request.contains("grant_type=authorization_code"));
     assert!(token_request.contains("code=executor-test-code"));
     assert!(token_request.contains("code_verifier="));
+    assert!(token_request.contains("client_id=executor-dcr-client"));
     let completed: McpServerOauthLoginCompletedNotification = timeout(
         DEFAULT_READ_TIMEOUT,
         app_server.read_notification("mcpServer/oauthLogin/completed"),
@@ -469,6 +549,10 @@ startup_timeout_sec = 10
                 OAUTH_MCP_SERVER_NAME.to_string(),
                 Some("executor-demo@1".to_string()),
             ),
+            (
+                PRE_REGISTERED_OAUTH_MCP_SERVER_NAME.to_string(),
+                Some("executor-demo@1".to_string()),
+            ),
             (REFRESH_PROBE_SERVER_NAME.to_string(), None),
         ])
     );
@@ -481,7 +565,10 @@ startup_timeout_sec = 10
         .map(|server| server.name)
         .collect::<Vec<_>>();
     assert!(unselected_server_names.iter().all(|name| {
-        name != MCP_SERVER_NAME && name != HTTP_MCP_SERVER_NAME && name != OAUTH_MCP_SERVER_NAME
+        name != MCP_SERVER_NAME
+            && name != HTTP_MCP_SERVER_NAME
+            && name != OAUTH_MCP_SERVER_NAME
+            && name != PRE_REGISTERED_OAUTH_MCP_SERVER_NAME
     }));
 
     http_server_handle.abort();
