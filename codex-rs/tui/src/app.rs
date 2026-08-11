@@ -1019,6 +1019,7 @@ impl App {
                 (ChatWidget::new_with_app_event(init), Some(forked))
             }
         };
+        chat_widget.note_rendered_width(tui.terminal.last_known_screen_size.width);
         chat_widget.remote_connection = remote_connection;
         let thread_and_widget_ms = thread_and_widget_started_at.elapsed().as_millis();
         chat_widget

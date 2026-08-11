@@ -464,8 +464,10 @@ fn render_changes_block(rows: Vec<Row<'_>>, wrap_cols: usize, cwd: &Path) -> Vec
         let lang_path = r.move_path.unwrap_or(r.path);
         let lang = detect_lang_for_path(lang_path);
         let mut lines = vec![];
-        render_change(r.change, &mut lines, wrap_cols - 4, lang.as_deref());
-        out.extend(prefix_lines(lines, "    ".into(), "    ".into()));
+        let prefix = "    ";
+        let content_width = wrap_cols.saturating_sub(prefix.len());
+        render_change(r.change, &mut lines, content_width, lang.as_deref());
+        out.extend(prefix_lines(lines, prefix.into(), prefix.into()));
     }
 
     out
@@ -1631,6 +1633,12 @@ mod tests {
             /*width*/ 80,
             /*height*/ 10,
         );
+
+        let narrow = create_diff_summary(&changes, &PathBuf::from("/"), /*wrap_cols*/ 3);
+        assert_snapshot!(format!("{}\n{}", narrow[1], narrow[2]), @r"
+            1 +a
+               l
+        ");
     }
 
     #[test]

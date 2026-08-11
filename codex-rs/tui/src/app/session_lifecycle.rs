@@ -533,6 +533,8 @@ impl App {
             /*initial_user_message*/ None,
         );
         self.replace_chat_widget(ChatWidget::new_with_app_event(init));
+        self.chat_widget
+            .note_rendered_width(tui.terminal.last_known_screen_size.width);
         if blocks_direct_input {
             self.chat_widget.set_parent_owned_thread();
         }
@@ -754,6 +756,8 @@ impl App {
             initial_user_message,
         );
         self.replace_chat_widget(ChatWidget::new_with_app_event(init));
+        self.chat_widget
+            .note_rendered_width(tui.terminal.last_known_screen_size.width);
         if started.blocks_direct_input {
             self.mark_primary_thread_parent_owned(started.session.thread_id);
         }

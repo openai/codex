@@ -2410,6 +2410,61 @@ async fn ambient_pet_can_be_disabled() {
 }
 
 #[tokio::test]
+async fn added_history_uses_pet_adjusted_terminal_width() {
+    #[derive(Debug)]
+    struct WidthCell(std::sync::Arc<std::sync::atomic::AtomicU16>);
+
+    impl HistoryCell for WidthCell {
+        fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+            self.0.store(width, std::sync::atomic::Ordering::Relaxed);
+            if width == u16::MAX {
+                Vec::new()
+            } else {
+                vec!["width-sensitive history".into()]
+            }
+        }
+
+        fn raw_lines(&self) -> Vec<Line<'static>> {
+            Vec::new()
+        }
+    }
+
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    enable_test_ambient_pet(&mut chat);
+    chat.last_rendered_width.set(Some(80));
+    set_active_cell(
+        &mut chat,
+        Box::new(PlainHistoryCell::new(vec!["active response".into()])),
+    );
+    let width = std::sync::Arc::new(std::sync::atomic::AtomicU16::new(0));
+
+    chat.add_to_history(WidthCell(std::sync::Arc::clone(&width)));
+
+    assert_eq!(width.load(std::sync::atomic::Ordering::Relaxed), 69);
+    assert!(chat.transcript.needs_final_message_separator);
+    let backend = VT100Backend::new(/*width*/ 80, /*height*/ 4);
+    let mut terminal = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(
+        /*x*/ 0, /*y*/ 3, /*width*/ 80, /*height*/ 1,
+    ));
+    for lines in drain_insert_history(&mut rx) {
+        crate::insert_history::insert_history_lines(&mut terminal, lines)
+            .expect("insert history lines");
+    }
+    insta::assert_snapshot!(terminal.backend().vt100().screen().contents().trim(), @r"
+active response
+
+width-sensitive history
+");
+
+    width.store(0, std::sync::atomic::Ordering::Relaxed);
+    chat.set_raw_output_mode(/*enabled*/ true);
+    chat.last_rendered_width.set(Some(12));
+    chat.add_to_history(WidthCell(std::sync::Arc::clone(&width)));
+    assert_eq!(width.load(std::sync::atomic::Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
 #[serial]
 async fn ambient_pet_reserves_history_wrap_width() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;

@@ -705,7 +705,7 @@ pub(crate) struct ChatWidget {
     quit_shortcut_key: Option<KeyBinding>,
     // Runtime metrics accumulated across delta snapshots for the active turn.
     turn_runtime_metrics: RuntimeMetricsSummary,
-    last_rendered_width: std::cell::Cell<Option<usize>>,
+    last_rendered_width: std::cell::Cell<Option<u16>>,
     // Feedback sink for /feedback
     feedback: codex_feedback::CodexFeedback,
     // Current session rollout path (if known)
@@ -1239,8 +1239,17 @@ impl ChatWidget {
                 .active_cell
                 .as_ref()
                 .is_some_and(|c| c.as_any().is::<history_cell::SessionHeaderHistoryCell>());
+        let history_width = self
+            .last_rendered_width
+            .get()
+            .map(|width| self.history_wrap_width(width))
+            .unwrap_or(u16::MAX);
 
-        if !keep_placeholder_header_active && !cell.display_lines(u16::MAX).is_empty() {
+        if !keep_placeholder_header_active
+            && !cell
+                .display_lines_for_mode(history_width, self.history_render_mode())
+                .is_empty()
+        {
             // Only break exec grouping if the cell renders visible lines.
             if !self.has_active_stream_tail() {
                 self.flush_active_cell();
@@ -1583,7 +1592,6 @@ impl ChatWidget {
             if width == 0 {
                 None
             } else {
-                let width = u16::try_from(width).unwrap_or(u16::MAX);
                 let width = usize::from(self.history_wrap_width(width));
                 Some(crate::width::usable_content_width(width, reserved_cols).unwrap_or(1))
             }
@@ -1643,7 +1651,7 @@ impl ChatWidget {
     /// rebuilding runs through app-level resize reflow.
     pub(crate) fn on_terminal_resize(&mut self, width: u16) {
         let had_rendered_width = self.last_rendered_width.get().is_some();
-        self.last_rendered_width.set(Some(width as usize));
+        self.last_rendered_width.set(Some(width));
         let stream_width = self.current_stream_width(/*reserved_cols*/ 2);
         let plan_stream_width = self.current_stream_width(/*reserved_cols*/ 4);
         if let Some(controller) = self.stream_controller.as_mut() {

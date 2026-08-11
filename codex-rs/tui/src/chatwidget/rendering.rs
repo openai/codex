@@ -58,7 +58,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn note_rendered_width(&self, width: u16) {
-        self.last_rendered_width.set(Some(width as usize));
+        self.last_rendered_width.set(Some(width));
     }
 }
 
