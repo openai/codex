@@ -1,6 +1,7 @@
 use super::*;
 use crate::context::world_state::WorldStateSnapshot;
 use crate::context_manager::is_user_turn_boundary;
+use codex_history::ResponseItemEnvelope;
 use codex_protocol::protocol::SessionContextWindow;
 use uuid::Uuid;
 
@@ -8,7 +9,7 @@ use uuid::Uuid;
 // the resume/fork hydration metadata derived from the same replay.
 #[derive(Debug)]
 pub(super) struct RolloutReconstruction {
-    pub(super) history: Vec<ResponseItem>,
+    pub(super) history: Vec<ResponseItemEnvelope>,
     pub(super) previous_turn_settings: Option<PreviousTurnSettings>,
     pub(super) reference_context_item: Option<TurnContextItem>,
     pub(super) world_state_baseline: Option<WorldStateSnapshot>,
@@ -49,7 +50,7 @@ struct ActiveReplaySegment<'a> {
     previous_turn_settings: Option<PreviousTurnSettings>,
     reference_context_item: TurnReferenceContextItem,
     world_state_replay: Vec<&'a RolloutItem>,
-    base_replacement_history: Option<&'a [ResponseItem]>,
+    base_replacement_history: Option<&'a [ResponseItemEnvelope]>,
     window: Option<ReconstructedWindow>,
 }
 
@@ -60,7 +61,7 @@ fn turn_ids_are_compatible(active_turn_id: Option<&str>, item_turn_id: Option<&s
 
 fn finalize_active_segment<'a>(
     active_segment: ActiveReplaySegment<'a>,
-    base_replacement_history: &mut Option<&'a [ResponseItem]>,
+    base_replacement_history: &mut Option<&'a [ResponseItemEnvelope]>,
     previous_turn_settings: &mut Option<PreviousTurnSettings>,
     reference_context_item: &mut TurnReferenceContextItem,
     world_state_replay: &mut Vec<&'a RolloutItem>,
@@ -136,7 +137,7 @@ impl Session {
                 _ => None,
             })
         };
-        let mut base_replacement_history: Option<&[ResponseItem]> = None;
+        let mut base_replacement_history: Option<&[ResponseItemEnvelope]> = None;
         let mut previous_turn_settings = None;
         let mut reference_context_item = TurnReferenceContextItem::NeverSet;
         let mut world_state_replay = Vec::new();
@@ -271,7 +272,8 @@ impl Session {
                 RolloutItem::ResponseItem(response_item) => {
                     let active_segment =
                         active_segment.get_or_insert_with(ActiveReplaySegment::default);
-                    active_segment.counts_as_user_turn |= is_user_turn_boundary(response_item);
+                    active_segment.counts_as_user_turn |=
+                        is_user_turn_boundary(&response_item.item);
                 }
                 RolloutItem::InterAgentCommunication(_) => {
                     let active_segment =
@@ -317,7 +319,7 @@ impl Session {
         let mut history = ContextManager::new();
         let mut saw_legacy_compaction_without_replacement_history = false;
         if let Some(base_replacement_history) = base_replacement_history {
-            history.replace(base_replacement_history.to_vec());
+            history.replace_annotated(base_replacement_history.to_vec());
         }
         // Materialize exact history semantics from the replay-derived suffix. The eventual lazy
         // design should keep this same replay shape, but drive it from a resumable reverse source
@@ -325,8 +327,8 @@ impl Session {
         for item in rollout_suffix {
             match item {
                 RolloutItem::ResponseItem(response_item) => {
-                    history.record_items(
-                        std::iter::once(response_item),
+                    history.record_annotated_items(
+                        std::slice::from_ref(response_item),
                         turn_context.model_info.truncation_policy.into(),
                     );
                 }
@@ -342,7 +344,7 @@ impl Session {
                     if let Some(replacement_history) = &compacted.replacement_history {
                         // This should actually never happen, because the reverse loop above (to build rollout_suffix)
                         // should stop before any compaction that has Some replacement_history
-                        history.replace(replacement_history.clone());
+                        history.replace_annotated(replacement_history.clone());
                     } else {
                         saw_legacy_compaction_without_replacement_history = true;
                         // Legacy rollouts without `replacement_history` should rebuild the
@@ -360,7 +362,7 @@ impl Session {
                             &user_messages,
                             &compacted.message,
                         );
-                        history.replace(rebuilt);
+                        history.replace_annotated(rebuilt);
                     }
                 }
                 RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
@@ -429,7 +431,7 @@ impl Session {
             id: None,
         });
         RolloutReconstruction {
-            history: history.into_raw_items(),
+            history: history.into_annotated_items(),
             previous_turn_settings,
             reference_context_item,
             world_state_baseline,

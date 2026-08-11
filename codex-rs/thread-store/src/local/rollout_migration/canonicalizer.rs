@@ -114,13 +114,13 @@ impl LegacyRolloutCanonicalizer {
         let bytes_before = self.bytes_written;
         match line.item {
             RolloutItem::SessionMeta(_) => return Ok(0),
-            RolloutItem::ResponseItem(ResponseItem::Other) => {
-                return Err(migration_error(
-                    "legacy rollout contains an unsupported response item",
-                ));
-            }
             RolloutItem::ResponseItem(response) => {
-                let hook = match &response {
+                if matches!(&response.item, ResponseItem::Other) {
+                    return Err(migration_error(
+                        "legacy rollout contains an unsupported response item",
+                    ));
+                }
+                let hook = match &response.item {
                     ResponseItem::Message {
                         role, content, id, ..
                     } if role == "user" => parse_hook_prompt_message(id.as_deref(), content),

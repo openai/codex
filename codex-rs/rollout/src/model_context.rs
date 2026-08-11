@@ -1,3 +1,4 @@
+use crate::ResponseItemEnvelope;
 use crate::RolloutItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
@@ -186,8 +187,8 @@ fn turn_ids_are_compatible(active_turn_id: Option<&str>, item_turn_id: Option<&s
         .is_none_or(|turn_id| item_turn_id.is_none_or(|item_turn_id| item_turn_id == turn_id))
 }
 
-fn response_item_counts_as_user_turn(response_item: &ResponseItem) -> bool {
-    match response_item {
+fn response_item_counts_as_user_turn(response_item: &ResponseItemEnvelope) -> bool {
+    match &response_item.item {
         ResponseItem::AgentMessage { .. } => true,
         ResponseItem::Message { role, content, .. } => {
             role == "assistant" && InterAgentCommunication::is_message_content(content)

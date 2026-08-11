@@ -5,6 +5,7 @@ use crate::context::world_state::WorldState;
 use crate::context::world_state::WorldStateSection;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
 use codex_protocol::AgentPath;
 use codex_protocol::ResponseItemId;
@@ -476,7 +477,10 @@ fn cloned_history_shares_items_until_mutated() {
 #[test]
 fn annotated_history_apis_preserve_envelopes() {
     let first_item = assistant_msg("first");
-    let first_envelope = ResponseItemEnvelope::new(first_item.clone());
+    let first_envelope = ResponseItemEnvelope {
+        item: first_item.clone(),
+        metadata: Some(CodexHarnessMetadata::default()),
+    };
     let mut history = ContextManager::new();
 
     history.replace_annotated(vec![first_envelope.clone()]);
@@ -486,6 +490,62 @@ fn annotated_history_apis_preserve_envelopes() {
         std::slice::from_ref(&first_envelope)
     );
     assert_eq!(history.into_raw_items(), vec![first_item]);
+}
+
+#[test]
+fn record_annotated_items_preserves_metadata_while_processing_item() {
+    let envelope = ResponseItemEnvelope {
+        item: ResponseItem::FunctionCallOutput {
+            id: None,
+            call_id: "call-1".to_string(),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text("word ".repeat(100)),
+                success: Some(true),
+            },
+            internal_chat_message_metadata_passthrough: None,
+        },
+        metadata: Some(CodexHarnessMetadata::default()),
+    };
+    let mut history = ContextManager::new();
+
+    history.record_annotated_items(std::slice::from_ref(&envelope), TruncationPolicy::Tokens(4));
+
+    assert_eq!(history.annotated_items().len(), 1);
+    assert_eq!(
+        history.annotated_items()[0].metadata,
+        Some(CodexHarnessMetadata::default())
+    );
+    assert_ne!(history.annotated_items()[0].item, envelope.item);
+}
+
+#[test]
+fn for_prompt_annotated_preserves_metadata_while_normalizing_item() {
+    let envelope = ResponseItemEnvelope {
+        item: ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![
+                ContentItem::InputText {
+                    text: "keep".to_string(),
+                },
+                ContentItem::InputImage {
+                    image_url: "data:image/png;base64,abc".to_string(),
+                    detail: None,
+                },
+            ],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+        metadata: Some(CodexHarnessMetadata::default()),
+    };
+    let mut history = ContextManager::new();
+    history.replace_annotated(vec![envelope.clone()]);
+
+    let normalized = history.for_prompt_annotated(&[InputModality::Text]);
+
+    assert_eq!(normalized.len(), 1);
+    assert_eq!(normalized[0].metadata, envelope.metadata);
+    assert_ne!(normalized[0].item, envelope.item);
 }
 
 #[test]

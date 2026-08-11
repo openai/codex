@@ -745,7 +745,7 @@ async fn spawn_guardian_review_session(
         ),
         None => (
             parent_compaction
-                .map(|item| InitialHistory::Forked(vec![RolloutItem::ResponseItem(item)])),
+                .map(|item| InitialHistory::Forked(vec![RolloutItem::ResponseItem(item.into())])),
             0,
             None,
         ),

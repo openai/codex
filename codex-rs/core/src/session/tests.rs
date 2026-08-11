@@ -105,8 +105,10 @@ use codex_config::permissions_toml::PermissionsToml;
 use codex_execpolicy::Decision;
 use codex_execpolicy::NetworkRuleProtocol;
 use codex_execpolicy::Policy;
+use codex_history::CodexHarnessMetadata;
 use codex_history::CompactedItem;
 use codex_history::InitialHistory;
+use codex_history::ResponseItemEnvelope;
 use codex_history::ResumedHistory;
 use codex_history::RolloutItem;
 use codex_network_proxy::NetworkProxyConfig;
@@ -658,6 +660,10 @@ fn test_model_client_session() -> crate::client::ModelClientSession {
 
 pub(super) fn raw_history_items(history: &ContextManager) -> Vec<ResponseItem> {
     history.raw_items().cloned().collect()
+}
+
+fn raw_envelopes(items: &[ResponseItemEnvelope]) -> Vec<ResponseItem> {
+    items.iter().map(|envelope| envelope.item.clone()).collect()
 }
 
 fn developer_input_texts(items: &[ResponseItem]) -> Vec<&str> {
@@ -1988,7 +1994,7 @@ async fn reconstruct_history_matches_live_compactions() {
         .reconstruct_history_from_rollout(reconstruction_turn.as_ref(), &rollout_items)
         .await;
 
-    assert_eq!(expected, reconstructed.history);
+    assert_eq!(expected, raw_envelopes(&reconstructed.history));
     assert_eq!(2, reconstructed.window_number);
     assert_eq!(
         reconstructed
@@ -2014,8 +2020,11 @@ async fn reconstruct_history_uses_replacement_history_verbatim() {
         }),
     };
     let replacement_history = vec![
-        summary_item.clone(),
-        ResponseItem::Message {
+        ResponseItemEnvelope {
+            item: summary_item.clone(),
+            metadata: Some(CodexHarnessMetadata::default()),
+        },
+        ResponseItemEnvelope::new(ResponseItem::Message {
             id: None,
             role: "developer".to_string(),
             content: vec![ContentItem::InputText {
@@ -2023,7 +2032,7 @@ async fn reconstruct_history_uses_replacement_history_verbatim() {
             }],
             phase: None,
             internal_chat_message_metadata_passthrough: None,
-        },
+        }),
     ];
     let first_window_id = Uuid::now_v7();
     let previous_window_id = Uuid::now_v7();
@@ -2213,7 +2222,7 @@ async fn record_inter_agent_communication_sets_turn_id_in_rollout_and_resume() {
         RolloutItem::InterAgentCommunicationMetadata {
             trigger_turn: false,
         },
-        RolloutItem::ResponseItem(expected_item.clone()),
+        RolloutItem::ResponseItem(expected_item.clone().into()),
     ];
     assert_eq!(
         strip_response_item_ids_from_json(serde_json::to_value(persisted_items).unwrap()),
@@ -2271,7 +2280,11 @@ async fn record_inter_agent_communication_preserves_item_id_in_rollout_and_resum
         panic!("expected resumed rollout history");
     };
     let persisted_item_id = resumed.history.iter().find_map(|item| match item {
-        RolloutItem::ResponseItem(item @ ResponseItem::AgentMessage { .. }) => item.id(),
+        RolloutItem::ResponseItem(item)
+            if matches!(&item.item, ResponseItem::AgentMessage { .. }) =>
+        {
+            item.id()
+        }
         _ => None,
     });
     assert_eq!(
@@ -2398,13 +2411,17 @@ async fn prepares_resumed_history_before_installing_it() {
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
-            history: Arc::new(vec![RolloutItem::ResponseItem(resumed_item)]),
+            history: Arc::new(vec![RolloutItem::ResponseItem(ResponseItemEnvelope {
+                item: resumed_item,
+                metadata: Some(CodexHarnessMetadata::default()),
+            })]),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
 
+    let history = session.state.lock().await.clone_history();
     assert_eq!(
-        raw_history_items(&session.state.lock().await.clone_history()),
+        raw_history_items(&history),
         vec![ResponseItem::Message {
             id: None,
             role: "user".to_string(),
@@ -2423,6 +2440,10 @@ async fn prepares_resumed_history_before_installing_it() {
             phase: None,
             internal_chat_message_metadata_passthrough: None,
         }]
+    );
+    assert_eq!(
+        history.annotated_items()[0].metadata,
+        Some(CodexHarnessMetadata::default())
     );
 }
 
@@ -3216,7 +3237,7 @@ async fn start_new_context_window_assigns_and_persists_item_ids() {
     });
     assert_eq!(
         persisted_replacement_history.cloned(),
-        Some(raw_history_items(&live_history))
+        Some(live_history.annotated_items().to_vec())
     );
 }
 
@@ -3235,6 +3256,10 @@ async fn record_initial_history_assigns_and_persists_id_for_forked_response_item
     ])
     .expect("developer message");
     let mut expected_item = response_item.clone();
+    let response_item = ResponseItemEnvelope {
+        item: response_item,
+        metadata: Some(CodexHarnessMetadata::default()),
+    };
 
     session
         .record_initial_history(InitialHistory::Forked(vec![RolloutItem::ResponseItem(
@@ -3254,6 +3279,10 @@ async fn record_initial_history_assigns_and_persists_id_for_forked_response_item
     assert!(live_item_id.starts_with("msg_"));
     expected_item.set_id(live_item.id().cloned());
     assert_eq!(raw_history_items(&live_history), vec![expected_item]);
+    assert_eq!(
+        live_history.annotated_items()[0].metadata,
+        Some(CodexHarnessMetadata::default())
+    );
 
     session.flush_rollout().await.expect("rollout should flush");
     let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
@@ -3262,8 +3291,8 @@ async fn record_initial_history_assigns_and_persists_id_for_forked_response_item
     else {
         panic!("expected resumed rollout history");
     };
-    let persisted_item_id = resumed.history.iter().find_map(|item| match item {
-        RolloutItem::ResponseItem(response_item) => response_item.id(),
+    let persisted_item = resumed.history.iter().find_map(|item| match item {
+        RolloutItem::ResponseItem(response_item) => Some(response_item),
         RolloutItem::SessionMeta(_)
         | RolloutItem::InterAgentCommunication(_)
         | RolloutItem::InterAgentCommunicationMetadata { .. }
@@ -3272,9 +3301,14 @@ async fn record_initial_history_assigns_and_persists_id_for_forked_response_item
         | RolloutItem::WorldState(_)
         | RolloutItem::EventMsg(_) => None,
     });
+    let persisted_item = persisted_item.expect("forked response item should be persisted");
     assert_eq!(
-        persisted_item_id.map(ResponseItemId::as_str),
+        persisted_item.id().map(ResponseItemId::as_str),
         Some(live_item_id.as_str())
+    );
+    assert_eq!(
+        persisted_item.metadata,
+        Some(CodexHarnessMetadata::default())
     );
 }
 
@@ -3532,6 +3566,7 @@ async fn thread_rollback_drops_last_turn_from_history() {
         .await;
     let rollout_items: Vec<RolloutItem> = full_history
         .into_iter()
+        .map(ResponseItemEnvelope::new)
         .map(RolloutItem::ResponseItem)
         .collect();
     sess.persist_rollout_items(&rollout_items).await;
@@ -3592,6 +3627,7 @@ async fn thread_rollback_clears_history_when_num_turns_exceeds_existing_turns() 
         .await;
     let rollout_items: Vec<RolloutItem> = full_history
         .into_iter()
+        .map(ResponseItemEnvelope::new)
         .map(RolloutItem::ResponseItem)
         .collect();
     sess.persist_rollout_items(&rollout_items).await;
@@ -3677,8 +3713,8 @@ async fn thread_rollback_recomputes_previous_turn_settings_and_reference_context
             },
         )),
         RolloutItem::TurnContext(first_context_item.clone()),
-        RolloutItem::ResponseItem(turn_one_user.clone()),
-        RolloutItem::ResponseItem(turn_one_assistant.clone()),
+        RolloutItem::ResponseItem(turn_one_user.clone().into()),
+        RolloutItem::ResponseItem(turn_one_assistant.clone().into()),
         RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: first_turn_id,
             started_at: None,
@@ -3708,8 +3744,8 @@ async fn thread_rollback_recomputes_previous_turn_settings_and_reference_context
             },
         )),
         RolloutItem::TurnContext(rolled_back_context_item),
-        RolloutItem::ResponseItem(turn_two_user),
-        RolloutItem::ResponseItem(turn_two_assistant),
+        RolloutItem::ResponseItem(turn_two_user.into()),
+        RolloutItem::ResponseItem(turn_two_assistant.into()),
         RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: rolled_back_turn_id,
             started_at: None,
@@ -3799,8 +3835,8 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
             ..Default::default()
         })),
         RolloutItem::TurnContext(first_context_item.clone()),
-        RolloutItem::ResponseItem(user_message("turn 1 user")),
-        RolloutItem::ResponseItem(assistant_message("turn 1 assistant")),
+        RolloutItem::ResponseItem(user_message("turn 1 user").into()),
+        RolloutItem::ResponseItem(assistant_message("turn 1 assistant").into()),
         RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: first_turn_id,
             started_at: None,
@@ -3821,7 +3857,13 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
         )),
         RolloutItem::Compacted(CompactedItem {
             message: "summary after compaction".to_string(),
-            replacement_history: Some(compacted_history.clone()),
+            replacement_history: Some(
+                compacted_history
+                    .iter()
+                    .cloned()
+                    .map(ResponseItemEnvelope::new)
+                    .collect(),
+            ),
             window_number: Some(7),
             first_window_id: Some(first_window_id.to_string()),
             previous_window_id: Some(previous_window_id.to_string()),
@@ -3859,8 +3901,8 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
             comp_hash: None,
             ..first_context_item.clone()
         }),
-        RolloutItem::ResponseItem(user_message("turn 2 user")),
-        RolloutItem::ResponseItem(assistant_message("turn 2 assistant")),
+        RolloutItem::ResponseItem(user_message("turn 2 user").into()),
+        RolloutItem::ResponseItem(assistant_message("turn 2 assistant").into()),
         RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: rolled_back_turn_id,
             started_at: None,
@@ -3937,8 +3979,8 @@ async fn thread_rollback_persists_marker_and_replays_cumulatively() {
             ..Default::default()
         })),
         RolloutItem::TurnContext(turn_context_item.clone()),
-        RolloutItem::ResponseItem(user_message("turn 1 user")),
-        RolloutItem::ResponseItem(assistant_message("turn 1 assistant")),
+        RolloutItem::ResponseItem(user_message("turn 1 user").into()),
+        RolloutItem::ResponseItem(assistant_message("turn 1 assistant").into()),
         RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-1".to_string(),
             started_at: None,
@@ -3966,8 +4008,8 @@ async fn thread_rollback_persists_marker_and_replays_cumulatively() {
             ..Default::default()
         })),
         RolloutItem::TurnContext(turn_context_item.clone()),
-        RolloutItem::ResponseItem(user_message("turn 2 user")),
-        RolloutItem::ResponseItem(assistant_message("turn 2 assistant")),
+        RolloutItem::ResponseItem(user_message("turn 2 user").into()),
+        RolloutItem::ResponseItem(assistant_message("turn 2 assistant").into()),
         RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-2".to_string(),
             started_at: None,
@@ -3995,8 +4037,8 @@ async fn thread_rollback_persists_marker_and_replays_cumulatively() {
             ..Default::default()
         })),
         RolloutItem::TurnContext(turn_context_item),
-        RolloutItem::ResponseItem(user_message("turn 3 user")),
-        RolloutItem::ResponseItem(assistant_message("turn 3 assistant")),
+        RolloutItem::ResponseItem(user_message("turn 3 user").into()),
+        RolloutItem::ResponseItem(assistant_message("turn 3 assistant").into()),
         RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-3".to_string(),
             started_at: None,
@@ -11438,7 +11480,7 @@ async fn sample_rollout(
         initial_context.insert(insert_at, msg);
     }
     for item in &initial_context {
-        rollout_items.push(RolloutItem::ResponseItem(item.clone()));
+        rollout_items.push(RolloutItem::ResponseItem(item.clone().into()));
     }
     live_history.record_items(
         initial_context.iter(),
@@ -11458,7 +11500,7 @@ async fn sample_rollout(
         std::iter::once(&user1),
         reconstruction_turn.model_info.truncation_policy.into(),
     );
-    rollout_items.push(RolloutItem::ResponseItem(user1.clone()));
+    rollout_items.push(RolloutItem::ResponseItem(user1.clone().into()));
 
     let assistant1 = ResponseItem::Message {
         id: None,
@@ -11473,7 +11515,7 @@ async fn sample_rollout(
         std::iter::once(&assistant1),
         reconstruction_turn.model_info.truncation_policy.into(),
     );
-    rollout_items.push(RolloutItem::ResponseItem(assistant1.clone()));
+    rollout_items.push(RolloutItem::ResponseItem(assistant1.clone().into()));
 
     let summary1 = "summary one";
     let snapshot1 = live_history
@@ -11481,7 +11523,7 @@ async fn sample_rollout(
         .for_prompt(&reconstruction_turn.model_info.input_modalities);
     let user_messages1 = collect_user_messages(&snapshot1);
     let rebuilt1 = compact::build_compacted_history(Vec::new(), &user_messages1, summary1);
-    live_history.replace(rebuilt1);
+    live_history.replace_annotated(rebuilt1);
     let (window_number, window_ids) = session.advance_auto_compact_window().await;
     rollout_items.push(RolloutItem::Compacted(CompactedItem {
         message: summary1.to_string(),
@@ -11505,7 +11547,7 @@ async fn sample_rollout(
         std::iter::once(&user2),
         reconstruction_turn.model_info.truncation_policy.into(),
     );
-    rollout_items.push(RolloutItem::ResponseItem(user2.clone()));
+    rollout_items.push(RolloutItem::ResponseItem(user2.clone().into()));
 
     let assistant2 = ResponseItem::Message {
         id: None,
@@ -11520,7 +11562,7 @@ async fn sample_rollout(
         std::iter::once(&assistant2),
         reconstruction_turn.model_info.truncation_policy.into(),
     );
-    rollout_items.push(RolloutItem::ResponseItem(assistant2.clone()));
+    rollout_items.push(RolloutItem::ResponseItem(assistant2.clone().into()));
 
     let summary2 = "summary two";
     let snapshot2 = live_history
@@ -11528,7 +11570,7 @@ async fn sample_rollout(
         .for_prompt(&reconstruction_turn.model_info.input_modalities);
     let user_messages2 = collect_user_messages(&snapshot2);
     let rebuilt2 = compact::build_compacted_history(Vec::new(), &user_messages2, summary2);
-    live_history.replace(rebuilt2);
+    live_history.replace_annotated(rebuilt2);
     let (window_number, window_ids) = session.advance_auto_compact_window().await;
     rollout_items.push(RolloutItem::Compacted(CompactedItem {
         message: summary2.to_string(),
@@ -11552,7 +11594,7 @@ async fn sample_rollout(
         std::iter::once(&user3),
         reconstruction_turn.model_info.truncation_policy.into(),
     );
-    rollout_items.push(RolloutItem::ResponseItem(user3));
+    rollout_items.push(RolloutItem::ResponseItem(user3.into()));
 
     let assistant3 = ResponseItem::Message {
         id: None,
@@ -11567,7 +11609,7 @@ async fn sample_rollout(
         std::iter::once(&assistant3),
         reconstruction_turn.model_info.truncation_policy.into(),
     );
-    rollout_items.push(RolloutItem::ResponseItem(assistant3));
+    rollout_items.push(RolloutItem::ResponseItem(assistant3.into()));
 
     (
         rollout_items,

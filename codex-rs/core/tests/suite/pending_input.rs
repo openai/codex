@@ -481,14 +481,16 @@ async fn queue_only_agent_mail_wakes_sleeping_root_and_persists_message() {
     assert!(history.items.iter().any(|item| {
         matches!(
             item,
-            RolloutItem::ResponseItem(codex_protocol::models::ResponseItem::AgentMessage {
-                content,
-                ..
-            }) if content.iter().any(|content| matches!(
-                content,
-                codex_protocol::models::AgentMessageInputContent::InputText { text }
-                    if text == CHILD_MESSAGE
-            ))
+            RolloutItem::ResponseItem(envelope)
+                if matches!(
+                    &envelope.item,
+                    codex_protocol::models::ResponseItem::AgentMessage { content, .. }
+                        if content.iter().any(|content| matches!(
+                            content,
+                            codex_protocol::models::AgentMessageInputContent::InputText { text }
+                                if text == CHILD_MESSAGE
+                        ))
+                )
         )
     }));
 }

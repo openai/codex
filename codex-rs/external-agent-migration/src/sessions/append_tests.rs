@@ -75,15 +75,18 @@ fn requires_a_strict_nonempty_model_prefix() {
         assert!(plan_append(&source, &rewritten).is_none());
     }
     let mut with_tool_call = history;
-    with_tool_call.push(RolloutItem::ResponseItem(ResponseItem::FunctionCall {
-        id: None,
-        name: "native_tool".to_string(),
-        namespace: None,
-        arguments: "{}".to_string(),
-        encrypted_function_args: None,
-        call_id: "native-call".to_string(),
-        internal_chat_message_metadata_passthrough: None,
-    }));
+    with_tool_call.push(RolloutItem::ResponseItem(
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "native_tool".to_string(),
+            namespace: None,
+            arguments: "{}".to_string(),
+            encrypted_function_args: None,
+            call_id: "native-call".to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        }
+        .into(),
+    ));
     assert!(plan_append(&source, &with_tool_call).is_none());
 }
 
@@ -105,7 +108,10 @@ fn model_messages(items: &[RolloutItem]) -> Vec<(MessageRole, &str)> {
     items
         .iter()
         .filter_map(|item| match item {
-            RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) => {
+            RolloutItem::ResponseItem(response_item) => {
+                let ResponseItem::Message { role, content, .. } = &response_item.item else {
+                    return None;
+                };
                 match (role.as_str(), content.as_slice()) {
                     ("user", [ContentItem::InputText { text }]) => {
                         Some((MessageRole::User, text.as_str()))

@@ -1,6 +1,8 @@
 use core_test_support::test_codex::local_selections;
 use std::fs;
+use std::path::Path;
 
+use anyhow::Context;
 use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -8,6 +10,7 @@ use codex_core::StartThreadOptions;
 use codex_core::X_CODEX_ROUTING_HINT_HEADER;
 use codex_core::compact::SUMMARY_PREFIX;
 use codex_features::Feature;
+use codex_history::CodexHarnessMetadata;
 use codex_history::InitialHistory;
 use codex_history::RolloutItem;
 use codex_history::RolloutLine;
@@ -369,6 +372,76 @@ fn amazon_bedrock_test_codex() -> TestCodexBuilder {
         })
 }
 
+fn is_retained_user_message(item: &ResponseItem, retained_text: &str) -> bool {
+    matches!(
+        item,
+        ResponseItem::Message { role, content, .. }
+            if role == "user"
+                && content.iter().any(|item| {
+                    matches!(item, ContentItem::InputText { text } if text == retained_text)
+                })
+    )
+}
+
+fn annotate_retained_user_in_rollout(path: &Path, retained_text: &str) -> Result<()> {
+    let mut rollout = fs::read_to_string(path)?
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(serde_json::from_str::<RolloutLine>)
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    rollout
+        .iter_mut()
+        .find_map(|line| match &mut line.item {
+            RolloutItem::ResponseItem(envelope)
+                if is_retained_user_message(&envelope.item, retained_text) =>
+            {
+                Some(envelope)
+            }
+            _ => None,
+        })
+        .context("persisted user response missing from rollout")?
+        .metadata = Some(CodexHarnessMetadata::default());
+
+    let contents = rollout
+        .iter()
+        .map(serde_json::to_string)
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .join("\n");
+    fs::write(path, format!("{contents}\n"))?;
+    Ok(())
+}
+
+fn assert_compacted_user_metadata(path: &Path, retained_text: &str) -> Result<()> {
+    let replacement_history = fs::read_to_string(path)?
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(serde_json::from_str::<RolloutLine>)
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .into_iter()
+        .rev()
+        .find_map(|line| match line.item {
+            RolloutItem::Compacted(compacted) => compacted.replacement_history,
+            _ => None,
+        })
+        .context("compacted replacement history missing")?;
+    assert!(
+        replacement_history.iter().any(|envelope| {
+            is_retained_user_message(&envelope.item, retained_text) && envelope.metadata.is_some()
+        }),
+        "compacted user message should retain its aligned harness metadata"
+    );
+    Ok(())
+}
+
+fn assert_compact_request_omits_harness_metadata(request: &responses::ResponsesRequest) {
+    for item in request.input() {
+        assert!(
+            item.get("metadata").is_none() && item.get("replacement_history_metadata").is_none(),
+            "provider request must not receive harness history metadata: {item}"
+        );
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn amazon_bedrock_uses_remote_compaction_endpoint() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -428,6 +501,70 @@ async fn amazon_bedrock_uses_remote_compaction_endpoint() -> Result<()> {
         item["type"] == "compaction"
             && item["encrypted_content"] == "BEDROCK_REMOTE_COMPACTED_SUMMARY"
     }));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_v2_retains_metadata_from_resumed_history() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = wiremock::MockServer::start().await;
+    let retained_text = "annotated v2 user message";
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                responses::ev_assistant_message("message-1", "before compaction"),
+                responses::ev_completed("response-1"),
+            ]),
+            sse(vec![
+                json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "compaction",
+                        "encrypted_content": "ANNOTATED_V2_COMPACTION_SUMMARY",
+                    },
+                }),
+                responses::ev_completed("response-compact"),
+            ]),
+        ],
+    )
+    .await;
+
+    let builder = || {
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                let _ = config.features.enable(Feature::RemoteCompactionV2);
+            })
+    };
+    let initial = builder().build(&server).await?;
+    initial.submit_turn(retained_text).await?;
+    let home = initial.home.clone();
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .context("rollout path")?;
+    initial.codex.shutdown_and_wait().await?;
+    annotate_retained_user_in_rollout(&rollout_path, retained_text)?;
+
+    let resumed = builder()
+        .resume(&server, home, rollout_path.clone())
+        .await?;
+    resumed.codex.submit(Op::Compact).await?;
+    wait_for_turn_complete(&resumed.codex).await;
+    resumed.codex.shutdown_and_wait().await?;
+
+    let requests = response_mock.requests();
+    let compact_request = requests.last().context("compact request")?;
+    assert_eq!(
+        compact_request.inputs_of_type("compaction_trigger").len(),
+        1
+    );
+    assert_compact_request_omits_harness_metadata(compact_request);
+    assert_compacted_user_metadata(&rollout_path, retained_text)?;
 
     Ok(())
 }
@@ -1141,7 +1278,10 @@ async fn remote_compact_v2_reuses_compaction_trigger_for_followups() -> Result<(
         developer_message(tool_notice),
     ]
     .into_iter()
-    .map(|item| serde_json::from_value(item).map(RolloutItem::ResponseItem))
+    .map(|item| {
+        serde_json::from_value::<ResponseItem>(item)
+            .map(|item| RolloutItem::ResponseItem(item.into()))
+    })
     .collect::<serde_json::Result<Vec<_>>>()?;
     let codex = harness
         .test()
@@ -2958,7 +3098,7 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
         {
             let has_compaction_item = replacement_history.iter().any(|item| {
                 matches!(
-                    item,
+                    &item.item,
                     ResponseItem::Compaction {
                         encrypted_content, ..
                     }
@@ -2967,7 +3107,7 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
             });
             let has_compacted_assistant_note = replacement_history.iter().any(|item| {
                 matches!(
-                    item,
+                    &item.item,
                     ResponseItem::Message { role, content, .. }
                         if role == "assistant"
                             && content.iter().any(|part| matches!(
@@ -2978,7 +3118,7 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
             });
             let has_permissions_developer_message = replacement_history.iter().any(|item| {
                 matches!(
-                    item,
+                    &item.item,
                     ResponseItem::Message { role, content, .. }
                         if role == "developer"
                             && content.iter().any(|part| matches!(

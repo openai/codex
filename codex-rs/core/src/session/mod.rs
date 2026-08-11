@@ -335,6 +335,7 @@ use codex_core_plugins::RecommendedPluginCandidatesInput;
 use codex_git_utils::get_git_repo_root;
 use codex_history::CompactedItem;
 use codex_history::InitialHistory;
+use codex_history::ResponseItemEnvelope;
 use codex_mcp::McpConfig;
 use codex_mcp::effective_mcp_servers;
 use codex_otel::SessionTelemetry;
@@ -1491,17 +1492,31 @@ impl Session {
         // Keep the recorded rollout unchanged. Prepare its reconstructed history before
         // installing it, so legacy media is processed once for this resume or fork and
         // will be processed again if the rollout is reconstructed in a future session.
-        // Never backfill resize notices during replay; only newly recorded items may
-        // emit them, so the historical model prefix remains unchanged.
+        // Replay disables image-resize notices, so media preparation remains one-to-one. Keep
+        // the prior batch behavior and carry history-only metadata in a positional sidecar.
+        let (mut prepared_history, metadata): (Vec<_>, Vec<_>) = history
+            .into_iter()
+            .map(|envelope| (envelope.item, envelope.metadata))
+            .unzip();
         let _ = prepare_image_response_items(
-            &mut history,
+            &mut prepared_history,
             ImagePreparationMode::DetailBased,
             ImageResizeNoticeMode::Disabled,
         );
-        prepare_audio_response_items(&mut history);
+        prepare_audio_response_items(&mut prepared_history);
+        assert_eq!(
+            prepared_history.len(),
+            metadata.len(),
+            "replay media preparation must remain one-to-one when resize notices are disabled"
+        );
+        history = prepared_history
+            .into_iter()
+            .zip(metadata)
+            .map(|(item, metadata)| ResponseItemEnvelope { item, metadata })
+            .collect();
         {
             let mut state = self.state.lock().await;
-            state.replace_history(history, reference_context_item);
+            state.replace_annotated_history(history, reference_context_item);
             if let Some(world_state) = world_state_baseline {
                 state.history.set_world_state_baseline(world_state);
             }
@@ -3027,7 +3042,7 @@ impl Session {
     fn assign_missing_rollout_response_item_ids(items: &mut [RolloutItem]) {
         for item in items {
             if let RolloutItem::ResponseItem(response_item) = item {
-                Self::assign_missing_response_item_id(response_item);
+                Self::assign_missing_response_item_id(&mut response_item.item);
             }
         }
     }
@@ -3233,7 +3248,7 @@ impl Session {
             RolloutItem::InterAgentCommunicationMetadata {
                 trigger_turn: communication.trigger_turn,
             },
-            RolloutItem::ResponseItem(response_item),
+            RolloutItem::ResponseItem(response_item.into()),
         ])
         .await;
         self.send_raw_response_items(turn_context, items).await;
@@ -3311,12 +3326,14 @@ impl Session {
 
     pub(crate) async fn replace_compacted_history(
         &self,
-        items: Vec<ResponseItem>,
+        mut items: Vec<ResponseItemEnvelope>,
         reference_context_item: Option<TurnContextItem>,
         world_state_baseline: Option<Arc<WorldState>>,
         metadata: CompactedHistoryMetadata,
     ) {
-        let items = Self::assign_missing_response_item_ids(Cow::Owned(items)).into_owned();
+        for envelope in &mut items {
+            Self::assign_missing_response_item_id(&mut envelope.item);
+        }
         let compacted_item = CompactedItem {
             message: metadata.message,
             replacement_history: Some(items.clone()),
@@ -3332,7 +3349,7 @@ impl Session {
         let mut world_state_item = None;
         {
             let mut state = self.state.lock().await;
-            state.replace_history(items, reference_context_item.clone());
+            state.replace_annotated_history(items, reference_context_item.clone());
             if let Some(world_state) = world_state_baseline {
                 let snapshot = world_state.snapshot();
                 world_state_item = Some(WorldStateItem::full(snapshot.clone().into_value()));
@@ -3361,6 +3378,7 @@ impl Session {
         let rollout_items: Vec<RolloutItem> = items
             .iter()
             .cloned()
+            .map(ResponseItemEnvelope::new)
             .map(RolloutItem::ResponseItem)
             .collect();
         self.persist_rollout_items(&rollout_items).await;
@@ -3716,7 +3734,10 @@ impl Session {
         let (window_number, window_ids) = window;
         let context_items = self
             .build_initial_context_with_world_state(turn_context, world_state.as_ref())
-            .await;
+            .await
+            .into_iter()
+            .map(ResponseItemEnvelope::new)
+            .collect();
         let turn_context_item = turn_context.to_turn_context_item();
         self.replace_compacted_history(
             context_items,

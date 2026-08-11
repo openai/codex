@@ -2741,15 +2741,18 @@ async fn resume_agent_restores_closed_agent_and_accepts_send_input() {
     let thread = manager
         .resume_thread_with_history(
             config.clone(),
-            InitialHistory::Forked(vec![RolloutItem::ResponseItem(ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: "materialized".to_string(),
-                }],
-                phase: None,
-                internal_chat_message_metadata_passthrough: None,
-            })]),
+            InitialHistory::Forked(vec![RolloutItem::ResponseItem(
+                ResponseItem::Message {
+                    id: None,
+                    role: "user".to_string(),
+                    content: vec![ContentItem::InputText {
+                        text: "materialized".to_string(),
+                    }],
+                    phase: None,
+                    internal_chat_message_metadata_passthrough: None,
+                }
+                .into(),
+            )]),
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy")),
             /*parent_trace*/ None,
             ClientMcpExtensions::default(),

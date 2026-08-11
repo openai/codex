@@ -220,7 +220,7 @@ fn source_model_items(items: &[RolloutItem]) -> Option<Vec<SourceModelItem<'_>>>
             RolloutItem::SessionMeta(_) | RolloutItem::InterAgentCommunicationMetadata { .. } => {}
             RolloutItem::ResponseItem(response_item) => {
                 model_items.push(SourceModelItem {
-                    response_item,
+                    response_item: &response_item.item,
                     append_start_index: append_start_index.take().unwrap_or(index),
                 });
             }
@@ -253,7 +253,7 @@ fn history_model_items(items: &[RolloutItem]) -> Option<Vec<&ResponseItem>> {
     for item in items {
         match item {
             RolloutItem::SessionMeta(_) | RolloutItem::InterAgentCommunicationMetadata { .. } => {}
-            RolloutItem::ResponseItem(response_item) => model_items.push(response_item),
+            RolloutItem::ResponseItem(response_item) => model_items.push(&response_item.item),
             RolloutItem::EventMsg(
                 EventMsg::ContextCompacted(_) | EventMsg::ThreadRolledBack(_),
             )

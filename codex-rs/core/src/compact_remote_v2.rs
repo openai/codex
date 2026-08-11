@@ -11,7 +11,7 @@ use crate::compact::InitialContextInjection;
 use crate::compact::compaction_status_from_result;
 use crate::compact_model_fallback::record_model_fallback;
 use crate::compact_model_fallback::should_retry_with_current_model;
-use crate::compact_remote::process_compacted_history;
+use crate::compact_remote::process_annotated_compacted_history;
 use crate::compact_remote::should_keep_compacted_history_item;
 use crate::compact_remote_history::HistoryItemGroup;
 use crate::compact_remote_history::history_item_groups;
@@ -32,6 +32,8 @@ use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
 use codex_analytics::CompactionTrigger;
+use codex_history::CodexHarnessMetadata;
+use codex_history::ResponseItemEnvelope;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
@@ -278,6 +280,7 @@ async fn run_remote_compact_task_inner_impl(
     let RemoteCompactV2Attempt {
         trace_input_history,
         prompt_input,
+        prompt_input_metadata,
         compaction_output,
         token_usage,
         owned_client_session: _owned_client_session,
@@ -290,12 +293,15 @@ async fn run_remote_compact_task_inner_impl(
         analytics_details.cache_write_input_tokens = Some(token_usage.cache_write_input_tokens);
     }
     let (compacted_history, retained_images) =
-        build_v2_compacted_history(&prompt_input, compaction_output);
+        build_v2_compacted_history(prompt_input, prompt_input_metadata, compaction_output);
     analytics_details.retained_image_count = Some(retained_images);
     let (new_window_number, new_window_ids) = sess.advance_auto_compact_window().await;
-    let (new_history, world_state_baseline) =
-        process_compacted_history(sess.as_ref(), compacted_history, &initial_context_injection)
-            .await;
+    let (new_history, world_state_baseline) = process_annotated_compacted_history(
+        sess.as_ref(),
+        compacted_history,
+        &initial_context_injection,
+    )
+    .await;
 
     let reference_context_item = match initial_context_injection {
         InitialContextInjection::DoNotInject => None,
@@ -304,9 +310,13 @@ async fn run_remote_compact_task_inner_impl(
         }
     };
     if let Some(trace_input_history) = trace_input_history.as_deref() {
+        let replacement_history = new_history
+            .iter()
+            .map(|envelope| envelope.item.clone())
+            .collect::<Vec<_>>();
         compaction_trace.record_installed(&CompactionCheckpointTracePayload {
             input_history: trace_input_history,
-            replacement_history: &new_history,
+            replacement_history: &replacement_history,
         });
     }
     sess.replace_compacted_history(
@@ -443,22 +453,28 @@ async fn collect_compaction_output(
 }
 
 fn build_v2_compacted_history(
-    prompt_input: &[ResponseItem],
+    prompt_input: Vec<ResponseItem>,
+    prompt_input_metadata: Vec<Option<CodexHarnessMetadata>>,
     compaction_output: ResponseItem,
-) -> (Vec<ResponseItem>, usize) {
+) -> (Vec<ResponseItemEnvelope>, usize) {
+    debug_assert_eq!(prompt_input.len(), prompt_input_metadata.len());
+    let prompt_input = prompt_input
+        .into_iter()
+        .zip(prompt_input_metadata)
+        .map(|(item, metadata)| ResponseItemEnvelope { item, metadata })
+        .collect::<Vec<_>>();
     let retained = history_item_groups(prompt_input)
-        .filter(|group| is_retained_for_remote_compaction_v2(group.source))
-        .filter(|group| should_keep_compacted_history_item(group.source))
+        .filter(|group| is_retained_for_remote_compaction_v2(&group.source.item))
+        .filter(|group| should_keep_compacted_history_item(&group.source.item))
         .flat_map(HistoryItemGroup::into_items)
-        .cloned()
         .collect::<Vec<_>>();
     let mut retained =
         truncate_retained_messages_for_remote_compaction(retained, RETAINED_MESSAGE_TOKEN_BUDGET);
     let retained_image_count = retained
         .iter()
-        .map(retained_input_image_count)
+        .map(|envelope| retained_input_image_count(&envelope.item))
         .sum::<usize>();
-    retained.push(compaction_output);
+    retained.push(ResponseItemEnvelope::new(compaction_output));
     (retained, retained_image_count)
 }
 
@@ -492,9 +508,9 @@ fn retained_input_image_count(item: &ResponseItem) -> usize {
 }
 
 fn truncate_retained_messages_for_remote_compaction(
-    items: Vec<ResponseItem>,
+    items: Vec<ResponseItemEnvelope>,
     max_tokens: usize,
-) -> Vec<ResponseItem> {
+) -> Vec<ResponseItemEnvelope> {
     let mut remaining = max_tokens;
     let mut truncated_reversed = Vec::with_capacity(items.len());
     for group in history_item_groups(items)
@@ -509,8 +525,8 @@ fn truncate_retained_messages_for_remote_compaction(
         let notice_tokens = group
             .attached_notice
             .as_ref()
-            .map_or(0, |notice| message_text_token_count(notice).max(1));
-        let token_count = message_text_token_count(&group.source)
+            .map_or(0, |notice| message_text_token_count(&notice.item).max(1));
+        let token_count = message_text_token_count(&group.source.item)
             .max(1)
             .saturating_add(notice_tokens);
         if token_count <= remaining {
@@ -553,15 +569,19 @@ fn message_text_token_count(item: &ResponseItem) -> usize {
 }
 
 fn truncate_message_text_to_token_budget(
-    item: ResponseItem,
+    envelope: ResponseItemEnvelope,
     max_tokens: usize,
-) -> Option<ResponseItem> {
+) -> Option<ResponseItemEnvelope> {
+    let ResponseItemEnvelope {
+        item,
+        metadata: harness_metadata,
+    } = envelope;
     let ResponseItem::Message {
         id,
         role,
         content,
         phase,
-        internal_chat_message_metadata_passthrough: metadata,
+        internal_chat_message_metadata_passthrough: passthrough_metadata,
     } = item
     else {
         return None;
@@ -597,12 +617,15 @@ fn truncate_message_text_to_token_budget(
         return None;
     }
 
-    Some(ResponseItem::Message {
-        id,
-        role,
-        content: truncated_content,
-        phase,
-        internal_chat_message_metadata_passthrough: metadata,
+    Some(ResponseItemEnvelope {
+        item: ResponseItem::Message {
+            id,
+            role,
+            content: truncated_content,
+            phase,
+            internal_chat_message_metadata_passthrough: passthrough_metadata,
+        },
+        metadata: harness_metadata,
     })
 }
 
@@ -625,6 +648,32 @@ mod tests {
             phase,
             internal_chat_message_metadata_passthrough: None,
         }
+    }
+
+    fn build_without_metadata(
+        input: Vec<ResponseItem>,
+        output: ResponseItem,
+    ) -> (Vec<ResponseItemEnvelope>, usize) {
+        let metadata = vec![None; input.len()];
+        build_v2_compacted_history(input, metadata, output)
+    }
+
+    fn annotated(items: Vec<ResponseItem>) -> Vec<ResponseItemEnvelope> {
+        items.into_iter().map(ResponseItemEnvelope::new).collect()
+    }
+
+    fn raw(items: Vec<ResponseItemEnvelope>) -> Vec<ResponseItem> {
+        items
+            .into_iter()
+            .map(ResponseItemEnvelope::into_item)
+            .collect()
+    }
+
+    fn truncate_without_metadata(items: Vec<ResponseItem>, max_tokens: usize) -> Vec<ResponseItem> {
+        raw(truncate_retained_messages_for_remote_compaction(
+            annotated(items),
+            max_tokens,
+        ))
     }
 
     fn response_stream(events: Vec<CodexResult<ResponseEvent>>) -> ResponseStream {
@@ -670,12 +719,53 @@ mod tests {
             internal_chat_message_metadata_passthrough: None,
         };
 
-        let (history, _) = build_v2_compacted_history(&input, output.clone());
+        let (history, _) = build_without_metadata(input, output.clone());
+
+        assert_eq!(
+            raw(history),
+            vec![message("user", "user", /*phase*/ None), output]
+        );
+    }
+
+    #[test]
+    fn build_v2_compacted_history_preserves_retained_metadata_sidecar() {
+        let retained = message("user", "keep", /*phase*/ None);
+        let filtered = message("developer", "drop", /*phase*/ None);
+        let output = ResponseItem::Compaction {
+            id: None,
+            encrypted_content: "new".to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        };
+        let (history, _) = build_v2_compacted_history(
+            vec![filtered, retained.clone()],
+            vec![None, Some(CodexHarnessMetadata::default())],
+            output.clone(),
+        );
 
         assert_eq!(
             history,
-            vec![message("user", "user", /*phase*/ None), output]
+            vec![
+                ResponseItemEnvelope {
+                    item: retained,
+                    metadata: Some(CodexHarnessMetadata::default()),
+                },
+                ResponseItemEnvelope::new(output),
+            ]
         );
+    }
+
+    #[test]
+    fn retained_history_truncation_preserves_metadata() {
+        let item = ResponseItemEnvelope {
+            item: message("user", "word ".repeat(200).as_str(), /*phase*/ None),
+            metadata: Some(CodexHarnessMetadata::default()),
+        };
+
+        let truncated =
+            truncate_retained_messages_for_remote_compaction(vec![item], /*max_tokens*/ 4);
+
+        assert_eq!(truncated.len(), 1);
+        assert_eq!(truncated[0].metadata, Some(CodexHarnessMetadata::default()));
     }
 
     #[test]
@@ -699,9 +789,9 @@ mod tests {
             internal_chat_message_metadata_passthrough: None,
         };
 
-        let (history, _) = build_v2_compacted_history(&input, output.clone());
+        let (history, _) = build_without_metadata(input, output.clone());
 
-        assert_eq!(history, vec![old, new, output]);
+        assert_eq!(raw(history), vec![old, new, output]);
     }
 
     #[test]
@@ -731,7 +821,7 @@ mod tests {
             internal_chat_message_metadata_passthrough: None,
         };
 
-        let (_, retained_image_count) = build_v2_compacted_history(&input, output);
+        let (_, retained_image_count) = build_without_metadata(input, output);
 
         assert_eq!(retained_image_count, 2);
     }
@@ -746,8 +836,7 @@ mod tests {
             new.clone(),
         ];
 
-        let truncated =
-            truncate_retained_messages_for_remote_compaction(retained, /*max_tokens*/ 3);
+        let truncated = truncate_without_metadata(retained, /*max_tokens*/ 3);
 
         assert_eq!(
             truncated,
@@ -779,8 +868,7 @@ mod tests {
             internal_chat_message_metadata_passthrough: None,
         };
 
-        let truncated =
-            truncate_retained_messages_for_remote_compaction(vec![item], /*max_tokens*/ 3);
+        let truncated = truncate_without_metadata(vec![item], /*max_tokens*/ 3);
 
         assert_eq!(
             truncated,
@@ -824,8 +912,7 @@ mod tests {
             newest.clone(),
         ];
 
-        let truncated =
-            truncate_retained_messages_for_remote_compaction(retained, /*max_tokens*/ 2);
+        let truncated = truncate_without_metadata(retained, /*max_tokens*/ 2);
 
         assert_eq!(truncated, vec![image_only_message, newest]);
     }
@@ -845,8 +932,7 @@ mod tests {
         let newest = message("user", "new", /*phase*/ None);
         let retained = vec![image_only_message, newest.clone()];
 
-        let truncated =
-            truncate_retained_messages_for_remote_compaction(retained, /*max_tokens*/ 1);
+        let truncated = truncate_without_metadata(retained, /*max_tokens*/ 1);
 
         assert_eq!(truncated, vec![newest]);
     }

@@ -6,9 +6,6 @@ use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
 use std::time::SystemTime;
 
-use crate::InitialHistory;
-use crate::RolloutItem;
-use crate::RolloutLine;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HistoryPosition;
@@ -21,7 +18,10 @@ use tempfile::TempDir;
 use uuid::Uuid;
 
 use super::*;
+use crate::InitialHistory;
 use crate::RolloutConfig;
+use crate::RolloutItem;
+use crate::RolloutLine;
 use crate::RolloutRecorder;
 use crate::RolloutRecorderParams;
 use crate::append_rollout_item_to_path;

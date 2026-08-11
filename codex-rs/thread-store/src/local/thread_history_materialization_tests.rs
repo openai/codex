@@ -2296,26 +2296,31 @@ fn turn_completed(turn_id: &str) -> RolloutItem {
 }
 
 fn user_message(message: &str) -> RolloutItem {
-    RolloutItem::ResponseItem(ResponseItem::Message {
-        id: None,
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
-            text: message.to_string(),
-        }],
-        phase: None,
-        internal_chat_message_metadata_passthrough: None,
-    })
+    RolloutItem::ResponseItem(
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: message.to_string(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        }
+        .into(),
+    )
 }
 
 fn contains_user_message(items: &[RolloutItem], expected: &str) -> bool {
     items.iter().any(|item| {
-        matches!(
-            item,
-            RolloutItem::ResponseItem(ResponseItem::Message { content, .. })
-                if content.iter().any(|content| {
-                    matches!(content, ContentItem::InputText { text } if text == expected)
-                })
-        )
+        let RolloutItem::ResponseItem(response_item) = item else {
+            return false;
+        };
+        let ResponseItem::Message { content, .. } = &response_item.item else {
+            return false;
+        };
+        content
+            .iter()
+            .any(|content| matches!(content, ContentItem::InputText { text } if text == expected))
     })
 }
 

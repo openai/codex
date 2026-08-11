@@ -1179,11 +1179,15 @@ async fn interrupt_during_mcp_startup_preserves_user_input_in_history(
         .position(|item| {
             matches!(
                 item,
-                RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. })
-                    if role == "user"
-                        && content.iter().any(|item| {
-                            matches!(item, ContentItem::InputText { text } if text == prompt)
-                        })
+                RolloutItem::ResponseItem(envelope)
+                    if matches!(
+                        &envelope.item,
+                        ResponseItem::Message { role, content, .. }
+                            if role == "user"
+                                && content.iter().any(|item| {
+                                    matches!(item, ContentItem::InputText { text } if text == prompt)
+                                })
+                    )
             )
         })
         .expect("an interrupted turn should retain its submitted user prompt");
@@ -1193,10 +1197,14 @@ async fn interrupt_during_mcp_startup_preserves_user_input_in_history(
         .position(|item| {
             matches!(
                 item,
-                RolloutItem::ResponseItem(ResponseItem::Message { content, .. })
-                    if content.iter().any(|item| {
-                        matches!(item, ContentItem::InputText { text } if text.contains("<turn_aborted>"))
-                    })
+                RolloutItem::ResponseItem(envelope)
+                    if matches!(
+                        &envelope.item,
+                        ResponseItem::Message { content, .. }
+                            if content.iter().any(|item| {
+                                matches!(item, ContentItem::InputText { text } if text.contains("<turn_aborted>"))
+                            })
+                    )
             )
         })
         .expect("an interrupted turn should retain its interruption marker");

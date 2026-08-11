@@ -20,6 +20,7 @@ use time::macros::format_description;
 use uuid::Uuid;
 
 use crate::INTERACTIVE_SESSION_SOURCES;
+use crate::ResponseItemEnvelope;
 use crate::RolloutItem;
 use crate::RolloutLine;
 use crate::find_thread_path_by_id_str;
@@ -31,6 +32,7 @@ use crate::list::get_threads;
 use crate::list::read_head_for_summary;
 use crate::rollout_date_parts;
 use anyhow::Result;
+use codex_history::CodexHarnessMetadata;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -1265,6 +1267,39 @@ async fn test_base_instructions_present_in_meta_is_preserved() {
 }
 
 #[tokio::test]
+async fn read_head_for_summary_omits_harness_metadata() {
+    let temp = TempDir::new().unwrap();
+    let rollout_path = temp.path().join("rollout.jsonl");
+    let response_item = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "hello".to_string(),
+        }],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let line = RolloutLine {
+        timestamp: "2025-04-03T10:30:00Z".to_string(),
+        ordinal: None,
+        item: RolloutItem::ResponseItem(ResponseItemEnvelope {
+            item: response_item.clone(),
+            metadata: Some(CodexHarnessMetadata {}),
+        }),
+    };
+    fs::write(
+        &rollout_path,
+        format!("{}\n", serde_json::to_string(&line).unwrap()),
+    )
+    .unwrap();
+
+    let head = read_head_for_summary(&rollout_path).await.unwrap();
+
+    assert_eq!(head, vec![serde_json::to_value(response_item).unwrap()]);
+    assert!(head[0].get("metadata").is_none());
+}
+
+#[tokio::test]
 async fn test_created_at_sort_uses_file_mtime_for_updated_at() -> Result<()> {
     let temp = TempDir::new().unwrap();
     let home = temp.path();
@@ -1384,7 +1419,7 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
         let response_line = RolloutLine {
             timestamp: format!("{ts}-{idx:02}"),
             ordinal: None,
-            item: RolloutItem::ResponseItem(ResponseItem::Message {
+            item: RolloutItem::ResponseItem(ResponseItemEnvelope::new(ResponseItem::Message {
                 id: None,
                 role: "assistant".into(),
                 content: vec![ContentItem::OutputText {
@@ -1392,7 +1427,7 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
                 }],
                 phase: None,
                 internal_chat_message_metadata_passthrough: None,
-            }),
+            })),
         };
         writeln!(file, "{}", serde_json::to_string(&response_line)?)?;
     }

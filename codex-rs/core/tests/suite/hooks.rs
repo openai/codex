@@ -1265,7 +1265,8 @@ fn rollout_hook_prompt_texts(text: &str) -> Result<Vec<String>> {
             continue;
         }
         let rollout: RolloutLine = serde_json::from_str(trimmed).context("parse rollout line")?;
-        if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) = rollout.item
+        if let RolloutItem::ResponseItem(envelope) = rollout.item
+            && let ResponseItem::Message { role, content, .. } = envelope.item
             && role == "user"
         {
             for item in content {

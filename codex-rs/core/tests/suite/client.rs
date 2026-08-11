@@ -100,6 +100,10 @@ const INSTALLATION_ID_FILENAME: &str = "installation_id";
 const TEST_WINDOW_ID: &str = "test-thread:0";
 const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
 
+fn rollout_response_item(item: ResponseItem) -> RolloutItem {
+    RolloutItem::ResponseItem(item.into())
+}
+
 fn test_turn_responses_metadata(
     _client: &ModelClient,
     thread_id: ThreadId,
@@ -516,7 +520,7 @@ async fn synthetic_call_output_id_is_stable_across_resumes() -> anyhow::Result<(
         RolloutLine {
             timestamp: "2024-01-01T00:00:01.000Z".to_string(),
             ordinal: None,
-            item: RolloutItem::ResponseItem(ResponseItem::FunctionCall {
+            item: rollout_response_item(ResponseItem::FunctionCall {
                 id: Some(ResponseItemId::with_suffix("fc", "existing")),
                 name: "do_it".to_string(),
                 namespace: None,
@@ -1038,12 +1042,12 @@ async fn resume_replays_legacy_js_repl_image_rollout_shapes() {
         RolloutLine {
             timestamp: "2024-01-01T00:00:01.000Z".to_string(),
             ordinal: None,
-            item: RolloutItem::ResponseItem(legacy_custom_tool_call),
+            item: rollout_response_item(legacy_custom_tool_call),
         },
         RolloutLine {
             timestamp: "2024-01-01T00:00:02.000Z".to_string(),
             ordinal: None,
-            item: RolloutItem::ResponseItem(ResponseItem::CustomToolCallOutput {
+            item: rollout_response_item(ResponseItem::CustomToolCallOutput {
                 id: None,
                 call_id: "legacy-js-call".to_string(),
                 name: None,
@@ -1054,7 +1058,7 @@ async fn resume_replays_legacy_js_repl_image_rollout_shapes() {
         RolloutLine {
             timestamp: "2024-01-01T00:00:03.000Z".to_string(),
             ordinal: None,
-            item: RolloutItem::ResponseItem(ResponseItem::Message {
+            item: rollout_response_item(ResponseItem::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputImage {
@@ -1178,7 +1182,7 @@ async fn resume_replays_image_tool_outputs_with_detail() {
         RolloutLine {
             timestamp: "2024-01-01T00:00:01.000Z".to_string(),
             ordinal: None,
-            item: RolloutItem::ResponseItem(ResponseItem::FunctionCall {
+            item: rollout_response_item(ResponseItem::FunctionCall {
                 id: None,
                 name: "view_image".to_string(),
                 namespace: None,
@@ -1191,7 +1195,7 @@ async fn resume_replays_image_tool_outputs_with_detail() {
         RolloutLine {
             timestamp: "2024-01-01T00:00:01.500Z".to_string(),
             ordinal: None,
-            item: RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
+            item: rollout_response_item(ResponseItem::FunctionCallOutput {
                 id: None,
                 call_id: function_call_id.to_string(),
                 output: FunctionCallOutputPayload::from_content_items(vec![
@@ -1206,7 +1210,7 @@ async fn resume_replays_image_tool_outputs_with_detail() {
         RolloutLine {
             timestamp: "2024-01-01T00:00:02.000Z".to_string(),
             ordinal: None,
-            item: RolloutItem::ResponseItem(ResponseItem::CustomToolCall {
+            item: rollout_response_item(ResponseItem::CustomToolCall {
                 id: None,
                 status: Some("completed".to_string()),
                 call_id: custom_call_id.to_string(),
@@ -1219,7 +1223,7 @@ async fn resume_replays_image_tool_outputs_with_detail() {
         RolloutLine {
             timestamp: "2024-01-01T00:00:02.500Z".to_string(),
             ordinal: None,
-            item: RolloutItem::ResponseItem(ResponseItem::CustomToolCallOutput {
+            item: rollout_response_item(ResponseItem::CustomToolCallOutput {
                 id: None,
                 call_id: custom_call_id.to_string(),
                 name: None,

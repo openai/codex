@@ -17,6 +17,7 @@ use crate::session::PreviousTurnSettings;
 use crate::session::session::SessionConfiguration;
 use crate::session::time_reminder::CurrentTimeReminderState;
 use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
+use codex_history::ResponseItemEnvelope;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -115,12 +116,24 @@ impl SessionState {
         self.history.clone()
     }
 
+    #[cfg(test)]
     pub(crate) fn replace_history(
         &mut self,
         items: Vec<ResponseItem>,
         reference_context_item: Option<TurnContextItem>,
     ) {
         self.history.replace(items);
+        self.history
+            .set_reference_context_item(reference_context_item);
+        self.auto_compact_window.clear_prefill();
+    }
+
+    pub(crate) fn replace_annotated_history(
+        &mut self,
+        items: Vec<ResponseItemEnvelope>,
+        reference_context_item: Option<TurnContextItem>,
+    ) {
+        self.history.replace_annotated(items);
         self.history
             .set_reference_context_item(reference_context_item);
         self.auto_compact_window.clear_prefill();

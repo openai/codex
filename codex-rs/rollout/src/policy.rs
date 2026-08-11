@@ -8,7 +8,7 @@ use codex_protocol::protocol::ThreadHistoryMode;
 /// Whether a rollout `item` should be persisted in rollout files.
 pub fn is_persisted_rollout_item(item: &RolloutItem, history_mode: ThreadHistoryMode) -> bool {
     match item {
-        RolloutItem::ResponseItem(item) => should_persist_response_item(item),
+        RolloutItem::ResponseItem(item) => should_persist_response_item(&item.item),
         RolloutItem::InterAgentCommunication(_)
         | RolloutItem::InterAgentCommunicationMetadata { .. } => true,
         RolloutItem::EventMsg(ev) => should_persist_event_msg(ev, history_mode),

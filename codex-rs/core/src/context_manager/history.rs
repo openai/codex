@@ -9,6 +9,7 @@ use crate::event_mapping::is_contextual_user_message_content;
 use crate::session::turn_context::TurnContext;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
 use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::BaseInstructions;
@@ -127,28 +128,61 @@ impl ContextManager {
     pub(crate) fn record_items<I>(&mut self, items: I, policy: TruncationPolicy)
     where
         I: IntoIterator,
-        I::Item: std::ops::Deref<Target = ResponseItem>,
+        I::Item: Deref<Target = ResponseItem>,
     {
-        for item in items {
-            let item_ref = item.deref();
-            if !is_api_message(item_ref) {
+        self.record_items_with_metadata(items.into_iter().map(|item| (item, None)), policy);
+    }
+
+    /// Records history envelopes while preserving their history-only metadata.
+    pub(crate) fn record_annotated_items(
+        &mut self,
+        items: &[ResponseItemEnvelope],
+        policy: TruncationPolicy,
+    ) {
+        self.record_items_with_metadata(
+            items
+                .iter()
+                .map(|envelope| (&envelope.item, envelope.metadata.as_ref())),
+            policy,
+        );
+    }
+
+    fn record_items_with_metadata<'a, I, T>(&mut self, items: I, policy: TruncationPolicy)
+    where
+        I: IntoIterator<Item = (T, Option<&'a CodexHarnessMetadata>)>,
+        T: Deref<Target = ResponseItem>,
+    {
+        for (item, metadata) in items {
+            let item = item.deref();
+            if !is_api_message(item) {
                 continue;
             }
 
-            let processed = Self::process_item(item_ref, policy);
-            Arc::make_mut(&mut self.items).push(ResponseItemEnvelope::new(processed));
+            let processed = ResponseItemEnvelope {
+                item: Self::process_item(item, policy),
+                metadata: metadata.cloned(),
+            };
+            Arc::make_mut(&mut self.items).push(processed);
         }
     }
 
     /// Returns the history prepared for sending to the model. This applies a proper
     /// normalization and drops un-suited items. Unsupported image and audio content
     /// is stripped from messages and tool outputs according to `input_modalities`.
-    pub(crate) fn for_prompt(mut self, input_modalities: &[InputModality]) -> Vec<ResponseItem> {
-        self.normalize_history(input_modalities);
-        Arc::unwrap_or_clone(self.items)
+    pub(crate) fn for_prompt(self, input_modalities: &[InputModality]) -> Vec<ResponseItem> {
+        self.for_prompt_annotated(input_modalities)
             .into_iter()
             .map(ResponseItemEnvelope::into_item)
             .collect()
+    }
+
+    /// Returns normalized history envelopes for internal consumers that must retain metadata.
+    pub(crate) fn for_prompt_annotated(
+        mut self,
+        input_modalities: &[InputModality],
+    ) -> Vec<ResponseItemEnvelope> {
+        self.normalize_history(input_modalities);
+        Arc::unwrap_or_clone(self.items)
     }
 
     /// Iterates over raw response items without exposing their history envelopes.
@@ -165,10 +199,15 @@ impl ContextManager {
 
     /// Returns raw items in the history and consumes the snapshot.
     pub(crate) fn into_raw_items(self) -> Vec<ResponseItem> {
-        Arc::unwrap_or_clone(self.items)
+        self.into_annotated_items()
             .into_iter()
             .map(ResponseItemEnvelope::into_item)
             .collect()
+    }
+
+    /// Returns annotated history items and consumes the snapshot.
+    pub(crate) fn into_annotated_items(self) -> Vec<ResponseItemEnvelope> {
+        Arc::unwrap_or_clone(self.items)
     }
 
     pub(crate) fn history_version(&self) -> u64 {
@@ -217,6 +256,7 @@ impl ContextManager {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn replace(&mut self, items: Vec<ResponseItem>) {
         self.replace_annotated(items.into_iter().map(ResponseItemEnvelope::new).collect());
     }

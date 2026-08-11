@@ -1240,7 +1240,7 @@ pub async fn read_head_for_summary(path: &Path) -> io::Result<Vec<serde_json::Va
                     }
                 }
                 RolloutItem::ResponseItem(item) => {
-                    if let Ok(value) = serde_json::to_value(item) {
+                    if let Ok(value) = serde_json::to_value(&item.item) {
                         head.push(value);
                     }
                 }

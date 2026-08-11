@@ -541,15 +541,18 @@ fn turn_complete(turn_id: &str) -> RolloutItem {
 }
 
 fn user_message(message: &str) -> RolloutItem {
-    RolloutItem::ResponseItem(ResponseItem::Message {
-        id: None,
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
-            text: message.to_string(),
-        }],
-        phase: None,
-        internal_chat_message_metadata_passthrough: None,
-    })
+    RolloutItem::ResponseItem(
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: message.to_string(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        }
+        .into(),
+    )
 }
 
 fn contextual_user_message() -> RolloutItem {
@@ -575,15 +578,18 @@ fn completed_user_message(turn_id: &str, message: &str) -> RolloutItem {
 }
 
 fn agent_message(message: &str) -> RolloutItem {
-    RolloutItem::ResponseItem(ResponseItem::AgentMessage {
-        id: None,
-        author: "worker".to_string(),
-        recipient: "root".to_string(),
-        content: vec![AgentMessageInputContent::InputText {
-            text: message.to_string(),
-        }],
-        internal_chat_message_metadata_passthrough: None,
-    })
+    RolloutItem::ResponseItem(
+        ResponseItem::AgentMessage {
+            id: None,
+            author: "worker".to_string(),
+            recipient: "root".to_string(),
+            content: vec![AgentMessageInputContent::InputText {
+                text: message.to_string(),
+            }],
+            internal_chat_message_metadata_passthrough: None,
+        }
+        .into(),
+    )
 }
 
 fn turn_context(root: &Path, turn_id: &str) -> RolloutItem {
@@ -614,7 +620,8 @@ fn turn_context(root: &Path, turn_id: &str) -> RolloutItem {
 fn compacted(message: &str, replacement_history: Option<Vec<ResponseItem>>) -> RolloutItem {
     RolloutItem::Compacted(CompactedItem {
         message: message.to_string(),
-        replacement_history,
+        replacement_history: replacement_history
+            .map(|items| items.into_iter().map(Into::into).collect()),
         window_number: Some(1),
         first_window_id: None,
         previous_window_id: None,

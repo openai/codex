@@ -794,7 +794,7 @@ fn replacement_history_from_rollout(path: &Path) -> Result<Value> {
         {
             let values = items
                 .into_iter()
-                .map(|item| serde_json::to_value(item).expect("serialize replacement item"))
+                .map(|item| serde_json::to_value(item.item).expect("serialize replacement item"))
                 .collect::<Vec<_>>();
             replacement_history = Some(Value::Array(values));
         }

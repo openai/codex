@@ -6,11 +6,11 @@ use std::io::Seek;
 use std::io::SeekFrom;
 use std::path::Path;
 
-use crate::RolloutItem;
-use crate::RolloutLine;
 use codex_protocol::protocol::HistoryPosition;
 use codex_protocol::protocol::ThreadHistoryMode;
 
+use crate::RolloutItem;
+use crate::RolloutLine;
 use crate::reverse_jsonl_scanner::ReverseJsonlScanner;
 use crate::reverse_jsonl_scanner::ScanOutcome;
 

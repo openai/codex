@@ -759,15 +759,18 @@ async fn seed_stage1_candidate(
     let line = RolloutLine {
         timestamp: updated_at.to_rfc3339(),
         ordinal: None,
-        item: RolloutItem::ResponseItem(ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "remember this startup test conversation".to_string(),
-            }],
-            phase: None,
-            internal_chat_message_metadata_passthrough: None,
-        }),
+        item: RolloutItem::ResponseItem(
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "remember this startup test conversation".to_string(),
+                }],
+                phase: None,
+                internal_chat_message_metadata_passthrough: None,
+            }
+            .into(),
+        ),
     };
     let jsonl = serde_json::to_string(&line)?;
     tokio::fs::write(&rollout_path, format!("{jsonl}\n")).await?;

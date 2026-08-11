@@ -132,6 +132,10 @@ fn captured_op_matches(actual: &(ThreadId, Op), expected: &(ThreadId, Op)) -> bo
     }
 }
 
+fn rollout_response_item(item: ResponseItem) -> RolloutItem {
+    RolloutItem::ResponseItem(item.into())
+}
+
 fn assistant_message(text: &str, phase: Option<MessagePhase>) -> ResponseItem {
     ResponseItem::Message {
         id: None,
@@ -1040,7 +1044,7 @@ async fn spawn_agent_fork_from_paginated_parent_uses_model_context_prefix() {
     parent_thread
         .session
         .persist_rollout_items(&[
-            RolloutItem::ResponseItem(ResponseItem::Message {
+            rollout_response_item(ResponseItem::Message {
                 id: None,
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText {
@@ -1141,7 +1145,7 @@ async fn spawn_agent_fork_from_paginated_parent_uses_model_context_prefix() {
         .iter()
         .find_map(|line| match &line.item {
             RolloutItem::ResponseItem(response_item)
-                if serde_json::to_string(response_item)
+                if serde_json::to_string(&response_item.item)
                     .expect("serialize response item")
                     .contains("id-less inherited context") =>
             {
@@ -1254,21 +1258,24 @@ async fn spawn_agent_numeric_fork_from_compacted_paginated_parent_clamps_to_prov
         .persist_rollout_items(&[
             RolloutItem::Compacted(CompactedItem {
                 message: String::new(),
-                replacement_history: Some(vec![ResponseItem::Message {
-                    id: None,
-                    role: "user".to_string(),
-                    content: vec![ContentItem::InputText {
-                        text: "compacted summary".to_string(),
-                    }],
-                    phase: None,
-                    internal_chat_message_metadata_passthrough: None,
-                }]),
+                replacement_history: Some(vec![
+                    ResponseItem::Message {
+                        id: None,
+                        role: "user".to_string(),
+                        content: vec![ContentItem::InputText {
+                            text: "compacted summary".to_string(),
+                        }],
+                        phase: None,
+                        internal_chat_message_metadata_passthrough: None,
+                    }
+                    .into(),
+                ]),
                 window_number: None,
                 first_window_id: None,
                 previous_window_id: None,
                 window_id: None,
             }),
-            RolloutItem::ResponseItem(ResponseItem::Message {
+            rollout_response_item(ResponseItem::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -1277,7 +1284,7 @@ async fn spawn_agent_numeric_fork_from_compacted_paginated_parent_clamps_to_prov
                 phase: None,
                 internal_chat_message_metadata_passthrough: None,
             }),
-            RolloutItem::ResponseItem(spawn_agent_call(&parent_spawn_call_id)),
+            rollout_response_item(spawn_agent_call(&parent_spawn_call_id)),
         ])
         .await;
 
@@ -1681,14 +1688,16 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history() {
         .persist_rollout_items(&[
             RolloutItem::Compacted(CompactedItem {
                 message: String::new(),
-                replacement_history: Some(replacement_history),
+                replacement_history: Some(
+                    replacement_history.into_iter().map(Into::into).collect(),
+                ),
                 window_number: None,
                 first_window_id: None,
                 previous_window_id: None,
                 window_id: None,
             }),
             RolloutItem::TurnContext(turn_context.to_turn_context_item()),
-            RolloutItem::ResponseItem(spawn_agent_call(&parent_spawn_call_id)),
+            rollout_response_item(spawn_agent_call(&parent_spawn_call_id)),
         ])
         .await;
     parent_thread
@@ -1832,7 +1841,7 @@ async fn spawn_agent_full_fork_restores_instructions_after_compaction_discards_p
     parent_thread
         .session
         .persist_rollout_items(&[
-            RolloutItem::ResponseItem(ResponseItem::Message {
+            rollout_response_item(ResponseItem::Message {
                 id: None,
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText {
@@ -1843,14 +1852,16 @@ async fn spawn_agent_full_fork_restores_instructions_after_compaction_discards_p
             }),
             RolloutItem::Compacted(CompactedItem {
                 message: String::new(),
-                replacement_history: Some(replacement_history),
+                replacement_history: Some(
+                    replacement_history.into_iter().map(Into::into).collect(),
+                ),
                 window_number: None,
                 first_window_id: None,
                 previous_window_id: None,
                 window_id: None,
             }),
             RolloutItem::TurnContext(turn_context.to_turn_context_item()),
-            RolloutItem::ResponseItem(spawn_agent_call(&parent_spawn_call_id)),
+            rollout_response_item(spawn_agent_call(&parent_spawn_call_id)),
         ])
         .await;
     parent_thread
@@ -1969,7 +1980,7 @@ async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_onc
             )
             .await;
         let mut rollout_items = vec![
-            RolloutItem::ResponseItem(parent_user_message),
+            rollout_response_item(parent_user_message),
             RolloutItem::Compacted(CompactedItem {
                 message: "legacy compacted summary".to_string(),
                 replacement_history: None,
@@ -1980,7 +1991,7 @@ async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_onc
             }),
         ];
         if let Some(instructions) = parent_developer_instructions {
-            rollout_items.push(RolloutItem::ResponseItem(ResponseItem::Message {
+            rollout_items.push(rollout_response_item(ResponseItem::Message {
                 id: None,
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText {
@@ -1993,7 +2004,7 @@ async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_onc
         rollout_items.push(RolloutItem::TurnContext(
             turn_context.to_turn_context_item(),
         ));
-        rollout_items.push(RolloutItem::ResponseItem(spawn_agent_call(
+        rollout_items.push(rollout_response_item(spawn_agent_call(
             parent_spawn_call_id,
         )));
         parent_thread

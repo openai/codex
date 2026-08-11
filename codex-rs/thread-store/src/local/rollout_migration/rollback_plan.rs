@@ -121,7 +121,9 @@ impl RollbackPlanner {
             _ => None,
         };
         let paired_delivery_boundary = match (&self.pending_delivery_boundary, &line.item) {
-            (Some(boundary), RolloutItem::ResponseItem(ResponseItem::AgentMessage { .. })) => {
+            (Some(boundary), RolloutItem::ResponseItem(response))
+                if matches!(&response.item, ResponseItem::AgentMessage { .. }) =>
+            {
                 Some(*boundary)
             }
             _ => None,
@@ -134,9 +136,9 @@ impl RollbackPlanner {
             RolloutItem::ResponseItem(response) => {
                 if let Some(boundary) = paired_delivery_boundary {
                     self.record_boundaries[index] = Some(boundary);
-                } else if rollback::counts_as_boundary(response) {
+                } else if rollback::counts_as_boundary(&response.item) {
                     let boundary = self.start_boundary(index);
-                    if let ResponseItem::Message { role, content, .. } = response
+                    if let ResponseItem::Message { role, content, .. } = &response.item
                         && role == "user"
                     {
                         self.pending_user_response = Some(PendingUserResponse {
@@ -144,7 +146,7 @@ impl RollbackPlanner {
                             content: content.clone(),
                         });
                     }
-                } else if rollback::is_pre_turn_context_update(response) {
+                } else if rollback::is_pre_turn_context_update(&response.item) {
                     // Until another user boundary arrives, this is trailing context for the
                     // previous turn. Keep that fallback owner so rollback drops it when there is
                     // no later turn to attach it to.

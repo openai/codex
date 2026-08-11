@@ -2700,14 +2700,14 @@ async fn conversation_startup_context_current_thread_selects_many_turns_by_budge
             let turn_number = index + 1;
             let assistant_turn = format!("assistant turn {turn_number}");
             [
-                RolloutItem::ResponseItem(ResponseItem::Message {
+                ResponseItem::Message {
                     id: None,
                     role: "user".to_string(),
                     content: vec![ContentItem::InputText { text: user_turn }],
                     phase: None,
                     internal_chat_message_metadata_passthrough: None,
-                }),
-                RolloutItem::ResponseItem(ResponseItem::Message {
+                },
+                ResponseItem::Message {
                     id: None,
                     role: "assistant".to_string(),
                     content: vec![ContentItem::OutputText {
@@ -2715,8 +2715,9 @@ async fn conversation_startup_context_current_thread_selects_many_turns_by_budge
                     }],
                     phase: None,
                     internal_chat_message_metadata_passthrough: None,
-                }),
+                },
             ]
+            .map(|item| RolloutItem::ResponseItem(item.into()))
         })
         .collect::<Vec<_>>();
     test.codex.shutdown_and_wait().await?;

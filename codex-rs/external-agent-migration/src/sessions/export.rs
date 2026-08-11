@@ -120,7 +120,7 @@ pub(super) fn rollout_items_from_messages(messages: Vec<ConversationMessage>) ->
                 )));
                 response_item_bytes =
                     response_item_bytes.saturating_add(message_byte_count(&message));
-                items.push(RolloutItem::ResponseItem(response_item(message)));
+                items.push(RolloutItem::ResponseItem(response_item(message).into()));
                 current_turn = Some((turn_id, started_at));
             }
             MessageRole::Assistant => {
@@ -137,7 +137,7 @@ pub(super) fn rollout_items_from_messages(messages: Vec<ConversationMessage>) ->
                         memory_citation: None,
                     },
                 )));
-                items.push(RolloutItem::ResponseItem(response_item(message)));
+                items.push(RolloutItem::ResponseItem(response_item(message).into()));
             }
         }
     }
@@ -325,7 +325,8 @@ mod tests {
             .filter(|item| {
                 matches!(
                     item,
-                    RolloutItem::ResponseItem(ResponseItem::Message { .. })
+                    RolloutItem::ResponseItem(response_item)
+                        if matches!(&response_item.item, ResponseItem::Message { .. })
                 )
             })
             .count();

@@ -48,15 +48,14 @@ fn find_user_message_with_image(text: &str) -> Option<ResponseItem> {
             Ok(rollout) => rollout,
             Err(_) => continue,
         };
-        if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) =
-            &rollout.item
+        if let RolloutItem::ResponseItem(envelope) = &rollout.item
+            && let ResponseItem::Message { role, content, .. } = &envelope.item
             && role == "user"
             && content
                 .iter()
                 .any(|span| matches!(span, ContentItem::InputImage { .. }))
-            && let RolloutItem::ResponseItem(item) = rollout.item.clone()
         {
-            return Some(item);
+            return Some(envelope.item.clone());
         }
     }
     None
@@ -326,16 +325,18 @@ async fn resumed_history_only_emits_resize_notices_for_new_images() -> anyhow::R
         .collect::<serde_json::Result<Vec<_>>>()?;
     let historical_content = rollout_lines
         .iter_mut()
-        .find_map(|line| match &mut line.item {
-            RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. })
-                if role == "user"
-                    && content.iter().any(|item| {
-                        matches!(item, ContentItem::InputText { text } if text == "historical image")
-                    }) =>
-            {
-                Some(content)
-            }
-            _ => None,
+        .find_map(|line| {
+            let RolloutItem::ResponseItem(envelope) = &mut line.item else {
+                return None;
+            };
+            let ResponseItem::Message { role, content, .. } = &mut envelope.item else {
+                return None;
+            };
+            (role == "user"
+                && content.iter().any(|item| {
+                    matches!(item, ContentItem::InputText { text } if text == "historical image")
+                }))
+            .then_some(content)
         })
         .context("historical user message in rollout")?;
     historical_content.insert(

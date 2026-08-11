@@ -8,16 +8,22 @@
 use super::compact::COMPACT_WARNING_MESSAGE;
 use super::compact::FIRST_REPLY;
 use super::compact::SUMMARY_TEXT;
+use anyhow::Context;
 use anyhow::Result;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::config::Config;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use codex_history::CodexHarnessMetadata;
+use codex_history::RolloutItem;
+use codex_history::RolloutLine;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::mcp::ClientMcpExtensions;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::WarningEvent;
@@ -39,12 +45,14 @@ use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use std::path::Path;
 use std::sync::Arc;
 use tempfile::TempDir;
 use wiremock::MockServer;
 
 const AFTER_SECOND_RESUME: &str = "AFTER_SECOND_RESUME";
 const AFTER_ROLLBACK: &str = "AFTER_ROLLBACK";
+const CHECKPOINT_METADATA_KEY: &str = "replacement_history_metadata";
 
 fn network_disabled() -> bool {
     std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok()
@@ -67,6 +75,73 @@ fn normalize_line_endings_str(text: &str) -> String {
     } else {
         text.to_string()
     }
+}
+
+fn response_message_contains_text(item: &ResponseItem, expected: &str) -> bool {
+    matches!(
+        item,
+        ResponseItem::Message { role, content, .. }
+            if role == "user"
+                && content.iter().any(|item| {
+                    matches!(item, ContentItem::InputText { text } if text == expected)
+                })
+    )
+}
+
+fn seed_first_checkpoint_harness_metadata(path: &Path, retained_text: &str) -> Result<()> {
+    let mut lines = std::fs::read_to_string(path)?
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(serde_json::from_str::<RolloutLine>)
+        .collect::<Result<Vec<_>, _>>()?;
+    let replacement_history = lines
+        .iter_mut()
+        .find_map(|line| match &mut line.item {
+            RolloutItem::Compacted(compacted) => compacted.replacement_history.as_mut(),
+            _ => None,
+        })
+        .context("first compacted checkpoint missing replacement history")?;
+    replacement_history
+        .iter()
+        .find(|envelope| response_message_contains_text(&envelope.item, retained_text))
+        .context("retained user message missing from first compacted checkpoint")?;
+    for envelope in replacement_history {
+        envelope.metadata = Some(CodexHarnessMetadata::default());
+    }
+
+    let rewritten = lines
+        .iter()
+        .map(serde_json::to_string)
+        .collect::<Result<Vec<_>, _>>()?
+        .join("\n");
+    std::fs::write(path, format!("{rewritten}\n"))?;
+    Ok(())
+}
+
+fn assert_latest_checkpoint_retains_harness_metadata(
+    path: &Path,
+    retained_text: &str,
+) -> Result<()> {
+    let replacement_history = std::fs::read_to_string(path)?
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(serde_json::from_str::<RolloutLine>)
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .rev()
+        .find_map(|line| match line.item {
+            RolloutItem::Compacted(compacted) => compacted.replacement_history,
+            _ => None,
+        })
+        .context("latest compacted checkpoint missing replacement history")?;
+    assert!(
+        replacement_history.iter().any(|envelope| {
+            response_message_contains_text(&envelope.item, retained_text)
+                && envelope.metadata.is_some()
+        }),
+        "latest compacted checkpoint should retain aligned harness metadata on {retained_text:?}"
+    );
+    Ok(())
 }
 
 fn extract_summary_user_text(request: &Value, summary_text: &str) -> String {
@@ -307,6 +382,7 @@ async fn compact_resume_after_second_compaction_preserves_history() -> Result<()
     );
 
     shutdown_conversation(&base).await;
+    seed_first_checkpoint_harness_metadata(&base_path, "hello world")?;
     let resumed = resume_conversation(&manager, &config, base_path).await;
     user_turn(&resumed, "AFTER_RESUME").await;
     let resumed_path = fetch_conversation_path(&resumed);
@@ -327,6 +403,7 @@ async fn compact_resume_after_second_compaction_preserves_history() -> Result<()
     );
 
     shutdown_conversation(&forked).await;
+    assert_latest_checkpoint_retains_harness_metadata(&forked_path, "hello world")?;
     let resumed_again = resume_conversation(&manager, &config, forked_path).await;
     user_turn(&resumed_again, AFTER_SECOND_RESUME).await;
 
@@ -337,6 +414,15 @@ async fn compact_resume_after_second_compaction_preserves_history() -> Result<()
         .collect::<Vec<_>>();
     requests.iter_mut().for_each(normalize_line_endings);
     normalize_compact_prompts(&mut requests);
+    assert!(
+        requests
+            .iter()
+            .flat_map(|request| request["input"].as_array().expect("provider request input"))
+            .all(|item| {
+                item.get(CHECKPOINT_METADATA_KEY).is_none() && item.get("metadata").is_none()
+            }),
+        "provider requests must not contain harness metadata"
+    );
     let input_after_compact = json!(requests[requests.len() - 2]["input"]);
     let input_after_resume = json!(requests[requests.len() - 1]["input"]);
 

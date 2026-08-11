@@ -40,11 +40,12 @@ pub(crate) fn user_message_positions_in_rollout(items: &[RolloutItem]) -> Vec<us
     let mut user_positions = Vec::new();
     for (idx, item) in items.iter().enumerate() {
         match item {
-            RolloutItem::ResponseItem(item @ ResponseItem::Message { .. })
-                if matches!(
-                    event_mapping::parse_turn_item(item),
-                    Some(TurnItem::UserMessage(_))
-                ) =>
+            RolloutItem::ResponseItem(item)
+                if matches!(&item.item, ResponseItem::Message { .. })
+                    && matches!(
+                        event_mapping::parse_turn_item(&item.item),
+                        Some(TurnItem::UserMessage(_))
+                    ) =>
             {
                 user_positions.push(idx);
             }
@@ -76,7 +77,7 @@ pub(crate) fn fork_turn_positions_in_rollout(items: &[RolloutItem]) -> Vec<usize
     for (idx, item) in items.iter().enumerate() {
         match item {
             RolloutItem::ResponseItem(item) => {
-                let has_delivery_metadata = matches!(item, ResponseItem::AgentMessage { .. })
+                let has_delivery_metadata = matches!(&item.item, ResponseItem::AgentMessage { .. })
                     && idx.checked_sub(1).is_some_and(|previous_idx| {
                         matches!(
                             items.get(previous_idx),

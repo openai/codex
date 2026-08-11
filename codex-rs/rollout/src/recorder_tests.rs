@@ -1,6 +1,7 @@
 #![allow(warnings, clippy::all)]
 
 use super::*;
+use crate::ResponseItemEnvelope;
 use crate::RolloutItem;
 use crate::RolloutLine;
 use crate::config::RolloutConfig;
@@ -321,7 +322,10 @@ async fn load_rollout_items_defaults_legacy_session_id() -> std::io::Result<()> 
     assert_eq!(session_meta.meta.session_id, SessionId::from(thread_id));
     assert!(matches!(
         items[1],
-        RolloutItem::ResponseItem(ResponseItem::Message { .. })
+        RolloutItem::ResponseItem(ResponseItemEnvelope {
+            item: ResponseItem::Message { .. },
+            ..
+        })
     ));
 
     Ok(())
@@ -502,10 +506,49 @@ async fn load_rollout_items_filters_legacy_ghost_snapshots_from_compaction_histo
     assert_eq!(replacement_history.len(), 1);
     assert!(matches!(
         &replacement_history[0],
-        ResponseItem::Message { .. }
+        ResponseItemEnvelope {
+            item: ResponseItem::Message { .. },
+            ..
+        }
     ));
 
     Ok(())
+}
+
+#[test]
+fn strip_legacy_ghost_snapshot_keeps_checkpoint_metadata_aligned() {
+    let mut value = serde_json::json!({
+        "type": "compacted",
+        "payload": {
+            "message": "summary",
+            "replacement_history": [
+                {"type": "message", "role": "assistant", "content": []},
+                {"type": "ghost_snapshot", "ghost_commit": {"id": "deadbeef"}},
+                {"type": "message", "role": "user", "content": []}
+            ],
+            "replacement_history_metadata": [
+                {"slot": "assistant"},
+                {"slot": "ghost"},
+                {"slot": "user"}
+            ]
+        }
+    });
+
+    assert!(!strip_legacy_ghost_snapshot_rollout_line(&mut value));
+    assert_eq!(
+        value["payload"]["replacement_history"],
+        serde_json::json!([
+            {"type": "message", "role": "assistant", "content": []},
+            {"type": "message", "role": "user", "content": []}
+        ])
+    );
+    assert_eq!(
+        value["payload"]["replacement_history_metadata"],
+        serde_json::json!([
+            {"slot": "assistant"},
+            {"slot": "user"}
+        ])
+    );
 }
 
 #[tokio::test]
