@@ -8,6 +8,8 @@
 //! It intentionally stays separate from live thread-history reduction because migration needs a
 //! frozen adapter for historical rollout payloads.
 
+use codex_extension_items::ExtensionItem;
+use codex_extension_items::image_generation::ImageGenerationItem;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
 use codex_protocol::items::CommandExecutionItem;
@@ -17,7 +19,6 @@ use codex_protocol::items::DynamicToolCallStatus;
 use codex_protocol::items::EnteredReviewModeItem;
 use codex_protocol::items::ExitedReviewModeItem;
 use codex_protocol::items::FileChangeItem;
-use codex_protocol::items::ImageGenerationItem;
 use codex_protocol::items::McpToolCallError;
 use codex_protocol::items::McpToolCallItem;
 use codex_protocol::items::McpToolCallStatus;
@@ -156,13 +157,15 @@ pub(super) fn completed_item(
             None,
         )),
         EventMsg::ImageGenerationEnd(event) => Some((
-            TurnItem::ImageGeneration(ImageGenerationItem {
+            TurnItem::Extension(ExtensionItem::ImageGeneration(ImageGenerationItem {
                 id: event.call_id.clone(),
                 status: event.status.clone(),
                 revised_prompt: event.revised_prompt.clone(),
                 result: event.result.clone(),
+                transparent_background: event.transparent_background,
+                failure: event.failure.clone(),
                 saved_path: event.saved_path.clone(),
-            }),
+            })),
             None,
         )),
         EventMsg::ContextCompacted(_) => Some((

@@ -430,6 +430,7 @@ impl ImageGenerationItem {
             revised_prompt: self.revised_prompt.clone(),
             result: self.result.clone(),
             transparent_background: None,
+            failure: None,
             saved_path: self.saved_path.clone(),
         })
     }

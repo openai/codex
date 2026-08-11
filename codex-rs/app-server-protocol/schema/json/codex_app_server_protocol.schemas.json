@@ -12159,6 +12159,37 @@
         ],
         "type": "string"
       },
+      "ImageGenerationFailure": {
+        "oneOf": [
+          {
+            "properties": {
+              "limitId": {
+                "type": "string"
+              },
+              "resetsAt": {
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "type": {
+                "enum": [
+                  "usageLimitExceeded"
+                ],
+                "title": "UsageLimitExceededImageGenerationFailureType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "limitId",
+              "type"
+            ],
+            "title": "UsageLimitExceededImageGenerationFailure",
+            "type": "object"
+          }
+        ]
+      },
       "InputModality": {
         "description": "Canonical user-input modality tags advertised by a model.",
         "oneOf": [
@@ -19950,6 +19981,17 @@
           },
           {
             "properties": {
+              "failure": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ImageGenerationFailure"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
               "id": {
                 "type": "string"
               },

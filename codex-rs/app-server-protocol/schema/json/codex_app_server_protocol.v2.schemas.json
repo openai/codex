@@ -8435,6 +8435,37 @@
       ],
       "type": "string"
     },
+    "ImageGenerationFailure": {
+      "oneOf": [
+        {
+          "properties": {
+            "limitId": {
+              "type": "string"
+            },
+            "resetsAt": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "usageLimitExceeded"
+              ],
+              "title": "UsageLimitExceededImageGenerationFailureType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "limitId",
+            "type"
+          ],
+          "title": "UsageLimitExceededImageGenerationFailure",
+          "type": "object"
+        }
+      ]
+    },
     "InitializeCapabilities": {
       "description": "Client-declared capabilities negotiated during initialize.",
       "properties": {
@@ -17709,6 +17740,17 @@
         },
         {
           "properties": {
+            "failure": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ImageGenerationFailure"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
             "id": {
               "type": "string"
             },

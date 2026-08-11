@@ -7,6 +7,9 @@ use std::path::PathBuf;
 use std::os::unix::fs::PermissionsExt;
 
 use codex_app_server_protocol::build_turns_from_rollout_items;
+use codex_extension_items::ExtensionItem;
+use codex_extension_items::image_generation::ImageGenerationFailure;
+use codex_extension_items::image_generation::ImageGenerationItem;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
@@ -17,6 +20,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ImageGenerationEndEvent;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::SandboxPolicy;
@@ -395,6 +399,62 @@ async fn migration_projects_explicit_and_implicit_legacy_completed_items() {
     assert_eq!(reasoning["type"], "reasoning");
     assert_eq!(reasoning["summary"], json!(["summary"]));
     assert_eq!(reasoning["content"], json!(["raw"]));
+}
+
+#[tokio::test]
+async fn migration_preserves_image_generation_failure_metadata() {
+    let home = TempDir::new().expect("create Codex home");
+    let thread_id = ThreadId::new();
+    let expected_item = ImageGenerationItem {
+        id: "image-call".to_string(),
+        status: "failed".to_string(),
+        revised_prompt: Some("paint a blue whale".to_string()),
+        result: String::new(),
+        transparent_background: None,
+        failure: Some(ImageGenerationFailure::UsageLimitExceeded {
+            limit_id: "image_gen".to_string(),
+            resets_at: Some(1_786_150_800),
+        }),
+        saved_path: None,
+    };
+    let image_completion =
+        RolloutItem::EventMsg(EventMsg::ImageGenerationEnd(ImageGenerationEndEvent {
+            call_id: expected_item.id.clone(),
+            status: expected_item.status.clone(),
+            revised_prompt: expected_item.revised_prompt.clone(),
+            result: expected_item.result.clone(),
+            transparent_background: expected_item.transparent_background,
+            failure: expected_item.failure.clone(),
+            saved_path: expected_item.saved_path.clone(),
+        }));
+    let path = write_rollout(
+        home.path(),
+        thread_id,
+        SessionSource::Cli,
+        vec![
+            started("image-turn"),
+            image_completion,
+            completed("image-turn"),
+        ],
+    );
+    let store = indexed_store(home.path()).await;
+
+    store
+        .migrate_rollouts(apply_options())
+        .await
+        .expect("migrate legacy image completion");
+
+    let migrated_item = read_rollout(&path)
+        .into_iter()
+        .find_map(|line| match line.item {
+            RolloutItem::EventMsg(EventMsg::ItemCompleted(event)) => Some(event.item),
+            _ => None,
+        })
+        .expect("migrated image completion");
+    let TurnItem::Extension(ExtensionItem::ImageGeneration(migrated_item)) = migrated_item else {
+        panic!("expected migrated extension image-generation item");
+    };
+    assert_eq!(migrated_item, expected_item);
 }
 
 #[tokio::test]

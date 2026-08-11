@@ -22,7 +22,10 @@ use codex_extension_api::ToolPayload;
 use codex_extension_api::ToolSpec;
 use codex_extension_api::parse_tool_input_schema;
 use codex_extension_items::ExtensionItem;
+use codex_extension_items::image_generation::ImageGenerationFailure;
 use codex_extension_items::image_generation::ImageGenerationItem;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -97,6 +100,7 @@ fn legacy_end_event(item: &ImageGenerationItem) -> EventMsg {
         revised_prompt: item.revised_prompt.clone(),
         result: item.result.clone(),
         transparent_background: item.transparent_background,
+        failure: item.failure.clone(),
         saved_path: item.saved_path.clone(),
     })
 }
@@ -144,6 +148,7 @@ impl ImageGenerationTool {
                     revised_prompt: None,
                     result: String::new(),
                     transparent_background: None,
+                    failure: None,
                     saved_path: None,
                 },
                 EventMsg::ImageGenerationBegin(ImageGenerationBeginEvent {
@@ -155,7 +160,12 @@ impl ImageGenerationTool {
             ImageRequest::Generate(request) => self.backend.generate(request, &call.turn_id).await,
             ImageRequest::Edit(request) => self.backend.edit(request, &call.turn_id).await,
         }
-        .map_err(|err| format!("image generation failed: {err}"))
+        .map_err(|error| {
+            (
+                format!("image generation failed: {}", error.message()),
+                usage_limit_failure(error.codex_error()),
+            )
+        })
         .and_then(|response| {
             let transparent_background = match response.background {
                 Some(ImageBackground::Transparent) => Some(true),
@@ -167,17 +177,18 @@ impl ImageGenerationTool {
                 .into_iter()
                 .next()
                 .map(|data| (data.b64_json, transparent_background))
-                .ok_or_else(|| "image generation returned no image data".to_string())
+                .ok_or_else(|| ("image generation returned no image data".to_string(), None))
         });
         let (result, transparent_background) = match result {
             Ok(result) => result,
-            Err(message) => {
+            Err((message, failure)) => {
                 let item = ImageGenerationItem {
                     id: call.call_id.clone(),
                     status: "failed".to_string(),
                     revised_prompt: Some(args.prompt),
                     result: String::new(),
                     transparent_background: None,
+                    failure,
                     saved_path: None,
                 };
                 let legacy_event = legacy_end_event(&item);
@@ -218,6 +229,7 @@ impl ImageGenerationTool {
             revised_prompt: Some(args.prompt),
             result: result.clone(),
             transparent_background,
+            failure: None,
             saved_path: saved_path.clone(),
         };
         let legacy_event = legacy_end_event(&item);
@@ -233,6 +245,33 @@ impl ImageGenerationTool {
             output_hint,
         }))
     }
+}
+
+fn usage_limit_failure(error: &CodexErr) -> Option<ImageGenerationFailure> {
+    let CodexErrorDetails::UsageLimitReached(usage_limit) = error.details() else {
+        return None;
+    };
+    let rate_limits = usage_limit.rate_limits.as_deref()?;
+    let limit_id = rate_limits.limit_id.as_deref()?;
+    if limit_id != "image_gen" {
+        return None;
+    }
+
+    let resets_at = if let Some(reset_at) = usage_limit.resets_at.as_ref() {
+        Some(reset_at.timestamp())
+    } else {
+        [rate_limits.primary.as_ref(), rate_limits.secondary.as_ref()]
+            .into_iter()
+            .flatten()
+            .filter(|window| window.used_percent >= 100.0)
+            .filter_map(|window| window.resets_at)
+            .max()
+    };
+
+    Some(ImageGenerationFailure::UsageLimitExceeded {
+        limit_id: limit_id.to_string(),
+        resets_at,
+    })
 }
 
 async fn save_image_generation_result(

@@ -4305,6 +4305,7 @@ version = "0.0.0"
 dependencies = [
  "chrono",
  "codex-app-server-protocol",
+ "codex-extension-items",
  "codex-git-utils",
  "codex-install-context",
  "codex-internal-extra-config",

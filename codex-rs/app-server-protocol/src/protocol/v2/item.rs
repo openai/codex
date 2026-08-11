@@ -15,6 +15,7 @@ use crate::protocol::item_builders::convert_patch_changes;
 use crate::protocol::item_builders::review_output_text;
 use codex_experimental_api_macros::ExperimentalApi;
 use codex_extension_items::ExtensionItem;
+pub use codex_extension_items::image_generation::ImageGenerationFailure;
 pub use codex_extension_items::image_generation::ImageGenerationItem;
 pub use codex_extension_items::sleep::SleepItem;
 pub use codex_extension_items::web_search::WebSearchAction;
@@ -929,6 +930,7 @@ impl From<CoreTurnItem> for ThreadItem {
                     revised_prompt: image.revised_prompt,
                     result: image.result,
                     transparent_background: None,
+                    failure: None,
                     saved_path: image.saved_path,
                 })
             }

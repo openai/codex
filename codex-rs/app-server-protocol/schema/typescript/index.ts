@@ -37,6 +37,7 @@ export type { GitDiffToRemoteParams } from "./GitDiffToRemoteParams";
 export type { GitDiffToRemoteResponse } from "./GitDiffToRemoteResponse";
 export type { GitSha } from "./GitSha";
 export type { ImageDetail } from "./ImageDetail";
+export type { ImageGenerationFailure } from "./ImageGenerationFailure";
 export type { ImageGenerationItem } from "./ImageGenerationItem";
 export type { InitializeCapabilities } from "./InitializeCapabilities";
 export type { InitializeParams } from "./InitializeParams";

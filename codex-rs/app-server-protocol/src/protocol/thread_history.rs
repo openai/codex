@@ -863,6 +863,7 @@ impl ThreadHistoryBuilder {
             revised_prompt: None,
             result: String::new(),
             transparent_background: None,
+            failure: None,
             saved_path: None,
         });
         self.upsert_item_in_current_turn(item);
@@ -875,6 +876,7 @@ impl ThreadHistoryBuilder {
             revised_prompt: payload.revised_prompt.clone(),
             result: payload.result.clone(),
             transparent_background: payload.transparent_background,
+            failure: payload.failure.clone(),
             saved_path: payload.saved_path.clone(),
         });
         self.upsert_item_in_current_turn(item);
@@ -2079,6 +2081,7 @@ mod tests {
                         revised_prompt: Some("A blue square".to_string()),
                         result: "cG5n".to_string(),
                         transparent_background: Some(true),
+                        failure: None,
                         saved_path: Some(saved_path.clone()),
                     },
                 )),
@@ -2110,6 +2113,7 @@ mod tests {
                 revised_prompt: Some("A blue square".to_string()),
                 result: "cG5n".to_string(),
                 transparent_background: Some(true),
+                failure: None,
                 saved_path: Some(saved_path),
             })]
         );
@@ -2373,6 +2377,12 @@ mod tests {
                 revised_prompt: Some("final prompt".into()),
                 result: "Zm9v".into(),
                 transparent_background: Some(true),
+                failure: Some(
+                    codex_extension_items::image_generation::ImageGenerationFailure::UsageLimitExceeded {
+                        limit_id: "image_gen".into(),
+                        resets_at: Some(1_786_150_800),
+                    },
+                ),
                 saved_path: Some(test_path_buf("/tmp/ig_123.png").abs()),
             })),
             RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
@@ -2413,6 +2423,12 @@ mod tests {
                         revised_prompt: Some("final prompt".into()),
                         result: "Zm9v".into(),
                         transparent_background: Some(true),
+                        failure: Some(
+                            codex_extension_items::image_generation::ImageGenerationFailure::UsageLimitExceeded {
+                                limit_id: "image_gen".into(),
+                                resets_at: Some(1_786_150_800),
+                            },
+                        ),
                         saved_path: Some(test_path_buf("/tmp/ig_123.png").abs()),
                     }),
                 ],

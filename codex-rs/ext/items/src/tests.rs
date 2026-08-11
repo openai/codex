@@ -15,6 +15,7 @@ fn completed_image_generation_item() -> ExtensionItem {
         revised_prompt: Some("A blue square".to_string()),
         result: "cG5n".to_string(),
         transparent_background: None,
+        failure: None,
         saved_path: None,
     })
 }
@@ -33,6 +34,7 @@ fn image_generation_item_preserves_stable_wire_shape() {
             "revisedPrompt": "A blue square",
             "result": "cG5n",
             "transparentBackground": null,
+            "failure": null,
         })
     );
     assert_eq!(
@@ -70,6 +72,7 @@ fn image_generation_item_preserves_authoritative_transparency() {
             "revisedPrompt": "A blue square",
             "result": "cG5n",
             "transparentBackground": true,
+            "failure": null,
         })
     );
     assert_eq!(

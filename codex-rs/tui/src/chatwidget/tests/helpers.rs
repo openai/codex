@@ -713,6 +713,7 @@ pub(super) fn handle_image_generation_end(
                 revised_prompt,
                 result: String::new(),
                 transparent_background: None,
+                failure: None,
                 saved_path,
             }),
         }),
