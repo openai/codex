@@ -12,10 +12,6 @@ use std::path::PathBuf;
     override_usage = "codex exec [OPTIONS] [PROMPT]\n       codex exec [OPTIONS] <COMMAND> [ARGS]"
 )]
 pub struct Cli {
-    /// Process-only PSP routing selected by the parent Codex CLI.
-    #[clap(skip)]
-    pub psp: bool,
-
     /// Action to perform. If omitted, runs a new non-interactive session.
     #[command(subcommand)]
     pub command: Option<Command>,

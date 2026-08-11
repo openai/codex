@@ -5034,7 +5034,6 @@ async fn rebuild_preserving_session_layers_refreshes_requirements() -> std::io::
         refreshed_toml,
         ConfigOverrides {
             cwd: Some(codex_home.path().to_path_buf()),
-            psp: Some(true),
             ..Default::default()
         },
         codex_home.abs(),
@@ -5112,8 +5111,6 @@ async fn rebuild_preserving_session_layers_refreshes_requirements() -> std::io::
         .rebuild_preserving_session_layers(&refreshed_config)
         .await?;
 
-    assert!(config.psp);
-    assert!(config.http_client_factory().has_chatgpt_cookies());
     assert_eq!(
         config.mcp_servers.get(),
         &HashMap::from([

@@ -282,7 +282,7 @@ async fn start_app_server_for_archive_command(
         &cli_kv_overrides,
         &launch_loader_overrides,
         strict_config,
-        cli.bypass_hook_trust || cli.psp,
+        cli.bypass_hook_trust,
     );
     let default_daemon = if explicit_remote_endpoint.is_none() && reuse_implicit_local_daemon {
         super::maybe_probe_default_daemon_socket(codex_home.as_path()).await
@@ -373,7 +373,6 @@ async fn start_app_server_for_archive_command(
             main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe.clone(),
             show_raw_agent_reasoning: cli.oss.then_some(true),
             bypass_hook_trust: cli.bypass_hook_trust.then_some(true),
-            psp: Some(cli.psp),
             ..Default::default()
         })
         .loader_overrides(loader_overrides.clone())

@@ -40,9 +40,6 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
 
 #[derive(Parser, Debug)]
 struct TopCli {
-    #[arg(long, hide = true)]
-    psp: bool,
-
     #[clap(flatten)]
     config_overrides: CliConfigOverrides,
 
@@ -54,7 +51,6 @@ fn main() -> anyhow::Result<()> {
     arg0_dispatch_or_else(|arg0_paths: Arg0DispatchPaths| async move {
         let top_cli = TopCli::parse();
         let mut inner = top_cli.inner;
-        inner.psp = top_cli.psp;
         inner
             .config_overrides
             .raw_overrides

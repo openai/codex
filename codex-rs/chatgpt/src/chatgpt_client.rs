@@ -28,8 +28,7 @@ static PSP_CHATGPT_CLIENT: LazyLock<Mutex<Option<CachedChatGptClient>>> =
     LazyLock::new(|| Mutex::new(None));
 
 /// Reuse the default client while retaining its configured ChatGPT cookies.
-fn psp_chatgpt_client(config: &Config) -> HttpClient {
-    let factory = config.http_client_factory();
+fn psp_chatgpt_client(factory: HttpClientFactory) -> HttpClient {
     let residency = default_headers()
         .get(RESIDENCY_HEADER_NAME)
         .map(|value| value.as_bytes().to_vec());
@@ -87,8 +86,9 @@ pub(crate) async fn chatgpt_get_request_with_timeout<T: DeserializeOwned>(
         path.trim_start_matches('/')
     );
 
-    let client = if config.psp {
-        psp_chatgpt_client(config)
+    let http_client_factory = config.http_client_factory();
+    let client = if http_client_factory.has_chatgpt_cookies() {
+        psp_chatgpt_client(http_client_factory)
     } else {
         create_client()
     };
@@ -145,8 +145,9 @@ pub(crate) async fn chatgpt_post_request_with_timeout<
         config.chatgpt_base_url.trim_end_matches('/'),
         path.trim_start_matches('/')
     );
-    let client = if config.psp {
-        psp_chatgpt_client(config)
+    let http_client_factory = config.http_client_factory();
+    let client = if http_client_factory.has_chatgpt_cookies() {
+        psp_chatgpt_client(http_client_factory)
     } else {
         create_client()
     };

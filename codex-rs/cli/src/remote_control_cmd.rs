@@ -65,7 +65,6 @@ pub(crate) async fn run(
     command: RemoteControlCommand,
     arg0_paths: Arg0DispatchPaths,
     root_config_overrides: CliConfigOverrides,
-    psp: bool,
 ) -> anyhow::Result<()> {
     match command.subcommand {
         None => {
@@ -73,8 +72,7 @@ pub(crate) async fn run(
                 command.json,
                 "Starting app-server with remote control enabled...",
             )?;
-            run_foreground_remote_control(command.json, arg0_paths, root_config_overrides, psp)
-                .await?;
+            run_foreground_remote_control(command.json, arg0_paths, root_config_overrides).await?;
         }
         Some(RemoteControlSubcommand::Start) => {
             print_remote_control_progress(
@@ -113,7 +111,6 @@ async fn run_foreground_remote_control(
     json: bool,
     arg0_paths: Arg0DispatchPaths,
     root_config_overrides: CliConfigOverrides,
-    psp: bool,
 ) -> anyhow::Result<()> {
     let socket_dir = tempfile::Builder::new()
         .prefix("codex-rc-")
@@ -129,7 +126,6 @@ async fn run_foreground_remote_control(
     let runtime_options = AppServerRuntimeOptions {
         remote_control_startup_mode: codex_app_server::RemoteControlStartupMode::EnabledEphemeral,
         install_shutdown_signal_handler: false,
-        psp,
         ..Default::default()
     };
     let (stop_rx, stop_signal_task) = foreground_stop_signal();

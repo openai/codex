@@ -105,10 +105,6 @@ use codex_terminal_detection::TerminalName;
     override_usage = "codex [OPTIONS] [PROMPT]\n       codex [OPTIONS] <COMMAND> [ARGS]"
 )]
 struct MultitoolCli {
-    /// Enable process-only PSP routing for first-party ChatGPT requests.
-    #[arg(long, global = true, hide = true)]
-    psp: bool,
-
     #[clap(flatten)]
     pub config_overrides: CliConfigOverrides,
 
@@ -993,15 +989,12 @@ async fn cli_main(
     remote_control_disabled: bool,
 ) -> anyhow::Result<()> {
     let MultitoolCli {
-        psp,
         config_overrides: mut root_config_overrides,
         feature_toggles,
         remote,
         mut interactive,
         subcommand,
     } = MultitoolCli::parse();
-    interactive.psp = psp;
-
     // Fold --enable/--disable into config overrides so they flow to all subcommands.
     let toggle_overrides = feature_toggles.to_overrides()?;
     root_config_overrides.raw_overrides.extend(toggle_overrides);
@@ -1040,7 +1033,6 @@ async fn cli_main(
             exec_cli
                 .shared
                 .inherit_exec_root_options(&interactive.shared);
-            exec_cli.psp = psp;
             exec_cli.strict_config |= root_strict_config;
             prepend_config_flags(
                 &mut exec_cli.config_overrides,
@@ -1061,7 +1053,6 @@ async fn cli_main(
             exec_cli
                 .shared
                 .inherit_exec_root_options(&interactive.shared);
-            exec_cli.psp = psp;
             exec_cli.command = Some(ExecCommand::Review(review_args));
             exec_cli.strict_config = strict_config || root_strict_config;
             prepend_config_flags(
@@ -1171,7 +1162,6 @@ async fn cli_main(
                                 codex_app_server::RemoteControlStartupMode::ResolvePersisted
                             }
                         },
-                        psp,
                         ..Default::default()
                     };
                     codex_app_server::run_main_with_transport_options(
@@ -1274,7 +1264,6 @@ async fn cli_main(
                 remote_control_cli,
                 arg0_paths.clone(),
                 root_config_overrides,
-                psp,
             )
             .await?;
         }
@@ -2743,7 +2732,6 @@ mod tests {
     fn finalize_resume_from_args(args: &[&str]) -> TuiCli {
         let cli = MultitoolCli::try_parse_from(args).expect("parse");
         let MultitoolCli {
-            psp: _,
             mut interactive,
             config_overrides: mut root_overrides,
             subcommand,
@@ -2781,7 +2769,6 @@ mod tests {
     fn finalize_fork_from_args(args: &[&str]) -> TuiCli {
         let cli = MultitoolCli::try_parse_from(args).expect("parse");
         let MultitoolCli {
-            psp: _,
             mut interactive,
             config_overrides: mut root_overrides,
             subcommand,
@@ -2826,7 +2813,6 @@ mod tests {
     fn finalize_archive_from_args(args: &[&str]) -> (String, TuiCli, InteractiveRemoteOptions) {
         let cli = MultitoolCli::try_parse_from(args).expect("parse");
         let MultitoolCli {
-            psp: _,
             interactive,
             config_overrides: root_overrides,
             subcommand,
@@ -4053,19 +4039,6 @@ mod tests {
         })
         .expect_err("empty env vars should be rejected");
         assert!(err.to_string().contains("is empty"));
-    }
-
-    #[test]
-    fn psp_is_a_global_runtime_argument() {
-        for args in [
-            ["codex", "--psp"].as_slice(),
-            ["codex", "app-server", "--psp"].as_slice(),
-            ["codex", "remote-control", "--psp"].as_slice(),
-        ] {
-            let cli = MultitoolCli::try_parse_from(args).expect("parse runtime PSP flag");
-            assert!(cli.psp);
-            assert!(cli.config_overrides.raw_overrides.is_empty());
-        }
     }
 
     #[test]

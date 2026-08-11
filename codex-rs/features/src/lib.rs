@@ -171,6 +171,8 @@ pub enum Feature {
     SpawnCsv,
     /// Enable apps.
     Apps,
+    /// Route first-party ChatGPT requests through PSP.
+    Psp,
     /// Enable MCP apps.
     EnableMcpApps,
     /// Enable MCP protocol version 2026-07-28 support.
@@ -1091,6 +1093,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "apps",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::Psp,
+        key: "psp",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::EnableMcpApps,
