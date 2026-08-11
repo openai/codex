@@ -1,5 +1,6 @@
 use std::ffi::c_void;
 use std::io::Write;
+use std::os::windows::fs::MetadataExt as _;
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -7,6 +8,7 @@ use codex_windows_sandbox::ensure_allow_mask_aces_with_inheritance;
 use codex_windows_sandbox::path_mask_allows;
 use windows_sys::Win32::Security::CONTAINER_INHERIT_ACE;
 use windows_sys::Win32::Security::OBJECT_INHERIT_ACE;
+use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_EXECUTE;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 
@@ -26,7 +28,9 @@ pub(super) fn ensure_codex_app_runtime_paths_readable(
     );
 
     for runtime_path in runtime_paths {
-        if !runtime_path.is_dir() {
+        if !std::fs::symlink_metadata(&runtime_path).is_ok_and(|metadata| {
+            metadata.is_dir() && (metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT) == 0
+        }) {
             continue;
         }
 
@@ -92,7 +96,7 @@ fn runtime_paths(local_app_data: Option<PathBuf>, user_profile: Option<PathBuf>)
     let mut runtime_paths = Vec::new();
     if let Some(local_app_data) = local_app_data {
         let codex_root = local_app_data.join("OpenAI").join("Codex");
-        runtime_paths.extend([codex_root.join("bin"), codex_root.join("runtimes")]);
+        runtime_paths.push(codex_root);
     }
     // The managed primary runtime is installed outside the LocalAppData runtime roots.
     if let Some(user_profile) = user_profile {

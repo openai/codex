@@ -3,15 +3,14 @@ use pretty_assertions::assert_eq;
 use std::path::PathBuf;
 
 #[test]
-fn runtime_paths_include_desktop_and_primary_runtime_roots() {
+fn runtime_paths_include_desktop_parent_and_primary_runtime_roots() {
     let local_app_data = PathBuf::from(r"C:\Users\user\AppData\Local");
     let user_profile = PathBuf::from(r"C:\Users\user");
 
     assert_eq!(
         runtime_paths(Some(local_app_data), Some(user_profile)),
         vec![
-            PathBuf::from(r"C:\Users\user\AppData\Local\OpenAI\Codex\bin"),
-            PathBuf::from(r"C:\Users\user\AppData\Local\OpenAI\Codex\runtimes"),
+            PathBuf::from(r"C:\Users\user\AppData\Local\OpenAI\Codex"),
             PathBuf::from(r"C:\Users\user\.cache\codex-runtimes"),
         ]
     );
