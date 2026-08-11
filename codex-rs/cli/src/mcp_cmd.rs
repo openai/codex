@@ -156,7 +156,7 @@ pub struct AddMcpStreamableHttpArgs {
     #[arg(
         long = "oauth-client-registration",
         value_enum,
-        value_name = "AUTO|DCR",
+        value_name = "AUTO|CIMD|DCR",
         requires = "url"
     )]
     pub oauth_client_registration: Option<McpOAuthClientRegistrationArg>,
@@ -169,6 +169,7 @@ pub struct AddMcpStreamableHttpArgs {
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
 pub enum McpOAuthClientRegistrationArg {
     Auto,
+    Cimd,
     Dcr,
 }
 
@@ -176,6 +177,7 @@ impl From<McpOAuthClientRegistrationArg> for McpOAuthClientRegistration {
     fn from(value: McpOAuthClientRegistrationArg) -> Self {
         match value {
             McpOAuthClientRegistrationArg::Auto => Self::Auto,
+            McpOAuthClientRegistrationArg::Cimd => Self::Cimd,
             McpOAuthClientRegistrationArg::Dcr => Self::Dcr,
         }
     }
@@ -200,7 +202,7 @@ pub struct LoginArgs {
     #[arg(
         long = "oauth-client-registration",
         value_enum,
-        value_name = "AUTO|DCR"
+        value_name = "AUTO|CIMD|DCR"
     )]
     pub oauth_client_registration: Option<McpOAuthClientRegistrationArg>,
 }

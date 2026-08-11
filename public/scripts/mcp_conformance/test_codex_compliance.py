@@ -529,6 +529,55 @@ def test_official_case_preserves_independent_runner_failure_with_successful_adap
     assert case.diagnostics == f"{scenario}:\nofficial runner failed"
 
 
+def test_official_case_keeps_cimd_registration_checks_in_regression_gated_http_case(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def run_official_mode(**kwargs: object) -> list[OfficialScenarioResult]:
+        calls.append(kwargs)
+        scenarios = kwargs["scenarios"]
+        assert isinstance(scenarios, (tuple, list))
+        scenario = scenarios[0]
+        assert isinstance(scenario, str)
+        return [
+            OfficialScenarioResult(
+                scenario=scenario,
+                success=True,
+                adapter_success=True,
+                adapter_detail="adapter succeeded",
+            )
+        ]
+
+    monkeypatch.setattr(
+        "run_codex_compliance.run_official_mode",
+        run_official_mode,
+    )
+
+    case = _run_official_case(
+        Path("/opt/codex"),
+        Path("/src/codex_conformance_adapter.py"),
+        conformance_command=["conformance"],
+        mode=MODERN_VERSION,
+        scenarios=["auth/offline-access-scope"],
+        case_home=tmp_path / "case",
+        timeout_seconds=1.0,
+        enable_modern_feature=True,
+    )
+
+    assert case.transport == "official-http"
+    supplemental = [check for check in case.checks if check.source == "supplemental"]
+    assert [check.check_id for check in supplemental] == ["auto_cimd", "forced_cimd"]
+    assert len(calls) == 3
+    auto_env = calls[1]["base_env"]
+    forced_env = calls[2]["base_env"]
+    assert isinstance(auto_env, dict)
+    assert isinstance(forced_env, dict)
+    assert auto_env.get("CODEX_CONFORMANCE_CLIENT_REGISTRATION") is None
+    assert forced_env["CODEX_CONFORMANCE_CLIENT_REGISTRATION"] == "cimd"
+
+
 def _regression_report() -> dict[str, object]:
     cases: list[dict[str, object]] = []
     known_modern = {
@@ -599,6 +648,18 @@ def _regression_report() -> dict[str, object]:
                         "check_id": None,
                     }
                 )
+        if mode == MODERN_VERSION:
+            official_checks.extend(
+                {
+                    "name": f"supplemental/auth/offline-access-scope/{check_id}",
+                    "success": True,
+                    "status": "PASS",
+                    "source": "supplemental",
+                    "scenario": "auth/offline-access-scope",
+                    "check_id": check_id,
+                }
+                for check_id in ("auto_cimd", "forced_cimd")
+            )
         cases.append(
             {
                 "mode": mode,
@@ -688,6 +749,33 @@ def test_regression_gate_rejects_a_new_modern_failure() -> None:
 
     assert gate["success"] is False
     assert any(item["scenario"] == "tools_call" for item in gate["newFailures"])
+
+
+@pytest.mark.parametrize("check_id", ["auto_cimd", "forced_cimd"])
+def test_regression_gate_rejects_cimd_registration_failures(
+    check_id: str,
+) -> None:
+    baseline = _compact_regression_baseline(_regression_report())
+    candidate = _regression_report()
+    checks = _regression_case(candidate, MODERN_VERSION, "official-http")["checks"]
+    assert isinstance(checks, list)
+    check = next(
+        item
+        for item in checks
+        if isinstance(item, dict)
+        and item.get("source") == "supplemental"
+        and item.get("check_id") == check_id
+    )
+    check["success"] = False
+    check["status"] = "FAIL"
+
+    gate = _evaluate_regression_gate(candidate, baseline)
+
+    assert gate["success"] is False
+    assert any(
+        item["source"] == "supplemental" and item["check_id"] == check_id
+        for item in gate["newFailures"]
+    )
 
 
 def test_regression_gate_rejects_a_new_intermediate_oauth_failure() -> None:

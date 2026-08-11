@@ -4,6 +4,7 @@
     "McpServerOauthClientRegistration": {
       "enum": [
         "auto",
+        "cimd",
         "dcr"
       ],
       "type": "string"
@@ -19,7 +20,7 @@
           "type": "null"
         }
       ],
-      "description": "Registration strategy for this login only; omission preserves automatic DCR."
+      "description": "Registration strategy for this login only; omission selects automatic discovery."
     },
     "name": {
       "type": "string"

@@ -124,6 +124,7 @@ impl McpRequestProcessor {
         } = params;
         let client_registration = match client_registration.unwrap_or_default() {
             McpServerOauthClientRegistration::Auto => McpOAuthClientRegistration::Auto,
+            McpServerOauthClientRegistration::Cimd => McpOAuthClientRegistration::Cimd,
             McpServerOauthClientRegistration::Dcr => McpOAuthClientRegistration::Dcr,
         };
 

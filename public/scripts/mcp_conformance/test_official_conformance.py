@@ -10,7 +10,9 @@ import pytest
 import run_codex_compliance
 from codex_conformance_adapter import (
     CIMD_CLIENT_METADATA_URL,
+    CLIENT_REGISTRATION_OVERRIDE_ENV_VAR,
     AdapterFailure,
+    _client_registration_override,
     _exercise_auth_scenario,
     _oauth_client_id,
     _validate_oauth_secret_not_persisted,
@@ -303,17 +305,6 @@ def test_strict_auth_accepts_product_owned_reauthentication(
     assert manual_reauthorizations == []
 
 
-def test_strict_auth_does_not_invent_a_production_client_metadata_url() -> None:
-    assert (
-        _oauth_client_id(
-            "auth/basic-cimd",
-            {},
-            require_production_client_identity=True,
-        )
-        is None
-    )
-
-
 @pytest.mark.parametrize("filename", ["config.toml", ".credentials.json"])
 def test_oauth_client_secret_persistence_is_detected_without_disclosing_it(
     tmp_path: Path,
@@ -349,14 +340,6 @@ def test_auth_adapter_selects_only_scenario_provided_client_ids() -> None:
     assert _oauth_client_id("auth/basic-cimd", {}) == CIMD_CLIENT_METADATA_URL
     assert (
         _oauth_client_id(
-            "auth/basic-cimd",
-            {},
-            require_production_client_identity=True,
-        )
-        is None
-    )
-    assert (
-        _oauth_client_id(
             "auth/pre-registration",
             {"client_id": "pre-registered", "client_secret": "do-not-log"},
         )
@@ -365,6 +348,35 @@ def test_auth_adapter_selects_only_scenario_provided_client_ids() -> None:
     assert _oauth_client_id("auth/metadata-default", {}) is None
     with pytest.raises(AdapterFailure, match="client_id"):
         _oauth_client_id("auth/pre-registration", {})
+
+
+@pytest.mark.parametrize(
+    ("scenario", "require_automatic_auth", "override", "expected"),
+    [
+        ("auth/offline-access-not-supported", False, None, None),
+        ("auth/offline-access-scope", False, None, "dcr"),
+        ("auth/offline-access-scope", True, None, None),
+        ("auth/offline-access-scope", False, "cimd", "cimd"),
+    ],
+)
+def test_auth_adapter_scopes_client_registration_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+    scenario: str,
+    require_automatic_auth: bool,
+    override: str | None,
+    expected: str | None,
+) -> None:
+    if override is None:
+        monkeypatch.delenv(CLIENT_REGISTRATION_OVERRIDE_ENV_VAR, raising=False)
+    else:
+        monkeypatch.setenv(CLIENT_REGISTRATION_OVERRIDE_ENV_VAR, override)
+    assert (
+        _client_registration_override(
+            scenario,
+            require_automatic_auth=require_automatic_auth,
+        )
+        == expected
+    )
 
 
 def test_auth_registration_does_not_persist_context_secret(tmp_path: Path) -> None:

@@ -43,6 +43,7 @@ class AdapterFailure(RuntimeError):
 
 CIMD_CLIENT_METADATA_URL = "https://conformance-test.local/client-metadata.json"
 PRE_REGISTERED_CLIENT_SECRET_ENV_VAR = "MCP_CONFORMANCE_CLIENT_SECRET"
+CLIENT_REGISTRATION_OVERRIDE_ENV_VAR = "CODEX_CONFORMANCE_CLIENT_REGISTRATION"
 AUTH_COMPLETION_METHOD = "mcpServer/oauthLogin/completed"
 EXPECTED_AUTH_REJECTION_SCENARIOS = frozenset(
     {
@@ -303,16 +304,31 @@ def _drive_headless_authorization(
 def _oauth_client_id(
     scenario: str,
     context: Mapping[str, object],
-    *,
-    require_production_client_identity: bool = False,
 ) -> str | None:
     if scenario == "auth/basic-cimd":
-        return None if require_production_client_identity else CIMD_CLIENT_METADATA_URL
+        return CIMD_CLIENT_METADATA_URL
     if scenario == "auth/pre-registration":
         client_id = context.get("client_id")
         if not isinstance(client_id, str) or not client_id:
             raise AdapterFailure("pre-registration context did not contain client_id")
         return client_id
+    return None
+
+
+def _client_registration_override(
+    scenario: str,
+    *,
+    require_automatic_auth: bool,
+) -> str | None:
+    requested = os.environ.get(CLIENT_REGISTRATION_OVERRIDE_ENV_VAR)
+    if requested:
+        if requested not in {"auto", "cimd", "dcr"}:
+            raise AdapterFailure(
+                f"{CLIENT_REGISTRATION_OVERRIDE_ENV_VAR} must be auto, cimd, or dcr"
+            )
+        return requested
+    if scenario == "auth/offline-access-scope" and not require_automatic_auth:
+        return "dcr"
     return None
 
 
@@ -359,6 +375,7 @@ def _oauth_login(
     *,
     scopes: Sequence[str] | None,
     timeout_seconds: float,
+    client_registration: str | None = None,
 ) -> tuple[bool, str | None]:
     event_index = len(client.events)
     params: dict[str, object] = {
@@ -367,6 +384,8 @@ def _oauth_login(
     }
     if scopes is not None:
         params["scopes"] = list(scopes)
+    if client_registration is not None:
+        params["clientRegistration"] = client_registration
     response = client.request("mcpServer/oauth/login", params)
     result, detail = _response_result(response)
     if result is None:
@@ -424,11 +443,13 @@ def _login_reload_and_call(
     workspace: Path,
     timeout_seconds: float,
     scopes: Sequence[str] | None = None,
+    client_registration: str | None = None,
 ) -> None:
     success, error = _oauth_login(
         client,
         scopes=scopes,
         timeout_seconds=timeout_seconds,
+        client_registration=client_registration,
     )
     if not success:
         raise AdapterFailure(f"OAuth login failed: {error or 'unknown error'}")
@@ -444,6 +465,7 @@ def _exercise_auth_scenario(
     workspace: Path,
     timeout_seconds: float,
     require_automatic_auth: bool = False,
+    client_registration: str | None = None,
 ) -> str:
     if scenario in EXPECTED_AUTH_REJECTION_SCENARIOS:
         success, error = _oauth_login(
@@ -566,6 +588,7 @@ def _exercise_auth_scenario(
         client,
         workspace=workspace,
         timeout_seconds=timeout_seconds,
+        client_registration=client_registration,
     )
     return "completed OAuth login, authenticated discovery, and tool call"
 
@@ -741,11 +764,7 @@ def run_adapter(server_url: str) -> dict[str, object]:
             if not feature_configured:
                 raise AdapterFailure("could not configure the modern MCP feature")
 
-        oauth_client_id = _oauth_client_id(
-            scenario,
-            context,
-            require_production_client_identity=require_automatic_auth,
-        )
+        oauth_client_id = _oauth_client_id(scenario, context)
         oauth_client_secret = context.get("client_secret")
         oauth_client_secret_env_var = None
         if (
@@ -880,12 +899,17 @@ def run_adapter(server_url: str) -> dict[str, object]:
                     raise AdapterFailure("could not enable the modern MCP feature")
 
             if scenario.startswith("auth/"):
+                client_registration = _client_registration_override(
+                    scenario,
+                    require_automatic_auth=require_automatic_auth,
+                )
                 detail = _exercise_auth_scenario(
                     client,
                     scenario=scenario,
                     workspace=workspace,
                     timeout_seconds=timeout_seconds,
                     require_automatic_auth=require_automatic_auth,
+                    client_registration=client_registration,
                 )
                 if scenario == "auth/pre-registration" and isinstance(
                     oauth_client_secret,

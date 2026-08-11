@@ -4031,6 +4031,20 @@
         "transport": "official-http"
       },
       {
+        "check_id": "auto_cimd",
+        "mode": "2026-07-28",
+        "scenario": "auth/offline-access-scope",
+        "source": "supplemental",
+        "transport": "official-http"
+      },
+      {
+        "check_id": "forced_cimd",
+        "mode": "2026-07-28",
+        "scenario": "auth/offline-access-scope",
+        "source": "supplemental",
+        "transport": "official-http"
+      },
+      {
         "check_id": "app_server_initialize",
         "mode": "2026-07-28",
         "scenario": "",

@@ -1233,10 +1233,74 @@ def _run_official_case(
                 source="harness",
             )
         )
+    if mode == MODERN_VERSION and "auth/offline-access-scope" in scenarios:
+        case.checks.extend(
+            _cimd_registration_checks(
+                codex_binary,
+                adapter_script,
+                conformance_command=conformance_command,
+                case_home=case_home / "cimd-registration",
+                timeout_seconds=timeout_seconds,
+                enable_modern_feature=enable_modern_feature,
+            )
+        )
     if diagnostics:
         case.diagnostics = "\n\n".join(diagnostics)[-16_000:]
     case.finish(started_at)
     return case
+
+
+def _cimd_registration_checks(
+    codex_binary: Path,
+    adapter_script: Path,
+    *,
+    conformance_command: Sequence[str],
+    case_home: Path,
+    timeout_seconds: float,
+    enable_modern_feature: bool,
+) -> list[CheckResult]:
+    checks: list[CheckResult] = []
+    case_home.mkdir(parents=True)
+    for check_name, client_registration in (
+        ("auto_cimd", None),
+        ("forced_cimd", "cimd"),
+    ):
+        env = _isolated_environment(case_home / check_name)
+        env["CODEX_CONFORMANCE_TIMEOUT"] = str(timeout_seconds)
+        env["CODEX_CONFORMANCE_ENABLE_MODERN_FEATURE"] = (
+            "1" if enable_modern_feature else "0"
+        )
+        env["CODEX_CONFORMANCE_REQUIRE_AUTOMATIC_AUTH"] = "1"
+        if client_registration is not None:
+            env["CODEX_CONFORMANCE_CLIENT_REGISTRATION"] = client_registration
+        results = run_official_mode(
+            conformance_command=conformance_command,
+            adapter_script=adapter_script,
+            codex_binary=codex_binary,
+            mode=MODERN_VERSION,
+            scenarios=("auth/offline-access-scope",),
+            output_dir=case_home / check_name / "official-results",
+            timeout_seconds=timeout_seconds,
+            base_env=env,
+        )
+        result = results[0] if len(results) == 1 else None
+        success = result is not None and result.success
+        checks.append(
+            CheckResult(
+                name=f"supplemental/auth/offline-access-scope/{check_name}",
+                success=success,
+                detail=(
+                    result.adapter_detail or result.runner_detail
+                    if result is not None
+                    else "supplemental offline-access-scope scenario did not run"
+                ),
+                source="supplemental",
+                scenario="auth/offline-access-scope",
+                check_id=check_name,
+                category="auth",
+            )
+        )
+    return checks
 
 
 def run_compliance(
