@@ -310,16 +310,6 @@ pub fn new_guardian_denied_action_request(summary: String) -> Box<dyn HistoryCel
     Box::new(PrefixedWrappedHistoryCell::new(line, "✗ ".red(), "  "))
 }
 
-pub fn new_guardian_approved_action_request(summary: String) -> Box<dyn HistoryCell> {
-    let line = Line::from(vec![
-        "Request ".into(),
-        "approved".bold(),
-        " for ".into(),
-        Span::from(summary).dim(),
-    ]);
-    Box::new(PrefixedWrappedHistoryCell::new(line, "✔ ".green(), "  "))
-}
-
 pub fn new_guardian_timed_out_patch_request(files: Vec<String>) -> Box<dyn HistoryCell> {
     let mut summary = vec![
         "Review ".into(),

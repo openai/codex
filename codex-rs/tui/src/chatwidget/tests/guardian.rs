@@ -159,7 +159,7 @@ async fn guardian_denied_exec_renders_warning_and_denied_request() {
 }
 
 #[tokio::test]
-async fn guardian_approved_exec_renders_approved_request() {
+async fn guardian_approved_exec_is_hidden_from_history() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.show_welcome_banner = false;
 
@@ -192,10 +192,7 @@ async fn guardian_approved_exec_renders_approved_request() {
     let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
     term.set_viewport_area(viewport);
 
-    for lines in drain_insert_history(&mut rx) {
-        crate::insert_history::insert_history_lines(&mut term, lines)
-            .expect("Failed to insert history lines in test");
-    }
+    assert!(drain_insert_history(&mut rx).is_empty());
 
     term.draw(|f| {
         chat.render(f.area(), f.buffer_mut());
@@ -203,13 +200,13 @@ async fn guardian_approved_exec_renders_approved_request() {
     .expect("draw guardian approval history");
 
     assert_chatwidget_snapshot!(
-        "guardian_approved_exec_renders_approved_request",
+        "guardian_approved_exec_is_hidden_from_history",
         normalize_snapshot_paths(term.backend().vt100().screen().contents())
     );
 }
 
 #[tokio::test]
-async fn guardian_approved_request_permissions_renders_request_summary() {
+async fn guardian_approved_request_permissions_clears_status_without_history() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.show_welcome_banner = false;
     let action = GuardianAssessmentAction::RequestPermissions {
@@ -265,6 +262,9 @@ async fn guardian_approved_request_permissions_renders_request_summary() {
         action,
     });
 
+    assert!(chat.status_state.pending_guardian_review_status.is_empty());
+    assert_eq!(chat.status_state.current_status.header, "Working");
+
     let width: u16 = 110;
     let ui_height: u16 = chat.desired_height(width);
     let vt_height: u16 = ui_height.saturating_add(1).max(12);
@@ -274,10 +274,7 @@ async fn guardian_approved_request_permissions_renders_request_summary() {
     let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
     term.set_viewport_area(viewport);
 
-    for lines in drain_insert_history(&mut rx) {
-        crate::insert_history::insert_history_lines(&mut term, lines)
-            .expect("Failed to insert history lines in test");
-    }
+    assert!(drain_insert_history(&mut rx).is_empty());
 
     term.draw(|f| {
         chat.render(f.area(), f.buffer_mut());
@@ -285,7 +282,7 @@ async fn guardian_approved_request_permissions_renders_request_summary() {
     .expect("draw guardian request permissions approval history");
 
     assert_chatwidget_snapshot!(
-        "guardian_approved_request_permissions_renders_request_summary",
+        "guardian_approved_request_permissions_clears_status_without_history",
         normalize_snapshot_paths(term.backend().vt100().screen().contents())
     );
 }

@@ -31,8 +31,8 @@ impl ChatWidget {
     /// In-progress assessments temporarily own the live status footer so the
     /// user can see what is being reviewed, including parallel review
     /// aggregation. Terminal assessments clear or update that footer state and
-    /// render the final approved/denied history cell when guardian returns a
-    /// decision.
+    /// render denied or timed-out decisions in history. Approved assessments
+    /// silently complete after updating the footer.
     pub(super) fn on_guardian_assessment(&mut self, ev: GuardianAssessmentEvent) {
         let permission_request_summary = |subject: &str, reason: &Option<String>| {
             reason
@@ -119,8 +119,8 @@ impl ChatWidget {
             return;
         }
 
-        // Terminal assessments remove the matching pending footer entry first,
-        // then render the final approved/denied history cell below.
+        // Terminal assessments remove the matching pending footer entry before
+        // any decision-specific history handling.
         if self
             .status_state
             .pending_guardian_review_status
@@ -147,21 +147,6 @@ impl ChatWidget {
         }
 
         if ev.status == GuardianAssessmentStatus::Approved {
-            let cell = if let Some(command) = guardian_command(&ev.action) {
-                history_cell::new_approval_decision_cell(
-                    history_cell::ApprovalDecisionSubject::Command(command),
-                    crate::history_cell::ReviewDecision::Approved,
-                    history_cell::ApprovalDecisionActor::Guardian,
-                )
-            } else if let Some(summary) = guardian_action_summary(&ev.action) {
-                history_cell::new_guardian_approved_action_request(summary)
-            } else {
-                let summary = serde_json::to_string(&ev.action)
-                    .unwrap_or_else(|_| "<unrenderable guardian action>".to_string());
-                history_cell::new_guardian_approved_action_request(summary)
-            };
-
-            self.add_boxed_history(cell);
             self.request_redraw();
             return;
         }
