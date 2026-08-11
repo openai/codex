@@ -1303,6 +1303,97 @@ fn active_mcp_tool_call_snapshot() {
 }
 
 #[test]
+fn code_mode_tool_call_uses_title_and_preserves_full_transcript() {
+    let output = format!("{} transcript tail", "0123456789".repeat(20));
+    let mut cell = new_active_mcp_tool_call(
+        "call-code-mode".into(),
+        McpInvocation {
+            server: "node_repl".into(),
+            tool: "js".into(),
+            arguments: Some(json!({
+                "title": "Inspect Spotify workspace",
+                "code": "await tools.exec_command({ cmd: 'git status' })",
+            })),
+        },
+        /*animations_enabled*/ false,
+    );
+    cell.complete(
+        Duration::ZERO,
+        Ok(CallToolResult {
+            content: vec![
+                text_block("Script completed\nWall time 0.1 seconds\nOutput:\n"),
+                text_block(
+                    &json!({"chunk_id": "chunk-1", "output": output, "exit_code": 0}).to_string(),
+                ),
+            ],
+            is_error: None,
+            structured_content: None,
+            meta: None,
+        }),
+    );
+
+    let history = render_lines(&cell.display_lines(/*width*/ 40)).join("\n");
+    let transcript = render_lines(&cell.transcript_lines(/*width*/ 180)).join("\n");
+    insta::assert_snapshot!(format!("history:\n{history}\n\ntranscript:\n{transcript}"), @r#"
+    history:
+    • Called Inspect Spotify workspace
+      └ 012345678901234567890123456789012345
+            67890123456789012345678901234567
+            89012345678901234567890123456789
+            01234567890123456789012345678901
+            23456789012345678901234567890123
+            45678901...
+
+    transcript:
+    • Called node_repl.js({"title":"Inspect Spotify workspace","code":"await tools.exec_command({ cmd: 'git status' })"})
+      └ Script completed
+        Wall time 0.1 seconds
+        Output:
+        {"chunk_id":"chunk-
+            1","output":"012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678
+            90123456789012345678901234567890123456789 transcript tail","exit_code":0}
+    "#);
+}
+
+#[test]
+fn code_mode_tool_call_preserves_failure_details() {
+    let mut cell = new_active_mcp_tool_call(
+        "call-code-mode-failed".into(),
+        McpInvocation {
+            server: "node_repl".into(),
+            tool: "js".into(),
+            arguments: Some(json!({"title": "Inspect workspace", "code": "throw Error('denied')"})),
+        },
+        /*animations_enabled*/ false,
+    );
+    cell.complete(
+        Duration::ZERO,
+        Ok(CallToolResult {
+            content: vec![text_block("Script failed\nOutput:\npermission denied")],
+            is_error: Some(true),
+            structured_content: None,
+            meta: None,
+        }),
+    );
+
+    let history = render_lines(&cell.display_lines(/*width*/ 80)).join("\n");
+    let transcript = render_lines(&cell.transcript_lines(/*width*/ 120)).join("\n");
+    insta::assert_snapshot!(format!("history:\n{history}\n\ntranscript:\n{transcript}"), @r#"
+    history:
+    • Called Inspect workspace
+      └ Script failed
+        Output:
+        permission denied
+
+    transcript:
+    • Called node_repl.js({"title":"Inspect workspace","code":"throw Error('denied')"})
+      └ Script failed
+        Output:
+        permission denied
+    "#);
+}
+
+#[test]
 fn mcp_inventory_loading_snapshot() {
     let cell = new_mcp_inventory_loading(/*animations_enabled*/ true);
     let rendered = render_lines(&cell.display_lines(/*width*/ 80)).join("\n");
