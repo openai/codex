@@ -11,6 +11,7 @@ use tempfile::TempDir;
 use super::SkillConfigRule;
 use super::SkillConfigRuleSelector;
 use super::SkillConfigRules;
+use super::bundled_skills_enabled_from_stack;
 use super::skill_config_rules_from_stack;
 
 fn user_layer(codex_home: &TempDir, config: &str) -> ConfigLayerEntry {
@@ -48,6 +49,38 @@ path = {path}
 enabled = {enabled}
 "#
     )
+}
+
+#[test]
+fn bundled_skills_follow_effective_configuration() {
+    let codex_home = TempDir::new().expect("temp dir");
+
+    assert!(bundled_skills_enabled_from_stack(&stack(
+        &codex_home,
+        "",
+        ""
+    )));
+    assert!(!bundled_skills_enabled_from_stack(&stack(
+        &codex_home,
+        "[skills.bundled]\nenabled = false\n",
+        ""
+    )));
+    assert!(bundled_skills_enabled_from_stack(&stack(
+        &codex_home,
+        "[skills.bundled]\nenabled = false\n",
+        "[skills.bundled]\nenabled = true\n"
+    )));
+}
+
+#[test]
+fn malformed_bundled_skills_config_defaults_to_enabled() {
+    let codex_home = TempDir::new().expect("temp dir");
+
+    assert!(bundled_skills_enabled_from_stack(&stack(
+        &codex_home,
+        "[skills]\nbundled = 'invalid'\n",
+        ""
+    )));
 }
 
 #[test]

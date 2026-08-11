@@ -4,6 +4,8 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
+use codex_config::ConfigLayerEntry;
+use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigRequirementsToml;
 use codex_exec_server::LOCAL_FS;
@@ -1879,7 +1881,10 @@ async fn host_catalog_compacts_shared_paths_under_budget_pressure() -> TestResul
     let root = AbsolutePathBuf::try_from(std::fs::canonicalize(root)?)?;
     let rendered_root = root.to_string_lossy().replace('\\', "/");
     let config_layer_stack = ConfigLayerStack::new(
-        Vec::new(),
+        vec![ConfigLayerEntry::new(
+            ConfigLayerSource::SessionFlags,
+            toml::from_str("[skills.bundled]\nenabled = false\n")?,
+        )],
         Default::default(),
         ConfigRequirementsToml::default(),
     )?;
@@ -1892,12 +1897,7 @@ async fn host_catalog_compacts_shared_paths_under_budget_pressure() -> TestResul
     service.set_extra_roots(vec![root]);
     let snapshot = service
         .snapshot_for_config(
-            &HostSkillsLoadInput::new(
-                codex_home,
-                Vec::new(),
-                config_layer_stack,
-                /*bundled_skills_enabled*/ false,
-            ),
+            &HostSkillsLoadInput::new(codex_home, Vec::new(), config_layer_stack),
             Some(Arc::clone(&LOCAL_FS)),
         )
         .await;

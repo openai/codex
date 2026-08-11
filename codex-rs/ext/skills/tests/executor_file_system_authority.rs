@@ -222,7 +222,8 @@ async fn skill_loading_and_reads_use_the_supplied_executor_file_system() {
             ConfigLayerSource::Project {
                 dot_codex_folder: project_folder,
             },
-            toml::Value::Table(Default::default()),
+            toml::from_str("[skills.bundled]\nenabled = false\n")
+                .expect("valid bundled skills config"),
         )],
         Default::default(),
         ConfigRequirementsToml::default(),
@@ -236,12 +237,7 @@ async fn skill_loading_and_reads_use_the_supplied_executor_file_system() {
     );
     let snapshot = service
         .snapshot_for_config(
-            &HostSkillsLoadInput::new(
-                cwd,
-                Vec::new(),
-                config_layer_stack,
-                /*bundled_skills_enabled*/ false,
-            ),
+            &HostSkillsLoadInput::new(cwd, Vec::new(), config_layer_stack),
             Some(Arc::new(SyntheticFileSystem {
                 alias_root: PathUri::from_abs_path(&alias_root),
                 canonical_root: PathUri::from_abs_path(&canonical_root),

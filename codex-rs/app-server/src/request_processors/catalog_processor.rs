@@ -533,7 +533,6 @@ impl CatalogRequestProcessor {
         let skills_request = skills_service.for_request();
         let mut data = futures::stream::iter(cwds.into_iter().enumerate())
             .map(|(index, cwd)| {
-                let config = &config;
                 let fs = fs.clone();
                 let skills_request = &skills_request;
                 let effective_skill_roots = effective_skill_roots.clone();
@@ -560,7 +559,6 @@ impl CatalogRequestProcessor {
                         cwd_abs.clone(),
                         effective_skill_roots,
                         config_layer_stack,
-                        config.bundled_skills_enabled(),
                     )
                     .with_plugin_skill_snapshots(plugin_skill_snapshots);
                     let snapshot = skills_request

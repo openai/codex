@@ -172,7 +172,6 @@ async fn skills_for_config_with_stack(
         cwd.path().abs(),
         effective_skill_roots.to_vec(),
         config_layer_stack.clone(),
-        bundled_skills_enabled_from_stack(config_layer_stack),
     );
     skills_service
         .snapshot_for_config(&skills_input, Some(Arc::clone(&LOCAL_FS)))
@@ -226,7 +225,6 @@ async fn watchable_skill_root_paths_exclude_plugin_and_system_roots() {
         cwd.path().abs(),
         vec![plugin_skill_root.clone()],
         config_layer_stack,
-        /*bundled_skills_enabled*/ true,
     );
     let skills_service = HostSkillsService::new(
         codex_home.path().abs(),
@@ -262,7 +260,6 @@ async fn snapshot_for_config_merges_extension_host_and_legacy_plugin_roots() {
         cwd.path().abs(),
         vec![plugin_skill_root],
         config_layer_stack,
-        /*bundled_skills_enabled*/ false,
     );
     let skills_service = HostSkillsService::new(
         codex_home.path().abs(),
@@ -356,12 +353,7 @@ async fn skills_list_snapshots_share_host_roots_only_within_one_request() {
     );
     let request = skills_service.for_request();
     let input = |cwd: &TempDir, config_layer_stack| {
-        HostSkillsLoadInput::new(
-            cwd.path().abs(),
-            Vec::new(),
-            config_layer_stack,
-            /*bundled_skills_enabled*/ true,
-        )
+        HostSkillsLoadInput::new(cwd.path().abs(), Vec::new(), config_layer_stack)
     };
 
     write_user_skill(&codex_home, "first", "first-skill", "first skill");
@@ -434,7 +426,6 @@ async fn skills_for_config_refreshes_cache_when_remote_plugin_id_changes() {
         cwd.path().abs(),
         vec![plugin_skill_root.clone()],
         config_layer_stack.clone(),
-        bundled_skills_enabled_from_stack(&config_layer_stack),
     )
     .with_plugin_skill_snapshots(Some(test_plugin_skill_snapshots()));
     let plugin_snapshot = skills_service
@@ -504,12 +495,8 @@ async fn set_extra_roots_replaces_runtime_roots_and_clears_cache() {
         /*bundled_skills_enabled*/ true,
     );
 
-    let skills_input = HostSkillsLoadInput::new(
-        cwd.path().abs(),
-        Vec::new(),
-        config_layer_stack.clone(),
-        bundled_skills_enabled_from_stack(&config_layer_stack),
-    );
+    let skills_input =
+        HostSkillsLoadInput::new(cwd.path().abs(), Vec::new(), config_layer_stack.clone());
     let empty_snapshot = skills_service
         .for_request()
         .snapshot_for_cwd(
@@ -699,12 +686,8 @@ async fn skills_for_cwd_loads_repo_and_user_roots_with_local_fs() {
         ConfigRequirementsToml::default(),
     )
     .expect("valid config layer stack");
-    let skills_input = HostSkillsLoadInput::new(
-        cwd.path().abs(),
-        Vec::new(),
-        config_layer_stack.clone(),
-        bundled_skills_enabled_from_stack(&config_layer_stack),
-    );
+    let skills_input =
+        HostSkillsLoadInput::new(cwd.path().abs(), Vec::new(), config_layer_stack.clone());
     let skills_service = HostSkillsService::new(
         codex_home.path().abs(),
         /*bundled_skills_enabled*/ true,
@@ -770,12 +753,8 @@ async fn skills_for_cwd_without_fs_skips_repo_roots() {
         ConfigRequirementsToml::default(),
     )
     .expect("valid config layer stack");
-    let skills_input = HostSkillsLoadInput::new(
-        cwd.path().abs(),
-        Vec::new(),
-        config_layer_stack.clone(),
-        bundled_skills_enabled_from_stack(&config_layer_stack),
-    );
+    let skills_input =
+        HostSkillsLoadInput::new(cwd.path().abs(), Vec::new(), config_layer_stack.clone());
     let skills_service = HostSkillsService::new(
         codex_home.path().abs(),
         /*bundled_skills_enabled*/ true,
@@ -843,12 +822,8 @@ async fn skills_for_cwd_uses_cached_result_until_force_reload() {
         codex_home.path().abs(),
         /*bundled_skills_enabled*/ true,
     );
-    let base_input = HostSkillsLoadInput::new(
-        cwd.path().abs(),
-        Vec::new(),
-        config_layer_stack.clone(),
-        bundled_skills_enabled_from_stack(&config_layer_stack),
-    );
+    let base_input =
+        HostSkillsLoadInput::new(cwd.path().abs(), Vec::new(), config_layer_stack.clone());
     let config_input = base_input
         .clone()
         .with_plugin_skill_snapshots(Some(test_plugin_skill_snapshots()));
@@ -929,12 +904,7 @@ async fn skills_for_config_ignores_cwd_cache_when_session_flags_reenable_skill()
         codex_home.path().abs(),
         /*bundled_skills_enabled*/ true,
     );
-    let parent_input = HostSkillsLoadInput::new(
-        cwd.path().abs(),
-        Vec::new(),
-        parent_stack.clone(),
-        bundled_skills_enabled_from_stack(&parent_stack),
-    );
+    let parent_input = HostSkillsLoadInput::new(cwd.path().abs(), Vec::new(), parent_stack.clone());
 
     let parent_snapshot = skills_service
         .for_request()

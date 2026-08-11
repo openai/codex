@@ -249,6 +249,58 @@ async fn skills_list_disabled_bundled_skills_preserves_shared_system_skill_cache
 }
 
 #[tokio::test]
+async fn skills_list_uses_each_cwds_bundled_skills_configuration() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let disabled_cwd = TempDir::new()?;
+    let enabled_cwd = TempDir::new()?;
+
+    for (cwd, enabled) in [(disabled_cwd.path(), false), (enabled_cwd.path(), true)] {
+        std::fs::create_dir_all(cwd.join(".git"))?;
+        std::fs::create_dir_all(cwd.join(".codex"))?;
+        std::fs::write(
+            cwd.join(".codex/config.toml"),
+            format!("[skills.bundled]\nenabled = {enabled}\n"),
+        )?;
+        set_project_trust_level(codex_home.path(), cwd, TrustLevel::Trusted)?;
+    }
+
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+
+    let request_id = app_server
+        .send_skills_list_request(SkillsListParams {
+            cwds: vec![
+                disabled_cwd.path().to_path_buf(),
+                enabled_cwd.path().to_path_buf(),
+            ],
+            force_reload: true,
+        })
+        .await?;
+    let SkillsListResponse { data } =
+        timeout(DEFAULT_TIMEOUT, app_server.read_response(request_id)).await??;
+
+    assert_eq!(data.len(), 2);
+    for (entry, (cwd, enabled)) in data
+        .iter()
+        .zip([(disabled_cwd.path(), false), (enabled_cwd.path(), true)])
+    {
+        assert_eq!(entry.cwd, cwd);
+        assert_eq!(entry.errors, Vec::new());
+        assert_eq!(
+            entry
+                .skills
+                .iter()
+                .any(|skill| skill.scope == SkillScope::System),
+            enabled
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn skills_list_runtime_enable_refreshes_shared_system_skill_cache() -> Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;

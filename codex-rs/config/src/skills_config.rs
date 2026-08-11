@@ -119,6 +119,27 @@ impl SkillConfigRules {
     }
 }
 
+/// Returns whether bundled skills are enabled by the effective configuration.
+pub fn bundled_skills_enabled_from_stack(config_layer_stack: &ConfigLayerStack) -> bool {
+    let effective_config = config_layer_stack.effective_config();
+    let Some(skills_value) = effective_config
+        .as_table()
+        .and_then(|table| table.get("skills"))
+    else {
+        return true;
+    };
+
+    let skills: SkillsConfig = match skills_value.clone().try_into() {
+        Ok(skills) => skills,
+        Err(err) => {
+            warn!("invalid skills config: {err}");
+            return true;
+        }
+    };
+
+    skills.bundled.unwrap_or_default().enabled
+}
+
 /// Resolves skill enablement rules from user and session configuration layers.
 pub fn skill_config_rules_from_stack(config_layer_stack: &ConfigLayerStack) -> SkillConfigRules {
     let mut entries = Vec::new();

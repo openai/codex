@@ -23,7 +23,6 @@ pub use codex_skills::detect_implicit_skill_invocation_for_command;
 pub use codex_skills_extension::HostSkillsLoadInput;
 pub use codex_skills_extension::HostSkillsService;
 pub use codex_skills_extension::SkillLoadOutcome;
-pub use codex_skills_extension::bundled_skills_enabled_from_stack;
 
 #[derive(Debug, Default)]
 struct ImplicitSkillInvocations(Mutex<HashSet<String>>);
@@ -36,7 +35,6 @@ pub(crate) fn skills_load_input_from_config(
         config.cwd.clone(),
         effective_skill_roots,
         config.config_layer_stack.clone(),
-        config.bundled_skills_enabled(),
     )
 }
 

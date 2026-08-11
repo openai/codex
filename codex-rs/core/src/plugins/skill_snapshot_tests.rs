@@ -36,6 +36,9 @@ remote_plugin = true
 
 [plugins."{PLUGIN_CONFIG_NAME}"]
 enabled = true
+
+[skills.bundled]
+enabled = false
 "#,
         ),
     );
@@ -68,7 +71,6 @@ enabled = true
             cwd,
             plugin_outcome.effective_plugin_skill_roots(),
             config.config_layer_stack.clone(),
-            /*bundled_skills_enabled*/ false,
         )
         .with_plugin_skill_snapshots(
             plugins_manager.plugin_skill_snapshots_for_config(&plugins_input),

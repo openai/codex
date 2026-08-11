@@ -7,6 +7,7 @@ use std::sync::Weak;
 
 use codex_config::ConfigLayerStack;
 use codex_config::SkillConfigRules;
+use codex_config::bundled_skills_enabled_from_stack;
 use codex_config::skill_config_rules_from_stack;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
@@ -19,9 +20,7 @@ use tokio::sync::OnceCell;
 use tokio::sync::Semaphore;
 use tracing::info;
 use tracing::instrument;
-use tracing::warn;
 
-use codex_config::SkillsConfig;
 use codex_skills::LoadedSkills;
 use codex_skills::SkillLoadFuture;
 use codex_skills::SkillRootLoadRequest;
@@ -43,7 +42,6 @@ pub struct HostSkillsLoadInput {
     cwd: AbsolutePathBuf,
     effective_skill_roots: Vec<PluginSkillRoot>,
     config_layer_stack: ConfigLayerStack,
-    bundled_skills_enabled: bool,
     plugin_skill_snapshots: Option<SkillRootSnapshots<PluginSkillRoot>>,
 }
 
@@ -52,13 +50,11 @@ impl HostSkillsLoadInput {
         cwd: AbsolutePathBuf,
         effective_skill_roots: Vec<PluginSkillRoot>,
         config_layer_stack: ConfigLayerStack,
-        bundled_skills_enabled: bool,
     ) -> Self {
         Self {
             cwd,
             effective_skill_roots,
             config_layer_stack,
-            bundled_skills_enabled,
             plugin_skill_snapshots: None,
         }
     }
@@ -219,7 +215,8 @@ impl HostSkillsService {
         input: &HostSkillsLoadInput,
         fs: Option<Arc<dyn ExecutorFileSystem>>,
     ) -> Vec<HostSkillRoot> {
-        if input.bundled_skills_enabled {
+        let bundled_skills_enabled = bundled_skills_enabled_from_stack(&input.config_layer_stack);
+        if bundled_skills_enabled {
             self.ensure_system_skills_installed();
         }
         let mut roots = resolve_skill_roots(
@@ -230,7 +227,7 @@ impl HostSkillsService {
             self.extra_roots(),
         )
         .await;
-        if !input.bundled_skills_enabled {
+        if !bundled_skills_enabled {
             roots.retain(|root| root.scope != SkillScope::System);
         }
         roots
@@ -485,28 +482,6 @@ impl Hash for FileSystemIdentity {
     fn hash<H: Hasher>(&self, state: &mut H) {
         (self.0.as_ptr() as *const ()).hash(state);
     }
-}
-
-pub fn bundled_skills_enabled_from_stack(
-    config_layer_stack: &codex_config::ConfigLayerStack,
-) -> bool {
-    let effective_config = config_layer_stack.effective_config();
-    let Some(skills_value) = effective_config
-        .as_table()
-        .and_then(|table| table.get("skills"))
-    else {
-        return true;
-    };
-
-    let skills: SkillsConfig = match skills_value.clone().try_into() {
-        Ok(skills) => skills,
-        Err(err) => {
-            warn!("invalid skills config: {err}");
-            return true;
-        }
-    };
-
-    skills.bundled.unwrap_or_default().enabled
 }
 
 fn config_skills_cache_key(

@@ -116,7 +116,6 @@ impl SkillsWatcher {
             config.cwd.clone(),
             plugin_outcome.effective_plugin_skill_roots(),
             config.config_layer_stack.clone(),
-            config.bundled_skills_enabled(),
         );
         let roots = thread_manager
             .skills_service()
