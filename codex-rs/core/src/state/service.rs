@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::HostSkillsService;
 use crate::agent::AgentControl;
 use crate::agents_md_manager::AgentsMdManager;
 use crate::attestation::AttestationProvider;
@@ -38,6 +37,7 @@ use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_rollout::state_db::StateDbHandle;
 use codex_rollout_trace::ThreadTraceContext;
+use codex_skills_extension::HostSkillsService;
 use codex_thread_store::LiveThread;
 use codex_thread_store::ThreadStore;
 use tokio::runtime::Handle;

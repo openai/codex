@@ -59,7 +59,7 @@ pub(crate) struct PluginRequestProcessor {
 }
 
 fn plugin_skills_to_info(
-    skills: &[codex_core::skills::SkillMetadata],
+    skills: &[codex_skills::SkillMetadata],
     disabled_skill_paths: &HashSet<AbsolutePathBuf>,
 ) -> Vec<SkillSummary> {
     skills

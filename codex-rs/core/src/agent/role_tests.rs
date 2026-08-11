@@ -1,11 +1,11 @@
 use super::*;
-use crate::HostSkillsService;
 use crate::config::ConfigBuilder;
 use crate::plugins::plugins_manager_for_config;
 use crate::skills_load_input_from_config;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::BaseInstructionsProvenance;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_skills_extension::HostSkillsService;
 use codex_utils_absolute_path::test_support::PathExt;
 use pretty_assertions::assert_eq;
 use std::fs;

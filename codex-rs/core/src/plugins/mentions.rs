@@ -102,8 +102,6 @@ pub(crate) fn collect_explicit_plugin_mentions(
         .collect()
 }
 
-pub(crate) use crate::build_skill_name_counts;
-
 pub(crate) fn build_connector_slug_counts(
     connectors: &[connectors::AppInfo],
 ) -> HashMap<String, usize> {

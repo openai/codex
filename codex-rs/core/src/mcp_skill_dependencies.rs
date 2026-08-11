@@ -17,7 +17,6 @@ use codex_rmcp_client::perform_oauth_login;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use crate::SkillMetadata;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -28,6 +27,7 @@ use codex_mcp::mcp_permission_prompt_is_auto_approved;
 use codex_mcp::oauth_login_support;
 use codex_mcp::resolve_oauth_scopes;
 use codex_mcp::should_retry_without_scopes;
+use codex_skills::SkillMetadata;
 use codex_skills::SkillToolDependency;
 
 const SKILL_MCP_DEPENDENCY_PROMPT_ID: &str = "skill_mcp_dependency_install";
