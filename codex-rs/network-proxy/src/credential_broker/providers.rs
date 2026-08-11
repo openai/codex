@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 const DUMMY_ALPHANUMERIC: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
-type RequestHeader = for<'a> fn(&'a HeaderMap) -> Option<&'a HeaderValue>;
+type TranslateRequestHeader = fn(&HeaderMap, &str, &str) -> Option<HeaderValue>;
 
 /// Describes how one credential family is recognized and injected.
 ///
@@ -17,8 +17,9 @@ type RequestHeader = for<'a> fn(&'a HeaderMap) -> Option<&'a HeaderValue>;
 pub(super) struct CredentialProvider {
     context_env_vars: &'static [&'static str],
     sources: &'static [CredentialSource],
+    pub(super) reset_on_configuration_change: bool,
     dummy_value: fn(&str) -> String,
-    request_header: RequestHeader,
+    translate_request_header: TranslateRequestHeader,
     request_header_value: fn(&str) -> Option<HeaderValue>,
     insert_request_header: fn(&mut HeaderMap, HeaderValue),
 }
@@ -26,6 +27,7 @@ pub(super) struct CredentialProvider {
 #[derive(Clone, PartialEq, Eq)]
 pub(super) enum CredentialHostBinding {
     ExactHost(String),
+    ExactHosts(Vec<String>),
     HostPattern {
         exact_hosts: &'static [&'static str],
         suffixes: &'static [&'static str],
@@ -34,7 +36,8 @@ pub(super) enum CredentialHostBinding {
 
 pub(super) struct CredentialSource {
     pub(super) env_vars: &'static [&'static str],
-    pub(super) host_binding: fn(&HashMap<String, String>) -> Option<CredentialHostBinding>,
+    pub(super) host_binding:
+        fn(&HashMap<String, String>, Option<&str>) -> Option<CredentialHostBinding>,
 }
 
 const CREDENTIAL_PROVIDERS: &[&CredentialProvider] = &[&github::PROVIDER, &openai::PROVIDER];
@@ -48,8 +51,13 @@ impl CredentialProvider {
         (self.dummy_value)(real_value)
     }
 
-    pub(super) fn request_header<'a>(&self, headers: &'a HeaderMap) -> Option<&'a HeaderValue> {
-        (self.request_header)(headers)
+    pub(super) fn translate_request_header(
+        &self,
+        headers: &HeaderMap,
+        expected_value: &str,
+        replacement_value: &str,
+    ) -> Option<HeaderValue> {
+        (self.translate_request_header)(headers, expected_value, replacement_value)
     }
 
     pub(super) fn request_header_value(&self, value: &str) -> Option<HeaderValue> {
@@ -65,6 +73,9 @@ impl CredentialHostBinding {
     pub(super) fn matches_host(&self, host: &str) -> bool {
         match self {
             Self::ExactHost(expected_host) => host == expected_host,
+            Self::ExactHosts(expected_hosts) => {
+                expected_hosts.iter().any(|expected| host == expected)
+            }
             Self::HostPattern {
                 exact_hosts,
                 suffixes,
@@ -75,14 +86,26 @@ impl CredentialHostBinding {
     }
 }
 
-pub(super) fn credential_broker_env_keys() -> impl Iterator<Item = &'static str> {
+pub(super) fn credential_context_env_keys(
+    brokered_keys: &[String],
+) -> impl Iterator<Item = &'static str> + '_ {
     credential_providers()
+        .filter(move |provider| {
+            provider.sources().iter().any(|source| {
+                source.env_vars.iter().any(|key| {
+                    brokered_keys
+                        .iter()
+                        .any(|brokered_key| super::env_key_matches(brokered_key, key))
+                })
+            })
+        })
         .flat_map(|provider| provider.context_env_vars.iter().copied())
-        .chain(
-            credential_providers()
-                .flat_map(CredentialProvider::sources)
-                .flat_map(|source| source.env_vars.iter().copied()),
-        )
+}
+
+pub(super) fn credential_env_keys() -> impl Iterator<Item = &'static str> {
+    credential_providers()
+        .flat_map(CredentialProvider::sources)
+        .flat_map(|source| source.env_vars.iter().copied())
 }
 
 pub(super) fn credential_providers() -> impl Iterator<Item = &'static CredentialProvider> {

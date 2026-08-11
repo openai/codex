@@ -603,7 +603,11 @@ pub fn is_managed_proxy_env_var(key: &str, value: &str) -> bool {
 }
 
 pub fn strip_managed_proxy_env(env: &mut HashMap<String, String>) {
-    env.retain(|key, value| !is_managed_proxy_env_var(key, value));
+    let brokered_credential_dummy_env_keys =
+        crate::credential_broker::brokered_credential_dummy_env_keys(env);
+    env.retain(|key, value| {
+        !brokered_credential_dummy_env_keys.contains(key) && !is_managed_proxy_env_var(key, value)
+    });
 }
 
 #[cfg(target_os = "macos")]
@@ -828,9 +832,27 @@ impl NetworkProxy {
 
     /// Captures the static inputs needed to launch a matching executor-local proxy.
     pub async fn remote_launch_config(&self) -> Result<crate::RemoteNetworkProxyLaunchConfig> {
-        let proxy = crate::RemoteNetworkProxyConfig::from_effective_config(
-            &self.state.current_cfg().await?,
-        )?;
+        let (mut config, brokerage_created_default_allowlist) =
+            self.state.current_cfg_with_brokerage_provenance().await?;
+        let mut broker_only_config = config::NetworkProxyConfig {
+            enabled: config.enabled,
+            credential_broker_openai_host: config.credential_broker_openai_host.clone(),
+            dangerously_allow_plaintext_credential_injection: config
+                .dangerously_allow_plaintext_credential_injection,
+            ..config::NetworkProxyConfig::default()
+        };
+        broker_only_config.set_credential_broker_enabled(/*enabled*/ true);
+        broker_only_config.set_allowed_domains(vec!["*".to_string()]);
+        let broker_only = brokerage_created_default_allowlist && config == broker_only_config;
+        if config.credential_broker {
+            config.enabled &= !broker_only;
+            config.credential_broker = false;
+            config.dangerously_allow_plaintext_credential_injection = false;
+            if config.mitm && config.mitm_hooks.is_empty() {
+                config.mitm = false;
+            }
+        }
+        let proxy = crate::RemoteNetworkProxyConfig::from_effective_config(&config)?;
         let (environment_id, execution_id) = self
             .execution_scope
             .as_ref()
@@ -1025,6 +1047,15 @@ impl NetworkProxy {
                 socks_addr: self.socks_addr,
             },
         );
+    }
+
+    /// Restores known dummy credentials before a child intentionally leaves managed networking.
+    pub fn restore_brokered_credentials(
+        &self,
+        env: &mut HashMap<String, String>,
+        command: &mut [String],
+    ) {
+        self.state.restore_child_credentials(env, command);
     }
 
     pub fn apply_to_env_for_environment(
@@ -1969,7 +2000,12 @@ mod tests {
     async fn remote_launch_config_carries_execution_scope() -> Result<()> {
         #[cfg(target_os = "windows")]
         let _permit = WINDOWS_INGRESS_TEST_LOCK.acquire().await.unwrap();
-        let state = Arc::new(network_proxy_state_for_policy(NetworkProxyConfig::default()));
+        let mut config = NetworkProxyConfig {
+            dangerously_allow_plaintext_credential_injection: true,
+            ..NetworkProxyConfig::default()
+        };
+        config.set_credential_broker_enabled(/*enabled*/ true);
+        let state = Arc::new(network_proxy_state_for_policy(config));
         let proxy = match NetworkProxy::builder().state(state).build().await {
             Ok(proxy) => proxy,
             Err(err) => {
@@ -1995,6 +2031,39 @@ mod tests {
 
         assert_eq!(launch.environment_id.as_deref(), Some("remote-env"));
         assert_eq!(launch.execution_id.as_deref(), Some("execution-1"));
+        assert!(!launch.proxy.enabled);
+        for (enabled, mode, allowed_domain, proxy_url) in [
+            (false, config::NetworkMode::Full, Some("*"), None),
+            (false, config::NetworkMode::Full, Some("example.com"), None),
+            (
+                false,
+                config::NetworkMode::Full,
+                None,
+                Some("http://127.0.0.1:8123"),
+            ),
+            (true, config::NetworkMode::Full, None, None),
+            (true, config::NetworkMode::Limited, None, None),
+        ] {
+            let mut config = NetworkProxyConfig {
+                enabled,
+                mode,
+                ..NetworkProxyConfig::default()
+            };
+            if let Some(domain) = allowed_domain {
+                config.set_allowed_domains(vec![domain.to_string()]);
+            }
+            if let Some(proxy_url) = proxy_url {
+                config.proxy_url = proxy_url.to_string();
+            }
+            config.set_credential_broker_enabled(/*enabled*/ true);
+            let proxy = NetworkProxy::builder()
+                .state(Arc::new(network_proxy_state_for_policy(config)))
+                .build()
+                .await?;
+            let launch = proxy.remote_launch_config().await?;
+            assert!(launch.proxy.enabled);
+            assert_eq!(launch.proxy.mode, mode);
+        }
         assert_eq!(
             prepared
                 .env

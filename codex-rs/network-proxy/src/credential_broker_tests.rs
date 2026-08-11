@@ -1,5 +1,7 @@
 use super::*;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use pretty_assertions::assert_eq;
 use rama_http::HeaderValue;
 use rama_http::header::AUTHORIZATION;
@@ -12,10 +14,14 @@ fn env_map<const N: usize>(entries: [(&str, &str); N]) -> HashMap<String, String
 }
 
 fn headers_with_bearer(value: &str) -> HeaderMap {
+    headers_with_authorization(&format!("Bearer {value}"))
+}
+
+fn headers_with_authorization(value: &str) -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert(
         AUTHORIZATION,
-        HeaderValue::from_str(&format!("Bearer {value}")).expect("valid bearer header"),
+        HeaderValue::from_str(value).expect("valid authorization header"),
     );
     headers
 }
@@ -57,11 +63,53 @@ fn virtualize_child_env_replaces_supported_credentials() {
     let openai_dummy = env.get("OPENAI_API_KEY").expect("dummy OpenAI API key");
     assert_credential_shape(github_token, github_dummy, "github_pat_");
     assert_credential_shape(openai_api_key, openai_dummy, "sk-proj-");
+    let mut command = vec![
+        format!("Authorization: Bearer {github_dummy}"),
+        format!("Authorization: Bearer {openai_dummy}"),
+    ];
+    let openai_dummy = openai_dummy.clone();
     env.insert("OPENAI_API_KEY".to_string(), "sk-user-override".to_string());
     assert_eq!(
         brokered_credential_dummy_env_keys(&env),
         vec!["GH_TOKEN".to_string()]
     );
+
+    broker.restore_child_env(&mut env, &mut command);
+    assert_eq!(env.get("GH_TOKEN").map(String::as_str), Some(github_token));
+    assert_eq!(
+        env.get("OPENAI_API_KEY").map(String::as_str),
+        Some("sk-user-override")
+    );
+    assert_eq!(
+        command,
+        vec![
+            format!("Authorization: Bearer {github_token}"),
+            format!("Authorization: Bearer {openai_dummy}"),
+        ]
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn brokered_credentials_match_environment_keys_case_insensitively_on_windows() {
+    let broker = CredentialBroker::new(/*enabled*/ true);
+    let mut env = env_map([
+        ("gh_host", "github.example.com"),
+        ("gh_enterprise_token", "ghp-enterprise-real"),
+    ]);
+
+    broker.virtualize_child_env(&mut env);
+    let dummy = env
+        .get("GH_ENTERPRISE_TOKEN")
+        .expect("dummy GitHub enterprise token");
+    let mut headers = headers_with_bearer(dummy);
+    broker.inject_request_headers("github.example.com", &mut headers);
+
+    assert_eq!(
+        brokered_credential_dummy_env_keys(&env),
+        vec!["GH_ENTERPRISE_TOKEN".to_string()]
+    );
+    assert_eq!(authorization(&headers), Some("Bearer ghp-enterprise-real"));
 }
 
 #[test]
@@ -82,6 +130,27 @@ fn virtualize_child_env_preserves_live_dummy_mappings() {
 
     assert_eq!(authorization(&first_headers), Some("Bearer ghp-real-one"));
     assert_eq!(authorization(&second_headers), Some("Bearer ghp-real-two"));
+}
+
+#[test]
+fn brokered_credential_env_keys_only_include_registered_credentials() {
+    let broker = CredentialBroker::new(/*enabled*/ true);
+    let mut env = env_map([
+        ("OPENAI_API_KEY", "sk-real"),
+        ("GH_TOKEN", ""),
+        ("GH_HOST", "github.example.com"),
+    ]);
+
+    broker.virtualize_child_env(&mut env);
+    env.insert(
+        "GH_TOKEN".to_string(),
+        "ghp_added_after_brokerage".to_string(),
+    );
+
+    assert_eq!(
+        brokered_credential_env_keys(&env).collect::<Vec<_>>(),
+        vec!["OPENAI_API_KEY"]
+    );
 }
 
 #[test]
@@ -147,6 +216,47 @@ fn inject_request_headers_requires_dummy_to_select_ambiguous_github_credential()
 }
 
 #[test]
+fn request_translation_preserves_provider_scheme_and_host_binding() {
+    let broker = CredentialBroker::new(/*enabled*/ true);
+    let mut env = env_map([("GH_TOKEN", "ghp-real")]);
+    broker.virtualize_child_env(&mut env);
+    let gh = &env["GH_TOKEN"];
+    let basic_dummy = STANDARD.encode(format!("x-access-token:{gh}"));
+    let basic_real = STANDARD.encode("x-access-token:ghp-real");
+    let basic_username_dummy = STANDARD.encode(format!("{gh}:x-oauth-basic"));
+    let basic_username_real = STANDARD.encode("ghp-real:x-oauth-basic");
+    let basic_dummy = basic_dummy.as_str();
+    let basic_real = basic_real.as_str();
+    let basic_username_dummy = basic_username_dummy.as_str();
+    let basic_username_real = basic_username_real.as_str();
+
+    for (host, scheme, input, expected) in [
+        ("github.com", "Basic", basic_dummy, basic_real),
+        ("example.com", "Basic", basic_dummy, basic_dummy),
+        (
+            "github.com",
+            "Basic",
+            basic_username_dummy,
+            basic_username_real,
+        ),
+        (
+            "example.com",
+            "Basic",
+            basic_username_dummy,
+            basic_username_dummy,
+        ),
+        ("api.github.com", "Bearer", gh.as_str(), "ghp-real"),
+        ("uploads.github.com", "Bearer", gh.as_str(), "ghp-real"),
+        ("api.github.com", "token", gh.as_str(), "ghp-real"),
+    ] {
+        let mut headers = headers_with_authorization(&format!("{scheme} {input}"));
+        broker.inject_request_headers(host, &mut headers);
+        let expected = format!("{scheme} {expected}");
+        assert_eq!(authorization(&headers), Some(expected.as_str()), "{host}");
+    }
+}
+
+#[test]
 fn inject_request_headers_requires_dummy_and_preserves_explicit_authorization() {
     let broker = CredentialBroker::new(/*enabled*/ true);
     let mut env = env_map([("OPENAI_API_KEY", "sk-real")]);
@@ -165,6 +275,54 @@ fn inject_request_headers_requires_dummy_and_preserves_explicit_authorization() 
     broker.inject_request_headers("api.openai.com", &mut explicit_headers);
 
     assert_eq!(authorization(&explicit_headers), Some("Bearer sk-explicit"));
+}
+
+#[test]
+fn openai_credentials_bind_only_to_default_and_configured_trusted_hosts() {
+    let broker = CredentialBroker::new(/*enabled*/ true);
+    let mut config = NetworkProxyConfig::default();
+    config.set_credential_broker_enabled(/*enabled*/ true);
+    config.set_credential_broker_openai_base_url(
+        /*base_url*/ Some("https://gateway.example.com./v1"),
+    );
+    broker.configure(&config);
+
+    let mut env = env_map([
+        ("OPENAI_API_KEY", "sk-real"),
+        ("OPENAI_BASE_URL", "https://sdk.example.com./v1"),
+        ("GH_TOKEN", "ghp-real"),
+    ]);
+    broker.virtualize_child_env(&mut env);
+    assert!(brokered_credential_env_keys(&env).any(|key| key == "OPENAI_BASE_URL"));
+    let dummy = &env["OPENAI_API_KEY"];
+
+    for (host, expected_credential) in [
+        ("api.openai.com", "sk-real"),
+        ("gateway.example.com", "sk-real"),
+        ("sdk.example.com", "sk-real"),
+        ("attacker.example", dummy.as_str()),
+    ] {
+        let mut headers = headers_with_bearer(dummy);
+        broker.inject_request_headers(host, &mut headers);
+        let expected = format!("Bearer {expected_credential}");
+        assert_eq!(authorization(&headers), Some(expected.as_str()), "{host}");
+    }
+
+    config.set_credential_broker_openai_base_url(
+        /*base_url*/ Some("https://replacement.example/v1"),
+    );
+    broker.configure(&config);
+
+    let mut github_headers = headers_with_bearer(&env["GH_TOKEN"]);
+    broker.inject_request_headers("api.github.com", &mut github_headers);
+    assert_eq!(authorization(&github_headers), Some("Bearer ghp-real"));
+
+    let mut openai_headers = headers_with_bearer(dummy);
+    broker.inject_request_headers("gateway.example.com", &mut openai_headers);
+    assert_eq!(
+        authorization(&openai_headers),
+        Some(format!("Bearer {dummy}").as_str())
+    );
 }
 
 #[test]
@@ -207,6 +365,7 @@ fn github_enterprise_credentials_bind_to_gh_host() {
         ("GH_ENTERPRISE_TOKEN", "ghp-enterprise-real"),
     ]);
     broker.virtualize_child_env(&mut env);
+    assert!(brokered_credential_env_keys(&env).any(|key| key == "GH_HOST"));
     let github_token = env
         .get("GH_ENTERPRISE_TOKEN")
         .expect("dummy GitHub enterprise token");
