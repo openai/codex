@@ -808,6 +808,7 @@ async fn maybe_auto_review_mcp_request_user_input(
             .map(|option| option.label.clone())
             .unwrap_or_else(|| MCP_TOOL_APPROVAL_ACCEPT.to_string()),
         ReviewDecision::Approved
+        | ReviewDecision::ApprovedMcpPolicyAmendment
         | ReviewDecision::ApprovedExecpolicyAmendment { .. }
         | ReviewDecision::NetworkPolicyAmendment { .. } => MCP_TOOL_APPROVAL_ACCEPT.to_string(),
         ReviewDecision::Denied { .. } | ReviewDecision::TimedOut | ReviewDecision::Abort => {

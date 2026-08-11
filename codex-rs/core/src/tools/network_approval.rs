@@ -42,6 +42,7 @@ use tokio::sync::Notify;
 use tokio::sync::OnceCell;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
+use tracing::error;
 use tracing::warn;
 use uuid::Uuid;
 
@@ -985,6 +986,20 @@ impl NetworkApprovalService {
                     PendingApprovalDecision::Deny
                 }
             },
+            ReviewDecision::ApprovedMcpPolicyAmendment => {
+                error!("Network approval received ApprovedMcpPolicyAmendment");
+                if let Some(owner_call) = owner_call.as_ref() {
+                    let rejection = "Error while requesting approval".to_string();
+                    let outcome = if use_guardian {
+                        NetworkApprovalOutcome::DeniedByPolicy(rejection)
+                    } else {
+                        NetworkApprovalOutcome::DeniedByApproval(rejection)
+                    };
+                    self.record_call_outcome(&owner_call.registration_id, outcome)
+                        .await;
+                }
+                PendingApprovalDecision::Deny
+            }
             ReviewDecision::Denied { rejection } => {
                 if let Some(owner_call) = owner_call.as_ref() {
                     let outcome = if use_guardian {

@@ -1013,6 +1013,7 @@ fn mcp_elicitation_response_from_guardian_decision(
     match decision {
         ReviewDecision::Approved
         | ReviewDecision::ApprovedForSession
+        | ReviewDecision::ApprovedMcpPolicyAmendment
         | ReviewDecision::ApprovedExecpolicyAmendment { .. }
         | ReviewDecision::NetworkPolicyAmendment { .. } => ElicitationResponse {
             action: ElicitationAction::Accept,

@@ -320,18 +320,15 @@ fn writes_mode_does_not_require_approval_for_read_only_tools() {
 fn prompting_modes_do_not_allow_persistent_remember() {
     for approval_mode in [AppToolApproval::Prompt, AppToolApproval::Writes] {
         assert_eq!(
-            normalize_approval_decision_for_mode(
-                McpToolApprovalDecision::AcceptForSession,
-                approval_mode,
-            ),
-            McpToolApprovalDecision::Accept
+            normalize_approval_decision_for_mode(ReviewDecision::ApprovedForSession, approval_mode,),
+            ReviewDecision::Approved
         );
         assert_eq!(
             normalize_approval_decision_for_mode(
-                McpToolApprovalDecision::AcceptAndRemember,
+                ReviewDecision::ApprovedMcpPolicyAmendment,
                 approval_mode,
             ),
-            McpToolApprovalDecision::Accept
+            ReviewDecision::Approved
         );
     }
 }
@@ -1740,38 +1737,6 @@ fn guardian_mcp_review_request_ignores_untrusted_connected_account_email() {
 }
 
 #[test]
-fn guardian_review_decision_maps_to_mcp_tool_decision() {
-    assert_eq!(
-        mcp_tool_approval_decision_from_guardian(ReviewDecision::Approved),
-        McpToolApprovalDecision::Accept
-    );
-    let denial = mcp_tool_approval_decision_from_guardian(ReviewDecision::denied(
-        "This action was rejected due to unacceptable risk.\nReason: too risky\nThe agent must not attempt to achieve the same outcome",
-    ));
-    let McpToolApprovalDecision::Decline {
-        message: Some(message),
-    } = denial
-    else {
-        panic!("guardian denial should carry a rejection message");
-    };
-    assert!(message.contains("Reason: too risky"));
-    assert!(message.contains("The agent must not attempt to achieve the same outcome"));
-    let timeout = mcp_tool_approval_decision_from_guardian(ReviewDecision::TimedOut);
-    let McpToolApprovalDecision::Decline {
-        message: Some(message),
-    } = timeout
-    else {
-        panic!("guardian timeout should carry a timeout message");
-    };
-    assert!(message.contains("did not finish before its deadline"));
-    assert!(!message.contains("unacceptable risk"));
-    assert_eq!(
-        mcp_tool_approval_decision_from_guardian(ReviewDecision::Abort),
-        McpToolApprovalDecision::Decline { message: None }
-    );
-}
-
-#[test]
 fn approval_elicitation_meta_includes_connector_source_for_codex_apps() {
     assert_eq!(
         build_mcp_tool_approval_elicitation_meta(
@@ -1858,7 +1823,10 @@ fn declined_elicitation_response_stays_decline() {
         "approval",
     );
 
-    assert_eq!(response, McpToolApprovalDecision::Decline { message: None });
+    assert_eq!(
+        response,
+        ReviewDecision::denied("user rejected MCP tool call")
+    );
 }
 
 #[test]
@@ -1875,7 +1843,10 @@ fn synthetic_decline_request_user_input_response_stays_decline() {
         "approval",
     );
 
-    assert_eq!(response, McpToolApprovalDecision::Decline { message: None });
+    assert_eq!(
+        response,
+        ReviewDecision::denied("user rejected MCP tool call")
+    );
 }
 
 #[test]
@@ -1891,7 +1862,7 @@ fn accepted_elicitation_response_uses_always_persist_meta() {
         "approval",
     );
 
-    assert_eq!(response, McpToolApprovalDecision::AcceptAndRemember);
+    assert_eq!(response, ReviewDecision::ApprovedMcpPolicyAmendment);
 }
 
 #[test]
@@ -1907,7 +1878,7 @@ fn accepted_elicitation_response_uses_session_persist_meta() {
         "approval",
     );
 
-    assert_eq!(response, McpToolApprovalDecision::AcceptForSession);
+    assert_eq!(response, ReviewDecision::ApprovedForSession);
 }
 
 #[test]
@@ -1921,7 +1892,7 @@ fn accepted_elicitation_without_content_defaults_to_accept() {
         "approval",
     );
 
-    assert_eq!(response, McpToolApprovalDecision::Accept);
+    assert_eq!(response, ReviewDecision::Approved);
 }
 
 #[tokio::test]
@@ -2505,7 +2476,7 @@ async fn permission_request_hook_allows_mcp_tool_call() {
     )
     .await;
 
-    assert_eq!(decision, Some(McpToolApprovalDecision::Accept));
+    assert_eq!(decision, Some(ReviewDecision::Approved));
     let log = std::fs::read_to_string(log_path).expect("read MCP permission hook log");
     let inputs = log
         .lines()
@@ -2573,7 +2544,7 @@ async fn permission_request_hook_uses_hook_tool_name_without_metadata() {
     )
     .await;
 
-    assert_eq!(decision, Some(McpToolApprovalDecision::Accept));
+    assert_eq!(decision, Some(ReviewDecision::Approved));
     let log = std::fs::read_to_string(log_path).expect("read MCP permission hook log");
     let inputs = log
         .lines()
@@ -2656,7 +2627,7 @@ async fn permission_request_hook_runs_after_remembered_mcp_approval() {
     )
     .await;
 
-    assert_eq!(decision, Some(McpToolApprovalDecision::Accept));
+    assert_eq!(decision, Some(ReviewDecision::Approved));
     assert!(
         !log_path.exists(),
         "remembered approval should skip PermissionRequest hooks"
@@ -2741,10 +2712,7 @@ async fn guardian_mode_mcp_denial_returns_rationale_message() {
     )
     .await;
 
-    let Some(McpToolApprovalDecision::Decline {
-        message: Some(message),
-    }) = decision
-    else {
+    let Some(ReviewDecision::Denied { rejection: message }) = decision else {
         panic!("guardian-denied MCP approval should carry a rejection message");
     };
     assert!(message.contains("Reason: The tool call would expose private calendar data"));

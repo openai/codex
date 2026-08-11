@@ -240,9 +240,11 @@ pub(crate) async fn handle_mcp_tool_call(
     .await
     {
         let result = match decision {
-            decision @ (McpToolApprovalDecision::Accept
-            | McpToolApprovalDecision::AcceptForSession
-            | McpToolApprovalDecision::AcceptAndRemember) => {
+            decision @ (ReviewDecision::Approved
+            | ReviewDecision::ApprovedForSession
+            | ReviewDecision::ApprovedMcpPolicyAmendment
+            | ReviewDecision::ApprovedExecpolicyAmendment { .. }
+            | ReviewDecision::NetworkPolicyAmendment { .. }) => {
                 return handle_approved_mcp_tool_call(
                     &sess,
                     step_context.as_ref(),
@@ -258,20 +260,31 @@ pub(crate) async fn handle_mcp_tool_call(
                 )
                 .await;
             }
-            McpToolApprovalDecision::Decline { message } => {
-                let message = message.unwrap_or_else(|| "user rejected MCP tool call".to_string());
+            ReviewDecision::Denied { rejection } => {
                 notify_mcp_tool_call_skip(
                     sess.as_ref(),
                     turn_context.as_ref(),
                     &call_id,
                     invocation,
                     item_metadata.clone(),
-                    message,
+                    rejection,
                     /*already_started*/ true,
                 )
                 .await
             }
-            McpToolApprovalDecision::Cancel => {
+            ReviewDecision::TimedOut => {
+                notify_mcp_tool_call_skip(
+                    sess.as_ref(),
+                    turn_context.as_ref(),
+                    &call_id,
+                    invocation,
+                    item_metadata.clone(),
+                    crate::guardian::guardian_timeout_message(),
+                    /*already_started*/ true,
+                )
+                .await
+            }
+            ReviewDecision::Abort => {
                 let message = "user cancelled MCP tool call".to_string();
                 notify_mcp_tool_call_skip(
                     sess.as_ref(),
@@ -1005,15 +1018,6 @@ async fn maybe_track_codex_app_used(
     );
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum McpToolApprovalDecision {
-    Accept,
-    AcceptForSession,
-    AcceptAndRemember,
-    Decline { message: Option<String> },
-    Cancel,
-}
-
 #[derive(Clone, Copy)]
 struct McpToolApprovalPolicy {
     mode: AppToolApproval,
@@ -1023,7 +1027,7 @@ struct McpToolApprovalPolicy {
 enum McpToolApprovalApplication {
     NotRequired,
     Apply {
-        decision: McpToolApprovalDecision,
+        decision: ReviewDecision,
         policy: McpToolApprovalPolicy,
     },
 }
@@ -1288,7 +1292,7 @@ async fn maybe_request_mcp_tool_approval(
     metadata: &McpToolApprovalMetadata,
     config: &codex_mcp::McpConfig,
     policy: McpToolApprovalPolicy,
-) -> Option<McpToolApprovalDecision> {
+) -> Option<ReviewDecision> {
     let turn_context = &step_context.turn;
     let approvals_reviewer = connectors::mcp_approvals_reviewer_from_layers(
         &config.config_layer_stack,
@@ -1322,7 +1326,7 @@ async fn maybe_request_mcp_tool_approval(
     if let Some(key) = session_approval_key.as_ref()
         && mcp_tool_approval_is_remembered(sess, key).await
     {
-        return Some(McpToolApprovalDecision::Accept);
+        return Some(ReviewDecision::Approved);
     }
 
     match run_permission_request_hooks(
@@ -1340,12 +1344,10 @@ async fn maybe_request_mcp_tool_approval(
     .await
     {
         Some(PermissionRequestDecision::Allow) => {
-            return Some(McpToolApprovalDecision::Accept);
+            return Some(ReviewDecision::Approved);
         }
         Some(PermissionRequestDecision::Deny { message }) => {
-            return Some(McpToolApprovalDecision::Decline {
-                message: Some(message),
-            });
+            return Some(ReviewDecision::denied(message));
         }
         None => {}
     }
@@ -1369,8 +1371,10 @@ async fn maybe_request_mcp_tool_approval(
             Default::default(),
         )
         .await;
-        let decision = mcp_tool_approval_decision_from_guardian(decision);
-        return Some(decision);
+        return Some(match decision {
+            ReviewDecision::Abort => ReviewDecision::denied("user rejected MCP tool call"),
+            decision => decision,
+        });
     }
 
     let prompt_options = mcp_tool_approval_prompt_options(
@@ -1516,22 +1520,6 @@ pub(crate) fn build_guardian_mcp_tool_review_request(
                 open_world_hint: annotations.open_world_hint,
                 read_only_hint: annotations.read_only_hint,
             }),
-    }
-}
-
-fn mcp_tool_approval_decision_from_guardian(decision: ReviewDecision) -> McpToolApprovalDecision {
-    match decision {
-        ReviewDecision::Approved
-        | ReviewDecision::ApprovedExecpolicyAmendment { .. }
-        | ReviewDecision::NetworkPolicyAmendment { .. } => McpToolApprovalDecision::Accept,
-        ReviewDecision::ApprovedForSession => McpToolApprovalDecision::AcceptForSession,
-        ReviewDecision::Denied { rejection } => McpToolApprovalDecision::Decline {
-            message: Some(rejection),
-        },
-        ReviewDecision::TimedOut => McpToolApprovalDecision::Decline {
-            message: Some(crate::guardian::guardian_timeout_message()),
-        },
-        ReviewDecision::Abort => McpToolApprovalDecision::Decline { message: None },
     }
 }
 
@@ -1824,9 +1812,9 @@ fn build_mcp_tool_approval_display_params(
 fn parse_mcp_tool_approval_elicitation_response(
     response: Option<ElicitationResponse>,
     question_id: &str,
-) -> McpToolApprovalDecision {
+) -> ReviewDecision {
     let Some(response) = response else {
-        return McpToolApprovalDecision::Cancel;
+        return ReviewDecision::Abort;
     };
     match response.action {
         ElicitationAction::Accept => {
@@ -1838,10 +1826,10 @@ fn parse_mcp_tool_approval_elicitation_response(
                 .and_then(serde_json::Value::as_str)
             {
                 Some(MCP_TOOL_APPROVAL_PERSIST_SESSION) => {
-                    return McpToolApprovalDecision::AcceptForSession;
+                    return ReviewDecision::ApprovedForSession;
                 }
                 Some(MCP_TOOL_APPROVAL_PERSIST_ALWAYS) => {
-                    return McpToolApprovalDecision::AcceptAndRemember;
+                    return ReviewDecision::ApprovedMcpPolicyAmendment;
                 }
                 _ => {}
             }
@@ -1850,13 +1838,13 @@ fn parse_mcp_tool_approval_elicitation_response(
                 request_user_input_response_from_elicitation_content(response.content),
                 question_id,
             ) {
-                McpToolApprovalDecision::Cancel => McpToolApprovalDecision::Accept,
+                ReviewDecision::Abort => ReviewDecision::Approved,
                 decision => decision,
             }
         }
-        ElicitationAction::Decline => McpToolApprovalDecision::Decline { message: None },
-        ElicitationAction::Cancel => McpToolApprovalDecision::Cancel,
-        _ => McpToolApprovalDecision::Cancel,
+        ElicitationAction::Decline => ReviewDecision::denied("user rejected MCP tool call"),
+        ElicitationAction::Cancel => ReviewDecision::Abort,
+        _ => ReviewDecision::Abort,
     }
 }
 
@@ -1890,54 +1878,54 @@ fn request_user_input_response_from_elicitation_content(
 fn parse_mcp_tool_approval_response(
     response: Option<RequestUserInputResponse>,
     question_id: &str,
-) -> McpToolApprovalDecision {
+) -> ReviewDecision {
     let Some(response) = response else {
-        return McpToolApprovalDecision::Cancel;
+        return ReviewDecision::Abort;
     };
     let answers = response
         .answers
         .get(question_id)
         .map(|answer| answer.answers.as_slice());
     let Some(answers) = answers else {
-        return McpToolApprovalDecision::Cancel;
+        return ReviewDecision::Abort;
     };
     if answers
         .iter()
         .any(|answer| answer == MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC)
     {
-        McpToolApprovalDecision::Decline { message: None }
+        ReviewDecision::denied("user rejected MCP tool call")
     } else if answers
         .iter()
         .any(|answer| answer == MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION)
     {
-        McpToolApprovalDecision::AcceptForSession
+        ReviewDecision::ApprovedForSession
     } else if answers
         .iter()
         .any(|answer| answer == MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER)
     {
-        McpToolApprovalDecision::AcceptAndRemember
+        ReviewDecision::ApprovedMcpPolicyAmendment
     } else if answers
         .iter()
         .any(|answer| answer == MCP_TOOL_APPROVAL_ACCEPT)
     {
-        McpToolApprovalDecision::Accept
+        ReviewDecision::Approved
     } else {
-        McpToolApprovalDecision::Cancel
+        ReviewDecision::Abort
     }
 }
 
 fn normalize_approval_decision_for_mode(
-    decision: McpToolApprovalDecision,
+    decision: ReviewDecision,
     approval_mode: AppToolApproval,
-) -> McpToolApprovalDecision {
+) -> ReviewDecision {
     if matches!(
         approval_mode,
         AppToolApproval::Prompt | AppToolApproval::Writes
     ) && matches!(
         decision,
-        McpToolApprovalDecision::AcceptForSession | McpToolApprovalDecision::AcceptAndRemember
+        ReviewDecision::ApprovedForSession | ReviewDecision::ApprovedMcpPolicyAmendment
     ) {
-        McpToolApprovalDecision::Accept
+        ReviewDecision::Approved
     } else {
         decision
     }
@@ -1956,26 +1944,29 @@ async fn remember_mcp_tool_approval(sess: &Session, key: McpToolApprovalKey) {
 async fn apply_mcp_tool_approval_decision(
     sess: &Session,
     turn_context: &TurnContext,
-    decision: &McpToolApprovalDecision,
+    decision: &ReviewDecision,
     session_approval_key: Option<McpToolApprovalKey>,
     persistent_approval_key: Option<McpToolApprovalKey>,
 ) {
     match decision {
-        McpToolApprovalDecision::AcceptForSession => {
+        ReviewDecision::ApprovedForSession => {
             if let Some(key) = session_approval_key {
                 remember_mcp_tool_approval(sess, key).await;
             }
         }
-        McpToolApprovalDecision::AcceptAndRemember => {
+        ReviewDecision::ApprovedMcpPolicyAmendment => {
             if let Some(key) = persistent_approval_key {
                 maybe_persist_mcp_tool_approval(sess, turn_context, key).await;
             } else if let Some(key) = session_approval_key {
                 remember_mcp_tool_approval(sess, key).await;
             }
         }
-        McpToolApprovalDecision::Accept
-        | McpToolApprovalDecision::Decline { .. }
-        | McpToolApprovalDecision::Cancel => {}
+        ReviewDecision::Approved
+        | ReviewDecision::ApprovedExecpolicyAmendment { .. }
+        | ReviewDecision::NetworkPolicyAmendment { .. }
+        | ReviewDecision::Denied { .. }
+        | ReviewDecision::TimedOut
+        | ReviewDecision::Abort => {}
     }
 }
 

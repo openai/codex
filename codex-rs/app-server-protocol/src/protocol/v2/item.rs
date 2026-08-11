@@ -82,6 +82,9 @@ impl From<CoreReviewDecision> for CommandExecutionApprovalDecision {
     fn from(value: CoreReviewDecision) -> Self {
         match value {
             CoreReviewDecision::Approved => Self::Accept,
+            // MCP approvals are handled through elicitations, so an MCP policy amendment should
+            // never appear in a command execution approval. To be cautious here, we fail closed.
+            CoreReviewDecision::ApprovedMcpPolicyAmendment => Self::Decline,
             CoreReviewDecision::ApprovedExecpolicyAmendment {
                 proposed_execpolicy_amendment,
             } => Self::AcceptWithExecpolicyAmendment {

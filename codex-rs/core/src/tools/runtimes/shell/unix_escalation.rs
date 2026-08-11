@@ -68,6 +68,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
+use tracing::error;
 use uuid::Uuid;
 
 pub(crate) struct PreparedUnifiedExecZshFork {
@@ -537,6 +538,13 @@ impl CoreShellActionProvider {
                         ReviewDecision::TimedOut => EscalationDecision::deny(Some(
                             crate::guardian::guardian_timeout_message(),
                         )),
+                        ReviewDecision::ApprovedMcpPolicyAmendment => {
+                            error!("Shell escalation received ApprovedMcpPolicyAmendment");
+
+                            EscalationDecision::deny(Some(
+                                "Error while requesting approval".to_string(),
+                            ))
+                        }
                         ReviewDecision::Abort => {
                             EscalationDecision::deny(Some("User cancelled execution".to_string()))
                         }

@@ -21,6 +21,19 @@ fn approval_resolution_rejects_denied_network_policy_amendment() {
 }
 
 #[test]
+fn approval_resolution_rejects_mcp_policy_amendment() {
+    let resolution = ApprovalResolution {
+        decision: ReviewDecision::ApprovedMcpPolicyAmendment,
+        source: ApprovalResolutionSource::User,
+    };
+
+    assert!(matches!(
+        resolution.into_tool_result(),
+        Err(ToolError::Rejected(rejection)) if rejection == "Error while requesting approval"
+    ));
+}
+
+#[test]
 fn approval_resolution_aborts_turn_when_approval_is_aborted() {
     let resolution = ApprovalResolution {
         decision: ReviewDecision::Abort,

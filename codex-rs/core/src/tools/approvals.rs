@@ -36,6 +36,7 @@ use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tracing::error;
 
 #[derive(Clone)]
 pub(crate) struct ApprovalContext {
@@ -310,6 +311,12 @@ impl ApprovalResolution {
     fn into_tool_result(self) -> Result<ReviewDecision, ToolError> {
         let source = self.source;
         match self.decision {
+            ReviewDecision::ApprovedMcpPolicyAmendment => {
+                error!("Tool approval received ApprovedMcpPolicyAmendment");
+                Err(ToolError::Rejected(
+                    "Error while requesting approval".to_string(),
+                ))
+            }
             ReviewDecision::NetworkPolicyAmendment {
                 network_policy_amendment,
             } if network_policy_amendment.action == NetworkPolicyRuleAction::Deny => {
