@@ -17,9 +17,9 @@ jobs:
   metadata:
     runs-on: ubuntu-latest
     outputs:
-      # A stale PR head can contain the old detector, which does not emit this
-      # output. Missing must mean "run" so older branches cannot silently skip
-      # the expensive V8 coverage while reporting success.
+      # Older revisions can contain a detector that does not emit this output.
+      # Missing must mean "run" so they cannot silently skip the expensive V8
+      # coverage while reporting success.
       canary_required: ${{ steps.changes.outputs.canary_required || 'true' }}
       v8_version: ${{ steps.v8_version.outputs.version }}
       windows_source_required: ${{ steps.changes.outputs.windows_source_required }}
@@ -27,7 +27,6 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -173,7 +172,6 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
       - name: Set up Bazel

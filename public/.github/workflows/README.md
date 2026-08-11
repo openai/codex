@@ -4,6 +4,9 @@ The workflows in this directory are split so that pull requests get fast, review
 
 ## Pull Requests
 
+- Required checks run against GitHub's synthetic merge commit, not the pull
+  request head alone. This includes changes already on `main` and catches
+  conflicts before they reach the branch.
 - `bazel.yml` is the main pre-merge verification path for Rust code.
   It runs Bazel `test` and Bazel `clippy` on the supported Bazel targets,
   including the generated Rust test binaries needed to lint inline `#[cfg(test)]`
