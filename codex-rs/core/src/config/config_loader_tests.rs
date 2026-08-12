@@ -831,7 +831,7 @@ async fn managed_goal_token_budget_overrides_user_config() -> anyhow::Result<()>
 }
 
 #[tokio::test]
-async fn returns_empty_when_all_layers_missing() {
+async fn returns_packaged_defaults_when_other_layers_are_missing() {
     let tmp = tempdir().expect("tempdir");
     let managed_path = tmp.path().join("managed_config.toml");
 
@@ -865,12 +865,11 @@ async fn returns_empty_when_all_layers_missing() {
         "expected empty config for user layer when config.toml does not exist"
     );
 
-    let binding = layers.effective_config();
-    let base_table = binding.as_table().expect("base table expected");
-    assert!(
-        base_table.is_empty(),
-        "expected empty base layer when configs missing"
-    );
+    let packaged_defaults = layers
+        .layers_low_to_high()
+        .find(|layer| matches!(layer.name, ConfigLayerSource::PackagedDefaults { .. }))
+        .expect("packaged defaults layer should always be present");
+    assert_eq!(layers.effective_config(), packaged_defaults.config);
     let num_system_layers = layers
         .layers_high_to_low()
         .filter(|layer| matches!(layer.name, ConfigLayerSource::System { .. }))
@@ -879,16 +878,6 @@ async fn returns_empty_when_all_layers_missing() {
         num_system_layers, 1,
         "system layer should always be present"
     );
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        let effective = layers.effective_config();
-        let table = effective.as_table().expect("top-level table expected");
-        assert!(
-            table.is_empty(),
-            "expected empty table when configs missing"
-        );
-    }
 }
 
 #[tokio::test]
@@ -1003,6 +992,9 @@ async fn includes_thread_config_layers_in_stack() -> anyhow::Result<()> {
             },
             ConfigLayerSource::System {
                 file: expected_system_config,
+            },
+            ConfigLayerSource::PackagedDefaults {
+                file: AbsolutePathBuf::from_absolute_path(std::env::current_exe()?)?,
             },
         ]
     );
@@ -2322,6 +2314,9 @@ model_provider = "cloud-provider"
             .map(|layer| layer.name.clone())
             .collect::<Vec<_>>(),
         vec![
+            ConfigLayerSource::PackagedDefaults {
+                file: AbsolutePathBuf::from_absolute_path(std::env::current_exe()?)?,
+            },
             ConfigLayerSource::System {
                 file: AbsolutePathBuf::from_absolute_path(&system_config_path)?,
             },

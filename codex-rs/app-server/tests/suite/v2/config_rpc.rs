@@ -270,6 +270,11 @@ sandbox_mode = "workspace-write"
             profile: None,
         }
     );
+    assert!(
+        origins
+            .values()
+            .all(|origin| !matches!(&origin.name, ConfigLayerSource::PackagedDefaults { .. }))
+    );
     let layers = layers.expect("layers present");
     assert_layers_user_then_optional_system(&layers, user_file)?;
 

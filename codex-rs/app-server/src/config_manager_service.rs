@@ -143,7 +143,10 @@ impl ConfigManager {
             .map_err(|err| ConfigManagerError::json("failed to deserialize configuration", err))?;
 
         let mut origins = layers.origins();
-        origins.retain(|path, _| {
+        origins.retain(|path, metadata| {
+            if matches!(&metadata.name, ConfigLayerSource::PackagedDefaults { .. }) {
+                return false;
+            }
             let segments = path.split('.').map(str::to_string).collect::<Vec<_>>();
             layers
                 .requirements_toml()
@@ -160,6 +163,9 @@ impl ConfigManager {
             layers: params.include_layers.then(|| {
                 layers
                     .all_layers_high_to_low()
+                    .filter(|layer| {
+                        !matches!(&layer.name, ConfigLayerSource::PackagedDefaults { .. })
+                    })
                     .map(|layer| config_layer_to_api(layer.as_layer()))
                     .collect()
             }),
@@ -818,10 +824,8 @@ fn compute_override_metadata(
     effective: &TomlValue,
     segments: &[String],
 ) -> Option<OverriddenMetadata> {
-    let user_value = match layers.get_active_user_layer() {
-        Some(user_layer) => value_at_semantic_path(&user_layer.config, segments),
-        None => return None,
-    };
+    let user_layer = layers.get_active_user_layer()?;
+    let user_value = value_at_semantic_path(&user_layer.config, segments);
     let effective_value = value_at_semantic_path(effective, segments);
 
     if user_value.is_some() && user_value == effective_value {
@@ -833,6 +837,9 @@ fn compute_override_metadata(
     }
 
     let overriding_layer = find_effective_layer(layers, segments)?;
+    if overriding_layer.name.precedence() <= user_layer.name.precedence() {
+        return None;
+    }
     let message = override_message(&overriding_layer.name);
 
     Some(OverriddenMetadata {

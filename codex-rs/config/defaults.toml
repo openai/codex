@@ -1,0 +1,17 @@
+# Fixed defaults for packaged Codex clients.
+include_permissions_instructions = true
+include_apps_instructions = true
+include_collaboration_mode_instructions = true
+include_environment_context = true
+cli_auth_credentials_store = "file"
+mcp_oauth_credentials_store = "auto"
+project_doc_max_bytes = 32768
+project_doc_fallback_filenames = []
+background_terminal_max_timeout = 300000
+file_opener = "vscode"
+hide_agent_reasoning = false
+chatgpt_base_url = "https://chatgpt.com/backend-api/"
+project_root_markers = [".git"]
+
+[history]
+persistence = "save-all"
