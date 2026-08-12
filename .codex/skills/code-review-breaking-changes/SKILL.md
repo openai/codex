@@ -10,3 +10,5 @@ Search for breaking changes in external integration surfaces:
 - resuming sessions from existing rollouts
 
 Do not stop after finding one issue; analyze all possible ways breaking changes can happen.
+
+Do not consider source compatibility for Rust projects that compile against this repo's code.

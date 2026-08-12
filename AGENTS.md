@@ -127,6 +127,8 @@ and old-client/new-executor combinations under realistic sandbox permissions. Fl
 functionality—including skills, plugins, and MCP tools—as P1. If safe backward compatibility is impossible,
 require explicit version gating and a coordinated rollout.
 
+Do not consider source compatibility for Rust projects that compile against this repo's code.
+
 ### Test authoring guidance
 
 For agent changes prefer integration tests over unit tests. Integration tests are under `core/suite` and use `test_codex` to set up a test instance of codex.
