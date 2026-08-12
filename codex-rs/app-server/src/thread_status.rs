@@ -224,7 +224,7 @@ impl ThreadWatchManager {
     where
         F: FnOnce(&mut ThreadWatchState) -> Option<ThreadStatusChangedNotification>,
     {
-        let (notification, running_turn_count) = {
+        let notification = {
             let mut state = self.state.lock().await;
             let notification = mutate(&mut state);
             let running_turn_count = state
@@ -232,9 +232,16 @@ impl ThreadWatchManager {
                 .values()
                 .filter(|runtime| runtime.running)
                 .count();
-            (notification, running_turn_count)
+            self.running_turn_count_tx.send_if_modified(|current| {
+                if *current == running_turn_count {
+                    false
+                } else {
+                    *current = running_turn_count;
+                    true
+                }
+            });
+            notification
         };
-        let _ = self.running_turn_count_tx.send(running_turn_count);
 
         if let Some(notification) = notification
             && let Some(outgoing) = &self.outgoing
@@ -693,6 +700,26 @@ mod tests {
             .note_turn_completed(INTERACTIVE_THREAD_ID, false)
             .await;
         assert_eq!(manager.running_turn_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn running_turn_watch_notifies_only_when_count_changes() {
+        let manager = ThreadWatchManager::new();
+        let mut count = manager.subscribe_running_turn_count();
+
+        manager.upsert_thread(INTERACTIVE_THREAD_ID).await;
+        manager.note_turn_started(INTERACTIVE_THREAD_ID).await;
+        assert!(count.has_changed().expect("watch remains open"));
+        assert_eq!(*count.borrow_and_update(), 1);
+
+        let _permission_guard = manager
+            .note_permission_requested(INTERACTIVE_THREAD_ID)
+            .await;
+        assert!(!count.has_changed().expect("watch remains open"));
+
+        manager.note_thread_shutdown(INTERACTIVE_THREAD_ID).await;
+        assert!(count.has_changed().expect("watch remains open"));
+        assert_eq!(*count.borrow_and_update(), 0);
     }
 
     #[tokio::test]
