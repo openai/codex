@@ -23,6 +23,10 @@ impl McpConnectionSet {
                     });
                     continue;
                 };
+                if view.connection.startup_is_dormant() && view.connection.client.has_cached_tools()
+                {
+                    continue;
+                }
 
                 match view.connection.client().await {
                     Ok(_) => {}

@@ -30,6 +30,7 @@ use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use test_case::test_case;
 
 use super::rmcp_client::remote_aware_environment_id;
 use super::rmcp_client::remote_aware_stdio_server_bin;
@@ -247,7 +248,9 @@ async fn mcp_calls_stay_bound_to_each_thread() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn cached_http_mcp_starts_lazily_for_subagents() -> anyhow::Result<()> {
+#[test_case(false; "optional server")]
+#[test_case(true; "required server")]
+async fn cached_http_mcp_starts_lazily_for_subagents(required: bool) -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let responses_server = responses::start_mock_server().await;
@@ -269,6 +272,7 @@ async fn cached_http_mcp_starts_lazily_for_subagents() -> anyhow::Result<()> {
                     "url": server_url,
                     "http_headers": { "Authorization": "Bearer cached-http-test-token" },
                     "enabled_tools": ["calendar_create_event"],
+                    "required": required,
                     "startup_timeout_sec": 10,
                 }))
                 .expect("HTTP MCP server configuration"),
