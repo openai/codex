@@ -7,7 +7,7 @@ use std::path::Path;
 use std::time::Duration;
 use std::time::Instant;
 
-use codex_protocol::ThreadId;
+use codex_protocol::RolloutId;
 use codex_protocol::protocol::HistoryPosition;
 
 use crate::ARCHIVED_SESSIONS_SUBDIR;
@@ -16,12 +16,12 @@ use crate::compression::RolloutFile;
 
 /// Direct history-base edges discovered from local rollout metadata.
 ///
-/// This is a physical-rollout index, not a logical lineage resolver. Callers use it to answer
+/// This indexes immutable rollout IDs, not a thread's selected lineage. Callers use it to answer
 /// cheap inverse-reference questions without each reimplementing rollout discovery.
 #[derive(Debug, Default)]
 pub struct RolloutReferenceIndex {
-    history_base_by_thread: HashMap<ThreadId, HistoryPosition>,
-    reference_counts_by_thread: HashMap<ThreadId, usize>,
+    history_base_by_rollout: HashMap<RolloutId, HistoryPosition>,
+    reference_counts_by_rollout: HashMap<RolloutId, usize>,
 }
 
 impl RolloutReferenceIndex {
@@ -54,25 +54,25 @@ impl RolloutReferenceIndex {
         .await
     }
 
-    /// Returns how many other discovered rollouts directly reference thread_id.
-    pub fn reference_count(&self, thread_id: ThreadId) -> usize {
-        self.reference_counts_by_thread
-            .get(&thread_id)
+    /// Returns how many other discovered rollouts directly reference `rollout_id`.
+    pub fn reference_count(&self, rollout_id: RolloutId) -> usize {
+        self.reference_counts_by_rollout
+            .get(&rollout_id)
             .copied()
             .unwrap_or_default()
     }
 
-    /// Returns the direct history-base edge for thread_id, if one was discovered.
-    pub fn history_base(&self, thread_id: ThreadId) -> Option<&HistoryPosition> {
-        self.history_base_by_thread.get(&thread_id)
+    /// Returns the direct history-base edge for `rollout_id`, if one was discovered.
+    pub fn history_base(&self, rollout_id: RolloutId) -> Option<&HistoryPosition> {
+        self.history_base_by_rollout.get(&rollout_id)
     }
 
     async fn scan_with_deadline(
         codex_home: &Path,
         deadline: ScanDeadline,
     ) -> io::Result<Option<Self>> {
-        let mut history_base_by_thread = HashMap::new();
-        let mut seen_thread_ids = HashSet::new();
+        let mut history_base_by_rollout = HashMap::new();
+        let mut seen_rollout_ids = HashSet::new();
         let mut stack = vec![
             codex_home.join(ARCHIVED_SESSIONS_SUBDIR),
             codex_home.join(SESSIONS_SUBDIR),
@@ -105,31 +105,33 @@ impl RolloutReferenceIndex {
                 let Some(rollout_file) = RolloutFile::from_path(path) else {
                     continue;
                 };
+                let Some(rollout_id) = crate::rollout_id_from_path(rollout_file.path()) else {
+                    continue;
+                };
                 let Ok(meta) = crate::read_session_meta_line(rollout_file.path()).await else {
                     continue;
                 };
-                let thread_id = meta.meta.id;
-                if !seen_thread_ids.insert(thread_id) {
+                if !seen_rollout_ids.insert(rollout_id) {
                     continue;
                 }
                 if let Some(history_base) = meta.meta.history_base {
-                    history_base_by_thread.insert(thread_id, history_base);
+                    history_base_by_rollout.insert(rollout_id, history_base);
                 }
             }
         }
 
-        let mut reference_counts_by_thread = HashMap::new();
-        for (thread_id, history_base) in &history_base_by_thread {
-            if history_base.thread_id == *thread_id {
+        let mut reference_counts_by_rollout = HashMap::new();
+        for (rollout_id, history_base) in &history_base_by_rollout {
+            if history_base.thread_id == *rollout_id {
                 continue;
             }
-            *reference_counts_by_thread
+            *reference_counts_by_rollout
                 .entry(history_base.thread_id)
                 .or_default() += 1;
         }
         Ok(Some(Self {
-            history_base_by_thread,
-            reference_counts_by_thread,
+            history_base_by_rollout,
+            reference_counts_by_rollout,
         }))
     }
 }

@@ -333,20 +333,20 @@ async fn worker_waits_for_rollout_maintenance_before_compressing() -> anyhow::Re
 #[tokio::test]
 async fn worker_skips_archived_paginated_fork_pointer_chain() -> anyhow::Result<()> {
     let home = TempDir::new()?;
+    let thread_id = ThreadId::from_string(&Uuid::from_u128(15).to_string())?;
     let source_uuid = Uuid::from_u128(16);
-    let source_id = ThreadId::from_string(&source_uuid.to_string())?;
+    let source_rollout_id = ThreadId::from_string(&source_uuid.to_string())?;
     let source_path = rollout_path(home.path(), "2025-01-03T12-00-00", source_uuid);
-    write_rollout(&source_path, source_id, "referenced source")?;
+    write_rollout(&source_path, thread_id, "referenced source")?;
     set_old_mtime(&source_path)?;
 
     let child_uuid = Uuid::from_u128(17);
-    let child_id = ThreadId::from_string(&child_uuid.to_string())?;
     let child_path = archived_rollout_path(home.path(), "2025-01-03T12-00-01", child_uuid);
-    write_rollout(&child_path, child_id, "fork child")?;
+    write_rollout(&child_path, thread_id, "fork child")?;
     set_history_base(
         child_path.as_path(),
         HistoryPosition {
-            thread_id: source_id,
+            thread_id: source_rollout_id,
             end_ordinal_exclusive: 2,
             end_byte_offset: std::fs::metadata(source_path.as_path())?.len(),
         },

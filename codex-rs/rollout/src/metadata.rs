@@ -2,14 +2,14 @@ use crate::ARCHIVED_SESSIONS_SUBDIR;
 use crate::RolloutItem;
 use crate::SESSIONS_SUBDIR;
 use crate::compression;
-use crate::list::parse_timestamp_uuid_from_filename;
 use crate::recorder::RolloutRecorder;
+use crate::rollout_file_name::RolloutFileName;
 use crate::state_db::normalize_cwd_for_state_db;
 use chrono::DateTime;
 use chrono::NaiveDateTime;
 use chrono::Timelike;
 use chrono::Utc;
-use codex_protocol::ThreadId;
+use codex_protocol::RolloutId;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionMetaLine;
@@ -82,17 +82,29 @@ pub fn builder_from_items(
     }
 
     let file_name = rollout_path.file_name()?.to_str()?;
-    let file_name = compression::parse_rollout_file_name(file_name)?;
-    let (created_ts, uuid) = parse_timestamp_uuid_from_filename(file_name)?;
+    let file_name = RolloutFileName::parse(file_name)?;
+    let created_ts = file_name.timestamp();
     let created_at =
         DateTime::<Utc>::from_timestamp(created_ts.unix_timestamp(), 0)?.with_nanosecond(0)?;
-    let id = ThreadId::from_string(&uuid.to_string()).ok()?;
     Some(ThreadMetadataBuilder::new(
-        id,
+        file_name.thread_id(),
         rollout_path.to_path_buf(),
         created_at,
         SessionSource::default(),
     ))
+}
+
+/// Returns the rollout ID encoded in a canonical rollout filename.
+///
+/// Normal rollouts use `rollout-<timestamp>-<thread-id>.jsonl`, where the thread ID and rollout ID
+/// are the same. Threads that have been `reverted` use
+/// `rollout-<timestamp>-<thread-id>_<rollout-id>.jsonl`, where this returns the ID after `_`.
+///
+/// This can differ from [`SessionMeta::id`] when `thread/revert` keeps the thread ID stable while
+/// switching to a new immutable rollout file.
+pub fn rollout_id_from_path(rollout_path: &Path) -> Option<RolloutId> {
+    let file_name = rollout_path.file_name()?.to_str()?;
+    Some(RolloutFileName::parse(file_name)?.rollout_id())
 }
 
 pub async fn extract_metadata_from_rollout(

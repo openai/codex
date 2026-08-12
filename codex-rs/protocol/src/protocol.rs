@@ -2840,9 +2840,15 @@ impl SessionContextWindow {
     }
 }
 
-/// Exclusive position in another thread's paginated rollout history.
+/// Exclusive position in another rollout's paginated history.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema, TS)]
 pub struct HistoryPosition {
+    /// Rollout ID for the immutable prefix file.
+    ///
+    /// `HistoryPosition` predates `thread/revert`, so this field is named `thread_id`. Treat its
+    /// value as a `rollout_id`: ordinary rollouts use the thread ID as their rollout ID, while a
+    /// reverted thread's filename carries a distinct rollout ID. It is not necessarily
+    /// [`SessionMeta::id`], which remains the stable thread ID across revert.
     pub thread_id: ThreadId,
     /// First rollout ordinal not included from the prefix file.
     pub end_ordinal_exclusive: u64,

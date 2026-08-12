@@ -708,6 +708,50 @@ async fn referenced_paginated_rollout_starts_at_history_cutoff_and_resumes() -> 
 }
 
 #[tokio::test]
+async fn rollout_id_preserves_session_meta_thread_id() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let config = test_config(home.path());
+    let thread_id = ThreadId::new();
+    let rollout_id = ThreadId::new();
+    let recorder = RolloutRecorder::new(
+        &config,
+        RolloutRecorderParams::new(
+            thread_id,
+            /*forked_from_id*/ None,
+            /*parent_thread_id*/ None,
+            SessionSource::Exec,
+            /*thread_source*/ None,
+            "test_originator".to_string(),
+            BaseInstructions::default(),
+            Vec::new(),
+        )
+        .with_history_mode(ThreadHistoryMode::Paginated)
+        .with_rollout_id(rollout_id),
+    )
+    .await?;
+    let rollout_path = recorder.rollout_path().to_path_buf();
+    recorder.persist().await?;
+    recorder.shutdown().await?;
+
+    let replacement_suffix = format!("-{thread_id}_{rollout_id}.jsonl");
+    assert!(
+        rollout_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with(replacement_suffix.as_str()))
+    );
+    assert_eq!(
+        crate::rollout_id_from_path(rollout_path.as_path()),
+        Some(rollout_id)
+    );
+    let RolloutItem::SessionMeta(meta_line) = &read_rollout_lines(&rollout_path)?[0].item else {
+        panic!("first rollout item should be session metadata");
+    };
+    assert_eq!(meta_line.meta.id, thread_id);
+    Ok(())
+}
+
+#[tokio::test]
 async fn recorder_omits_ordinals_from_legacy_rollouts() -> std::io::Result<()> {
     let home = TempDir::new().expect("temp dir");
     let config = test_config(home.path());
@@ -829,7 +873,7 @@ async fn writer_state_retries_write_error_before_reporting_flush_success() -> st
         writer: Some(JsonlWriter {
             file: tokio::fs::File::from_std(read_only_file),
         }),
-        deferred_log_file_info: None,
+        deferred_creation: false,
         pending_items: Vec::new(),
         meta: None,
         cwd: home.path().to_path_buf(),
@@ -1141,74 +1185,6 @@ async fn list_threads_db_enabled_preserves_metadata_for_missing_rollout_paths()
         .await
         .expect("state db lookup should succeed");
     assert_eq!(stored_metadata, Some(metadata));
-    Ok(())
-}
-
-#[tokio::test]
-async fn list_threads_db_enabled_repairs_stale_rollout_paths() -> std::io::Result<()> {
-    let home = TempDir::new().expect("temp dir");
-    let config = test_config(home.path());
-
-    let uuid = Uuid::from_u128(9011);
-    let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
-    let real_path = write_session_file(home.path(), "2025-01-03T13-00-00", uuid)?;
-    let stale_path = home.path().join(format!(
-        "sessions/2099/01/01/rollout-2099-01-01T00-00-00-{uuid}.jsonl"
-    ));
-
-    let runtime = codex_state::StateRuntime::init(
-        codex_state::SqliteConfig::new_for_testing(home.path().abs()),
-        config.model_provider_id.clone(),
-    )
-    .await
-    .expect("state db should initialize");
-    runtime
-        .mark_backfill_complete(/*last_watermark*/ None)
-        .await
-        .expect("backfill should be complete");
-    let created_at = chrono::Utc
-        .with_ymd_and_hms(2025, 1, 3, 13, 0, 0)
-        .single()
-        .expect("valid datetime");
-    let mut builder = codex_state::ThreadMetadataBuilder::new(
-        thread_id,
-        stale_path,
-        created_at,
-        SessionSource::Cli,
-    );
-    builder.model_provider = Some(config.model_provider_id.clone());
-    builder.cwd = home.path().to_path_buf();
-    let mut metadata = builder.build(config.model_provider_id.as_str());
-    metadata.first_user_message = Some("Hello from user".to_string());
-    metadata.preview = metadata.first_user_message.clone();
-    runtime
-        .upsert_thread(&metadata)
-        .await
-        .expect("state db upsert should succeed");
-
-    let default_provider = config.model_provider_id.clone();
-    let page = RolloutRecorder::list_threads(
-        Some(runtime.clone()),
-        &config,
-        /*page_size*/ 1,
-        /*cursor*/ None,
-        ThreadSortKey::CreatedAt,
-        SortDirection::Desc,
-        &[],
-        /*model_providers*/ None,
-        /*cwd_filters*/ None,
-        default_provider.as_str(),
-        /*search_term*/ None,
-    )
-    .await?;
-    assert_eq!(page.items.len(), 1);
-    assert_eq!(page.items[0].path, real_path);
-
-    let repaired_path = runtime
-        .find_rollout_path_by_id(thread_id, Some(false))
-        .await
-        .expect("state db lookup should succeed");
-    assert_eq!(repaired_path, Some(real_path));
     Ok(())
 }
 

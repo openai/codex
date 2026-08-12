@@ -81,6 +81,34 @@ async fn active_duplicate_wins_without_double_counting() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn indexes_multiple_rollouts_for_the_same_thread() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let source_rollout_id = thread_id(Uuid::from_u128(21))?;
+    let replacement_rollout_id = thread_id(Uuid::from_u128(22))?;
+    let thread_id = thread_id(Uuid::from_u128(20))?;
+    let history_base = history_position(source_rollout_id);
+    write_rollout(
+        active_rollout_path(home.path(), Uuid::from_u128(21)),
+        thread_id,
+        Some(history_base),
+    )?;
+    write_rollout(
+        active_rollout_path(home.path(), Uuid::from_u128(22)),
+        thread_id,
+        Some(history_base),
+    )?;
+
+    let index = RolloutReferenceIndex::scan(home.path()).await?;
+    assert_eq!(index.history_base(source_rollout_id), Some(&history_base));
+    assert_eq!(
+        index.history_base(replacement_rollout_id),
+        Some(&history_base)
+    );
+    assert_eq!(index.reference_count(source_rollout_id), 1);
+    Ok(())
+}
+
+#[tokio::test]
 async fn self_history_base_does_not_count_as_reference() -> anyhow::Result<()> {
     let home = TempDir::new()?;
     let thread_id = thread_id(Uuid::from_u128(11))?;
@@ -144,9 +172,9 @@ fn write_rollout(
     Ok(())
 }
 
-fn history_position(thread_id: ThreadId) -> HistoryPosition {
+fn history_position(rollout_id: ThreadId) -> HistoryPosition {
     HistoryPosition {
-        thread_id,
+        thread_id: rollout_id,
         end_ordinal_exclusive: 2,
         end_byte_offset: 100,
     }
