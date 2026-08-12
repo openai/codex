@@ -5,6 +5,10 @@
 - an HTTP proxy (default `127.0.0.1:3128`)
 - a SOCKS5 proxy (default `127.0.0.1:8081`, enabled by default)
 
+On Windows, managed HTTP listeners prefer ports `3128-3159`, and SOCKS5 listeners prefer ports
+`8081-8112`. An explicitly configured port is attempted first. If every preferred port is occupied,
+the proxy preserves its existing ephemeral loopback fallback.
+
 It enforces an allow/deny policy and a "limited" mode intended for read-only network access.
 
 ## Quickstart
