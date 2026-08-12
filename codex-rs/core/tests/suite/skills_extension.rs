@@ -1182,8 +1182,8 @@ async fn production_turn_aliases_discovered_singleton_orchestrator_root() -> Res
         "model request should include the aliased orchestrator skill: {developer_text}"
     );
     assert!(
-        developer_text.contains("- Root aliases: Expand short locators"),
-        "model request should explain how to expand resource aliases: {developer_text}"
+        developer_text.contains("- Root aliases: Pass short package locators directly"),
+        "model request should explain how to read aliased packages: {developer_text}"
     );
 
     Ok(())
@@ -1257,10 +1257,9 @@ async fn production_turn_aliases_executor_skill_roots() -> Result<()> {
         "Sol should omit optional skill usage instructions: {executor_catalog}"
     );
     assert!(
-        !executor_catalog.contains("- Root aliases: Expand short locators"),
+        !executor_catalog.contains("- Root aliases: Pass short package locators directly"),
         "Sol should not include optional resource-alias instructions: {executor_catalog}"
     );
-
     Ok(())
 }
 

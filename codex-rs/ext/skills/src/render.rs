@@ -1046,7 +1046,7 @@ fn build_aliased_catalog(
     ))
 }
 
-fn build_alias_plan(entries: &[&SkillCatalogEntry]) -> Option<AliasPlan> {
+pub(crate) fn build_alias_plan(entries: &[&SkillCatalogEntry]) -> Option<AliasPlan> {
     let source = &entries.first()?.authority.kind;
     if entries.iter().any(|entry| &entry.authority.kind != source) {
         return None;

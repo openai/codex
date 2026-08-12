@@ -11,6 +11,7 @@ use serde::Serialize;
 
 use crate::catalog::SkillResourceId;
 use crate::provider::SkillReadRequest;
+use crate::render::build_alias_plan;
 
 use super::MAX_HANDLE_BYTES;
 use super::SkillToolAuthority;
@@ -55,7 +56,7 @@ impl ToolExecutor<ToolCall> for ReadTool {
     fn spec(&self) -> ToolSpec {
         skill_function_tool::<ReadArgs, ReadResponse>(
             TOOL_NAME,
-            "Read one page from a skill. Pass its provided package, expanding any root alias. Omit resource to read SKILL.md; to read another file, use the same package and pass the file's complete skill:// identifier as resource. If the package is not provided, use skills.list to find it. Pass next_cursor back as cursor to continue.",
+            "Read one page from a skill. Pass its provided package directly; root aliases are resolved automatically. Omit resource to read SKILL.md; to read another file, use the same package and pass the file's complete skill:// identifier as resource. If the package is not provided, use skills.list to find it. Pass next_cursor back as cursor to continue.",
         )
     }
 
@@ -73,9 +74,20 @@ impl ToolExecutor<ToolCall> for ReadTool {
                 super::SkillToolAuthoritySelector::Executor,
             ] {
                 let catalog = self.context.catalog(&call.turn_id, selector).await;
+                let alias_plan = build_alias_plan(
+                    &catalog
+                        .entries
+                        .iter()
+                        .filter(|entry| entry.is_model_visible())
+                        .collect::<Vec<_>>(),
+                );
                 if let Some(entry) = catalog.entries.into_iter().find(|entry| {
                     entry.enabled
-                        && entry.id.0 == args.package
+                        && (entry.id.0 == args.package
+                            || alias_plan
+                                .as_ref()
+                                .and_then(|plan| plan.shorten(&entry.id.0))
+                                .is_some_and(|alias| alias == args.package))
                         && SkillToolAuthority::from_authority(&entry.authority)
                             .is_some_and(|authority| authority.selector() == selector)
                 }) {
