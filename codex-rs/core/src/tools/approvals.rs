@@ -5,8 +5,9 @@ use crate::guardian::GuardianReviewContext;
 use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request;
-use crate::guardian::routes_approval_to_guardian_with_reviewer;
+use crate::guardian::routes_approval_policy_to_guardian;
 use crate::hook_runtime::run_permission_request_hooks;
+use crate::mcp_tool_call::request_mcp_tool_user_approval;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -19,14 +20,17 @@ use crate::tools::sandboxing::ApprovalRequestReasons;
 use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::with_cached_approval;
+use codex_config::types::AppToolApproval;
 use codex_hooks::PermissionRequestDecision;
 use codex_otel::ToolDecisionSource;
 use codex_protocol::approvals::ExecPolicyAmendment;
 #[cfg(unix)]
 use codex_protocol::approvals::GuardianCommandSource;
 use codex_protocol::approvals::NetworkApprovalContext;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::AdditionalPermissionProfile;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::NetworkPolicyRuleAction;
 use codex_protocol::protocol::ReviewDecision;
@@ -95,6 +99,25 @@ pub(crate) enum ApprovalAction {
         changes: Arc<HashMap<PathBuf, FileChange>>,
         permissions_preapproved: bool,
     },
+    McpToolCall {
+        id: String,
+        server: String,
+        tool_name: String,
+        arguments: Option<serde_json::Value>,
+        connector_id: Option<String>,
+        connector_name: Option<String>,
+        connector_description: Option<String>,
+        connected_account_email: Option<String>,
+        tool_title: Option<String>,
+        tool_description: Option<String>,
+        annotations: Option<crate::guardian::GuardianMcpAnnotations>,
+        hook_tool_name: HookToolName,
+        approval_policy: AskForApproval,
+        reviewer: ApprovalsReviewer,
+        approval_mode: AppToolApproval,
+        allow_session_remember: bool,
+        allow_persistent_approval: bool,
+    },
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, serde::Serialize)]
@@ -126,6 +149,16 @@ impl ApprovalAction {
             Self::ApplyPatch { patch, .. } => PermissionRequestPayload {
                 tool_name: HookToolName::apply_patch(),
                 tool_input: serde_json::json!({ "command": patch }),
+            },
+            Self::McpToolCall {
+                hook_tool_name,
+                arguments,
+                ..
+            } => PermissionRequestPayload {
+                tool_name: hook_tool_name.clone(),
+                tool_input: arguments
+                    .clone()
+                    .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new())),
             },
         }
     }
@@ -164,6 +197,7 @@ impl ApprovalAction {
             })],
             #[cfg(unix)]
             Self::Execve { .. } => Vec::new(),
+            Self::McpToolCall { .. } => Vec::new(),
             Self::ApplyPatch {
                 environment_id,
                 files,
@@ -252,6 +286,32 @@ impl ApprovalAction {
                     .collect::<std::io::Result<Vec<_>>>()?,
                 patch,
             },
+            Self::McpToolCall {
+                id,
+                server,
+                tool_name,
+                arguments,
+                connector_id,
+                connector_name,
+                connector_description,
+                connected_account_email,
+                tool_title,
+                tool_description,
+                annotations,
+                ..
+            } => crate::guardian::GuardianApprovalRequest::McpToolCall {
+                id,
+                server,
+                tool_name,
+                arguments,
+                connector_id,
+                connector_name,
+                connector_description,
+                connected_account_email,
+                tool_title,
+                tool_description,
+                annotations,
+            },
         })
     }
 }
@@ -286,7 +346,11 @@ enum ApprovalReviewer {
 
 impl ApprovalReviewer {
     fn for_turn(turn: &TurnContext) -> Self {
-        if routes_approval_to_guardian_with_reviewer(turn, turn.config.approvals_reviewer) {
+        Self::for_policy(turn.approval_policy(), turn.config.approvals_reviewer)
+    }
+
+    fn for_policy(approval_policy: AskForApproval, reviewer: ApprovalsReviewer) -> Self {
+        if routes_approval_policy_to_guardian(approval_policy, reviewer) {
             Self::Guardian
         } else {
             Self::User
@@ -343,6 +407,7 @@ impl Session {
         action: ApprovalAction,
         ctx: ApprovalContext,
     ) -> Result<ReviewDecision, ToolError> {
+        let is_mcp_tool_call = matches!(&action, ApprovalAction::McpToolCall { .. });
         let permission_request_run_id = match &action {
             #[cfg(unix)]
             ApprovalAction::Execve { approval_id, .. } => approval_id.clone(),
@@ -372,6 +437,9 @@ impl Session {
             None => self.request_reviewer_approval(action, &ctx).await,
         };
         record_resolution(&ctx, &resolution);
+        if is_mcp_tool_call && resolution.decision == ReviewDecision::ApprovedMcpPolicyAmendment {
+            return Ok(resolution.decision);
+        }
         resolution.into_tool_result()
     }
 
@@ -382,6 +450,13 @@ impl Session {
     ) -> ApprovalResolution {
         let reviewer = if ctx.strict_auto_review {
             ApprovalReviewer::Guardian
+        } else if let ApprovalAction::McpToolCall {
+            approval_policy,
+            reviewer,
+            ..
+        } = &action
+        {
+            ApprovalReviewer::for_policy(*approval_policy, *reviewer)
         } else {
             ApprovalReviewer::for_turn(ctx.review_context.turn())
         };
@@ -465,6 +540,7 @@ impl Session {
                     #[cfg(unix)]
                     ApprovalAction::Execve { .. } => unreachable!("matched command approval"),
                     ApprovalAction::ApplyPatch { .. } => unreachable!("matched command approval"),
+                    ApprovalAction::McpToolCall { .. } => unreachable!("matched command approval"),
                 };
                 let reason = ctx
                     .retry_reason
@@ -552,6 +628,15 @@ impl Session {
                         )
                         .await
                     },
+                )
+                .await
+            }
+            ApprovalAction::McpToolCall { .. } => {
+                request_mcp_tool_user_approval(
+                    self,
+                    ctx.review_context.turn(),
+                    &ctx.call_id,
+                    action,
                 )
                 .await
             }

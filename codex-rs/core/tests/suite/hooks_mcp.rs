@@ -6,10 +6,13 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use codex_config::types::AppToolApproval;
+use codex_config::types::ApprovalsReviewer;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::config::Config;
 use codex_features::Feature;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::AskForApproval;
 use core_test_support::hooks::trust_discovered_hooks;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -20,6 +23,7 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_wine_exec;
 use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_mcp_server;
@@ -27,12 +31,21 @@ use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 
+use super::rmcp_client::remote_aware_environment_id;
+use super::rmcp_client::remote_aware_stdio_server_bin;
+
 const RMCP_SERVER: &str = "rmcp";
 const RMCP_PREFIXED_NAMESPACE: &str = "mcp__rmcp";
 const RMCP_UNPREFIXED_NAMESPACE: &str = "rmcp";
 const RMCP_ECHO_TOOL_NAME: &str = "mcp__rmcp__echo";
 const RMCP_HOOK_MATCHER: &str = RMCP_ECHO_TOOL_NAME;
 const RMCP_ECHO_MESSAGE: &str = "hook e2e ping";
+
+#[derive(Clone, Copy)]
+enum PermissionRequestHookOutcome {
+    Allow,
+    Deny(&'static str),
+}
 
 fn enable_mcp_tool_name_features(config: &mut Config, prefix_mcp_tool_names: bool) {
     if !prefix_mcp_tool_names {
@@ -170,6 +183,56 @@ print(json.dumps({{
     Ok(())
 }
 
+fn write_permission_request_hook(home: &Path, outcome: PermissionRequestHookOutcome) -> Result<()> {
+    let script_path = home.join("permission_request_hook.py");
+    let log_path = home.join("permission_request_hook_log.jsonl");
+    let decision = match outcome {
+        PermissionRequestHookOutcome::Allow => json!({ "behavior": "allow" }),
+        PermissionRequestHookOutcome::Deny(message) => {
+            json!({ "behavior": "deny", "message": message })
+        }
+    };
+    let hook_output = json!({
+        "hookSpecificOutput": {
+            "hookEventName": "PermissionRequest",
+            "decision": decision,
+        }
+    });
+    let python_output_literal = serde_json::to_string(&hook_output.to_string())
+        .context("serialize MCP permission request hook output")?;
+    let script = format!(
+        r#"import json
+from pathlib import Path
+import sys
+
+payload = json.load(sys.stdin)
+
+with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
+
+print({python_output_literal})
+"#,
+        log_path = log_path.display(),
+    );
+    let hooks = json!({
+        "hooks": {
+            "PermissionRequest": [{
+                "matcher": RMCP_HOOK_MATCHER,
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("python3 {}", script_path.display()),
+                    "statusMessage": "running MCP permission request hook",
+                }]
+            }]
+        }
+    });
+
+    fs::write(&script_path, script).context("write MCP permission request hook script")?;
+    fs::write(home.join("hooks.json"), hooks.to_string())
+        .context("write MCP permission request hooks")?;
+    Ok(())
+}
+
 fn read_hook_inputs(home: &Path, log_name: &str) -> Result<Vec<Value>> {
     fs::read_to_string(home.join(log_name))
         .with_context(|| format!("read {log_name}"))?
@@ -179,7 +242,12 @@ fn read_hook_inputs(home: &Path, log_name: &str) -> Result<Vec<Value>> {
         .collect()
 }
 
-fn insert_rmcp_test_server(config: &mut Config, command: String, approval_mode: AppToolApproval) {
+fn insert_rmcp_test_server(
+    config: &mut Config,
+    command: String,
+    approval_mode: AppToolApproval,
+    environment_id: String,
+) {
     let mut servers = config.mcp_servers.get().clone();
     servers.insert(
         RMCP_SERVER.to_string(),
@@ -192,7 +260,7 @@ fn insert_rmcp_test_server(config: &mut Config, command: String, approval_mode: 
                 env_vars: Vec::new(),
                 cwd: None,
             },
-            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
+            environment_id,
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
@@ -223,7 +291,134 @@ fn enable_hooks_and_rmcp_server(
 ) {
     trust_discovered_hooks(config);
     enable_mcp_tool_name_features(config, prefix_mcp_tool_names);
-    insert_rmcp_test_server(config, rmcp_test_server_bin, approval_mode);
+    insert_rmcp_test_server(
+        config,
+        rmcp_test_server_bin,
+        approval_mode,
+        codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn permission_request_hook_allows_mcp_tool_without_user_or_guardian_review() -> Result<()> {
+    run_mcp_permission_request_hook_test(PermissionRequestHookOutcome::Allow).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn permission_request_hook_denies_mcp_tool_without_user_or_guardian_review() -> Result<()> {
+    run_mcp_permission_request_hook_test(PermissionRequestHookOutcome::Deny(
+        "MCP tool access denied by the integration-test hook",
+    ))
+    .await
+}
+
+async fn run_mcp_permission_request_hook_test(outcome: PermissionRequestHookOutcome) -> Result<()> {
+    skip_if_wine_exec!(
+        Ok(()),
+        "requires a Windows test_stdio_server in the Wine-exec environment"
+    );
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = match outcome {
+        PermissionRequestHookOutcome::Allow => "permissionrequest-rmcp-allow",
+        PermissionRequestHookOutcome::Deny(_) => "permissionrequest-rmcp-deny",
+    };
+    let arguments = json!({ "message": RMCP_ECHO_MESSAGE }).to_string();
+    let rmcp_test_server_bin = remote_aware_stdio_server_bin()?;
+    let mut builder = test_codex()
+        .with_pre_build_hook(move |home| {
+            write_permission_request_hook(home, outcome)
+                .expect("failed to write MCP permission request hook fixture");
+        })
+        .with_config(move |config| {
+            trust_discovered_hooks(config);
+            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+            insert_rmcp_test_server(
+                config,
+                rmcp_test_server_bin,
+                AppToolApproval::Prompt,
+                remote_aware_environment_id(),
+            );
+        });
+    let test = builder.build_with_remote_and_local_env(&server).await?;
+    wait_for_mcp_server(&test.codex, RMCP_SERVER).await?;
+
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-mcp-permission-hook-1"),
+                ev_function_call_with_namespace(
+                    call_id,
+                    RMCP_PREFIXED_NAMESPACE,
+                    "echo",
+                    &arguments,
+                ),
+                ev_completed("resp-mcp-permission-hook-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-mcp-permission-hook-2"),
+                ev_assistant_message("msg-mcp-permission-hook", "done"),
+                ev_completed("resp-mcp-permission-hook-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.submit_turn_with_approval_and_permission_profile(
+        "call the rmcp echo tool with the MCP permission request hook",
+        AskForApproval::OnRequest,
+        PermissionProfile::Disabled,
+    )
+    .await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests.iter().all(|request| {
+            request.body_json()["client_metadata"]["x-openai-subagent"].as_str() != Some("guardian")
+        }),
+        "a permission request hook should resolve MCP approval before Guardian review",
+    );
+
+    let output_item = requests[1].function_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("MCP tool output should be a string");
+    match outcome {
+        PermissionRequestHookOutcome::Allow => assert!(
+            output.contains(&format!("ECHOING: {RMCP_ECHO_MESSAGE}")),
+            "an allowed MCP tool should execute",
+        ),
+        PermissionRequestHookOutcome::Deny(message) => assert!(
+            output.contains(message),
+            "a denied MCP tool should surface the hook's rejection message",
+        ),
+    }
+
+    let hook_inputs =
+        read_hook_inputs(test.codex_home_path(), "permission_request_hook_log.jsonl")?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(
+        json!({
+            "hook_event_name": hook_inputs[0]["hook_event_name"],
+            "tool_name": hook_inputs[0]["tool_name"],
+            "tool_input": hook_inputs[0]["tool_input"],
+        }),
+        json!({
+            "hook_event_name": "PermissionRequest",
+            "tool_name": RMCP_ECHO_TOOL_NAME,
+            "tool_input": { "message": RMCP_ECHO_MESSAGE },
+        }),
+    );
+    assert!(
+        hook_inputs[0].get("tool_use_id").is_none(),
+        "PermissionRequest input should not include a tool_use_id",
+    );
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

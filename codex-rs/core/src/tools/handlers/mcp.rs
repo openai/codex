@@ -166,6 +166,7 @@ impl McpHandler {
             session,
             step_context,
             call_id,
+            tool_name,
             payload,
             ..
         } = invocation;
@@ -185,9 +186,9 @@ impl McpHandler {
             Arc::clone(&session),
             &step_context,
             call_id.clone(),
-            self.tool_info.server_name.clone(),
-            self.tool_info.tool.name.to_string(),
+            &self.tool_info,
             self.hook_tool_name(),
+            tool_name,
             payload,
         )
         .await;

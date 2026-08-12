@@ -21,6 +21,7 @@ mod tool_namespaces_info;
 use std::borrow::Cow;
 
 use crate::session::turn_context::TurnContext;
+pub(crate) use approvals::ApprovalContext;
 use codex_features::Feature;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::openai_models::ToolMode;
