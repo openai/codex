@@ -5063,6 +5063,86 @@ async fn turn_event_counts_completed_tool_items() {
 }
 
 #[tokio::test]
+async fn completed_background_tool_item_emits_after_turn_event() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut out = Vec::new();
+
+    ingest_turn_prerequisites(
+        &mut reducer,
+        &mut out,
+        /*include_initialize*/ true,
+        /*include_resolved_config*/ true,
+        /*include_started*/ true,
+        /*include_token_usage*/ false,
+    )
+    .await;
+
+    reducer
+        .ingest(
+            AnalyticsFact::Notification(Box::new(ServerNotification::ItemStarted(
+                ItemStartedNotification {
+                    thread_id: "thread-2".to_string(),
+                    turn_id: "turn-2".to_string(),
+                    started_at_ms: 998,
+                    item: sample_command_execution_item(
+                        CommandExecutionStatus::InProgress,
+                        /*exit_code*/ None,
+                        /*duration_ms*/ None,
+                    ),
+                },
+            ))),
+            &mut out,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::Notification(Box::new(sample_turn_completed_notification(
+                "thread-2",
+                "turn-2",
+                AppServerTurnStatus::Completed,
+                /*codex_error_info*/ None,
+            ))),
+            &mut out,
+        )
+        .await;
+
+    assert_eq!(
+        out.iter()
+            .filter(|event| matches!(event, TrackEventRequest::TurnEvent(_)))
+            .count(),
+        1
+    );
+    reducer
+        .ingest(
+            AnalyticsFact::Notification(Box::new(ServerNotification::ItemCompleted(
+                ItemCompletedNotification {
+                    thread_id: "thread-2".to_string(),
+                    turn_id: "turn-2".to_string(),
+                    completed_at_ms: 1_000,
+                    item: sample_command_execution_item(
+                        CommandExecutionStatus::Completed,
+                        Some(0),
+                        Some(1),
+                    ),
+                },
+            ))),
+            &mut out,
+        )
+        .await;
+
+    assert_eq!(
+        out.iter()
+            .filter(|event| matches!(event, TrackEventRequest::TurnEvent(_)))
+            .count(),
+        1
+    );
+    assert!(
+        out.iter()
+            .any(|event| matches!(event, TrackEventRequest::CommandExecution(_)))
+    );
+}
+
+#[tokio::test]
 async fn item_completed_without_turn_state_does_not_create_turn_state() {
     let mut reducer = AnalyticsReducer::default();
     let mut out = Vec::new();

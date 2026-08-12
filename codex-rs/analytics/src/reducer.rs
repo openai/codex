@@ -436,6 +436,7 @@ struct TurnState {
     steer_count: usize,
     tool_counts: TurnToolCounts,
     resource_skill_invocations: HashSet<String>,
+    turn_event_emitted: bool,
 }
 
 #[derive(Clone, Hash, Eq, PartialEq)]
@@ -1819,6 +1820,14 @@ impl AnalyticsReducer {
                     );
                 }
                 self.item_review_summaries.remove(&key);
+                if self
+                    .turns
+                    .get(&notification.turn_id)
+                    .is_some_and(|turn_state| turn_state.turn_event_emitted)
+                    && !self.has_pending_tool_items_for_turn(&notification.turn_id)
+                {
+                    self.turns.remove(&notification.turn_id);
+                }
             }
             ServerNotification::ItemGuardianApprovalReviewStarted(notification) => {
                 let _ = notification;
@@ -2190,6 +2199,9 @@ impl AnalyticsReducer {
         let Some(turn_state) = self.turns.get(turn_id) else {
             return;
         };
+        if turn_state.turn_event_emitted {
+            return;
+        }
         if turn_state.thread_id.is_none()
             || turn_state.num_input_images.is_none()
             || turn_state.resolved_config.is_none()
@@ -2241,7 +2253,19 @@ impl AnalyticsReducer {
             input.repo_hash = accepted_line_repo_hash_for_cwd(cwd.as_path()).await;
             out.extend(accepted_line_fingerprint_event_requests(input));
         }
-        self.turns.remove(turn_id);
+        if self.has_pending_tool_items_for_turn(turn_id) {
+            if let Some(turn_state) = self.turns.get_mut(turn_id) {
+                turn_state.turn_event_emitted = true;
+            }
+        } else {
+            self.turns.remove(turn_id);
+        }
+    }
+
+    fn has_pending_tool_items_for_turn(&self, turn_id: &str) -> bool {
+        self.tool_items_started_at_ms
+            .keys()
+            .any(|key| key.turn_id == turn_id)
     }
 
     /// Resolve the parent connection lazily when a subagent fact arrives first.

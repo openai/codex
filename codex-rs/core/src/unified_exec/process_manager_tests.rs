@@ -581,6 +581,7 @@ async fn pruning_does_not_evict_live_process_while_exited_process_is_finalizing(
                 } else {
                     Arc::clone(&live_process)
                 },
+                plugin_metrics_sidecar: None,
                 call_id: format!("call-{process_id}"),
                 process_id,
                 cwd: cwd.clone(),

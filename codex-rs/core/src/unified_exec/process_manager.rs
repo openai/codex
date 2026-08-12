@@ -60,6 +60,7 @@ use crate::unified_exec::head_tail_buffer::HeadTailBuffer;
 use crate::unified_exec::process::OutputHandles;
 use crate::unified_exec::process::SpawnLifecycleHandle;
 use crate::unified_exec::process::UnifiedExecProcess;
+use crate::unified_exec::take_plugin_metrics_sidecar;
 use codex_core_plugins::PLUGIN_METRICS_OUTPUT_ENV_VAR;
 use codex_core_plugins::PluginCommandAttribution;
 use codex_core_plugins::PluginMetricsSidecar;
@@ -538,13 +539,14 @@ impl UnifiedExecProcessManager {
                 request.tty,
                 deferred_network_approval.clone(),
                 network_denial_monitor,
+                metrics_sidecar,
                 Arc::clone(&transcript),
                 Arc::clone(&initial_exec_command_active),
             )
             .await;
             InitialExecCommandGuard {
                 active: Some(initial_exec_command_active),
-                metrics_sidecar,
+                metrics_sidecar: None,
             }
         } else {
             InitialExecCommandGuard {
@@ -629,10 +631,7 @@ impl UnifiedExecProcessManager {
                     exit_code,
                     process_id,
                     ..
-                } => {
-                    drop(initial_exec_command_guard.metrics_sidecar.take());
-                    (Some(process_id), exit_code)
-                }
+                } => (Some(process_id), exit_code),
                 ProcessStatus::Exited { exit_code, entry } => {
                     if let Err(message) =
                         finish_deferred_network_approval_after_process_exit_for_session(
@@ -652,8 +651,17 @@ impl UnifiedExecProcessManager {
                                 output_omitted_bytes,
                             )
                         })?;
-                    initial_exec_command_guard
-                        .finish_plugin_metrics(context, exit_code.unwrap_or(-1));
+                    let metrics_sidecar = entry
+                        .plugin_metrics_sidecar
+                        .as_ref()
+                        .and_then(take_plugin_metrics_sidecar);
+                    finish_and_track_measurements(
+                        metrics_sidecar,
+                        exit_code.unwrap_or(-1),
+                        &context.session,
+                        &context.step_context.turn,
+                        &context.call_id,
+                    );
                     (None, exit_code)
                 }
                 ProcessStatus::Unknown => {
@@ -988,11 +996,15 @@ impl UnifiedExecProcessManager {
         tty: bool,
         network_approval: Option<DeferredNetworkApproval>,
         network_denial_monitor: Option<tokio::task::JoinHandle<()>>,
+        metrics_sidecar: Option<PluginMetricsSidecar>,
         transcript: Arc<tokio::sync::Mutex<HeadTailBuffer>>,
         initial_exec_command_active: Arc<AtomicBool>,
     ) {
+        let plugin_metrics_sidecar =
+            metrics_sidecar.map(|sidecar| Arc::new(std::sync::Mutex::new(Some(sidecar))));
         let entry = ProcessEntry {
             process: Arc::clone(&process),
+            plugin_metrics_sidecar: plugin_metrics_sidecar.clone(),
             call_id: context.call_id.clone(),
             process_id,
             cwd: cwd.clone(),
@@ -1028,6 +1040,7 @@ impl UnifiedExecProcessManager {
             transcript,
             started_at,
             network_denial_monitor,
+            plugin_metrics_sidecar,
         );
     }
 
