@@ -5,6 +5,8 @@ use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::responses_metadata::CompactionTurnMetadata;
 use crate::responses_metadata::INSTALLATION_ID_KEY;
 use crate::responses_metadata::LEGACY_CODE_MODE_TOOL_NAMES_KEY;
+use crate::responses_metadata::NODE_REPL_AUTO_REVIEW_REQUIRED_KEY;
+use crate::responses_metadata::NODE_REPL_DISABLED_KEY;
 use crate::responses_metadata::PARENT_TURN_ID_KEY;
 use crate::responses_metadata::ROOT_TURN_ID_KEY;
 use crate::responses_metadata::SANDBOX_MODE_KEY;
@@ -19,6 +21,7 @@ use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
 use codex_analytics::CompactionTrigger;
+use codex_models_manager::model_info::model_info_from_slug;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::SessionSource;
@@ -235,6 +238,7 @@ fn turn_metadata_state_includes_sandbox_metadata() {
         WindowsSandboxLevel::Disabled,
         /*enforce_managed_network*/ false,
         /*auto_review_enabled*/ true,
+        &model_info_from_slug("gpt-5.4"),
     );
 
     let header = test_turn_metadata_header(&state);
@@ -283,6 +287,7 @@ fn turn_metadata_state_includes_root_fork_lineage() {
         WindowsSandboxLevel::Disabled,
         /*enforce_managed_network*/ false,
         /*auto_review_enabled*/ false,
+        &model_info_from_slug("gpt-5.4"),
     );
 
     let header = test_turn_metadata_header(&state);
@@ -323,6 +328,7 @@ fn turn_metadata_state_includes_thread_spawn_subagent_parent_without_fork() {
         WindowsSandboxLevel::Disabled,
         /*enforce_managed_network*/ false,
         /*auto_review_enabled*/ false,
+        &model_info_from_slug("gpt-5.4"),
     );
 
     let header = test_turn_metadata_header(&state);
@@ -363,6 +369,7 @@ fn turn_metadata_state_includes_forked_thread_spawn_subagent_lineage() {
         WindowsSandboxLevel::Disabled,
         /*enforce_managed_network*/ false,
         /*auto_review_enabled*/ false,
+        &model_info_from_slug("gpt-5.4"),
     );
 
     let header = test_turn_metadata_header(&state);
@@ -405,6 +412,7 @@ fn turn_metadata_state_includes_known_parent_for_non_thread_spawn_subagents_with
             WindowsSandboxLevel::Disabled,
             /*enforce_managed_network*/ false,
             /*auto_review_enabled*/ false,
+            &model_info_from_slug("gpt-5.4"),
         );
 
         let header = test_turn_metadata_header(&state);
@@ -438,6 +446,7 @@ fn turn_metadata_state_includes_turn_started_at_unix_ms_after_start() {
         WindowsSandboxLevel::Disabled,
         /*enforce_managed_network*/ false,
         /*auto_review_enabled*/ false,
+        &model_info_from_slug("gpt-5.4"),
     );
     state.set_turn_started_at_unix_ms(/*turn_started_at_unix_ms*/ 1_700_000_000_123);
 
@@ -469,6 +478,7 @@ fn turn_metadata_state_includes_model_and_reasoning_effort_only_in_request_meta(
         WindowsSandboxLevel::Disabled,
         /*enforce_managed_network*/ false,
         /*auto_review_enabled*/ false,
+        &model_info_from_slug("gpt-5.4"),
     );
 
     let header = test_turn_metadata_header(&state);
@@ -519,6 +529,7 @@ fn turn_metadata_state_marks_user_input_requested_during_turn_only_for_mcp_reque
         WindowsSandboxLevel::Disabled,
         /*enforce_managed_network*/ false,
         /*auto_review_enabled*/ false,
+        &model_info_from_slug("gpt-5.4"),
     );
 
     let header = test_turn_metadata_header(&state);
@@ -573,6 +584,7 @@ fn turn_metadata_state_ignores_client_reserved_metadata_before_start() {
         WindowsSandboxLevel::Disabled,
         /*enforce_managed_network*/ false,
         /*auto_review_enabled*/ false,
+        &model_info_from_slug("gpt-5.4"),
     );
     state.set_responsesapi_client_metadata(HashMap::from([
         (
@@ -603,6 +615,11 @@ fn turn_metadata_state_ignores_client_reserved_metadata_before_start() {
             "danger-full-access".to_string(),
         ),
         (AUTO_REVIEW_ENABLED_KEY.to_string(), "true".to_string()),
+        (
+            NODE_REPL_AUTO_REVIEW_REQUIRED_KEY.to_string(),
+            "true".to_string(),
+        ),
+        (NODE_REPL_DISABLED_KEY.to_string(), "true".to_string()),
     ]));
 
     let header = test_turn_metadata_header(&state);
@@ -618,6 +635,11 @@ fn turn_metadata_state_ignores_client_reserved_metadata_before_start() {
     assert!(json.get("subagent_kind").is_none());
     assert_eq!(json[SANDBOX_MODE_KEY].as_str(), Some("read-only"));
     assert_eq!(json[AUTO_REVIEW_ENABLED_KEY].as_bool(), Some(false));
+    assert_eq!(
+        json[NODE_REPL_AUTO_REVIEW_REQUIRED_KEY].as_bool(),
+        Some(false)
+    );
+    assert_eq!(json[NODE_REPL_DISABLED_KEY].as_bool(), Some(false));
 }
 
 #[test]
@@ -649,6 +671,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
         WindowsSandboxLevel::Disabled,
         /*enforce_managed_network*/ false,
         /*auto_review_enabled*/ false,
+        &model_info_from_slug("gpt-5.4"),
     );
     state.set_responses_api_metadata(BTreeMap::from([(
         "codex_security_surface".to_string(),
@@ -873,6 +896,7 @@ fn turn_metadata_state_overlays_compaction_only_on_compaction_requests() {
         WindowsSandboxLevel::Disabled,
         /*enforce_managed_network*/ false,
         /*auto_review_enabled*/ false,
+        &model_info_from_slug("gpt-5.4"),
     );
     state.set_responses_api_metadata(BTreeMap::from([(
         "codex_security_surface".to_string(),
@@ -953,6 +977,7 @@ async fn turn_metadata_state_preserves_lineage_after_git_enrichment() {
         WindowsSandboxLevel::Disabled,
         /*enforce_managed_network*/ false,
         /*auto_review_enabled*/ false,
+        &model_info_from_slug("gpt-5.4"),
     ));
 
     state.spawn_git_enrichment_task();
@@ -996,6 +1021,7 @@ async fn turn_metadata_state_coalesces_concurrent_git_enrichment() {
         WindowsSandboxLevel::Disabled,
         /*enforce_managed_network*/ false,
         /*auto_review_enabled*/ false,
+        &model_info_from_slug("gpt-5.4"),
     ));
     let barrier = Arc::new(tokio::sync::Barrier::new(8));
     let tasks = (0..8)
@@ -1050,6 +1076,7 @@ async fn turn_metadata_state_git_enrichment_cancellation_is_retryable_and_errors
         WindowsSandboxLevel::Disabled,
         /*enforce_managed_network*/ false,
         /*auto_review_enabled*/ false,
+        &model_info_from_slug("gpt-5.4"),
     ));
     state.spawn_git_enrichment_task();
     state.cancel_git_enrichment_task();
@@ -1084,6 +1111,7 @@ async fn turn_metadata_state_git_enrichment_cancellation_is_retryable_and_errors
         WindowsSandboxLevel::Disabled,
         /*enforce_managed_network*/ false,
         /*auto_review_enabled*/ false,
+        &model_info_from_slug("gpt-5.4"),
     ));
     invalid_state.spawn_git_enrichment_task();
     tokio::time::timeout(Duration::from_secs(2), async {

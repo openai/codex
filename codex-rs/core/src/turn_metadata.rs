@@ -30,6 +30,7 @@ use codex_git_utils::get_head_commit_hash;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadSource;
@@ -110,6 +111,8 @@ pub(crate) struct TurnMetadataState {
     sandbox: Option<String>,
     sandbox_mode: Option<String>,
     auto_review_enabled: bool,
+    node_repl_auto_review_required: bool,
+    node_repl_disabled: bool,
     enriched_workspaces: RwLock<Option<BTreeMap<String, TurnMetadataWorkspace>>>,
     tool_namespaces_info: RwLock<Option<TurnToolNamespacesInfo>>,
     turn_started_at_unix_ms: RwLock<Option<i64>>,
@@ -135,6 +138,7 @@ impl TurnMetadataState {
         windows_sandbox_level: WindowsSandboxLevel,
         enforce_managed_network: bool,
         auto_review_enabled: bool,
+        model_info: &ModelInfo,
     ) -> Self {
         let repo_root = get_git_repo_root(&cwd);
         let sandbox = Some(
@@ -163,6 +167,8 @@ impl TurnMetadataState {
             sandbox,
             sandbox_mode,
             auto_review_enabled,
+            node_repl_auto_review_required: model_info.node_repl_auto_review_required,
+            node_repl_disabled: model_info.node_repl_disabled,
             enriched_workspaces: RwLock::new(None),
             tool_namespaces_info: RwLock::new(None),
             turn_started_at_unix_ms: RwLock::new(None),
@@ -347,6 +353,8 @@ impl TurnMetadataState {
             sandbox: self.sandbox.clone(),
             sandbox_mode: self.sandbox_mode.clone(),
             auto_review_enabled: Some(self.auto_review_enabled),
+            node_repl_auto_review_required: Some(self.node_repl_auto_review_required),
+            node_repl_disabled: Some(self.node_repl_disabled),
             workspaces: self.current_workspaces(),
             tool_namespaces_info: self
                 .tool_namespaces_info

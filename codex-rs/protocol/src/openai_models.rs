@@ -442,6 +442,10 @@ pub struct ModelInfo {
     pub supports_search_tool: bool,
     #[serde(default)]
     pub use_responses_lite: bool,
+    #[serde(default)]
+    pub node_repl_auto_review_required: bool,
+    #[serde(default)]
+    pub node_repl_disabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_review_model_override: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -855,6 +859,8 @@ mod tests {
             used_fallback_model_metadata: false,
             supports_search_tool: false,
             use_responses_lite: false,
+            node_repl_auto_review_required: false,
+            node_repl_disabled: false,
             auto_review_model_override: None,
             model_specialty: None,
             tool_mode: None,
@@ -1435,6 +1441,8 @@ mod tests {
         assert_eq!(model.web_search_tool_type, WebSearchToolType::Text);
         assert!(!model.supports_search_tool);
         assert!(!model.use_responses_lite);
+        assert!(!model.node_repl_auto_review_required);
+        assert!(!model.node_repl_disabled);
         assert_eq!(model.comp_hash, None);
         assert_eq!(model.auto_review_model_override, None);
         assert_eq!(model.tool_mode, None);

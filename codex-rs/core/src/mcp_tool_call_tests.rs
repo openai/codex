@@ -97,6 +97,13 @@ fn mcp_turn_metadata_context(turn_context: &TurnContext) -> McpTurnMetadataConte
     }
 }
 
+fn expected_mcp_turn_metadata(turn_context: &TurnContext) -> serde_json::Value {
+    turn_context
+        .turn_metadata_state
+        .current_meta_value_for_mcp_request(mcp_turn_metadata_context(turn_context))
+        .expect("turn metadata")
+}
+
 fn write_sample_plugin_mcp(codex_home: &std::path::Path) {
     let plugin_root = codex_home.join("plugins/cache/test/sample/local");
     std::fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("create plugin manifest dir");
@@ -1004,10 +1011,16 @@ fn truncate_mcp_tool_result_for_event_bounds_large_error() {
 #[tokio::test]
 async fn mcp_tool_call_request_meta_includes_turn_metadata_for_custom_server() {
     let (_, turn_context) = make_session_and_context().await;
-    let expected_turn_metadata = turn_context
+    turn_context
         .turn_metadata_state
-        .current_meta_value_for_mcp_request(mcp_turn_metadata_context(&turn_context))
-        .expect("turn metadata");
+        .set_responsesapi_client_metadata(HashMap::from([
+            (
+                "node_repl_auto_review_required".to_string(),
+                "true".to_string(),
+            ),
+            ("node_repl_disabled".to_string(), "true".to_string()),
+        ]));
+    let expected_turn_metadata = expected_mcp_turn_metadata(&turn_context);
 
     let meta = build_mcp_tool_call_request_meta(
         &turn_context,
@@ -1025,6 +1038,14 @@ async fn mcp_tool_call_request_meta_includes_turn_metadata_for_custom_server() {
             .get("model")
             .and_then(serde_json::Value::as_str),
         Some(turn_context.model_info.slug.as_str())
+    );
+    assert_eq!(
+        turn_metadata["node_repl_auto_review_required"],
+        serde_json::Value::Bool(turn_context.model_info.node_repl_auto_review_required),
+    );
+    assert_eq!(
+        turn_metadata["node_repl_disabled"],
+        serde_json::Value::Bool(turn_context.model_info.node_repl_disabled),
     );
     assert_eq!(
         turn_metadata
@@ -1122,10 +1143,7 @@ async fn mcp_sandbox_cwd_is_none_for_unselected_server_environment() -> anyhow::
 #[tokio::test]
 async fn plugin_mcp_tool_call_request_meta_includes_plugin_id() {
     let (_, turn_context) = make_session_and_context().await;
-    let expected_turn_metadata = turn_context
-        .turn_metadata_state
-        .current_meta_value_for_mcp_request(mcp_turn_metadata_context(&turn_context))
-        .expect("turn metadata");
+    let expected_turn_metadata = expected_mcp_turn_metadata(&turn_context);
     let mut metadata = approval_metadata(
         /*connector_id*/ None, /*connector_name*/ None,
         /*connector_description*/ None, /*tool_title*/ None,
@@ -1246,10 +1264,7 @@ async fn mcp_tool_call_item_includes_app_identity() {
 #[tokio::test]
 async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps_meta() {
     let (_, turn_context) = make_session_and_context().await;
-    let expected_turn_metadata = turn_context
-        .turn_metadata_state
-        .current_meta_value_for_mcp_request(mcp_turn_metadata_context(&turn_context))
-        .expect("turn metadata");
+    let expected_turn_metadata = expected_mcp_turn_metadata(&turn_context);
     let metadata = McpToolApprovalMetadata {
         annotations: None,
         connector_id: Some("calendar".to_string()),
@@ -1297,10 +1312,7 @@ async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps
 #[tokio::test]
 async fn codex_apps_tool_call_request_meta_includes_call_id_without_existing_codex_apps_meta() {
     let (_, turn_context) = make_session_and_context().await;
-    let expected_turn_metadata = turn_context
-        .turn_metadata_state
-        .current_meta_value_for_mcp_request(mcp_turn_metadata_context(&turn_context))
-        .expect("turn metadata");
+    let expected_turn_metadata = expected_mcp_turn_metadata(&turn_context);
 
     assert_eq!(
         build_mcp_tool_call_request_meta(

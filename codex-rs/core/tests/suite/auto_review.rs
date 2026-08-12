@@ -260,6 +260,8 @@ fn remote_model_with_auto_review_override(slug: &str, review_model: &str) -> Mod
         used_fallback_model_metadata: false,
         supports_search_tool: false,
         use_responses_lite: false,
+        node_repl_auto_review_required: false,
+        node_repl_disabled: false,
         auto_review_model_override: Some(review_model.to_string()),
         model_specialty: None,
         tool_mode: None,

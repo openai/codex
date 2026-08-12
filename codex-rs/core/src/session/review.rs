@@ -13,6 +13,14 @@ pub(super) async fn spawn_review_thread(
         .review_model
         .clone()
         .unwrap_or_else(|| parent_turn_context.model_info.slug.clone());
+    let available_models = sess
+        .services
+        .models_manager
+        .list_models(
+            RefreshStrategy::OnlineIfUncached,
+            config.http_client_factory(),
+        )
+        .await;
     let review_model_info = sess
         .services
         .models_manager
@@ -24,14 +32,6 @@ pub(super) async fn spawn_review_thread(
     let _ = review_features.disable(Feature::WebSearchCached);
     let _ = review_features.disable(Feature::Goals);
     let review_web_search_mode = WebSearchMode::Disabled;
-    let available_models = sess
-        .services
-        .models_manager
-        .list_models(
-            RefreshStrategy::OnlineIfUncached,
-            config.http_client_factory(),
-        )
-        .await;
     let unified_exec_shell_mode = UnifiedExecShellMode::for_session(
         codex_tools::unified_exec_feature_mode_for_features(review_features.get()),
         crate::tools::tool_user_shell_type(sess.services.user_shell.as_ref()),
@@ -120,6 +120,7 @@ pub(super) async fn spawn_review_thread(
         parent_turn_context.windows_sandbox_level,
         parent_turn_context.network.is_some(),
         auto_review_enabled,
+        &model_info,
     ));
     if turn_metadata_state.can_start_root_turn(&session_source) {
         turn_metadata_state.set_root_turn_id(review_turn_id.clone());

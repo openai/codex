@@ -103,6 +103,8 @@ async fn models_client_hits_models_endpoint() {
             used_fallback_model_metadata: false,
             supports_search_tool: false,
             use_responses_lite: false,
+            node_repl_auto_review_required: true,
+            node_repl_disabled: true,
             auto_review_model_override: None,
             model_specialty: None,
             tool_mode: None,
@@ -136,6 +138,8 @@ async fn models_client_hits_models_endpoint() {
 
     assert_eq!(models.len(), 1);
     assert_eq!(models[0].slug, "gpt-test");
+    assert!(models[0].node_repl_auto_review_required);
+    assert!(models[0].node_repl_disabled);
 
     let received = server
         .received_requests()

@@ -48,6 +48,8 @@ fn model_with_shell_type(shell_type: ConfigShellToolType) -> ModelInfo {
         used_fallback_model_metadata: false,
         supports_search_tool: false,
         use_responses_lite: false,
+        node_repl_auto_review_required: false,
+        node_repl_disabled: false,
         auto_review_model_override: None,
         model_specialty: None,
         tool_mode: None,

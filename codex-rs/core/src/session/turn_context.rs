@@ -605,6 +605,7 @@ impl Session {
             session_configuration.windows_sandbox_level,
             network.is_some(),
             auto_review_enabled,
+            &model_info,
         ));
         turn_metadata_state
             .set_responses_api_metadata(per_turn_config.responses_api_metadata.clone());

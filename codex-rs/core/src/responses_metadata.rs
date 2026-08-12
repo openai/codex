@@ -44,6 +44,8 @@ pub(crate) const THREAD_SOURCE_KEY: &str = "thread_source";
 pub(crate) const SANDBOX_KEY: &str = "sandbox";
 pub(crate) const SANDBOX_MODE_KEY: &str = "sandbox_mode";
 pub(crate) const AUTO_REVIEW_ENABLED_KEY: &str = "auto_review_enabled";
+pub(crate) const NODE_REPL_AUTO_REVIEW_REQUIRED_KEY: &str = "node_repl_auto_review_required";
+pub(crate) const NODE_REPL_DISABLED_KEY: &str = "node_repl_disabled";
 pub(crate) const WORKSPACES_KEY: &str = "workspaces";
 
 // App-server clients can specify additional metadata in the `responsesapi_client_metadata` param
@@ -73,6 +75,8 @@ const RESERVED_METADATA_KEYS: &[&str] = &[
     SANDBOX_KEY,
     SANDBOX_MODE_KEY,
     AUTO_REVIEW_ENABLED_KEY,
+    NODE_REPL_AUTO_REVIEW_REQUIRED_KEY,
+    NODE_REPL_DISABLED_KEY,
     WORKSPACES_KEY,
 ];
 const MAX_EXTRA_METADATA_ENTRIES: usize = 16;
@@ -213,6 +217,8 @@ pub struct CodexResponsesMetadata {
     pub(crate) sandbox: Option<String>,
     pub(crate) sandbox_mode: Option<String>,
     pub(crate) auto_review_enabled: Option<bool>,
+    pub(crate) node_repl_auto_review_required: Option<bool>,
+    pub(crate) node_repl_disabled: Option<bool>,
     pub(crate) workspaces: BTreeMap<String, TurnMetadataWorkspace>,
     pub(crate) tool_namespaces_info: Option<TurnToolNamespacesInfo>,
     pub(crate) turn_started_at_unix_ms: Option<i64>,
@@ -244,6 +250,8 @@ impl CodexResponsesMetadata {
             sandbox: None,
             sandbox_mode: None,
             auto_review_enabled: None,
+            node_repl_auto_review_required: None,
+            node_repl_disabled: None,
             workspaces: BTreeMap::new(),
             tool_namespaces_info: None,
             turn_started_at_unix_ms: None,
@@ -360,6 +368,8 @@ impl CodexResponsesMetadata {
             sandbox: self.sandbox.as_deref(),
             sandbox_mode: self.sandbox_mode.as_deref(),
             auto_review_enabled: self.auto_review_enabled,
+            node_repl_auto_review_required: self.node_repl_auto_review_required,
+            node_repl_disabled: self.node_repl_disabled,
             workspaces: non_empty_workspaces(&self.workspaces),
             tool_namespaces_info: self.tool_namespaces_info.as_ref(),
             turn_started_at_unix_ms: self.turn_started_at_unix_ms,
@@ -487,6 +497,10 @@ struct CodexTurnMetadataPayload<'a> {
     sandbox_mode: Option<&'a str>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     auto_review_enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    node_repl_auto_review_required: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    node_repl_disabled: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     workspaces: Option<&'a BTreeMap<String, TurnMetadataWorkspace>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

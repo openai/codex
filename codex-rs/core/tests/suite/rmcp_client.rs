@@ -1344,8 +1344,15 @@ async fn local_stdio_server_uses_runtime_fallback_cwd_when_config_omits_cwd() ->
     Ok(())
 }
 
+#[test_case(false, false; "both disabled")]
+#[test_case(true, false; "auto review required")]
+#[test_case(false, true; "disabled")]
+#[test_case(true, true; "both enabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()> {
+async fn stdio_mcp_tool_call_includes_sandbox_state_meta(
+    node_repl_auto_review_required: bool,
+    node_repl_disabled: bool,
+) -> anyhow::Result<()> {
     // TODO(anp): Remove after packaging a Windows stdio test server for Wine exec.
     skip_if_wine_exec!(
         Ok(()),
@@ -1358,8 +1365,17 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()>
     let call_id = "sandbox-meta-call";
     let server_name = "rmcp";
     let namespace = format!("mcp__{server_name}");
+    let mut models = codex_models_manager::bundled_models_response()?;
+    let model = models
+        .models
+        .iter_mut()
+        .find(|model| model.slug == "gpt-5.4")
+        .expect("bundled model should exist");
+    model.node_repl_auto_review_required = node_repl_auto_review_required;
+    model.node_repl_disabled = node_repl_disabled;
+    let models_mock = mount_models_once(&server, models).await;
 
-    mount_sse_once(
+    let initial_mock = mount_sse_once(
         &server,
         responses::sse(vec![
             responses::ev_response_created("resp-1"),
@@ -1379,6 +1395,8 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()>
 
     let rmcp_test_server_bin = remote_aware_stdio_server_bin()?;
     let fixture = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model("gpt-5.4")
         .with_config(move |config| {
             insert_mcp_server(
                 config,
@@ -1394,6 +1412,15 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()>
         .await?;
 
     wait_for_mcp_server(&fixture.codex, server_name).await?;
+    fixture
+        .thread_manager
+        .get_models_manager()
+        .list_models(
+            RefreshStrategy::Online,
+            codex_core::test_support::default_http_client_factory(),
+        )
+        .await;
+    assert_eq!(models_mock.requests().len(), 1);
 
     fixture
         .submit_turn_with_permission_profile(
@@ -1401,6 +1428,21 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()>
             PermissionProfile::read_only(),
         )
         .await?;
+
+    let initial_request = initial_mock.single_request().body_json();
+    let response_metadata: Value = serde_json::from_str(
+        initial_request["client_metadata"]["x-codex-turn-metadata"]
+            .as_str()
+            .expect("responses request should include turn metadata"),
+    )?;
+    assert_eq!(
+        response_metadata["node_repl_auto_review_required"],
+        json!(node_repl_auto_review_required),
+    );
+    assert_eq!(
+        response_metadata["node_repl_disabled"],
+        json!(node_repl_disabled)
+    );
 
     let output_item = final_mock.single_request().function_call_output(call_id);
     let output_text = output_item
@@ -1413,6 +1455,14 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()>
     let meta = output_json
         .as_object()
         .expect("sandbox_meta should return metadata object");
+    assert_eq!(
+        output_json.pointer("/x-codex-turn-metadata/node_repl_auto_review_required"),
+        Some(&json!(node_repl_auto_review_required))
+    );
+    assert_eq!(
+        output_json.pointer("/x-codex-turn-metadata/node_repl_disabled"),
+        Some(&json!(node_repl_disabled))
+    );
 
     let sandbox_meta = meta
         .get(MCP_SANDBOX_STATE_META_CAPABILITY)
@@ -2240,6 +2290,8 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
                 used_fallback_model_metadata: false,
                 supports_search_tool: false,
                 use_responses_lite: false,
+                node_repl_auto_review_required: false,
+                node_repl_disabled: false,
                 auto_review_model_override: None,
                 model_specialty: None,
                 tool_mode: None,
