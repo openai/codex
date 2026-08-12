@@ -663,6 +663,50 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_apply_patch_rollout_state() {
 }
 
 #[test]
+fn maybe_wrap_shell_lc_with_snapshot_restores_reserved_metrics_output_env() {
+    let dir = tempdir().expect("create temp dir");
+    let snapshot_path = dir.path().join("snapshot.sh");
+    std::fs::write(
+        &snapshot_path,
+        "# Snapshot file\nexport CODEX_PLUGIN_METRICS_OUTPUT='/stale/path'\n",
+    )
+    .expect("write snapshot");
+    let (session_shell, shell_snapshot) =
+        shell_with_snapshot(ShellType::Bash, "/bin/bash", snapshot_path.abs());
+    let command = vec![
+        "/bin/bash".to_string(),
+        "-lc".to_string(),
+        "printf '%s' \"${CODEX_PLUGIN_METRICS_OUTPUT-unset}\"".to_string(),
+    ];
+
+    for (live_value, expected) in [(None, "unset"), (Some("/private/path"), "/private/path")] {
+        let env = live_value
+            .map(|value| {
+                HashMap::from([(PLUGIN_METRICS_OUTPUT_ENV_VAR.to_string(), value.to_string())])
+            })
+            .unwrap_or_default();
+        let rewritten = maybe_wrap_shell_lc_with_snapshot(
+            &command,
+            &session_shell,
+            Some(&shell_snapshot),
+            &HashMap::new(),
+            &env,
+            &RuntimePathPrepends::default(),
+        );
+        let mut process = Command::new(&rewritten[0]);
+        process.args(&rewritten[1..]);
+        match live_value {
+            Some(value) => process.env(PLUGIN_METRICS_OUTPUT_ENV_VAR, value),
+            None => process.env_remove(PLUGIN_METRICS_OUTPUT_ENV_VAR),
+        };
+        let output = process.output().expect("run rewritten command");
+
+        assert!(output.status.success(), "command failed: {output:?}");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
+    }
+}
+
+#[test]
 fn maybe_wrap_shell_lc_with_snapshot_restores_proxy_env_from_process_env() {
     let dir = tempdir().expect("create temp dir");
     let snapshot_path = dir.path().join("snapshot.sh");

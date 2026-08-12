@@ -53,6 +53,7 @@ tokio = { workspace = true, features = ["fs", "macros", "rt", "time"] }
 toml = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
 zip = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]

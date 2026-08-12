@@ -5,6 +5,7 @@ use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::unified_exec::SpawnLifecycleHandle;
+use codex_core_plugins::PluginMetricsSidecar;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_tools::ZshForkConfig;
 
@@ -23,8 +24,9 @@ pub(crate) async fn maybe_run_shell_command(
     attempt: &SandboxAttempt<'_>,
     ctx: &ToolCtx,
     command: &[String],
+    metrics_sidecar: Option<&PluginMetricsSidecar>,
 ) -> Result<Option<ExecToolCallOutput>, ToolError> {
-    imp::maybe_run_shell_command(req, attempt, ctx, command).await
+    imp::maybe_run_shell_command(req, attempt, ctx, command, metrics_sidecar).await
 }
 
 /// Prepares unified exec to launch through the zsh-fork backend when the
@@ -76,8 +78,9 @@ mod imp {
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx,
         command: &[String],
+        metrics_sidecar: Option<&PluginMetricsSidecar>,
     ) -> Result<Option<ExecToolCallOutput>, ToolError> {
-        unix_escalation::try_run_zsh_fork(req, attempt, ctx, command).await
+        unix_escalation::try_run_zsh_fork(req, attempt, ctx, command, metrics_sidecar).await
     }
 
     pub(super) async fn maybe_prepare_unified_exec(
@@ -118,8 +121,9 @@ mod imp {
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx,
         command: &[String],
+        metrics_sidecar: Option<&PluginMetricsSidecar>,
     ) -> Result<Option<ExecToolCallOutput>, ToolError> {
-        let _ = (req, attempt, ctx, command);
+        let _ = (req, attempt, ctx, command, metrics_sidecar);
         Ok(None)
     }
 

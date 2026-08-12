@@ -4,6 +4,7 @@ use crate::exec_policy::AllowPrefixRules;
 use crate::shell_snapshot::ShellSnapshotFile;
 use crate::tools::sandboxing::executor_windows_sandbox_level;
 use codex_core_plugins::PluginCommandAttribution;
+use codex_core_plugins::ResolvedPluginMetricsOperation;
 use codex_core_plugins::TrustedPluginRoots;
 use codex_exec_server::ExecutorFileSystem;
 use codex_file_system::FileSystemSandboxContext;
@@ -240,6 +241,16 @@ impl TurnContext {
         } else {
             AllowPrefixRules::Honor
         }
+    }
+
+    pub(crate) fn plugin_metrics_operation_for_command(
+        &self,
+        command: &[String],
+        cwd: &AbsolutePathBuf,
+    ) -> Option<ResolvedPluginMetricsOperation> {
+        self.extension_data
+            .get::<TrustedPluginRoots>()?
+            .resolve_metrics_operation(command, cwd)
     }
 
     pub(crate) fn permission_profile(&self) -> PermissionProfile {

@@ -49,6 +49,8 @@ use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use core_test_support::wait_for_mcp_server;
+use core_test_support::zsh_fork::zsh_fork_runtime;
+use core_test_support::zsh_fork::zsh_fork_test_builder;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use test_case::test_case;
@@ -340,8 +342,12 @@ fn searched_plugin_tools(
     )
 }
 
+#[test_case(false; "classic shell")]
+#[test_case(true; "zsh-fork shell")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn persisted_remote_plugin_command_attribution_flows_through_turn_context() -> Result<()> {
+async fn persisted_remote_plugin_command_attribution_flows_through_turn_context(
+    zsh_fork: bool,
+) -> Result<()> {
     skip_if_target_windows!(Ok(()), "executes a POSIX shell script");
     skip_if_no_network!(Ok(()));
     skip_if_remote!(
@@ -352,8 +358,28 @@ async fn persisted_remote_plugin_command_attribution_flows_through_turn_context(
     let server = start_mock_server().await;
     let codex_home = Arc::new(TempDir::new()?);
     let script_path = write_remote_plugin_script_and_config(codex_home.as_ref());
-    let script_path = script_path.to_string_lossy();
-    let command = shlex::try_join(["/bin/sh", script_path.as_ref()])?;
+    std::fs::write(
+        &script_path,
+        r#"printf '%s' '{"version":1,"measurements":[{"name":"files_scanned","value":7}]}' > "$CODEX_PLUGIN_METRICS_OUTPUT"
+"#,
+    )?;
+    let plugin_root = script_path
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("plugin root");
+    std::fs::write(
+        plugin_root.join("analytics.yaml"),
+        "version: 1\noperations: {scan: {path: ./scripts/run.sh, measurements: {files_scanned: {}}}}\n",
+    )?;
+    let builder = if zsh_fork {
+        let Some(runtime) = zsh_fork_runtime("zsh-fork plugin measurement test")? else {
+            return Ok(());
+        };
+        zsh_fork_test_builder(runtime, AskForApproval::Never)
+    } else {
+        test_codex()
+    };
+    let command = shlex::try_join(["/bin/sh", script_path.to_string_lossy().as_ref()])?;
     let call_id = "remote-plugin-command";
     let arguments = serde_json::to_string(&serde_json::json!({
         "command": command,
@@ -376,16 +402,18 @@ async fn persisted_remote_plugin_command_attribution_flows_through_turn_context(
     )
     .await;
 
-    let mut builder = test_codex()
+    let chatgpt_base_url = server.uri();
+    let mut builder = builder
         .with_home(Arc::clone(&codex_home))
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_model("gpt-5.2");
+        .with_model("gpt-5.2")
+        .with_config(move |config| config.chatgpt_base_url = chatgpt_base_url);
     let test_codex = builder.build_with_auto_env(&server).await?;
     let codex = Arc::clone(&test_codex.codex);
     let cwd = test_codex.config.cwd.clone();
     let session_model = test_codex.session_configured.model.clone();
     let (sandbox_policy, permission_profile) =
-        turn_permission_fields(PermissionProfile::Disabled, cwd.as_path());
+        turn_permission_fields(PermissionProfile::read_only(), cwd.as_path());
     codex
         .submit(Op::UserInput {
             items: vec![codex_protocol::user_input::UserInput::Text {
@@ -423,6 +451,11 @@ async fn persisted_remote_plugin_command_attribution_flows_through_turn_context(
         _ => None,
     })
     .await;
+    assert_eq!(
+        end.exit_code, 0,
+        "sandboxed plugin command failed: {}",
+        end.aggregated_output
+    );
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     for (plugin_id, script_path) in [
@@ -432,6 +465,22 @@ async fn persisted_remote_plugin_command_attribution_flows_through_turn_context(
         assert_eq!(plugin_id, Some(REMOTE_PLUGIN_CONFIG_NAME));
         assert_eq!(script_path, Some("scripts/run.sh"));
     }
+
+    let measurement = wait_for_analytics_event(&server, "codex_plugin_measurement_event").await;
+    assert_eq!(
+        serde_json::json!({
+            "plugin_id": measurement["event_params"]["plugin_id"],
+            "operation": measurement["event_params"]["operation"],
+            "measurement_name": measurement["event_params"]["measurement_name"],
+            "number_value": measurement["event_params"]["number_value"],
+        }),
+        serde_json::json!({
+            "plugin_id": REMOTE_PLUGIN_CONFIG_NAME,
+            "operation": "scan",
+            "measurement_name": "files_scanned",
+            "number_value": 7.0,
+        })
+    );
 
     Ok(())
 }

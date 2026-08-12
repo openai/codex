@@ -12,6 +12,7 @@ use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::tools::sandboxing::ToolError;
 use codex_apply_patch::CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR;
+use codex_core_plugins::PLUGIN_METRICS_OUTPUT_ENV_VAR;
 #[cfg(unix)]
 use codex_install_context::InstallContext;
 #[cfg(target_os = "macos")]
@@ -274,6 +275,7 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
         CODEX_THREAD_ID_ENV_VAR,
         CODEX_PERMISSION_PROFILE_ENV_VAR,
         CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR,
+        PLUGIN_METRICS_OUTPUT_ENV_VAR,
     ] {
         if let Some(value) = env.get(key) {
             override_env.insert(key.to_string(), value.clone());
@@ -285,6 +287,7 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
         &[
             CODEX_PERMISSION_PROFILE_ENV_VAR,
             CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR,
+            PLUGIN_METRICS_OUTPUT_ENV_VAR,
         ],
     );
     let (proxy_captures, proxy_exports) = build_proxy_env_exports();
