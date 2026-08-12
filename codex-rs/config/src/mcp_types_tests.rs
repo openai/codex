@@ -5,6 +5,32 @@ use std::collections::HashMap;
 use std::path::Path;
 
 #[test]
+fn app_tool_approval_restrictions_never_weaken_either_policy() {
+    use AppToolApproval::Approve;
+    use AppToolApproval::Auto;
+    use AppToolApproval::Prompt;
+    use AppToolApproval::Writes;
+
+    let modes = [Approve, Auto, Writes, Prompt];
+    let expected = [
+        [Approve, Auto, Writes, Prompt],
+        [Auto, Auto, Prompt, Prompt],
+        [Writes, Prompt, Writes, Prompt],
+        [Prompt, Prompt, Prompt, Prompt],
+    ];
+
+    for (parent_index, parent) in modes.into_iter().enumerate() {
+        for (requested_index, requested) in modes.into_iter().enumerate() {
+            assert_eq!(
+                parent.restrict_to(requested),
+                expected[parent_index][requested_index],
+                "parent: {parent:?}, requested: {requested:?}",
+            );
+        }
+    }
+}
+
+#[test]
 fn deserialize_stdio_command_server_config() {
     let cfg: McpServerConfig = toml::from_str(
         r#"

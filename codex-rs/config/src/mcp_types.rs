@@ -30,6 +30,22 @@ pub enum AppToolApproval {
     Approve,
 }
 
+impl AppToolApproval {
+    /// Requires approval whenever either policy could require it.
+    ///
+    /// `Auto` and `Writes` are incomparable: each can require approval for a
+    /// tool the other would approve. Their conservative intersection is `Prompt`.
+    pub fn restrict_to(self, requested: Self) -> Self {
+        match (self, requested) {
+            (Self::Prompt, _) | (_, Self::Prompt) => Self::Prompt,
+            (Self::Approve, mode) | (mode, Self::Approve) => mode,
+            (Self::Auto, Self::Auto) => Self::Auto,
+            (Self::Writes, Self::Writes) => Self::Writes,
+            (Self::Auto, Self::Writes) | (Self::Writes, Self::Auto) => Self::Prompt,
+        }
+    }
+}
+
 /// Human-readable reason a configured MCP server was disabled after requirements
 /// were applied.
 ///

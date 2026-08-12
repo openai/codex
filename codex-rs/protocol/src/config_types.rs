@@ -362,6 +362,18 @@ pub enum WebSearchMode {
     Live,
 }
 
+impl WebSearchMode {
+    /// Restricts search to the access permitted by both modes.
+    pub fn restrict_to(self, requested: Self) -> Self {
+        match (self, requested) {
+            (Self::Disabled, _) | (_, Self::Disabled) => Self::Disabled,
+            (Self::Cached, _) | (_, Self::Cached) => Self::Cached,
+            (Self::Indexed, _) | (_, Self::Indexed) => Self::Indexed,
+            (Self::Live, Self::Live) => Self::Live,
+        }
+    }
+}
+
 /// A model-facing surface on which a tool can be exposed.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
@@ -767,6 +779,32 @@ pub struct CollaborationModeMask {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn web_search_mode_restrictions_never_expand_either_mode() {
+        use WebSearchMode::Cached;
+        use WebSearchMode::Disabled;
+        use WebSearchMode::Indexed;
+        use WebSearchMode::Live;
+
+        let modes = [Disabled, Cached, Indexed, Live];
+        let expected = [
+            [Disabled, Disabled, Disabled, Disabled],
+            [Disabled, Cached, Cached, Cached],
+            [Disabled, Cached, Indexed, Indexed],
+            [Disabled, Cached, Indexed, Live],
+        ];
+
+        for (parent_index, parent) in modes.into_iter().enumerate() {
+            for (requested_index, requested) in modes.into_iter().enumerate() {
+                assert_eq!(
+                    parent.restrict_to(requested),
+                    expected[parent_index][requested_index],
+                    "parent: {parent:?}, requested: {requested:?}",
+                );
+            }
+        }
+    }
 
     #[test]
     fn apply_mask_can_clear_optional_fields() {
