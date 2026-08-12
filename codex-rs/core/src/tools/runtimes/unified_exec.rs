@@ -38,6 +38,7 @@ use crate::unified_exec::NoopSpawnLifecycle;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecProcessManager;
+use codex_core_plugins::PluginMetricsSidecar;
 use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::error::CodexErr;
@@ -45,6 +46,7 @@ use codex_protocol::error::SandboxErr;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxablePreference;
+use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use codex_shell_command::powershell::prefix_powershell_script_with_utf8;
 use codex_tools::UnifiedExecShellMode;
 use codex_utils_path_uri::PathUri;
@@ -97,6 +99,11 @@ pub struct UnifiedExecApprovalKey {
 pub struct UnifiedExecRuntime<'a> {
     manager: &'a UnifiedExecProcessManager,
     shell_mode: UnifiedExecShellMode,
+}
+
+pub(crate) struct UnifiedExecAttempt {
+    pub(crate) process: UnifiedExecProcess,
+    pub(crate) metrics_sidecar: Option<PluginMetricsSidecar>,
 }
 
 fn unified_exec_options(
@@ -187,7 +194,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
     }
 }
 
-impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRuntime<'a> {
+impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecAttempt> for UnifiedExecRuntime<'a> {
     fn turn_environment<'b>(&self, req: &'b UnifiedExecRequest) -> &'b TurnEnvironment {
         &req.turn_environment
     }
@@ -239,7 +246,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         req: &UnifiedExecRequest,
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx,
-    ) -> Result<UnifiedExecProcess, ToolError> {
+    ) -> Result<UnifiedExecAttempt, ToolError> {
         let base_command = &req.command;
         let windows_sandbox_proxy_settings_mode = ctx.session.windows_sandbox_proxy_settings_mode;
         let session_shell = ctx.session.user_shell();
@@ -269,7 +276,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             launch_sandbox_permissions,
         ));
         let env = exec_env_for_sandbox_permissions(&req.env, launch_sandbox_permissions);
-        let (env, managed_network_context, network_proxy_launch) = match managed_network {
+        let (mut env, managed_network_context, network_proxy_launch) = match managed_network {
             Some(network) if environment_is_remote => {
                 let mut launch = network.remote_launch_config().await.map_err(|err| {
                     ToolError::Codex(CodexErr::Io(io::Error::other(err.to_string())))
@@ -330,8 +337,19 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             None => (env, None, None),
         };
         let explicit_env_overrides = req.explicit_env_overrides.clone();
-        #[cfg(unix)]
-        let mut env = env;
+        let metrics_sidecar = (!environment_is_remote
+            && ctx.session.services.analytics_events_client.is_enabled())
+        .then(|| {
+            let cwd = req.cwd.to_abs_path().ok()?;
+            ctx.step_context
+                .turn
+                .plugin_metrics_operation_for_command(&req.command, &cwd)
+        })
+        .flatten()
+        .and_then(PluginMetricsSidecar::create);
+        if let Some(sidecar) = metrics_sidecar.as_ref() {
+            sidecar.install_output_env(&mut env);
+        }
         #[cfg(unix)]
         let runtime_path_prepends = {
             let mut runtime_path_prepends = RuntimePathPrepends::default();
@@ -375,6 +393,13 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         } else {
             command
         };
+        let sidecar_permissions = metrics_sidecar
+            .as_ref()
+            .map(PluginMetricsSidecar::additional_permissions);
+        let additional_permissions = merge_permission_profiles(
+            req.additional_permissions.as_ref(),
+            sidecar_permissions.as_ref(),
+        );
 
         if let UnifiedExecShellMode::ZshFork(zsh_fork_config) = &self.shell_mode {
             let command = build_unified_exec_sandbox_command(
@@ -382,7 +407,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 &req.cwd,
                 &env,
                 managed_network_context.clone(),
-                req.additional_permissions.clone(),
+                additional_permissions.clone(),
             )
             .map_err(|error| match error {
                 ToolError::Rejected(_) => {
@@ -416,7 +441,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                                 .to_string(),
                         ));
                     }
-                    return self
+                    let process = self
                         .manager
                         .open_session_with_prepared_exec_env(
                             req.process_id,
@@ -436,7 +461,11 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                                 }))
                             }
                             other => ToolError::Rejected(other.to_string()),
-                        });
+                        })?;
+                    return Ok(UnifiedExecAttempt {
+                        process,
+                        metrics_sidecar,
+                    });
                 }
                 None => {
                     tracing::warn!(
@@ -450,7 +479,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             &req.cwd,
             &env,
             managed_network_context,
-            req.additional_permissions.clone(),
+            additional_permissions,
         )
         .map_err(|error| match error {
             ToolError::Rejected(_) => {
@@ -459,7 +488,8 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             error @ ToolError::Codex(_) => error,
         })?;
         let options = unified_exec_options(attempt.network_denial_cancellation_token.clone());
-        self.manager
+        let process = self
+            .manager
             .open_session_with_exec_env(
                 req.process_id,
                 command,
@@ -474,7 +504,11 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 Box::new(NoopSpawnLifecycle),
                 req.turn_environment.environment.as_ref(),
             )
-            .await
+            .await?;
+        Ok(UnifiedExecAttempt {
+            process,
+            metrics_sidecar,
+        })
     }
 }
 
@@ -491,6 +525,7 @@ mod tests {
     use codex_tools::ZshForkConfig;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use codex_utils_path_uri::PathUri;
+    use pretty_assertions::assert_eq;
     use std::sync::Arc;
     use std::time::Duration;
     use tempfile::tempdir;

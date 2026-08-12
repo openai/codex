@@ -109,6 +109,10 @@ fn exec_env_policy_excludes_non_inheritable_and_runtime_variables() {
                 "codex_apply_patch_preserve_line_endings".to_string(),
                 "1".to_string(),
             ),
+            (
+                "codex_plugin_metrics_output".to_string(),
+                "/stale/sidecar".to_string(),
+            ),
             ("KEEP".to_string(), "value".to_string()),
         ]),
         ..Default::default()
@@ -122,6 +126,7 @@ fn exec_env_policy_excludes_non_inheritable_and_runtime_variables() {
             exclude: vec![
                 CODEX_PERMISSION_PROFILE_ENV_VAR.to_string(),
                 codex_apply_patch::CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR.to_string(),
+                PLUGIN_METRICS_OUTPUT_ENV_VAR.to_string(),
             ],
             r#set: HashMap::from([("KEEP".to_string(), "value".to_string())]),
             include_only: Vec::new(),
