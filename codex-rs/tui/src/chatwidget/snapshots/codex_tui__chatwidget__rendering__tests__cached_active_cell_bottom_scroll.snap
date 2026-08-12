@@ -1,0 +1,14 @@
+---
+source: tui/src/chatwidget/rendering_tests.rs
+expression: "format!(\"{transcript:?}\")"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 80, height: 2 },
+    content: [
+        "                                                                                ",
+        "frame 2 row 2                                                                   ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}

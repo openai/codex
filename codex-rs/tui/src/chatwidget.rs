@@ -1219,7 +1219,7 @@ impl ChatWidget {
     }
 
     fn flush_active_cell(&mut self) {
-        if let Some(active) = self.transcript.active_cell.take() {
+        if let Some(active) = self.transcript.take_active_cell() {
             self.transcript.needs_final_message_separator = true;
             self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
             self.request_pending_usage_output_insertion();
@@ -1378,7 +1378,7 @@ impl ChatWidget {
 
     /// Mark the active cell as failed (✗) and flush it into history.
     fn finalize_active_cell_as_failed(&mut self) {
-        if let Some(mut cell) = self.transcript.active_cell.take() {
+        if let Some(mut cell) = self.transcript.take_active_cell() {
             // Insert finalized cell into history and keep grouping consistent.
             if let Some(exec) = cell.as_any_mut().downcast_mut::<ExecCell>() {
                 exec.mark_failed();
@@ -1470,7 +1470,7 @@ impl ChatWidget {
     /// Merge the real session info cell with any placeholder header to avoid double boxes.
     fn apply_session_info_cell(&mut self, cell: history_cell::SessionInfoCell) {
         let mut session_info_cell = Some(Box::new(cell) as Box<dyn HistoryCell>);
-        let merged_header = if let Some(active) = self.transcript.active_cell.take() {
+        let merged_header = if let Some(active) = self.transcript.take_active_cell() {
             if active
                 .as_any()
                 .is::<history_cell::SessionHeaderHistoryCell>()
