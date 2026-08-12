@@ -53,12 +53,20 @@ impl CheapSkillSelector for RrfLexicalCharSkillSelector {
 }
 
 fn fuse_rankings<const N: usize>(rankings: [&[usize]; N], limit: usize) -> Vec<usize> {
+    fuse_rankings_with_constant(rankings, limit, RRF_K)
+}
+
+pub(super) fn fuse_rankings_with_constant<const N: usize>(
+    rankings: [&[usize]; N],
+    limit: usize,
+    rank_constant: usize,
+) -> Vec<usize> {
     let mut scores = HashMap::<usize, f64>::new();
     let mut best_ranks = HashMap::<usize, usize>::new();
     for ranking in rankings {
         for (index, id) in ranking.iter().copied().enumerate() {
             let rank = index + 1;
-            *scores.entry(id).or_default() += 1.0 / (RRF_K + rank) as f64;
+            *scores.entry(id).or_default() += 1.0 / (rank_constant + rank) as f64;
             best_ranks
                 .entry(id)
                 .and_modify(|best_rank| *best_rank = (*best_rank).min(rank))

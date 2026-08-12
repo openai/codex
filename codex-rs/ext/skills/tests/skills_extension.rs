@@ -932,7 +932,7 @@ async fn shadow_lru_selector_recovers_a_skill_invoked_on_an_earlier_turn() -> Te
         .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
         .find(|metric| metric.name() == "codex.skills.shadow_selection.invocation")
         .ok_or("shadow invocation metric should be recorded")?;
-    let mut lru_hits = match metric.data() {
+    let mut selector_hits = match metric.data() {
         AggregatedMetrics::U64(MetricData::Sum(sum)) => sum
             .data_points()
             .filter_map(|point| {
@@ -941,7 +941,7 @@ async fn shadow_lru_selector_recovers_a_skill_invoked_on_an_earlier_turn() -> Te
                     .find(|attribute| attribute.key.as_str() == "method")?
                     .value
                     .as_str();
-                if method != "lru_v1" {
+                if method != "lru_v1" && method != "lru_plus_lexical_v1" {
                     return None;
                 }
                 let hit = point
@@ -950,16 +950,20 @@ async fn shadow_lru_selector_recovers_a_skill_invoked_on_an_earlier_turn() -> Te
                     .value
                     .as_str()
                     .to_string();
-                Some((hit, point.value()))
+                Some((method.to_string(), hit, point.value()))
             })
             .collect::<Vec<_>>(),
         data => panic!("unexpected shadow invocation metric data: {data:?}"),
     };
-    lru_hits.sort();
+    selector_hits.sort();
 
     assert_eq!(
-        vec![("false".to_string(), 1), ("true".to_string(), 1)],
-        lru_hits
+        vec![
+            ("lru_plus_lexical_v1".to_string(), "true".to_string(), 2),
+            ("lru_v1".to_string(), "false".to_string(), 1),
+            ("lru_v1".to_string(), "true".to_string(), 1),
+        ],
+        selector_hits
     );
     Ok(())
 }
