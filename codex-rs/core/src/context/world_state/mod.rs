@@ -278,13 +278,24 @@ pub(crate) struct WorldStateSnapshot {
     sections: BTreeMap<String, Value>,
 }
 
+impl From<&Map<String, Value>> for WorldStateSnapshot {
+    fn from(state: &Map<String, Value>) -> Self {
+        Self {
+            sections: state
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+        }
+    }
+}
+
 impl WorldStateSnapshot {
-    pub(crate) fn into_value(self) -> Value {
-        Value::Object(self.sections.into_iter().collect())
+    pub(crate) fn into_object(self) -> Map<String, Value> {
+        self.sections.into_iter().collect()
     }
 
     /// Returns the RFC 7386 merge patch that advances `previous` to `self`.
-    pub(crate) fn merge_patch_from(&self, previous: &Self) -> Option<Value> {
+    pub(crate) fn merge_patch_from(&self, previous: &Self) -> Option<Map<String, Value>> {
         let mut patch = Map::new();
         // Emit removals first to preserve insertion-ordered JSON patch output.
         for key in previous.sections.keys() {
@@ -301,13 +312,10 @@ impl WorldStateSnapshot {
                 patch.insert(key.clone(), current.clone());
             }
         }
-        (!patch.is_empty()).then_some(Value::Object(patch))
+        (!patch.is_empty()).then_some(patch)
     }
 
-    pub(crate) fn apply_merge_patch(&mut self, patch: &Value) -> serde_json::Result<()> {
-        let Value::Object(patch) = patch else {
-            return serde_json::from_value::<Self>(patch.clone()).map(drop);
-        };
+    pub(crate) fn apply_merge_patch(&mut self, patch: &Map<String, Value>) {
         // Borrow existing keys; only newly inserted sections need owned keys.
         for (key, value) in patch {
             if value.is_null() {
@@ -320,7 +328,6 @@ impl WorldStateSnapshot {
                 self.sections.insert(key.clone(), current);
             }
         }
-        Ok(())
     }
 }
 

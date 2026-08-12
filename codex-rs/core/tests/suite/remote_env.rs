@@ -747,7 +747,7 @@ async fn deferred_executor_promotes_primary_environment_when_startup_completes()
         .collect::<serde_json::Result<Vec<_>>>()?
         .into_iter()
         .filter_map(|line| match line.item {
-            RolloutItem::WorldState(item) if !item.full => Some(item.state),
+            RolloutItem::WorldState(item) if !item.full => Some(Value::Object(item.state)),
             _ => None,
         })
         .find(|patch| {
@@ -1982,21 +1982,15 @@ async fn deferred_executor_compaction_preserves_then_updates_environment_once() 
         vec![true, true, false]
     );
     assert_eq!(
-        world_state_items[0]
-            .state
-            .pointer("/environments/environments/remote/status"),
+        world_state_items[0].state["environments"].pointer("/environments/remote/status"),
         Some(&json!("starting"))
     );
     assert_eq!(
-        world_state_items[2]
-            .state
-            .pointer("/environments/environments/remote/status"),
+        world_state_items[2].state["environments"].pointer("/environments/remote/status"),
         Some(&json!("available"))
     );
     assert_eq!(
-        world_state_items[2]
-            .state
-            .pointer("/environments/environments/remote/shell"),
+        world_state_items[2].state["environments"].pointer("/environments/remote/shell"),
         Some(&json!("zsh"))
     );
 

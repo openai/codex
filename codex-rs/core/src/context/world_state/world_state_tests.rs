@@ -258,25 +258,16 @@ fn snapshot_merge_patch_changes_and_removes_nested_values() {
     };
 
     assert_eq!(
-        current.merge_patch_from(&previous),
+        current.merge_patch_from(&previous).map(Value::Object),
         Some(json!({
             "kept": {"changed": "after", "removed": null},
             "removed_section": null,
         }))
     );
-    previous
-        .apply_merge_patch(
-            &current
-                .merge_patch_from(&previous)
-                .expect("changed snapshots should produce a patch"),
-        )
-        .expect("apply world-state merge patch");
+    let patch = current
+        .merge_patch_from(&previous)
+        .expect("changed snapshots should produce a patch");
+    previous.apply_merge_patch(&patch);
     assert_eq!(previous, current);
     assert_eq!(current.merge_patch_from(&current), None);
-
-    for invalid in [Value::Null, json!(true), json!([])] {
-        let original = previous.clone();
-        assert!(previous.apply_merge_patch(&invalid).is_err());
-        assert_eq!(previous, original);
-    }
 }

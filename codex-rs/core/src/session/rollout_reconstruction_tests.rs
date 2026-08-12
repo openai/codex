@@ -21,6 +21,12 @@ use serde_json::json;
 use std::path::PathBuf;
 use uuid::Uuid;
 
+macro_rules! object {
+    ($value:tt) => {
+        serde_json::from_value(json!($value)).unwrap()
+    };
+}
+
 fn user_message(text: &str) -> ResponseItem {
     ResponseItem::Message {
         id: None,
@@ -157,7 +163,7 @@ async fn record_initial_history_restores_world_state_baseline() {
         .map(RolloutItem::ResponseItem)
         .collect::<Vec<_>>();
     world_state_items.push(RolloutItem::WorldState(WorldStateItem::full(
-        world_state.snapshot().into_value(),
+        world_state.snapshot().into_object(),
     )));
     let rollout_items =
         completed_user_turn_rollout(turn_context.to_turn_context_item(), world_state_items);
@@ -355,7 +361,7 @@ async fn reconstruct_history_rollback_keeps_history_and_metadata_in_sync_for_com
             },
         )),
         RolloutItem::TurnContext(first_context_item.clone()),
-        RolloutItem::WorldState(WorldStateItem::full(json!({
+        RolloutItem::WorldState(WorldStateItem::full(object!({
             "test": {"environment": "first"}
         }))),
         RolloutItem::ResponseItem(turn_one_user.clone().into()),
@@ -391,7 +397,7 @@ async fn reconstruct_history_rollback_keeps_history_and_metadata_in_sync_for_com
             },
         )),
         RolloutItem::TurnContext(rolled_back_context_item),
-        RolloutItem::WorldState(WorldStateItem::patch(json!({
+        RolloutItem::WorldState(WorldStateItem::patch(object!({
             "test": {"environment": "rolled-back"}
         }))),
         RolloutItem::ResponseItem(turn_two_user.into()),
@@ -1131,7 +1137,7 @@ async fn reconstruct_history_replays_world_state_from_latest_compaction_window()
     let rollout_items = completed_user_turn_rollout(
         turn_context.to_turn_context_item(),
         vec![
-            RolloutItem::WorldState(WorldStateItem::full(json!({
+            RolloutItem::WorldState(WorldStateItem::full(object!({
                 "environment": {"status": "old"}
             }))),
             RolloutItem::Compacted(CompactedItem {
@@ -1142,10 +1148,10 @@ async fn reconstruct_history_replays_world_state_from_latest_compaction_window()
                 previous_window_id: None,
                 window_id: None,
             }),
-            RolloutItem::WorldState(WorldStateItem::full(json!({
+            RolloutItem::WorldState(WorldStateItem::full(object!({
                 "environment": {"status": "starting", "cwd": "/workspace"}
             }))),
-            RolloutItem::WorldState(WorldStateItem::patch(json!({
+            RolloutItem::WorldState(WorldStateItem::patch(object!({
                 "environment": {"status": "ready"}
             }))),
         ],

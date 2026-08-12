@@ -100,7 +100,7 @@ impl ContextManager {
         let fragments =
             world_state.render_history_diff(self.world_state_baseline.as_ref(), self.raw_items());
         let rollout_item = self.world_state_baseline.as_ref().map_or_else(
-            || Some(WorldStateItem::full(snapshot.clone().into_value())),
+            || Some(WorldStateItem::full(snapshot.clone().into_object())),
             |previous| {
                 snapshot
                     .merge_patch_from(previous)
