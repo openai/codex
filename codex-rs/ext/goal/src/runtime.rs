@@ -3,8 +3,10 @@ use std::sync::Weak;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
+use codex_core::StartIfIdleSubmission;
 use codex_core::ThreadManager;
 use codex_core::TurnInput;
+use codex_core::TurnInputRequest;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ThreadGoal;
@@ -403,15 +405,23 @@ impl GoalRuntimeHandle {
         }
         let item = continuation_steering_item(&protocol_goal_from_state(goal));
 
-        if let Err(err) = thread
-            .try_start_turn_if_idle(vec![TurnInput::ResponseItem(item.into())])
+        match thread
+            .start_turn_if_idle(TurnInputRequest::new(TurnInput::ResponseItem(item)))
             .await
         {
-            let reason = err.reason();
-            tracing::debug!(
-                ?reason,
-                "skipping goal continuation because automatic idle work was rejected"
-            );
+            Ok(StartIfIdleSubmission::Started { .. }) => {}
+            Ok(StartIfIdleSubmission::NotSubmitted { reason }) => {
+                tracing::debug!(
+                    ?reason,
+                    "skipping goal continuation because automatic idle work was rejected"
+                );
+            }
+            Err(error) => {
+                tracing::debug!(
+                    %error,
+                    "skipping goal continuation because turn input submission failed"
+                );
+            }
         }
 
         let current_turn_is_goal_active = self

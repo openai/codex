@@ -2,6 +2,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::ensure;
 use codex_core::StartThreadOptions;
+use codex_core::TurnInputRequest;
 #[cfg(not(target_os = "windows"))]
 use codex_core::config::Constrained;
 #[cfg(not(target_os = "windows"))]
@@ -11,7 +12,6 @@ use codex_protocol::config_types::ApprovalsReviewer;
 #[cfg(not(target_os = "windows"))]
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::user_input::UserInput;
 use core_test_support::PathBufExt;
@@ -196,13 +196,10 @@ async fn guardian_prewarm_and_review_skip_redundant_git_enrichment() -> Result<(
 
     std::fs::write(repo.path().join("untracked.txt"), "dirty\n")?;
     test.codex
-        .submit(
-            vec![UserInput::Text {
-                text: "run a command that requires Guardian review".into(),
-                text_elements: Vec::new(),
-            }]
-            .into(),
-        )
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "run a command that requires Guardian review".into(),
+            text_elements: Vec::new(),
+        }]))
         .await?;
     let (user_turn, guardian_turn) = tokio::time::timeout(Duration::from_secs(5), async {
         tokio::join!(
@@ -295,16 +292,10 @@ async fn ephemeral_system_thread_prewarm_skips_and_turn_observes_fresh_state(
     std::fs::write(repo.path().join("untracked.txt"), "dirty\n")?;
     system_thread
         .thread
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "generate a thread title".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "generate a thread title".into(),
+            text_elements: Vec::new(),
+        }]))
         .await?;
     wait_for_event(system_thread.thread.as_ref(), |event| {
         matches!(event, EventMsg::TurnComplete(_))
@@ -423,24 +414,21 @@ async fn concurrent_turns_keep_distinct_worktree_and_repository_metadata() -> Re
 
     std::fs::write(repo.path().join("untracked.txt"), "dirty\n")?;
     std::fs::write(other_repo.path().join("untracked.txt"), "dirty\n")?;
-    let user_turn = |prompt: &str| Op::UserInput {
-        items: vec![UserInput::Text {
+    let user_turn = |prompt: &str| {
+        TurnInputRequest::user_input(vec![UserInput::Text {
             text: prompt.to_string(),
             text_elements: Vec::new(),
-        }],
-        final_output_json_schema: None,
-        responsesapi_client_metadata: None,
-        additional_context: Default::default(),
-        thread_settings: Default::default(),
+        }])
     };
     tokio::try_join!(
-        test.codex.submit(user_turn("inspect the main worktree")),
+        test.codex
+            .start_or_steer_turn(user_turn("inspect the main worktree")),
         worktree_thread
             .thread
-            .submit(user_turn("inspect the linked worktree")),
+            .start_or_steer_turn(user_turn("inspect the linked worktree")),
         other_thread
             .thread
-            .submit(user_turn("inspect the other repository"))
+            .start_or_steer_turn(user_turn("inspect the other repository"))
     )?;
     tokio::join!(
         wait_for_event(test.codex.as_ref(), |event| matches!(

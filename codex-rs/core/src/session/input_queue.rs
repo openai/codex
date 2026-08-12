@@ -376,6 +376,7 @@ mod tests {
     use super::*;
     use codex_history::CodexHarnessMetadata;
     use codex_protocol::AgentPath;
+    use codex_protocol::user_input::UserInput;
     use pretty_assertions::assert_eq;
 
     #[test]

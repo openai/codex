@@ -4,13 +4,16 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_exec_server::REMOTE_ENVIRONMENT_ID;
 use codex_features::Feature;
+use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Settings;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandStatus;
-use codex_protocol::protocol::Op;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::TurnEnvironmentSelections;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -21,6 +24,7 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
+use core_test_support::test_codex::TurnInputRequest;
 use core_test_support::wait_for_event;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
@@ -116,30 +120,24 @@ async fn windows_exec_server_runs_with_native_shell_and_cwd() -> Result<()> {
             );
 
             test.codex
-                .submit(Op::UserInput {
-                    items: vec![UserInput::Text {
+                .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
                         text: "run the Windows smoke command".to_string(),
                         text_elements: Vec::new(),
-                    }],
-                    final_output_json_schema: None,
-                    responsesapi_client_metadata: None,
-                    additional_context: Default::default(),
-                    thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                    }]).with_thread_settings(ThreadSettingsOverrides {
                         environments: Some(environments),
                         approval_policy: Some(AskForApproval::Never),
                         sandbox_policy: Some(sandbox_policy),
                         permission_profile,
-                        collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
-                            mode: codex_protocol::config_types::ModeKind::Default,
-                            settings: codex_protocol::config_types::Settings {
+                        collaboration_mode: Some(CollaborationMode {
+                            mode: ModeKind::Default,
+                            settings: Settings {
                                 model: test.session_configured.model.clone(),
                                 reasoning_effort: None,
                                 developer_instructions: None,
                             },
                         }),
                         ..Default::default()
-                    },
-                })
+                    }))
                 .await?;
 
             let mut begin = None;

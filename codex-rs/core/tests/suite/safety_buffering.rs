@@ -1,6 +1,6 @@
 use anyhow::Ok;
+use codex_core::TurnInputRequest;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SafetyBufferingEvent;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_completed;
@@ -48,16 +48,10 @@ async fn emits_safety_buffering_from_response_metadata_with_the_header_fallback_
 
     let test = test_codex().build(&server).await?;
     test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "Check this request".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "Check this request".into(),
+            text_elements: Vec::new(),
+        }]))
         .await?;
 
     let event = wait_for_event_match(&test.codex, |event| match event {
@@ -103,16 +97,10 @@ async fn emits_safety_buffering_with_the_responses_api_model_without_header_gati
 
     let test = test_codex().build(&server).await?;
     test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "Check this request".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "Check this request".into(),
+            text_elements: Vec::new(),
+        }]))
         .await?;
 
     let event = wait_for_event_match(&test.codex, |event| match event {

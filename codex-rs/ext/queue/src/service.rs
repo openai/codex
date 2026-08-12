@@ -1,13 +1,14 @@
-use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::Weak;
 
 use codex_core::CodexThread;
+use codex_core::NotSubmittedReason;
+use codex_core::StartIfIdleSubmission;
 use codex_core::ThreadManager;
 use codex_core::TurnInput;
-use codex_core::UserMessageAdmission;
+use codex_core::TurnInputRequest;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ThreadIdleCause;
@@ -19,9 +20,7 @@ use codex_protocol::models::snapshot_local_user_input;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadQueueChangedEvent;
-use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use codex_protocol::user_input::UserInput;
@@ -49,8 +48,10 @@ pub enum QueueServiceError {
     InvalidPayload(#[from] serde_json::Error),
     #[error("local queued attachment is invalid: {0}")]
     InvalidAttachment(#[from] std::io::Error),
-    #[error("queued user message could not be admitted: {0}")]
-    Admission(#[from] CodexErr),
+    #[error("Core failed to submit queued user message: {0}")]
+    CoreSubmissionError(#[from] CodexErr),
+    #[error("Core declined to start queued user message: {0:?}")]
+    NotStarted(NotSubmittedReason),
     #[error("only user input can be added to the user-message queue")]
     InvalidInput,
     #[error(
@@ -189,14 +190,13 @@ impl QueuedItemService {
         Ok(())
     }
 
-    /// Starts or steers the exact queued message and removes it after Core
-    /// accepts the input for turn processing.
+    /// Starts the exact queued message when idle and removes it after submission.
     pub async fn start(
         &self,
         thread: &CodexThread,
         queued_item_id: String,
         trace: Option<W3cTraceContext>,
-    ) -> Result<UserMessageAdmission, QueueServiceError> {
+    ) -> Result<StartIfIdleSubmission, QueueServiceError> {
         let thread_id = thread.session_configured().thread_id;
         let _dispatch_guard = self.dispatch_guard(thread_id).await;
         let item = self
@@ -207,24 +207,18 @@ impl QueuedItemService {
             .ok_or_else(|| ThreadStoreError::InvalidRequest {
                 message: format!("queued item not found: {queued_item_id}"),
             })?;
-        let TurnInput::UserInput { content, client_id } = item.input else {
+        let input @ TurnInput::UserInput { .. } = item.input else {
             return Err(QueueServiceError::InvalidInput);
         };
-        let admission = thread
-            .submit_user_input_and_wait_for_admission(
-                Op::UserInput {
-                    items: content,
-                    final_output_json_schema: None,
-                    responsesapi_client_metadata: None,
-                    additional_context: BTreeMap::new(),
-                    thread_settings: ThreadSettingsOverrides::default(),
-                },
-                trace,
-                client_id,
-            )
-            .await?;
+        let submission = thread
+            .start_turn_if_idle(TurnInputRequest::new(input).with_trace(trace))
+            .await
+            .map_err(QueueServiceError::CoreSubmissionError)?;
+        if let StartIfIdleSubmission::NotSubmitted { reason } = submission {
+            return Err(QueueServiceError::NotStarted(reason));
+        }
         self.delete_locked(thread_id, queued_item_id).await?;
-        Ok(admission)
+        Ok(submission)
     }
 
     async fn dispatch_if_idle(&self, thread_id: ThreadId) -> Result<(), QueueServiceError> {
@@ -261,18 +255,33 @@ impl QueuedItemService {
                 continue;
             }
 
-            if let Err(error) = thread.try_start_turn_if_idle(vec![input]).await {
-                tracing::warn!(
-                    %thread_id,
-                    %queued_item_id,
-                    reason = ?error.reason(),
-                    "core could not start queued user input"
-                );
-                return Ok(());
+            match thread
+                .start_turn_if_idle(TurnInputRequest::new(input))
+                .await
+            {
+                Ok(StartIfIdleSubmission::Started { .. }) => {
+                    self.delete_locked(thread_id, queued_item_id).await?;
+                    return Ok(());
+                }
+                Ok(StartIfIdleSubmission::NotSubmitted { reason }) => {
+                    tracing::warn!(
+                        %thread_id,
+                        %queued_item_id,
+                        ?reason,
+                        "core could not start queued user input"
+                    );
+                    return Ok(());
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        %thread_id,
+                        %queued_item_id,
+                        %error,
+                        "core could not start queued user input"
+                    );
+                    return Ok(());
+                }
             }
-
-            self.delete_locked(thread_id, queued_item_id).await?;
-            return Ok(());
         }
     }
 

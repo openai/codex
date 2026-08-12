@@ -99,28 +99,6 @@ fn captured_op_matches(actual: &(ThreadId, Op), expected: &(ThreadId, Op)) -> bo
     }
     match (&actual.1, &expected.1) {
         (
-            Op::UserInput {
-                items: actual_items,
-                final_output_json_schema: actual_schema,
-                responsesapi_client_metadata: actual_metadata,
-                additional_context: actual_context,
-                thread_settings: actual_settings,
-            },
-            Op::UserInput {
-                items: expected_items,
-                final_output_json_schema: expected_schema,
-                responsesapi_client_metadata: expected_metadata,
-                additional_context: expected_context,
-                thread_settings: expected_settings,
-            },
-        ) => {
-            actual_items == expected_items
-                && actual_schema == expected_schema
-                && actual_metadata == expected_metadata
-                && actual_context == expected_context
-                && actual_settings == expected_settings
-        }
-        (
             Op::InterAgentCommunication {
                 communication: actual,
             },
@@ -314,6 +292,29 @@ fn history_contains_text<'a>(
     })
 }
 
+async fn wait_for_recorded_user_message(thread: &CodexThread, needle: &str) {
+    timeout(Duration::from_secs(5), async {
+        loop {
+            let event = thread
+                .next_event()
+                .await
+                .expect("event stream should stay open");
+            if let EventMsg::ItemCompleted(ItemCompletedEvent {
+                item: TurnItem::UserMessage(item),
+                ..
+            }) = event.msg
+                && item.content.iter().any(
+                    |input| matches!(input, UserInput::Text { text, .. } if text.contains(needle)),
+                )
+            {
+                return;
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for user message recording");
+}
+
 fn history_contains_assistant_inter_agent_communication<'a>(
     history_items: impl IntoIterator<Item = &'a ResponseItem>,
     expected: &InterAgentCommunication,
@@ -355,6 +356,13 @@ async fn wait_for_subagent_notification(parent_thread: &Arc<CodexThread>) -> boo
 }
 
 async fn persist_thread_for_tree_resume(thread: &Arc<CodexThread>, message: &str) {
+    // These tests only need a durable resume fixture. Stop the child prompt
+    // first so this marker records directly instead of waiting behind an
+    // unrelated active turn.
+    thread
+        .session
+        .abort_all_tasks(TurnAbortReason::Interrupted)
+        .await;
     thread
         .inject_user_message_without_turn(message.to_string())
         .await;
@@ -597,7 +605,7 @@ async fn subscribe_status_updates_on_shutdown() {
 #[tokio::test]
 async fn send_input_submits_user_message() {
     let harness = AgentControlHarness::new().await;
-    let (thread_id, _thread) = harness.start_thread().await;
+    let (thread_id, thread) = harness.start_thread().await;
 
     let submission_id = harness
         .control
@@ -613,25 +621,7 @@ async fn send_input_submits_user_message() {
         .await
         .expect("send_input should succeed");
     assert!(!submission_id.is_empty());
-    let expected = (
-        thread_id,
-        Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello from tests".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        },
-    );
-    let captured = harness
-        .manager
-        .captured_ops()
-        .into_iter()
-        .find(|entry| captured_op_matches(entry, &expected));
-    assert!(captured.is_some());
+    wait_for_recorded_user_message(thread.as_ref(), "hello from tests").await;
 }
 
 #[tokio::test]
@@ -968,30 +958,12 @@ async fn spawn_agent_creates_thread_and_sends_prompt() {
         )
         .await
         .expect("spawn_agent should succeed");
-    let _thread = harness
+    let thread = harness
         .manager
         .get_thread(thread_id)
         .await
         .expect("thread should be registered");
-    let expected = (
-        thread_id,
-        Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "spawned".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        },
-    );
-    let captured = harness
-        .manager
-        .captured_ops()
-        .into_iter()
-        .find(|entry| captured_op_matches(entry, &expected));
-    assert!(captured.is_some());
+    wait_for_recorded_user_message(thread.as_ref(), "spawned").await;
 }
 
 #[tokio::test]
@@ -1587,25 +1559,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         "empty child developer instructions should preserve unrelated developer fragments"
     );
 
-    let expected = (
-        child_thread_id,
-        Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "child task".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        },
-    );
-    let captured = harness
-        .manager
-        .captured_ops()
-        .into_iter()
-        .find(|entry| captured_op_matches(entry, &expected));
-    assert!(captured.is_some());
+    wait_for_recorded_user_message(child_thread.as_ref(), "child task").await;
 
     let _ = harness
         .control

@@ -11,8 +11,11 @@ use crate::outgoing_message::OutgoingNotificationMeta;
 use crate::patch_approval::handle_patch_approval_request;
 use codex_core::CodexThread;
 use codex_core::NewThread;
+use codex_core::StartIfIdleSubmission;
 use codex_core::StartThreadOptions;
 use codex_core::ThreadManager;
+use codex_core::TurnInputRequest;
+use codex_core::TurnInputSubmission;
 use codex_core::config::Config as CodexConfig;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::AgentMessageEvent;
@@ -20,15 +23,12 @@ use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
-use codex_protocol::protocol::Op;
-use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::user_input::UserInput;
 use rmcp::model::CallToolResult;
 use rmcp::model::ContentBlock;
 use rmcp::model::RequestId;
 use serde_json::json;
-use uuid::Uuid;
 
 /// To adhere to MCP `tools/call` response format, include the Codex
 /// `threadId` in the `structured_content` field of the response.
@@ -49,6 +49,14 @@ pub(crate) fn create_call_tool_result_with_thread_id(
     result.is_error = is_error;
     result.structured_content = Some(structured_content);
     result
+}
+
+fn prompt_request(prompt: String) -> TurnInputRequest {
+    TurnInputRequest::user_input(vec![UserInput::Text {
+        text: prompt,
+        // MCP tool prompts are plain text with no UI element ranges.
+        text_elements: Vec::new(),
+    }])
 }
 
 /// Run a complete Codex session and stream events back to the client.
@@ -94,39 +102,33 @@ pub async fn run_codex_tool_session(
         }),
     );
 
-    // Preserve the legacy event ID for initial `codex` calls. Each call starts
-    // a new thread, so the thread and turn pair remains unique.
-    let turn_id = id.to_string();
-    active_turns.register(id.clone(), thread_id, turn_id.clone());
-    let submission = Submission {
-        id: turn_id,
-        op: Op::UserInput {
-            items: vec![UserInput::Text {
-                text: initial_prompt.clone(),
-                // MCP tool prompts are plain text with no UI element ranges.
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        },
-        client_user_message_id: None,
-        trace: None,
-        parent_turn_id: None,
-        root_turn_id: None,
+    let turn_id = match thread
+        .start_turn_if_idle(prompt_request(initial_prompt))
+        .await
+    {
+        Ok(StartIfIdleSubmission::Started { turn_id }) => turn_id,
+        Ok(StartIfIdleSubmission::NotSubmitted { reason }) => {
+            tracing::error!("Failed to submit initial prompt: {reason:?}");
+            let result = create_call_tool_result_with_thread_id(
+                thread_id,
+                format!("Failed to submit initial prompt: {reason:?}"),
+                Some(true),
+            );
+            outgoing.send_response(id.clone(), result);
+            return;
+        }
+        Err(e) => {
+            tracing::error!("Failed to submit initial prompt: {e}");
+            let result = create_call_tool_result_with_thread_id(
+                thread_id,
+                format!("Failed to submit initial prompt: {e}"),
+                Some(true),
+            );
+            outgoing.send_response(id.clone(), result);
+            return;
+        }
     };
-
-    if let Err(e) = thread.submit_with_id(submission).await {
-        tracing::error!("Failed to submit initial prompt: {e}");
-        let result = create_call_tool_result_with_thread_id(
-            thread_id,
-            format!("Failed to submit initial prompt: {e}"),
-            Some(true),
-        );
-        active_turns.finish(&id, || outgoing.send_response(id.clone(), result));
-        return;
-    }
+    active_turns.register(id.clone(), thread_id, turn_id);
 
     run_codex_tool_session_inner(thread_id, thread, outgoing, id, active_turns).await;
 }
@@ -139,42 +141,32 @@ pub async fn run_codex_tool_session_reply(
     prompt: String,
     active_turns: Arc<ActiveTurnRegistry>,
 ) {
-    // Replies share a thread, so use Core's UUIDv7 submission ID convention
-    // instead of a reusable MCP request ID.
-    let turn_id = Uuid::now_v7().to_string();
-    active_turns.register(request_id.clone(), thread_id, turn_id.clone());
-    if let Err(e) = thread
-        .submit_with_id(Submission {
-            id: turn_id,
-            op: Op::UserInput {
-                items: vec![UserInput::Text {
-                    text: prompt,
-                    // MCP tool prompts are plain text with no UI element ranges.
-                    text_elements: Vec::new(),
-                }],
-                final_output_json_schema: None,
-                responsesapi_client_metadata: None,
-                additional_context: Default::default(),
-                thread_settings: Default::default(),
-            },
-            client_user_message_id: None,
-            trace: None,
-            parent_turn_id: None,
-            root_turn_id: None,
-        })
-        .await
-    {
-        tracing::error!("Failed to submit user input: {e}");
-        let result = create_call_tool_result_with_thread_id(
-            thread_id,
-            format!("Failed to submit user input: {e}"),
-            Some(true),
-        );
-        active_turns.finish(&request_id, || {
+    let turn_id = match thread.start_or_steer_turn(prompt_request(prompt)).await {
+        Ok(TurnInputSubmission::Started { turn_id } | TurnInputSubmission::Steered { turn_id }) => {
+            turn_id
+        }
+        Ok(TurnInputSubmission::NotSubmitted { reason }) => {
+            tracing::error!("Failed to submit user input: {reason:?}");
+            let result = create_call_tool_result_with_thread_id(
+                thread_id,
+                format!("Failed to submit user input: {reason:?}"),
+                Some(true),
+            );
             outgoing.send_response(request_id.clone(), result);
-        });
-        return;
-    }
+            return;
+        }
+        Err(e) => {
+            tracing::error!("Failed to submit user input: {e}");
+            let result = create_call_tool_result_with_thread_id(
+                thread_id,
+                format!("Failed to submit user input: {e}"),
+                Some(true),
+            );
+            outgoing.send_response(request_id.clone(), result);
+            return;
+        }
+    };
+    active_turns.register(request_id.clone(), thread_id, turn_id);
 
     run_codex_tool_session_inner(thread_id, thread, outgoing, request_id, active_turns).await;
 }

@@ -3,6 +3,7 @@ use anyhow::Result;
 use codex_config::permissions_toml::FilesystemPermissionToml;
 use codex_config::permissions_toml::PermissionProfileToml;
 use codex_config::types::ApprovalsReviewer;
+use codex_core::TurnInputRequest;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
@@ -740,15 +741,12 @@ async fn submit_turn_with_session_permissions(
         test.cwd.path(),
     );
     test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
                 text: prompt.into(),
                 text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: ThreadSettingsOverrides {
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
                 environments: Some(local_selections(test.config.cwd.clone())),
                 approval_policy: Some(approval_policy),
                 approvals_reviewer: Some(approvals_reviewer),
@@ -763,8 +761,8 @@ async fn submit_turn_with_session_permissions(
                     },
                 }),
                 ..Default::default()
-            },
-        })
+            }),
+        )
         .await?;
 
     Ok(())

@@ -51,6 +51,10 @@ use crate::session::turn_context::TurnContext;
 use codex_config::types::McpServerConfig;
 use codex_features::Feature;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_protocol::turn_input::TurnInputMode;
+use codex_protocol::turn_input::TurnInputRequest;
+use codex_protocol::turn_input::TurnInputSubmission;
+use codex_protocol::turn_input::TurnStartOptions;
 use codex_thread_store::PersistContext;
 use codex_utils_path_uri::PathUri;
 
@@ -888,13 +892,9 @@ async fn run_review_on_session(
         .unwrap_or_else(|| params.parent_context.turn().config.cwd.clone());
 
     let parent_turn = params.parent_context.turn();
-    let submission = review_session.io.submit_with_trace(
-        Op::UserInput {
-            items: prompt_items.items,
-            final_output_json_schema: Some(params.schema.clone()),
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+    let submission = review_session.io.submit_turn_input(
+        TurnInputRequest::user_input(prompt_items.items)
+            .with_thread_settings(codex_protocol::protocol::ThreadSettingsOverrides {
                 environments: Some(codex_protocol::protocol::TurnEnvironmentSelections::new(
                     parent_turn_legacy_fallback_cwd,
                     parent_turn_environments,
@@ -913,11 +913,13 @@ async fn run_review_on_session(
                     },
                 }),
                 ..Default::default()
-            },
-        },
-        /*trace*/ None,
-        Some(parent_turn.sub_id.clone()),
-        parent_turn.turn_metadata_state.root_turn_id(),
+            })
+            .on_start(TurnStartOptions {
+                final_output_json_schema: Some(params.schema.clone()),
+                parent_turn_id: Some(parent_turn.sub_id.clone()),
+                root_turn_id: parent_turn.turn_metadata_state.root_turn_id(),
+            }),
+        TurnInputMode::StartIfIdle,
     );
     let submit_result = run_before_review_deadline(
         deadline,
@@ -926,7 +928,17 @@ async fn run_review_on_session(
     )
     .await;
     let child_turn_id = match submit_result {
-        Ok(Ok(child_turn_id)) => child_turn_id,
+        Ok(Ok(TurnInputSubmission::Started { turn_id })) => turn_id,
+        Ok(Ok(submission)) => {
+            return (
+                GuardianReviewSessionOutcome::SessionFailed {
+                    error: anyhow!("guardian review input was not started: {submission:?}"),
+                    error_info: None,
+                },
+                false,
+                analytics_result,
+            );
+        }
         Ok(Err(err)) => {
             return (
                 GuardianReviewSessionOutcome::SessionFailed {
@@ -1879,16 +1891,21 @@ mod tests {
             .await
         });
         let submission = rx_sub.recv().await.expect("guardian submission");
+        let id = submission.id;
+        let Op::TurnInput { reply, .. } = submission.op else {
+            panic!("expected turn-input submission");
+        };
+        reply
+            .send(Ok(TurnInputSubmission::Started {
+                turn_id: id.clone(),
+            }))
+            .expect("reply to guardian submission");
         tx_event
             .send(turn_complete_event("prior-turn", Some("stale"), Some(9)))
             .await
             .expect("queue prior turn completion");
         tx_event
-            .send(turn_complete_event(
-                submission.id.as_str(),
-                Some("fresh"),
-                Some(42),
-            ))
+            .send(turn_complete_event(id.as_str(), Some("fresh"), Some(42)))
             .await
             .expect("queue submitted turn completion");
 
@@ -1904,7 +1921,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_review_removes_trunk_when_event_stream_is_broken() {
-        let (mut review_session, tx_event, _rx_sub) = test_review_session().await;
+        let (mut review_session, tx_event, rx_sub) = test_review_session().await;
         let params = test_review_params().await;
         review_session.reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
             &params.spawn_config,
@@ -1915,16 +1932,26 @@ mod tests {
                 .await
                 .history_version(),
         );
-        let manager = GuardianReviewSessionManager {
+        let manager = Arc::new(GuardianReviewSessionManager {
             state: Arc::new(Mutex::new(GuardianReviewSessionState {
                 trunk: Some(Arc::new(review_session)),
                 ephemeral_reviews: Vec::new(),
             })),
             ..Default::default()
+        });
+        let manager_for_review = Arc::clone(&manager);
+        let review = tokio::spawn(async move { manager_for_review.run_review(params).await });
+        let submission = rx_sub.recv().await.expect("guardian submission");
+        let id = submission.id;
+        let Op::TurnInput { reply, .. } = submission.op else {
+            panic!("expected turn-input submission");
         };
+        reply
+            .send(Ok(TurnInputSubmission::Started { turn_id: id }))
+            .expect("reply to guardian submission");
         drop(tx_event);
 
-        let (outcome, _) = manager.run_review(params).await;
+        let (outcome, _) = review.await.expect("review task should complete");
 
         assert!(matches!(
             outcome,

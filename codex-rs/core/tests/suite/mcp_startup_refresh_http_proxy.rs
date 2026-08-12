@@ -1,3 +1,4 @@
+use codex_core::TurnInputRequest;
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -10,7 +11,7 @@ use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
 use codex_utils_path_uri::PathUri;
 use core_test_support::apps_test_server::AppsTestServer;
@@ -313,8 +314,8 @@ async fn skill_mcp_dependency_oauth_uses_configured_http_client() -> Result<()> 
         turn_permission_fields(PermissionProfile::Disabled, fixture.config.cwd.as_path());
     fixture
         .codex
-        .submit(Op::UserInput {
-            items: vec![
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![
                 UserInput::Text {
                     text: "please use $proxy-skill".to_string(),
                     text_elements: Vec::new(),
@@ -323,18 +324,15 @@ async fn skill_mcp_dependency_oauth_uses_configured_http_client() -> Result<()> 
                     name: "proxy-skill".to_string(),
                     path: skill_path.to_path_buf(),
                 },
-            ],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+            ])
+            .with_thread_settings(ThreadSettingsOverrides {
                 environments: Some(local_selections(fixture.config.cwd.clone())),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
                 ..Default::default()
-            },
-        })
+            }),
+        )
         .await?;
     core_test_support::wait_for_event(fixture.codex.as_ref(), |event| {
         matches!(event, EventMsg::TurnComplete(_))

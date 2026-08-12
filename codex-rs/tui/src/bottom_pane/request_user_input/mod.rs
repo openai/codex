@@ -1561,7 +1561,7 @@ mod tests {
         let AppEvent::CodexOp(op) = event else {
             panic!("expected CodexOp");
         };
-        assert_eq!(op, Op::interrupt());
+        assert!(matches!(op, Op::Interrupt));
         assert!(
             rx.try_recv().is_err(),
             "unexpected AppEvents before interrupt completion"

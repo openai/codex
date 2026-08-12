@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use codex_core::StartThreadOptions;
 use codex_core::ThreadManager;
+use codex_core::TurnInputRequest;
 use codex_core::config::Config;
 use codex_core::config::ExtraConfig;
 use codex_core::config::ThreadStoreConfig;
@@ -114,16 +115,10 @@ async fn stores_config_and_starts_configured_turn_after_idle() {
     );
 
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "start".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "start".to_string(),
+            text_elements: Vec::new(),
+        }]))
         .await
         .expect("submit initial turn");
 

@@ -36,7 +36,6 @@ use codex_core_api::NewThread;
 use codex_core_api::Notice;
 use codex_core_api::OAuthCredentialsStoreMode;
 use codex_core_api::OPENAI_PROVIDER_ID;
-use codex_core_api::Op;
 use codex_core_api::OtelConfig;
 use codex_core_api::PermissionProfile;
 use codex_core_api::Permissions;
@@ -46,6 +45,7 @@ use codex_core_api::RealtimeConfig;
 use codex_core_api::SessionPickerViewMode;
 use codex_core_api::SessionSource;
 use codex_core_api::SqliteConfig;
+use codex_core_api::StartIfIdleSubmission;
 use codex_core_api::StartThreadOptions;
 use codex_core_api::TerminalResizeReflowConfig;
 use codex_core_api::ThreadManager;
@@ -54,6 +54,7 @@ use codex_core_api::ToolSuggestConfig;
 use codex_core_api::TuiKeymap;
 use codex_core_api::TuiNotificationSettings;
 use codex_core_api::TuiPetAnchor;
+use codex_core_api::TurnInputRequest;
 use codex_core_api::UriBasedFileOpener;
 use codex_core_api::UserInput;
 use codex_core_api::WebSearchMode;
@@ -322,19 +323,16 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
 }
 
 async fn run_turn(thread: &CodexThread, thread_id: &str, prompt: String) -> anyhow::Result<()> {
-    thread
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: prompt,
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+    let submission = thread
+        .start_turn_if_idle(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: prompt,
+            text_elements: Vec::new(),
+        }]))
         .await
         .context("submit user input")?;
+    if let StartIfIdleSubmission::NotSubmitted { reason } = submission {
+        bail!("turn input was not submitted: {reason:?}");
+    }
 
     let mut current_turn_id: Option<String> = None;
     let mut stdout = std::io::stdout().lock();

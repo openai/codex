@@ -285,8 +285,8 @@ async fn codex_apps_file_params_pass_uploaded_file_to_post_tool_use_hook() -> Re
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn library_pdf_tool_forwards_app_context_and_finalizes_reservation() -> Result<()> {
+    use codex_core::TurnInputRequest;
     use codex_protocol::protocol::EventMsg;
-    use codex_protocol::protocol::Op;
     use codex_protocol::protocol::ThreadSettingsOverrides;
     use codex_protocol::user_input::UserInput;
     use core_test_support::PathExt;
@@ -430,19 +430,16 @@ default_tools_approval_mode = "approve"
     )
     .await;
     test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
                 text: "Save the generated PDF in Library.".to_string(),
                 text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: ThreadSettingsOverrides {
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
                 approval_policy: Some(AskForApproval::Never),
                 ..Default::default()
-            },
-        })
+            }),
+        )
         .await?;
     core_test_support::wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))

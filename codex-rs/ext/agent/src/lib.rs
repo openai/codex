@@ -1,7 +1,9 @@
 use codex_core::CodexThread;
 use codex_core::NewThread;
+use codex_core::StartIfIdleSubmission;
 use codex_core::StartThreadOptions;
 use codex_core::ThreadManager;
+use codex_core::TurnInputRequest;
 use codex_core::config::Config;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
@@ -71,16 +73,23 @@ impl AgentRunner {
                 },
             )
             .await?;
-        let turn_id = thread
-            .submit_with_trace(
-                vec![UserInput::Text {
+        let turn_id = match thread
+            .start_turn_if_idle(
+                TurnInputRequest::user_input(vec![UserInput::Text {
                     text: prompt,
                     text_elements: Vec::new(),
-                }]
-                .into(),
-                parent_trace,
+                }])
+                .with_trace(parent_trace),
             )
-            .await?;
+            .await?
+        {
+            StartIfIdleSubmission::Started { turn_id } => turn_id,
+            StartIfIdleSubmission::NotSubmitted { reason } => {
+                return Err(CodexErr::InvalidRequest(format!(
+                    "agent prompt was not submitted: {reason:?}"
+                )));
+            }
+        };
 
         Ok(AgentRun {
             thread_id,

@@ -12,6 +12,7 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
+use codex_core::TurnInputRequest;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::config::Config;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
@@ -26,6 +27,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 use core_test_support::context_snapshot;
@@ -636,7 +638,7 @@ async fn snapshot_rollback_followup_turn_trims_context_updates() -> Result<()> {
     std::fs::create_dir_all(&override_cwd)?;
     core_test_support::submit_thread_settings(
         &conversation,
-        codex_protocol::protocol::ThreadSettingsOverrides {
+        ThreadSettingsOverrides {
             environments: Some(local_selections(override_cwd.clone())),
             collaboration_mode: Some(CollaborationMode {
                 mode: ModeKind::Default,
@@ -859,16 +861,10 @@ async fn start_test_conversation(
 
 async fn user_turn(conversation: &Arc<CodexThread>, text: &str) {
     conversation
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: text.into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: text.into(),
+            text_elements: Vec::new(),
+        }]))
         .await
         .expect("submit user turn");
     wait_for_event(conversation, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;

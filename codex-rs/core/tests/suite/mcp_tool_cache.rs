@@ -7,6 +7,7 @@ use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::NewThread;
 use codex_core::StartThreadOptions;
+use codex_core::TurnInputRequest;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::RemoveOptions;
 use codex_protocol::models::PermissionProfile;
@@ -17,6 +18,7 @@ use codex_protocol::protocol::McpStartupStatus;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
 use codex_utils_path_uri::PathUri;
 use core_test_support::apps_test_server::AppsTestServer;
@@ -40,21 +42,16 @@ use super::rmcp_client::remote_aware_stdio_server_bin;
 const SERVER_NAME: &str = "cached_rmcp";
 const NAMESPACE: &str = "mcp__cached_rmcp";
 
-fn user_turn(prompt: &str) -> Op {
-    Op::UserInput {
-        items: vec![UserInput::Text {
-            text: prompt.to_string(),
-            text_elements: Vec::new(),
-        }],
-        final_output_json_schema: None,
-        responsesapi_client_metadata: None,
-        additional_context: Default::default(),
-        thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-            approval_policy: Some(AskForApproval::Never),
-            permission_profile: Some(PermissionProfile::Disabled),
-            ..Default::default()
-        },
-    }
+fn user_turn(prompt: &str) -> TurnInputRequest {
+    TurnInputRequest::user_input(vec![UserInput::Text {
+        text: prompt.to_string(),
+        text_elements: Vec::new(),
+    }])
+    .with_thread_settings(ThreadSettingsOverrides {
+        approval_policy: Some(AskForApproval::Never),
+        permission_profile: Some(PermissionProfile::Disabled),
+        ..Default::default()
+    })
 }
 
 fn process_label(pid: &str) -> String {
@@ -193,7 +190,7 @@ async fn mcp_calls_stay_bound_to_each_thread() -> anyhow::Result<()> {
         )
         .await;
         thread
-            .submit(user_turn(&format!("Call the {SERVER_NAME} echo tool.")))
+            .start_or_steer_turn(user_turn(&format!("Call the {SERVER_NAME} echo tool.")))
             .await?;
         let EventMsg::McpToolCallEnd(end) = wait_for_event(
             thread,
@@ -362,7 +359,7 @@ async fn cached_http_mcp_starts_lazily_for_subagents(
     )
     .await;
     subagent
-        .submit(user_turn("Call the cached HTTP tool."))
+        .start_or_steer_turn(user_turn("Call the cached HTTP tool."))
         .await?;
     wait_for_event(&subagent, |event| {
         matches!(event, EventMsg::TurnComplete(_))
@@ -445,7 +442,10 @@ async fn cached_mcp_startup_is_eager_for_root_and_lazy_for_subagents() -> anyhow
         ]),
     )
     .await;
-    fixture.codex.submit(user_turn("use the echo tool")).await?;
+    fixture
+        .codex
+        .start_or_steer_turn(user_turn("use the echo tool"))
+        .await?;
     let first_pid = wait_for_new_pid(fs.as_ref(), &pid_file, /*previous_pid*/ None).await?;
     fs.write_file(&barrier_file, b"ready".to_vec(), /*sandbox*/ None)
         .await?;
@@ -515,7 +515,7 @@ async fn cached_mcp_startup_is_eager_for_root_and_lazy_for_subagents() -> anyhow
     )
     .await;
     second_thread
-        .submit(user_turn("Do not call any MCP tools."))
+        .start_or_steer_turn(user_turn("Do not call any MCP tools."))
         .await?;
     let mut reported_ready_before_startup = false;
     wait_for_event(&second_thread, |event| {
@@ -578,7 +578,7 @@ async fn cached_mcp_startup_is_eager_for_root_and_lazy_for_subagents() -> anyhow
     let second_for_turn = Arc::clone(&second_thread);
     let cached_turn = tokio::spawn(async move {
         second_for_turn
-            .submit(user_turn("call the echo and cwd tools"))
+            .start_or_steer_turn(user_turn("call the echo and cwd tools"))
             .await?;
         let mut unrelated_finished_tx = Some(unrelated_finished_tx);
         let mut saw_starting = false;
@@ -734,7 +734,7 @@ async fn cached_mcp_startup_is_eager_for_root_and_lazy_for_subagents() -> anyhow
     )
     .await;
     interrupted_thread
-        .submit(user_turn("Start the cached MCP tool."))
+        .start_or_steer_turn(user_turn("Start the cached MCP tool."))
         .await?;
     let interrupted_pid = wait_for_new_pid(fs.as_ref(), &pid_file, Some(&filtered_pid)).await?;
     wait_for_event(&interrupted_thread, |event| {
@@ -790,7 +790,7 @@ async fn cached_mcp_startup_is_eager_for_root_and_lazy_for_subagents() -> anyhow
     )
     .await;
     interrupted_thread
-        .submit(user_turn("Retry the cached MCP tool."))
+        .start_or_steer_turn(user_turn("Retry the cached MCP tool."))
         .await?;
     wait_for_event(&interrupted_thread, |event| {
         matches!(event, EventMsg::TurnComplete(_))

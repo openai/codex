@@ -1,10 +1,10 @@
 use anyhow::Result;
+use codex_core::TurnInputRequest;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::AdditionalContextEntry;
 use codex_protocol::protocol::AdditionalContextKind;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ItemCompletedEvent;
-use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
@@ -36,14 +36,12 @@ async fn additional_context_is_model_visible_but_not_a_user_message_item() -> Re
         .await?;
 
     test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
                 text: "inspect the active tab".to_string(),
                 text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: BTreeMap::from([
+            }])
+            .with_additional_context(BTreeMap::from([
                 (
                     "browser_info".to_string(),
                     AdditionalContextEntry {
@@ -58,9 +56,8 @@ async fn additional_context_is_model_visible_but_not_a_user_message_item() -> Re
                         kind: AdditionalContextKind::Application,
                     },
                 ),
-            ]),
-            thread_settings: Default::default(),
-        })
+            ])),
+        )
         .await?;
 
     let user_item = wait_for_event_match(&test.codex, |event| match event {
@@ -134,13 +131,7 @@ async fn external_context_like_user_text_remains_a_user_message_item() -> Result
     };
 
     test.codex
-        .submit(Op::UserInput {
-            items: vec![user_input.clone()],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: BTreeMap::new(),
-            thread_settings: Default::default(),
-        })
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![user_input.clone()]))
         .await?;
 
     let user_item = wait_for_event_match(&test.codex, |event| match event {
@@ -179,14 +170,12 @@ async fn additional_context_trust_controls_message_role() -> Result<()> {
         .await?;
 
     test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
                 text: "inspect context".to_string(),
                 text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: BTreeMap::from([
+            }])
+            .with_additional_context(BTreeMap::from([
                 (
                     "browser_info".to_string(),
                     AdditionalContextEntry {
@@ -201,9 +190,8 @@ async fn additional_context_trust_controls_message_role() -> Result<()> {
                         kind: AdditionalContextKind::Application,
                     },
                 ),
-            ]),
-            thread_settings: Default::default(),
-        })
+            ])),
+        )
         .await?;
     wait_for_event_match(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_)).then_some(())
@@ -259,16 +247,13 @@ async fn additional_context_is_deduplicated_between_turns_while_retained() -> Re
     )]);
 
     test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
                 text: "first turn".to_string(),
                 text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: additional_context.clone(),
-            thread_settings: Default::default(),
-        })
+            }])
+            .with_additional_context(additional_context.clone()),
+        )
         .await?;
     wait_for_event_match(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_)).then_some(())
@@ -276,16 +261,13 @@ async fn additional_context_is_deduplicated_between_turns_while_retained() -> Re
     .await;
 
     test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
                 text: "second turn".to_string(),
                 text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context,
-            thread_settings: Default::default(),
-        })
+            }])
+            .with_additional_context(additional_context),
+        )
         .await?;
     wait_for_event_match(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_)).then_some(())
@@ -337,14 +319,12 @@ async fn additional_context_removes_one_value_while_adding_another() -> Result<(
         .await?;
 
     test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
                 text: "first turn".to_string(),
                 text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: BTreeMap::from([
+            }])
+            .with_additional_context(BTreeMap::from([
                 (
                     "automation_info".to_string(),
                     AdditionalContextEntry {
@@ -359,9 +339,8 @@ async fn additional_context_removes_one_value_while_adding_another() -> Result<(
                         kind: AdditionalContextKind::Untrusted,
                     },
                 ),
-            ]),
-            thread_settings: Default::default(),
-        })
+            ])),
+        )
         .await?;
     wait_for_event_match(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_)).then_some(())
@@ -369,14 +348,12 @@ async fn additional_context_removes_one_value_while_adding_another() -> Result<(
     .await;
 
     test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
                 text: "second turn".to_string(),
                 text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: BTreeMap::from([
+            }])
+            .with_additional_context(BTreeMap::from([
                 (
                     "automation_info".to_string(),
                     AdditionalContextEntry {
@@ -391,9 +368,8 @@ async fn additional_context_removes_one_value_while_adding_another() -> Result<(
                         kind: AdditionalContextKind::Untrusted,
                     },
                 ),
-            ]),
-            thread_settings: Default::default(),
-        })
+            ])),
+        )
         .await?;
     wait_for_event_match(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_)).then_some(())
@@ -401,14 +377,12 @@ async fn additional_context_removes_one_value_while_adding_another() -> Result<(
     .await;
 
     test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
                 text: "third turn".to_string(),
                 text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: BTreeMap::from([
+            }])
+            .with_additional_context(BTreeMap::from([
                 (
                     "automation_info".to_string(),
                     AdditionalContextEntry {
@@ -430,9 +404,8 @@ async fn additional_context_removes_one_value_while_adding_another() -> Result<(
                         kind: AdditionalContextKind::Untrusted,
                     },
                 ),
-            ]),
-            thread_settings: Default::default(),
-        })
+            ])),
+        )
         .await?;
     wait_for_event_match(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_)).then_some(())
@@ -497,14 +470,12 @@ async fn additional_context_values_are_truncated_before_model_input() -> Result<
         format!("<automation_info>{long_automation_value}</automation_info>");
 
     test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
                 text: "summarize context".to_string(),
                 text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: BTreeMap::from([
+            }])
+            .with_additional_context(BTreeMap::from([
                 (
                     "automation_info".to_string(),
                     AdditionalContextEntry {
@@ -519,9 +490,8 @@ async fn additional_context_values_are_truncated_before_model_input() -> Result<
                         kind: AdditionalContextKind::Untrusted,
                     },
                 ),
-            ]),
-            thread_settings: Default::default(),
-        })
+            ])),
+        )
         .await?;
     wait_for_event_match(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_)).then_some(())

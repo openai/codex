@@ -148,13 +148,13 @@ mod tool_harness;
 mod tool_parallelism;
 mod tools;
 mod truncation;
+mod turn_input_submission;
 mod turn_state;
 mod unified_exec;
 mod unified_exec_process_events;
 #[cfg(unix)]
 mod unified_exec_zsh_fork_approvals;
 mod unstable_features_warning;
-mod user_message_admission;
 mod user_notification;
 mod user_shell_cmd;
 mod view_image;

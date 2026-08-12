@@ -22,6 +22,7 @@ use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerEnvVar;
 use codex_config::types::McpServerTransportConfig;
 use codex_config::types::OAuthCredentialsStoreMode;
+use codex_core::TurnInputRequest;
 use codex_core::config::Config;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::Environment;
@@ -37,7 +38,10 @@ use codex_models_manager::manager::RefreshStrategy;
 use codex_utils_path_uri::LegacyAppPathString;
 
 use codex_history::RolloutItem;
+use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::Settings;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
@@ -55,6 +59,7 @@ use codex_protocol::protocol::McpStartupFailureReason;
 use codex_protocol::protocol::McpStartupStatus;
 use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
 use codex_utils_cargo_bin::cargo_bin;
 use codex_utils_path_uri::PathUri;
@@ -115,7 +120,7 @@ fn assert_wall_time_header(output: &str) {
     assert_eq!(marker, "Output:");
 }
 
-fn read_only_user_turn(fixture: &TestCodex, text: impl Into<String>) -> Op {
+fn read_only_user_turn(fixture: &TestCodex, text: impl Into<String>) -> TurnInputRequest {
     read_only_user_turn_with_model(fixture, text, fixture.session_configured.model.clone())
 }
 
@@ -123,11 +128,11 @@ fn read_only_user_turn_with_model(
     fixture: &TestCodex,
     text: impl Into<String>,
     model: String,
-) -> Op {
+) -> TurnInputRequest {
     user_turn_with_permission_profile(fixture, text, model, PermissionProfile::read_only())
 }
 
-fn auto_approved_user_turn(fixture: &TestCodex, text: impl Into<String>) -> Op {
+fn auto_approved_user_turn(fixture: &TestCodex, text: impl Into<String>) -> TurnInputRequest {
     user_turn_with_permission_profile(
         fixture,
         text,
@@ -141,33 +146,28 @@ fn user_turn_with_permission_profile(
     text: impl Into<String>,
     model: String,
     permission_profile: PermissionProfile,
-) -> Op {
+) -> TurnInputRequest {
     let cwd = fixture.config.cwd.clone();
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(permission_profile, cwd.as_path());
-    Op::UserInput {
-        items: vec![UserInput::Text {
-            text: text.into(),
-            text_elements: Vec::new(),
-        }],
-        final_output_json_schema: None,
-        responsesapi_client_metadata: None,
-        additional_context: Default::default(),
-        thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-            approval_policy: Some(AskForApproval::Never),
-            sandbox_policy: Some(sandbox_policy),
-            permission_profile,
-            collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
-                mode: codex_protocol::config_types::ModeKind::Default,
-                settings: codex_protocol::config_types::Settings {
-                    model,
-                    reasoning_effort: None,
-                    developer_instructions: None,
-                },
-            }),
-            ..Default::default()
-        },
-    }
+    TurnInputRequest::user_input(vec![UserInput::Text {
+        text: text.into(),
+        text_elements: Vec::new(),
+    }])
+    .with_thread_settings(ThreadSettingsOverrides {
+        approval_policy: Some(AskForApproval::Never),
+        sandbox_policy: Some(sandbox_policy),
+        permission_profile,
+        collaboration_mode: Some(CollaborationMode {
+            mode: ModeKind::Default,
+            settings: Settings {
+                model,
+                reasoning_effort: None,
+                developer_instructions: None,
+            },
+        }),
+        ..Default::default()
+    })
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -390,7 +390,7 @@ async fn call_structured_tool(
 
     fixture
         .codex
-        .submit(read_only_user_turn(fixture, "call the requested rmcp tool"))
+        .start_or_steer_turn(read_only_user_turn(fixture, "call the requested rmcp tool"))
         .await?;
 
     wait_for_event(&fixture.codex, |ev| {
@@ -540,7 +540,7 @@ async fn mcp_namespace_instructions_are_preserved_without_hiding_tools() -> anyh
 
     fixture
         .codex
-        .submit(read_only_user_turn(&fixture, "show the bounded MCP tools"))
+        .start_or_steer_turn(read_only_user_turn(&fixture, "show the bounded MCP tools"))
         .await?;
     wait_for_event(&fixture.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
@@ -650,7 +650,7 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
 
     fixture
         .codex
-        .submit(read_only_user_turn(&fixture, "call the rmcp echo tool"))
+        .start_or_steer_turn(read_only_user_turn(&fixture, "call the rmcp echo tool"))
         .await?;
 
     let begin_event = wait_for_event(&fixture.codex, |ev| {
@@ -951,7 +951,7 @@ async fn modern_mcp_pagination_preserves_valid_tools_and_rejects_oversized_curso
 
     fixture
         .codex
-        .submit(read_only_user_turn(
+        .start_or_steer_turn(read_only_user_turn(
             &fixture,
             "show the paginated MCP tools",
         ))
@@ -1159,7 +1159,7 @@ async fn interrupt_during_mcp_startup_preserves_user_input_in_history(
     let prompt = "keep this interrupted prompt in conversation history";
     fixture
         .codex
-        .submit(read_only_user_turn(&fixture, prompt))
+        .start_or_steer_turn(read_only_user_turn(&fixture, prompt))
         .await?;
     wait_for_event(&fixture.codex, |event| {
         matches!(event, EventMsg::TurnStarted(_))
@@ -1546,7 +1546,7 @@ async fn stdio_mcp_parallel_tool_calls_default_false_runs_serially() -> anyhow::
         // Keep this baseline on the mutable sync tool so read-only hints do not
         // make the call parallel-safe. Bypass read-only turn permissions so
         // approval behavior does not block the scheduling assertion.
-        .submit(auto_approved_user_turn(
+        .start_or_steer_turn(auto_approved_user_turn(
             &fixture,
             "call the rmcp sync tool twice",
         ))
@@ -1684,7 +1684,7 @@ async fn stdio_mcp_read_only_tool_calls_run_concurrently_without_server_opt_in()
 
     fixture
         .codex
-        .submit(read_only_user_turn(
+        .start_or_steer_turn(read_only_user_turn(
             &fixture,
             "call the rmcp sync_readonly tool twice",
         ))
@@ -1777,7 +1777,7 @@ async fn stdio_mcp_parallel_tool_calls_opt_in_runs_concurrently() -> anyhow::Res
         // Exercise the server opt-in with the mutable sync tool rather than the
         // read-only sync_readonly tool. Bypass read-only turn permissions so
         // approval behavior does not block the scheduling assertion.
-        .submit(auto_approved_user_turn(
+        .start_or_steer_turn(auto_approved_user_turn(
             &fixture,
             "call the rmcp sync tool twice",
         ))
@@ -1857,7 +1857,7 @@ async fn stdio_encrypted_content_responses_round_trip() -> anyhow::Result<()> {
 
     fixture
         .codex
-        .submit(read_only_user_turn(
+        .start_or_steer_turn(read_only_user_turn(
             &fixture,
             "call the rmcp encrypted output tool",
         ))
@@ -1956,7 +1956,7 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
 
     fixture
         .codex
-        .submit(read_only_user_turn(&fixture, "call the rmcp image tool"))
+        .start_or_steer_turn(read_only_user_turn(&fixture, "call the rmcp image tool"))
         .await?;
 
     // Wait for tool begin/end and final completion.
@@ -2113,7 +2113,7 @@ async fn stdio_image_responses_resize_large_image() -> anyhow::Result<()> {
 
     fixture
         .codex
-        .submit(read_only_user_turn(
+        .start_or_steer_turn(read_only_user_turn(
             &fixture,
             "call the rmcp image_scenario tool",
         ))
@@ -2201,7 +2201,7 @@ async fn stdio_image_responses_preserve_original_detail_metadata() -> anyhow::Re
 
     fixture
         .codex
-        .submit(read_only_user_turn(
+        .start_or_steer_turn(read_only_user_turn(
             &fixture,
             "call the rmcp image_scenario tool",
         ))
@@ -2362,7 +2362,7 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
 
     fixture
         .codex
-        .submit(read_only_user_turn_with_model(
+        .start_or_steer_turn(read_only_user_turn_with_model(
             &fixture,
             "call the rmcp image tool",
             text_only_model_slug.to_string(),
@@ -2463,7 +2463,7 @@ async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
 
     fixture
         .codex
-        .submit(read_only_user_turn(&fixture, "call the rmcp echo tool"))
+        .start_or_steer_turn(read_only_user_turn(&fixture, "call the rmcp echo tool"))
         .await?;
 
     let begin_event = wait_for_event(&fixture.codex, |ev| {
@@ -2588,7 +2588,7 @@ async fn stdio_server_propagates_explicit_local_env_var_source() -> anyhow::Resu
 
     fixture
         .codex
-        .submit(read_only_user_turn(&fixture, "call the rmcp echo tool"))
+        .start_or_steer_turn(read_only_user_turn(&fixture, "call the rmcp echo tool"))
         .await?;
 
     wait_for_event(&fixture.codex, |ev| {
@@ -2684,7 +2684,7 @@ async fn remote_stdio_env_var_source_does_not_copy_local_env() -> anyhow::Result
 
     fixture
         .codex
-        .submit(read_only_user_turn(&fixture, "call the rmcp echo tool"))
+        .start_or_steer_turn(read_only_user_turn(&fixture, "call the rmcp echo tool"))
         .await?;
 
     wait_for_event(&fixture.codex, |ev| {
@@ -2886,7 +2886,7 @@ async fn streamable_http_tool_call_round_trip(with_headers_helper: bool) -> anyh
     // Phase 4: submit the user turn that should trigger the MCP tool call.
     fixture
         .codex
-        .submit(read_only_user_turn(
+        .start_or_steer_turn(read_only_user_turn(
             &fixture,
             "call the rmcp streamable http echo tool",
         ))
@@ -3317,7 +3317,7 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
     store_lock.try_lock()?;
     fixture
         .codex
-        .submit(read_only_user_turn(
+        .start_or_steer_turn(read_only_user_turn(
             &fixture,
             "continue while OAuth credentials are locked",
         ))
@@ -3397,7 +3397,7 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
             .await;
         fixture
             .codex
-            .submit(read_only_user_turn(
+            .start_or_steer_turn(read_only_user_turn(
                 &fixture,
                 "continue while a newly discovered OAuth server is starting",
             ))
@@ -3466,7 +3466,7 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
     // Phase 6: submit the user turn that should invoke the OAuth-backed tool.
     fixture
         .codex
-        .submit(read_only_user_turn(
+        .start_or_steer_turn(read_only_user_turn(
             &fixture,
             "call the rmcp streamable http oauth echo tool",
         ))

@@ -1,9 +1,13 @@
 use anyhow::Context;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_core::TurnInputRequest;
 use codex_features::Feature;
 use codex_history::RolloutItem;
 use codex_history::RolloutLine;
+use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Settings;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::ImageDetail;
@@ -13,6 +17,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
 use codex_utils_image::data_url_from_bytes;
 use core_test_support::TempDirExt;
@@ -125,8 +130,8 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
         turn_permission_fields(PermissionProfile::Disabled, cwd.path());
 
     codex
-        .submit(Op::UserInput {
-            items: vec![
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![
                 UserInput::LocalImage {
                     path: abs_path.clone(),
                     detail: None,
@@ -135,26 +140,23 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
                     text: "pasted image".to_string(),
                     text_elements: Vec::new(),
                 },
-            ],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+            ])
+            .with_thread_settings(ThreadSettingsOverrides {
                 environments: Some(local_selections(cwd.abs())),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
-                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
-                    mode: codex_protocol::config_types::ModeKind::Default,
-                    settings: codex_protocol::config_types::Settings {
+                collaboration_mode: Some(CollaborationMode {
+                    mode: ModeKind::Default,
+                    settings: Settings {
                         model: session_model,
                         reasoning_effort: None,
                         developer_instructions: None,
                     },
                 }),
                 ..Default::default()
-            },
-        })
+            }),
+        )
         .await?;
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
@@ -224,8 +226,8 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
         turn_permission_fields(PermissionProfile::Disabled, cwd.path());
 
     codex
-        .submit(Op::UserInput {
-            items: vec![
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![
                 UserInput::Image {
                     image_url: image_url.clone(),
                     detail: None,
@@ -234,26 +236,23 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
                     text: "dropped image".to_string(),
                     text_elements: Vec::new(),
                 },
-            ],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+            ])
+            .with_thread_settings(ThreadSettingsOverrides {
                 environments: Some(local_selections(cwd.abs())),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
-                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
-                    mode: codex_protocol::config_types::ModeKind::Default,
-                    settings: codex_protocol::config_types::Settings {
+                collaboration_mode: Some(CollaborationMode {
+                    mode: ModeKind::Default,
+                    settings: Settings {
                         model: session_model,
                         reasoning_effort: None,
                         developer_instructions: None,
                     },
                 }),
                 ..Default::default()
-            },
-        })
+            }),
+        )
         .await?;
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
@@ -374,16 +373,10 @@ async fn resumed_history_only_emits_resize_notices_for_new_images() -> anyhow::R
     .await;
     resumed
         .codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Image {
-                image_url: original_image_url.clone(),
-                detail: Some(ImageDetail::High),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Image {
+            image_url: original_image_url.clone(),
+            detail: Some(ImageDetail::High),
+        }]))
         .await?;
     wait_for_event(&resumed.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))

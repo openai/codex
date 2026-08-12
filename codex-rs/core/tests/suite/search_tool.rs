@@ -4,6 +4,7 @@ use anyhow::Result;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::StartThreadOptions;
+use codex_core::TurnInputRequest;
 use codex_core::config::Config;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistryBuilder;
@@ -598,16 +599,10 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
     let mut builder = configured_builder(apps_server.chatgpt_base_url.clone());
     let test = builder.build_with_auto_env(&server).await?;
     test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "Find the calendar create tool".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "Find the calendar create tool".to_string(),
+            text_elements: Vec::new(),
+        }]))
         .await?;
 
     let EventMsg::McpToolCallBegin(begin) = wait_for_event(&test.codex, |event| {
@@ -1157,16 +1152,10 @@ async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -
     test.session_configured = new_thread.session_configured;
 
     test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "Use the automation tool".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "Use the automation tool".to_string(),
+            text_elements: Vec::new(),
+        }]))
         .await?;
 
     let EventMsg::DynamicToolCallRequest(request) = wait_for_event(&test.codex, |event| {
@@ -1489,16 +1478,10 @@ async fn tool_search_surfaced_mcp_tool_errors_are_returned_to_model() -> Result<
     wait_for_mcp_server(&test.codex, "rmcp").await?;
 
     test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "Find the rmcp echo tool and call it.".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "Find the rmcp echo tool and call it.".to_string(),
+            text_elements: Vec::new(),
+        }]))
         .await?;
 
     let EventMsg::McpToolCallEnd(end) = wait_for_event(&test.codex, |event| {
@@ -1822,16 +1805,10 @@ async fn tool_search_matches_dynamic_tools_by_name_description_namespace_and_sch
     test.session_configured = new_thread.session_configured;
 
     test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "Search for the dynamic tool".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "Search for the dynamic tool".to_string(),
+            text_elements: Vec::new(),
+        }]))
         .await?;
 
     wait_for_event(&test.codex, |event| {

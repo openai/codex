@@ -1,4 +1,8 @@
 use anyhow::Result;
+use codex_core::TurnInputRequest;
+use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Settings;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
@@ -7,7 +11,7 @@ use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ModelRerouteReason;
 use codex_protocol::protocol::ModelVerification;
-use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_function_call;
@@ -35,33 +39,28 @@ const TRUSTED_ACCESS_FOR_CYBER_VERIFICATION: &str = "trusted_access_for_cyber";
 const CYBER_POLICY_MESSAGE: &str =
     "This request has been flagged for potentially high-risk cyber activity.";
 
-fn disabled_text_turn(test: &TestCodex, text: &str) -> Op {
+fn disabled_text_turn(test: &TestCodex, text: &str) -> TurnInputRequest {
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::Disabled, test.cwd_path());
-    Op::UserInput {
-        items: vec![UserInput::Text {
-            text: text.to_string(),
-            text_elements: Vec::new(),
-        }],
-        final_output_json_schema: None,
-        responsesapi_client_metadata: None,
-        additional_context: Default::default(),
-        thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-            environments: Some(local_selections(test.config.cwd.clone())),
-            approval_policy: Some(AskForApproval::Never),
-            sandbox_policy: Some(sandbox_policy),
-            permission_profile,
-            collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
-                mode: codex_protocol::config_types::ModeKind::Default,
-                settings: codex_protocol::config_types::Settings {
-                    model: test.session_configured.model.clone(),
-                    reasoning_effort: test.config.model_reasoning_effort.clone(),
-                    developer_instructions: None,
-                },
-            }),
-            ..Default::default()
-        },
-    }
+    TurnInputRequest::user_input(vec![UserInput::Text {
+        text: text.to_string(),
+        text_elements: Vec::new(),
+    }])
+    .with_thread_settings(ThreadSettingsOverrides {
+        environments: Some(local_selections(test.config.cwd.clone())),
+        approval_policy: Some(AskForApproval::Never),
+        sandbox_policy: Some(sandbox_policy),
+        permission_profile,
+        collaboration_mode: Some(CollaborationMode {
+            mode: ModeKind::Default,
+            settings: Settings {
+                model: test.session_configured.model.clone(),
+                reasoning_effort: test.config.model_reasoning_effort.clone(),
+                developer_instructions: None,
+            },
+        }),
+        ..Default::default()
+    })
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -77,7 +76,7 @@ async fn openai_model_header_mismatch_emits_warning_event() -> Result<()> {
     let test = builder.build(&server).await?;
 
     test.codex
-        .submit(disabled_text_turn(&test, "trigger safety check"))
+        .start_or_steer_turn(disabled_text_turn(&test, "trigger safety check"))
         .await?;
 
     let reroute = wait_for_event(&test.codex, |event| {
@@ -125,7 +124,7 @@ async fn cyber_policy_response_emits_typed_error_without_retry() -> Result<()> {
     let test = builder.build(&server).await?;
 
     test.codex
-        .submit(disabled_text_turn(&test, "trigger cyber policy error"))
+        .start_or_steer_turn(disabled_text_turn(&test, "trigger cyber policy error"))
         .await?;
 
     let error = wait_for_event(&test.codex, |event| matches!(event, EventMsg::Error(_))).await;
@@ -164,7 +163,7 @@ async fn response_model_field_mismatch_emits_warning_when_header_matches_request
     let test = builder.build(&server).await?;
 
     test.codex
-        .submit(disabled_text_turn(&test, "trigger response model check"))
+        .start_or_steer_turn(disabled_text_turn(&test, "trigger response model check"))
         .await?;
 
     let reroute = wait_for_event(&test.codex, |event| {
@@ -234,7 +233,7 @@ async fn openai_model_header_mismatch_only_emits_one_warning_per_turn() -> Resul
     let test = builder.build(&server).await?;
 
     test.codex
-        .submit(disabled_text_turn(&test, "trigger follow-up turn"))
+        .start_or_steer_turn(disabled_text_turn(&test, "trigger follow-up turn"))
         .await?;
 
     let mut warning_count = 0;
@@ -272,7 +271,7 @@ async fn openai_model_header_casing_only_mismatch_does_not_warn() -> Result<()> 
     let test = builder.build(&server).await?;
 
     test.codex
-        .submit(disabled_text_turn(&test, "trigger casing check"))
+        .start_or_steer_turn(disabled_text_turn(&test, "trigger casing check"))
         .await?;
 
     let mut reroute_count = 0;
@@ -315,7 +314,7 @@ async fn model_verification_emits_structured_event_without_reroute_or_warning() 
     let test = builder.build(&server).await?;
 
     test.codex
-        .submit(disabled_text_turn(&test, "trigger model verification"))
+        .start_or_steer_turn(disabled_text_turn(&test, "trigger model verification"))
         .await?;
 
     let mut verification_count = 0;
@@ -391,7 +390,7 @@ async fn model_verification_only_emits_once_per_turn() -> Result<()> {
     let test = builder.build(&server).await?;
 
     test.codex
-        .submit(disabled_text_turn(
+        .start_or_steer_turn(disabled_text_turn(
             &test,
             "trigger follow-up model verification",
         ))

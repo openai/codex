@@ -1,5 +1,6 @@
 use anyhow::Result;
 use codex_config::Constrained;
+use codex_core::TurnInputRequest;
 use codex_core::config::Config;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
@@ -904,16 +905,10 @@ async fn apps_guidance_and_deferred_namespace_appear_after_recovery_within_a_tur
     let test = builder.build(&server).await?;
 
     test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "use an app after it recovers".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "use an app after it recovers".into(),
+            text_elements: Vec::new(),
+        }]))
         .await?;
     let EventMsg::RequestUserInput(request) = wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::RequestUserInput(_))
@@ -1093,16 +1088,10 @@ async fn later_follow_up_uses_background_recovered_apps_after_mid_thread_startup
     startup_control.fail_next_initialize_attempts(/*attempts*/ 1);
     test.codex.submit(Op::RefreshMcpServers).await?;
     test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "use Calendar after transient Apps startup failures".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "use Calendar after transient Apps startup failures".into(),
+            text_elements: Vec::new(),
+        }]))
         .await?;
     tokio::time::timeout(Duration::from_secs(5), async {
         let mut turn_complete = false;

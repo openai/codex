@@ -8,6 +8,7 @@ use std::time::Instant;
 use anyhow::Context;
 use anyhow::Result;
 use codex_core::StartThreadOptions;
+use codex_core::TurnInputRequest;
 use codex_core::config::Constrained;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_features::Feature;
@@ -23,7 +24,6 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
 use core_test_support::assert_regex_match;
@@ -133,16 +133,10 @@ async fn strict_tool_collisions_fail_the_turn_before_sampling(
         .thread;
 
     thread
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "use the planning tool".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "use the planning tool".to_string(),
+            text_elements: Vec::new(),
+        }]))
         .await?;
 
     let EventMsg::Error(error) =
@@ -196,16 +190,10 @@ async fn strict_tool_collisions_do_not_duplicate_unrelated_compaction_errors() -
     let test = builder.build_with_auto_env(&server).await?;
 
     test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "trigger compaction".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "trigger compaction".to_string(),
+            text_elements: Vec::new(),
+        }]))
         .await?;
 
     let mut errors = Vec::new();

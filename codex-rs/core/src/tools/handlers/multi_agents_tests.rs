@@ -34,6 +34,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
+use codex_protocol::items::TurnItem;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::BaseInstructionsProvenance;
@@ -52,6 +53,7 @@ use codex_protocol::protocol::FileSystemPath;
 use codex_protocol::protocol::FileSystemSandboxEntry;
 use codex_protocol::protocol::FileSystemSandboxPolicy;
 use codex_protocol::protocol::InterAgentCommunication;
+use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::NetworkSandboxPolicy;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
@@ -102,6 +104,27 @@ fn function_payload(args: serde_json::Value) -> ToolPayload {
 
 fn parse_agent_id(id: &str) -> ThreadId {
     ThreadId::from_string(id).expect("agent id should be valid")
+}
+
+async fn wait_for_recorded_user_input(thread: &crate::CodexThread, expected: &[UserInput]) {
+    timeout(Duration::from_secs(5), async {
+        loop {
+            let event = thread
+                .next_event()
+                .await
+                .expect("event stream should stay open");
+            if let EventMsg::ItemCompleted(ItemCompletedEvent {
+                item: TurnItem::UserMessage(item),
+                ..
+            }) = event.msg
+            {
+                assert_eq!(item.content, expected);
+                return;
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for recorded user input");
 }
 
 fn thread_manager() -> ThreadManager {
@@ -2582,9 +2605,16 @@ async fn send_input_interrupts_before_prompt() {
         .iter()
         .filter_map(|(id, op)| (*id == agent_id).then_some(op))
         .collect();
-    assert_eq!(ops_for_agent.len(), 2);
+    assert_eq!(ops_for_agent.len(), 1);
     assert!(matches!(ops_for_agent[0], Op::Interrupt));
-    assert!(matches!(ops_for_agent[1], Op::UserInput { .. }));
+    wait_for_recorded_user_input(
+        thread.thread.as_ref(),
+        &[UserInput::Text {
+            text: "hi".to_string(),
+            text_elements: Vec::new(),
+        }],
+    )
+    .await;
 
     let _ = thread
         .thread
@@ -2621,31 +2651,20 @@ async fn send_input_accepts_structured_items() {
         .await
         .expect("send_input should succeed");
 
-    let expected_items = vec![
-        UserInput::Mention {
-            name: "drive".to_string(),
-            path: "app://google_drive".to_string(),
-        },
-        UserInput::Text {
-            text: "read the folder".to_string(),
-            text_elements: Vec::new(),
-        },
-    ];
-    assert!(manager.captured_ops().iter().any(|(id, op)| {
-        *id == agent_id
-            && matches!(
-                op,
-                Op::UserInput {
-                    items,
-                    final_output_json_schema: None,
-                    responsesapi_client_metadata: None,
-                    additional_context,
-                    thread_settings,
-                } if items == &expected_items
-                    && additional_context.is_empty()
-                    && thread_settings == &Default::default()
-            )
-    }));
+    wait_for_recorded_user_input(
+        thread.thread.as_ref(),
+        &[
+            UserInput::Mention {
+                name: "drive".to_string(),
+                path: "app://google_drive".to_string(),
+            },
+            UserInput::Text {
+                text: "read the folder".to_string(),
+                text_elements: Vec::new(),
+            },
+        ],
+    )
+    .await;
 
     let _ = thread
         .thread

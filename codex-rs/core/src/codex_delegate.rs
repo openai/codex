@@ -34,6 +34,10 @@ use codex_login::AuthManager;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::error::CodexErr;
 use codex_protocol::protocol::MultiAgentVersion;
+use codex_protocol::turn_input::TurnInputMode;
+use codex_protocol::turn_input::TurnInputRequest;
+use codex_protocol::turn_input::TurnInputSubmission;
+use codex_protocol::turn_input::TurnStartOptions;
 
 #[cfg(test)]
 use crate::session::completed_session_loop_termination;
@@ -190,19 +194,24 @@ pub(crate) async fn run_codex_thread_one_shot(
     .await?;
 
     // Send the initial input to kick off the one-shot turn.
-    io.submit_with_trace(
-        Op::UserInput {
-            items: input,
-            final_output_json_schema,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        },
-        /*trace*/ None,
-        Some(parent_turn_id),
-        root_turn_id,
-    )
-    .await?;
+    let submission = io
+        .submit_turn_input(
+            TurnInputRequest::user_input(input).on_start(TurnStartOptions {
+                final_output_json_schema,
+                parent_turn_id: Some(parent_turn_id),
+                root_turn_id,
+            }),
+            TurnInputMode::StartIfIdle,
+        )
+        .await?;
+    match submission {
+        TurnInputSubmission::Started { .. } => {}
+        submission => {
+            return Err(CodexErr::InvalidRequest(format!(
+                "delegate turn input was not started: {submission:?}"
+            )));
+        }
+    }
 
     // Bridge events so we can observe completion and shut down automatically.
     let (tx_bridge, rx_bridge) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
@@ -222,7 +231,6 @@ pub(crate) async fn run_codex_thread_one_shot(
                     .send(Submission {
                         id: "shutdown".to_string(),
                         op: Op::Shutdown {},
-                        client_user_message_id: None,
                         trace: None,
                         parent_turn_id: None,
                         root_turn_id: None,

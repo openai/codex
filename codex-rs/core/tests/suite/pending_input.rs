@@ -2,7 +2,10 @@ use core_test_support::test_codex::local_selections;
 use std::sync::Arc;
 
 use codex_core::CodexThread;
+use codex_core::StartIfIdleSubmission;
 use codex_core::TurnInput;
+use codex_core::TurnInputRequest;
+use codex_core::TurnInputSubmission;
 use codex_core::config::CurrentTimeReminderConfig;
 use codex_extension_items::ExtensionItem;
 use codex_extension_items::sleep::SleepItem;
@@ -70,14 +73,13 @@ async fn idle_response_items_include_pending_mailbox_in_first_request() -> anyho
     let test = test_codex().build_with_auto_env(&server).await?;
 
     submit_queue_only_agent_mail(test.codex.as_ref(), "pending mailbox input").await;
-    test.codex
-        .try_start_turn_if_idle(vec![TurnInput::ResponseItem(
-            responses::user_message_item("automatic response item").into(),
-        )])
-        .await
-        .map_err(|error| {
-            anyhow::anyhow!("idle response items were rejected: {:?}", error.reason())
-        })?;
+    let submission = test
+        .codex
+        .start_turn_if_idle(TurnInputRequest::new(TurnInput::ResponseItem(
+            responses::user_message_item("automatic response item"),
+        )))
+        .await?;
+    assert!(matches!(submission, StartIfIdleSubmission::Started { .. }));
     wait_for_turn_complete(test.codex.as_ref()).await;
 
     let request = response.single_request();
@@ -144,13 +146,14 @@ async fn assert_idle_user_input_reaches_the_first_model_request(
         text: "queued user input reaches the first request".to_string(),
         text_elements: Vec::new(),
     }];
-    test.codex
-        .try_start_turn_if_idle(vec![TurnInput::UserInput {
+    let submission = test
+        .codex
+        .start_turn_if_idle(TurnInputRequest::new(TurnInput::UserInput {
             content: expected_input.clone(),
             client_id: Some("queued-user-message".to_string()),
-        }])
-        .await
-        .map_err(|error| anyhow::anyhow!("idle user input was rejected: {:?}", error.reason()))?;
+        }))
+        .await?;
+    assert!(matches!(submission, StartIfIdleSubmission::Started { .. }));
 
     let user_message = core_test_support::wait_for_event_match(test.codex.as_ref(), |event| {
         let EventMsg::ItemCompleted(event) = event else {
@@ -276,16 +279,10 @@ async fn build_codex(server: &StreamingSseServer) -> Arc<CodexThread> {
 
 async fn submit_user_input(codex: &CodexThread, text: &str) {
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: text.to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: text.to_string(),
+            text_elements: Vec::new(),
+        }]))
         .await
         .expect("submit user input");
 }
@@ -294,48 +291,40 @@ async fn submit_danger_full_access_user_turn(test: &TestCodex, text: &str) {
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::Disabled, test.config.cwd.as_path());
     test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
                 text: text.to_string(),
                 text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
                 environments: Some(local_selections(test.config.cwd.clone())),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
-                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
-                    mode: codex_protocol::config_types::ModeKind::Default,
-                    settings: codex_protocol::config_types::Settings {
+                collaboration_mode: Some(CollaborationMode {
+                    mode: ModeKind::Default,
+                    settings: Settings {
                         model: test.session_configured.model.clone(),
                         reasoning_effort: None,
                         developer_instructions: None,
                     },
                 }),
                 ..Default::default()
-            },
-        })
+            }),
+        )
         .await
         .expect("submit user turn");
 }
 
 async fn steer_user_input(codex: &CodexThread, text: &str) {
-    codex
-        .steer_input(
-            vec![UserInput::Text {
-                text: text.to_string(),
-                text_elements: Vec::new(),
-            }],
-            /*additional_context*/ Default::default(),
-            /*expected_turn_id*/ None,
-            /*client_user_message_id*/ None,
-            /*responsesapi_client_metadata*/ None,
-        )
+    let submission = codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: text.to_string(),
+            text_elements: Vec::new(),
+        }]))
         .await
         .expect("steer user input");
+    assert!(matches!(submission, TurnInputSubmission::Steered { .. }));
 }
 
 async fn enqueue_queue_only_agent_mail(codex: &CodexThread, text: &str) {
@@ -759,16 +748,10 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
         .codex;
 
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "first prompt".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "first prompt".into(),
+            text_elements: Vec::new(),
+        }]))
         .await
         .unwrap();
 
@@ -778,16 +761,10 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
     .await;
 
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "second prompt".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "second prompt".into(),
+            text_elements: Vec::new(),
+        }]))
         .await
         .unwrap();
 

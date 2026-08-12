@@ -1,4 +1,5 @@
 use anyhow::Result;
+use codex_core::TurnInputRequest;
 use codex_core::config::RolloutBudgetConfig;
 use codex_features::Feature;
 use codex_model_provider_info::built_in_model_providers;
@@ -141,16 +142,10 @@ async fn invalid_provider_rollout_budget_units_fail_without_retry() -> Result<()
         .await?;
 
     test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "reject invalid provider budget units".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "reject invalid provider budget units".to_string(),
+            text_elements: Vec::new(),
+        }]))
         .await?;
 
     let EventMsg::Error(error) =
@@ -312,16 +307,10 @@ async fn exhausted_budget_fails_current_and_later_turns() -> Result<()> {
 
     for prompt in ["exhaust the budget", "try another turn"] {
         test.codex
-            .submit(Op::UserInput {
-                items: vec![UserInput::Text {
-                    text: prompt.to_string(),
-                    text_elements: Vec::new(),
-                }],
-                final_output_json_schema: None,
-                responsesapi_client_metadata: None,
-                additional_context: Default::default(),
-                thread_settings: Default::default(),
-            })
+            .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+                text: prompt.to_string(),
+                text_elements: Vec::new(),
+            }]))
             .await?;
 
         wait_for_event(&test.codex, |event| {

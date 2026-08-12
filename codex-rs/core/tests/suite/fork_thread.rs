@@ -3,6 +3,7 @@ use std::sync::Arc;
 use codex_core::ForkSnapshot;
 use codex_core::NewThread;
 use codex_core::ThreadConfigSnapshot;
+use codex_core::TurnInputRequest;
 use codex_core::parse_turn_item;
 use codex_history::InitialHistory;
 use codex_history::ResumedHistory;
@@ -11,7 +12,6 @@ use codex_history::RolloutLine;
 use codex_protocol::items::TurnItem;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSettingsAppliedEvent;
 use codex_protocol::user_input::UserInput;
@@ -55,16 +55,10 @@ async fn fork_thread_twice_drops_to_first_message() {
     // Send three user messages; wait for three completed turns.
     for text in ["first", "second", "third"] {
         codex
-            .submit(Op::UserInput {
-                items: vec![UserInput::Text {
-                    text: text.to_string(),
-                    text_elements: Vec::new(),
-                }],
-                final_output_json_schema: None,
-                responsesapi_client_metadata: None,
-                additional_context: Default::default(),
-                thread_settings: Default::default(),
-            })
+            .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+                text: text.to_string(),
+                text_elements: Vec::new(),
+            }]))
             .await
             .unwrap();
         let _ = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -204,16 +198,10 @@ async fn assert_copied_fork_persists_inherited_history(history_mode: ThreadHisto
     let thread_manager = test.thread_manager.clone();
 
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "fork me from stored history".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "fork me from stored history".to_string(),
+            text_elements: Vec::new(),
+        }]))
         .await
         .expect("submit initial user turn");
     let _ = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -281,16 +269,10 @@ async fn assert_copied_fork_persists_inherited_history(history_mode: ThreadHisto
             .expect("resume copied paginated fork")
             .thread;
         resumed
-            .submit(Op::UserInput {
-                items: vec![UserInput::Text {
-                    text: "continue after cold resume".to_string(),
-                    text_elements: Vec::new(),
-                }],
-                final_output_json_schema: None,
-                responsesapi_client_metadata: None,
-                additional_context: Default::default(),
-                thread_settings: Default::default(),
-            })
+            .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "continue after cold resume".to_string(),
+                text_elements: Vec::new(),
+            }]))
             .await
             .expect("start resumed turn");
         wait_for_event(&resumed, |event| matches!(event, EventMsg::TurnComplete(_))).await;

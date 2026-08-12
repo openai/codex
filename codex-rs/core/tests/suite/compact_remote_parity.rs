@@ -1,3 +1,4 @@
+use codex_core::TurnInputRequest;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -605,13 +606,7 @@ async fn capture_from_requests(
 
 async fn submit_user_input(codex: &codex_core::CodexThread, items: Vec<UserInput>) -> Result<()> {
     codex
-        .submit(Op::UserInput {
-            items,
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+        .start_or_steer_turn(TurnInputRequest::user_input(items))
         .await?;
     wait_for_turn_complete(codex).await;
     Ok(())

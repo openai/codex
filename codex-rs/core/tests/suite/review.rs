@@ -1,5 +1,6 @@
 use codex_core::CodexThread;
 use codex_core::REVIEW_PROMPT;
+use codex_core::TurnInputRequest;
 use codex_core::config::Config;
 use codex_core::config::Constrained;
 use codex_core::find_thread_path_by_id_str;
@@ -1125,16 +1126,10 @@ async fn review_history_surfaces_in_parent_session() {
     // 2) Continue in the parent session; request input must not include any review items.
     let followup = "back to parent".to_string();
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: followup.clone(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: followup.clone(),
+            text_elements: Vec::new(),
+        }]))
         .await
         .unwrap();
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -1240,7 +1235,7 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
 
     core_test_support::submit_thread_settings(
         &codex,
-        codex_protocol::protocol::ThreadSettingsOverrides {
+        ThreadSettingsOverrides {
             environments: Some(local_selections(repo_path.to_path_buf().abs())),
             ..Default::default()
         },
