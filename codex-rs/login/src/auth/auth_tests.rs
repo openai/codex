@@ -1324,7 +1324,7 @@ impl ExternalAuth for FailingExternalAuth {
 }
 
 #[tokio::test]
-async fn configured_auth_keeps_cached_credentials_after_permanent_reload_failure() {
+async fn external_auth_keeps_cached_credentials_after_permanent_reload_failure() {
     let manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("seed"));
     let auth = CodexAuth::from_api_key("configured-token");
     let external_auth = Arc::new(FailingExternalAuth {
@@ -1332,9 +1332,9 @@ async fn configured_auth_keeps_cached_credentials_after_permanent_reload_failure
         resolve_count: AtomicUsize::new(0),
     });
     manager
-        .set_configured_external_auth(external_auth.clone())
+        .set_external_auth(external_auth.clone())
         .await
-        .expect("configured auth should install");
+        .expect("external auth should install");
 
     assert_eq!(external_auth.resolve_count.load(Ordering::SeqCst), 1);
 
@@ -1353,7 +1353,34 @@ async fn configured_auth_keeps_cached_credentials_after_permanent_reload_failure
 }
 
 #[tokio::test]
-async fn runtime_external_auth_errors_remain_transient() {
+async fn replacing_external_auth_clears_permanent_failure() {
+    let manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("seed"));
+    let auth = CodexAuth::from_api_key("external-token");
+    manager
+        .set_external_auth(Arc::new(FailingExternalAuth {
+            auth: auth.clone(),
+            resolve_count: AtomicUsize::new(0),
+        }))
+        .await
+        .expect("external auth should install");
+
+    assert_eq!(manager.auth().await, Some(auth.clone()));
+    assert!(manager.refresh_failure_for_auth(&auth).is_some());
+
+    manager
+        .set_external_auth(Arc::new(StaticExternalAuth(auth.clone())))
+        .await
+        .expect("replacement external auth should install");
+
+    manager
+        .refresh_token_from_authority()
+        .await
+        .expect("replacement external auth should refresh");
+    assert_eq!(manager.auth_cached(), Some(auth));
+}
+
+#[tokio::test]
+async fn runtime_external_auth_uses_provider_error_classification() {
     let manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("seed"));
     manager
         .set_external_auth(Arc::new(FailingExternalAuth {
@@ -1365,7 +1392,7 @@ async fn runtime_external_auth_errors_remain_transient() {
 
     assert!(matches!(
         manager.refresh_token_from_authority().await,
-        Err(RefreshTokenError::Transient(_))
+        Err(RefreshTokenError::Permanent(_))
     ));
 }
 
@@ -1409,12 +1436,15 @@ async fn external_auth_provider_can_install_headers() {
 }
 
 #[tokio::test]
-async fn configured_external_auth_is_immutable_and_process_local() {
+async fn workload_identity_auth_is_immutable_and_process_local() {
     let codex_home = tempdir().expect("tempdir");
-    let manager = AuthManager::from_auth_for_testing_with_home(
+    let mut manager = AuthManager::from_auth_for_testing_with_home(
         CodexAuth::from_api_key("seed"),
         codex_home.path().to_path_buf(),
     );
+    Arc::get_mut(&mut manager)
+        .expect("test manager should not be shared yet")
+        .workload_identity_selected = true;
     let access_token = fake_jwt_for_auth_file_params(&AuthFileParams {
         openai_api_key: None,
         chatgpt_plan_type: Some("enterprise".to_string()),
@@ -1426,12 +1456,12 @@ async fn configured_external_auth_is_immutable_and_process_local() {
             .expect("external ChatGPT auth");
 
     manager
-        .set_configured_external_auth(Arc::new(StaticExternalAuth(auth.clone())))
+        .install_external_auth(Arc::new(StaticExternalAuth(auth.clone())))
         .await
-        .expect("configured auth should install");
+        .expect("workload identity auth should install");
     manager.clear_external_auth();
 
-    assert!(manager.has_configured_external_auth());
+    assert!(manager.has_external_auth());
     assert_eq!(manager.auth().await, Some(auth.clone()));
     assert!(matches!(
         manager
@@ -1443,9 +1473,9 @@ async fn configured_external_auth_is_immutable_and_process_local() {
     let logout_error = manager
         .logout()
         .await
-        .expect_err("host-configured auth must not be logged out");
+        .expect_err("workload identity auth must not be logged out");
     assert_eq!(logout_error.kind(), std::io::ErrorKind::PermissionDenied);
-    assert!(manager.has_configured_external_auth());
+    assert!(manager.has_external_auth());
     assert_eq!(manager.auth_cached(), Some(auth));
 
     assert!(!get_auth_file(codex_home.path()).exists());
@@ -1454,7 +1484,12 @@ async fn configured_external_auth_is_immutable_and_process_local() {
         AuthCredentialsStoreMode::Ephemeral,
         AuthKeyringBackendKind::default(),
     );
-    assert_eq!(ephemeral_storage.load().expect("load ephemeral auth"), None);
+    assert!(
+        ephemeral_storage
+            .load()
+            .expect("load ephemeral auth")
+            .is_some()
+    );
 }
 
 struct ProviderAuthScript {

@@ -94,7 +94,7 @@ async fn header_auth_is_attached_to_responses_requests() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn configured_external_auth_401_retry_uses_refreshed_chatgpt_headers() -> anyhow::Result<()> {
+async fn external_auth_401_retry_uses_refreshed_chatgpt_headers() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -136,7 +136,7 @@ async fn configured_external_auth_401_retry_uses_refreshed_chatgpt_headers() -> 
     });
     test.thread_manager
         .auth_manager()
-        .set_configured_external_auth(external_auth.clone())
+        .set_external_auth(external_auth.clone())
         .await?;
 
     test.submit_turn("hello").await?;
