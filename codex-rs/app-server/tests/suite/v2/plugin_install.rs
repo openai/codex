@@ -78,7 +78,6 @@ async fn plugin_install_rejects_relative_marketplace_paths() -> Result<()> {
     let codex_home = TempDir::new()?;
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -108,7 +107,6 @@ async fn plugin_install_rejects_missing_install_source() -> Result<()> {
     let codex_home = TempDir::new()?;
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -141,7 +139,6 @@ async fn plugin_install_rejects_multiple_install_sources() -> Result<()> {
     let codex_home = TempDir::new()?;
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -182,7 +179,6 @@ plugins = false
     )?;
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -252,7 +248,6 @@ async fn plugin_install_writes_remote_plugin_to_cloud_and_cache() -> Result<()> 
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .with_env_overrides(&[(TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1"))])
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
@@ -355,7 +350,6 @@ async fn plugin_install_uses_remote_apps_needing_auth_response() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .with_env_overrides(&[(TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1"))])
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
@@ -410,7 +404,6 @@ async fn plugin_install_rejects_missing_remote_bundle_url() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -454,7 +447,6 @@ async fn plugin_install_rejects_plain_http_remote_bundle_url() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -503,7 +495,6 @@ async fn plugin_install_rejects_invalid_remote_release_version() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -538,7 +529,6 @@ async fn plugin_install_rejects_invalid_remote_plugin_name() -> Result<()> {
     write_remote_plugin_catalog_config(codex_home.path(), "https://example.invalid/backend-api/")?;
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -572,7 +562,6 @@ async fn plugin_install_tracks_analytics_when_remote_detail_fetch_fails() -> Res
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -631,7 +620,6 @@ async fn plugin_install_tracks_analytics_when_remote_install_is_rate_limited() -
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .with_env_overrides(&[(TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1"))])
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
@@ -701,7 +689,6 @@ async fn plugin_install_rejects_remote_plugin_disabled_by_admin_before_download(
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .with_env_overrides(&[(TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1"))])
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
@@ -765,7 +752,6 @@ async fn plugin_install_rejects_remote_plugin_not_available() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -844,7 +830,6 @@ async fn plugin_install_rejects_when_workspace_codex_plugins_disabled() -> Resul
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -877,7 +862,6 @@ async fn plugin_install_returns_invalid_request_for_missing_marketplace_file() -
     let codex_home = TempDir::new()?;
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -922,7 +906,6 @@ async fn plugin_install_tracks_analytics_when_marketplace_file_cannot_be_read() 
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -981,7 +964,6 @@ async fn plugin_install_returns_invalid_request_for_not_available_plugin() -> Re
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -1034,7 +1016,6 @@ async fn plugin_install_returns_invalid_request_for_disallowed_product_plugin() 
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .with_args(&["--session-source", "atlas"])
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
@@ -1088,7 +1069,6 @@ async fn plugin_install_tracks_analytics_event() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -1154,7 +1134,6 @@ async fn plugin_install_failure_tracks_analytics_event() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -1210,7 +1189,6 @@ async fn plugin_install_tracks_remote_plugin_analytics_event() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .with_env_overrides(&[(TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1"))])
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
@@ -1268,7 +1246,6 @@ async fn plugin_install_preserves_status_when_remote_bundle_error_body_is_too_la
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .with_env_overrides(&[(TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1"))])
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
@@ -1402,7 +1379,6 @@ async fn plugin_install_returns_apps_needing_auth() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
     let directory_requests_before_install = server_control.directory_request_count();
@@ -1497,7 +1473,6 @@ async fn plugin_install_skips_mcp_oauth_for_chatgpt_dual_surface_plugin() -> Res
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -1551,7 +1526,6 @@ url = "https://example.com/allowed-mcp"
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -1606,7 +1580,6 @@ enabled = false
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -1769,7 +1742,6 @@ async fn plugin_install_starts_mcp_oauth_with_formerly_disallowed_plugin_app() -
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -1868,7 +1840,6 @@ async fn plugin_install_starts_mcp_oauth_through_configured_http_proxy() -> Resu
     let proxy_uri = proxy.uri();
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .with_env_overrides(&[
             ("HTTP_PROXY", Some(proxy_uri.as_str())),
             ("http_proxy", Some(proxy_uri.as_str())),
@@ -1941,7 +1912,6 @@ connectors = true
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .with_env_overrides(&[("OPENAI_API_KEY", Some("test-api-key"))])
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
@@ -1980,7 +1950,6 @@ async fn plugin_install_starts_remote_mcp_oauth_for_install_response_only_app() 
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .with_env_overrides(&[(TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1"))])
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
@@ -2028,7 +1997,6 @@ async fn plugin_install_skips_remote_mcp_oauth_disabled_by_requirements() -> Res
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .with_env_overrides(&[(TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1"))])
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
@@ -2073,7 +2041,6 @@ async fn plugin_install_skips_remote_mcp_oauth_disabled_by_plugin_config() -> Re
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .with_env_overrides(&[(TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1"))])
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
@@ -2114,7 +2081,6 @@ async fn plugin_install_skips_remote_mcp_oauth_for_bundled_same_name_app() -> Re
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .with_env_overrides(&[(TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1"))])
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
@@ -2192,7 +2158,6 @@ async fn plugin_install_includes_formerly_disallowed_apps_needing_auth() -> Resu
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
     let directory_requests_before_install =
@@ -2280,6 +2245,7 @@ async fn plugin_install_makes_bundled_mcp_servers_available_to_followup_requests
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
+        // The bundled stdio MCP fixture is a host-local executable.
         .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
@@ -2308,16 +2274,21 @@ async fn plugin_install_makes_bundled_mcp_servers_available_to_followup_requests
         .await?;
     let response: ListMcpServerStatusResponse =
         timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
+    let [server] = response.data.as_slice() else {
+        bail!("expected exactly one bundled MCP server");
+    };
+
     assert_eq!(
-        response
-            .data
-            .into_iter()
-            .map(|server| (server.name, server.plugin_id))
-            .collect::<Vec<_>>(),
-        vec![(
-            "sample-mcp".to_string(),
-            Some("sample-plugin@debug".to_string()),
-        )]
+        (server.name.as_str(), server.plugin_id.as_deref()),
+        ("sample-mcp", Some("sample-plugin@debug")),
+    );
+    assert!(
+        server.server_info.is_some(),
+        "bundled MCP server did not initialize"
+    );
+    assert!(
+        server.tools.contains_key("echo"),
+        "bundled MCP server did not expose its tools"
     );
 
     let request_id = mcp

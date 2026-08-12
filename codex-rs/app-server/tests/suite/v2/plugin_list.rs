@@ -118,7 +118,6 @@ async fn plugin_list_skips_invalid_marketplace_file_and_reports_error() -> Resul
     let home = codex_home.path().to_string_lossy().into_owned();
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .with_env_overrides(&[
             ("HOME", Some(home.as_str())),
             ("USERPROFILE", Some(home.as_str())),
@@ -180,7 +179,6 @@ enabled = true
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -272,7 +270,6 @@ enabled = true
 
     let mut app_server = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -373,7 +370,6 @@ enabled = true
 
     let mut app_server = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -449,7 +445,6 @@ enabled = true
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -473,7 +468,6 @@ async fn plugin_list_rejects_relative_cwds() -> Result<()> {
     let codex_home = TempDir::new()?;
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -553,7 +547,6 @@ async fn plugin_list_keeps_valid_marketplaces_when_another_marketplace_fails_to_
     let home = codex_home.path().to_string_lossy().into_owned();
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .with_env_overrides(&[
             ("HOME", Some(home.as_str())),
             ("USERPROFILE", Some(home.as_str())),
@@ -673,7 +666,6 @@ async fn plugin_list_returns_empty_when_workspace_codex_plugins_disabled() -> Re
     let home = codex_home.path().to_string_lossy().into_owned();
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .without_managed_config()
         .with_env_overrides(&[
             ("HOME", Some(home.as_str())),
@@ -762,7 +754,6 @@ async fn plugin_list_reuses_cached_workspace_codex_plugins_setting() -> Result<(
     let home = codex_home.path().to_string_lossy().into_owned();
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .without_managed_config()
         .with_env_overrides(&[
             ("HOME", Some(home.as_str())),
@@ -845,7 +836,6 @@ async fn plugin_list_uses_alternate_discoverable_manifest_and_keeps_undiscoverab
     let home = codex_home.path().to_string_lossy().into_owned();
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .with_env_overrides(&[
             ("HOME", Some(home.as_str())),
             ("USERPROFILE", Some(home.as_str())),
@@ -969,7 +959,6 @@ async fn plugin_list_accepts_omitted_cwds() -> Result<()> {
     let home = codex_home.path().to_string_lossy().into_owned();
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .with_env_overrides(&[
             ("HOME", Some(home.as_str())),
             ("USERPROFILE", Some(home.as_str())),
@@ -1025,7 +1014,6 @@ async fn plugin_list_returns_share_context_for_shared_local_plugin() -> Result<(
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -1112,7 +1100,6 @@ enabled = true
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -1238,7 +1225,6 @@ enabled = false
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -1385,7 +1371,6 @@ enabled = false
     let home = codex_home.path().to_string_lossy().into_owned();
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .with_env_overrides(&[
             ("HOME", Some(home.as_str())),
             ("USERPROFILE", Some(home.as_str())),
@@ -1476,7 +1461,6 @@ async fn plugin_list_returns_plugin_interface_with_absolute_asset_paths() -> Res
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -1589,7 +1573,6 @@ async fn plugin_list_accepts_legacy_string_default_prompt() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -1677,7 +1660,6 @@ enabled = true
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -1784,7 +1766,6 @@ async fn app_server_startup_sync_downloads_remote_installed_plugin_bundles() -> 
         .join("plugins/cache/openai-curated-remote/linear/1.2.3");
     let _mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .with_plugin_startup_tasks()
         .with_env_overrides(&[(TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1"))])
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
@@ -1864,7 +1845,6 @@ async fn plugin_list_sync_upgrades_and_removes_remote_installed_plugin_bundles()
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .with_env_overrides(&[(TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1"))])
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
@@ -2053,7 +2033,6 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -2225,7 +2204,6 @@ async fn plugin_list_honors_global_remote_catalog_cache_ttl() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -2386,7 +2364,6 @@ async fn app_server_startup_refreshes_cached_remote_catalog_without_blocking_plu
 
     let mut app_server = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_TIMEOUT, app_server.initialize()).await??;
@@ -2435,7 +2412,6 @@ async fn app_server_startup_refreshes_cached_remote_catalog_without_blocking_plu
 
     let mut app_server = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .with_plugin_startup_tasks()
         .build()
         .await?;
@@ -2646,7 +2622,6 @@ async fn plugin_list_force_refetch_bypasses_fresh_global_remote_catalog_cache() 
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build()
         .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -2799,7 +2774,6 @@ async fn plugin_list_includes_openai_curated_remote_collection_when_remote_plugi
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -2889,7 +2863,6 @@ async fn plugin_list_propagates_openai_curated_remote_collection_errors_when_rem
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -2933,7 +2906,6 @@ async fn plugin_list_skips_openai_curated_remote_collection_for_api_auth_when_re
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -2972,7 +2944,6 @@ async fn plugin_list_includes_api_curated_marketplace_for_api_auth_when_remote_p
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -3029,7 +3000,6 @@ plugins = true
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -3094,7 +3064,6 @@ remote_plugin = false
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -3147,7 +3116,6 @@ async fn plugin_list_does_not_query_openai_curated_remote_collection_by_default(
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -3200,7 +3168,6 @@ async fn plugin_list_vertical_kind_noops_when_remote_plugin_enabled() -> Result<
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -3254,7 +3221,6 @@ async fn plugin_list_does_not_append_global_remote_when_marketplace_kinds_are_ex
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -3333,7 +3299,6 @@ plugin_sharing = true
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -3442,7 +3407,6 @@ plugin_sharing = false
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -3527,7 +3491,6 @@ plugin_sharing = false
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .with_env_overrides(&[(TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1"))])
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
@@ -3613,7 +3576,6 @@ trusted_hash = "sha256:unrelated"
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .with_env_overrides(&[(TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1"))])
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
@@ -3705,7 +3667,6 @@ async fn plugin_installed_hook_trust_write_failure_stays_untrusted() -> Result<(
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .with_env_overrides(&[(TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1"))])
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
@@ -3786,7 +3747,6 @@ async fn plugin_list_fetches_workspace_directory_kind_when_remote_plugin_disable
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -4006,7 +3966,6 @@ plugin_sharing = false
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -4151,7 +4110,6 @@ async fn plugin_list_fetches_shared_with_me_kind() -> Result<()> {
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -4307,7 +4265,6 @@ plugin_sharing = false
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -4367,7 +4324,6 @@ plugin_sharing = true
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -4510,7 +4466,6 @@ async fn assert_disabled_remote_plugin_metadata(
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -4573,7 +4528,6 @@ remote_plugin = true
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -4609,7 +4563,6 @@ async fn plugin_list_fetches_featured_plugin_ids_without_chatgpt_auth() -> Resul
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
 
@@ -4648,7 +4601,6 @@ async fn plugin_list_uses_warmed_featured_plugin_ids_cache_on_first_request() ->
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
         .with_plugin_startup_tasks()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
