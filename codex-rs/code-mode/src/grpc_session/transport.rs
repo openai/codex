@@ -10,6 +10,7 @@ use tonic::codegen::http::Request;
 use tonic::codegen::http::Response;
 use tonic::codegen::http::Uri;
 use tonic::transport::Channel;
+use tonic::transport::Endpoint;
 use tower::ServiceExt;
 use tower::service_fn;
 use tower::util::BoxCloneSyncService;
@@ -53,6 +54,15 @@ impl SharedTransport {
         self.client
             .get_or_try_init(|| async {
                 let client = match &self.endpoint {
+                    TransportEndpoint::Url { endpoint, .. } if endpoint.starts_with("unix:") => {
+                        let channel = Endpoint::from_shared(endpoint.clone())
+                            .map_err(|error| {
+                                format!("invalid gRPC code-mode Unix socket endpoint: {error}")
+                            })?
+                            .connect_lazy();
+                        let transport = channel.map_err(io::Error::other);
+                        CodeModeHostClient::new(BoxCloneSyncService::new(transport))
+                    }
                     TransportEndpoint::Url {
                         endpoint,
                         http_client_factory,

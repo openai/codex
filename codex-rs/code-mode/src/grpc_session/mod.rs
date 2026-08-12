@@ -39,11 +39,15 @@ mod callbacks;
 mod completion;
 mod conversion;
 mod deadline;
+mod generation;
 mod operations;
+mod reconnect;
 mod state;
 mod transport;
 
 type GrpcClient = CodeModeHostClient<GrpcTransport>;
+
+const SHUTDOWN_ERROR: &str = "code mode session is shutting down";
 
 /// Creates code-mode sessions over an HTTP/2 gRPC connection.
 #[derive(Clone)]
@@ -52,7 +56,7 @@ pub struct GrpcCodeModeSessionProvider {
 }
 
 impl GrpcCodeModeSessionProvider {
-    /// Connects lazily to an `http://` or `https://` gRPC endpoint.
+    /// Connects lazily to an `http://`, `https://`, or `unix://` gRPC endpoint.
     pub fn new(endpoint: impl Into<String>) -> Self {
         Self::with_http_client_factory(
             endpoint,
@@ -166,9 +170,13 @@ impl CodeModeSessionProvider for GrpcCodeModeSessionProvider {
         limits: CodeModeSessionCellExecutionLimits,
     ) -> CodeModeSessionProviderFuture<'a> {
         Box::pin(async move {
-            self.open_binding(delegate, limits)
-                .await
-                .map(|session| session as _)
+            let session = Arc::new(reconnect::ReconnectableSession::new(
+                self.clone(),
+                delegate,
+                limits,
+            ));
+            session.initialize().await?;
+            Ok(session as _)
         })
     }
 }
@@ -246,7 +254,7 @@ impl SessionInner {
             .unwrap_or_else(PoisonError::into_inner)
             .require_open()?;
         if self.shutdown_requested.load(Ordering::Acquire) {
-            return Err("code mode session is shutting down".to_string());
+            return Err(SHUTDOWN_ERROR.to_string());
         }
         Ok(())
     }

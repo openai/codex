@@ -21,16 +21,26 @@ use codex_code_mode::ToolDefinition;
 use codex_code_mode::ToolInvocationFuture;
 use codex_code_mode::WaitOutcome;
 use codex_code_mode::WaitRequest;
+#[cfg(unix)]
+use codex_code_mode_host::GrpcCodeModeHost;
 use codex_code_mode_protocol::grpc;
 use codex_code_mode_protocol::grpc::code_mode_host_client::CodeModeHostClient;
+#[cfg(unix)]
+use codex_code_mode_protocol::grpc::code_mode_host_server::CodeModeHostServer;
 use codex_protocol::ToolName;
 use futures::FutureExt;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+#[cfg(unix)]
+use tokio::net::UnixListener;
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
+#[cfg(unix)]
+use tokio_stream::wrappers::UnixListenerStream;
 use tokio_util::sync::CancellationToken;
 use tonic::Code;
+#[cfg(unix)]
+use tonic::transport::Server;
 
 #[path = "support/host.rs"]
 mod host;
@@ -897,5 +907,222 @@ async fn dropping_a_grpc_lease_retires_its_server_session() -> Result<()> {
     })
     .await
     .context("dropping the gRPC lease did not retire its server session")??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn cached_session_recovers_after_a_remote_host_restarts() -> Result<()> {
+    let mut original = HostHarness::start("grpc://127.0.0.1:0").await?;
+    let listen_url = original
+        .endpoint
+        .replacen("http://", "grpc://", /*count*/ 1);
+    let provider = GrpcCodeModeSessionProvider::new(original.endpoint.clone());
+    let delegate = Arc::new(RecordingDelegate::default());
+    let session = provider
+        .create_session(delegate.clone())
+        .await
+        .map_err(anyhow::Error::msg)?;
+
+    let mut pending = request("await tools.echo({generation: 1}); await new Promise(() => {});");
+    pending.enabled_tools = vec![tool("echo")];
+    pending.yield_time_ms = Some(/*value*/ 1);
+    let started = session.execute(pending).await.map_err(anyhow::Error::msg)?;
+    let old_cell_id = started.cell_id.clone();
+    assert_eq!(old_cell_id, cell_id("1"));
+    assert!(matches!(
+        started.initial_response().await,
+        Ok(RuntimeResponse::Yielded { .. })
+    ));
+
+    let interrupted_wait = start_active_wait(
+        Arc::clone(&session),
+        WaitRequest {
+            cell_id: old_cell_id.clone(),
+            yield_time_ms: 60_000,
+        },
+    )
+    .await?;
+    timeout(TEST_TIMEOUT, async {
+        while delegate
+            .invocations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty()
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .context("original host did not dispatch its tool callback")?;
+    original
+        ._child
+        .kill()
+        .await
+        .context("stop the original gRPC host")?;
+    assert!(
+        timeout(TEST_TIMEOUT, interrupted_wait)
+            .await
+            .context("host loss did not interrupt the pending wait")?
+            .context("interrupted wait task panicked")?
+            .is_err()
+    );
+    timeout(TEST_TIMEOUT, async {
+        loop {
+            if delegate
+                .closed_cells
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .contains(&old_cell_id)
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .context("host loss did not retire the original generation's cell")?;
+
+    let _replacement = HostHarness::start(&listen_url).await?;
+    let mut callback = request(
+        r#"const result = await tools.echo({generation: 2}); notify("reconnected"); text(result.value);"#,
+    );
+    callback.tool_call_id = "reconnected-call".to_string();
+    callback.enabled_tools = vec![tool("echo")];
+    let (callback_response, concurrent_response) = tokio::join!(
+        execute(&session, callback),
+        execute(&session, request(r#"text("concurrent")"#)),
+    );
+    let callback_response = callback_response?;
+    let RuntimeResponse::Result {
+        cell_id: callback_cell_id,
+        ..
+    } = &callback_response
+    else {
+        anyhow::bail!("reconnected tool call did not complete");
+    };
+    let callback_cell_id = callback_cell_id.clone();
+    assert_eq!(
+        callback_response,
+        text_response(callback_cell_id.as_str(), "output")
+    );
+    let concurrent_response = concurrent_response?;
+    let RuntimeResponse::Result {
+        cell_id: concurrent_cell_id,
+        ..
+    } = &concurrent_response
+    else {
+        anyhow::bail!("concurrent reconnected cell did not complete");
+    };
+    let concurrent_cell_id = concurrent_cell_id.clone();
+    assert_eq!(
+        concurrent_response,
+        text_response(concurrent_cell_id.as_str(), "concurrent")
+    );
+    let mut replacement_cell_ids = [callback_cell_id.as_str(), concurrent_cell_id.as_str()];
+    replacement_cell_ids.sort_unstable();
+    assert_eq!(replacement_cell_ids, ["g2:1", "g2:2"]);
+    assert_eq!(
+        delegate
+            .invocations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .map(|invocation| (invocation.cell_id.clone(), invocation.input.clone()))
+            .collect::<Vec<_>>(),
+        vec![
+            (old_cell_id.clone(), Some(json!({ "generation": 1 }))),
+            (callback_cell_id.clone(), Some(json!({ "generation": 2 }))),
+        ]
+    );
+    assert_eq!(
+        *delegate
+            .notifications
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner),
+        vec![(
+            "reconnected-call".to_string(),
+            callback_cell_id,
+            "reconnected".to_string(),
+        )]
+    );
+
+    let mut pending = request("await new Promise(() => {});");
+    pending.yield_time_ms = Some(/*value*/ 1);
+    let started = session.execute(pending).await.map_err(anyhow::Error::msg)?;
+    let replacement_cell_id = started.cell_id.clone();
+    assert_eq!(replacement_cell_id, cell_id("g2:3"));
+    assert_eq!(
+        started.initial_response().await,
+        Ok(RuntimeResponse::Yielded {
+            cell_id: replacement_cell_id.clone(),
+            content_items: Vec::new(),
+        })
+    );
+    assert_eq!(
+        session
+            .wait(WaitRequest {
+                cell_id: replacement_cell_id.clone(),
+                yield_time_ms: 1,
+            })
+            .await
+            .map_err(anyhow::Error::msg)?,
+        WaitOutcome::LiveCell(RuntimeResponse::Yielded {
+            cell_id: replacement_cell_id.clone(),
+            content_items: Vec::new(),
+        })
+    );
+    assert_eq!(
+        session
+            .terminate(replacement_cell_id.clone())
+            .await
+            .map_err(anyhow::Error::msg)?,
+        WaitOutcome::LiveCell(RuntimeResponse::Terminated {
+            cell_id: replacement_cell_id,
+            content_items: Vec::new(),
+        })
+    );
+
+    let stale_wait = session
+        .wait(WaitRequest {
+            cell_id: old_cell_id.clone(),
+            yield_time_ms: 1,
+        })
+        .await
+        .unwrap_err();
+    assert!(stale_wait.contains("stale code-mode host generation"));
+    let stale_termination = session.terminate(old_cell_id).await.unwrap_err();
+    assert!(stale_termination.contains("stale code-mode host generation"));
+    session.shutdown().await.map_err(anyhow::Error::msg)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unix_socket_endpoints_execute_code_mode_cells() -> Result<()> {
+    let directory = tempfile::tempdir().context("create Unix socket directory")?;
+    let socket_path = directory.path().join("grpc.sock");
+    let listener = UnixListener::bind(&socket_path).context("bind code-mode Unix socket")?;
+    let server = tokio::spawn(
+        Server::builder()
+            .add_service(CodeModeHostServer::new(GrpcCodeModeHost::new()))
+            .serve_with_incoming(UnixListenerStream::new(listener)),
+    );
+
+    for endpoint in [
+        format!("unix://{}", socket_path.display()),
+        format!("unix:{}", socket_path.display()),
+    ] {
+        let session = GrpcCodeModeSessionProvider::new(endpoint)
+            .create_session(Arc::new(NoopCodeModeSessionDelegate))
+            .await
+            .map_err(anyhow::Error::msg)?;
+        assert_eq!(
+            execute(&session, request(r#"text("unix socket")"#)).await?,
+            text_response("1", "unix socket")
+        );
+        session.shutdown().await.map_err(anyhow::Error::msg)?;
+    }
+
+    server.abort();
     Ok(())
 }
