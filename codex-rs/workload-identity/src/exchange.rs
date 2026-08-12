@@ -100,7 +100,7 @@ impl WorkloadIdentityExchange {
         let valid_from = Instant::now();
         let result = match self.exchange_uncached().await {
             Ok(token) => state.store(token, valid_from, Instant::now()),
-            Err(error) if error.allows_cached_fallback() => {
+            Err(error) if error.is_transient() => {
                 let now = Instant::now();
                 match state.cached.as_mut() {
                     Some(cached) if cached.expires_at > now => {
@@ -156,6 +156,15 @@ impl WorkloadIdentityExchange {
         result
     }
 
+    /// Drops the cached token only when it is still the token the caller rejected.
+    pub async fn invalidate_if_current(&self, observed_token_version: u64) {
+        let mut state = self.state.lock().await;
+        if state.token_generation == observed_token_version {
+            state.cached = None;
+            state.last_attempt_error = None;
+        }
+    }
+
     fn complete_attempt(&self, state: &mut CacheState, error: Option<&WorkloadIdentityError>) {
         state.last_attempt_error = error.cloned();
         self.completed_attempts.fetch_add(1, Ordering::Release);
@@ -204,17 +213,6 @@ impl WorkloadIdentityExchange {
         serde_json::from_slice::<TokenExchangeResponse>(&bytes)
             .map_err(|_| WorkloadIdentityError::InvalidExchangeResponse)?
             .into_token()
-    }
-}
-
-impl WorkloadIdentityError {
-    fn allows_cached_fallback(&self) -> bool {
-        matches!(
-            self,
-            Self::AssertionFile { .. }
-                | Self::ExchangeUnavailable
-                | Self::ExchangeRejected(408 | 429 | 500..=599)
-        )
     }
 }
 

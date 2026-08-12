@@ -11,6 +11,8 @@ use codex_protocol::protocol::SessionSource;
 use base64::Engine;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ModelProviderAuthInfo;
+use codex_protocol::shell_environment::OPENAI_FEDERATION_RULE_ID_ENV_VAR;
+use codex_protocol::shell_environment::OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR;
 use pretty_assertions::assert_eq;
 use serde::Serialize;
 use serde_json::json;
@@ -1700,6 +1702,96 @@ impl Drop for EnvVarGuard {
 
 fn remove_access_token_env_var() -> EnvVarGuard {
     EnvVarGuard::remove(CODEX_ACCESS_TOKEN_ENV_VAR)
+}
+
+struct TestAuthManagerConfig(AuthConfig);
+
+impl AuthManagerConfig for TestAuthManagerConfig {
+    fn codex_home(&self) -> PathBuf {
+        self.0.codex_home.clone()
+    }
+
+    fn cli_auth_credentials_store_mode(&self) -> AuthCredentialsStoreMode {
+        self.0.auth_credentials_store_mode
+    }
+
+    fn auth_keyring_backend_kind(&self) -> AuthKeyringBackendKind {
+        self.0.keyring_backend_kind
+    }
+
+    fn forced_login_method(&self) -> Option<ForcedLoginMethod> {
+        self.0.forced_login_method
+    }
+
+    fn forced_chatgpt_workspace_id(&self) -> Option<Vec<String>> {
+        self.0.forced_chatgpt_workspace_id.clone()
+    }
+
+    fn managed_auth_policy(&self) -> ManagedAuthPolicy {
+        self.0.managed_auth_policy.clone()
+    }
+
+    fn chatgpt_base_url(&self) -> String {
+        self.0
+            .chatgpt_base_url
+            .clone()
+            .expect("test config should include a ChatGPT base URL")
+    }
+
+    fn auth_route_config(&self) -> AuthRouteConfig {
+        self.0.auth_route_config.clone()
+    }
+}
+
+fn test_auth_manager_config(codex_home: &Path) -> TestAuthManagerConfig {
+    TestAuthManagerConfig(AuthConfig {
+        codex_home: codex_home.to_path_buf(),
+        auth_credentials_store_mode: AuthCredentialsStoreMode::File,
+        keyring_backend_kind: AuthKeyringBackendKind::Direct,
+        forced_login_method: Some(ForcedLoginMethod::Chatgpt),
+        chatgpt_base_url: Some("https://chatgpt-staging.com/backend-api".to_string()),
+        forced_chatgpt_workspace_id: Some(vec!["forced-workspace".to_string()]),
+        managed_auth_policy: ManagedAuthPolicy {
+            allowed_login_methods: Some(vec![ForcedLoginMethod::Chatgpt]),
+            allowed_chatgpt_workspaces: Some(vec![
+                "forced-workspace".to_string(),
+                "managed-workspace".to_string(),
+            ]),
+        },
+        auth_route_config: AuthRouteConfig::from_http_client_factory(HttpClientFactory::new(
+            OutboundProxyPolicy::RespectSystemProxy,
+        )),
+    })
+}
+
+#[test]
+fn auth_config_from_preserves_all_fields() {
+    let codex_home = tempdir().expect("tempdir");
+    let config = test_auth_manager_config(codex_home.path());
+
+    assert_eq!(auth_config_from(&config), config.0);
+}
+
+#[tokio::test]
+#[serial(codex_auth_env)]
+async fn try_shared_from_config_rejects_partial_workload_identity_configuration() {
+    let codex_home = tempdir().expect("tempdir");
+    let config = test_auth_manager_config(codex_home.path());
+    let _access_token_guard = remove_access_token_env_var();
+    let _rule_guard = EnvVarGuard::set(OPENAI_FEDERATION_RULE_ID_ENV_VAR, "rule-one");
+    let _assertion_file_guard = EnvVarGuard::remove(OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR);
+
+    let error =
+        AuthManager::try_shared_from_config(&config, /*enable_codex_api_key_env*/ false)
+            .await
+            .expect_err("partial workload identity config should fail closed");
+
+    assert!(matches!(error, RefreshTokenError::Permanent(_)));
+    assert!(
+        error
+            .to_string()
+            .contains(OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR)
+    );
 }
 
 #[tokio::test]

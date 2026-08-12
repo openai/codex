@@ -61,3 +61,27 @@ pub enum WorkloadIdentityError {
     #[error("the workload identity token exchange returned an invalid response")]
     InvalidExchangeResponse,
 }
+
+impl WorkloadIdentityError {
+    /// Whether retrying the operation may succeed without changing configuration.
+    pub fn is_transient(&self) -> bool {
+        match self {
+            Self::AssertionFile { source, .. } => matches!(
+                source.kind(),
+                std::io::ErrorKind::Interrupted
+                    | std::io::ErrorKind::NotFound
+                    | std::io::ErrorKind::TimedOut
+                    | std::io::ErrorKind::WouldBlock
+            ),
+            Self::ExchangeUnavailable | Self::ExchangeRejected(408 | 429 | 500..=599) => true,
+            Self::InvalidFederationRuleId
+            | Self::AssertionFileMustBeAbsolute
+            | Self::InvalidAssertion
+            | Self::AssertionTooLarge
+            | Self::HttpClientConfiguration
+            | Self::InvalidTokenUrl
+            | Self::ExchangeRejected(_)
+            | Self::InvalidExchangeResponse => false,
+        }
+    }
+}

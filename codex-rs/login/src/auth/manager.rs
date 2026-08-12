@@ -38,6 +38,8 @@ use super::agent_identity::require_agent_identity_authapi_base_url;
 use super::agent_identity::verified_record_from_jwt;
 use super::external_bearer::BearerTokenRefresher;
 use super::revoke::revoke_auth_tokens;
+use super::workload_identity::WorkloadIdentityExternalAuth;
+use super::workload_identity::WorkloadIdentitySessionError;
 use crate::auth::AuthHeaders;
 pub use crate::auth::agent_identity::AgentIdentityAuth;
 pub use crate::auth::agent_identity::AgentIdentityAuthError;
@@ -2672,20 +2674,7 @@ impl AuthManager {
         config: &impl AuthManagerConfig,
         enable_codex_api_key_env: bool,
     ) -> Arc<Self> {
-        Self::shared_from_auth_config(
-            AuthConfig {
-                codex_home: config.codex_home(),
-                auth_credentials_store_mode: config.cli_auth_credentials_store_mode(),
-                keyring_backend_kind: config.auth_keyring_backend_kind(),
-                forced_login_method: config.forced_login_method(),
-                chatgpt_base_url: Some(config.chatgpt_base_url()),
-                forced_chatgpt_workspace_id: config.forced_chatgpt_workspace_id(),
-                managed_auth_policy: config.managed_auth_policy(),
-                auth_route_config: config.auth_route_config(),
-            },
-            enable_codex_api_key_env,
-        )
-        .await
+        Self::shared_from_auth_config(auth_config_from(config), enable_codex_api_key_env).await
     }
 
     /// Builds a shared manager using restrictions resolved before authentication.
@@ -2694,6 +2683,33 @@ impl AuthManager {
         enable_codex_api_key_env: bool,
     ) -> Arc<Self> {
         Arc::new(Self::new_from_auth_config(auth_config, enable_codex_api_key_env).await)
+    }
+
+    /// Constructs a manager and activates process-configured workload identity when selected.
+    pub async fn try_shared_from_config(
+        config: &impl AuthManagerConfig,
+        enable_codex_api_key_env: bool,
+    ) -> Result<Arc<Self>, RefreshTokenError> {
+        Self::try_shared_from_auth_config(auth_config_from(config), enable_codex_api_key_env).await
+    }
+
+    /// Activates workload identity against an auth config resolved before full runtime config.
+    pub async fn try_shared_from_auth_config(
+        auth_config: AuthConfig,
+        enable_codex_api_key_env: bool,
+    ) -> Result<Arc<Self>, RefreshTokenError> {
+        let external_auth = WorkloadIdentityExternalAuth::from_process_config(
+            &auth_config,
+            enable_codex_api_key_env,
+        )
+        .map_err(configured_workload_identity_error)?;
+        let manager = Self::shared_from_auth_config(auth_config, enable_codex_api_key_env).await;
+        if let Some(external_auth) = external_auth {
+            manager
+                .set_configured_external_auth(Arc::new(external_auth))
+                .await?;
+        }
+        Ok(manager)
     }
 
     pub fn unauthorized_recovery(self: &Arc<Self>) -> UnauthorizedRecovery {
@@ -3001,6 +3017,26 @@ impl AuthManager {
 
         Ok(())
     }
+}
+
+fn auth_config_from(config: &impl AuthManagerConfig) -> AuthConfig {
+    AuthConfig {
+        codex_home: config.codex_home(),
+        auth_credentials_store_mode: config.cli_auth_credentials_store_mode(),
+        keyring_backend_kind: config.auth_keyring_backend_kind(),
+        forced_login_method: config.forced_login_method(),
+        chatgpt_base_url: Some(config.chatgpt_base_url()),
+        forced_chatgpt_workspace_id: config.forced_chatgpt_workspace_id(),
+        managed_auth_policy: config.managed_auth_policy(),
+        auth_route_config: config.auth_route_config(),
+    }
+}
+
+fn configured_workload_identity_error(error: WorkloadIdentitySessionError) -> RefreshTokenError {
+    RefreshTokenError::Permanent(RefreshTokenFailedError::new(
+        RefreshTokenFailedReason::Other,
+        error.to_string(),
+    ))
 }
 
 #[cfg(test)]
