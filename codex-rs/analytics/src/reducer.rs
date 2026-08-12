@@ -33,6 +33,8 @@ use crate::events::CodexPluginEventRequest;
 use crate::events::CodexPluginInstallFailedEventRequest;
 use crate::events::CodexPluginInstallFailedMetadata;
 use crate::events::CodexPluginInstallRequestedEventRequest;
+use crate::events::CodexPluginMeasurementEventParams;
+use crate::events::CodexPluginMeasurementEventRequest;
 use crate::events::CodexPluginUsedEventRequest;
 use crate::events::CodexReviewEventParams;
 use crate::events::CodexReviewEventRequest;
@@ -94,6 +96,8 @@ use crate::facts::InternalToolInputLog; // copybara:strip-for-public
 use crate::facts::InvocationType;
 use crate::facts::PluginInstallFailedInput;
 use crate::facts::PluginInstallRequestedInput;
+use crate::facts::PluginMeasurementRow;
+use crate::facts::PluginMeasurementsInput;
 use crate::facts::PluginState;
 use crate::facts::PluginStateChangedInput;
 use crate::facts::PluginUsedInput;
@@ -172,6 +176,28 @@ const MAX_INTERNAL_TOOL_FIELDS_JSON_BYTES: usize = 64 * 1024;
 static INTERNAL_TOOL_INPUT_SEQUENCE_NUMBER: AtomicU64 = AtomicU64::new(1);
 // copybara:strip-for-public end
 const MAX_TOOL_RESPONSE_ENTRIES: usize = 256;
+
+pub(crate) const MAX_PLUGIN_MEASUREMENTS_PER_BATCH: usize = 100;
+const MAX_PLUGIN_MEASUREMENT_DIMENSIONS: usize = 8;
+const MAX_PLUGIN_MEASUREMENT_IDENTIFIER_BYTES: usize = 64;
+
+pub(crate) fn valid_plugin_measurement_identifier(value: &str) -> bool {
+    let mut characters = value.chars();
+    matches!(characters.next(), Some('a'..='z'))
+        && value.len() <= MAX_PLUGIN_MEASUREMENT_IDENTIFIER_BYTES
+        && characters.all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '_'
+        })
+}
+
+pub(crate) fn valid_plugin_measurement_row(row: &PluginMeasurementRow) -> bool {
+    row.number_value.is_finite()
+        && valid_plugin_measurement_identifier(&row.measurement_name)
+        && row.dimensions.len() <= MAX_PLUGIN_MEASUREMENT_DIMENSIONS
+        && row.dimensions.iter().all(|(name, value)| {
+            valid_plugin_measurement_identifier(name) && valid_plugin_measurement_identifier(value)
+        })
+}
 
 #[derive(Default)]
 pub(crate) struct AnalyticsReducer {
@@ -624,6 +650,9 @@ impl AnalyticsReducer {
                 }
                 CustomAnalyticsFact::PluginInstallFailed(input) => {
                     self.ingest_plugin_install_failed(input, out);
+                }
+                CustomAnalyticsFact::PluginMeasurements(input) => {
+                    self.ingest_plugin_measurements(input, out);
                 }
                 CustomAnalyticsFact::ExternalAgentConfigImportCompleted(input) => {
                     self.ingest_external_agent_config_import_completed(input, out);
@@ -1844,6 +1873,48 @@ impl AnalyticsReducer {
             }
             _ => {}
         }
+    }
+
+    fn ingest_plugin_measurements(
+        &mut self,
+        input: PluginMeasurementsInput,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        if input.rows.is_empty()
+            || input.rows.len() > MAX_PLUGIN_MEASUREMENTS_PER_BATCH
+            || !valid_plugin_measurement_identifier(&input.operation)
+        {
+            return;
+        }
+        let PluginMeasurementsInput {
+            thread_id,
+            turn_id,
+            item_id,
+            plugin_id,
+            execution_id,
+            operation,
+            rows,
+        } = input;
+        out.extend(
+            rows.into_iter()
+                .filter(valid_plugin_measurement_row)
+                .map(|row| {
+                    TrackEventRequest::PluginMeasurement(CodexPluginMeasurementEventRequest {
+                        event_type: "codex_plugin_measurement_event",
+                        event_params: CodexPluginMeasurementEventParams {
+                            thread_id: thread_id.clone(),
+                            turn_id: turn_id.clone(),
+                            item_id: item_id.clone(),
+                            plugin_id: plugin_id.clone(),
+                            execution_id: execution_id.clone(),
+                            operation: operation.clone(),
+                            measurement_name: row.measurement_name,
+                            number_value: row.number_value,
+                            dimensions: (!row.dimensions.is_empty()).then_some(row.dimensions),
+                        },
+                    })
+                }),
+        );
     }
 
     fn emit_thread_initialized(

@@ -28,6 +28,7 @@ use crate::facts::PluginInstallFailedInput;
 use crate::facts::PluginInstallRequested;
 use crate::facts::PluginInstallRequestedInput;
 use crate::facts::PluginInstallSource;
+use crate::facts::PluginMeasurementsInput;
 use crate::facts::PluginState;
 use crate::facts::PluginStateChangedInput;
 use crate::facts::SkillInvocation;
@@ -40,6 +41,9 @@ use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnTokenUsageFact;
 use crate::now_unix_millis;
 use crate::reducer::AnalyticsReducer;
+use crate::reducer::MAX_PLUGIN_MEASUREMENTS_PER_BATCH;
+use crate::reducer::valid_plugin_measurement_identifier;
+use crate::reducer::valid_plugin_measurement_row;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::InitializeParams;
@@ -392,6 +396,26 @@ impl AnalyticsEventsClient {
         if !matches!(flushed, Ok(true)) {
             tracing::warn!("timed out or failed while flushing analytics events");
         }
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.queue.is_some()
+    }
+
+    pub fn track_plugin_measurements(&self, mut input: PluginMeasurementsInput) {
+        if input.rows.is_empty()
+            || input.rows.len() > MAX_PLUGIN_MEASUREMENTS_PER_BATCH
+            || !valid_plugin_measurement_identifier(&input.operation)
+        {
+            return;
+        }
+        input.rows.retain(valid_plugin_measurement_row);
+        if input.rows.is_empty() {
+            return;
+        }
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::PluginMeasurements(input),
+        ));
     }
 
     pub fn track_skill_invocations(

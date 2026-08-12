@@ -21,6 +21,10 @@ use crate::events::CodexMcpToolCallEventParams;
 #[cfg(debug_assertions)]
 use crate::events::CodexMcpToolCallEventRequest;
 #[cfg(debug_assertions)]
+use crate::events::CodexPluginMeasurementEventParams;
+#[cfg(debug_assertions)]
+use crate::events::CodexPluginMeasurementEventRequest;
+#[cfg(debug_assertions)]
 use crate::events::CodexPluginMetadata;
 #[cfg(debug_assertions)]
 use crate::events::CodexPluginUsedEventRequest;
@@ -50,9 +54,13 @@ use crate::facts::AnalyticsFact;
 use crate::facts::ArtifactOperation;
 #[cfg(debug_assertions)]
 use crate::facts::ArtifactOperationLifecycle;
+use crate::facts::CustomAnalyticsFact;
 use crate::facts::InvocationType;
+use crate::facts::PluginMeasurementRow;
+use crate::facts::PluginMeasurementsInput;
 #[cfg(debug_assertions)]
 use crate::facts::TrackEventsContext;
+use crate::reducer::MAX_PLUGIN_MEASUREMENTS_PER_BATCH;
 use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval as AppServerAskForApproval;
 use codex_app_server_protocol::ClientRequest;
@@ -84,6 +92,7 @@ use codex_login::AuthManager;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::test_path_buf;
 use pretty_assertions::assert_eq;
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 #[cfg(debug_assertions)]
 use std::fs;
@@ -429,6 +438,22 @@ async fn api_key_auth_sends_only_plugin_events_to_codex_backend() {
     let auth_manager = codex_login::AuthManager::from_auth_for_testing(
         codex_login::CodexAuth::from_api_key("sk-test"),
     );
+    let plugin_measurement = |thread_id: &str, plugin_id: &str| {
+        TrackEventRequest::PluginMeasurement(CodexPluginMeasurementEventRequest {
+            event_type: "codex_plugin_measurement_event",
+            event_params: CodexPluginMeasurementEventParams {
+                thread_id: thread_id.to_string(),
+                turn_id: "turn-1".to_string(),
+                item_id: "item-1".to_string(),
+                plugin_id: plugin_id.to_string(),
+                execution_id: "execution-1".to_string(),
+                operation: "security_scan".to_string(),
+                measurement_name: "findings".to_string(),
+                number_value: 1.0,
+                dimensions: None,
+            },
+        })
+    };
 
     send_track_events(
         &auth_manager,
@@ -437,6 +462,7 @@ async fn api_key_auth_sends_only_plugin_events_to_codex_backend() {
             sample_regular_track_event("non-plugin-skill"),
             sample_mcp_tool_call_event("non-plugin-mcp", /*plugin_id*/ None),
             sample_plugin_used_track_event("non-plugin-used", /*plugin_id*/ None),
+            plugin_measurement("non-plugin-measurement", /*plugin_id*/ ""),
             sample_accepted_line_fingerprint_event("other-event"),
             TrackEventRequest::ThreadArchive(ThreadArchiveEvent {
                 event_type: "codex_thread_archive_event",
@@ -450,6 +476,7 @@ async fn api_key_auth_sends_only_plugin_events_to_codex_backend() {
             sample_skill_track_event("plugin-skill", Some("sample@test")),
             sample_mcp_tool_call_event("plugin-mcp", Some("sample@test")),
             sample_artifact_operation_event("plugin-artifact"),
+            plugin_measurement("plugin-measurement", "sample@test"),
         ],
     )
     .await;
@@ -503,6 +530,11 @@ async fn api_key_auth_sends_only_plugin_events_to_codex_backend() {
                 "event_type": "codex_artifact_operation",
                 "plugin_id": "presentations@openai-primary-runtime",
                 "thread_id": "plugin-artifact",
+            }),
+            serde_json::json!({
+                "event_type": "codex_plugin_measurement_event",
+                "plugin_id": "sample@test",
+                "thread_id": "plugin-measurement",
             }),
         ]
     );
@@ -678,6 +710,66 @@ fn sample_turn_steer_response() -> ClientResponsePayload {
     ClientResponsePayload::TurnSteer(TurnSteerResponse {
         turn_id: "turn-2".to_string(),
     })
+}
+
+#[test]
+fn track_plugin_measurements_rejects_unbounded_inputs_before_queueing() {
+    let (client, mut receiver) = client_with_receiver();
+    let measurements = |row_count| PluginMeasurementsInput {
+        thread_id: "thread-1".to_string(),
+        turn_id: "turn-1".to_string(),
+        item_id: "item-1".to_string(),
+        plugin_id: "sample@openai-curated".to_string(),
+        execution_id: "execution-1".to_string(),
+        operation: "security_scan".to_string(),
+        rows: vec![
+            PluginMeasurementRow {
+                measurement_name: "finding_count".to_string(),
+                number_value: 1.0,
+                dimensions: BTreeMap::new(),
+            };
+            row_count
+        ],
+    };
+
+    client.track_plugin_measurements(measurements(MAX_PLUGIN_MEASUREMENTS_PER_BATCH + 1));
+    assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
+
+    let mut oversized_operation = measurements(1);
+    oversized_operation.operation = "o".repeat(65);
+    client.track_plugin_measurements(oversized_operation);
+    assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
+
+    let mut mixed_rows = measurements(4);
+    mixed_rows.rows[0].measurement_name = "m".repeat(65);
+    mixed_rows.rows[1]
+        .dimensions
+        .insert("d".repeat(65), "valid".to_string());
+    mixed_rows.rows[2]
+        .dimensions
+        .insert("valid".to_string(), "v".repeat(65));
+    client.track_plugin_measurements(mixed_rows);
+    assert!(matches!(
+        receiver.try_recv(),
+        Ok(AnalyticsEventsQueueMessage::Fact(fact))
+            if matches!(
+                fact.as_ref(),
+                AnalyticsFact::Custom(CustomAnalyticsFact::PluginMeasurements(input))
+                    if input.rows.len() == 1
+                        && input.rows[0].measurement_name == "finding_count"
+            )
+    ));
+
+    client.track_plugin_measurements(measurements(MAX_PLUGIN_MEASUREMENTS_PER_BATCH));
+    assert!(matches!(
+        receiver.try_recv(),
+        Ok(AnalyticsEventsQueueMessage::Fact(fact))
+            if matches!(
+                fact.as_ref(),
+                AnalyticsFact::Custom(CustomAnalyticsFact::PluginMeasurements(input))
+                    if input.rows.len() == MAX_PLUGIN_MEASUREMENTS_PER_BATCH
+            )
+    ));
 }
 
 #[test]
@@ -877,7 +969,6 @@ fn track_event_request_batches_only_isolates_accepted_line_fingerprint_events() 
     assert!(batches[2][0].should_send_in_isolated_request());
 }
 // copybara:strip-for-public begin
-use crate::facts::CustomAnalyticsFact;
 use crate::facts::InternalToolHookOutcome;
 use crate::facts::InternalToolInputLog;
 use crate::facts::InternalToolSourceKind;
