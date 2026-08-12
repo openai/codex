@@ -4,6 +4,8 @@ pub(crate) mod types;
 pub use client::AddCreditsNudgeCreditType;
 pub use client::Client;
 pub use client::RequestError;
+pub use client::ThreadUsage;
+pub use client::ThreadUsageBreakdownGroup;
 pub use types::AccountEntry;
 pub use types::AccountsCheckResponse;
 pub use types::CodeTaskDetailsResponse;
