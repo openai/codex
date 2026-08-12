@@ -453,21 +453,16 @@ async fn rejected_queue_messages_are_consumed_without_retrying_or_blocking_follo
     assert!(queue.list(thread_id).await?.is_empty());
 
     let rejected = staging.enqueue(thread_id, user_input("blocked")).await?;
-    let error = tokio::time::timeout(
+    let admission = tokio::time::timeout(
         Duration::from_secs(10),
         queue.start(test.codex.as_ref(), rejected.id, /*trace*/ None),
     )
-    .await?
-    .expect_err("explicitly started blocked input should be rejected");
-    assert!(matches!(
-        error,
-        QueueServiceError::Admission(error)
-            if matches!(
-                error.details(),
-                codex_protocol::error::CodexErrorDetails::InvalidRequest(message)
-                    if message == "user message was rejected by a hook"
-            )
-    ));
+    .await??;
+    assert!(matches!(admission, UserMessageAdmission::Started { .. }));
+    wait_for_event_match(test.codex.as_ref(), |event| {
+        matches!(event, EventMsg::TurnComplete(_)).then_some(())
+    })
+    .await;
     assert!(queue.list(thread_id).await?.is_empty());
     let hook_log = std::fs::read_to_string(test.codex_home_path().join("queue_prompt_hook.log"))?;
     assert_eq!(
@@ -732,7 +727,7 @@ async fn invalid_head_is_skipped_and_a_live_user_turn_is_accepted() -> anyhow::R
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn resumed_idle_dispatches_input_persisted_without_a_loaded_manager() -> anyhow::Result<()> {
+async fn resumed_idle_dispatches_input_without_a_loaded_manager() -> anyhow::Result<()> {
     let server = start_mock_server().await;
     responses::mount_sse_once(&server, responses::sse_completed("resumed-turn")).await;
     let test = test_codex().build_with_auto_env(&server).await?;

@@ -123,9 +123,6 @@ impl Session {
             ));
         }
 
-        let (input_persisted_sender, input_persisted_receiver) =
-            has_user_input.then(tokio::sync::oneshot::channel).unzip();
-        let original_input = input.clone();
         let task_input = if has_user_input {
             self.clear_connector_selection().await;
             for item in &input {
@@ -144,18 +141,9 @@ impl Session {
             turn_context,
             task_input,
             RegularTask::new(),
-            input_persisted_sender,
             MailboxParentProvenance::Ignore,
         )
         .await;
-        if let Some(receiver) = input_persisted_receiver {
-            return receiver
-                .await
-                .unwrap_or(Err(
-                    TryStartTurnIfIdleRejectionReason::TaskEndedBeforePersistence,
-                ))
-                .map_err(|reason| TryStartTurnIfIdleError::new(reason, original_input));
-        }
         Ok(())
     }
 

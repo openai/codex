@@ -43,7 +43,6 @@ use codex_thread_store::ReadThreadParams;
 use serde_json::Value;
 use tracing::instrument;
 
-use crate::codex_thread::TryStartTurnIfIdleRejectionReason;
 use crate::context::ContextualUserFragment;
 use crate::context::HookAdditionalContext;
 use crate::event_mapping::parse_turn_item;
@@ -52,7 +51,6 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::sandboxing::PermissionRequestPayload;
-use crate::user_message_admission::UserMessageAdmissionError;
 
 pub(crate) struct HookRuntimeOutcome {
     pub should_stop: bool,
@@ -574,72 +572,15 @@ pub(crate) async fn inspect_pending_input(
     }
 }
 
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "durable queue admission must settle before its active turn can be aborted"
-)]
 pub(crate) async fn record_pending_input(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     pending_input: TurnInput,
     additional_contexts: Vec<String>,
     persist_context: PersistContext,
-) -> Result<(), TryStartTurnIfIdleRejectionReason> {
+) {
     match pending_input {
         TurnInput::UserInput { content, client_id } => {
-            let awaiting_admission = client_id.as_deref().is_some_and(|client_id| {
-                sess.pending_user_message_admissions
-                    .contains_client_id(client_id)
-            });
-            let mut active = sess.active_turn.lock().await;
-            let input_persisted = active
-                .as_mut()
-                .and_then(|turn| turn.task.as_mut())
-                .filter(|task| Arc::ptr_eq(&task.turn_context, turn_context))
-                .and_then(|task| task.input_persisted.take());
-            if awaiting_admission || input_persisted.is_some() {
-                // An admission acknowledgment always requires synchronous persistence.
-                sess.record_user_prompt_and_emit_turn_item(
-                    turn_context.as_ref(),
-                    content.as_slice(),
-                    client_id.clone(),
-                    PersistContext::Standard,
-                )
-                .await;
-                record_additional_contexts(sess, turn_context, additional_contexts).await;
-                match sess.flush_rollout().await {
-                    Ok(()) => {
-                        if awaiting_admission && let Some(client_id) = client_id.as_deref() {
-                            sess.pending_user_message_admissions
-                                .complete_persistence(client_id, Ok(()));
-                        }
-                        if let Some(sender) = input_persisted {
-                            let _ = sender.send(Ok(()));
-                        }
-                    }
-                    Err(error) => {
-                        let error = codex_protocol::error::CodexErr::from(error);
-                        sess.send_event(
-                            turn_context.as_ref(),
-                            EventMsg::Error(error.to_error_event(/*message_prefix*/ None)),
-                        )
-                        .await;
-                        if awaiting_admission && let Some(client_id) = client_id.as_deref() {
-                            sess.pending_user_message_admissions.complete_persistence(
-                                client_id,
-                                Err(UserMessageAdmissionError::PersistenceFailed(error)),
-                            );
-                        }
-                        if let Some(sender) = input_persisted {
-                            let _ = sender
-                                .send(Err(TryStartTurnIfIdleRejectionReason::PersistenceFailed));
-                        }
-                        return Err(TryStartTurnIfIdleRejectionReason::PersistenceFailed);
-                    }
-                }
-                return Ok(());
-            }
-            drop(active);
             sess.record_user_prompt_and_emit_turn_item(
                 turn_context.as_ref(),
                 content.as_slice(),
@@ -658,32 +599,6 @@ pub(crate) async fn record_pending_input(
         }
     }
     record_additional_contexts(sess, turn_context, additional_contexts).await;
-    Ok(())
-}
-
-pub(crate) async fn reject_pending_input(
-    sess: &Arc<Session>,
-    turn_context: &Arc<TurnContext>,
-    pending_input: &TurnInput,
-) {
-    let TurnInput::UserInput { client_id, .. } = pending_input else {
-        return;
-    };
-    if let Some(client_id) = client_id.as_deref() {
-        sess.pending_user_message_admissions
-            .complete_persistence(client_id, Err(UserMessageAdmissionError::RejectedByHook));
-    }
-    let input_persisted = {
-        let mut active = sess.active_turn.lock().await;
-        active
-            .as_mut()
-            .and_then(|turn| turn.task.as_mut())
-            .filter(|task| Arc::ptr_eq(&task.turn_context, turn_context))
-            .and_then(|task| task.input_persisted.take())
-    };
-    if let Some(sender) = input_persisted {
-        let _ = sender.send(Err(TryStartTurnIfIdleRejectionReason::RejectedByHook));
-    }
 }
 
 /// Processes finished async hook results at a safe turn boundary.

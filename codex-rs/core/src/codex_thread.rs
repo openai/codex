@@ -7,9 +7,7 @@ use crate::session::SessionSettingsUpdate;
 use crate::session::SteerInputError;
 use crate::session::TurnInput;
 use crate::session::session::Session;
-use crate::user_message_admission::PendingUserMessageAdmissionState;
 use crate::user_message_admission::UserMessageAdmission;
-use crate::user_message_admission::UserMessageAdmissionError;
 use codex_diagnostics::Gauge;
 use codex_diagnostics::GaugeGuard;
 use codex_exec_server::SelectedCapabilityRootsStatus;
@@ -111,12 +109,6 @@ pub enum TryStartTurnIfIdleRejectionReason {
     /// Another turn or task is active, or the idle reservation was lost before
     /// the automatic turn could start.
     Busy,
-    /// A user-prompt hook consumed and rejected the submitted input.
-    RejectedByHook,
-    /// The automatic turn ended before its initial input was persisted.
-    TaskEndedBeforePersistence,
-    /// The initial input could not be durably written to the rollout.
-    PersistenceFailed,
 }
 
 /// Rejection returned when an extension asks to start automatic idle work but
@@ -331,72 +323,21 @@ impl CodexThread {
         trace: Option<W3cTraceContext>,
         client_user_message_id: Option<String>,
     ) -> CodexResult<UserMessageAdmission> {
-        self.submit_user_input_and_wait_for_admission_inner(
-            op,
-            trace,
-            client_user_message_id,
-            PendingUserMessageAdmissionState::Immediate,
-        )
-        .await
-        .map_err(Into::into)
-    }
-
-    /// Waits for durable admission and preserves its typed failure outcome.
-    ///
-    /// A client user-message id is required to identify the persisted message.
-    pub async fn submit_user_input_and_wait_for_persisted_admission(
-        &self,
-        op: Op,
-        trace: Option<W3cTraceContext>,
-        client_user_message_id: Option<String>,
-    ) -> Result<UserMessageAdmission, UserMessageAdmissionError> {
-        if client_user_message_id.is_none() {
-            return Err(UserMessageAdmissionError::Admission(
-                CodexErr::InvalidRequest(
-                    "persisted user message admission requires a client user message id"
-                        .to_string(),
-                ),
-            ));
-        }
-        if matches!(&op, Op::UserInput { items, .. } if items.is_empty()) {
-            return Err(UserMessageAdmissionError::Admission(
-                CodexErr::InvalidRequest(
-                    "user message admission requires nonempty user input".to_string(),
-                ),
-            ));
-        }
-        self.submit_user_input_and_wait_for_admission_inner(
-            op,
-            trace,
-            client_user_message_id,
-            PendingUserMessageAdmissionState::WaitingForAdmission,
-        )
-        .await
-    }
-
-    async fn submit_user_input_and_wait_for_admission_inner(
-        &self,
-        op: Op,
-        trace: Option<W3cTraceContext>,
-        client_user_message_id: Option<String>,
-        state: PendingUserMessageAdmissionState,
-    ) -> Result<UserMessageAdmission, UserMessageAdmissionError> {
         let Op::UserInput { .. } = &op else {
-            return Err(UserMessageAdmissionError::Admission(
-                CodexErr::InvalidRequest("user message admission requires user input".to_string()),
+            return Err(CodexErr::InvalidRequest(
+                "user message admission requires user input".to_string(),
             ));
         };
         self.session
             .services
             .agent_control
             .ensure_execution_capacity_for_op(self.session.thread_id(), &op)
-            .await
-            .map_err(UserMessageAdmissionError::Admission)?;
+            .await?;
         let submission_id = crate::session::new_submission_id();
         let (_pending_admission, admission) = self
             .session
             .pending_user_message_admissions
-            .register(submission_id.clone(), client_user_message_id.clone(), state);
+            .register(submission_id.clone());
         self.io
             .submit_with_id(Submission {
                 id: submission_id.clone(),
@@ -405,14 +346,12 @@ impl CodexThread {
                 trace,
                 parent_turn_id: None,
             })
-            .await
-            .map_err(UserMessageAdmissionError::Admission)?;
+            .await?;
         tokio::select! {
             biased;
-            result = admission => result
-                .unwrap_or(Err(UserMessageAdmissionError::TaskEndedBeforePersistence)),
+            result = admission => result.unwrap_or(Err(CodexErr::InternalAgentDied)),
             () = self.io.session_loop_termination.clone() => {
-                Err(UserMessageAdmissionError::TaskEndedBeforePersistence)
+                Err(CodexErr::InternalAgentDied)
             },
         }
     }

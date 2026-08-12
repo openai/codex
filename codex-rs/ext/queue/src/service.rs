@@ -6,10 +6,8 @@ use std::sync::Weak;
 
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
-use codex_core::TryStartTurnIfIdleRejectionReason;
 use codex_core::TurnInput;
 use codex_core::UserMessageAdmission;
-use codex_core::UserMessageAdmissionError;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ThreadIdleCause;
@@ -191,7 +189,8 @@ impl QueuedItemService {
         Ok(())
     }
 
-    /// Starts or steers the exact queued message and removes it after admission.
+    /// Starts or steers the exact queued message and removes it after Core
+    /// accepts the input for turn processing.
     pub async fn start(
         &self,
         thread: &CodexThread,
@@ -212,7 +211,7 @@ impl QueuedItemService {
             return Err(QueueServiceError::InvalidInput);
         };
         let admission = thread
-            .submit_user_input_and_wait_for_persisted_admission(
+            .submit_user_input_and_wait_for_admission(
                 Op::UserInput {
                     items: content,
                     final_output_json_schema: None,
@@ -223,16 +222,7 @@ impl QueuedItemService {
                 trace,
                 client_id,
             )
-            .await;
-        let admission = match admission {
-            Ok(admission) => admission,
-            Err(error) => {
-                if matches!(&error, UserMessageAdmissionError::RejectedByHook) {
-                    self.delete_locked(thread_id, queued_item_id).await?;
-                }
-                return Err(QueueServiceError::Admission(error.into()));
-            }
-        };
+            .await?;
         self.delete_locked(thread_id, queued_item_id).await?;
         Ok(admission)
     }
@@ -272,10 +262,6 @@ impl QueuedItemService {
             }
 
             if let Err(error) = thread.try_start_turn_if_idle(vec![input]).await {
-                if error.reason() == TryStartTurnIfIdleRejectionReason::RejectedByHook {
-                    self.delete_locked(thread_id, queued_item_id).await?;
-                    continue;
-                }
                 tracing::warn!(
                     %thread_id,
                     %queued_item_id,

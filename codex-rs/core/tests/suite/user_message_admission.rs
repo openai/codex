@@ -1,8 +1,5 @@
 use codex_core::UserMessageAdmission;
-use codex_core::UserMessageAdmissionError;
 use codex_core::config::Constrained;
-use codex_history::RolloutItem;
-use codex_history::RolloutLine;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
@@ -104,34 +101,6 @@ async fn user_message_admission_starts_turn_for_empty_input() {
     assert!(user_input_groups[0][0].starts_with("<environment_context>"));
 }
 
-#[tokio::test]
-async fn persisted_user_message_admission_rejects_empty_input() {
-    let server = responses::start_mock_server().await;
-    let test = test_codex()
-        .with_model("gpt-5.4")
-        .build_with_auto_env(&server)
-        .await
-        .expect("build persisted user-message admission session");
-
-    let error = timeout(
-        Duration::from_secs(5),
-        test.codex
-            .submit_user_input_and_wait_for_persisted_admission(
-                empty_user_input(),
-                /*trace*/ None,
-                Some("empty-client-message".to_string()),
-            ),
-    )
-    .await
-    .expect("empty persisted input should be rejected promptly")
-    .expect_err("empty input cannot produce a persisted user message");
-    assert!(matches!(
-        error,
-        UserMessageAdmissionError::Admission(ref error)
-            if matches!(error.details(), CodexErrorDetails::InvalidRequest(_))
-    ));
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn default_turn_start_persists_developer_and_user_input_before_model_request() {
     let (release_response, response_gate) = oneshot::channel();
@@ -189,7 +158,7 @@ async fn default_turn_start_persists_developer_and_user_input_before_model_reque
     server.shutdown().await;
 }
 
-/// Concurrent submissions must start exactly one turn, steer the other message, and persist both client IDs.
+/// Concurrent submissions must start exactly one turn and steer the other message.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_message_admission_reports_started_and_steered_for_concurrent_submissions() {
     let (release_response, response_gate) = oneshot::channel();
@@ -225,7 +194,7 @@ async fn user_message_admission_reports_started_and_steered_for_concurrent_submi
         async move {
             barrier.wait().await;
             codex
-                .submit_user_input_and_wait_for_persisted_admission(
+                .submit_user_input_and_wait_for_admission(
                     user_input("first message"),
                     /*trace*/ None,
                     Some("client-message-1".to_string()),
@@ -239,7 +208,7 @@ async fn user_message_admission_reports_started_and_steered_for_concurrent_submi
         async move {
             barrier.wait().await;
             codex
-                .submit_user_input_and_wait_for_persisted_admission(
+                .submit_user_input_and_wait_for_admission(
                     user_input("second message"),
                     /*trace*/ None,
                     Some("client-message-2".to_string()),
@@ -263,7 +232,7 @@ async fn user_message_admission_reports_started_and_steered_for_concurrent_submi
         tokio::join!(first_submission, second_submission)
     })
     .await
-    .expect("both concurrent admissions should resolve once their messages are persisted");
+    .expect("both concurrent admissions should resolve");
     let first_admission = first_admission
         .expect("first submission task should finish")
         .expect("first user message should be admitted");
@@ -286,33 +255,6 @@ async fn user_message_admission_reports_started_and_steered_for_concurrent_submi
             ),
         };
     assert_eq!(started_turn_id, steered_turn_id);
-
-    let rollout_path = codex.rollout_path().expect("user-message rollout path");
-    let rollout = tokio::fs::read_to_string(rollout_path)
-        .await
-        .expect("read persisted user-message rollout");
-    let mut persisted_client_message_ids: Vec<_> = rollout
-        .lines()
-        .map(serde_json::from_str::<RolloutLine>)
-        .collect::<Result<Vec<_>, _>>()
-        .expect("parse persisted user-message rollout")
-        .into_iter()
-        .filter_map(|line| match line.item {
-            RolloutItem::EventMsg(EventMsg::ItemCompleted(event)) => match event.item {
-                TurnItem::UserMessage(message) => message.client_id,
-                _ => None,
-            },
-            _ => None,
-        })
-        .collect();
-    persisted_client_message_ids.sort();
-    assert_eq!(
-        persisted_client_message_ids,
-        vec![
-            "client-message-1".to_string(),
-            "client-message-2".to_string()
-        ]
-    );
 
     let mut observed_client_message_ids = Vec::new();
     loop {

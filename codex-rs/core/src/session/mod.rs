@@ -4124,10 +4124,6 @@ impl Session {
                 pending_input,
             )
             .await;
-        if let Some(client_id) = client_user_message_id.as_deref() {
-            self.pending_user_message_admissions
-                .associate_steered_by_client_id(client_id, active_turn_id);
-        }
         Ok(active_turn_id.clone())
     }
 
