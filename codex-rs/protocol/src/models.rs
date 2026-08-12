@@ -790,6 +790,11 @@ pub struct InternalChatMessageMetadataPassthrough {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub turn_id: Option<String>,
+    /// Message creation time in fractional Unix seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    #[ts(skip)]
+    pub create_time: Option<serde_json::Number>,
     /// Warehouse-only Responses metadata, not part of the public app-server protocol.
     #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
@@ -1131,6 +1136,39 @@ impl ResponseItem {
             return;
         };
         InternalChatMessageMetadataPassthrough::set_turn_id_if_missing(metadata, turn_id);
+    }
+
+    /// Stamps a harness-authored durable item without replacing its creation time.
+    pub fn set_create_time_if_missing(&mut self, create_time: serde_json::Number) {
+        let metadata = match self {
+            Self::Message {
+                role,
+                internal_chat_message_metadata_passthrough: metadata,
+                ..
+            } if matches!(role.as_str(), "user" | "developer") => metadata,
+            Self::AgentMessage {
+                internal_chat_message_metadata_passthrough: metadata,
+                ..
+            }
+            | Self::FunctionCallOutput {
+                internal_chat_message_metadata_passthrough: metadata,
+                ..
+            }
+            | Self::CustomToolCallOutput {
+                internal_chat_message_metadata_passthrough: metadata,
+                ..
+            }
+            | Self::ToolSearchOutput {
+                internal_chat_message_metadata_passthrough: metadata,
+                ..
+            } => metadata,
+            _ => return,
+        };
+
+        metadata
+            .get_or_insert_default()
+            .create_time
+            .get_or_insert(create_time);
     }
 
     /// Removes internal chat message metadata passthrough before sending to a provider that does
@@ -2357,9 +2395,19 @@ mod tests {
         let mut missing_turn_id = response_item_with_passthrough_metadata(
             /*internal_chat_message_metadata_passthrough*/ None,
         );
+        let create_time = serde_json::Number::from(123);
+        missing_turn_id.set_create_time_if_missing(create_time.clone());
         missing_turn_id.set_turn_id_if_missing("");
         missing_turn_id.set_turn_id_if_missing("turn-1");
-        assert_eq!(missing_turn_id.turn_id(), Some("turn-1"));
+        missing_turn_id.set_create_time_if_missing(serde_json::Number::from(456));
+        assert_eq!(
+            missing_turn_id.executed_tool_call_metadata(),
+            Some(&InternalChatMessageMetadataPassthrough {
+                turn_id: Some("turn-1".to_string()),
+                create_time: Some(create_time),
+                ..Default::default()
+            })
+        );
 
         let mut other = ResponseItem::Other;
         other.set_turn_id_if_missing("turn-1");

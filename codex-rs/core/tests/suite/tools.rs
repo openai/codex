@@ -409,10 +409,15 @@ async fn namespaced_custom_tool_call_preserves_namespace_through_dispatch_and_re
         .and_then(Value::as_str)
         .map(str::to_string)
         .expect("custom tool call should include turn metadata");
+    let custom_tool_output = request.custom_tool_call_output(call_id);
+    let output_create_time = custom_tool_output
+        .pointer("/internal_chat_message_metadata_passthrough/create_time")
+        .and_then(Value::as_f64)
+        .expect("custom tool output should include a creation timestamp");
     assert_eq!(
         (
             strip_response_item_ids_from_json(Value::Array(custom_tool_calls)),
-            strip_response_item_ids_from_json(request.custom_tool_call_output(call_id)),
+            strip_response_item_ids_from_json(custom_tool_output),
         ),
         (
             Value::Array(vec![json!({
@@ -431,6 +436,7 @@ async fn namespaced_custom_tool_call_preserves_namespace_through_dispatch_and_re
                 "output": format!("unsupported custom tool call: {namespace}{tool_name}"),
                 "internal_chat_message_metadata_passthrough": {
                     "turn_id": turn_id,
+                    "create_time": output_create_time,
                     "executed_tool_calls": [{
                         "name": format!("{namespace}__{tool_name}"),
                         "arguments": input,

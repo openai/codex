@@ -2948,6 +2948,20 @@ impl Session {
         }
     }
 
+    pub(crate) fn response_item_create_time() -> serde_json::Number {
+        let create_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default();
+        serde_json::Number::from_f64(create_time.as_secs_f64())
+            .unwrap_or_else(|| serde_json::Number::from(create_time.as_secs()))
+    }
+
+    /// Adds the turn ID and creation time to newly created conversation items.
+    pub(crate) fn stamp_response_item_for_history(item: &mut ResponseItem, turn_id: &str) {
+        item.set_turn_id_if_missing(turn_id);
+        item.set_create_time_if_missing(Self::response_item_create_time());
+    }
+
     /// Records conversation items: append to history, persist to rollout, and
     /// notify clients observing raw response items.
     pub(crate) fn prepare_conversation_items_for_history<'a>(
@@ -2981,7 +2995,7 @@ impl Session {
         prepare_audio_response_items(&mut items);
         // Most response items get their passthrough turn ID at the durable history boundary.
         for item in &mut items {
-            item.set_turn_id_if_missing(&turn_context.sub_id);
+            Self::stamp_response_item_for_history(item, &turn_context.sub_id);
         }
         let items = Cow::Owned(items);
         (
@@ -3223,9 +3237,8 @@ impl Session {
     pub(crate) async fn record_inter_agent_communication(
         &self,
         turn_context: &TurnContext,
-        mut communication: InterAgentCommunication,
+        communication: InterAgentCommunication,
     ) {
-        communication.set_turn_id_if_missing(&turn_context.sub_id);
         let response_item = communication.to_model_input_item();
         let (items, _) = self.prepare_conversation_items_for_history(
             turn_context,

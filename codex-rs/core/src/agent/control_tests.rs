@@ -1477,6 +1477,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         ThreadHistoryMode::Legacy
     );
     let history = child_thread.session.clone_history().await;
+    let history_items = history.raw_items().cloned().collect::<Vec<_>>();
     let mut expected_final_answer =
         assistant_message("parent final answer", Some(MessagePhase::FinalAnswer));
     expected_final_answer.set_turn_id_if_missing(&turn_context.sub_id);
@@ -1496,6 +1497,12 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         internal_chat_message_metadata_passthrough: None,
     };
     expected_developer_message.set_turn_id_if_missing(&turn_context.sub_id);
+    expected_developer_message.set_create_time_if_missing(
+        history_items[1]
+            .executed_tool_call_metadata()
+            .and_then(|metadata| metadata.create_time.clone())
+            .expect("recorded developer message should have a creation timestamp"),
+    );
     let expected_history = [
         expected_parent_seed,
         expected_developer_message,
@@ -1510,7 +1517,6 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
             internal_chat_message_metadata_passthrough: None,
         },
     ];
-    let history_items = history.raw_items().cloned().collect::<Vec<_>>();
     assert_eq!(
         strip_response_item_ids(&history_items),
         strip_response_item_ids(&expected_history),

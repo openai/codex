@@ -382,8 +382,15 @@ mod tests {
         session
             .record_conversation_items(&turn, std::slice::from_ref(&history_item))
             .await;
-        let mut expected_history_item = history_item.clone();
-        expected_history_item.set_turn_id_if_missing(&turn_id);
+        let expected_history_item = strip_response_item_id(
+            session
+                .clone_history()
+                .await
+                .raw_items()
+                .next()
+                .expect("history item")
+                .clone(),
+        );
         let raw_history_event = rx.recv().await.expect("history raw response item event");
         let EventMsg::RawResponseItem(raw_history_item) = raw_history_event.msg else {
             panic!("expected raw response item event");

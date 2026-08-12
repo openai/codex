@@ -17,6 +17,7 @@ struct SpawnAgentThreadInheritance {
 /// submission and lifecycle logging cannot receive one without the other. Other spawn sources
 /// provide user input directly, making an uncontextualized inter-agent communication
 /// unrepresentable.
+#[allow(clippy::large_enum_variant)]
 enum SpawnInitialInput {
     UserInput(Vec<UserInput>),
     InterAgentCommunication(InterAgentCommunication, AgentCommunicationContext),

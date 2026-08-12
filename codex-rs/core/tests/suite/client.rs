@@ -196,12 +196,17 @@ fn assert_codex_client_metadata(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn openai_stateless_responses_requests_preserve_item_turn_metadata_across_turns() {
     let server = MockServer::start().await;
+    let assistant_create_time = 1_785_276_138.422709;
+    let mut assistant_message = ev_assistant_message("msg-1", "first answer");
+    assistant_message["item"]["internal_chat_message_metadata_passthrough"] = json!({
+        "create_time": assistant_create_time,
+    });
     let response_mock = mount_sse_sequence(
         &server,
         vec![
             sse(vec![
                 ev_response_created("resp1"),
-                ev_assistant_message("msg-1", "first answer"),
+                assistant_message,
                 ev_completed("resp1"),
             ]),
             sse(vec![ev_response_created("resp2"), ev_completed("resp2")]),
@@ -234,6 +239,14 @@ async fn openai_stateless_responses_requests_preserve_item_turn_metadata_across_
             Some(first_turn_id)
         );
     }
+    for role in ["user", "developer"] {
+        assert!(first_input.iter().any(|item| {
+            item["role"].as_str() == Some(role)
+                && item["internal_chat_message_metadata_passthrough"]["create_time"]
+                    .as_f64()
+                    .is_some_and(|create_time| create_time > 0.0)
+        }));
+    }
 
     let item_turn_id = |text: &str| {
         second_input
@@ -250,6 +263,26 @@ async fn openai_stateless_responses_requests_preserve_item_turn_metadata_across_
     assert_eq!(item_turn_id("turn one"), Some(first_turn_id));
     assert_eq!(item_turn_id("first answer"), Some(first_turn_id));
     assert_eq!(item_turn_id("turn two"), Some(second_turn_id));
+
+    let item_create_time = |text: &str| {
+        second_input
+            .iter()
+            .find(|item| {
+                item["content"].as_array().is_some_and(|content| {
+                    content
+                        .iter()
+                        .any(|content_item| content_item["text"].as_str() == Some(text))
+                })
+            })
+            .and_then(|item| {
+                item["internal_chat_message_metadata_passthrough"]["create_time"].as_f64()
+            })
+    };
+    assert_eq!(
+        item_create_time("first answer"),
+        Some(assistant_create_time)
+    );
+    assert!(item_create_time("turn two").is_some_and(|create_time| create_time > 0.0));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

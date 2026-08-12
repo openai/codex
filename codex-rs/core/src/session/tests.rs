@@ -2085,13 +2085,23 @@ async fn record_conversation_items_stamps_missing_turn_id_and_preserves_existing
         .record_conversation_items(&turn_context, &[fresh_item.clone(), existing_item.clone()])
         .await;
 
+    let history = session.clone_history().await;
+    let recorded_items = raw_history_items(&history);
+    let fresh_create_time = recorded_items[0]
+        .executed_tool_call_metadata()
+        .and_then(|metadata| metadata.create_time.clone())
+        .expect("harness-authored items should receive creation timestamps");
+    assert!(
+        fresh_create_time
+            .as_f64()
+            .is_some_and(|seconds| seconds > 0.0)
+    );
+
     let mut expected_fresh_item = fresh_item;
     expected_fresh_item.set_turn_id_if_missing(&turn_context.sub_id);
+    expected_fresh_item.set_create_time_if_missing(fresh_create_time);
     let expected_items = vec![expected_fresh_item, existing_item];
-    assert_eq!(
-        raw_history_items(&session.clone_history().await),
-        expected_items
-    );
+    assert_eq!(recorded_items, expected_items);
 }
 
 #[tokio::test]
@@ -2191,8 +2201,17 @@ async fn record_inter_agent_communication_sets_turn_id_in_rollout_and_resume() {
         .record_inter_agent_communication(&turn_context, communication)
         .await;
 
+    let recorded_history = session.clone_history().await;
+    let recorded_items = raw_history_items(&recorded_history);
+    let create_time = recorded_items[0]
+        .executed_tool_call_metadata()
+        .and_then(|metadata| metadata.create_time.clone())
+        .expect("locally authored agent message should receive a creation timestamp");
+    assert!(create_time.as_f64().is_some_and(|seconds| seconds > 0.0));
+    expected_item.set_create_time_if_missing(create_time);
+
     assert_eq!(
-        strip_response_item_ids(&raw_history_items(&session.clone_history().await)),
+        strip_response_item_ids(&recorded_items),
         strip_response_item_ids(std::slice::from_ref(&expected_item))
     );
 
@@ -2564,8 +2583,10 @@ async fn resumed_history_injects_initial_context_on_first_context_update_only() 
     expected.extend(initial_context);
     let history_after_seed = session.clone_history().await;
     assert_eq!(
-        strip_response_item_ids(&expected),
-        strip_response_item_ids(&raw_history_items(&history_after_seed))
+        strip_response_item_ids(&strip_metadata_from_items(&expected)),
+        strip_response_item_ids(&strip_metadata_from_items(&raw_history_items(
+            &history_after_seed
+        )))
     );
 
     session
@@ -9606,8 +9627,8 @@ async fn record_context_updates_and_set_reference_context_item_injects_full_cont
     let history = session.clone_history().await;
     let initial_context = build_initial_context(&session, &turn_context).await;
     assert_eq!(
-        strip_response_item_ids(&raw_history_items(&history)),
-        strip_response_item_ids(&initial_context)
+        strip_response_item_ids(&strip_metadata_from_items(&raw_history_items(&history))),
+        strip_response_item_ids(&strip_metadata_from_items(&initial_context))
     );
 
     let current_context = session.reference_context_item().await;
@@ -9661,8 +9682,8 @@ async fn record_context_updates_and_set_reference_context_item_reinjects_full_co
     let initial_context = build_initial_context(&session, &turn_context).await;
     expected_history.extend(initial_context);
     assert_eq!(
-        strip_response_item_ids(&raw_history_items(&history)),
-        strip_response_item_ids(&expected_history)
+        strip_response_item_ids(&strip_metadata_from_items(&raw_history_items(&history))),
+        strip_response_item_ids(&strip_metadata_from_items(&expected_history))
     );
 }
 
