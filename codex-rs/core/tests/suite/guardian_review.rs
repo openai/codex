@@ -29,6 +29,7 @@ use codex_protocol::user_input::UserInput;
 use core_test_support::fs_wait;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_custom_tool_call;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_response_once_match;
@@ -474,6 +475,61 @@ async fn guardian_session_is_reused_for_consecutive_tool_reviews_without_prewarm
     assert_eq!(first_guardian_thread_id, second_guardian_thread_id);
     assert_eq!(fs::read_to_string(first_output_file)?, "first");
     assert_eq!(fs::read_to_string(second_output_file)?, "second");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_review_of_code_mode_exec_command_includes_outer_source() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_wine_exec!(
+        Ok(()),
+        "Guardian approval actions require host-native paths"
+    );
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_config(|config| {
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+            let _ = config.features.enable(Feature::CodeMode);
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+
+    let code = r#"const outerContext = "guardian-code-mode-outer-context";
+await tools.exec_command({cmd: "true", sandbox_permissions: "require_escalated", justification: "test"});"#;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_custom_tool_call("code-mode-call", "exec", code),
+                ev_completed("resp-parent"),
+            ]),
+            sse(vec![
+                ev_assistant_message("guardian", r#"{"outcome":"allow"}"#),
+                ev_completed("resp-guardian"),
+            ]),
+            sse(vec![ev_completed("resp-done")]),
+        ],
+    )
+    .await;
+
+    let prompt = "run a nested command that requires Guardian review";
+    test.submit_text_turn(prompt).await?;
+
+    let transcript = responses.requests()[1].message_input_texts("user")[2..6].concat();
+    assert_eq!(
+        transcript,
+        format!(
+            ">>> TRANSCRIPT START\n\
+             [1] user: {prompt}\n\
+             \n\
+             [2] tool exec call: {code}\n\
+             >>> TRANSCRIPT END\n"
+        )
+    );
 
     Ok(())
 }
