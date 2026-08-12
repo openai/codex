@@ -17,6 +17,8 @@ use codex_rmcp_client::WrappedOAuthTokenResponse;
 use codex_rmcp_client::determine_streamable_http_auth_status;
 use codex_rmcp_client::is_authentication_required_error;
 use codex_rmcp_client::save_oauth_tokens;
+use codex_rmcp_client::with_http_headers_helper;
+use codex_utils_cargo_bin::cargo_bin;
 use oauth2::AccessToken;
 use oauth2::RefreshToken;
 use oauth2::basic::BasicTokenType;
@@ -43,12 +45,22 @@ const EXPIRED_ACCESS_TOKEN: &str = "expired-access-token";
 const REFRESH_TOKEN: &str = "valid-refresh-token";
 const REFRESHED_ACCESS_TOKEN: &str = "refreshed-access-token";
 const CHILD_SERVER_URL_ENV: &str = "MCP_TEST_OAUTH_STARTUP_SERVER_URL";
+const CHILD_HELPER_COMMAND_ENV: &str = "MCP_TEST_OAUTH_STARTUP_HELPER_COMMAND";
 const UNREFRESHABLE_SERVER_URL: &str = "https://unrefreshable.example/mcp";
 const UNEXPIRED_SERVER_URL: &str = "https://unexpired.example/mcp";
 const REFRESHABLE_SERVER_URL: &str = "https://refreshable.example/mcp";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn refreshes_expired_persisted_token_before_initialize() -> anyhow::Result<()> {
+    assert_expired_token_refresh(/*with_headers_helper*/ false).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn refreshes_oauth_with_gateway_headers_helper() -> anyhow::Result<()> {
+    assert_expired_token_refresh(/*with_headers_helper*/ true).await
+}
+
+async fn assert_expired_token_refresh(with_headers_helper: bool) -> anyhow::Result<()> {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/.well-known/oauth-authorization-server/mcp"))
@@ -94,7 +106,12 @@ async fn refreshes_expired_persisted_token_before_initialize() -> anyhow::Result
             format!("Bearer {REFRESHED_ACCESS_TOKEN}"),
         ))
         .respond_with(|request: &Request| {
-            let body: Value = request.body_json().expect("valid JSON-RPC request");
+            let body: Value = match request.body_json() {
+                Ok(body) => body,
+                Err(_) => {
+                    return ResponseTemplate::new(400).set_body_string("invalid JSON-RPC request");
+                }
+            };
             match body.get("method").and_then(Value::as_str) {
                 Some("initialize") => ResponseTemplate::new(200).set_body_json(json!({
                     "jsonrpc": "2.0",
@@ -126,13 +143,32 @@ async fn refreshes_expired_persisted_token_before_initialize() -> anyhow::Result
     // Credential storage resolves CODEX_HOME from the process environment.
     // Run the client half of the test in an ignored helper test so it can use
     // an isolated home without mutating the parent test runner's environment.
-    let status = Command::new(std::env::current_exe()?)
+    let mut command = Command::new(std::env::current_exe()?);
+    command
         .args(["oauth_startup_child", "--exact", "--ignored", "--nocapture"])
         .env("CODEX_HOME", codex_home.path())
         .env(CHILD_SERVER_URL_ENV, server_url)
-        .status()
-        .await?;
+        .env("MCP_TEST_AMBIENT_SECRET", "must-not-reach-helper");
+    if with_headers_helper {
+        command.env(
+            CHILD_HELPER_COMMAND_ENV,
+            format!(
+                "\"{}\" --http-headers-helper",
+                cargo_bin("test_streamable_http_server")?.display(),
+            ),
+        );
+    }
+    let status = command.status().await?;
     assert!(status.success(), "OAuth startup child failed: {status}");
+    if with_headers_helper {
+        let requests = server.received_requests().await.unwrap_or_default();
+        assert!(requests.iter().all(|request| {
+            request
+                .headers
+                .get("proxy-authorization")
+                .is_some_and(|value| value == "Bearer gateway-token")
+        }));
+    }
     server.verify().await;
     Ok(())
 }
@@ -334,6 +370,15 @@ async fn oauth_startup_child() -> anyhow::Result<()> {
     // This mirrors create_client's transport and initialization setup, except
     // it omits the direct bearer token. Supplying that token would bypass the
     // persisted OAuth credentials and the startup refresh under test.
+    let mut http_client = Environment::default_for_tests().get_http_client();
+    if let Ok(helper_command) = std::env::var(CHILD_HELPER_COMMAND_ENV) {
+        http_client = with_http_headers_helper(
+            http_client,
+            &server_url,
+            &helper_command,
+            std::env::current_dir()?,
+        )?;
+    }
     let client = RmcpClient::new_streamable_http_client(
         SERVER_NAME,
         &server_url,
@@ -342,7 +387,7 @@ async fn oauth_startup_child() -> anyhow::Result<()> {
         /*env_http_headers*/ None,
         OAuthCredentialsStoreMode::File,
         AuthKeyringBackendKind::default(),
-        Environment::default_for_tests().get_http_client(),
+        http_client,
         /*auth_provider*/ None,
     )
     .await?;

@@ -14,6 +14,7 @@ use codex_rmcp_client::OAuthDiscoveryTimeout;
 use codex_rmcp_client::OAuthProviderError;
 use codex_rmcp_client::StreamableHttpRedirectMode;
 use codex_rmcp_client::determine_streamable_http_auth_status;
+use codex_rmcp_client::determine_streamable_http_auth_status_from_credentials;
 use codex_rmcp_client::discover_streamable_http_oauth;
 use futures::FutureExt;
 use futures::future::join_all;
@@ -92,6 +93,7 @@ fn oauth_login_candidate(transport: &McpServerTransportConfig) -> Option<McpOAut
         bearer_token_env_var,
         http_headers,
         env_http_headers,
+        ..
     } = transport
     else {
         return None;
@@ -247,7 +249,22 @@ async fn compute_auth_status(
             bearer_token_env_var,
             http_headers,
             env_http_headers,
+            http_headers_helper,
         } => {
+            if http_headers_helper.is_some() {
+                // Status inspection must not execute an arbitrary local helper. Existing
+                // credentials remain reportable; otherwise discovery waits for startup/login.
+                return Ok(determine_streamable_http_auth_status_from_credentials(
+                    config.oauth_credential_name(server_name).as_ref(),
+                    url,
+                    bearer_token_env_var.as_deref(),
+                    http_headers.clone(),
+                    env_http_headers.clone(),
+                    store_mode,
+                    keyring_backend_kind,
+                )?
+                .unwrap_or(McpAuthState::Unknown));
+            }
             let http_client = runtime_context
                 .resolve_http_client(server_name, config)
                 .map_err(anyhow::Error::msg)?;

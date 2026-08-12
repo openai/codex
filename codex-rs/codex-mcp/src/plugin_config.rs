@@ -64,6 +64,9 @@ impl PluginMcpFile {
 
 /// Parses the two supported plugin MCP file shapes and normalizes each server.
 ///
+/// Native plugin HTTP servers share the regular MCP transport configuration;
+/// relative helper commands therefore use the session's local process cwd.
+///
 /// Invalid individual servers are returned as errors without discarding valid
 /// siblings. A malformed top-level document fails the whole parse.
 pub fn parse_plugin_mcp_config(

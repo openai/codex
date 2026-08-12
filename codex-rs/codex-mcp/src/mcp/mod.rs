@@ -575,6 +575,7 @@ fn mcp_server_config_for_url(
             bearer_token_env_var: codex_apps_mcp_bearer_token_env_var(),
             http_headers: Some(http_headers),
             env_http_headers,
+            http_headers_helper: None,
         },
         auth: auth_mode,
         environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),

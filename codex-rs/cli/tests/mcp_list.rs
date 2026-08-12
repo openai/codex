@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::io::Read;
 use std::io::Write;
 use std::net::TcpListener;
@@ -415,6 +416,69 @@ async fn list_and_get_render_expected_output() -> Result<()> {
         .assert()
         .success()
         .stdout(contains("\"name\": \"docs\"").and(contains("\"enabled\": true")));
+
+    Ok(())
+}
+
+#[test]
+fn list_and_get_redact_http_headers_helper() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let marker = codex_home.path().join("helper-ran");
+    let helper = toml::Value::String(format!("echo invoked > \"{}\"", marker.display()));
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        format!(
+            "[mcp_servers.docs]\n\
+             url = \"https://example.com/mcp\"\n\
+             http_headers_helper = {helper}\n\
+             [mcp_servers.authenticated]\n\
+             url = \"https://example.com/mcp\"\n\
+             http_headers = {{ Authorization = \"Bearer static\" }}\n\
+             http_headers_helper = {helper}\n"
+        ),
+    )?;
+
+    let list_output = codex_command(codex_home.path())?
+        .args(["mcp", "list", "--json"])
+        .output()?;
+    assert!(list_output.status.success());
+    let stdout = String::from_utf8(list_output.stdout)?;
+    assert!(stdout.contains("http_headers_helper"));
+    assert!(stdout.contains("<redacted>"));
+    let entries: Vec<JsonValue> = serde_json::from_str(&stdout)?;
+    let auth_statuses = entries
+        .into_iter()
+        .map(|entry| {
+            (
+                entry["name"].as_str().expect("server name").to_string(),
+                entry["auth_status"]
+                    .as_str()
+                    .expect("auth status")
+                    .to_string(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        auth_statuses,
+        BTreeMap::from([
+            ("authenticated".to_string(), "bearer_token".to_string()),
+            ("docs".to_string(), "unknown".to_string()),
+        ])
+    );
+    assert!(!marker.exists());
+
+    for args in [
+        &["mcp", "get", "docs", "--json"][..],
+        &["mcp", "get", "docs"][..],
+    ] {
+        let output = codex_command(codex_home.path())?.args(args).output()?;
+        assert!(output.status.success());
+        let stdout = String::from_utf8(output.stdout)?;
+        assert!(stdout.contains("http_headers_helper"));
+        assert!(stdout.contains("<redacted>"));
+        assert!(!stdout.contains("helper-ran"));
+        assert!(!marker.exists());
+    }
 
     Ok(())
 }

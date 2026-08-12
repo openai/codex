@@ -305,6 +305,7 @@ pub struct RawMcpServerConfig {
     #[schemars(skip)]
     pub bearer_token: Option<String>,
     pub bearer_token_env_var: Option<String>,
+    pub http_headers_helper: Option<String>,
 
     // shared
     #[serde(default)]
@@ -360,6 +361,7 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             url,
             bearer_token,
             bearer_token_env_var,
+            http_headers_helper,
             environment_id,
             auth,
             startup_timeout_sec,
@@ -402,6 +404,7 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
                 bearer_token_env_var.as_ref(),
             )?;
             throw_if_set("stdio", "bearer_token", bearer_token.as_ref())?;
+            throw_if_set("stdio", "http_headers_helper", http_headers_helper.as_ref())?;
             throw_if_set("stdio", "http_headers", http_headers.as_ref())?;
             throw_if_set("stdio", "env_http_headers", env_http_headers.as_ref())?;
             throw_if_set("stdio", "oauth", oauth.as_ref())?;
@@ -424,11 +427,27 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             throw_if_set("streamable_http", "env_vars", env_vars.as_ref())?;
             throw_if_set("streamable_http", "cwd", cwd.as_ref())?;
             throw_if_set("streamable_http", "bearer_token", bearer_token.as_ref())?;
+            if http_headers_helper
+                .as_deref()
+                .is_some_and(|command| command.trim().is_empty())
+            {
+                return Err("http_headers_helper must not be empty".to_string());
+            }
+            if environment_id
+                .as_deref()
+                .is_some_and(|environment_id| environment_id != DEFAULT_MCP_SERVER_ENVIRONMENT_ID)
+                && http_headers_helper.is_some()
+            {
+                return Err(
+                    "http_headers_helper is only supported for local MCP servers".to_string(),
+                );
+            }
             McpServerTransportConfig::StreamableHttp {
                 url,
                 bearer_token_env_var,
                 http_headers,
                 env_http_headers,
+                http_headers_helper,
             }
         } else {
             return Err("invalid transport".to_string());
@@ -503,6 +522,10 @@ pub enum McpServerTransportConfig {
         /// HTTP headers where the value is sourced from an environment variable.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         env_http_headers: Option<HashMap<String, String>>,
+        /// Local-only shell command that prints a JSON object of dynamic HTTP headers.
+        /// The command may be visible to local process inspection; do not embed credentials.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        http_headers_helper: Option<String>,
     },
 }
 

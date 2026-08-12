@@ -140,6 +140,7 @@ impl McpServerConnectionIdentity {
                     bearer_token_env_var: None,
                     http_headers,
                     env_http_headers,
+                    http_headers_helper: _,
                 } if !http_headers.as_ref().is_some_and(|headers| {
                     headers.iter().any(|(name, value)| {
                         name.eq_ignore_ascii_case("authorization") && valid_http_header_value(value)
@@ -189,8 +190,12 @@ impl McpServerConnectionIdentity {
             && matches!(
                 config.transport,
                 McpServerTransportConfig::Stdio { cwd: None, .. }
+                    | McpServerTransportConfig::StreamableHttp {
+                        http_headers_helper: Some(_),
+                        ..
+                    }
             ))
-        .then(|| runtime_context.local_stdio_fallback_cwd());
+        .then(|| runtime_context.local_process_cwd());
         let referenced_environment_variables = referenced_environment_variables(config);
         let runtime_auth = runtime_auth_provider.and(auth).cloned();
         let runtime_auth_token = runtime_auth.as_ref().and_then(|auth| auth.get_token().ok());

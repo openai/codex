@@ -19,17 +19,8 @@ pub(super) struct McpDesiredState {
     pub(super) originator: String,
     pub(super) session_source: SessionSource,
     pub(super) environments: TurnEnvironmentSnapshot,
+    pub(super) local_process_cwd: PathBuf,
     pub(super) windows_sandbox_level: WindowsSandboxLevel,
-}
-
-impl McpDesiredState {
-    pub(super) fn local_stdio_fallback_cwd(&self) -> PathBuf {
-        self.environments
-            .primary()
-            .and_then(|environment| environment.cwd().to_abs_path().ok())
-            .map(|cwd| cwd.to_path_buf())
-            .unwrap_or_else(|| self.config.cwd.to_path_buf())
-    }
 }
 
 impl Session {
@@ -70,6 +61,10 @@ impl Session {
             .and_then(|environment| environment.cwd().to_abs_path().ok())
             .unwrap_or_else(|| session_configuration.cwd().clone());
         let config = Self::build_per_turn_config(&session_configuration, cwd);
+        let local_process_cwd = environments
+            .local_environment_cwd()
+            .unwrap_or_else(|| session_configuration.cwd().clone())
+            .to_path_buf();
 
         McpDesiredState {
             config: Arc::new(config),
@@ -78,6 +73,7 @@ impl Session {
             originator: session_configuration.originator.clone(),
             session_source: session_configuration.session_source.clone(),
             environments,
+            local_process_cwd,
             windows_sandbox_level: session_configuration.windows_sandbox_level,
         }
     }
@@ -88,11 +84,15 @@ impl Session {
         auth: Option<CodexAuth>,
         mcp_projection: McpRuntimeProjection,
         resolved_environments: &TurnEnvironmentSnapshot,
-        local_stdio_fallback_cwd: PathBuf,
+        mcp_runtime_cwd: PathBuf,
     ) -> anyhow::Result<()> {
-        let cwd = AbsolutePathBuf::from_absolute_path(local_stdio_fallback_cwd)
+        let cwd = AbsolutePathBuf::from_absolute_path(mcp_runtime_cwd)
             .unwrap_or_else(|_| session_configuration.cwd().clone());
         let config = Self::build_per_turn_config(session_configuration, cwd);
+        let local_process_cwd = resolved_environments
+            .local_environment_cwd()
+            .unwrap_or_else(|| session_configuration.cwd().clone())
+            .to_path_buf();
         let desired = McpDesiredState {
             config: Arc::new(config),
             auth,
@@ -100,6 +100,7 @@ impl Session {
             originator: session_configuration.originator.clone(),
             session_source: session_configuration.session_source.clone(),
             environments: resolved_environments.clone(),
+            local_process_cwd,
             windows_sandbox_level: session_configuration.windows_sandbox_level,
         };
         self.publish_mcp_runtime(
@@ -165,10 +166,9 @@ impl Session {
             .or_insert_with(|| PathUri::from_abs_path(&desired.config.cwd));
         let mcp_config = Arc::new(config);
         let mcp_servers = effective_mcp_servers(&mcp_config, auth.as_ref());
-        let local_stdio_fallback_cwd = desired.local_stdio_fallback_cwd();
         let runtime_context = McpRuntimeContext::new(
             self.services.turn_environments.environment_manager(),
-            local_stdio_fallback_cwd,
+            desired.local_process_cwd.clone(),
         );
         let codex_apps_auth_manager =
             codex_mcp::host_owned_codex_apps_enabled(&mcp_config, auth.as_ref())

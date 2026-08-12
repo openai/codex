@@ -566,6 +566,26 @@ impl TurnEnvironmentSnapshot {
             .find(|environment| !environment.environment.is_remote())
     }
 
+    pub(crate) fn local_environment_cwd(&self) -> Option<AbsolutePathBuf> {
+        self.environments
+            .iter()
+            .find_map(|environment| match environment {
+                TurnEnvironmentState::Ready(environment)
+                    if !environment.environment.is_remote() =>
+                {
+                    environment.cwd().to_abs_path().ok()
+                }
+                TurnEnvironmentState::Ready(_) => None,
+                TurnEnvironmentState::Starting(environment)
+                    if environment.selection.environment_id
+                        == codex_exec_server::LOCAL_ENVIRONMENT_ID =>
+                {
+                    environment.selection.cwd.to_abs_path().ok()
+                }
+                TurnEnvironmentState::Starting(_) => None,
+            })
+    }
+
     #[cfg(test)]
     pub(crate) fn primary_environment(&self) -> Option<Arc<codex_exec_server::Environment>> {
         self.primary()
@@ -1425,6 +1445,7 @@ url = "ws://127.0.0.1:8765"
     async fn single_local_environment_cwd_requires_exactly_one_local_environment() {
         let cwd = AbsolutePathBuf::current_dir().expect("cwd");
         let cwd_uri = PathUri::from_abs_path(&cwd);
+        let remote_cwd_uri = PathUri::from_abs_path(&cwd.join("remote-cwd"));
         let local_manager = Arc::new(EnvironmentManager::default_for_tests());
         let local = resolve_turn_environments(
             Arc::clone(&local_manager),
@@ -1444,7 +1465,7 @@ url = "ws://127.0.0.1:8765"
             environments: vec![TurnEnvironmentState::Ready(TurnEnvironment::new(
                 REMOTE_ENVIRONMENT_ID.to_string(),
                 remote_environment.clone(),
-                cwd_uri.clone(),
+                remote_cwd_uri.clone(),
                 Vec::new(),
                 /*shell*/ None,
                 test_environment_config(),
@@ -1452,20 +1473,41 @@ url = "ws://127.0.0.1:8765"
         };
         let multiple = TurnEnvironmentSnapshot {
             environments: vec![
-                TurnEnvironmentState::Ready(local.primary().expect("local environment").clone()),
                 TurnEnvironmentState::Ready(TurnEnvironment::new(
                     REMOTE_ENVIRONMENT_ID.to_string(),
                     remote_environment,
-                    cwd_uri,
+                    remote_cwd_uri,
                     Vec::new(),
                     /*shell*/ None,
                     test_environment_config(),
                 )),
+                TurnEnvironmentState::Ready(local.primary().expect("local environment").clone()),
             ],
         };
 
-        assert_eq!(local.single_local_environment_cwd(), Some(cwd));
+        assert_eq!(local.single_local_environment_cwd(), Some(cwd.clone()));
         assert_eq!(remote.single_local_environment_cwd(), None);
         assert_eq!(multiple.single_local_environment_cwd(), None);
+        assert_eq!(multiple.local_environment_cwd(), Some(cwd));
+    }
+
+    #[test]
+    fn local_environment_cwd_uses_starting_local_selection() {
+        let cwd = AbsolutePathBuf::current_dir()
+            .expect("cwd")
+            .join("starting-local");
+        let snapshot = TurnEnvironmentSnapshot {
+            environments: vec![TurnEnvironmentState::Starting(StartingTurnEnvironment {
+                selection: TurnEnvironmentSelection {
+                    environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
+                    cwd: PathUri::from_abs_path(&cwd),
+                    workspace_roots: Vec::new(),
+                },
+                config: test_environment_config(),
+                resolution: futures::future::pending().boxed().shared(),
+            })],
+        };
+
+        assert_eq!(snapshot.local_environment_cwd(), Some(cwd));
     }
 }

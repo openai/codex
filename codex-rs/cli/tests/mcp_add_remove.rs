@@ -137,6 +137,18 @@ async fn add_and_login_discover_oauth_through_configured_http_proxy() -> Result<
             .await?
             .contains_key("oauth")
     );
+    let helper_command = if cfg!(windows) {
+        r#"echo {"X-Gateway":"gateway-token"}"#
+    } else {
+        r#"printf '{"X-Gateway":"gateway-token"}'"#
+    };
+    let config_path = codex_home.path().join("config.toml");
+    let mut config = std::fs::read_to_string(&config_path)?;
+    config.push_str(&format!(
+        "http_headers_helper = {}\n",
+        toml::Value::String(helper_command.to_string())
+    ));
+    std::fs::write(config_path, config)?;
 
     // Local OAuth login does not require the execution-environment registry.
     std::fs::write(codex_home.path().join("environments.toml"), "invalid = [")?;
@@ -164,14 +176,22 @@ async fn add_and_login_discover_oauth_through_configured_http_proxy() -> Result<
         "mock OAuth registration should terminate the explicit login"
     );
 
-    let registrations = proxy
+    let requests = proxy
         .received_requests()
         .await
-        .expect("mock proxy should record OAuth requests")
+        .expect("mock proxy should record OAuth requests");
+    let registrations: Vec<_> = requests
         .iter()
         .filter(|request| request.method == "POST" && request.url.path() == "/oauth/register")
-        .count();
-    assert_eq!(registrations, 2);
+        .collect();
+    assert_eq!(registrations.len(), 2);
+    assert_eq!(
+        registrations
+            .iter()
+            .filter(|request| request.headers.get("x-gateway").is_some())
+            .count(),
+        1
+    );
     Ok(())
 }
 
@@ -259,6 +279,7 @@ async fn add_streamable_http_without_manual_token() -> Result<()> {
             bearer_token_env_var,
             http_headers,
             env_http_headers,
+            ..
         } => {
             assert_eq!(url, "https://example.com/mcp");
             assert!(bearer_token_env_var.is_none());
@@ -305,6 +326,7 @@ async fn add_streamable_http_with_custom_env_var() -> Result<()> {
             bearer_token_env_var,
             http_headers,
             env_http_headers,
+            ..
         } => {
             assert_eq!(url, "https://example.com/issues");
             assert_eq!(bearer_token_env_var.as_deref(), Some("GITHUB_TOKEN"));

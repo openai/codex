@@ -273,6 +273,7 @@ fn deserialize_streamable_http_server_config() {
             bearer_token_env_var: None,
             http_headers: None,
             env_http_headers: None,
+            http_headers_helper: None,
         }
     );
     assert!(cfg.enabled);
@@ -295,6 +296,7 @@ fn deserialize_streamable_http_server_config_with_env_var() {
             bearer_token_env_var: Some("GITHUB_TOKEN".to_string()),
             http_headers: None,
             env_http_headers: None,
+            http_headers_helper: None,
         }
     );
     assert!(cfg.enabled);
@@ -307,6 +309,7 @@ fn deserialize_streamable_http_server_config_with_headers() {
             url = "https://example.com/mcp"
             http_headers = { "X-Foo" = "bar" }
             env_http_headers = { "X-Token" = "TOKEN_ENV" }
+            http_headers_helper = "auth-cli headers"
         "#,
     )
     .expect("should deserialize http config with headers");
@@ -321,8 +324,20 @@ fn deserialize_streamable_http_server_config_with_headers() {
                 "X-Token".to_string(),
                 "TOKEN_ENV".to_string()
             )])),
+            http_headers_helper: Some("auth-cli headers".to_string()),
         }
     );
+}
+
+#[test]
+fn rejects_http_headers_helper_outside_local_http_servers() {
+    for contents in [
+        "command = \"server\"\nhttp_headers_helper = \"auth-cli headers\"",
+        "url = \"https://example.com/mcp\"\nhttp_headers_helper = \"  \"",
+        "url = \"https://example.com/mcp\"\nenvironment_id = \"remote\"\nhttp_headers_helper = \"auth-cli headers\"",
+    ] {
+        toml::from_str::<McpServerConfig>(contents).expect_err("invalid helper placement");
+    }
 }
 
 #[test]

@@ -564,6 +564,7 @@ impl McpConnectionSet {
                                     bearer_token_env_var,
                                     http_headers,
                                     env_http_headers,
+                                    ..
                                 } => {
                                     match determine_streamable_http_auth_status_from_credentials(
                                         configured_config

@@ -23,6 +23,7 @@ fn server(url: &str) -> McpServerConfig {
             bearer_token_env_var: None,
             http_headers: None,
             env_http_headers: None,
+            http_headers_helper: None,
         },
         environment_id: DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
         enabled: true,

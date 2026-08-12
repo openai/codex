@@ -1010,6 +1010,7 @@ async fn apps_enabled_turn_skips_pending_optional_mcp_without_cached_tools() -> 
                     bearer_token_env_var: None,
                     http_headers: None,
                     env_http_headers: None,
+                    http_headers_helper: None,
                 },
                 TestMcpServerOptions::default(),
             );
@@ -1080,6 +1081,7 @@ async fn shutdown_cancels_startup_prewarm_waiting_for_mcp_startup() -> anyhow::R
                     bearer_token_env_var: None,
                     http_headers: None,
                     env_http_headers: None,
+                    http_headers_helper: None,
                 },
                 TestMcpServerOptions::default(),
             );
@@ -1142,6 +1144,7 @@ async fn interrupt_during_mcp_startup_preserves_user_input_in_history(
                     bearer_token_env_var: None,
                     http_headers: None,
                     env_http_headers: None,
+                    http_headers_helper: None,
                 },
                 TestMcpServerOptions::default(),
             );
@@ -2790,9 +2793,14 @@ impl StreamableHttpTestServer {
 /// What this tests: Codex can discover and call a Streamable HTTP MCP tool in
 /// both local and remote-aware placements, and the tool observes the expected
 /// environment value from the server process that actually handled the request.
+#[test_case(false; "plain")]
+#[test_case(true; "headers helper")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
+async fn streamable_http_tool_call_round_trip(with_headers_helper: bool) -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
+    if with_headers_helper && is_remote_test_environment() {
+        return Ok(());
+    }
 
     // Phase 1: script the model responses so Codex will call the MCP echo tool
     // and then complete the turn after the tool result is returned.
@@ -2832,12 +2840,23 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
     // placement. In full CI this may be the remote environment container; locally
     // it is a host process.
     let expected_env_value = "propagated-env-http";
-    let Some(http_server) =
-        start_streamable_http_test_server(expected_env_value, /*expected_token*/ None).await?
+    let Some(http_server) = start_streamable_http_test_server(
+        expected_env_value,
+        /*expected_token*/ None,
+        with_headers_helper.then_some("gateway-token"),
+    )
+    .await?
     else {
         return Ok(());
     };
     let server_url = http_server.url().to_string();
+    let http_headers_helper = with_headers_helper.then(|| {
+        if cfg!(windows) {
+            r#"echo {"Proxy-Authorization":"Bearer gateway-token"}"#.to_string()
+        } else {
+            r#"printf '{"Proxy-Authorization":"Bearer gateway-token"}'"#.to_string()
+        }
+    });
 
     // Phase 3: configure Codex with the Streamable HTTP MCP server and build a
     // fixture that selects remote MCP placement only when the remote test
@@ -2852,6 +2871,7 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
                     bearer_token_env_var: None,
                     http_headers: None,
                     env_http_headers: None,
+                    http_headers_helper,
                 },
                 TestMcpServerOptions {
                     environment_id: remote_aware_environment_id(),
@@ -2921,7 +2941,6 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
         .and_then(Value::as_str)
         .expect("env snapshot inserted");
     assert_eq!(env_value, expected_env_value);
-
     // Phase 7: verify the scripted model calls were consumed and clean up the
     // placement-aware MCP server.
     wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -2938,8 +2957,12 @@ async fn streamable_http_configured_auth_precedes_chatgpt_auth() -> anyhow::Resu
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
-    let Some(configured_auth_server) =
-        start_streamable_http_test_server("configured-auth", Some("configured-token")).await?
+    let Some(configured_auth_server) = start_streamable_http_test_server(
+        "configured-auth",
+        Some("configured-token"),
+        /*expected_gateway_token*/ None,
+    )
+    .await?
     else {
         return Ok(());
     };
@@ -2959,6 +2982,7 @@ async fn streamable_http_configured_auth_precedes_chatgpt_auth() -> anyhow::Resu
                         "Bearer configured-token".to_string(),
                     )])),
                     env_http_headers: None,
+                    http_headers_helper: None,
                 },
                 TestMcpServerOptions {
                     environment_id: remote_aware_environment_id(),
@@ -2999,6 +3023,7 @@ async fn streamable_http_chatgpt_auth_is_not_sent_to_configured_origin() -> anyh
                     bearer_token_env_var: None,
                     http_headers: None,
                     env_http_headers: None,
+                    http_headers_helper: None,
                 },
                 TestMcpServerOptions {
                     auth: McpServerAuth::ChatGpt,
@@ -3190,8 +3215,12 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
     let expected_token = "initial-access-token";
     let client_id = "test-client-id";
     let refresh_token = "initial-refresh-token";
-    let Some(http_server) =
-        start_streamable_http_test_server(expected_env_value, Some(expected_token)).await?
+    let Some(http_server) = start_streamable_http_test_server(
+        expected_env_value,
+        Some(expected_token),
+        /*expected_gateway_token*/ None,
+    )
+    .await?
     else {
         return Ok(());
     };
@@ -3249,6 +3278,7 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
                         "Authorization".to_string(),
                         unset_authorization_env_var,
                     )])),
+                    http_headers_helper: None,
                 },
                 TestMcpServerOptions {
                     environment_id,
@@ -3518,6 +3548,7 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
 async fn start_streamable_http_test_server(
     expected_env_value: &str,
     expected_token: Option<&str>,
+    expected_gateway_token: Option<&str>,
 ) -> anyhow::Result<Option<StreamableHttpTestServer>> {
     let rmcp_http_server_bin = match cargo_bin("test_streamable_http_server") {
         Ok(path) => path,
@@ -3552,6 +3583,9 @@ async fn start_streamable_http_test_server(
         .env("MCP_TEST_VALUE", expected_env_value);
     if let Some(expected_token) = expected_token {
         command.env("MCP_EXPECT_BEARER", expected_token);
+    }
+    if let Some(expected_gateway_token) = expected_gateway_token {
+        command.env("MCP_EXPECT_GATEWAY_BEARER", expected_gateway_token);
     }
     let mut child = command.spawn()?;
 
@@ -3593,7 +3627,6 @@ async fn start_remote_streamable_http_test_server(
             sh_single_quote(expected_token)
         ));
     }
-
     let script = format!(
         "{} nohup {} > {} 2>&1 < /dev/null & echo $!",
         env_assignments.join(" "),

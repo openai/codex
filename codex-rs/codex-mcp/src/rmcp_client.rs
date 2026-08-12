@@ -1061,7 +1061,7 @@ async fn make_rmcp_client(
                 // `ExecutorStdioServerLauncher` once the executor-backed path
                 // preserves `LocalStdioServerLauncher` semantics.
                 Arc::new(LocalStdioServerLauncher::new(
-                    runtime_context.local_stdio_fallback_cwd(),
+                    runtime_context.local_process_cwd(),
                 )) as Arc<dyn StdioServerLauncher>
             } else {
                 let Some(environment) = resolved_environment.as_ref() else {
@@ -1092,11 +1092,11 @@ async fn make_rmcp_client(
             http_headers,
             env_http_headers,
             bearer_token_env_var,
+            http_headers_helper: _,
         } => {
-            let http_client = resolved_environment.as_ref().map_or_else(
-                || runtime_context.local_http_client(),
-                |environment| environment.get_http_client(),
-            );
+            let http_client = runtime_context
+                .http_client_for_server(server.config(), resolved_environment.as_ref())
+                .map_err(|error| StartupOutcomeError::from(anyhow!(error)))?;
             let http_client = maybe_with_openai_docs_source_attribution(&url, http_client);
             let resolved_bearer_token =
                 match resolve_bearer_token(server_name, bearer_token_env_var.as_deref()) {

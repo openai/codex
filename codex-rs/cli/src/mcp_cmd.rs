@@ -25,6 +25,7 @@ use codex_login::AuthManager;
 use codex_mcp::McpOAuthLoginSupport;
 use codex_mcp::McpRuntimeContext;
 use codex_mcp::ResolvedMcpOAuthScopes;
+use codex_mcp::apply_http_headers_helper;
 use codex_mcp::compute_auth_statuses;
 use codex_mcp::discover_supported_scopes;
 use codex_mcp::oauth_login_support;
@@ -398,6 +399,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
                 bearer_token_env_var,
                 http_headers: None,
                 env_http_headers: None,
+                http_headers_helper: None,
             },
             oauth_client_id,
             oauth_client_registration
@@ -558,6 +560,8 @@ async fn run_login(config: &Config, login_args: LoginArgs) -> Result<()> {
     // environment routing belongs to app-server and session MCP flows.
     let http_client: Arc<dyn HttpClient> =
         Arc::new(RouteAwareHttpClient::new(config.http_client_factory()));
+    let http_client = apply_http_headers_helper(http_client, server, config.cwd.to_path_buf())
+        .map_err(anyhow::Error::msg)?;
     let explicit_scopes = (!scopes.is_empty()).then_some(scopes);
     let discovered_scopes = if explicit_scopes.is_none() && server.scopes.is_none() {
         discover_supported_scopes(
@@ -679,6 +683,7 @@ async fn run_list(config: &Config, list_args: ListArgs) -> Result<()> {
                         bearer_token_env_var,
                         http_headers,
                         env_http_headers,
+                        http_headers_helper,
                     } => {
                         serde_json::json!({
                             "type": "streamable_http",
@@ -686,6 +691,9 @@ async fn run_list(config: &Config, list_args: ListArgs) -> Result<()> {
                             "bearer_token_env_var": bearer_token_env_var,
                             "http_headers": http_headers,
                             "env_http_headers": env_http_headers,
+                            "http_headers_helper": http_headers_helper
+                                .as_ref()
+                                .map(|_| "<redacted>"),
                         })
                     }
                 };
@@ -914,12 +922,16 @@ async fn run_get(config: &Config, get_args: GetArgs) -> Result<()> {
                 bearer_token_env_var,
                 http_headers,
                 env_http_headers,
+                http_headers_helper,
             } => serde_json::json!({
                 "type": "streamable_http",
                 "url": url,
                 "bearer_token_env_var": bearer_token_env_var,
                 "http_headers": http_headers,
                 "env_http_headers": env_http_headers,
+                "http_headers_helper": http_headers_helper
+                    .as_ref()
+                    .map(|_| "<redacted>"),
             }),
         };
         let output = serde_json::to_string_pretty(&serde_json::json!({
@@ -996,6 +1008,7 @@ async fn run_get(config: &Config, get_args: GetArgs) -> Result<()> {
             bearer_token_env_var,
             http_headers,
             env_http_headers,
+            http_headers_helper,
         } => {
             println!("  transport: streamable_http");
             println!("  url: {url}");
@@ -1027,6 +1040,8 @@ async fn run_get(config: &Config, get_args: GetArgs) -> Result<()> {
                 _ => "-".to_string(),
             };
             println!("  env_http_headers: {env_headers_display}");
+            let helper_display = http_headers_helper.as_ref().map_or("-", |_| "<redacted>");
+            println!("  http_headers_helper: {helper_display}");
         }
     }
     if let Some(timeout) = server.startup_timeout_sec {

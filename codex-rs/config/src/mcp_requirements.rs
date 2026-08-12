@@ -122,6 +122,7 @@ impl McpServerRequirement {
     }
 
     pub fn matches(&self, server: &McpServerConfig) -> bool {
+        // HTTP requirements intentionally authorize the complete server configuration by URL.
         match (self, &server.transport) {
             (
                 Self::Identity {

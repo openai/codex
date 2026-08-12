@@ -113,6 +113,7 @@ async fn local_mcp_startup_and_refresh_use_configured_http_client() -> Result<()
                             "Bearer initial".to_string(),
                         )])),
                         env_http_headers: None,
+                        http_headers_helper: None,
                     },
                     environment_id: DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
                     enabled: true,

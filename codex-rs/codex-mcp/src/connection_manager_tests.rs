@@ -2069,6 +2069,43 @@ fn tool_catalog_cache_bypasses_remote_sourced_environment_variables() {
     );
 }
 
+#[test]
+fn tool_catalog_cache_bypasses_http_headers_helpers() {
+    let cache = McpToolCatalogCache::default();
+    let runtime_context = reusable_server_runtime_context();
+    let mut config = reusable_server_config("https://example.com/mcp");
+    let identity = reusable_server_identity(&config, &runtime_context);
+    let context = |config: &McpServerConfig, identity: &McpServerConnectionIdentity| {
+        cache.context(
+            "docs",
+            config,
+            &runtime_context,
+            /*resolved_environment*/ None,
+            (
+                &ElicitationCapability::default(),
+                &ClientMcpExtensions::default(),
+            ),
+            Some((
+                identity,
+                crate::McpProtocolMode::Legacy,
+                /*agent_plugin*/ false,
+            )),
+        )
+    };
+    assert!(context(&config, &identity).is_some());
+
+    let McpServerTransportConfig::StreamableHttp {
+        http_headers_helper,
+        ..
+    } = &mut config.transport
+    else {
+        unreachable!("expected HTTP transport");
+    };
+    *http_headers_helper = Some("auth-cli headers".to_string());
+    let identity = reusable_server_identity(&config, &runtime_context);
+    assert!(context(&config, &identity).is_none());
+}
+
 #[tokio::test]
 async fn list_available_server_infos_uses_cache_while_client_is_pending() {
     let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
@@ -3532,6 +3569,7 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
                     bearer_token_env_var: None,
                     http_headers: None,
                     env_http_headers: None,
+                    http_headers_helper: None,
                 },
                 environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
                 enabled: true,
@@ -3642,6 +3680,7 @@ fn mcp_init_error_display_prompts_for_github_pat() {
             bearer_token_env_var: None,
             http_headers: None,
             env_http_headers: None,
+            http_headers_helper: None,
         },
         environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
         enabled: true,
@@ -3757,6 +3796,7 @@ fn mcp_init_error_display_reports_generic_errors() {
             bearer_token_env_var: Some("TOKEN".to_string()),
             http_headers: None,
             env_http_headers: None,
+            http_headers_helper: None,
         },
         environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
         enabled: true,
@@ -3809,6 +3849,7 @@ fn reusable_server_config(url: &str) -> McpServerConfig {
             bearer_token_env_var: Some("CODEX_MCP_REUSE_TEST_TOKEN".to_string()),
             http_headers: None,
             env_http_headers: None,
+            http_headers_helper: None,
         },
         environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
         enabled: true,
@@ -4119,6 +4160,7 @@ fn connection_identity_uses_effective_authorization_headers() {
                 .map(|value| HashMap::from([("aUtHoRiZaTiOn".to_string(), value.to_string())])),
             env_http_headers: environment_header
                 .map(|value| HashMap::from([("aUtHoRiZaTiOn".to_string(), value.to_string())])),
+            http_headers_helper: None,
         };
         let server = EffectiveMcpServer::configured(config);
         let identity = |keyring_backend_kind| {

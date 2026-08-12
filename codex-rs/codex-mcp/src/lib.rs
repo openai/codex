@@ -21,6 +21,7 @@ pub use runtime::McpRuntimeContext;
 pub use runtime::McpRuntimeInput;
 pub use runtime::McpStartupPolicy;
 pub use runtime::SandboxState;
+pub use runtime::apply_http_headers_helper;
 pub use tool_catalog_cache::McpToolCatalogCache;
 pub use tools::ToolInfo;
 

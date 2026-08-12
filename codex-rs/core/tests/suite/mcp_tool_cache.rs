@@ -4,6 +4,7 @@ use std::time::Duration;
 use anyhow::Context;
 use codex_config::Constrained;
 use codex_config::types::McpServerConfig;
+use codex_config::types::McpServerTransportConfig;
 use codex_core::NewThread;
 use codex_core::StartThreadOptions;
 use codex_exec_server::ExecutorFileSystem;
@@ -19,6 +20,7 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
 use codex_utils_path_uri::PathUri;
 use core_test_support::apps_test_server::AppsTestServer;
+use core_test_support::is_remote_test_environment;
 use core_test_support::responses;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::mount_sse_once;
@@ -247,11 +249,19 @@ async fn mcp_calls_stay_bound_to_each_thread() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test_case(false, false, 1; "optional server uses cache")]
+#[test_case(true, false, 1; "required server uses cache")]
+#[test_case(false, true, 2; "headers helper bypasses cache")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(false; "optional server")]
-#[test_case(true; "required server")]
-async fn cached_http_mcp_starts_lazily_for_subagents(required: bool) -> anyhow::Result<()> {
+async fn cached_http_mcp_starts_lazily_for_subagents(
+    required: bool,
+    with_headers_helper: bool,
+    expected_startup_attempts: usize,
+) -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
+    if with_headers_helper && is_remote_test_environment() {
+        return Ok(());
+    }
 
     let responses_server = responses::start_mock_server().await;
     let (http_server, startup_control) =
@@ -287,6 +297,24 @@ async fn cached_http_mcp_starts_lazily_for_subagents(required: bool) -> anyhow::
     wait_for_mcp_server(&fixture.codex, SERVER_NAME).await?;
     assert_eq!(startup_control.initialize_attempts(), 1);
 
+    let mut subagent_config = fixture.config.clone();
+    if with_headers_helper {
+        let mut servers = subagent_config.mcp_servers.get().clone();
+        let server = servers.get_mut(SERVER_NAME).expect("cached HTTP server");
+        let McpServerTransportConfig::StreamableHttp {
+            http_headers_helper,
+            ..
+        } = &mut server.transport
+        else {
+            unreachable!("expected HTTP transport");
+        };
+        *http_headers_helper = Some(if cfg!(windows) {
+            r#"echo {"X-Cache-Test":"helper"}"#.to_string()
+        } else {
+            r#"printf '{"X-Cache-Test":"helper"}'"#.to_string()
+        });
+        subagent_config.mcp_servers.set(servers)?;
+    }
     let NewThread {
         thread: subagent, ..
     } = fixture
@@ -299,10 +327,16 @@ async fn cached_http_mcp_starts_lazily_for_subagents(required: bool) -> anyhow::
                 agent_nickname: None,
                 agent_role: None,
             })),
-            ..StartThreadOptions::new(fixture.config.clone())
+            ..StartThreadOptions::new(subagent_config)
         })
         .await?;
-    assert_eq!(startup_control.initialize_attempts(), 1);
+    if with_headers_helper {
+        wait_for_mcp_server(&subagent, SERVER_NAME).await?;
+    }
+    assert_eq!(
+        startup_control.initialize_attempts(),
+        expected_startup_attempts
+    );
 
     let call_id = "http-call";
     let call_response = mount_sse_once(

@@ -18,6 +18,7 @@ use axum::http::HeaderMap;
 use axum::routing::get;
 use axum::routing::post;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
 use codex_app_server_protocol::McpServerOauthLoginCompletedNotification;
@@ -52,8 +53,143 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use tokio::time::timeout;
+use wiremock::Mock;
+use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::header;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[tokio::test]
+async fn oauth_login_uses_http_headers_helper() -> Result<()> {
+    let oauth = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/.well-known/oauth-authorization-server/mcp"))
+        .and(header("x-gateway", "gateway-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "issuer": format!("{}/mcp", oauth.uri()),
+            "authorization_endpoint": format!("{}/oauth/authorize", oauth.uri()),
+            "token_endpoint": format!("{}/oauth/token", oauth.uri()),
+        })))
+        .mount(&oauth)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .and(header("x-gateway", "gateway-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "oauth-token",
+            "token_type": "Bearer",
+        })))
+        .expect(1)
+        .mount(&oauth)
+        .await;
+
+    let codex_home = TempDir::new()?;
+    let helper_command = if cfg!(windows) {
+        r#"echo {"X-Gateway":"gateway-token"}"#
+    } else {
+        r#"printf '{"X-Gateway":"gateway-token"}'"#
+    };
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        format!(
+            "mcp_oauth_credentials_store = \"file\"\n\
+             [mcp_servers.gateway]\n\
+             url = \"{}/mcp\"\n\
+             http_headers_helper = {}\n\
+             [mcp_servers.gateway.oauth]\n\
+             client_id = \"test-client\"\n",
+            oauth.uri(),
+            toml::Value::String(helper_command.to_string()),
+        ),
+    )?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+
+    let request_id = mcp
+        .send_raw_request(
+            "mcpServer/oauth/login",
+            Some(json!({"name": "gateway", "timeoutSecs": 10})),
+        )
+        .await?;
+    let response: McpServerOauthLoginResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
+    let authorization_url = reqwest::Url::parse(&response.authorization_url)?;
+    let query: BTreeMap<_, _> = authorization_url.query_pairs().into_owned().collect();
+    let mut callback_url = reqwest::Url::parse(&query["redirect_uri"])?;
+    callback_url
+        .query_pairs_mut()
+        .append_pair("code", "test-code")
+        .append_pair("state", &query["state"]);
+    reqwest::Client::builder()
+        .no_proxy()
+        .build()?
+        .get(callback_url)
+        .send()
+        .await?
+        .error_for_status()?;
+    let completed: McpServerOauthLoginCompletedNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_notification("mcpServer/oauthLogin/completed"),
+    )
+    .await??;
+    assert_eq!(
+        completed,
+        McpServerOauthLoginCompletedNotification {
+            name: "gateway".to_string(),
+            thread_id: None,
+            success: true,
+            error: None,
+        }
+    );
+    oauth.verify().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn oauth_login_does_not_run_helper_disabled_by_managed_requirements() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let marker = codex_home.path().join("helper-ran");
+    let helper = toml::Value::String(format!("echo invoked > \"{}\"", marker.display()));
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        format!(
+            "[mcp_servers.blocked]\nurl = \"https://example.com/mcp\"\nhttp_headers_helper = {helper}\n"
+        ),
+    )?;
+    std::fs::write(
+        codex_home.path().join("requirements.toml"),
+        "[mcp_servers.blocked.identity]\nurl = \"https://allowed.example.com/mcp\"\n",
+    )?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+
+    let request_id = mcp
+        .send_raw_request(
+            "mcpServer/oauth/login",
+            Some(json!({"name": "blocked", "timeoutSecs": 10})),
+        )
+        .await?;
+    let error: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert!(
+        error
+            .error
+            .message
+            .contains("disabled by managed requirements")
+    );
+    assert!(!marker.exists());
+    Ok(())
+}
 
 async fn wait_for_new_pid(path: &Path, previous_pid: Option<&str>) -> Result<String> {
     Ok(timeout(DEFAULT_READ_TIMEOUT, async {
