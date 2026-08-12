@@ -65,6 +65,50 @@ fn script_run_detection_excludes_python_c() {
 }
 
 #[test]
+fn powershell_skill_doc_read_matches_common_forms() {
+    let skill_doc_path = test_path_buf("/tmp/skill-test/SKILL.md").abs();
+    let spaced_skill_doc_path = test_path_buf("/tmp/skill test/SKILL.md").abs();
+    let skill = test_skill_metadata(skill_doc_path.clone());
+    let spaced_skill = test_skill_metadata(spaced_skill_doc_path.clone());
+    let outcome = TestLookup {
+        by_doc_path: HashMap::from([
+            (canonicalize_if_exists(&skill_doc_path), skill),
+            (canonicalize_if_exists(&spaced_skill_doc_path), spaced_skill),
+        ]),
+        ..Default::default()
+    };
+    let path = skill_doc_path.display();
+    let spaced_path = spaced_skill_doc_path.display();
+
+    for command in [
+        format!("Get-Content {path}"),
+        format!("Get-Content -Raw {path}"),
+        format!("Get-Content \"{spaced_path}\""),
+        format!("Get-Content -Raw \"{spaced_path}\""),
+    ] {
+        let found = detect_implicit_skill_invocation_for_command(
+            &outcome,
+            &command,
+            &test_path_buf("/tmp").abs(),
+        );
+
+        assert_eq!(
+            found.map(|value| value.name),
+            Some("test-skill".to_string()),
+            "command: {command}"
+        );
+    }
+}
+
+#[test]
+fn powershell_get_content_path_preserves_windows_backslashes() {
+    assert_eq!(
+        powershell_get_content_path(r#"Get-Content C:\skills\example\SKILL.md"#),
+        Some(r#"C:\skills\example\SKILL.md"#)
+    );
+}
+
+#[test]
 fn skill_doc_read_detection_matches_absolute_path() {
     let skill_doc_path = test_path_buf("/tmp/skill-test/SKILL.md").abs();
     let normalized_skill_doc_path = canonicalize_if_exists(&skill_doc_path);

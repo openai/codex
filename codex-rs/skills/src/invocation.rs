@@ -35,6 +35,7 @@ pub fn detect_implicit_skill_invocation_for_command(
     }
 
     detect_skill_doc_read(outcome, tokens.as_slice(), &workdir)
+        .or_else(|| detect_powershell_skill_doc_read(outcome, command, &workdir))
 }
 
 /// Resolves statically recognizable skill accesses without consulting the host filesystem.
@@ -148,6 +149,44 @@ fn detect_skill_doc_read(
     }
 
     None
+}
+
+fn detect_powershell_skill_doc_read(
+    outcome: &impl ImplicitSkillLookup,
+    command: &str,
+    workdir: &AbsolutePathBuf,
+) -> Option<SkillMetadata> {
+    let path = powershell_get_content_path(command)?;
+    let candidate_path = canonicalize_if_exists(&workdir.join(Path::new(path)));
+    outcome
+        .implicit_skill_for_doc_path(&candidate_path)
+        .cloned()
+}
+
+fn powershell_get_content_path(command: &str) -> Option<&str> {
+    let mut arguments = command.trim().strip_prefix("Get-Content ")?;
+    if let Some(remaining_arguments) = arguments.strip_prefix("-Raw ") {
+        arguments = remaining_arguments;
+    }
+
+    let (path, trailing) = if let Some(quoted_path) = arguments.strip_prefix('"') {
+        let closing_quote = quoted_path.find('"')?;
+        (
+            &quoted_path[..closing_quote],
+            &quoted_path[closing_quote + 1..],
+        )
+    } else {
+        let path_end = arguments
+            .char_indices()
+            .find_map(|(index, character)| character.is_whitespace().then_some(index))
+            .unwrap_or(arguments.len());
+        (&arguments[..path_end], &arguments[path_end..])
+    };
+
+    if path.is_empty() || path.starts_with('-') || !trailing.trim().is_empty() {
+        return None;
+    }
+    Some(path)
 }
 
 fn command_basename(command: &str) -> String {
