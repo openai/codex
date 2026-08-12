@@ -40,6 +40,8 @@ struct ReadArgs {
 struct ReadResponse {
     resource: String,
     contents: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    skill_root: Option<String>,
     next_cursor: Option<String>,
 }
 
@@ -56,7 +58,7 @@ impl ToolExecutor<ToolCall> for ReadTool {
     fn spec(&self) -> ToolSpec {
         skill_function_tool::<ReadArgs, ReadResponse>(
             TOOL_NAME,
-            "Read one page from a skill. Pass its provided package directly; root aliases are resolved automatically. Omit resource to read SKILL.md; to read another file, use the same package and pass the file's complete skill:// identifier as resource. If the package is not provided, use skills.list to find it. Pass next_cursor back as cursor to continue.",
+            "Read one page from a skill. Pass its provided package directly; root aliases are resolved automatically. Omit resource to read SKILL.md; to read another file, use the same package and pass the file's complete skill:// identifier as resource. For executor-backed skills, skill_root is the skill's absolute directory in the executor filesystem and can be used to locate bundled scripts. If the package is not provided, use skills.list to find it. Pass next_cursor back as cursor to continue.",
         )
     }
 
@@ -189,7 +191,20 @@ impl ToolExecutor<ToolCall> for ReadTool {
                     "skills.read cursor is invalid".to_string(),
                 ));
             }
-            let response = page_response(result.resource.as_str(), &result.contents, start)?;
+            let skill_root = if output_authority == super::SkillToolAuthoritySelector::Executor {
+                main_prompt
+                    .environment_path()
+                    .and_then(|(_, path)| path.parent())
+                    .map(|path| path.inferred_native_path_string())
+            } else {
+                None
+            };
+            let response = page_response(
+                result.resource.as_str(),
+                &result.contents,
+                skill_root.as_deref(),
+                start,
+            )?;
             let output = skill_json_output(&response, output_authority)?;
 
             if requested_resource == main_prompt
@@ -212,11 +227,13 @@ impl ToolExecutor<ToolCall> for ReadTool {
 fn page_response(
     resource: &str,
     contents: &str,
+    skill_root: Option<&str>,
     start: usize,
 ) -> Result<ReadResponse, FunctionCallError> {
     let response = |end, next_cursor| ReadResponse {
         resource: resource.to_string(),
         contents: contents[start..end].to_string(),
+        skill_root: skill_root.map(str::to_string),
         next_cursor,
     };
     let complete = response(contents.len(), None);

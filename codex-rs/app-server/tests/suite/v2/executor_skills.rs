@@ -531,11 +531,19 @@ stream_max_retries = 0
             assert_eq!(list_output["skills"], json!([]));
         }
     }
-    assert!(
-        requests[2]
+    let main_output = serde_json::from_str::<serde_json::Value>(
+        &requests[2]
             .function_call_output_text("main")
-            .expect("main skill output")
-            .contains(SKILL_MARKER)
+            .expect("main skill output"),
+    )?;
+    assert!(
+        main_output["contents"]
+            .as_str()
+            .is_some_and(|contents| contents.contains(SKILL_MARKER))
+    );
+    assert_eq!(
+        main_output["skill_root"],
+        json!(skill_dir.inferred_native_path_string())
     );
     let reference_output_text = requests[3]
         .function_call_output_text("reference")
@@ -554,6 +562,10 @@ stream_max_retries = 0
         reference_output["contents"]
             .as_str()
             .is_some_and(|contents| contents.contains(REFERENCE_MARKER))
+    );
+    assert_eq!(
+        reference_output["skill_root"],
+        json!(skill_dir.inferred_native_path_string())
     );
     match scenario {
         ExecutorSkillScenario::VisibleWithBudgetWarning => {
