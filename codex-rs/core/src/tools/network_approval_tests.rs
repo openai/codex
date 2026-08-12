@@ -559,9 +559,9 @@ async fn record_blocked_request_sets_policy_outcome_for_owner_call() {
     assert!(cancellation_token.is_cancelled());
     assert_eq!(
             service.take_call_outcome("registration-1").await,
-            Some(NetworkApprovalOutcome::DeniedByPolicy(
+            Some(
                 "Network access to \"example.com\" was blocked: domain is not on the allowlist for the current sandbox mode.".to_string()
-            ))
+            )
         );
 }
 
@@ -572,10 +572,7 @@ async fn blocked_request_does_not_override_recorded_approval_outcome() {
     let rejection = "approval client unavailable";
 
     service
-        .record_call_outcome(
-            "registration-1",
-            NetworkApprovalOutcome::DeniedByApproval(rejection.to_string()),
-        )
+        .record_call_outcome("registration-1", rejection.to_string())
         .await;
     service
         .record_blocked_request(denied_blocked_request("example.com"))
@@ -597,10 +594,7 @@ async fn specific_approval_outcome_replaces_earlier_blocked_request() {
         .record_blocked_request(denied_blocked_request("example.com"))
         .await;
     service
-        .record_call_outcome(
-            "registration-1",
-            NetworkApprovalOutcome::DeniedByApproval(rejection.to_string()),
-        )
+        .record_call_outcome("registration-1", rejection.to_string())
         .await;
 
     let error =
@@ -609,14 +603,33 @@ async fn specific_approval_outcome_replaces_earlier_blocked_request() {
     assert!(matches!(error, ToolError::Rejected(message) if message == rejection));
 }
 
+#[tokio::test]
+async fn latest_specific_approval_outcome_replaces_earlier_specific_outcome() {
+    let service = NetworkApprovalService::default();
+    register_call_with_default_shell_trigger(&service, "registration-1").await;
+
+    service
+        .record_call_outcome("registration-1", "earlier approval rejection".to_string())
+        .await;
+    service
+        .record_call_outcome("registration-1", "latest approval rejection".to_string())
+        .await;
+
+    let error =
+        network_approval_outcome_to_result(service.take_call_outcome("registration-1").await)
+            .expect_err("latest approval rejection should remain an error");
+    assert!(matches!(
+        error,
+        ToolError::Rejected(message) if message == "latest approval rejection"
+    ));
+}
+
 #[test]
 fn approval_denial_messages_are_bounded_for_model_context() {
     let rejection = "x".repeat(40_000);
 
-    let error = network_approval_outcome_to_result(Some(NetworkApprovalOutcome::DeniedByApproval(
-        rejection,
-    )))
-    .expect_err("approval denial should remain an error");
+    let error = network_approval_outcome_to_result(Some(rejection))
+        .expect_err("approval denial should remain an error");
     let ToolError::Rejected(message) = error else {
         panic!("approval denial should produce a rejected tool error");
     };
@@ -632,10 +645,7 @@ async fn finish_call_returns_denial_and_unregisters_active_call() {
         register_call_with_default_shell_trigger(&service, "registration-1").await;
 
     service
-        .record_call_outcome(
-            "registration-1",
-            NetworkApprovalOutcome::DeniedByPolicy("network denied".to_string()),
-        )
+        .record_call_outcome("registration-1", "network denied".to_string())
         .await;
 
     let err = service
@@ -678,10 +688,7 @@ async fn deferred_finish_reuses_denial_result_after_first_consumer() {
         _execution_proxy: None,
     };
     service
-        .record_call_outcome(
-            "registration-1",
-            NetworkApprovalOutcome::DeniedByPolicy("network denied".to_string()),
-        )
+        .record_call_outcome("registration-1", "network denied".to_string())
         .await;
 
     let first = deferred
@@ -705,10 +712,7 @@ async fn record_call_outcome_ignores_inactive_call() {
     service.unregister_call("registration-1").await;
 
     service
-        .record_call_outcome(
-            "registration-1",
-            NetworkApprovalOutcome::DeniedByPolicy("network denied".to_string()),
-        )
+        .record_call_outcome("registration-1", "network denied".to_string())
         .await;
 
     assert!(!cancellation_token.is_cancelled());
@@ -747,8 +751,8 @@ async fn attributed_blocked_request_targets_one_of_multiple_active_calls() {
     assert_eq!(service.take_call_outcome("registration-1").await, None);
     assert_eq!(
         service.take_call_outcome("registration-2").await,
-        Some(NetworkApprovalOutcome::DeniedByPolicy(
+        Some(
             "Network access to \"example.com\" was blocked: domain is not on the allowlist for the current sandbox mode.".to_string()
-        ))
+        )
     );
 }
