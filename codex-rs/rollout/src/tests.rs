@@ -1331,7 +1331,7 @@ async fn read_head_for_summary_omits_harness_metadata() {
         ordinal: None,
         item: RolloutItem::ResponseItem(ResponseItemEnvelope {
             item: response_item.clone(),
-            metadata: Some(CodexHarnessMetadata {}),
+            metadata: Some(CodexHarnessMetadata::default()),
         }),
     };
     fs::write(

@@ -70,7 +70,9 @@ fn response_item_envelope_stores_metadata_beside_rollout_payload() -> Result<()>
         ordinal: Some(7),
         item: RolloutItem::ResponseItem(ResponseItemEnvelope {
             item: response_item.clone(),
-            metadata: Some(CodexHarnessMetadata {}),
+            metadata: Some(CodexHarnessMetadata {
+                client_authored: true,
+            }),
         }),
     };
     let serialized = serde_json::to_value(&line)?;
@@ -82,7 +84,7 @@ fn response_item_envelope_stores_metadata_beside_rollout_payload() -> Result<()>
             "ordinal": 7,
             "type": "response_item",
             "payload": response_item,
-            "metadata": {},
+            "metadata": { "client_authored": true },
         })
     );
     assert_eq!(serialized["payload"].get("metadata"), None);
@@ -91,7 +93,12 @@ fn response_item_envelope_stores_metadata_beside_rollout_payload() -> Result<()>
     let RolloutItem::ResponseItem(envelope) = restored.item else {
         panic!("expected response item");
     };
-    assert_eq!(envelope.metadata, Some(CodexHarnessMetadata {}));
+    assert_eq!(
+        envelope.metadata,
+        Some(CodexHarnessMetadata {
+            client_authored: true,
+        })
+    );
     Ok(())
 }
 
@@ -118,7 +125,7 @@ fn response_item_envelope_ignores_unknown_harness_metadata_fields() -> Result<()
     let RolloutItem::ResponseItem(envelope) = line.item else {
         panic!("expected response item");
     };
-    assert_eq!(envelope.metadata, Some(CodexHarnessMetadata {}));
+    assert_eq!(envelope.metadata, Some(CodexHarnessMetadata::default()));
 
     let compacted = serde_json::from_value::<CompactedItem>(json!({
         "message": "summary",
@@ -127,7 +134,7 @@ fn response_item_envelope_ignores_unknown_harness_metadata_fields() -> Result<()
     }))?;
     assert_eq!(
         compacted.replacement_history.expect("replacement history")[0].metadata,
-        Some(CodexHarnessMetadata {})
+        Some(CodexHarnessMetadata::default())
     );
     Ok(())
 }
@@ -175,7 +182,9 @@ fn compacted_replacement_history_stores_metadata_in_an_aligned_sidecar() -> Resu
         replacement_history: Some(vec![
             ResponseItemEnvelope {
                 item: developer_message.clone(),
-                metadata: Some(CodexHarnessMetadata {}),
+                metadata: Some(CodexHarnessMetadata {
+                    client_authored: true,
+                }),
             },
             ResponseItemEnvelope::new(compaction_item.clone()),
         ]),
@@ -191,7 +200,10 @@ fn compacted_replacement_history_stores_metadata_in_an_aligned_sidecar() -> Resu
         json!({
             "message": "summary",
             "replacement_history": [developer_message, compaction_item],
-            "replacement_history_metadata": [{}, {}],
+            "replacement_history_metadata": [
+                { "client_authored": true },
+                { "client_authored": false },
+            ],
         })
     );
 
@@ -201,11 +213,13 @@ fn compacted_replacement_history_stores_metadata_in_an_aligned_sidecar() -> Resu
         Some(vec![
             ResponseItemEnvelope {
                 item: developer_message,
-                metadata: Some(CodexHarnessMetadata {}),
+                metadata: Some(CodexHarnessMetadata {
+                    client_authored: true,
+                }),
             },
             ResponseItemEnvelope {
                 item: compaction_item,
-                metadata: Some(CodexHarnessMetadata {}),
+                metadata: Some(CodexHarnessMetadata::default()),
             },
         ])
     );
@@ -260,7 +274,9 @@ fn compacted_metadata_remains_compatible_with_legacy_response_item_readers() -> 
     let response_item = response_message("developer");
     let envelope = ResponseItemEnvelope {
         item: response_item.clone(),
-        metadata: Some(CodexHarnessMetadata {}),
+        metadata: Some(CodexHarnessMetadata {
+            client_authored: true,
+        }),
     };
     let response_line = serde_json::to_value(RolloutItem::ResponseItem(envelope.clone()))?;
     let LegacyRolloutItem::ResponseItem(legacy_response) =

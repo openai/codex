@@ -616,7 +616,7 @@ async fn non_user_input_cannot_enter_the_user_message_queue() -> anyhow::Result<
     let error = service
         .enqueue(
             ThreadId::new(),
-            TurnInput::ResponseItem(ResponseItem::Other),
+            TurnInput::ResponseItem(ResponseItem::Other.into()),
         )
         .await
         .expect_err("response item should not enter the user queue");

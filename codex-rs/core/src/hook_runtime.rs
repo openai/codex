@@ -590,7 +590,7 @@ pub(crate) async fn record_pending_input(
             .await;
         }
         TurnInput::ResponseItem(item) => {
-            sess.record_conversation_items(turn_context, std::slice::from_ref(&item))
+            sess.record_annotated_conversation_items(turn_context, vec![item])
                 .await;
         }
         TurnInput::InterAgentCommunication(communication) => {

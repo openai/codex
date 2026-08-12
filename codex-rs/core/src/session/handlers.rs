@@ -277,6 +277,7 @@ pub(super) async fn user_input_or_turn_inner(
             let mut task_input = additional_context_input
                 .into_iter()
                 .map(ResponseItem::from)
+                .map(|item| sess.annotate_client_response_item(item))
                 .map(TurnInput::ResponseItem)
                 .collect::<Vec<_>>();
             if !items.is_empty() {

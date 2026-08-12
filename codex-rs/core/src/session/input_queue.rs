@@ -3,6 +3,7 @@ use crate::state::MailboxDeliveryPhase;
 use crate::state::TurnState;
 use codex_diagnostics::Gauge;
 use codex_diagnostics::GaugeGuard;
+use codex_history::ResponseItemEnvelope;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::user_input::UserInput;
@@ -22,8 +23,42 @@ pub enum TurnInput {
         content: Vec<UserInput>,
         client_id: Option<String>,
     },
-    ResponseItem(ResponseItem),
+    // Preserve the existing serialized format while carrying injection API metadata
+    // through the in-memory queue.
+    ResponseItem(#[serde(with = "turn_input_response_item")] ResponseItemEnvelope),
     InterAgentCommunication(InterAgentCommunication),
+}
+
+mod turn_input_response_item {
+    use super::ResponseItem;
+    use super::ResponseItemEnvelope;
+    use serde::Deserialize;
+    use serde::Deserializer;
+    use serde::Serialize;
+    use serde::Serializer;
+    use serde::ser::Error as _;
+
+    pub(super) fn serialize<S>(
+        item: &ResponseItemEnvelope,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        if item.metadata.is_some() {
+            return Err(S::Error::custom(
+                "annotated response items cannot cross the turn-input serialization boundary",
+            ));
+        }
+        item.item.serialize(serializer)
+    }
+
+    pub(super) fn deserialize<'de, D>(deserializer: D) -> Result<ResponseItemEnvelope, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        ResponseItem::deserialize(deserializer).map(ResponseItemEnvelope::new)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -339,8 +374,40 @@ impl TurnInputQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_history::CodexHarnessMetadata;
     use codex_protocol::AgentPath;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn response_item_serde_preserves_legacy_shape_and_rejects_metadata() {
+        let item = ResponseItem::Other;
+        let input = TurnInput::ResponseItem(item.clone().into());
+        let value = serde_json::json!({"ResponseItem": item});
+
+        assert_eq!(serde_json::to_value(&input).unwrap(), value);
+        assert_eq!(serde_json::from_value::<TurnInput>(value).unwrap(), input);
+
+        let annotated = TurnInput::ResponseItem(ResponseItemEnvelope {
+            item: ResponseItem::Other,
+            metadata: Some(CodexHarnessMetadata {
+                client_authored: true,
+            }),
+        });
+        assert!(serde_json::to_value(annotated).is_err());
+
+        let forged = serde_json::json!({
+            "ResponseItem": {
+                "type": "message",
+                "role": "developer",
+                "content": [],
+                "metadata": {"client_authored": true}
+            }
+        });
+        let TurnInput::ResponseItem(envelope) = serde_json::from_value(forged).unwrap() else {
+            panic!("expected response item");
+        };
+        assert!(envelope.metadata.is_none());
+    }
 
     fn make_mail(
         author: AgentPath,

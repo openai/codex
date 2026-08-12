@@ -40,10 +40,12 @@ pub struct ResponseItemEnvelope {
 
 /// Metadata owned by the Codex harness and persisted with a response item.
 ///
-/// This intentionally has no fields yet. Keeping it closed prevents rollout
-/// metadata from becoming an untyped extension point.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
-pub struct CodexHarnessMetadata {}
+pub struct CodexHarnessMetadata {
+    /// Whether a developer message was supplied by an app-server client.
+    #[serde(default)]
+    pub client_authored: bool,
+}
 
 impl ResponseItemEnvelope {
     /// Wraps a raw Responses API item for persisted history.

@@ -404,7 +404,7 @@ impl GoalRuntimeHandle {
         let item = continuation_steering_item(&protocol_goal_from_state(goal));
 
         if let Err(err) = thread
-            .try_start_turn_if_idle(vec![TurnInput::ResponseItem(item)])
+            .try_start_turn_if_idle(vec![TurnInput::ResponseItem(item.into())])
             .await
         {
             let reason = err.reason();

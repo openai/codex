@@ -71,9 +71,9 @@ async fn idle_response_items_include_pending_mailbox_in_first_request() -> anyho
 
     submit_queue_only_agent_mail(test.codex.as_ref(), "pending mailbox input").await;
     test.codex
-        .try_start_turn_if_idle(vec![TurnInput::ResponseItem(responses::user_message_item(
-            "automatic response item",
-        ))])
+        .try_start_turn_if_idle(vec![TurnInput::ResponseItem(
+            responses::user_message_item("automatic response item").into(),
+        )])
         .await
         .map_err(|error| {
             anyhow::anyhow!("idle response items were rejected: {:?}", error.reason())

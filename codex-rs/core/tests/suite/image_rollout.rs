@@ -8,6 +8,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -355,6 +356,9 @@ async fn resumed_history_only_emits_resize_notices_for_new_images() -> anyhow::R
 
     let mut resume_builder = test_codex().with_config(|config| {
         let _ = config.features.enable(Feature::ImageResizeNotice);
+        let _ = config
+            .features
+            .enable(Feature::RetainClientDeveloperMessages);
     });
     let resumed = resume_builder
         .resume(&server, initial.home.clone(), rollout_path.clone())
@@ -372,7 +376,7 @@ async fn resumed_history_only_emits_resize_notices_for_new_images() -> anyhow::R
         .codex
         .submit(Op::UserInput {
             items: vec![UserInput::Image {
-                image_url: original_image_url,
+                image_url: original_image_url.clone(),
                 detail: Some(ImageDetail::High),
             }],
             final_output_json_schema: None,
@@ -446,7 +450,7 @@ async fn resumed_history_only_emits_resize_notices_for_new_images() -> anyhow::R
 
     resumed.codex.shutdown_and_wait().await?;
     let replayed = resume_builder
-        .resume(&server, resumed.home.clone(), rollout_path)
+        .resume(&server, resumed.home.clone(), rollout_path.clone())
         .await?;
     let replayed_mock = responses::mount_sse_once(
         &server,
@@ -465,6 +469,54 @@ async fn resumed_history_only_emits_resize_notices_for_new_images() -> anyhow::R
         .filter(|text| text.starts_with("<image_resize_notice>"))
         .collect::<Vec<_>>();
     assert_eq!(replayed_notices, vec![expected_notice.to_string()]);
+
+    let replayed = test_codex()
+        .with_config(|config| {
+            let _ = config.features.enable(Feature::ImageResizeNotice);
+            let _ = config
+                .features
+                .enable(Feature::RetainClientDeveloperMessages);
+        })
+        .restart(&server, &replayed)
+        .await?;
+    let existing_rollout_lines = fs::read_to_string(&rollout_path)?.lines().count();
+    replayed
+        .codex
+        .inject_response_items(vec![
+            ResponseInputItem::Message {
+                role: "user".to_string(),
+                content: vec![ContentItem::InputImage {
+                    image_url: original_image_url,
+                    detail: Some(ImageDetail::High),
+                }],
+                phase: None,
+            }
+            .into(),
+            ResponseInputItem::Message {
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "<image_resize_notice>client message</image_resize_notice>".to_string(),
+                }],
+                phase: None,
+            }
+            .into(),
+        ])
+        .await?;
+    let persisted_developer_metadata = fs::read_to_string(&rollout_path)?
+        .lines()
+        .skip(existing_rollout_lines)
+        .filter_map(|line| {
+            let RolloutItem::ResponseItem(envelope) = serde_json::from_str::<RolloutLine>(line)
+                .expect("new rollout line should deserialize")
+                .item
+            else {
+                return None;
+            };
+            matches!(envelope.item, ResponseItem::Message { role, .. } if role == "developer")
+                .then(|| envelope.metadata.map(|metadata| metadata.client_authored))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(persisted_developer_metadata, vec![None, Some(true)]);
 
     Ok(())
 }

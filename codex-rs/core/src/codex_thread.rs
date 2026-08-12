@@ -572,7 +572,7 @@ impl CodexThread {
                 .await?;
         }
         self.session
-            .inject_no_new_turn(items, Some(turn_context.as_ref()))
+            .inject_client_response_items(items, turn_context.as_ref())
             .await;
         Ok(())
     }

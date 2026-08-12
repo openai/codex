@@ -3037,14 +3037,33 @@ impl Session {
     ) {
         let (items, image_preparations) =
             self.prepare_conversation_items_for_history(turn_context, items);
-        let items = items.as_ref();
+        let items = items
+            .into_owned()
+            .into_iter()
+            .map(ResponseItemEnvelope::new)
+            .collect();
+        self.record_prepared_conversation_items(turn_context, items, image_preparations)
+            .await;
+    }
+
+    async fn record_prepared_conversation_items(
+        &self,
+        turn_context: &TurnContext,
+        items: Vec<ResponseItemEnvelope>,
+        image_preparations: Vec<ImagePreparationMetadata>,
+    ) {
+        let response_items = items
+            .iter()
+            .map(|envelope| envelope.item.clone())
+            .collect::<Vec<_>>();
         {
             let mut state = self.state.lock().await;
-            state.current_time_reminder.note_recorded_items(items);
-            state.record_items(
-                items.iter(),
-                turn_context.model_info.truncation_policy.into(),
-            );
+            state
+                .current_time_reminder
+                .note_recorded_items(&response_items);
+            state
+                .history
+                .record_annotated_items(&items, turn_context.model_info.truncation_policy.into());
         }
         for image in image_preparations {
             self.services
@@ -3054,8 +3073,11 @@ impl Session {
                     metadata: image,
                 });
         }
-        self.persist_rollout_response_items(items).await;
-        self.send_raw_response_items(turn_context, items).await;
+        let rollout_items: Vec<RolloutItem> =
+            items.into_iter().map(RolloutItem::ResponseItem).collect();
+        self.persist_rollout_items(&rollout_items).await;
+        self.send_raw_response_items(turn_context, &response_items)
+            .await;
     }
 
     pub(crate) async fn record_step_world_state_if_changed(
@@ -3347,16 +3369,6 @@ impl Session {
             let mut state = self.state.lock().await;
             state.queue_pending_session_start_source(codex_hooks::SessionStartSource::Compact);
         }
-    }
-
-    async fn persist_rollout_response_items(&self, items: &[ResponseItem]) {
-        let rollout_items: Vec<RolloutItem> = items
-            .iter()
-            .cloned()
-            .map(ResponseItemEnvelope::new)
-            .map(RolloutItem::ResponseItem)
-            .collect();
-        self.persist_rollout_items(&rollout_items).await;
     }
 
     pub fn enabled(&self, feature: Feature) -> bool {
@@ -4086,6 +4098,7 @@ impl Session {
         let mut pending_input = additional_context_input
             .into_iter()
             .map(ResponseItem::from)
+            .map(|item| self.annotate_client_response_item(item))
             .map(TurnInput::ResponseItem)
             .collect::<Vec<_>>();
         pending_input.push(TurnInput::UserInput {

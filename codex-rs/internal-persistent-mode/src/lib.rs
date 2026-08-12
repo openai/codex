@@ -63,7 +63,7 @@ impl ThreadLifecycleContributor<Config> for PersistentModeExtension {
             };
 
             if thread
-                .try_start_turn_if_idle(vec![TurnInput::ResponseItem(item)])
+                .try_start_turn_if_idle(vec![TurnInput::ResponseItem(item.into())])
                 .await
                 .is_err()
             {

@@ -10636,7 +10636,7 @@ async fn try_start_turn_if_idle_rejects_active_turn_without_injecting() {
     )
     .await;
 
-    let item = TurnInput::ResponseItem(user_message("synthetic idle input"));
+    let item = TurnInput::ResponseItem(user_message("synthetic idle input").into());
     let err = sess
         .try_start_turn_if_idle(vec![item.clone()])
         .await
@@ -10662,7 +10662,7 @@ async fn try_start_turn_if_idle_rejects_plan_mode_without_injecting() {
         state.session_configuration.collaboration_mode = collaboration_mode;
     }
 
-    let item = TurnInput::ResponseItem(user_message("synthetic idle input"));
+    let item = TurnInput::ResponseItem(user_message("synthetic idle input").into());
     let err = sess
         .try_start_turn_if_idle(vec![item.clone()])
         .await
@@ -10718,7 +10718,7 @@ async fn try_start_turn_if_idle_rejects_empty_user_input_in_plan_mode() {
             content: Vec::new(),
             client_id: Some("empty-queued-user-message".to_string()),
         },
-        TurnInput::ResponseItem(user_message("automatic idle input")),
+        TurnInput::ResponseItem(user_message("automatic idle input").into()),
     ];
     let error = sess
         .try_start_turn_if_idle(input.clone())
@@ -10747,7 +10747,7 @@ async fn try_start_turn_if_idle_rejects_pending_trigger_turn_without_injecting()
         )
         .await;
 
-    let item = TurnInput::ResponseItem(user_message("synthetic idle input"));
+    let item = TurnInput::ResponseItem(user_message("synthetic idle input").into());
     let err = sess
         .try_start_turn_if_idle(vec![item.clone()])
         .await
@@ -10775,7 +10775,7 @@ async fn try_start_turn_if_idle_rejects_active_review_turn_without_injecting() {
     )
     .await;
 
-    let item = TurnInput::ResponseItem(user_message("synthetic idle input"));
+    let item = TurnInput::ResponseItem(user_message("synthetic idle input").into());
     let err = sess
         .try_start_turn_if_idle(vec![item.clone()])
         .await
@@ -10987,7 +10987,7 @@ async fn abort_empty_active_turn_preserves_pending_input() {
     sess.input_queue
         .extend_pending_input_for_turn_state(
             turn_state.as_ref(),
-            vec![TurnInput::ResponseItem(pending_item.clone())],
+            vec![TurnInput::ResponseItem(pending_item.clone().into())],
         )
         .await;
 
@@ -10998,7 +10998,7 @@ async fn abort_empty_active_turn_preserves_pending_input() {
         sess.input_queue
             .take_pending_input_for_turn_state(turn_state.as_ref())
             .await,
-        vec![TurnInput::ResponseItem(pending_item)]
+        vec![TurnInput::ResponseItem(pending_item.into())]
     );
 }
 
