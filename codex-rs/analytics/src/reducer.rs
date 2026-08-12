@@ -663,8 +663,8 @@ impl AnalyticsReducer {
         };
         let has_thread_context = self.threads.get(thread_id).is_some_and(|thread| {
             thread.metadata.is_some()
-                && thread
-                    .connection_id
+                && self
+                    .thread_connection_id(thread_id)
                     .is_some_and(|connection_id| self.connections.contains_key(&connection_id))
         });
         if !has_thread_context {
@@ -1002,9 +1002,8 @@ impl AnalyticsReducer {
     ) {
         let parent_thread_id = input.parent_thread_id.clone();
         let parent_connection_id = parent_thread_id
-            .as_ref()
-            .and_then(|parent_thread_id| self.threads.get(parent_thread_id))
-            .and_then(|thread| thread.connection_id);
+            .as_deref()
+            .and_then(|parent_thread_id| self.thread_connection_id(parent_thread_id));
         let thread_state = self.threads.entry(input.thread_id.clone()).or_default();
         thread_state
             .originator
@@ -2132,11 +2131,9 @@ impl AnalyticsReducer {
             return;
         };
         let drop_site = AnalyticsDropSite::turn(thread_id, turn_id);
-        let connection_id = turn_state.connection_id.or_else(|| {
-            self.threads
-                .get(drop_site.thread_id)
-                .and_then(|thread| thread.connection_id)
-        });
+        let connection_id = turn_state
+            .connection_id
+            .or_else(|| self.thread_connection_id(drop_site.thread_id));
         let Some(connection_id) = connection_id else {
             warn_missing_analytics_context(&drop_site, MissingAnalyticsContext::ThreadConnection);
             return;
@@ -2176,15 +2173,24 @@ impl AnalyticsReducer {
         self.turns.remove(turn_id);
     }
 
+    /// Resolve the parent connection lazily when a subagent fact arrives first.
+    ///
+    /// Parents are spawned before their children, so ancestor links cannot cycle.
+    fn thread_connection_id(&self, thread_id: &str) -> Option<u64> {
+        let mut thread = self.threads.get(thread_id)?;
+        while thread.connection_id.is_none() {
+            let thread_metadata = thread.metadata.as_ref()?;
+            let parent_thread_id = thread_metadata.parent_thread_id.as_deref()?;
+            thread = self.threads.get(parent_thread_id)?;
+        }
+        thread.connection_id
+    }
+
     fn thread_connection_or_warn(
         &self,
         drop_site: AnalyticsDropSite<'_>,
     ) -> Option<&ConnectionState> {
-        let Some(thread_state) = self.threads.get(drop_site.thread_id) else {
-            warn_missing_analytics_context(&drop_site, MissingAnalyticsContext::ThreadConnection);
-            return None;
-        };
-        let Some(connection_id) = thread_state.connection_id else {
+        let Some(connection_id) = self.thread_connection_id(drop_site.thread_id) else {
             warn_missing_analytics_context(&drop_site, MissingAnalyticsContext::ThreadConnection);
             return None;
         };

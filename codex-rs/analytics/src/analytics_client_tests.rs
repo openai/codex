@@ -3425,7 +3425,6 @@ async fn subagent_tool_items_inherit_parent_connection_metadata() {
     let mut reducer = AnalyticsReducer::default();
     let mut events = Vec::new();
 
-    ingest_review_prerequisites(&mut reducer, &mut events).await;
     reducer
         .ingest(
             AnalyticsFact::Custom(CustomAnalyticsFact::SubAgentThreadStarted(
@@ -3446,7 +3445,7 @@ async fn subagent_tool_items_inherit_parent_connection_metadata() {
             &mut events,
         )
         .await;
-    events.clear();
+    ingest_review_prerequisites(&mut reducer, &mut events).await;
     reducer
         .ingest(
             AnalyticsFact::Notification(Box::new(sample_turn_started_notification(
@@ -3492,8 +3491,25 @@ async fn subagent_tool_items_inherit_parent_connection_metadata() {
         )
         .await;
 
+    ingest_code_mode_facts(
+        &mut reducer,
+        &mut events,
+        [CodeModeToolCallFact::Completed {
+            thread_id: "thread-subagent".into(),
+            turn_id: "turn-subagent".into(),
+            call_id: "exec-1".into(),
+            cell_id: None,
+            tool_name: "exec".into(),
+            started_at_ms: 1_000,
+            completed_at_ms: 1_042,
+            status: CodeModeToolCallStatus::Completed,
+        }],
+    )
+    .await;
+    reducer.flush(&mut events);
+
     let payload = serde_json::to_value(&events).expect("serialize events");
-    assert_eq!(payload.as_array().expect("events array").len(), 1);
+    assert_eq!(payload.as_array().expect("events array").len(), 2);
     assert_eq!(payload[0]["event_type"], "codex_command_execution_event");
     assert_eq!(payload[0]["event_params"]["thread_id"], "thread-subagent");
     assert_eq!(payload[0]["event_params"]["session_id"], "session-thread-1");
@@ -3504,6 +3520,8 @@ async fn subagent_tool_items_inherit_parent_connection_metadata() {
         payload[0]["event_params"]["app_server_client"]["client_name"],
         "codex-tui"
     );
+    assert_eq!(payload[1]["event_type"], "codex_dynamic_tool_call_event");
+    assert_eq!(payload[1]["event_params"]["parent_thread_id"], "thread-1");
 }
 
 #[test]
