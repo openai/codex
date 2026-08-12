@@ -2,6 +2,7 @@
 
 use super::markdown_render_cache::MarkdownRenderCache;
 use super::*;
+use std::borrow::Cow;
 
 #[derive(Debug)]
 pub(crate) struct UserHistoryCell {
@@ -13,17 +14,67 @@ pub(crate) struct UserHistoryCell {
 }
 
 /// Remove CSI sequences and control characters, preserving tabs and newlines.
-pub(crate) fn sanitize_user_text(text: &str) -> String {
-    let mut sanitized = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\x1b' && chars.next_if_eq(&'[').is_some() {
-            let _ = chars.find(|ch| ('@'..='~').contains(ch));
-        } else if matches!(ch, '\n' | '\t') || !ch.is_control() {
-            sanitized.push(ch);
-        }
+pub(crate) fn sanitize_user_text(text: Cow<'_, str>) -> Cow<'_, str> {
+    fn sanitize_borrowed(text: &str) -> Cow<'_, str> {
+        let mut remaining = Some(text);
+        let mut spans = std::iter::from_fn(move || {
+            let current = remaining.take()?;
+            let mut escaped = false;
+            let Some((prefix, suffix)) = current.split_once(|ch: char| {
+                escaped = ch == '\x1b';
+                escaped || ch.is_control() && !matches!(ch, '\n' | '\t')
+            }) else {
+                return Some(current);
+            };
+
+            remaining = if escaped && let Some(sequence) = suffix.strip_prefix('[') {
+                sequence
+                    .split_once(|ch: char| ('@'..='~').contains(&ch))
+                    .map(|(_, tail)| tail)
+            } else {
+                Some(suffix)
+            };
+            Some(prefix)
+        })
+        .filter(|span| !span.is_empty());
+
+        let first = spans.next().unwrap_or_default();
+        let Some(second) = spans.next() else {
+            return Cow::Borrowed(first);
+        };
+
+        Cow::Owned([first, second].into_iter().chain(spans).fold(
+            String::with_capacity(text.len()),
+            |mut acc, span| {
+                acc.push_str(span);
+                acc
+            },
+        ))
     }
-    sanitized
+
+    match text {
+        Cow::Borrowed(text) => sanitize_borrowed(text),
+        Cow::Owned(mut text) => match sanitize_borrowed(&text) {
+            Cow::Owned(sanitized) => Cow::Owned(sanitized),
+            Cow::Borrowed(retained) => {
+                if retained.is_empty() {
+                    text.clear();
+                } else if retained.len() != text.len() {
+                    // Cannot underflow because retained is a subslice of text.
+                    // I'd normally assert that here but this crate denies
+                    // clippy::expect_used.
+                    let start = retained.as_ptr().addr() - text.as_ptr().addr();
+                    let end = start + retained.len();
+
+                    // Truncate before draining because truncate is constant
+                    // time while drain is linear in the size of the receiver.
+                    text.truncate(end);
+                    drop(text.drain(..start));
+                }
+                Cow::Owned(text)
+            }
+        },
+    }
 }
 
 /// Build logical lines for a user message with styled text elements.
@@ -108,8 +159,8 @@ fn trim_trailing_blank_lines(mut lines: Vec<Line<'static>>) -> Vec<Line<'static>
 
 impl HistoryCell for UserHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let message = sanitize_user_text(&self.message);
-        let text_elements = if message == self.message {
+        let message = sanitize_user_text((&self.message).into());
+        let text_elements = if message.as_ref() == self.message {
             self.text_elements.as_slice()
         } else {
             &[]
@@ -154,7 +205,7 @@ impl HistoryCell for UserHistoryCell {
             (!wrapped.is_empty()).then_some(wrapped)
         } else {
             let raw_lines = build_user_message_lines_with_elements(
-                &message,
+                message.as_ref(),
                 text_elements,
                 style,
                 element_style,
@@ -198,8 +249,8 @@ impl HistoryCell for UserHistoryCell {
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
-        let message = sanitize_user_text(&self.message);
-        let mut lines = raw_lines_from_source(message.trim_end_matches(['\r', '\n']));
+        let message = sanitize_user_text((&self.message).into());
+        let mut lines = raw_lines_from_source(message.as_ref().trim_end_matches(['\r', '\n']));
         if !self.remote_image_urls.is_empty() {
             if !lines.is_empty() {
                 lines.push(Line::from(""));

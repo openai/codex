@@ -1,6 +1,66 @@
 use super::*;
 use crate::history_cell::markdown_render_cache::MarkdownRenderCacheKey;
+use assert_matches::assert_matches;
 use pretty_assertions::assert_eq;
+
+#[test]
+fn sanitizer_borrows_clean_text_and_removes_control_sequences() {
+    for (text, expected) in [
+        ("clean\ttext\n", "clean\ttext\n"),
+        ("\x07before", "before"),
+        ("before\x07", "before"),
+        ("\x1b[31mbefore", "before"),
+        ("before\x1b[31m", "before"),
+        ("before\x1b[31", "before"),
+        ("\x07[31m", "[31m"),
+        ("\x07", ""),
+    ] {
+        assert_matches!(
+            sanitize_user_text(text.into()),
+            Cow::Borrowed(sanitized) => assert_eq!(sanitized, expected)
+        );
+    }
+    assert_matches!(
+        sanitize_user_text("before\x1b[31mafter\x07".into()),
+        Cow::Owned(sanitized) => assert_eq!(sanitized, "beforeafter")
+    );
+    assert_eq!(sanitize_user_text("é\u{85}中".into()), "é中");
+    assert_eq!(sanitize_user_text("before\x1bafter".into()), "beforeafter");
+}
+
+#[test]
+fn sanitizer_preserves_owned_buffer_for_clean_and_edge_trimmed_text() {
+    for (text, expected) in [
+        ("clean\ttext\n", "clean\ttext\n"),
+        ("\x07before", "before"),
+        ("before\x07", "before"),
+        ("\x07before\x07", "before"),
+        ("\x1b[31mbefore", "before"),
+        ("before\x1b[31m", "before"),
+        ("\x07", ""),
+    ] {
+        let owned = text.to_string();
+        let original_pointer = owned.as_ptr();
+        let original_capacity = owned.capacity();
+
+        assert_matches!(sanitize_user_text(owned.into()), Cow::Owned(sanitized) => {
+            assert_eq!(sanitized, expected);
+            assert_eq!(sanitized.as_ptr(), original_pointer);
+            assert_eq!(sanitized.capacity(), original_capacity);
+        })
+    }
+}
+
+#[test]
+fn sanitizer_preallocates_owned_multi_fragment_text() {
+    let text = "before\x1b[31mafter\x07".to_string();
+    let original_length = text.len();
+
+    assert_matches!(sanitize_user_text(text.into()), Cow::Owned(sanitized) => {
+        assert_eq!(sanitized, "beforeafter");
+        assert!(sanitized.capacity() >= original_length, "{} >= {}", sanitized.capacity(), original_length);
+    })
+}
 
 fn replace_cached_lines(
     cell: &AgentMarkdownCell,
