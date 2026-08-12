@@ -152,12 +152,12 @@ FROM (
 ORDER BY rollout_ordinal ASC
         "#,
         )
-        .bind(segment.thread_id().to_string())
+        .bind(segment.rollout_id().to_string())
         .bind(next_rollout_ordinal)
         .bind(end_rollout_ordinal)
         .bind(segment_start_ordinal)
         .bind(end_rollout_ordinal)
-        .bind(segment.thread_id().to_string())
+        .bind(segment.rollout_id().to_string())
         .bind(next_rollout_ordinal)
         .bind(end_rollout_ordinal)
         .bind(segment_start_ordinal)

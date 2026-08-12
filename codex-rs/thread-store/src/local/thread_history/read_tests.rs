@@ -379,6 +379,53 @@ async fn list_items_rejects_update_ordinals_outside_sqlite_integer_range() {
 }
 
 #[tokio::test]
+async fn list_items_update_ordinals_use_selected_rollout_id() {
+    let (home, store, thread_id) = store_with_mode(ThreadHistoryMode::Paginated).await;
+    let rollout_id = ThreadId::new();
+    let selected_rollout_path = home.path().join(format!(
+        "sessions/2026/07/16/rollout-2026-07-16T00-00-00-{thread_id}_{rollout_id}.jsonl"
+    ));
+    write_rollout(
+        selected_rollout_path.as_path(),
+        thread_id,
+        /*history_base*/ None,
+    );
+    let state_db = store.state_db().await.expect("state runtime");
+    let mut metadata = state_db
+        .get_thread(thread_id)
+        .await
+        .expect("read metadata")
+        .expect("thread metadata");
+    metadata.rollout_path = selected_rollout_path;
+    state_db
+        .upsert_thread(&metadata)
+        .await
+        .expect("select replacement rollout");
+    insert_item(
+        history_db(&store).await,
+        rollout_id,
+        "turn-1",
+        "item-1",
+        /*rollout_ordinal*/ 1,
+    )
+    .await;
+
+    let page = store
+        .list_items(updated_item_params(
+            thread_id, /*after_updated_at_ordinal*/ 0,
+        ))
+        .await
+        .expect("update-ordered item page");
+
+    assert_eq!(
+        page.items,
+        vec![expected_item(
+            "turn-1", "item-1", /*rollout_ordinal*/ 1
+        )]
+    );
+}
+
+#[tokio::test]
 async fn list_history_keeps_legacy_threads_unsupported() {
     let (_home, store, thread_id) = store_with_mode(ThreadHistoryMode::Legacy).await;
 

@@ -15,6 +15,7 @@ mod rollout_lineage;
 mod search_threads;
 mod thread_history;
 mod thread_history_materialization;
+mod thread_rollout_resolver;
 mod thread_sections;
 mod unarchive_thread;
 mod update_thread_metadata;
@@ -112,6 +113,9 @@ pub struct LocalThreadStore {
 
 struct LiveRecorderEntry {
     recorder: RolloutRecorder,
+    // Rollout projection rows are keyed by immutable rollout ID, not the stable thread ID used
+    // to find this live writer.
+    rollout_id: ThreadId,
     // Local rollout files are materialized lazily, but metadata updates can arrive before the
     // canonical SessionMeta is durable. Retain the mode captured when live persistence was opened
     // so missing SQLite rows can still be seeded.
@@ -291,6 +295,7 @@ impl LocalThreadStore {
         &self,
         thread_id: ThreadId,
         recorder: RolloutRecorder,
+        rollout_id: ThreadId,
         history_mode: ThreadHistoryMode,
         writer_lock: WriterLockGuard,
     ) -> ThreadStoreResult<()> {
@@ -301,6 +306,7 @@ impl LocalThreadStore {
             Entry::Vacant(entry) => {
                 entry.insert(LiveRecorderEntry {
                     recorder,
+                    rollout_id,
                     history_mode,
                     writer_lock,
                 });

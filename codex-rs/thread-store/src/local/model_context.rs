@@ -14,6 +14,7 @@ use codex_rollout::ScanOutcome;
 use super::LocalThreadStore;
 use super::read_thread;
 use super::rollout_lineage::RolloutLineage;
+use super::thread_rollout_resolver;
 use crate::LoadThreadHistoryParams;
 use crate::StoredModelContext;
 use crate::ThreadStoreError;
@@ -27,7 +28,7 @@ mod tests;
 ///
 /// Plain paginated JSONL rollouts use a reverse scan. When it finds both a usable replacement-
 /// history checkpoint and the completed user-turn context needed for resume metadata, the returned
-/// replay starts with the canonical head `SessionMeta` followed by that newest suffix. When no
+/// replay starts with the canonical `SessionMeta` followed by that newest suffix. When no
 /// bounded cutoff is available, the scan continues to the beginning and returns the complete
 /// replay it already accumulated.
 ///
@@ -36,11 +37,17 @@ pub(super) async fn load_latest_model_context(
     store: &LocalThreadStore,
     params: LoadThreadHistoryParams,
 ) -> ThreadStoreResult<StoredModelContext> {
-    let path = read_thread::resolve_rollout_path(store, params.thread_id, params.include_archived)
-        .await?
-        .ok_or_else(|| ThreadStoreError::InvalidRequest {
-            message: format!("no rollout found for thread id {}", params.thread_id),
-        })?;
+    let resolved = if params.include_archived {
+        thread_rollout_resolver::resolve_current_including_archived(store, params.thread_id).await?
+    } else {
+        thread_rollout_resolver::resolve_current(store, params.thread_id).await?
+    };
+    let path =
+        resolved
+            .map(|resolved| resolved.path)
+            .ok_or_else(|| ThreadStoreError::InvalidRequest {
+                message: format!("no rollout found for thread id {}", params.thread_id),
+            })?;
 
     let session_meta = codex_rollout::read_session_meta_line(path.as_path())
         .await
@@ -139,7 +146,7 @@ fn scan_model_context_from_lineage_blocking(
             let ScanOutcome::Parsed(line) = outcome else {
                 continue;
             };
-            // Each physical segment contributes only its local delta. Its head metadata is
+            // Each rollout segment contributes only its local delta. Its session metadata is
             // replaced with the requested thread's canonical SessionMeta after replay.
             if matches!(&line.item, RolloutItem::SessionMeta(_)) {
                 break;

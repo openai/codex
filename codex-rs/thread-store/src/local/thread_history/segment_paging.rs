@@ -7,7 +7,7 @@ use super::super::rollout_lineage::RolloutLineage;
 use super::super::rollout_lineage::RolloutLineageSegment;
 use super::read::CursorScope;
 use super::read::HistoryCursor;
-use super::read::PhysicalHistoryPosition;
+use super::read::RolloutHistoryPosition;
 use super::read::StoredSummaryColumns;
 use super::read::StoredThreadItemRow;
 use super::read::StoredTurnRow;
@@ -92,12 +92,12 @@ FROM thread_turns
 WHERE thread_id =
             "#
             });
-        query.push_bind(segment.thread_id().to_string());
+        query.push_bind(segment.rollout_id().to_string());
         push_segment_range(&mut query, segment)?;
         for newer_segment in &lineage.segments()[segment_index + 1..] {
             query
                 .push(" AND NOT EXISTS (SELECT 1 FROM thread_turns AS newer_turn WHERE newer_turn.thread_id = ")
-                .push_bind(newer_segment.thread_id().to_string())
+                .push_bind(newer_segment.rollout_id().to_string())
                 .push(" AND newer_turn.turn_id = thread_turns.turn_id AND newer_turn.rollout_ordinal >= ")
                 .push_bind(sqlite_integer(newer_segment.start_ordinal())?);
             if let Some(end_ordinal) = newer_segment.end_ordinal() {
@@ -178,7 +178,7 @@ fn push_summary_item_join(
     item_id_column: &str,
 ) -> ThreadStoreResult<()> {
     query
-        .push_bind(segment.thread_id().to_string())
+        .push_bind(segment.rollout_id().to_string())
         .push(" AND ")
         .push(alias)
         .push(".turn_id = page_turns.turn_id AND ")
@@ -204,7 +204,7 @@ pub(super) async fn page_item_rows(
     lineage: &RolloutLineage,
     params: &ListItemsParams,
 ) -> ThreadStoreResult<SegmentPage<StoredThreadItemRow>> {
-    // Update ordinals are local to a physical rollout. Forked lineages need a structured
+    // Update ordinals are local to a rollout. Forked lineages need a structured
     // watermark before incremental replay can safely span their segments.
     if params.after_updated_at_ordinal.is_some() && lineage.segments().len() > 1 {
         return Err(ThreadStoreError::InvalidRequest {
@@ -217,7 +217,18 @@ pub(super) async fn page_item_rows(
                 message: "update-ordinal item sorting requires an update watermark".to_string(),
             });
         };
-        return page_updated_item_rows(pool, params, after_updated_at_ordinal).await;
+        let [segment] = lineage.segments() else {
+            return Err(ThreadStoreError::Internal {
+                message: "update-ordinal item paging requires one rollout segment".to_string(),
+            });
+        };
+        return page_updated_item_rows(
+            pool,
+            segment.rollout_id(),
+            params,
+            after_updated_at_ordinal,
+        )
+        .await;
     }
     let cursor = parse_cursor(
         params.cursor.as_deref(),
@@ -239,7 +250,7 @@ FROM thread_items
 WHERE thread_id =
             "#,
         );
-        query.push_bind(segment.thread_id().to_string());
+        query.push_bind(segment.rollout_id().to_string());
         push_segment_range(&mut query, segment)?;
         if let Some(after_updated_at_ordinal) = params.after_updated_at_ordinal {
             query
@@ -272,6 +283,7 @@ WHERE thread_id =
 
 async fn page_updated_item_rows(
     pool: &sqlx::SqlitePool,
+    rollout_id: ThreadId,
     params: &ListItemsParams,
     after_updated_at_ordinal: u64,
 ) -> ThreadStoreResult<SegmentPage<StoredThreadItemRow>> {
@@ -288,7 +300,7 @@ WHERE thread_id =
         "#,
     );
     query
-        .push_bind(params.thread_id.to_string())
+        .push_bind(rollout_id.to_string())
         .push(" AND updated_at_ordinal > ")
         .push_bind(sqlite_integer(after_updated_at_ordinal)?);
     if let Some(turn_id) = params.turn_id.as_deref() {
@@ -462,17 +474,17 @@ fn finish_page<T: HasPosition>(
 }
 
 trait HasPosition {
-    fn position(&self) -> PhysicalHistoryPosition;
+    fn position(&self) -> RolloutHistoryPosition;
 }
 
 impl HasPosition for StoredTurnRow {
-    fn position(&self) -> PhysicalHistoryPosition {
+    fn position(&self) -> RolloutHistoryPosition {
         self.position
     }
 }
 
 impl HasPosition for StoredThreadItemRow {
-    fn position(&self) -> PhysicalHistoryPosition {
+    fn position(&self) -> RolloutHistoryPosition {
         self.position
     }
 }

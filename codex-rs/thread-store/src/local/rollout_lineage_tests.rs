@@ -51,19 +51,19 @@ async fn resolves_nested_lineage_with_empty_intermediate_segments() {
         lineage.segments,
         vec![
             RolloutLineageSegment {
-                thread_id: root,
+                rollout_id: root,
                 rollout_path: root_path.clone(),
                 start_ordinal: 1,
                 end: Some(root_end),
             },
             RolloutLineageSegment {
-                thread_id: middle,
+                rollout_id: middle,
                 rollout_path: middle_path.clone(),
                 start_ordinal: 5,
                 end: Some(middle_end),
             },
             RolloutLineageSegment {
-                thread_id: child,
+                rollout_id: child,
                 rollout_path: child_path,
                 start_ordinal: 6,
                 end: None,
@@ -135,13 +135,13 @@ async fn resolves_lineage_at_explicit_history_position() {
         lineage.segments,
         vec![
             RolloutLineageSegment {
-                thread_id: root,
+                rollout_id: root,
                 rollout_path: root_path.clone(),
                 start_ordinal: 1,
                 end: Some(root_end),
             },
             RolloutLineageSegment {
-                thread_id: child,
+                rollout_id: child,
                 rollout_path: child_path.clone(),
                 start_ordinal: 5,
                 end: Some(end),

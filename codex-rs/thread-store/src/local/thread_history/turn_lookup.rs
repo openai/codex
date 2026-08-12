@@ -8,7 +8,7 @@ use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
 
 pub(in crate::local) struct TurnRow {
-    pub physical_thread_id: ThreadId,
+    pub rollout_id: ThreadId,
     pub rollout_ordinal: i64,
     pub rollout_byte_offset: Option<i64>,
     pub rollout_end_ordinal: Option<i64>,
@@ -75,7 +75,7 @@ WHERE thread_id = ?
   AND (? IS NULL OR rollout_ordinal < ?)
         "#,
     )
-    .bind(segment.thread_id().to_string())
+    .bind(segment.rollout_id().to_string())
     .bind(turn_id)
     .bind(sqlite_integer(segment.start_ordinal(), "rollout ordinal")?)
     .bind(end_ordinal)
@@ -87,7 +87,7 @@ WHERE thread_id = ?
     })
     .map(|row| {
         row.map(|row| TurnRow {
-            physical_thread_id: segment.thread_id(),
+            rollout_id: segment.rollout_id(),
             rollout_ordinal: row.get("rollout_ordinal"),
             rollout_byte_offset: row.get("rollout_byte_offset"),
             rollout_end_ordinal: row.get("rollout_end_ordinal"),

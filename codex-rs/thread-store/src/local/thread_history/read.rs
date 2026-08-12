@@ -45,12 +45,12 @@ pub(super) struct HistoryCursor {
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct PhysicalHistoryPosition {
+pub(super) struct RolloutHistoryPosition {
     pub rollout_ordinal: i64,
 }
 
 pub(super) struct StoredTurnRow {
-    pub position: PhysicalHistoryPosition,
+    pub position: RolloutHistoryPosition,
     pub turn_id: String,
     pub status: StoredTurnStatus,
     pub error: Option<StoredTurnError>,
@@ -88,7 +88,7 @@ struct StoredSummaryItemColumns {
 }
 
 pub(super) struct StoredThreadItemRow {
-    pub position: PhysicalHistoryPosition,
+    pub position: RolloutHistoryPosition,
     pub item: StoredThreadItem,
 }
 
@@ -212,7 +212,7 @@ async fn load_inherited_summary_items(
     let Some(segment) = lineage
         .segments()
         .iter()
-        .find(|segment| segment.thread_id() == source.physical_thread_id)
+        .find(|segment| segment.rollout_id() == source.rollout_id)
     else {
         return Ok(Vec::new());
     };
@@ -233,7 +233,7 @@ WHERE thread_id = ?
 ORDER BY rollout_ordinal ASC
         "#,
     )
-    .bind(source.physical_thread_id.to_string())
+    .bind(source.rollout_id.to_string())
     .bind(turn.turn_id.as_str())
     .bind(start_ordinal)
     .bind(end_ordinal)
@@ -298,7 +298,7 @@ pub(super) fn stored_turn_row(row: sqlx::sqlite::SqliteRow) -> ThreadStoreResult
         .transpose()
         .map_err(super::thread_history_error)?;
     Ok(StoredTurnRow {
-        position: PhysicalHistoryPosition {
+        position: RolloutHistoryPosition {
             rollout_ordinal: row.try_get("rollout_ordinal")?,
         },
         turn_id: row.try_get("turn_id")?,
@@ -389,7 +389,7 @@ pub(super) fn stored_thread_item_row(
         });
     }
     Ok(StoredThreadItemRow {
-        position: PhysicalHistoryPosition { rollout_ordinal },
+        position: RolloutHistoryPosition { rollout_ordinal },
         item: stored_thread_item(row)?,
     })
 }
