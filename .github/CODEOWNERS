@@ -3,9 +3,12 @@
 
 # Require approval from a Codex engineer for all internal changes.
 * @openai/codex-eng @openai/codex-core-agent-team
+/codex-cli/ @openai/coding-team @openai/codex-core-agent-team
 
 # Core crate ownership.
+/codex-rs/ansi-escape/ @openai/coding-team @openai/codex-core-agent-team
 /codex-rs/arg0/ @openai/codex-core-agent-team
+/codex-rs/cli/ @openai/coding-team @openai/codex-core-agent-team
 /codex-rs/codex-mcp/ @openai/codex-core-agent-team
 /codex-rs/core/ @openai/codex-core-agent-team
 /codex-rs/exec-server/ @openai/codex-core-agent-team
@@ -16,6 +19,7 @@
 /codex-rs/models-manager/ @openai/codex-core-agent-team
 /codex-rs/prompts/ @openai/codex-core-agent-team
 /codex-rs/rollout/ @openai/codex-core-agent-team
+/codex-rs/tui/ @openai/coding-team @openai/codex-core-agent-team
 /codex-rs/utils/path-uri/ @openai/codex-core-agent-team
 
 # External agent migration ownership.
