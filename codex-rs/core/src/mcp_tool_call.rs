@@ -26,7 +26,6 @@ use codex_analytics::build_track_events_context;
 use codex_api::HostedFileUploadContext;
 use codex_config::ConfigLayerSource;
 use codex_config::types::AppToolApproval;
-use codex_config::types::ApprovalsReviewer;
 use codex_connectors::AppToolPolicy;
 use codex_connectors::AppToolPolicyEvaluator;
 use codex_connectors::AppToolPolicyInput;
@@ -1264,19 +1263,8 @@ struct McpToolApprovalElicitationRequest<'a> {
 pub(crate) const MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX: &str = "mcp_tool_call_approval";
 pub(crate) const MCP_TOOL_APPROVAL_ACCEPT: &str = "Allow";
 pub(crate) const MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION: &str = "Allow for this session";
-// Internal-only token used when guardian auto-reviews delegated MCP approvals on the
-// RequestUserInput compatibility path. That legacy MCP prompt has allow/cancel labels but no
-// real "Decline" answer, so this lets guardian denials round-trip distinctly from user cancel.
-// This is not a user-facing option.
-pub(crate) const MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC: &str = "__codex_mcp_decline__";
 const MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER: &str = "Allow and don't ask me again";
 const MCP_TOOL_APPROVAL_CANCEL: &str = "Cancel";
-
-pub(crate) fn is_mcp_tool_approval_question_id(question_id: &str) -> bool {
-    question_id
-        .strip_prefix(MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX)
-        .is_some_and(|suffix| suffix.starts_with('_'))
-}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 struct McpToolApprovalKey {
@@ -1407,6 +1395,7 @@ pub(crate) async fn request_mcp_tool_user_approval(
         connected_account_email,
         tool_title,
         tool_description,
+        approval_policy,
         approval_mode,
         allow_session_remember,
         allow_persistent_approval,
@@ -1415,6 +1404,12 @@ pub(crate) async fn request_mcp_tool_user_approval(
     else {
         unreachable!("only MCP actions can request MCP tool approval");
     };
+
+    if *approval_policy == AskForApproval::Never {
+        return ReviewDecision::denied(
+            "MCP tool call requires approval, but approval policy is never",
+        );
+    }
 
     let tool_call_mcp_elicitation_enabled = turn_context
         .config
@@ -1498,19 +1493,6 @@ pub(crate) async fn request_mcp_tool_user_approval(
     normalize_approval_decision_for_mode(
         parse_mcp_tool_approval_response(response, &question_id),
         *approval_mode,
-    )
-}
-
-pub(crate) fn mcp_approvals_reviewer(
-    turn_context: &TurnContext,
-    server_name: &str,
-    metadata: Option<&McpToolApprovalMetadata>,
-) -> ApprovalsReviewer {
-    connectors::mcp_approvals_reviewer(
-        turn_context.config.as_ref(),
-        Some(turn_context.model_info.slug.as_str()),
-        server_name,
-        metadata.and_then(|metadata| metadata.connector_id.as_deref()),
     )
 }
 
@@ -1938,11 +1920,6 @@ fn parse_mcp_tool_approval_response(
         return ReviewDecision::Abort;
     };
     if answers
-        .iter()
-        .any(|answer| answer == MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC)
-    {
-        ReviewDecision::denied("user rejected MCP tool call")
-    } else if answers
         .iter()
         .any(|answer| answer == MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION)
     {

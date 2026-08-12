@@ -345,8 +345,9 @@ approvals_reviewer = "{app}"
             .expect("config should build");
 
         assert_eq!(
-            mcp_approvals_reviewer(
-                &config,
+            mcp_approvals_reviewer_from_layers(
+                &config.config_layer_stack,
+                config.approvals_reviewer,
                 config.model.as_deref(),
                 CODEX_APPS_MCP_SERVER_NAME,
                 Some("calendar")
@@ -354,8 +355,9 @@ approvals_reviewer = "{app}"
             expected_app
         );
         assert_eq!(
-            mcp_approvals_reviewer(
-                &config,
+            mcp_approvals_reviewer_from_layers(
+                &config.config_layer_stack,
+                config.approvals_reviewer,
                 config.model.as_deref(),
                 CODEX_APPS_MCP_SERVER_NAME,
                 Some("drive")
@@ -363,8 +365,9 @@ approvals_reviewer = "{app}"
             expected_default
         );
         assert_eq!(
-            mcp_approvals_reviewer(
-                &config,
+            mcp_approvals_reviewer_from_layers(
+                &config.config_layer_stack,
+                config.approvals_reviewer,
                 config.model.as_deref(),
                 CODEX_APPS_MCP_SERVER_NAME,
                 /*connector_id*/ None
@@ -372,8 +375,9 @@ approvals_reviewer = "{app}"
             expected_default
         );
         assert_eq!(
-            mcp_approvals_reviewer(
-                &config,
+            mcp_approvals_reviewer_from_layers(
+                &config.config_layer_stack,
+                config.approvals_reviewer,
                 config.model.as_deref(),
                 "custom_server",
                 Some("calendar")
@@ -408,8 +412,9 @@ approvals_reviewer = "user"
         .expect("config should build");
 
     assert_eq!(
-        mcp_approvals_reviewer(
-            &config,
+        mcp_approvals_reviewer_from_layers(
+            &config.config_layer_stack,
+            config.approvals_reviewer,
             config.model.as_deref(),
             CODEX_APPS_MCP_SERVER_NAME,
             Some("calendar")
@@ -443,8 +448,9 @@ approvals_reviewer = "user"
         .expect("config should build");
 
     assert_eq!(
-        mcp_approvals_reviewer(
-            &config,
+        mcp_approvals_reviewer_from_layers(
+            &config.config_layer_stack,
+            config.approvals_reviewer,
             config.model.as_deref(),
             CODEX_APPS_MCP_SERVER_NAME,
             Some("calendar")

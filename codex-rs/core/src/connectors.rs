@@ -504,21 +504,6 @@ pub fn with_app_plugin_sources(
     connectors
 }
 
-pub(crate) fn mcp_approvals_reviewer(
-    config: &Config,
-    model: Option<&str>,
-    server_name: &str,
-    connector_id: Option<&str>,
-) -> ApprovalsReviewer {
-    mcp_approvals_reviewer_from_layers(
-        &config.config_layer_stack,
-        config.approvals_reviewer,
-        model,
-        server_name,
-        connector_id,
-    )
-}
-
 pub(crate) fn mcp_approvals_reviewer_from_layers(
     config_layer_stack: &codex_config::ConfigLayerStack,
     default_reviewer: ApprovalsReviewer,
