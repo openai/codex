@@ -1,5 +1,6 @@
 use super::*;
 use crate::LoadedPlugin;
+use crate::PluginMeasurementDefinition;
 use crate::loader::curated_plugin_cache_version;
 use crate::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use crate::startup_sync::curated_plugins_repo_path;
@@ -13,6 +14,8 @@ use codex_plugin::PluginLoadOutcome;
 use codex_utils_path_uri::PathUri;
 use codex_utils_plugins::SkillDiscoveryMode;
 use pretty_assertions::assert_eq;
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs;
@@ -148,6 +151,7 @@ fn resolves_primary_runtime_scripts_from_the_installed_plugin_cache() {
     let roots = TrustedPluginRoots {
         roots: vec![TrustedPluginRoot {
             plugin_id: plugin_id.clone(),
+            metrics_operations_by_path: BTreeMap::new(),
             root: plugin_root.canonicalize().expect("canonical plugin root"),
         }],
     };
@@ -240,6 +244,24 @@ fn recognizes_windows_executor_plugin_cache_root() {
 
     assert!(executor_plugin_root_matches(&script, &attribution));
 }
+fn assert_invalid_metrics_manifest(codex_home: &Path, root: &AbsolutePathBuf, manifest: &str) {
+    fs::write(root.join("analytics.yaml"), manifest).expect("write analytics manifest");
+    let roots = roots_for(
+        codex_home,
+        vec![loaded_plugin(
+            "sample@openai-curated",
+            root.as_path(),
+            ENABLED,
+        )],
+    );
+    roots
+        .resolve_attribution(&command(&["scripts/run.py"]), root)
+        .expect("Part 1 attribution remains enabled");
+    assert_eq!(
+        roots.resolve_metrics_operation(&command(&["scripts/run.py"]), root),
+        None
+    );
+}
 fn assert_untrusted(codex_home: &Path, config_name: &str, root: &Path) {
     assert!(
         roots_for(codex_home, vec![loaded_plugin(config_name, root, ENABLED)])
@@ -299,15 +321,18 @@ fn trusted_roots_require_verified_curated_or_remote_cache() {
         vec![
             TrustedPluginRoot {
                 plugin_id: PluginId::parse("sample@openai-curated").expect("plugin id"),
+                metrics_operations_by_path: BTreeMap::new(),
                 root: root.canonicalize().expect("canonical root"),
             },
             TrustedPluginRoot {
                 plugin_id: PluginId::parse("api-sample@openai-api-curated").expect("plugin id"),
+                metrics_operations_by_path: BTreeMap::new(),
                 root: api_root.canonicalize().expect("canonical root"),
             },
             TrustedPluginRoot {
                 plugin_id: PluginId::parse("remote-sample@openai-curated-remote")
                     .expect("plugin id"),
+                metrics_operations_by_path: BTreeMap::new(),
                 root: remote_root.canonicalize().expect("canonical root"),
             },
         ]
@@ -351,6 +376,184 @@ fn trusted_roots_require_verified_curated_or_remote_cache() {
         "sample@openai-curated",
         no_sha_root.as_path(),
     );
+}
+
+#[test]
+fn resolves_manifest_operation_for_exact_attributed_script() {
+    let (temp, root, _) = script_fixture();
+    fs::write(
+        root.join("analytics.yaml"),
+        r#"version: 1
+operations:
+  security_scan:
+    path: ./scripts/run.py
+    measurements:
+      repository_files: {}
+      findings:
+        dimensions:
+          severity: [critical, high, medium, low]
+"#,
+    )
+    .expect("write analytics manifest");
+    let roots = roots_for(
+        temp.path(),
+        vec![loaded_plugin(
+            "sample@openai-curated",
+            root.as_path(),
+            ENABLED,
+        )],
+    );
+    assert_eq!(
+        roots.resolve_metrics_operation(&command(&["scripts/run.py"]), &root),
+        Some(ResolvedPluginMetricsOperation {
+            plugin_id: PluginId::parse("sample@openai-curated").expect("plugin id"),
+            operation: PluginMetricsOperation {
+                operation_name: "security_scan".to_string(),
+                measurements: BTreeMap::from([
+                    (
+                        "findings".to_string(),
+                        PluginMeasurementDefinition {
+                            enum_dimensions: BTreeMap::from([(
+                                "severity".to_string(),
+                                BTreeSet::from([
+                                    "critical".to_string(),
+                                    "high".to_string(),
+                                    "low".to_string(),
+                                    "medium".to_string(),
+                                ]),
+                            )]),
+                        },
+                    ),
+                    (
+                        "repository_files".to_string(),
+                        PluginMeasurementDefinition {
+                            enum_dimensions: BTreeMap::new(),
+                        },
+                    ),
+                ]),
+            },
+        })
+    );
+
+    let undeclared_script = root.join("scripts/undeclared.py");
+    fs::write(undeclared_script.as_path(), "print('ok')\n").expect("write undeclared script");
+    roots
+        .resolve_attribution(&command(&["scripts/undeclared.py"]), &root)
+        .expect("trusted attribution");
+    assert_eq!(
+        roots.resolve_metrics_operation(&command(&["scripts/undeclared.py"]), &root),
+        None
+    );
+}
+
+#[test]
+fn allows_measurement_names_reused_across_operations() {
+    let (temp, root, _) = script_fixture();
+    let other_script = root.join("scripts/other.py");
+    fs::write(other_script.as_path(), "#!/usr/bin/env python3\n").expect("write script");
+    fs::write(
+        root.join("analytics.yaml"),
+        r#"version: 1
+operations:
+  first:
+    path: ./scripts/run.py
+    measurements:
+      count: {}
+  second:
+    path: ./scripts/other.py
+    measurements:
+      count: {}
+"#,
+    )
+    .expect("write analytics manifest");
+    let roots = roots_for(
+        temp.path(),
+        vec![loaded_plugin(
+            "sample@openai-curated",
+            root.as_path(),
+            ENABLED,
+        )],
+    );
+
+    for (script, operation_name) in [("scripts/run.py", "first"), ("scripts/other.py", "second")] {
+        let resolved = roots
+            .resolve_metrics_operation(&command(&[script]), &root)
+            .expect("resolved metrics operation");
+        assert_eq!(resolved.operation.operation_name, operation_name);
+        assert!(resolved.operation.measurements.contains_key("count"));
+    }
+}
+
+#[test]
+fn invalid_manifest_disables_metrics_without_disabling_attribution() {
+    let (temp, root, _) = script_fixture();
+    let invalid_manifests = [
+        r#"version: 2
+operations: {scan: {path: scripts/run.py, measurements: {count: {}}}}
+"#,
+        r#"version: 1
+unknown: true
+operations: {scan: {path: scripts/run.py, measurements: {count: {}}}}
+"#,
+        r#"version: 1
+operations:
+  scan: {path: scripts/run.py, measurements: {count: {}}}
+  scan: {path: scripts/run.py, measurements: {count: {}}}
+"#,
+        r#"version: 1
+operations:
+  scan:
+    path: scripts/run.py
+    measurements:
+      count: {}
+      count: {}
+"#,
+        r#"version: 1
+operations:
+  scan:
+    path: ../outside.py
+    measurements:
+      count: {}
+"#,
+        r#"version: 1
+operations: {scan: {path: scripts/run.py, measurements: {count: {dimensions: {status: ["needs review"]}}}}}
+"#,
+        r#"version: 1
+operations: {BadName: {path: scripts/run.py, measurements: {count: {}}}}
+"#,
+        r#"version: 1
+operations: {scan: {path: scripts/run.py, measurements: {count: {}}}, scan_again: {path: ./scripts/run.py, measurements: {count: {}}}}
+"#,
+    ];
+
+    for manifest in invalid_manifests {
+        assert_invalid_metrics_manifest(temp.path(), &root, manifest);
+    }
+
+    let oversized_manifest = format!(
+        "version: 1\noperations: {{scan: {{path: scripts/run.py, measurements: {{count: {{}}}}}}}}\n#{}",
+        "x".repeat(64 * 1024)
+    );
+    assert_invalid_metrics_manifest(temp.path(), &root, &oversized_manifest);
+
+    #[cfg(unix)]
+    {
+        let outside = temp.path().join("outside.py");
+        fs::write(&outside, "print('outside')\n").expect("write outside script");
+        std::os::unix::fs::symlink(&outside, root.join("scripts/escape.py"))
+            .expect("symlink script");
+        assert_invalid_metrics_manifest(
+            temp.path(),
+            &root,
+            r#"version: 1
+operations:
+  scan:
+    path: scripts/escape.py
+    measurements:
+      count: {}
+"#,
+        );
+    }
 }
 
 #[test]
@@ -442,10 +645,12 @@ fn rejects_ambiguous_commands_overlaps_and_symlink_escapes() {
         roots: vec![
             TrustedPluginRoot {
                 plugin_id: PluginId::parse("sample@openai-curated").expect("plugin id"),
+                metrics_operations_by_path: BTreeMap::new(),
                 root: root.canonicalize().expect("canonical root"),
             },
             TrustedPluginRoot {
                 plugin_id: PluginId::parse("nested@openai-curated").expect("plugin id"),
+                metrics_operations_by_path: BTreeMap::new(),
                 root: root.join("scripts").canonicalize().expect("nested root"),
             },
         ],

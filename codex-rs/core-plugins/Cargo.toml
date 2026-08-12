@@ -43,6 +43,7 @@ regex = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+serde_with = { workspace = true }
 serde_yaml = { workspace = true }
 sha2 = { workspace = true }
 tar = { workspace = true }
