@@ -608,7 +608,7 @@ fn assert_selected_skill_catalog_available(request: &ResponsesRequest) {
     let catalog_fragment = latest_selected_skill_update(request)
         .expect("selected skill catalog update should be model-visible");
     assert!(catalog_fragment.contains(SKILL_DESCRIPTION));
-    assert!(catalog_fragment.contains("environment resource:"));
+    assert!(catalog_fragment.contains("executor package:"));
 }
 
 fn latest_selected_skill_update(request: &ResponsesRequest) -> Option<String> {

@@ -1,17 +1,17 @@
 use crate::catalog::SkillSourceKind;
 
-const SKILLS_INTRO_WITH_SOURCE_LOCATORS: &str = "A skill is a set of instructions provided through a `SKILL.md` source. Below is the list of skills that can be used. Each entry includes a name, description, and source locator. `file` locators are on the host filesystem, `environment resource` locators are owned by an execution environment, `orchestrator package` locators are opaque package identifiers, and `custom resource` locators use their provider's access mechanism.";
+const SKILLS_INTRO_WITH_SOURCE_LOCATORS: &str = "A skill is a set of instructions provided through a `SKILL.md` source. Below is the list of skills that can be used. Each entry includes a name, description, and source locator. `file` locators are on the host filesystem, `executor package` locators are owned by their execution environment, `orchestrator package` locators are opaque package identifiers, and `custom resource` locators use their provider's access mechanism.";
 const SKILLS_INTRO_WITH_HOST_ALIASES: &str = "A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list of skills that can be used. Each entry includes a name, description, and a short path that can be expanded into an absolute path using the skill roots table.";
 const SKILLS_INTRO_WITH_RESOURCE_ALIASES: &str = "A skill is a set of instructions provided through a `SKILL.md` source. Below is the list of skills that can be used. Each entry includes a name, description, and source locator. Short locators can be expanded using the skill roots table.";
 const RESOURCE_ALIAS_INSTRUCTIONS: &str = "- Root aliases: Expand short locators using their matching alias from `### Skill roots` into complete `skill://` identifiers.";
-const SKILLS_HOW_TO_USE_WITH_SOURCE_LOCATORS: &str = r###"- Discovery: The list above is the skills available in this session (name + description + source locator). `file` entries live on the host filesystem, `environment resource` entries are accessed through `skills.list` and `skills.read`, `orchestrator package` entries are accessed directly through `skills.read`, and `custom resource` entries use their provider's access mechanism.
+const SKILLS_HOW_TO_USE_WITH_SOURCE_LOCATORS: &str = r###"- Discovery: The list above is the skills available in this session (name + description + source locator). `file` entries live on the host filesystem, `executor package` and `orchestrator package` entries are accessed directly through `skills.read`, and `custom resource` entries use their provider's access mechanism.
 - Trigger rules: If the user names a skill (with `$SkillName` or plain text) OR the task clearly matches a skill's description shown above, you must use that skill for that turn. Multiple mentions mean use them all. Do not carry skills across turns unless re-mentioned.
 - Missing/blocked: If a named skill isn't in the list or its source can't be read, say so briefly and continue with the best fallback.
 - How to use a skill (progressive disclosure):
-  1) After deciding to use a skill, the main agent must read its `SKILL.md` completely before taking task actions. For a `file` entry, open the listed path. For an `environment resource`, call `skills.list` with `{"authority":{"kind":"executor"}}`, select the matching package, and pass its exact package and `main_resource` to `skills.read`. For an `orchestrator package`, expand its root alias when present and call `skills.read` with the complete locator as `package`; omit `resource` to read `SKILL.md` directly without calling `skills.list`. Follow `next_cursor`; if a read is paginated, continue until EOF.
-  2) When `SKILL.md` references another resource, use the same access mechanism. Resolve relative references beneath an executor skill's returned package and call `skills.read` with the same package. For orchestrator skills, pass the exact referenced resource identifier with the same package to `skills.read`; do not treat `skill://` identifiers as filesystem paths.
+  1) After deciding to use a skill, the main agent must read its `SKILL.md` completely before taking task actions. For a `file` entry, open the listed path. For an `executor package` or `orchestrator package`, expand its root alias when present and call `skills.read` with the complete locator as `package`; omit `resource` to read `SKILL.md` directly without calling `skills.list`. If a read is paginated, follow `next_cursor` until EOF.
+  2) When `SKILL.md` references another resource, use the same access mechanism. For executor and orchestrator skills, pass the complete package-contained resource identifier with the same package to `skills.read`; do not treat `skill://` identifiers as filesystem paths.
   3) If `SKILL.md` points to extra folders such as `references/`, use its routing instructions to identify the resources required for the task. The main agent must read each required instruction or reference file itself before acting on it. Do not delegate reading, summarizing, or interpreting skill instructions to a subagent. Subagents may still perform task work when the selected skill allows it.
-  4) For filesystem-backed skills, prefer running or patching provided scripts instead of retyping large code blocks. For environment and orchestrator skills, use `skills.read` and the available tools; do not invent a local path.
+  4) For filesystem-backed skills, prefer running or patching provided scripts instead of retyping large code blocks. For executor and orchestrator skills, use `skills.read` and the available tools; do not invent a local path.
   5) Reuse provided assets or templates through the same source access mechanism instead of recreating them.
 - Coordination and sequencing:
   - If multiple skills apply, choose the minimal set that covers the request and state the order you'll use them.
@@ -90,12 +90,11 @@ pub(crate) fn render_available_skills_body(
         lines.push("### Skill roots".to_string());
         lines.extend(skill_root_lines.iter().cloned());
     }
-    if skill_lines
-        .iter()
-        .any(|line| line.contains("(orchestrator package: "))
-    {
+    if skill_lines.iter().any(|line| {
+        line.contains("(executor package: ") || line.contains("(orchestrator package: ")
+    }) {
         lines.push(
-            "Read an orchestrator package directly with `skills.read({\"package\":\"<package>\"})` without calling `skills.list`; expand its root alias first when present."
+            "Read a skill package directly with `skills.read({\"package\":\"<package>\"})` to read its `SKILL.md`, expanding any root alias. To read another file from that skill, use the same `package` and pass the file's complete `skill://` identifier as `resource`. If the package is not provided, use `skills.list` to find it."
                 .to_string(),
         );
     }

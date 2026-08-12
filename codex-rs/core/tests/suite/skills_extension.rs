@@ -1239,15 +1239,19 @@ async fn production_turn_aliases_executor_skill_roots() -> Result<()> {
         "model request should include the executor skill root: {developer_text}"
     );
     assert!(
-        developer_text.contains("environment resource: e0/search/SKILL.md"),
+        developer_text.contains("executor package: e0/search"),
         "model request should include the aliased executor skill: {developer_text}"
     );
     let executor_catalog = developer_text
         .split("<skills_instructions>")
         .filter_map(|fragment| fragment.split_once("</skills_instructions>"))
         .map(|(fragment, _)| fragment)
-        .find(|fragment| fragment.contains("environment resource: e0/search/SKILL.md"))
+        .find(|fragment| fragment.contains("executor package: e0/search"))
         .expect("model request should include an executor skills catalog");
+    assert!(
+        executor_catalog.contains("Read a skill package directly with `skills.read"),
+        "Sol should receive direct-read instructions for executor skills: {executor_catalog}"
+    );
     assert!(
         !executor_catalog.contains("### How to use skills"),
         "Sol should omit optional skill usage instructions: {executor_catalog}"
@@ -1469,7 +1473,7 @@ async fn production_turn_aliases_combined_skill_catalogs_under_shared_budget() -
         );
     }
     for (source, alias, prefix, suffix) in [
-        ("environment resource", "e0", "executor", "/SKILL.md"),
+        ("executor package", "e0", "executor", ""),
         ("orchestrator package", "o0", "orchestrator", ""),
         ("file", "r0", "host", "/SKILL.md"),
     ] {
@@ -2215,9 +2219,11 @@ async fn production_turn_keeps_orchestrator_world_state_incremental_across_turns
             occurrences, 1,
             "request {index} should contain the orchestrator catalog exactly once: {developer_texts:?}"
         );
-        assert!(developer_texts.iter().any(|text| {
-            text.contains("Read an orchestrator package directly with `skills.read")
-        }));
+        assert!(
+            developer_texts
+                .iter()
+                .any(|text| text.contains("Read a skill package directly with `skills.read"))
+        );
     }
 
     Ok(())
@@ -2366,7 +2372,10 @@ async fn production_turn_omits_host_skills_before_executor_skills_under_extreme_
     let host_lines = skill_lines(catalog_text(&developer_texts, "host"), "host");
     let executor_lines = skill_lines(catalog_text(&developer_texts, "exec"), "exec");
 
-    assert_eq!(skill_names(&host_lines), vec!["host-beta"]);
+    assert_eq!(
+        skill_names(&host_lines),
+        vec!["host-alpha", "host-beta", "host-delta"]
+    );
     assert_eq!(
         skill_names(&executor_lines),
         EXECUTOR_CATALOG
@@ -2375,7 +2384,7 @@ async fn production_turn_omits_host_skills_before_executor_skills_under_extreme_
             .collect::<Vec<_>>()
     );
     assert!(warning_messages.contains(
-        &"Exceeded skills context budget. All skill descriptions were removed and 3 additional skills were not included in the model-visible skills list."
+        &"Exceeded skills context budget. All skill descriptions were removed and 1 additional skill was not included in the model-visible skills list."
             .to_string()
     ));
 

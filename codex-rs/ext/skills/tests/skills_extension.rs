@@ -77,7 +77,7 @@ use pretty_assertions::assert_eq;
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 static NEXT_CODEX_HOME_ID: AtomicUsize = AtomicUsize::new(0);
-const SKILLS_INTRO_WITH_ABSOLUTE_PATHS: &str = "A skill is a set of instructions provided through a `SKILL.md` source. Below is the list of skills that can be used. Each entry includes a name, description, and source locator. `file` locators are on the host filesystem, `environment resource` locators are owned by an execution environment, `orchestrator package` locators are opaque package identifiers, and `custom resource` locators use their provider's access mechanism.";
+const SKILLS_INTRO_WITH_ABSOLUTE_PATHS: &str = "A skill is a set of instructions provided through a `SKILL.md` source. Below is the list of skills that can be used. Each entry includes a name, description, and source locator. `file` locators are on the host filesystem, `executor package` locators are owned by their execution environment, `orchestrator package` locators are opaque package identifiers, and `custom resource` locators use their provider's access mechanism.";
 const DEMO_SKILL_CONTENTS: &str =
     "---\nname: demo\ndescription: Demo skill.\n---\n# Demo\n\nUse the demo skill.\n";
 
@@ -547,7 +547,7 @@ async fn executor_orchestrator_and_host_share_catalog_world_state_flow() -> Test
     for (section_id, expected_line) in [
         (
             "skills",
-            "- executor-skill: Fix lint errors. (environment resource: skill://executor/executor-skill/SKILL.md)",
+            "- executor-skill: Fix lint errors. (executor package: executor/executor-skill)",
         ),
         (
             "orchestrator_skills",
@@ -922,7 +922,7 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
     assert!(
         available_fragment
             .body()
-            .contains("(environment resource: skill://executor/lint-fix/SKILL.md)")
+            .contains("(executor package: executor/lint-fix)")
     );
 
     let fragments = registry.turn_input_contributors()[0]
@@ -1198,7 +1198,7 @@ async fn moderate_budget_pressure_keeps_every_catalog_entry() -> TestResult {
         let package_id = format!("{source}/{name}");
         let line_prefix = format!("- {name}: ");
         let line_suffix = if source == "executor" {
-            format!(" (environment resource: skill://{package_id}/SKILL.md)")
+            format!(" (executor package: {package_id})")
         } else {
             format!(" (orchestrator package: {package_id})")
         };
@@ -1319,7 +1319,7 @@ async fn extreme_budget_pressure_removes_descriptions_before_omitting_entries() 
     assert!(
         executor
             .body()
-            .contains("- executor-skill-039: (environment resource:")
+            .contains("- executor-skill-039: (executor package:")
     );
     assert!(
         orchestrator
