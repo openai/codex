@@ -7,6 +7,12 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  # For PRs, cancel the previous CI run when a new commit is pushed.
+  # Keep every `main` run so we do not discard post-merge CI.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
 jobs:
   # Keep reusable workflow calls alphabetized. The `required` job below is the
   # version-controlled list that the main-branch ruleset should require.
@@ -49,7 +55,7 @@ jobs:
     name: CI required
     # Without `always()`, GitHub skips this job after a failed dependency and a
     # required check can appear successful instead of reporting the failure.
-    if: ${{ always() }}
+    if: ${{ always() && !cancelled() }}
     needs:
       - bazel
       - blob-size-policy
