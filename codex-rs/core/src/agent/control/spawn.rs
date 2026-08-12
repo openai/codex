@@ -548,6 +548,7 @@ impl AgentControl {
                     &state,
                     input,
                     options.parent_turn_id,
+                    options.root_turn_id,
                 )
                 .await?;
             }
@@ -558,6 +559,7 @@ impl AgentControl {
                     communication,
                     context,
                     options.parent_turn_id,
+                    options.root_turn_id,
                 )
                 .await?;
             }

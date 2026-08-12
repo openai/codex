@@ -88,6 +88,7 @@ pub async fn user_input_or_turn(
     op: Op,
     client_user_message_id: Option<String>,
     parent_turn_id: Option<String>,
+    root_turn_id: Option<String>,
 ) {
     let admission = user_input_or_turn_inner(
         sess,
@@ -95,6 +96,7 @@ pub async fn user_input_or_turn(
         op,
         client_user_message_id,
         parent_turn_id,
+        root_turn_id,
     )
     .await;
     sess.pending_user_message_admissions
@@ -193,6 +195,7 @@ pub(super) async fn user_input_or_turn_inner(
     op: Op,
     client_user_message_id: Option<String>,
     parent_turn_id: Option<String>,
+    root_turn_id: Option<String>,
 ) -> CodexResult<UserMessageAdmission> {
     let Op::UserInput {
         items,
@@ -223,6 +226,14 @@ pub(super) async fn user_input_or_turn_inner(
     }
     sess.maybe_emit_model_warnings_for_turn(current_context.as_ref())
         .await;
+    if let Some(id) = root_turn_id.as_ref() {
+        current_context
+            .turn_metadata_state
+            .set_root_turn_id(id.clone());
+    }
+    let incoming_turn_metadata = parent_turn_id
+        .as_ref()
+        .map(|_| current_context.turn_metadata_state.as_ref());
     match sess
         .steer_input(
             items.clone(),
@@ -230,6 +241,7 @@ pub(super) async fn user_input_or_turn_inner(
             /*expected_turn_id*/ None,
             client_user_message_id.clone(),
             responsesapi_client_metadata.clone(),
+            incoming_turn_metadata,
         )
         .await
     {
@@ -238,6 +250,17 @@ pub(super) async fn user_input_or_turn_inner(
             Ok(UserMessageAdmission::Steered { turn_id })
         }
         Err(SteerInputError::NoActiveTurn(items)) => {
+            if root_turn_id.is_none()
+                && parent_turn_id.is_none()
+                && !items.is_empty()
+                && current_context
+                    .turn_metadata_state
+                    .can_start_root_turn(&current_context.session_source)
+            {
+                current_context
+                    .turn_metadata_state
+                    .set_root_turn_id(sub_id.clone());
+            }
             if let Some(id) = parent_turn_id {
                 current_context.turn_metadata_state.set_parent_turn_id(id);
             }
@@ -290,10 +313,15 @@ pub async fn inter_agent_communication(
     sub_id: String,
     communication: InterAgentCommunication,
     parent_turn_id: Option<String>,
+    root_turn_id: Option<String>,
 ) {
     let trigger_turn = communication.trigger_turn;
     sess.input_queue
-        .enqueue_mailbox_communication(communication, parent_turn_id.filter(|_| trigger_turn))
+        .enqueue_mailbox_communication(
+            communication,
+            parent_turn_id.filter(|_| trigger_turn),
+            root_turn_id.filter(|_| trigger_turn),
+        )
         .await;
     crate::agent_communication::emit_agent_communication_receive(&sub_id);
     if trigger_turn || sess.has_outstanding_durable_sleep() {
@@ -765,6 +793,7 @@ pub(super) async fn submission_loop(
                         op,
                         sub.client_user_message_id,
                         sub.parent_turn_id,
+                        sub.root_turn_id,
                     )
                     .await;
                     false
@@ -779,6 +808,7 @@ pub(super) async fn submission_loop(
                         sub.id.clone(),
                         communication,
                         sub.parent_turn_id,
+                        sub.root_turn_id,
                     )
                     .await;
                     false

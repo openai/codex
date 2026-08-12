@@ -887,6 +887,7 @@ async fn run_review_on_session(
         .and_then(|environment| environment.cwd().to_abs_path().ok())
         .unwrap_or_else(|| params.parent_context.turn().config.cwd.clone());
 
+    let parent_turn = params.parent_context.turn();
     let submission = review_session.io.submit_with_trace(
         Op::UserInput {
             items: prompt_items.items,
@@ -915,7 +916,8 @@ async fn run_review_on_session(
             },
         },
         /*trace*/ None,
-        Some(params.parent_context.turn().sub_id.clone()),
+        Some(parent_turn.sub_id.clone()),
+        parent_turn.turn_metadata_state.root_turn_id(),
     );
     let submit_result = run_before_review_deadline(
         deadline,

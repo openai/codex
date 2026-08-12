@@ -136,6 +136,7 @@ async fn handle_spawn_agent(
             fork_mode: args.fork_context.then_some(SpawnAgentForkMode::FullHistory),
             parent_thread_id: Some(session.thread_id),
             parent_turn_id: Some(turn.sub_id.clone()),
+            root_turn_id: turn.turn_metadata_state.root_turn_id(),
             environments: Some(step_context.environments.to_selections()),
         },
     ))

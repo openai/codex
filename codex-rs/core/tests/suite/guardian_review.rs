@@ -27,6 +27,8 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::user_input::UserInput;
 use core_test_support::fs_wait;
+use core_test_support::responses::assert_parent_turn;
+use core_test_support::responses::assert_root_turn;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_custom_tool_call;
@@ -209,6 +211,9 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review(
         "startup prewarm must not request the external clock"
     );
     let prewarm_requests = [first.body_json(), second.body_json()];
+    for prewarm in &prewarm_requests {
+        assert_root_turn(prewarm, /*expected*/ None)?;
+    }
     let guardian_prewarm = prewarm_requests
         .iter()
         .find(|request| {
@@ -267,6 +272,15 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review(
     )
     .await?
     .body_json();
+    let parent_request = server.connections()[2][0].body_json();
+    let parent_turn_id = parent_request["client_metadata"]["turn_id"]
+        .as_str()
+        .expect("reviewed parent turn id");
+    assert_parent_turn(&parent_request, /*expected*/ None)?;
+    assert_parent_turn(&guardian_review, Some(parent_turn_id))?;
+    for request in [&parent_request, &guardian_review] {
+        assert_root_turn(request, Some(parent_turn_id))?;
+    }
     assert_eq!(
         guardian_review["client_metadata"]["x-openai-subagent"].as_str(),
         Some("guardian")
@@ -466,6 +480,14 @@ async fn guardian_session_is_reused_for_consecutive_tool_reviews_without_prewarm
     assert_eq!(guardian_requests.len(), 2);
     let first_guardian_request = guardian_requests[0].body_json();
     let second_guardian_request = guardian_requests[1].body_json();
+    let parent_request = responses.requests()[0].body_json();
+    let parent_turn_id = parent_request["client_metadata"]["turn_id"]
+        .as_str()
+        .expect("reviewed parent turn id");
+    for request in [&first_guardian_request, &second_guardian_request] {
+        assert_parent_turn(request, Some(parent_turn_id))?;
+        assert_root_turn(request, Some(parent_turn_id))?;
+    }
     let first_guardian_thread_id = first_guardian_request["client_metadata"]["thread_id"]
         .as_str()
         .expect("first Guardian review should have a thread id");

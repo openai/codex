@@ -226,7 +226,10 @@ async fn review_op_emits_lifecycle_and_review_output() {
         turn_metadata["parent_thread_id"].as_str(),
         Some(parent_thread_id.as_str())
     );
-    responses::assert_parent_turn(&request.body_json(), Some(review_turn_id.as_str()))
+    let request_body = request.body_json();
+    responses::assert_root_turn(&request_body, Some(review_turn_id.as_str()))
+        .expect("review request root turn metadata");
+    responses::assert_parent_turn(&request_body, Some(review_turn_id.as_str()))
         .expect("review request parent turn metadata");
 
     // Also verify that a user message with the header and a formatted finding

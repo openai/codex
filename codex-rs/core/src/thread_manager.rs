@@ -1374,6 +1374,7 @@ impl ThreadManagerState {
         thread_id: ThreadId,
         op: Op,
         parent_turn_id: Option<String>,
+        root_turn_id: Option<String>,
     ) -> CodexResult<String> {
         let thread = self.get_thread(thread_id).await?;
         if let Some(ops_log) = &self.ops_log
@@ -1384,7 +1385,7 @@ impl ThreadManagerState {
         }
         thread
             .io
-            .submit_with_trace(op, /*trace*/ None, parent_turn_id)
+            .submit_with_trace(op, /*trace*/ None, parent_turn_id, root_turn_id)
             .await
     }
 

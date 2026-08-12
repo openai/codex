@@ -17,14 +17,24 @@ impl AgentControl {
                 Ok(String::new())
             } else {
                 state
-                    .send_op(agent_id, Op::Shutdown {}, /*parent_turn_id*/ None)
+                    .send_op(
+                        agent_id,
+                        Op::Shutdown {},
+                        /*parent_turn_id*/ None,
+                        /*root_turn_id*/ None,
+                    )
                     .await
             };
             thread.wait_until_terminated().await;
             result
         } else {
             state
-                .send_op(agent_id, Op::Shutdown {}, /*parent_turn_id*/ None)
+                .send_op(
+                    agent_id,
+                    Op::Shutdown {},
+                    /*parent_turn_id*/ None,
+                    /*root_turn_id*/ None,
+                )
                 .await
         };
         let _ = state.remove_thread(&agent_id).await;

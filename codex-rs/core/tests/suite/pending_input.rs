@@ -81,6 +81,9 @@ async fn idle_response_items_include_pending_mailbox_in_first_request() -> anyho
     wait_for_turn_complete(test.codex.as_ref()).await;
 
     let request = response.single_request();
+    let request_body = request.body_json();
+    responses::assert_root_turn(&request_body, /*expected*/ None)?;
+    responses::assert_parent_turn(&request_body, /*expected*/ None)?;
     let user_messages = request.message_input_texts("user");
     assert!(
         user_messages
@@ -167,6 +170,11 @@ async fn assert_idle_user_input_reaches_the_first_model_request(
     wait_for_turn_complete(test.codex.as_ref()).await;
 
     let request = response.single_request();
+    let request_body = request.body_json();
+    let turn_id = request_body["client_metadata"]["turn_id"]
+        .as_str()
+        .expect("idle user turn id");
+    responses::assert_root_turn(&request_body, Some(turn_id))?;
     assert!(
         request
             .message_input_texts("user")

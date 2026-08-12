@@ -6939,6 +6939,7 @@ async fn submit_with_id_captures_current_span_trace_context() {
             op: Op::Interrupt,
             client_user_message_id: None,
             parent_turn_id: None,
+            root_turn_id: None,
             trace: None,
         })
         .await
@@ -7012,6 +7013,7 @@ fn submission_dispatch_span_prefers_submission_trace_context() {
             op: Op::Interrupt,
             client_user_message_id: None,
             parent_turn_id: None,
+            root_turn_id: None,
             trace: Some(submission_trace),
         })
     });
@@ -7040,6 +7042,7 @@ fn submission_dispatch_span_uses_debug_for_realtime_audio() {
         }),
         client_user_message_id: None,
         parent_turn_id: None,
+        root_turn_id: None,
         trace: None,
     });
 
@@ -7106,6 +7109,7 @@ async fn user_turn_updates_approvals_reviewer() {
         },
         /*client_user_message_id*/ None,
         /*parent_turn_id*/ None,
+        /*root_turn_id*/ None,
     )
     .await;
 
@@ -7403,6 +7407,7 @@ async fn spawn_task_turn_span_inherits_dispatch_trace_context() {
         op: Op::Interrupt,
         client_user_message_id: None,
         parent_turn_id: None,
+        root_turn_id: None,
         trace: Some(submission_trace.clone()),
     });
     let dispatch_span_id = dispatch_span.context().span().span_context().span_id();
@@ -10435,6 +10440,7 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
         Some(&tc.sub_id),
         /*client_user_message_id*/ None,
         /*responsesapi_client_metadata*/ None,
+        /*incoming_turn_metadata*/ None,
     )
     .await
     .expect("steer pending input into active turn");
@@ -10606,6 +10612,7 @@ async fn thread_idle_lifecycle_waits_for_trigger_turn_mailbox_work() {
                 /*trigger_turn*/ true,
             ),
             /*parent_turn_id*/ None,
+            /*root_turn_id*/ None,
         )
         .await;
 
@@ -10638,7 +10645,7 @@ async fn try_start_turn_if_idle_rejects_active_turn_without_injecting() {
     assert_eq!(TryStartTurnIfIdleRejectionReason::Busy, err.reason());
     assert_eq!(vec![item], err.into_input());
     assert_eq!(
-        (Vec::<TurnInput>::new(), None),
+        (Vec::<TurnInput>::new(), None, None),
         sess.input_queue.get_pending_input(&sess.active_turn).await
     );
 
@@ -10665,7 +10672,7 @@ async fn try_start_turn_if_idle_rejects_plan_mode_without_injecting() {
     assert_eq!(vec![item], err.into_input());
     assert!(sess.active_turn.lock().await.is_none());
     assert_eq!(
-        (Vec::<TurnInput>::new(), None),
+        (Vec::<TurnInput>::new(), None, None),
         sess.input_queue.get_pending_input(&sess.active_turn).await
     );
 }
@@ -10736,6 +10743,7 @@ async fn try_start_turn_if_idle_rejects_pending_trigger_turn_without_injecting()
                 /*trigger_turn*/ true,
             ),
             /*parent_turn_id*/ None,
+            /*root_turn_id*/ None,
         )
         .await;
 
@@ -10776,7 +10784,7 @@ async fn try_start_turn_if_idle_rejects_active_review_turn_without_injecting() {
     assert_eq!(TryStartTurnIfIdleRejectionReason::Busy, err.reason());
     assert_eq!(vec![item], err.into_input());
     assert_eq!(
-        (Vec::<TurnInput>::new(), None),
+        (Vec::<TurnInput>::new(), None, None),
         sess.input_queue.get_pending_input(&sess.active_turn).await
     );
 
@@ -10798,6 +10806,7 @@ async fn steer_input_requires_active_turn() {
             /*expected_turn_id*/ None,
             /*client_user_message_id*/ None,
             /*responsesapi_client_metadata*/ None,
+            /*incoming_turn_metadata*/ None,
         )
         .await
         .expect_err("steering without active turn should fail");
@@ -10836,6 +10845,7 @@ async fn steer_input_enforces_expected_turn_id() {
             Some("different-turn-id"),
             /*client_user_message_id*/ None,
             /*responsesapi_client_metadata*/ None,
+            /*incoming_turn_metadata*/ None,
         )
         .await
         .expect_err("mismatched expected turn id should fail");
@@ -10857,7 +10867,10 @@ async fn steer_input_rejects_non_regular_turns() {
         (TaskKind::Review, NonSteerableTurnKind::Review),
         (TaskKind::Compact, NonSteerableTurnKind::Compact),
     ] {
-        let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
+        let (sess, incoming_turn_context, _rx) = make_session_and_context_with_rx().await;
+        incoming_turn_context
+            .turn_metadata_state
+            .set_root_turn_id("incoming-root".to_string());
         let input = vec![TurnInput::UserInput {
             content: vec![UserInput::Text {
                 text: "hello".to_string(),
@@ -10866,8 +10879,11 @@ async fn steer_input_rejects_non_regular_turns() {
             client_id: None,
         }];
         let turn_context = sess.new_default_turn_with_sub_id("turn".to_string()).await;
+        turn_context
+            .turn_metadata_state
+            .set_root_turn_id("active-root".to_string());
         sess.spawn_task(
-            turn_context,
+            Arc::clone(&turn_context),
             input,
             NeverEndingTask {
                 kind: task_kind,
@@ -10887,11 +10903,16 @@ async fn steer_input_rejects_non_regular_turns() {
                 /*expected_turn_id*/ None,
                 /*client_user_message_id*/ None,
                 /*responsesapi_client_metadata*/ None,
+                Some(incoming_turn_context.turn_metadata_state.as_ref()),
             )
             .await
             .expect_err("steering a non-regular turn should fail");
 
         assert_eq!(err, SteerInputError::ActiveTurnNotSteerable { turn_kind });
+        assert_eq!(
+            turn_context.turn_metadata_state.root_turn_id().as_deref(),
+            Some("active-root")
+        );
 
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
     }
@@ -10900,6 +10921,14 @@ async fn steer_input_rejects_non_regular_turns() {
 #[tokio::test]
 async fn steer_input_returns_active_turn_id() {
     let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+    tc.turn_metadata_state
+        .set_root_turn_id("active-root".to_string());
+    let incoming_turn_context = sess
+        .new_default_turn_with_sub_id("incoming".to_string())
+        .await;
+    incoming_turn_context
+        .turn_metadata_state
+        .set_root_turn_id("incoming-root".to_string());
     let input = vec![TurnInput::UserInput {
         content: vec![UserInput::Text {
             text: "hello".to_string(),
@@ -10928,11 +10957,13 @@ async fn steer_input_returns_active_turn_id() {
             Some(&tc.sub_id),
             /*client_user_message_id*/ None,
             /*responsesapi_client_metadata*/ None,
+            Some(incoming_turn_context.turn_metadata_state.as_ref()),
         )
         .await
         .expect("steering with matching expected turn id should succeed");
 
     assert_eq!(turn_id, tc.sub_id);
+    assert_eq!(tc.turn_metadata_state.root_turn_id(), None);
     assert!(sess.input_queue.has_pending_input(&sess.active_turn).await);
 }
 
@@ -11004,7 +11035,11 @@ async fn queue_only_mailbox_mail_waits_for_next_turn_after_answer_boundary() {
         .defer_mailbox_delivery_to_next_turn(&sess.active_turn, &tc.sub_id)
         .await;
     sess.input_queue
-        .enqueue_mailbox_communication(communication.clone(), /*parent_turn_id*/ None)
+        .enqueue_mailbox_communication(
+            communication.clone(),
+            /*parent_turn_id*/ None,
+            /*root_turn_id*/ None,
+        )
         .await;
 
     assert!(
@@ -11013,7 +11048,7 @@ async fn queue_only_mailbox_mail_waits_for_next_turn_after_answer_boundary() {
     );
     assert_eq!(
         sess.input_queue.get_pending_input(&sess.active_turn).await,
-        (Vec::new(), None)
+        (Vec::new(), None, None)
     );
 
     sess.abort_all_tasks(TurnAbortReason::Replaced).await;
@@ -11050,6 +11085,7 @@ async fn trigger_turn_mailbox_mail_waits_for_next_turn_after_answer_boundary() {
                 /*trigger_turn*/ true,
             ),
             /*parent_turn_id*/ None,
+            /*root_turn_id*/ None,
         )
         .await;
 
@@ -11087,7 +11123,11 @@ async fn steered_input_reopens_mailbox_delivery_for_current_turn() {
         .defer_mailbox_delivery_to_next_turn(&sess.active_turn, &tc.sub_id)
         .await;
     sess.input_queue
-        .enqueue_mailbox_communication(communication.clone(), /*parent_turn_id*/ None)
+        .enqueue_mailbox_communication(
+            communication.clone(),
+            /*parent_turn_id*/ None,
+            /*root_turn_id*/ None,
+        )
         .await;
     sess.steer_input(
         vec![UserInput::Text {
@@ -11098,6 +11138,7 @@ async fn steered_input_reopens_mailbox_delivery_for_current_turn() {
         Some(&tc.sub_id),
         /*client_user_message_id*/ None,
         /*responsesapi_client_metadata*/ None,
+        /*incoming_turn_metadata*/ None,
     )
     .await
     .expect("steered input should be accepted");
@@ -11141,7 +11182,11 @@ async fn stale_defer_mailbox_delivery_does_not_override_steered_input() {
         .defer_mailbox_delivery_to_next_turn(&sess.active_turn, &tc.sub_id)
         .await;
     sess.input_queue
-        .enqueue_mailbox_communication(communication.clone(), /*parent_turn_id*/ None)
+        .enqueue_mailbox_communication(
+            communication.clone(),
+            /*parent_turn_id*/ None,
+            /*root_turn_id*/ None,
+        )
         .await;
     sess.steer_input(
         vec![UserInput::Text {
@@ -11152,6 +11197,7 @@ async fn stale_defer_mailbox_delivery_does_not_override_steered_input() {
         Some(&tc.sub_id),
         /*client_user_message_id*/ None,
         /*responsesapi_client_metadata*/ None,
+        /*incoming_turn_metadata*/ None,
     )
     .await
     .expect("steered input should be accepted");
@@ -11199,7 +11245,11 @@ async fn tool_calls_reopen_mailbox_delivery_for_current_turn() {
         .defer_mailbox_delivery_to_next_turn(&sess.active_turn, &tc.sub_id)
         .await;
     sess.input_queue
-        .enqueue_mailbox_communication(communication.clone(), /*parent_turn_id*/ None)
+        .enqueue_mailbox_communication(
+            communication.clone(),
+            /*parent_turn_id*/ None,
+            /*root_turn_id*/ None,
+        )
         .await;
 
     let item = ResponseItem::FunctionCall {

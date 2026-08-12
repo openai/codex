@@ -296,7 +296,9 @@ impl CodexThread {
         trace: Option<W3cTraceContext>,
     ) -> CodexResult<String> {
         self.io
-            .submit_with_trace(op, trace, /*parent_turn_id*/ None)
+            .submit_with_trace(
+                op, trace, /*parent_turn_id*/ None, /*root_turn_id*/ None,
+            )
             .await
     }
 
@@ -345,6 +347,7 @@ impl CodexThread {
                 client_user_message_id,
                 trace,
                 parent_turn_id: None,
+                root_turn_id: None,
             })
             .await?;
         tokio::select! {
@@ -376,6 +379,7 @@ impl CodexThread {
                 expected_turn_id,
                 client_user_message_id,
                 responsesapi_client_metadata,
+                /*incoming_turn_metadata*/ None,
             )
             .await
     }
@@ -485,6 +489,7 @@ impl CodexThread {
     /// Use sparingly: this is intended to be removed soon.
     pub async fn submit_with_id(&self, mut sub: Submission) -> CodexResult<()> {
         sub.parent_turn_id = None;
+        sub.root_turn_id = None;
         self.io.submit_with_id(sub).await
     }
 

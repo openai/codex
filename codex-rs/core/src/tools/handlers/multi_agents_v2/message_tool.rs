@@ -112,7 +112,13 @@ pub(crate) async fn handle_message_string_tool(
     let result = session
         .services
         .agent_control
-        .send_inter_agent_communication(receiver_thread_id, communication, context, parent_turn_id)
+        .send_inter_agent_communication(
+            receiver_thread_id,
+            communication,
+            context,
+            parent_turn_id,
+            turn.turn_metadata_state.root_turn_id(),
+        )
         .await
         .map_err(|err| collab_agent_error(receiver_thread_id, err));
     result?;

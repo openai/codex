@@ -184,6 +184,8 @@ pub struct Submission {
     pub trace: Option<W3cTraceContext>,
     /// Core-provided ID of the parent turn that directly initiated this submission.
     pub parent_turn_id: Option<String>,
+    /// Core-provided ID of the top-level turn that causally initiated this submission.
+    pub root_turn_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]

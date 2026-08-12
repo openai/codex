@@ -15,6 +15,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::user_input::UserInput;
 use core_test_support::PathBufExt;
+use core_test_support::responses::assert_root_turn;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -30,6 +31,7 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 use tempfile::TempDir;
+use test_case::test_case;
 
 const ORIGIN_URL: &str = "https://example.invalid/cxa5426/repo.git";
 
@@ -230,8 +232,12 @@ async fn guardian_prewarm_and_review_skip_redundant_git_enrichment() -> Result<(
     Ok(())
 }
 
+#[test_case("system"; "system background thread")]
+#[test_case("ambient_background"; "ambient background thread")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn ephemeral_system_thread_prewarm_skips_and_turn_observes_fresh_state() -> Result<()> {
+async fn ephemeral_system_thread_prewarm_skips_and_turn_observes_fresh_state(
+    thread_source: &str,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let (repo, head) = create_git_repo()?;
@@ -274,7 +280,7 @@ async fn ephemeral_system_thread_prewarm_skips_and_turn_observes_fresh_state() -
     let system_thread = test
         .thread_manager
         .start_thread(StartThreadOptions {
-            thread_source: Some(ThreadSource::Feature("system".to_string())),
+            thread_source: Some(ThreadSource::Feature(thread_source.to_string())),
             ..StartThreadOptions::new(config)
         })
         .await?;
@@ -310,6 +316,7 @@ async fn ephemeral_system_thread_prewarm_skips_and_turn_observes_fresh_state() -
         .and_then(|connection| connection.get(2))
         .context("system turn follow-up request")?
         .body_json();
+    assert_root_turn(&turn, /*expected*/ None)?;
     assert_eq!(
         turn_metadata(&turn)?["workspaces"],
         expected_workspace(repo.path(), &head, /*has_changes*/ true)

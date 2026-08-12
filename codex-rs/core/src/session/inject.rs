@@ -123,6 +123,15 @@ impl Session {
             ));
         }
 
+        if has_user_input
+            && turn_context
+                .turn_metadata_state
+                .can_start_root_turn(&turn_context.session_source)
+        {
+            turn_context
+                .turn_metadata_state
+                .set_root_turn_id(turn_context.sub_id.clone());
+        }
         let task_input = if has_user_input {
             self.clear_connector_selection().await;
             for item in &input {

@@ -114,6 +114,7 @@ pub async fn run_codex_tool_session(
         client_user_message_id: None,
         trace: None,
         parent_turn_id: None,
+        root_turn_id: None,
     };
 
     if let Err(e) = thread.submit_with_id(submission).await {
@@ -159,6 +160,7 @@ pub async fn run_codex_tool_session_reply(
             client_user_message_id: None,
             trace: None,
             parent_turn_id: None,
+            root_turn_id: None,
         })
         .await
     {

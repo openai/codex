@@ -93,9 +93,10 @@ async fn user_message_admission_starts_turn_for_empty_input() {
         }
     }
 
-    let user_input_groups = response_mock
-        .single_request()
-        .message_input_text_groups("user");
+    let request = response_mock.single_request();
+    responses::assert_root_turn(&request.body_json(), /*expected*/ None)
+        .expect("synthetic clock wake must not become a root");
+    let user_input_groups = request.message_input_text_groups("user");
     assert_eq!(user_input_groups.len(), 1);
     assert_eq!(user_input_groups[0].len(), 1);
     assert!(user_input_groups[0][0].starts_with("<environment_context>"));

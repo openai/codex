@@ -136,6 +136,7 @@ async fn forward_ops_preserves_submission_trace_context() {
             tracestate: Some("vendor=state".to_string()),
         }),
         parent_turn_id: Some("parent-turn".to_string()),
+        root_turn_id: Some("root-turn".to_string()),
     };
     tx_ops.send(submission).await.unwrap();
     drop(tx_ops);

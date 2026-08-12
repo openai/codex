@@ -6,6 +6,7 @@ use crate::responses_metadata::CompactionTurnMetadata;
 use crate::responses_metadata::INSTALLATION_ID_KEY;
 use crate::responses_metadata::LEGACY_CODE_MODE_TOOL_NAMES_KEY;
 use crate::responses_metadata::PARENT_TURN_ID_KEY;
+use crate::responses_metadata::ROOT_TURN_ID_KEY;
 use crate::responses_metadata::SANDBOX_MODE_KEY;
 use crate::responses_metadata::TOOL_NAMESPACES_INFO_KEY;
 use crate::responses_metadata::TurnToolFunctionInfo;
@@ -164,6 +165,7 @@ async fn detached_memory_responses_metadata_omits_turn_identity() {
     assert!(parsed.get("thread_id").is_none());
     assert!(parsed.get("forked_from_thread_id").is_none());
     assert!(parsed.get("turn_id").is_none());
+    assert!(parsed.get(ROOT_TURN_ID_KEY).is_none());
     assert!(parsed.get(WINDOW_ID_KEY).is_none());
 
     let expected_repo_path = repo_path.to_string_lossy().into_owned();
@@ -594,6 +596,7 @@ fn turn_metadata_state_ignores_client_reserved_metadata_before_start() {
             "client-supplied".to_string(),
         ),
         ("parent_turn_id".to_string(), "client-supplied".to_string()),
+        (ROOT_TURN_ID_KEY.to_string(), "client-supplied".to_string()),
         ("subagent_kind".to_string(), "client-supplied".to_string()),
         (
             SANDBOX_MODE_KEY.to_string(),
@@ -611,6 +614,7 @@ fn turn_metadata_state_ignores_client_reserved_metadata_before_start() {
     assert!(json.get("forked_from_thread_id").is_none());
     assert!(json.get("parent_thread_id").is_none());
     assert!(json.get("parent_turn_id").is_none());
+    assert!(json.get(ROOT_TURN_ID_KEY).is_none());
     assert!(json.get("subagent_kind").is_none());
     assert_eq!(json[SANDBOX_MODE_KEY].as_str(), Some("read-only"));
     assert_eq!(json[AUTO_REVIEW_ENABLED_KEY].as_bool(), Some(false));
@@ -651,6 +655,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
         "sdk".to_string(),
     )]));
     state.set_parent_turn_id("parent-turn-a".to_string());
+    state.set_root_turn_id("root-turn-a".to_string());
     state.set_responsesapi_client_metadata(HashMap::from([
         (
             "codex_security_surface".to_string(),
@@ -688,6 +693,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
             "client-supplied".to_string(),
         ),
         ("parent_turn_id".to_string(), "client-supplied".to_string()),
+        (ROOT_TURN_ID_KEY.to_string(), "client-supplied".to_string()),
         ("subagent_kind".to_string(), "client-supplied".to_string()),
         (
             LEGACY_CODE_MODE_TOOL_NAMES_KEY.to_string(),
@@ -773,6 +779,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
         Some("55555555-5555-4555-8555-555555555555")
     );
     assert_eq!(json["parent_turn_id"].as_str(), Some("parent-turn-a"));
+    assert_eq!(json[ROOT_TURN_ID_KEY].as_str(), Some("root-turn-a"));
     assert_eq!(json["subagent_kind"].as_str(), Some("thread_spawn"));
     assert_eq!(json["thread_source"].as_str(), Some("automation"));
     assert_eq!(json["turn_id"].as_str(), Some("turn-a"));
@@ -787,6 +794,10 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
     let model_request_json: Value =
         serde_json::from_str(&model_request_header).expect("model request json");
     assert_eq!(model_request_json["request_kind"].as_str(), Some("turn"));
+    assert_eq!(
+        model_request_json[ROOT_TURN_ID_KEY].as_str(),
+        Some("root-turn-a")
+    );
     assert_eq!(
         model_request_json["thread_source"].as_str(),
         Some("automation")
@@ -838,6 +849,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
     assert!(meta.get(LEGACY_CODE_MODE_TOOL_NAMES_KEY).is_none());
     assert!(meta.get(TOOL_NAMESPACES_INFO_KEY).is_none());
     assert!(meta.get(PARENT_TURN_ID_KEY).is_none());
+    assert!(meta.get(ROOT_TURN_ID_KEY).is_none());
     assert!(meta.get(WINDOW_ID_KEY).is_none());
     assert!(meta.get("codex_security_surface").is_none());
     assert_eq!(state.workspace_kind().as_deref(), Some("projectless"));

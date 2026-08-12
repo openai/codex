@@ -20,6 +20,7 @@ use codex_protocol::user_input::UserInput;
 use core_test_support::hooks::trust_discovered_hooks;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::assert_parent_turn;
+use core_test_support::responses::assert_root_turn;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call_with_namespace;
@@ -971,6 +972,8 @@ async fn spawned_child_receives_forked_parent_context(
         .expect("legacy spawn parent turn id");
     assert_parent_turn(&parent_body, /*expected*/ None)?;
     assert_parent_turn(&child_body, Some(original_parent_turn_id))?;
+    assert_root_turn(&parent_body, Some(original_parent_turn_id))?;
+    assert_root_turn(&child_body, Some(original_parent_turn_id))?;
     assert_eq!(
         (
             child_body["model"].clone(),
@@ -1034,6 +1037,8 @@ async fn spawned_child_receives_forked_parent_context(
     assert_eq!(metadata["thread_id"], json!(child_thread_id));
     assert_parent_turn(&followup_parent_body, /*expected*/ None)?;
     assert_parent_turn(&reused_child_body, Some(followup_parent_turn_id))?;
+    assert_root_turn(&followup_parent_body, Some(followup_parent_turn_id))?;
+    assert_root_turn(&reused_child_body, Some(followup_parent_turn_id))?;
     Ok(())
 }
 

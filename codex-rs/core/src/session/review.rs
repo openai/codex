@@ -121,6 +121,9 @@ pub(super) async fn spawn_review_thread(
         parent_turn_context.network.is_some(),
         auto_review_enabled,
     ));
+    if turn_metadata_state.can_start_root_turn(&session_source) {
+        turn_metadata_state.set_root_turn_id(review_turn_id.clone());
+    }
 
     let extension_data = Arc::new(codex_extension_api::ExtensionData::new(
         review_turn_id.clone(),
