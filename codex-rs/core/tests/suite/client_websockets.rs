@@ -1496,14 +1496,15 @@ async fn responses_websocket_emits_rate_limit_events() {
 
     let server = start_websocket_server_with_headers(vec![WebSocketConnectionConfig {
         requests: vec![vec![
+            json!({
+                "type": "codex.response.metadata",
+                "headers": {"x-models-etag": "etag-123"},
+            }),
             rate_limit_event,
             ev_response_created("resp-1"),
             ev_completed("resp-1"),
         ]],
-        response_headers: vec![
-            ("X-Models-Etag".to_string(), "etag-123".to_string()),
-            ("X-Reasoning-Included".to_string(), "true".to_string()),
-        ],
+        response_headers: vec![("X-Reasoning-Included".to_string(), "true".to_string())],
         accept_delay: None,
         close_after_requests: true,
     }])

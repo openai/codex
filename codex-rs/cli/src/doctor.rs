@@ -2410,10 +2410,6 @@ async fn websocket_reachability_check(
             details.push(format!("handshake result: HTTP {}", probe.status));
             details.push(format!("reasoning header: {}", probe.reasoning_included));
             details.push(format!(
-                "models etag present: {}",
-                probe.models_etag_present
-            ));
-            details.push(format!(
                 "server model present: {}",
                 probe.server_model_present
             ));
