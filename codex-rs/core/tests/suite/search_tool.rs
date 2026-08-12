@@ -1,4 +1,3 @@
-#![cfg(not(target_os = "windows"))]
 #![allow(clippy::unwrap_used)]
 
 use anyhow::Result;
@@ -65,7 +64,7 @@ use core_test_support::responses::namespace_child_tool;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
-use core_test_support::stdio_server_bin;
+use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_mcp_server;
@@ -75,6 +74,9 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+
+use super::rmcp_client::remote_aware_environment_id;
+use super::rmcp_client::remote_aware_stdio_server_bin;
 
 const SEARCH_TOOL_DESCRIPTION_SNIPPETS: [&str; 2] = [
     "You have access to tools from the following sources",
@@ -156,7 +158,7 @@ async fn search_tool_enabled_by_default_adds_tool_search() -> Result<()> {
     .await;
 
     let mut builder = configured_builder(apps_server.chatgpt_base_url.clone());
-    let test = builder.build(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
     test.submit_turn_with_approval_and_permission_profile(
         "list tools",
@@ -214,7 +216,7 @@ async fn small_app_tool_sets_are_deferred_by_default() -> Result<()> {
     .await;
 
     let mut builder = configured_builder(apps_server.chatgpt_base_url.clone());
-    let test = builder.build(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
     test.submit_turn_with_approval_and_permission_profile(
         "list tools",
@@ -280,7 +282,7 @@ async fn app_only_tools_are_not_visible_or_runnable_by_direct_model_calls() -> R
     .await;
 
     let mut builder = configured_builder(apps_server.chatgpt_base_url.clone());
-    let test = builder.build(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     test.submit_turn_with_approval_and_permission_profile(
         "Try to call the app-only calendar tool.",
         AskForApproval::Never,
@@ -344,7 +346,7 @@ async fn app_search_sources_are_hidden_for_api_key_auth() -> Result<()> {
         .with_config(move |config| {
             configure_search_capable_apps(config, apps_server.chatgpt_base_url.as_str())
         });
-    let test = builder.build(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
     test.submit_turn_with_approval_and_permission_profile(
         "list tools",
@@ -385,7 +387,7 @@ async fn search_tool_adds_discovery_instructions_to_tool_description() -> Result
     .await;
 
     let mut builder = configured_builder(apps_server.chatgpt_base_url.clone());
-    let test = builder.build(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
     test.submit_turn_with_approval_and_permission_profile(
         "list tools",
@@ -433,7 +435,7 @@ async fn search_tool_omits_sources_when_deferred_tool_world_state_is_enabled() -
                 .enable(Feature::DeferredToolWorldState)
                 .expect("test config should allow feature update");
         });
-    let test = builder.build(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     test.submit_turn_with_approval_and_permission_profile(
         "list tools",
         AskForApproval::Never,
@@ -478,7 +480,7 @@ async fn search_tool_hides_apps_tools_without_search() -> Result<()> {
     .await;
 
     let mut builder = configured_builder(apps_server.chatgpt_base_url.clone());
-    let test = builder.build(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
     test.submit_turn_with_approval_and_permission_profile(
         "hello tools",
@@ -514,7 +516,7 @@ async fn explicit_app_mentions_leave_app_tools_deferred() -> Result<()> {
     .await;
 
     let mut builder = configured_builder(apps_server.chatgpt_base_url.clone());
-    let test = builder.build(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
     test.submit_turn_with_approval_and_permission_profile(
         "Use [$calendar](app://calendar) and then call tools.",
@@ -594,7 +596,7 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
     .await;
 
     let mut builder = configured_builder(apps_server.chatgpt_base_url.clone());
-    let test = builder.build(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     test.codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
@@ -864,7 +866,7 @@ async fn tool_search_returns_deferred_v1_multi_agent_tools() -> Result<()> {
     .await;
 
     let mut builder = test_codex().with_config(configure_search_capable_model);
-    let test = builder.build(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     test.submit_turn_with_approval_and_permission_profile(
         "Find the spawn agent tool",
         AskForApproval::Never,
@@ -1272,6 +1274,10 @@ async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tool_search_indexes_only_enabled_non_app_mcp_tools() -> Result<()> {
+    skip_if_wine_exec!(
+        Ok(()),
+        "requires a Windows test_stdio_server in the Wine-exec environment"
+    );
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -1308,7 +1314,8 @@ async fn tool_search_indexes_only_enabled_non_app_mcp_tools() -> Result<()> {
     )
     .await;
 
-    let rmcp_test_server_bin = stdio_server_bin()?;
+    let rmcp_test_server_bin = remote_aware_stdio_server_bin()?;
+    let environment_id = remote_aware_environment_id();
     let mut builder =
         configured_builder(apps_server.chatgpt_base_url.clone()).with_config(move |config| {
             let mut servers = config.mcp_servers.get().clone();
@@ -1323,7 +1330,7 @@ async fn tool_search_indexes_only_enabled_non_app_mcp_tools() -> Result<()> {
                         env_vars: Vec::new(),
                         cwd: None,
                     },
-                    environment_id: "local".to_string(),
+                    environment_id,
                     enabled: true,
                     required: false,
                     disabled_reason: None,
@@ -1345,7 +1352,7 @@ async fn tool_search_indexes_only_enabled_non_app_mcp_tools() -> Result<()> {
                 .set(servers)
                 .expect("test mcp servers should accept any configuration");
         });
-    let test = builder.build(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     wait_for_mcp_server(&test.codex, "rmcp").await?;
 
     test.submit_turn_with_approval_and_permission_profile(
@@ -1402,6 +1409,10 @@ async fn tool_search_indexes_only_enabled_non_app_mcp_tools() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tool_search_surfaced_mcp_tool_errors_are_returned_to_model() -> Result<()> {
+    skip_if_wine_exec!(
+        Ok(()),
+        "requires a Windows test_stdio_server in the Wine-exec environment"
+    );
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -1436,7 +1447,8 @@ async fn tool_search_surfaced_mcp_tool_errors_are_returned_to_model() -> Result<
     )
     .await;
 
-    let rmcp_test_server_bin = stdio_server_bin()?;
+    let rmcp_test_server_bin = remote_aware_stdio_server_bin()?;
+    let environment_id = remote_aware_environment_id();
     let mut builder =
         configured_builder(apps_server.chatgpt_base_url.clone()).with_config(move |config| {
             let mut servers = config.mcp_servers.get().clone();
@@ -1451,7 +1463,7 @@ async fn tool_search_surfaced_mcp_tool_errors_are_returned_to_model() -> Result<
                         env_vars: Vec::new(),
                         cwd: None,
                     },
-                    environment_id: "local".to_string(),
+                    environment_id,
                     enabled: true,
                     required: false,
                     disabled_reason: None,
@@ -1473,7 +1485,7 @@ async fn tool_search_surfaced_mcp_tool_errors_are_returned_to_model() -> Result<
                 .set(servers)
                 .expect("test mcp servers should accept any configuration");
         });
-    let test = builder.build(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     wait_for_mcp_server(&test.codex, "rmcp").await?;
 
     test.codex
@@ -1558,6 +1570,10 @@ async fn tool_search_surfaced_mcp_tool_errors_are_returned_to_model() -> Result<
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tool_search_uses_non_app_mcp_server_instructions_as_namespace_description() -> Result<()> {
+    skip_if_wine_exec!(
+        Ok(()),
+        "requires a Windows test_stdio_server in the Wine-exec environment"
+    );
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -1586,7 +1602,8 @@ async fn tool_search_uses_non_app_mcp_server_instructions_as_namespace_descripti
     )
     .await;
 
-    let rmcp_test_server_bin = stdio_server_bin()?;
+    let rmcp_test_server_bin = remote_aware_stdio_server_bin()?;
+    let environment_id = remote_aware_environment_id();
     let mut builder =
         configured_builder(apps_server.chatgpt_base_url.clone()).with_config(move |config| {
             let mut servers = config.mcp_servers.get().clone();
@@ -1601,7 +1618,7 @@ async fn tool_search_uses_non_app_mcp_server_instructions_as_namespace_descripti
                         env_vars: Vec::new(),
                         cwd: None,
                     },
-                    environment_id: "local".to_string(),
+                    environment_id,
                     enabled: true,
                     required: false,
                     disabled_reason: None,
@@ -1623,7 +1640,7 @@ async fn tool_search_uses_non_app_mcp_server_instructions_as_namespace_descripti
                 .set(servers)
                 .expect("test mcp servers should accept any configuration");
         });
-    let test = builder.build(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     wait_for_mcp_server(&test.codex, "rmcp").await?;
 
     test.submit_turn_with_approval_and_permission_profile(
@@ -1686,7 +1703,7 @@ async fn tool_search_matches_mcp_tools_by_distinct_name_description_and_schema_t
     .await;
 
     let mut builder = configured_builder(apps_server.chatgpt_base_url.clone());
-    let test = builder.build(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
     test.submit_turn_with_approval_and_permission_profile(
         "Search for calendar tooling.",
@@ -1792,7 +1809,7 @@ async fn tool_search_matches_dynamic_tools_by_name_description_namespace_and_sch
     });
 
     let mut builder = test_codex().with_config(configure_search_capable_model);
-    let base_test = builder.build(&server).await?;
+    let base_test = builder.build_with_auto_env(&server).await?;
     let new_thread = base_test
         .thread_manager
         .start_thread(StartThreadOptions {
