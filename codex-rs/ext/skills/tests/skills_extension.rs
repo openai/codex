@@ -18,6 +18,8 @@ use codex_extension_api::ExtensionWarning;
 use codex_extension_api::NoopTurnItemEmitter;
 use codex_extension_api::PreviousWorldStateSection;
 use codex_extension_api::RenderedWorldStateFragment;
+use codex_extension_api::SkillInvocationInput;
+use codex_extension_api::SkillInvocationKind;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ToolCall;
 use codex_extension_api::ToolPayload;
@@ -839,6 +841,126 @@ async fn shadow_selection_uses_host_catalog_when_instructions_are_disabled() -> 
         "every shadow selector should see the cached host skill: {catalog_entry_counts:?}"
     );
     assert_eq!(1, list_calls.load(Ordering::Relaxed));
+    Ok(())
+}
+
+#[tokio::test]
+async fn shadow_lru_selector_recovers_a_skill_invoked_on_an_earlier_turn() -> TestResult {
+    let provider = Arc::new(StaticSkillProvider {
+        catalog: SkillCatalog {
+            entries: vec![test_entry(
+                SkillSourceKind::Host,
+                "host",
+                "host/lint-fix",
+                "lint-fix/SKILL.md",
+            )],
+            warnings: Vec::new(),
+        },
+        read_requests: Arc::new(Mutex::new(Vec::new())),
+        list_calls: None,
+        fail_first_list: false,
+    });
+    let metrics = MetricsClient::new(
+        MetricsConfig::in_memory(
+            "test",
+            "codex-skills-extension",
+            env!("CARGO_PKG_VERSION"),
+            InMemoryMetricExporter::default(),
+        )
+        .with_runtime_reader(),
+    )?;
+    let mut builder = ExtensionRegistryBuilder::new();
+    install_with_providers_and_metrics(
+        &mut builder,
+        SkillProviders::new().with_host_provider(provider),
+        Some(metrics.clone()),
+        skills_extension_config,
+    );
+    let registry = builder.build();
+    let session_store = ExtensionData::new("session");
+    let thread_store = ExtensionData::new("thread");
+    let mut config = default_config();
+    config.include_instructions = false;
+    config.shadow_selection_enabled = true;
+    registry.thread_lifecycle_contributors()[0]
+        .on_thread_start(ThreadStartInput {
+            config: &config,
+            session_source: &SessionSource::Cli,
+            persistent_thread_state_available: true,
+            environments: &[],
+            mcp_resource_client: None,
+            extension_metrics: None,
+            session_store: &session_store,
+            thread_store: &thread_store,
+        })
+        .await;
+
+    for (turn_id, text) in [("turn-1", "Fix lint errors."), ("turn-2", "continue")] {
+        let turn_store = ExtensionData::new(turn_id);
+        let fragments = registry.turn_input_contributors()[0]
+            .contribute(
+                TurnInputContext {
+                    turn_id: turn_id.to_string(),
+                    user_input: vec![UserInput::Text {
+                        text: text.to_string(),
+                        text_elements: Vec::new(),
+                    }],
+                    environments: Vec::new(),
+                },
+                /*extension_metrics*/ None,
+                &session_store,
+                &thread_store,
+                &turn_store,
+            )
+            .await;
+        assert!(fragments.is_empty());
+        registry.skill_invocation_contributors()[0]
+            .on_skill_invocation(SkillInvocationInput {
+                session_store: &session_store,
+                thread_store: &thread_store,
+                turn_store: &turn_store,
+                turn_id,
+                skill_resource: "lint-fix/SKILL.md",
+                kind: SkillInvocationKind::Implicit,
+            })
+            .await;
+    }
+
+    let snapshot = metrics.snapshot()?;
+    let metric = snapshot
+        .scope_metrics()
+        .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
+        .find(|metric| metric.name() == "codex.skills.shadow_selection.invocation")
+        .ok_or("shadow invocation metric should be recorded")?;
+    let mut lru_hits = match metric.data() {
+        AggregatedMetrics::U64(MetricData::Sum(sum)) => sum
+            .data_points()
+            .filter_map(|point| {
+                let method = point
+                    .attributes()
+                    .find(|attribute| attribute.key.as_str() == "method")?
+                    .value
+                    .as_str();
+                if method != "lru_v1" {
+                    return None;
+                }
+                let hit = point
+                    .attributes()
+                    .find(|attribute| attribute.key.as_str() == "hit")?
+                    .value
+                    .as_str()
+                    .to_string();
+                Some((hit, point.value()))
+            })
+            .collect::<Vec<_>>(),
+        data => panic!("unexpected shadow invocation metric data: {data:?}"),
+    };
+    lru_hits.sort();
+
+    assert_eq!(
+        vec![("false".to_string(), 1), ("true".to_string(), 1)],
+        lru_hits
+    );
     Ok(())
 }
 

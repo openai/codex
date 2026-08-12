@@ -1,6 +1,7 @@
 mod character_ngram;
 mod character_routing_card;
 mod fielded_bm25;
+mod lru;
 mod multi_query_lexical;
 mod routing_card_lexical;
 mod rrf_lexical_char;
@@ -9,6 +10,7 @@ pub(crate) use character_ngram::CharacterNgramSkillSelector;
 pub(crate) use character_routing_card::CharacterRoutingCardSkillSelector;
 use codex_skills::SkillDependencies;
 pub(crate) use fielded_bm25::FieldedBm25SkillSelector;
+pub(crate) use lru::LruSkillSelector;
 pub(crate) use multi_query_lexical::MultiQueryLexicalSkillSelector;
 pub(crate) use routing_card_lexical::RoutingCardLexicalSkillSelector;
 pub(crate) use rrf_lexical_char::RrfLexicalCharSkillSelector;

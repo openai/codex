@@ -399,6 +399,7 @@ where
                     &shadow_catalog,
                     &shadow_selected_entries,
                     host_snapshot.as_deref(),
+                    Arc::clone(&thread_state.recent_skill_invocations),
                 ))
             } else {
                 None

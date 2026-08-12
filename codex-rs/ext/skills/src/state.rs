@@ -21,6 +21,7 @@ use crate::catalog::SkillResourceId;
 use crate::catalog::SkillSourceKind;
 use crate::provider::SkillListQuery;
 use crate::provider::SkillReadRequest;
+use crate::shadow_selection_experiment::RecentSkillInvocations;
 use crate::shadow_selection_experiment::ShadowSelectionTurnState;
 use crate::sources::SkillProviders;
 
@@ -39,6 +40,7 @@ pub(crate) struct SkillsThreadState {
     executor_discovery_cache: Mutex<Option<CachedExecutorDiscoveryCatalog>>,
     orchestrator_cache: Mutex<Option<Arc<OrchestratorGenerationCache>>>,
     shadow_selection_turn: Mutex<Option<ShadowSelectionTurn>>,
+    pub(crate) recent_skill_invocations: Arc<RecentSkillInvocations>,
 }
 
 impl SkillsThreadState {
@@ -50,6 +52,7 @@ impl SkillsThreadState {
             executor_discovery_cache: Mutex::new(None),
             orchestrator_cache: Mutex::new(None),
             shadow_selection_turn: Mutex::new(None),
+            recent_skill_invocations: Arc::new(RecentSkillInvocations::default()),
         }
     }
 

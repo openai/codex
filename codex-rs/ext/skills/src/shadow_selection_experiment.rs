@@ -1,6 +1,9 @@
 // This shadow-selection experiment is temporary and should be removed after evaluation.
 
+use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::VecDeque;
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::PoisonError;
 use std::time::Duration;
@@ -18,6 +21,7 @@ use crate::dynamic_skill_selector::CharacterRoutingCardSkillSelector;
 use crate::dynamic_skill_selector::CheapSkillSelection;
 use crate::dynamic_skill_selector::CheapSkillSelector;
 use crate::dynamic_skill_selector::FieldedBm25SkillSelector;
+use crate::dynamic_skill_selector::LruSkillSelector;
 use crate::dynamic_skill_selector::MultiQueryLexicalSkillSelector;
 use crate::dynamic_skill_selector::RoutingCardLexicalSkillSelector;
 use crate::dynamic_skill_selector::RrfLexicalCharSkillSelector;
@@ -25,7 +29,7 @@ use crate::dynamic_skill_selector::SkillSelectionDocument;
 use crate::dynamic_skill_selector::WeightedLexicalSkillSelector;
 
 const MAX_SHADOW_QUERY_BYTES: usize = 16 * 1024;
-const MAX_SHADOW_RESULTS: usize = 20;
+const MAX_SHADOW_RESULTS: usize = 50;
 
 const RUN_METRIC: &str = "codex.skills.shadow_selection";
 const DURATION_METRIC: &str = "codex.skills.shadow_selection.duration_ms";
@@ -61,6 +65,7 @@ impl ShadowSelectionExperiment {
         catalog: &SkillCatalog,
         explicitly_selected: &[SkillCatalogEntry],
         host_snapshot: Option<&HostSkillsSnapshot>,
+        recent_skill_invocations: Arc<RecentSkillInvocations>,
     ) -> ShadowSelectionTurnState {
         let query = build_shadow_query(inputs);
         let query_script = query_script_tag(&query.text);
@@ -95,22 +100,36 @@ impl ShadowSelectionExperiment {
             .iter()
             .map(|document| document.id)
             .collect::<HashSet<_>>();
-        let eligible_skill_resources = documents
+        let eligible_skill_ids_by_resource = documents
             .iter()
             .map(|document| {
-                normalize_skill_resource(catalog.entries[document.id].main_prompt.as_str())
+                (
+                    normalize_skill_resource(catalog.entries[document.id].main_prompt.as_str()),
+                    document.id,
+                )
             })
+            .collect::<HashMap<_, _>>();
+        let eligible_skill_resources = eligible_skill_ids_by_resource
+            .keys()
+            .cloned()
             .collect::<HashSet<_>>();
+        let recent_skill_ids = recent_skill_invocations
+            .snapshot()
+            .iter()
+            .filter_map(|resource| eligible_skill_ids_by_resource.get(resource).copied())
+            .collect();
         let routing_selector = CharacterRoutingCardSkillSelector::new(catalog, host_snapshot);
-        let mut ranked_selections = Vec::with_capacity(self.selectors.len() + 1);
+        let lru_selector = LruSkillSelector::new(recent_skill_ids);
+        let mut ranked_selections = Vec::with_capacity(self.selectors.len() + 2);
 
         for selector in self
             .selectors
             .iter()
             .map(std::convert::AsRef::as_ref)
-            .chain(std::iter::once(
+            .chain([
                 &routing_selector as &dyn CheapSkillSelector,
-            ))
+                &lru_selector as &dyn CheapSkillSelector,
+            ])
         {
             let start = Instant::now();
             let selection =
@@ -150,6 +169,7 @@ impl ShadowSelectionExperiment {
             query_script,
             eligible_skill_resources,
             seen_skill_resources: Mutex::new(HashSet::new()),
+            recent_skill_invocations,
         }
     }
 
@@ -166,6 +186,9 @@ impl ShadowSelectionExperiment {
         {
             return;
         }
+        state
+            .recent_skill_invocations
+            .record(skill_resource.clone());
         let Some(metrics_client) = self.metrics_client.as_ref() else {
             return;
         };
@@ -239,6 +262,38 @@ pub(crate) struct ShadowSelectionTurnState {
     query_script: &'static str,
     eligible_skill_resources: HashSet<String>,
     seen_skill_resources: Mutex<HashSet<String>>,
+    recent_skill_invocations: Arc<RecentSkillInvocations>,
+}
+
+#[derive(Default)]
+pub(crate) struct RecentSkillInvocations {
+    skill_resources: Mutex<VecDeque<String>>,
+}
+
+impl RecentSkillInvocations {
+    fn snapshot(&self) -> Vec<String> {
+        self.skill_resources
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .cloned()
+            .collect()
+    }
+
+    fn record(&self, skill_resource: String) {
+        let mut skill_resources = self
+            .skill_resources
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(index) = skill_resources
+            .iter()
+            .position(|resource| resource == &skill_resource)
+        {
+            skill_resources.remove(index);
+        }
+        skill_resources.push_front(skill_resource);
+        skill_resources.truncate(MAX_SHADOW_RESULTS);
+    }
 }
 
 struct RankedSelection {
@@ -310,7 +365,8 @@ fn rank_bucket(rank: Option<usize>) -> &'static str {
         Some(1) => "1",
         Some(2..=5) => "2_5",
         Some(6..=10) => "6_10",
-        Some(11..=MAX_SHADOW_RESULTS) => "11_20",
+        Some(11..=20) => "11_20",
+        Some(21..=MAX_SHADOW_RESULTS) => "21_50",
         Some(_) | None => "miss",
     }
 }
@@ -406,3 +462,7 @@ fn push_bounded(destination: &mut String, value: &str) -> bool {
     destination.push_str(&value[..end]);
     false
 }
+
+#[cfg(test)]
+#[path = "shadow_selection_experiment_tests.rs"]
+mod tests;
