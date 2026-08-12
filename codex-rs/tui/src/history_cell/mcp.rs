@@ -164,7 +164,7 @@ impl McpToolCallCell {
                 .unwrap_or_else(|| "node_repl.js".to_string());
             Line::from(title.cyan())
         } else {
-            line_to_static(&format_mcp_invocation(self.invocation.clone()))
+            line_to_static(&format_mcp_invocation(&self.invocation))
         };
         let mut compact_spans = vec![bullet.clone(), " ".into(), header_text.bold(), " ".into()];
         let mut compact_header = Line::from(compact_spans.clone());
@@ -296,7 +296,7 @@ impl HistoryCell for McpToolCallCell {
         };
         let mut lines = vec![Line::from(format!(
             "{header_text} {}",
-            format_mcp_invocation(self.invocation.clone())
+            format_mcp_invocation(&self.invocation)
         ))];
 
         if let Some(result) = &self.result {
@@ -745,7 +745,7 @@ impl HistoryCell for McpInventoryLoadingCell {
 pub(crate) fn new_mcp_inventory_loading(animations_enabled: bool) -> McpInventoryLoadingCell {
     McpInventoryLoadingCell::new(animations_enabled)
 }
-fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
+fn format_mcp_invocation(invocation: &McpInvocation) -> Line<'_> {
     let args_str = invocation
         .arguments
         .as_ref()
@@ -756,9 +756,9 @@ fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
         .unwrap_or_default();
 
     let invocation_spans = vec![
-        invocation.server.clone().cyan(),
+        invocation.server.as_str().cyan(),
         ".".into(),
-        invocation.tool.cyan(),
+        invocation.tool.as_str().cyan(),
         "(".into(),
         args_str.dim(),
         ")".into(),
