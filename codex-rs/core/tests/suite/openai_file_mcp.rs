@@ -35,6 +35,7 @@ use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::body_json;
+use wiremock::matchers::body_partial_json;
 use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
@@ -101,7 +102,7 @@ async fn mount_file_upload_mocks(server: &MockServer, file_size_bytes: u64) {
     Mock::given(method("POST"))
         .and(path("/files"))
         .and(header("chatgpt-account-id", "account_id"))
-        .and(body_json(json!({
+        .and(body_partial_json(json!({
             "file_name": "report.txt",
             "file_size": file_size_bytes,
             "use_case": "codex",
@@ -233,6 +234,19 @@ async fn codex_apps_file_params_omit_fields_absent_from_tool_schema() -> Result<
             "connector_id": "calendar",
         }))
     );
+    let requests = server.received_requests().await.expect("capture requests");
+    let upload_request = requests
+        .iter()
+        .find(|request| request.url.path() == "/files")
+        .expect("app tool should create a Files upload");
+    let upload_body: Value =
+        serde_json::from_slice(&upload_request.body).expect("Files request should be JSON");
+    assert_eq!(
+        upload_body.get("codex_connector_id"),
+        Some(&json!("calendar"))
+    );
+    assert_eq!(upload_body.get("upload_source"), None);
+    assert_eq!(upload_body.get("store_in_library"), None);
 
     server.verify().await;
     Ok(())
@@ -267,3 +281,184 @@ async fn codex_apps_file_params_pass_uploaded_file_to_post_tool_use_hook() -> Re
     server.verify().await;
     Ok(())
 }
+// copybara:strip-for-public begin
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn library_pdf_tool_forwards_app_context_and_finalizes_reservation() -> Result<()> {
+    use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::Op;
+    use codex_protocol::protocol::ThreadSettingsOverrides;
+    use codex_protocol::user_input::UserInput;
+    use core_test_support::PathExt;
+    use wiremock::Request;
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    Mock::given(method("POST"))
+        .and(path("/api/codex/ps/mcp"))
+        .and(body_partial_json(json!({ "method": "tools/list" })))
+        .respond_with(|request: &Request| {
+            let request_body: Value = serde_json::from_slice(&request.body)
+                .expect("Library tools/list request should be valid JSON");
+            ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0",
+                "id": request_body.get("id").cloned().unwrap_or(Value::Null),
+                "result": {
+                    "tools": [{
+                        "name": "library_create_library_file",
+                        "description": "Save a generated PDF in Library.",
+                        "annotations": { "readOnlyHint": false },
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "file": {
+                                    "type": "object",
+                                    "properties": {
+                                        "download_url": { "type": "string" },
+                                        "file_id": { "type": "string" }
+                                    },
+                                    "required": ["download_url", "file_id"],
+                                    "additionalProperties": false
+                                }
+                            },
+                            "required": ["file"],
+                            "additionalProperties": false
+                        },
+                        "_meta": {
+                            "connector_id": "library",
+                            "connector_name": "Library",
+                            "connector_description": "Save generated files.",
+                            "openai/fileParams": ["file"],
+                            "_codex_apps": {
+                                "resource_uri": "/connector_openai_library/implicit_link::connector_openai_library/create_library_file",
+                                "contains_mcp_source": true,
+                                "connector_id": "library"
+                            }
+                        }
+                    }],
+                    "nextCursor": null
+                }
+            }))
+        })
+        .with_priority(1)
+        .mount(&server)
+        .await;
+
+    let mut builder = apps_enabled_builder(apps_server.chatgpt_base_url.clone())
+        .with_config(|config| {
+            let user_config_path = config.codex_home.join("config.toml").abs();
+            let user_config = toml::from_str(
+                r#"
+[apps.library]
+default_tools_approval_mode = "approve"
+"#,
+            )
+            .expect("Library approval configuration should parse");
+            config.config_layer_stack = config
+                .config_layer_stack
+                .with_user_config(&user_config_path, user_config)
+                .expect("Library approval configuration should be valid");
+        })
+        .with_workspace_setup(|cwd, fs| async move {
+            let report_path = PathUri::from_abs_path(&cwd.join("report.pdf"));
+            fs.write_file(&report_path, b"%PDF-1.4".to_vec(), /*sandbox*/ None)
+                .await?;
+            Ok(())
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    let create_request = json!({
+        "file_name": "report.pdf",
+        "file_size": 8,
+        "use_case": "codex",
+        "codex_connector_id": "library",
+        "codex_action_name": "create_library_file",
+        "codex_model": test.session_configured.model,
+    });
+    Mock::given(method("POST"))
+        .and(path("/files"))
+        .and(header("chatgpt-account-id", "account_id"))
+        .and(body_json(create_request.clone()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "file_id": "file_pdf",
+            "upload_url": format!("{}/upload/file_pdf", server.uri()),
+            "pdf_c2pa_reservation": true,
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path("/upload/file_pdf"))
+        .and(header("content-length", "8"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/files/file_pdf/uploaded"))
+        .and(body_json(
+            json!({ "pdf_c2pa_create_request": create_request }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "status": "success",
+            "download_url": format!("{}/download/file_pdf", server.uri()),
+            "file_name": "report.pdf",
+            "mime_type": "application/pdf",
+            "file_size_bytes": 24,
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let _responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call_with_namespace(
+                    "library-call-1",
+                    "mcp__codex_apps__library",
+                    "_create_library_file",
+                    &json!({ "file": "report.pdf" }).to_string(),
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "Save the generated PDF in Library.".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: ThreadSettingsOverrides {
+                approval_policy: Some(AskForApproval::Never),
+                ..Default::default()
+            },
+        })
+        .await?;
+    core_test_support::wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let library_tool_call =
+        recorded_apps_tool_call_by_name(&server, "library_create_library_file").await;
+    assert_eq!(
+        library_tool_call.pointer("/params/arguments/file"),
+        Some(&json!({
+            "download_url": format!("{}/download/file_pdf", server.uri()),
+            "file_id": "file_pdf",
+        }))
+    );
+    server.verify().await;
+    Ok(())
+}
+// copybara:strip-for-public end

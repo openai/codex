@@ -23,6 +23,7 @@ use crate::turn_metadata::McpTurnMetadataContext;
 use codex_analytics::AppInvocation;
 use codex_analytics::InvocationType;
 use codex_analytics::build_track_events_context;
+use codex_api::HostedFileUploadContext;
 use codex_config::ConfigLayerSource;
 use codex_config::types::AppToolApproval;
 use codex_config::types::ApprovalsReviewer;
@@ -434,11 +435,21 @@ async fn handle_approved_mcp_tool_call(
                     }
                     maybe_mark_thread_memory_mode_polluted(sess, turn_context, &prepared_call)
                         .await;
+                    let hosted_upload = item_metadata
+                        .connector_id
+                        .as_ref()
+                        .zip(item_metadata.action_name.as_ref())
+                        .map(|(connector_id, action_name)| HostedFileUploadContext {
+                            connector_id: connector_id.clone(),
+                            action_name: action_name.clone(),
+                            model: turn_context.model_info.slug.clone(),
+                        });
                     let rewritten_arguments = rewrite_mcp_tool_arguments_for_openai_files(
                         sess,
                         step_context,
                         arguments_value,
                         metadata.openai_file_input_optional_fields.as_ref(),
+                        hosted_upload.as_ref(),
                     )
                     .await
                     .map_err(anyhow::Error::msg)?;
