@@ -56,6 +56,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
+use test_case::test_case;
 
 const CONFIGURED_CONTEXT_WINDOW: i64 = 128_000;
 const AUTO_COMPACT_FALLBACK_PROMPT: &str = "Save the important state before rollover.";
@@ -951,8 +952,12 @@ async fn get_context_remaining_returns_unknown_when_threshold_is_unbounded() -> 
     Ok(())
 }
 
+#[test_case(false; "token_budget_only")]
+#[test_case(true; "with_client_developer_retention")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn token_budget_context_uses_new_window_after_compaction() -> Result<()> {
+async fn token_budget_context_uses_new_window_after_compaction(
+    retain_client_developer_messages: bool,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -982,10 +987,25 @@ async fn token_budget_context_uses_new_window_after_compaction() -> Result<()> {
                 .features
                 .enable(Feature::TokenBudget)
                 .expect("test config should allow token budget");
+            if retain_client_developer_messages {
+                config
+                    .features
+                    .enable(Feature::RetainClientDeveloperMessages)
+                    .expect("test config should allow client developer retention");
+            }
         })
         .build(&server)
         .await?;
 
+    if retain_client_developer_messages {
+        test.codex
+            .inject_response_items(vec![serde_json::from_value(json!({
+                "type": "message",
+                "role": "developer",
+                "content": [{"type": "input_text", "text": "CLIENT_DEVELOPER_INSTRUCTIONS"}]
+            }))?])
+            .await?;
+    }
     test.submit_turn("before compact").await?;
     test.codex.submit(Op::Compact).await?;
     assert_context_compaction_item_lifecycle(&test.codex).await;
@@ -1024,6 +1044,11 @@ async fn token_budget_context_uses_new_window_after_compaction() -> Result<()> {
     assert!(
         !requests[1].body_contains_text("assistant before compact"),
         "token budget compaction should drop prior assistant messages"
+    );
+    assert_eq!(
+        requests[1].body_contains_text("CLIENT_DEVELOPER_INSTRUCTIONS"),
+        retain_client_developer_messages,
+        "token budget compaction should retain client-authored developer messages when enabled"
     );
     assert!(
         requests[1].body_contains_text("after compact"),
@@ -1082,8 +1107,12 @@ async fn token_budget_compaction_runs_compact_hooks() -> Result<()> {
     Ok(())
 }
 
+#[test_case(false; "token_budget_only")]
+#[test_case(true; "with_client_developer_retention")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn token_budget_mid_turn_auto_compaction_resets_before_active_follow_up() -> Result<()> {
+async fn token_budget_mid_turn_auto_compaction_resets_before_active_follow_up(
+    retain_client_developer_messages: bool,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -1129,10 +1158,25 @@ async fn token_budget_mid_turn_auto_compaction_resets_before_active_follow_up() 
                 .features
                 .enable(Feature::TokenBudget)
                 .expect("test config should allow token budget");
+            if retain_client_developer_messages {
+                config
+                    .features
+                    .enable(Feature::RetainClientDeveloperMessages)
+                    .expect("test config should allow client developer retention");
+            }
         })
         .build(&server)
         .await?;
 
+    if retain_client_developer_messages {
+        test.codex
+            .inject_response_items(vec![serde_json::from_value(json!({
+                "type": "message",
+                "role": "developer",
+                "content": [{"type": "input_text", "text": "MID_TURN_CLIENT_INSTRUCTIONS"}]
+            }))?])
+            .await?;
+    }
     test.submit_turn("trigger mid-turn auto compaction").await?;
 
     let requests = responses.requests();
@@ -1178,6 +1222,11 @@ async fn token_budget_mid_turn_auto_compaction_resets_before_active_follow_up() 
     assert!(
         !requests[1].body_contains_text("trigger mid-turn auto compaction"),
         "fresh token-budget windows should drop prior user messages"
+    );
+    assert_eq!(
+        requests[1].body_contains_text("MID_TURN_CLIENT_INSTRUCTIONS"),
+        retain_client_developer_messages,
+        "mid-turn token-budget compaction should retain client-authored developer messages when enabled"
     );
     assert_ne!(
         follow_up_window_id, initial_window_id,

@@ -69,6 +69,7 @@ use core_test_support::wait_for_event_with_timeout;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use test_case::test_case;
 use tokio::time::Duration;
 use wiremock::ResponseTemplate;
 
@@ -567,6 +568,102 @@ async fn remote_compact_v2_retains_metadata_from_resumed_history() -> Result<()>
     );
     assert_compact_request_omits_harness_metadata(compact_request);
     assert_compacted_user_metadata(&rollout_path, retained_text)?;
+
+    Ok(())
+}
+
+#[test_case(false; "feature_disabled")]
+#[test_case(true; "feature_enabled")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_v2_retains_only_client_developer_messages_when_enabled(
+    enabled: bool,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_auto_env_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(move |config| {
+                config
+                    .features
+                    .enable(Feature::RemoteCompactionV2)
+                    .expect("remote compaction v2 should be configurable");
+                if enabled {
+                    config
+                        .features
+                        .enable(Feature::RetainClientDeveloperMessages)
+                        .expect("client developer retention should be configurable");
+                }
+            }),
+    )
+    .await?;
+    let developer = |text: &str| ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText {
+            text: text.to_string(),
+        }],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let codex = &harness.test().codex;
+    let rollout_path = codex.rollout_path().context("rollout path")?;
+    codex
+        .inject_response_items(vec![developer("INJECTED_CLIENT_DEVELOPER")])
+        .await?;
+    let response_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            sse(vec![responses::ev_completed("before-compact")]),
+            sse(vec![
+                json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "compaction",
+                        "encrypted_content": "CLIENT_RETENTION_SUMMARY",
+                    },
+                }),
+                responses::ev_completed("compact"),
+            ]),
+            sse(vec![responses::ev_completed("after-compact")]),
+        ],
+    )
+    .await;
+
+    harness.test().submit_turn("before compact").await?;
+    codex.submit(Op::Compact).await?;
+    wait_for_turn_complete(codex).await;
+    harness.test().submit_turn("after compact").await?;
+
+    let requests = response_mock.requests();
+    let follow_up = requests.last().context("follow-up request")?;
+    assert_eq!(
+        follow_up.body_contains_text("INJECTED_CLIENT_DEVELOPER"),
+        enabled
+    );
+    requests
+        .iter()
+        .for_each(assert_compact_request_omits_harness_metadata);
+
+    codex.shutdown_and_wait().await?;
+    let replacement_history = fs::read_to_string(&rollout_path)?
+        .lines()
+        .filter_map(|line| serde_json::from_str::<RolloutLine>(line).ok())
+        .filter_map(|line| match line.item {
+            RolloutItem::Compacted(compacted) => compacted.replacement_history,
+            _ => None,
+        })
+        .next_back()
+        .context("remote compaction should persist a checkpoint")?;
+    let retained_client_developers = replacement_history
+        .iter()
+        .filter(|item| {
+            item.metadata
+                .as_ref()
+                .is_some_and(|metadata| metadata.client_authored)
+        })
+        .count();
+    assert_eq!(retained_client_developers, usize::from(enabled));
 
     Ok(())
 }
