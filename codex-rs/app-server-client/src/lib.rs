@@ -7,13 +7,14 @@
 //! - Typed caller-provided startup identity (`SessionSource` + client name).
 //! - Typed and raw request/notification dispatch.
 //! - Server request resolution and rejection.
-//! - Event consumption with backpressure signaling ([`InProcessServerEvent::Lagged`]).
+//! - Ordered, lossless event consumption that cannot block request processing.
 //! - Bounded graceful shutdown with abort fallback.
 //!
 //! The facade interposes a worker task between the caller and the underlying
 //! [`InProcessClientHandle`](codex_app_server::in_process::InProcessClientHandle),
-//! bridging async `mpsc` channels on both sides. Queues are bounded so overload
-//! surfaces as channel-full errors rather than unbounded memory growth.
+//! bridging async `mpsc` channels on both sides. Commands and the underlying
+//! runtime remain bounded; the local consumer event queue is unbounded so
+//! unread notifications cannot prevent request responses from being delivered.
 
 mod path;
 mod remote;
@@ -114,131 +115,6 @@ impl From<InProcessServerEvent> for AppServerEvent {
     }
 }
 
-fn event_requires_delivery(event: &InProcessServerEvent) -> bool {
-    // These transcript and terminal events must remain lossless. Dropping
-    // streamed assistant text or the authoritative completed item can leave
-    // the TUI with permanently corrupted markdown, while dropping completion
-    // notifications can leave surfaces waiting forever.
-    match event {
-        InProcessServerEvent::ServerNotification(notification) => {
-            server_notification_requires_delivery(notification)
-        }
-        _ => false,
-    }
-}
-
-/// Returns `true` for notifications that must survive backpressure.
-///
-/// Transcript events (`AgentMessageDelta`, `PlanDelta`, reasoning deltas) and
-/// the authoritative `ItemCompleted` / `TurnCompleted` form the lossless tier
-/// of the event stream. Dropping any of these corrupts the visible assistant
-/// output or leaves surfaces waiting for a completion signal that already
-/// fired. Everything else (`CommandExecutionOutputDelta`, progress, etc.) is
-/// best-effort and may be dropped with only cosmetic impact.
-///
-/// Both the in-process and remote transports delegate to this function so the
-/// classification stays in sync.
-pub(crate) fn server_notification_requires_delivery(notification: &ServerNotification) -> bool {
-    matches!(
-        notification,
-        ServerNotification::TurnCompleted(_)
-            | ServerNotification::ThreadSettingsUpdated(_)
-            | ServerNotification::ItemCompleted(_)
-            | ServerNotification::ExternalAgentConfigImportCompleted(_)
-            | ServerNotification::AgentMessageDelta(_)
-            | ServerNotification::PlanDelta(_)
-            | ServerNotification::ReasoningSummaryTextDelta(_)
-            | ServerNotification::ReasoningTextDelta(_)
-    )
-}
-
-/// Outcome of attempting to forward a single event to the consumer channel.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ForwardEventResult {
-    /// The event was delivered (or intentionally dropped); the stream is healthy.
-    Continue,
-    /// The consumer channel is closed; the caller should stop producing events.
-    DisableStream,
-}
-
-/// Forwards a single in-process event to the consumer, respecting the
-/// lossless/best-effort split.
-///
-/// Lossless events (transcript deltas, item/turn completions) block until the
-/// consumer drains capacity. Best-effort events use `try_send` and increment
-/// `skipped_events` on failure. When a lag marker needs to be flushed before a
-/// lossless event, the flush itself blocks so the marker is never lost.
-///
-/// If a dropped event is a `ServerRequest`, `reject_server_request` is called
-/// so the server does not wait for a response that will never come.
-async fn forward_in_process_event<F>(
-    event_tx: &mpsc::Sender<InProcessServerEvent>,
-    skipped_events: &mut usize,
-    event: InProcessServerEvent,
-    mut reject_server_request: F,
-) -> ForwardEventResult
-where
-    F: FnMut(ServerRequest),
-{
-    if *skipped_events > 0 {
-        if event_requires_delivery(&event) {
-            // Surface lag before the lossless event, but do not let the lag marker itself cause
-            // us to drop the transcript/completion notification the caller is blocked on.
-            if event_tx
-                .send(InProcessServerEvent::Lagged {
-                    skipped: *skipped_events,
-                })
-                .await
-                .is_err()
-            {
-                return ForwardEventResult::DisableStream;
-            }
-            *skipped_events = 0;
-        } else {
-            match event_tx.try_send(InProcessServerEvent::Lagged {
-                skipped: *skipped_events,
-            }) {
-                Ok(()) => {
-                    *skipped_events = 0;
-                }
-                Err(mpsc::error::TrySendError::Full(_)) => {
-                    *skipped_events = skipped_events.saturating_add(1);
-                    warn!("dropping in-process app-server event because consumer queue is full");
-                    if let InProcessServerEvent::ServerRequest(request) = event {
-                        reject_server_request(*request);
-                    }
-                    return ForwardEventResult::Continue;
-                }
-                Err(mpsc::error::TrySendError::Closed(_)) => {
-                    return ForwardEventResult::DisableStream;
-                }
-            }
-        }
-    }
-
-    if event_requires_delivery(&event) {
-        // Block until the consumer catches up for transcript/completion notifications; this
-        // preserves the visible assistant output even when the queue is otherwise saturated.
-        if event_tx.send(event).await.is_err() {
-            return ForwardEventResult::DisableStream;
-        }
-        return ForwardEventResult::Continue;
-    }
-
-    match event_tx.try_send(event) {
-        Ok(()) => ForwardEventResult::Continue,
-        Err(mpsc::error::TrySendError::Full(event)) => {
-            *skipped_events = skipped_events.saturating_add(1);
-            warn!("dropping in-process app-server event because consumer queue is full");
-            if let InProcessServerEvent::ServerRequest(request) = event {
-                reject_server_request(*request);
-            }
-            ForwardEventResult::Continue
-        }
-        Err(mpsc::error::TrySendError::Closed(_)) => ForwardEventResult::DisableStream,
-    }
-}
-
 /// Layered error for [`InProcessAppServerClient::request_typed`].
 ///
 /// This keeps transport failures, server-side JSON-RPC failures, and response
@@ -332,7 +208,7 @@ pub struct InProcessClientStartArgs {
     pub mcp_server_openai_form_elicitation: bool,
     /// Notification methods this client opts out of receiving.
     pub opt_out_notification_methods: Vec<String>,
-    /// Queue capacity for command/event channels (clamped to at least 1).
+    /// Queue capacity for command and embedded-runtime channels (clamped to at least 1).
     pub channel_capacity: usize,
 }
 
@@ -433,7 +309,7 @@ enum ClientCommand {
 /// boundary.
 pub struct InProcessAppServerClient {
     command_tx: mpsc::Sender<ClientCommand>,
-    event_rx: mpsc::Receiver<InProcessServerEvent>,
+    event_rx: mpsc::UnboundedReceiver<InProcessServerEvent>,
     worker_handle: tokio::task::JoinHandle<()>,
 }
 
@@ -456,20 +332,22 @@ pub enum AppServerClient {
 impl InProcessAppServerClient {
     /// Starts the in-process runtime and facade worker task.
     ///
-    /// The returned client is ready for requests and event consumption. If the
-    /// internal event queue is saturated later, server requests are rejected
-    /// with overload error instead of being silently dropped.
+    /// The returned client is ready for requests and ordered event consumption.
+    /// Request queues remain bounded without blocking on unread notifications.
     pub async fn start(args: InProcessClientStartArgs) -> IoResult<Self> {
         let channel_capacity = args.channel_capacity.max(1);
         let mut handle =
             codex_app_server::in_process::start(args.into_runtime_start_args()).await?;
         let request_sender = handle.sender();
         let (command_tx, mut command_rx) = mpsc::channel::<ClientCommand>(channel_capacity);
-        let (event_tx, event_rx) = mpsc::channel::<InProcessServerEvent>(channel_capacity);
+        // e9996ec62a preserved transcript events by awaiting a bounded queue, but that can
+        // deadlock a foreground request whose response is behind unread notifications.
+        // Match the remote-client fix in 79ea57715636: only this local consumer queue is
+        // unbounded; commands and the embedded runtime stay bounded and events remain ordered.
+        let (event_tx, event_rx) = mpsc::unbounded_channel::<InProcessServerEvent>();
 
         let worker_handle = tokio::spawn(async move {
             let mut event_stream_enabled = true;
-            let mut skipped_events = 0usize;
             loop {
                 tokio::select! {
                     command = command_rx.recv() => {
@@ -543,28 +421,8 @@ impl InProcessAppServerClient {
                             continue;
                         }
 
-                        match forward_in_process_event(
-                            &event_tx,
-                            &mut skipped_events,
-                            event,
-                            |request| {
-                                let _ = request_sender.fail_server_request(
-                                    request.id().clone(),
-                                    JSONRPCErrorError {
-                                        code: -32001,
-                                        message: "in-process app-server event queue is full"
-                                            .to_string(),
-                                        data: None,
-                                    },
-                                );
-                            },
-                        )
-                        .await
-                        {
-                            ForwardEventResult::Continue => {}
-                            ForwardEventResult::DisableStream => {
-                                event_stream_enabled = false;
-                            }
+                        if event_tx.send(event).is_err() {
+                            event_stream_enabled = false;
                         }
                     }
                 }
@@ -722,9 +580,7 @@ impl InProcessAppServerClient {
 
     /// Returns the next in-process event, or `None` when worker exits.
     ///
-    /// Callers are expected to drain this stream promptly. If they fall behind,
-    /// the worker emits [`InProcessServerEvent::Lagged`] markers and may reject
-    /// pending server requests rather than letting approval flows hang.
+    /// Events remain ordered and are retained while callers await requests.
     pub async fn next_event(&mut self) -> Option<InProcessServerEvent> {
         self.event_rx.recv().await
     }
@@ -740,10 +596,7 @@ impl InProcessAppServerClient {
             worker_handle,
         } = self;
         let mut worker_handle = worker_handle;
-        // Drop the caller-facing receiver before asking the worker to shut
-        // down. That unblocks any pending must-deliver `event_tx.send(..)`
-        // so the worker can reach `handle.shutdown()` instead of timing out
-        // and getting aborted with the runtime still attached.
+        // Stop forwarding caller-facing events before asking the worker to shut down.
         drop(event_rx);
         let (response_tx, response_rx) = oneshot::channel();
         if command_tx
@@ -922,12 +775,15 @@ mod tests {
     use codex_app_server_protocol::JSONRPCResponse;
     use codex_app_server_protocol::ServerNotification;
     use codex_app_server_protocol::SessionSource as ApiSessionSource;
+    use codex_app_server_protocol::ThreadSettingsUpdateParams;
+    use codex_app_server_protocol::ThreadSettingsUpdateResponse;
     use codex_app_server_protocol::ThreadStartParams;
     use codex_app_server_protocol::ThreadStartResponse;
     use codex_app_server_protocol::ToolRequestUserInputParams;
     use codex_app_server_protocol::ToolRequestUserInputQuestion;
     use codex_core::config::ConfigBuilder;
     use codex_core::init_state_db;
+    use codex_protocol::config_types::Personality;
     use codex_uds::UnixListener;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use futures::SinkExt;
@@ -1330,105 +1186,81 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn forward_in_process_event_preserves_transcript_notifications_under_backpressure() {
-        let (event_tx, mut event_rx) = mpsc::channel(1);
-        event_tx
-            .send(InProcessServerEvent::ServerNotification(Box::new(
-                command_execution_output_delta_notification("stdout-1"),
-            )))
+    async fn unread_lossless_notifications_do_not_block_in_process_requests() {
+        let mut client =
+            start_test_client_with_capacity(SessionSource::Cli, /*channel_capacity*/ 1).await;
+        let thread: ThreadStartResponse = client
+            .request_typed(ClientRequest::ThreadStart {
+                request_id: RequestId::Integer(1),
+                params: ThreadStartParams {
+                    ephemeral: Some(true),
+                    personality: Some(Personality::None),
+                    ..ThreadStartParams::default()
+                },
+            })
             .await
-            .expect("initial event should enqueue");
+            .expect("thread/start should succeed");
+        let request_handle = client.request_handle();
 
-        let mut skipped_events = 0usize;
-        let result = forward_in_process_event(
-            &event_tx,
-            &mut skipped_events,
-            InProcessServerEvent::ServerNotification(Box::new(
-                command_execution_output_delta_notification("stdout-2"),
-            )),
-            |_| {},
-        )
-        .await;
-        assert_eq!(result, ForwardEventResult::Continue);
-        assert_eq!(skipped_events, 1);
-
-        let receive_task = tokio::spawn(async move {
-            let mut events = Vec::new();
-            for _ in 0..5 {
-                events.push(
-                    timeout(Duration::from_secs(2), event_rx.recv())
-                        .await
-                        .expect("event should arrive before timeout")
-                        .expect("event stream should stay open"),
-                );
+        timeout(Duration::from_secs(2), async {
+            for (index, personality) in [
+                Personality::Friendly,
+                Personality::Pragmatic,
+                Personality::Friendly,
+                Personality::Pragmatic,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let _: ThreadSettingsUpdateResponse = request_handle
+                    .request_typed(ClientRequest::ThreadSettingsUpdate {
+                        request_id: RequestId::Integer((index + 2) as i64),
+                        params: ThreadSettingsUpdateParams {
+                            thread_id: thread.thread.id.clone(),
+                            personality: Some(personality),
+                            ..ThreadSettingsUpdateParams::default()
+                        },
+                    })
+                    .await
+                    .expect("thread/settings/update should succeed");
             }
-            events
-        });
 
-        for notification in [
-            agent_message_delta_notification("hello"),
-            item_completed_notification("hello"),
-            turn_completed_notification(),
-        ] {
-            let result = forward_in_process_event(
-                &event_tx,
-                &mut skipped_events,
-                InProcessServerEvent::ServerNotification(Box::new(notification)),
-                |_| {},
-            )
-            .await;
-            assert_eq!(result, ForwardEventResult::Continue);
-        }
-        assert_eq!(skipped_events, 0);
+            let _: ConfigRequirementsReadResponse = request_handle
+                .request_typed(ClientRequest::ConfigRequirementsRead {
+                    request_id: RequestId::Integer(10),
+                    params: None,
+                })
+                .await
+                .expect("configuration request should succeed");
+        })
+        .await
+        .expect("unread lossless notifications must not block app-server requests");
 
-        let events = receive_task
-            .await
-            .expect("receiver task should join successfully");
-        assert!(matches!(
-            &events[0],
-            InProcessServerEvent::ServerNotification(notification)
-                if matches!(
-                    notification.as_ref(),
-                    ServerNotification::CommandExecutionOutputDelta(notification)
-                        if notification.delta == "stdout-1"
-                )
-        ));
-        assert!(matches!(
-            &events[1],
-            InProcessServerEvent::Lagged { skipped: 1 }
-        ));
-        assert!(matches!(
-            &events[2],
-            InProcessServerEvent::ServerNotification(notification)
-                if matches!(
-                    notification.as_ref(),
-                    ServerNotification::AgentMessageDelta(notification)
-                        if notification.delta == "hello"
-                )
-        ));
-        assert!(matches!(
-            &events[3],
-            InProcessServerEvent::ServerNotification(notification)
-                if matches!(
-                    notification.as_ref(),
-                    ServerNotification::ItemCompleted(notification)
-                        if matches!(
-                            &notification.item,
-                            codex_app_server_protocol::ThreadItem::AgentMessage { text, .. }
-                                if text == "hello"
-                        )
-                )
-        ));
-        assert!(matches!(
-            &events[4],
-            InProcessServerEvent::ServerNotification(notification)
-                if matches!(
-                    notification.as_ref(),
-                    ServerNotification::TurnCompleted(notification)
-                        if notification.turn.status
-                            == codex_app_server_protocol::TurnStatus::Completed
-                )
-        ));
+        let mut personalities = Vec::new();
+        timeout(Duration::from_secs(2), async {
+            while personalities.len() < 4 {
+                if let Some(InProcessServerEvent::ServerNotification(notification)) =
+                    client.client.next_event().await
+                    && let ServerNotification::ThreadSettingsUpdated(notification) =
+                        notification.as_ref()
+                {
+                    personalities.push(notification.thread_settings.personality);
+                }
+            }
+        })
+        .await
+        .expect("queued settings notifications should remain readable");
+        assert_eq!(
+            personalities,
+            vec![
+                Some(Personality::Friendly),
+                Some(Personality::Pragmatic),
+                Some(Personality::Friendly),
+                Some(Personality::Pragmatic),
+            ]
+        );
+
+        client.shutdown().await.expect("shutdown should complete");
     }
 
     #[tokio::test]
@@ -2097,11 +1929,10 @@ mod tests {
     #[tokio::test]
     async fn next_event_surfaces_lagged_markers() {
         let (command_tx, _command_rx) = mpsc::channel(1);
-        let (event_tx, event_rx) = mpsc::channel(1);
+        let (event_tx, event_rx) = mpsc::unbounded_channel();
         let worker_handle = tokio::spawn(async {});
         event_tx
             .send(InProcessServerEvent::Lagged { skipped: 3 })
-            .await
             .expect("lagged marker should enqueue");
         drop(event_tx);
 
@@ -2120,83 +1951,6 @@ mod tests {
         ));
 
         client.shutdown().await.expect("shutdown should complete");
-    }
-
-    #[test]
-    fn event_requires_delivery_marks_transcript_and_terminal_events() {
-        assert!(event_requires_delivery(
-            &InProcessServerEvent::ServerNotification(Box::new(
-                codex_app_server_protocol::ServerNotification::TurnCompleted(
-                    codex_app_server_protocol::TurnCompletedNotification {
-                        thread_id: "thread".to_string(),
-                        turn: codex_app_server_protocol::Turn {
-                            id: "turn".to_string(),
-                            items_view: codex_app_server_protocol::TurnItemsView::Full,
-                            items: Vec::new(),
-                            status: codex_app_server_protocol::TurnStatus::Completed,
-                            error: None,
-                            started_at: None,
-                            completed_at: Some(0),
-                            duration_ms: None,
-                        },
-                    }
-                )
-            ))
-        ));
-        assert!(event_requires_delivery(
-            &InProcessServerEvent::ServerNotification(Box::new(
-                codex_app_server_protocol::ServerNotification::AgentMessageDelta(
-                    codex_app_server_protocol::AgentMessageDeltaNotification {
-                        thread_id: "thread".to_string(),
-                        turn_id: "turn".to_string(),
-                        item_id: "item".to_string(),
-                        delta: "hello".to_string(),
-                    }
-                )
-            ))
-        ));
-        assert!(event_requires_delivery(
-            &InProcessServerEvent::ServerNotification(Box::new(
-                codex_app_server_protocol::ServerNotification::ItemCompleted(
-                    codex_app_server_protocol::ItemCompletedNotification {
-                        thread_id: "thread".to_string(),
-                        turn_id: "turn".to_string(),
-                        completed_at_ms: 0,
-                        item: codex_app_server_protocol::ThreadItem::AgentMessage {
-                            id: "item".to_string(),
-                            text: "hello".to_string(),
-                            phase: None,
-                            memory_citation: None,
-                        },
-                    }
-                )
-            ))
-        ));
-        assert!(event_requires_delivery(
-            &InProcessServerEvent::ServerNotification(Box::new(
-                codex_app_server_protocol::ServerNotification::ExternalAgentConfigImportCompleted(
-                    codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification {
-                        import_id: "import".to_string(),
-                        item_type_results: Vec::new(),
-                    },
-                )
-            ))
-        ));
-        assert!(!event_requires_delivery(&InProcessServerEvent::Lagged {
-            skipped: 1
-        }));
-        assert!(!event_requires_delivery(
-            &InProcessServerEvent::ServerNotification(Box::new(
-                codex_app_server_protocol::ServerNotification::CommandExecutionOutputDelta(
-                    codex_app_server_protocol::CommandExecutionOutputDeltaNotification {
-                        thread_id: "thread".to_string(),
-                        turn_id: "turn".to_string(),
-                        item_id: "item".to_string(),
-                        delta: "stdout".to_string(),
-                    }
-                )
-            ))
-        ));
     }
 
     #[tokio::test]
@@ -2315,7 +2069,7 @@ mod tests {
         use std::sync::atomic::Ordering;
 
         let (command_tx, mut command_rx) = mpsc::channel(1);
-        let (_event_tx, event_rx) = mpsc::channel(1);
+        let (_event_tx, event_rx) = mpsc::unbounded_channel();
         let completed = Arc::new(AtomicBool::new(false));
         let worker_completed = Arc::clone(&completed);
         let worker_handle = tokio::spawn(async move {

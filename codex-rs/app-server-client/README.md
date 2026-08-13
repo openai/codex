@@ -57,11 +57,10 @@ phase where they reconcile startup response data with later events.
 
 ## Backpressure and shutdown
 
-- Queues are bounded and use `DEFAULT_IN_PROCESS_CHANNEL_CAPACITY` by default.
-- Full queues return explicit overload behavior instead of unbounded growth.
+- Command queues and the embedded runtime remain bounded, using
+  `DEFAULT_IN_PROCESS_CHANNEL_CAPACITY` by default.
+- The facade's local consumer event queue is unbounded and preserves notification
+  order. This keeps the worker draining the bounded runtime while a caller waits
+  for a request, preventing unread notifications from blocking its response.
 - `shutdown()` performs a bounded graceful shutdown and then aborts if timeout
   is exceeded.
-
-If the client falls behind on event consumption, the worker emits
-`InProcessServerEvent::Lagged` and may reject pending server requests so
-approval flows do not hang indefinitely behind a saturated queue.
