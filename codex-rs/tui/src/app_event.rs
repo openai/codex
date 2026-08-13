@@ -47,6 +47,7 @@ use crate::app_server_session::AppServerStartedThread;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
+use crate::chatwidget::ThreadUsageOutcome;
 use crate::chatwidget::UserMessage;
 use crate::goal_files::GoalDraft;
 use codex_app_server_protocol::AskForApproval;
@@ -450,6 +451,19 @@ pub(crate) enum AppEvent {
     TokenActivityLoaded {
         request_id: u64,
         result: Result<GetAccountTokenUsageResponse, String>,
+    },
+
+    /// Fetch backend-estimated usage for the currently visible enterprise thread.
+    RefreshThreadUsage {
+        thread_id: ThreadId,
+        request_id: u64,
+    },
+
+    /// Result of fetching backend-estimated usage for a specific thread.
+    ThreadUsageLoaded {
+        thread_id: ThreadId,
+        request_id: u64,
+        result: Result<ThreadUsageOutcome, String>,
     },
 
     /// Fetch workspace messages for the status-line headline item.

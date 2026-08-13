@@ -1,0 +1,10 @@
+---
+source: tui/src/chatwidget/tests/status_command_tests.rs
+expression: thread_usage
+---
+│  Thread usage:         50 credits                                    │
+│    Models:             GPT-5.4 100%                                  │
+│    Reasoning:          High 100%                                     │
+│    Speed:              Fast mode 100%                                │
+│    Billed tokens:      100 input (20 cached) + 40 output             │
+╰──────────────────────────────────────────────────────────────────────╯

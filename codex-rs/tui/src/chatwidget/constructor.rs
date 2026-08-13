@@ -246,6 +246,7 @@ impl ChatWidget {
             next_status_line_workspace_headline_request_id: 0,
             status_line_workspace_headline_last_requested_at: None,
             status_line_workspace_messages_disabled: false,
+            thread_usage: thread_usage::ThreadUsageState::default(),
             current_goal_status_indicator: None,
             current_goal_status: None,
             external_editor_state: ExternalEditorState::Closed,

@@ -21,6 +21,7 @@ fn loaded_state_freezes_chart_anchor_date_at_completion() {
                 longest_streak_days: None,
             },
             daily_usage_buckets: None,
+            thread_usage: None,
         }),
         today,
     );

@@ -212,6 +212,7 @@ fn summary_snapshot_left_aligns_and_splits_when_needed() {
             longest_streak_days: Some(54),
         },
         daily_usage_buckets: None,
+        thread_usage: None,
     };
     let rendered = |width| {
         summary_lines(&response, graph_width(width))

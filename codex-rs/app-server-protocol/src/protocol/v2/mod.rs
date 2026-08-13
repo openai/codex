@@ -26,6 +26,7 @@ mod remote_control;
 mod review;
 mod thread;
 mod thread_data;
+mod thread_usage;
 mod turn;
 mod windows_sandbox;
 
@@ -56,6 +57,7 @@ pub use review::*;
 pub use shared::*;
 pub use thread::*;
 pub use thread_data::*;
+pub use thread_usage::*;
 pub use turn::*;
 pub use windows_sandbox::*;
 

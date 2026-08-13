@@ -60,6 +60,7 @@ use codex_config::types::NotificationMethod;
 mod event_stream;
 mod frame_rate_limiter;
 mod frame_requester;
+mod history_tail;
 #[cfg(unix)]
 mod job_control;
 mod keyboard_modes;

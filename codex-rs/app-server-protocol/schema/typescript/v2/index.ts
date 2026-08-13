@@ -175,6 +175,7 @@ export type { FsWriteFileResponse } from "./FsWriteFileResponse";
 export type { GetAccountParams } from "./GetAccountParams";
 export type { GetAccountRateLimitsResponse } from "./GetAccountRateLimitsResponse";
 export type { GetAccountResponse } from "./GetAccountResponse";
+export type { GetAccountTokenUsageParams } from "./GetAccountTokenUsageParams";
 export type { GetAccountTokenUsageResponse } from "./GetAccountTokenUsageResponse";
 export type { GetWorkspaceMessagesResponse } from "./GetWorkspaceMessagesResponse";
 export type { GitInfo } from "./GitInfo";
@@ -516,6 +517,8 @@ export type { ThreadUnarchivedNotification } from "./ThreadUnarchivedNotificatio
 export type { ThreadUnsubscribeParams } from "./ThreadUnsubscribeParams";
 export type { ThreadUnsubscribeResponse } from "./ThreadUnsubscribeResponse";
 export type { ThreadUnsubscribeStatus } from "./ThreadUnsubscribeStatus";
+export type { ThreadUsage } from "./ThreadUsage";
+export type { ThreadUsageBreakdownGroup } from "./ThreadUsageBreakdownGroup";
 export type { TokenUsageBreakdown } from "./TokenUsageBreakdown";
 export type { ToolRequestUserInputAnswer } from "./ToolRequestUserInputAnswer";
 export type { ToolRequestUserInputOption } from "./ToolRequestUserInputOption";
