@@ -1,8 +1,10 @@
 use super::MAX_FRAGMENT_BYTES;
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 const FRAGMENT_PLACEHOLDER: &str = "<!--__INLINE_VISUALIZATION_FRAGMENT__-->";
 const VIEWER_DIRECTORY_NAME: &str = ".codex-viewers";
@@ -14,7 +16,11 @@ const VIEWER_RUNTIME: &str = include_str!("assets/visualize.html");
 const FRAME_CSP: &str = "default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src 'unsafe-inline' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data:; worker-src blob:; connect-src blob: data:; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
 const SHELL_STYLE: &str = ":root{color-scheme:light dark;background:light-dark(rgb(255 255 255), rgb(24 24 24))}html,body{margin:0}body{box-sizing:border-box;padding:1rem;background:inherit}iframe{display:block;width:100%;max-width:736px;height:calc(100vh - 2rem);margin:0 auto;border:0}";
 
-pub(super) fn materialize_document(path: &Path, thread_dir: &Path) -> std::io::Result<PathBuf> {
+pub(super) fn materialize_document(
+    path: &Path,
+    viewer_dir: &Path,
+    materialized_viewers: &Mutex<HashMap<PathBuf, String>>,
+) -> std::io::Result<PathBuf> {
     let metadata = path.metadata()?;
     if !metadata.is_file() || metadata.len() > MAX_FRAGMENT_BYTES {
         return Err(std::io::Error::other("invalid visualization fragment"));
@@ -28,29 +34,30 @@ pub(super) fn materialize_document(path: &Path, thread_dir: &Path) -> std::io::R
         .replace('-', " ");
     let document = render_fragment(&fragment, &title);
 
-    let thread_dir = fs::canonicalize(thread_dir)?;
-    let viewer_dir = thread_dir.join(VIEWER_DIRECTORY_NAME);
+    let viewer_dir = viewer_dir.join(VIEWER_DIRECTORY_NAME);
     fs::create_dir_all(&viewer_dir)?;
-    let viewer_dir = fs::canonicalize(viewer_dir)?;
-    if !viewer_dir.starts_with(&thread_dir) {
+    if fs::canonicalize(&viewer_dir)? != viewer_dir {
         return Err(std::io::Error::other(
-            "visualization viewer directory escapes thread directory",
+            "visualization viewer directory must not contain symbolic links",
         ));
     }
     let file_name = path
         .file_name()
         .ok_or_else(|| std::io::Error::other("visualization fragment has no file name"))?;
     let viewer_path = viewer_dir.join(file_name);
-    if fs::read_to_string(&viewer_path).is_ok_and(|existing| existing == document) {
+    let mut materialized_viewers = materialized_viewers
+        .lock()
+        .map_err(|_| std::io::Error::other("visualization viewer cache is unavailable"))?;
+    if materialized_viewers.get(&viewer_path) == Some(&document) {
         return Ok(viewer_path);
     }
-
     let mut temporary = tempfile::NamedTempFile::new_in(&viewer_dir)?;
     temporary.write_all(document.as_bytes())?;
     temporary.flush()?;
     temporary
         .persist(&viewer_path)
         .map_err(|error| error.error)?;
+    materialized_viewers.insert(viewer_path.clone(), document);
     Ok(viewer_path)
 }
 

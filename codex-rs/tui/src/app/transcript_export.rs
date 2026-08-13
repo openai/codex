@@ -24,6 +24,7 @@ use crate::history_cell::ReasoningSummaryCell;
 use crate::history_cell::SessionInfoCell;
 use crate::history_cell::UserHistoryCell;
 use crate::history_cell::raw_lines_from_source;
+use crate::legacy_core::config::Config;
 use crate::thread_transcript::RawReasoningVisibility;
 use crate::thread_transcript::thread_items_to_transcript_cells;
 
@@ -42,12 +43,11 @@ impl App {
         } else {
             RawReasoningVisibility::Hidden
         };
-        let codex_home = self.config.codex_home.to_path_buf();
         let cells = load_export_transcript(
             app_server,
             thread_id,
             visibility,
-            Some(codex_home.as_path()),
+            Some(&self.config),
             self.transcript_cells.clone(),
         )
         .await?;
@@ -77,7 +77,7 @@ pub(super) async fn load_export_transcript(
     app_server: &mut AppServerSession,
     thread_id: ThreadId,
     visibility: RawReasoningVisibility,
-    codex_home: Option<&Path>,
+    config: Option<&Config>,
     visible_transcript: Vec<Arc<dyn HistoryCell>>,
 ) -> Result<Vec<Arc<dyn HistoryCell>>, String> {
     let mut thread = app_server
@@ -123,7 +123,7 @@ pub(super) async fn load_export_transcript(
                 &thread.cwd,
                 [item],
                 visibility,
-                codex_home,
+                config,
             ));
         }
     }

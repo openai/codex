@@ -308,7 +308,7 @@ fn rendered_history_rows(
         &thread.cwd,
         items,
         visibility,
-        Some(config.codex_home.as_path()),
+        Some(config),
     )
     .into_iter()
     .fold(rendered_rows, |rows, cell| {
