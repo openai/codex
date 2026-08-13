@@ -57,7 +57,6 @@ use super::session_index::find_thread_names_by_ids;
 use crate::InitialHistory;
 use crate::ResumedHistory;
 use crate::RolloutItem;
-use crate::RolloutLine;
 use crate::config::RolloutConfigView;
 use crate::state_db;
 use crate::state_db::StateDbHandle;
@@ -1035,7 +1034,7 @@ impl RolloutRecorder {
                 reject_unknown_thread_history_mode(&value)?;
             }
 
-            let rollout_line = match serde_json::from_value::<RolloutLine>(value) {
+            let rollout_line = match crate::decode_rollout_line(value) {
                 Ok(rollout_line) => rollout_line,
                 Err(e) => {
                     trace!("failed to parse rollout line: {e}");

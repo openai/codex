@@ -49,6 +49,30 @@ use codex_protocol::protocol::UserMessageEvent;
 const NO_SOURCE_FILTER: &[SessionSource] = &[];
 const TEST_PROVIDER: &str = "test-provider";
 
+#[test]
+fn rollout_line_decoder_preserves_canonical_json_compatibility() -> Result<()> {
+    let cases = [
+        r#"{"timestamp":"2025-01-03T12:00:00.000Z","ordinal":7,"type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":{"limit_id":null,"limit_name":null,"primary":{"used_percent":0.0,"window_minutes":60,"resets_at":1800000000},"secondary":{"used_percent":12.5,"window_minutes":10080,"resets_at":1800100000},"credits":null,"individual_limit":null,"spend_control_reached":null,"plan_type":null,"rate_limit_reached_type":null}}}"#,
+        r#"{"metadata":{"client_authored":true},"payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"hello"}]},"type":"response_item","ordinal":9,"timestamp":"2025-01-03T12:00:00.000Z"}"#,
+        r#"{"timestamp":"2025-01-03T12:00:00.000Z","ordinal":10,"type":"event_msg","payload":{"type":"warning","message":"hello"},"metadata":"ignored"}"#,
+    ];
+
+    for encoded in cases {
+        let value = serde_json::from_str::<serde_json::Value>(encoded)?;
+        let decoded = crate::decode_rollout_line(value.clone())?;
+        let mut expected = value;
+        if expected["type"] != "response_item" {
+            expected
+                .as_object_mut()
+                .expect("rollout object")
+                .remove("metadata");
+        }
+        assert_eq!(serde_json::to_value(decoded)?, expected);
+    }
+
+    Ok(())
+}
+
 fn provider_vec(providers: &[&str]) -> Vec<String> {
     providers
         .iter()

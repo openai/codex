@@ -5,7 +5,6 @@ use chrono::DateTime;
 use codex_app_server_protocol::ThreadHistoryChangeSet;
 use codex_app_server_protocol::project_rollout_line;
 use codex_protocol::ThreadId;
-use codex_rollout::RolloutLine;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncSeekExt;
 use tracing::warn;
@@ -150,7 +149,7 @@ async fn read_projection_steps(
             }
         };
         let value_ordinal = value.get("ordinal").and_then(serde_json::Value::as_u64);
-        let line = match serde_json::from_value::<RolloutLine>(value) {
+        let line = match codex_rollout::decode_rollout_line(value) {
             Ok(line) => Some(line),
             Err(err) => {
                 warn!(
