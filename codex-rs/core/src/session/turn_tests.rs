@@ -47,6 +47,7 @@ fn post_sampling_token_estimate_is_disabled_by_always_on_sinks() {
         .with(tracing_subscriber::fmt::layer().with_filter(codex_state::log_db::default_filter()));
 
     tracing::subscriber::with_default(subscriber, || {
+        tracing::callsite::rebuild_interest_cache();
         assert!(!tracing::event_enabled!(
             target: POST_SAMPLING_TOKEN_ESTIMATE_TARGET,
             tracing::Level::TRACE,
