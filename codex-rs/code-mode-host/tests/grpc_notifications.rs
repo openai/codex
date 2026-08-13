@@ -183,10 +183,7 @@ async fn completed_waits_drain_pending_notifications_before_returning() -> Resul
         .create_session(delegate.clone())
         .await
         .map_err(anyhow::Error::msg)?;
-    let mut pending = request(
-        r#"await new Promise(resolve => setTimeout(resolve, 25)); notify("notice"); text("done");"#,
-    );
-    pending.yield_time_ms = Some(/*value*/ 1);
+    let pending = request(r#"yield_control(); notify("notice"); text("done");"#);
     let cell = session.execute(pending).await.map_err(anyhow::Error::msg)?;
     assert_eq!(
         cell.initial_response().await.map_err(anyhow::Error::msg)?,

@@ -877,8 +877,11 @@ async fn sessions_enforce_independent_yield_limits() -> Result<()> {
         })
     );
     assert_eq!(
-        execute(&limited, request(r#"text("recovered");"#)).await?,
-        text_response("2", "recovered")
+        execute(&limited, request("await new Promise(() => {});")).await?,
+        RuntimeResponse::Yielded {
+            cell_id: cell_id("2"),
+            content_items: Vec::new(),
+        }
     );
     limited.shutdown().await.map_err(anyhow::Error::msg)?;
     other.shutdown().await.map_err(anyhow::Error::msg)?;
