@@ -43,6 +43,7 @@ use codex_analytics::AnalyticsEventsClient;
 use codex_core::config::Config;
 use codex_core_plugins::PluginsManager;
 use codex_core_plugins::marketplace::MarketplacePluginInstallPolicy;
+use codex_protocol::auth::AuthMode;
 use codex_protocol::protocol::Product;
 use codex_rollout::StateDbHandle;
 use serde_json::Value as JsonValue;
@@ -68,6 +69,7 @@ pub struct ExternalAgentConfigService {
     pub(super) connector_metadata_roots: Vec<PathBuf>,
     pub(crate) external_agent_home: PathBuf,
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
+    pub(crate) auth_mode: Option<AuthMode>,
     pub(crate) source: ExternalAgentSource,
     pub(crate) session_import_limits: ExternalAgentSessionImportLimits,
     state_db: Option<StateDbHandle>,
@@ -76,6 +78,7 @@ pub struct ExternalAgentConfigService {
 impl ExternalAgentConfigService {
     pub fn new(
         codex_home: PathBuf,
+        auth_mode: Option<AuthMode>,
         analytics_events_client: AnalyticsEventsClient,
         state_db: Option<StateDbHandle>,
     ) -> Self {
@@ -87,6 +90,7 @@ impl ExternalAgentConfigService {
             connector_metadata_roots,
             external_agent_home,
             analytics_events_client: Some(analytics_events_client),
+            auth_mode,
             source,
             session_import_limits: ExternalAgentSessionImportLimits::default(),
             state_db,
@@ -102,6 +106,7 @@ impl ExternalAgentConfigService {
             connector_metadata_roots,
             external_agent_home,
             analytics_events_client: self.analytics_events_client.clone(),
+            auth_mode: self.auth_mode,
             source,
             session_import_limits: self.session_import_limits,
             state_db: self.state_db.clone(),
@@ -111,6 +116,12 @@ impl ExternalAgentConfigService {
     pub fn with_session_import_limits(&self, limits: ExternalAgentSessionImportLimits) -> Self {
         let mut service = self.clone();
         service.session_import_limits = limits;
+        service
+    }
+
+    pub fn with_auth_mode(&self, auth_mode: Option<AuthMode>) -> Self {
+        let mut service = self.clone();
+        service.auth_mode = auth_mode;
         service
     }
 
@@ -157,6 +168,7 @@ impl ExternalAgentConfigService {
             connector_metadata_roots,
             external_agent_home,
             analytics_events_client: None,
+            auth_mode: None,
             source,
             session_import_limits: ExternalAgentSessionImportLimits::default(),
             state_db: None,

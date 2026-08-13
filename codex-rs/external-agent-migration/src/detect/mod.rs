@@ -351,7 +351,7 @@ impl ExternalAgentConfigService {
                         .unwrap_or_default();
                     let configured_marketplace_plugins = configured_marketplace_plugins(
                         &config,
-                        &plugins_manager_for_config(&config),
+                        &plugins_manager_for_config(&config, self.auth_mode),
                     )?;
                     let source_root = repo_root.unwrap_or(self.external_agent_home.as_path());
                     if let Some(detected) =

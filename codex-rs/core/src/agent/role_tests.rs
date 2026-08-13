@@ -463,7 +463,7 @@ enabled = false
         .await
         .expect("custom role should apply");
 
-    let plugins_manager = Arc::new(plugins_manager_for_config(&config));
+    let plugins_manager = Arc::new(plugins_manager_for_config(&config, /*auth_mode*/ None));
     let skills_service =
         HostSkillsService::new(home.path().abs(), /*bundled_skills_enabled*/ true);
     let plugins_input = config.plugins_config_input();

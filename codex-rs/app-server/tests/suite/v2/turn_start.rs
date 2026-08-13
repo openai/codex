@@ -4414,7 +4414,7 @@ async fn command_execution_notifications_include_trusted_plugin_id() -> Result<(
     let curated_sha = "0123456789abcdef0123456789abcdef01234567";
     let plugin_root = codex_home
         .path()
-        .join("plugins/cache/openai-curated/google-calendar/01234567");
+        .join("plugins/cache/openai-api-curated/google-calendar/01234567");
     let script_path = plugin_root.join("scripts/run.sh");
     let synced_root = codex_home.path().join(".tmp/plugins");
     for path in [
@@ -4437,9 +4437,9 @@ async fn command_execution_notifications_include_trusted_plugin_id() -> Result<(
         format!("{curated_sha}\n"),
     )?;
     std::fs::write(
-        synced_root.join(".agents/plugins/marketplace.json"),
+        synced_root.join(".agents/plugins/api_marketplace.json"),
         r#"{
-  "name": "openai-curated",
+  "name": "openai-api-curated",
   "plugins": [{
     "name": "google-calendar",
     "source": {"source": "local", "path": "./plugins/google-calendar"}
@@ -4464,7 +4464,7 @@ async fn command_execution_notifications_include_trusted_plugin_id() -> Result<(
         .with_sandbox_mode("danger-full-access")
         .enable_feature(Feature::Plugins)
         .disable_feature(Feature::RemotePlugin)
-        .with_extra_config("[plugins.\"google-calendar@openai-curated\"]\nenabled = true")
+        .with_extra_config("[plugins.\"google-calendar@openai-api-curated\"]\nenabled = true")
         .write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
@@ -4506,7 +4506,7 @@ async fn command_execution_notifications_include_trusted_plugin_id() -> Result<(
                         .expect("command execution item should include scriptPath");
                     assert_eq!(
                         (item_json["pluginId"].as_str(), emitted_script_path),
-                        (Some("google-calendar@openai-curated"), "scripts/run.sh")
+                        (Some("google-calendar@openai-api-curated"), "scripts/run.sh")
                     );
                     assert!(
                         !emitted_script_path.contains(script_path.to_string_lossy().as_ref()),

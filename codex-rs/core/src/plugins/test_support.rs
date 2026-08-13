@@ -3,7 +3,7 @@ use crate::config::ConfigBuilder;
 use std::fs;
 use std::path::Path;
 
-use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
+use codex_core_plugins::OPENAI_API_CURATED_MARKETPLACE_NAME;
 
 pub(crate) const TEST_CURATED_PLUGIN_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 
@@ -50,7 +50,7 @@ pub(crate) fn write_curated_plugin(root: &Path, plugin_name: &str) {
     );
 }
 
-pub(crate) fn write_openai_curated_marketplace(root: &Path, plugin_names: &[&str]) {
+pub(crate) fn write_openai_api_curated_marketplace(root: &Path, plugin_names: &[&str]) {
     let plugins = plugin_names
         .iter()
         .map(|plugin_name| {
@@ -67,10 +67,10 @@ pub(crate) fn write_openai_curated_marketplace(root: &Path, plugin_names: &[&str
         .collect::<Vec<_>>()
         .join(",\n");
     write_file(
-        &root.join(".agents/plugins/marketplace.json"),
+        &root.join(".agents/plugins/api_marketplace.json"),
         &format!(
             r#"{{
-  "name": "{OPENAI_CURATED_MARKETPLACE_NAME}",
+  "name": "{OPENAI_API_CURATED_MARKETPLACE_NAME}",
   "plugins": [
 {plugins}
   ]

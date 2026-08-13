@@ -1,7 +1,95 @@
 use super::super::*;
 use crate::migration_source::MarketplaceImportSource;
 use crate::source_cla;
+use codex_protocol::auth::AuthMode;
 use pretty_assertions::assert_eq;
+
+#[tokio::test]
+async fn authenticated_plugin_migration_uses_chatgpt_curated_marketplace() {
+    let (_root, external_agent_home, codex_home) = fixture_paths();
+    let curated_root = codex_home.join(".tmp/plugins");
+    let plugin_root = curated_root.join("plugins/sample");
+    fs::create_dir_all(&external_agent_home).expect("create external agent home");
+    fs::create_dir_all(curated_root.join(".agents/plugins"))
+        .expect("create curated marketplace directory");
+    fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("create curated plugin directory");
+    fs::write(
+        external_agent_home.join("settings.json"),
+        r#"{"enabledPlugins":{"sample@openai-curated":true}}"#,
+    )
+    .expect("write external agent settings");
+    fs::write(
+        codex_home.join("config.toml"),
+        "[features]\nplugins = true\n",
+    )
+    .expect("write Codex config");
+    fs::write(
+        codex_home.join(".tmp/plugins.sha"),
+        "0123456789abcdef0123456789abcdef01234567\n",
+    )
+    .expect("write curated plugin version");
+    fs::write(
+        curated_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "openai-curated",
+  "plugins": [{
+    "name": "sample",
+    "source": {"source": "local", "path": "./plugins/sample"}
+  }]
+}"#,
+    )
+    .expect("write curated marketplace");
+    fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"sample","version":"0.1.0"}"#,
+    )
+    .expect("write curated plugin manifest");
+
+    let service = service_for_paths(external_agent_home.clone(), codex_home)
+        .with_auth_mode(Some(AuthMode::Chatgpt));
+    let items = service
+        .detect(ExternalAgentConfigDetectOptions {
+            include_home: true,
+            include_memory: false,
+            cwds: None,
+        })
+        .await
+        .expect("detect authenticated curated plugin");
+    let details = Some(MigrationDetails {
+        plugins: vec![PluginsMigration {
+            marketplace_name: "openai-curated".to_string(),
+            plugin_names: vec!["sample".to_string()],
+        }],
+        ..Default::default()
+    });
+    assert_eq!(
+        items,
+        vec![ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::Plugins,
+            description: format!(
+                "Migrate enabled plugins from {}",
+                external_agent_home.join("settings.json").display()
+            ),
+            cwd: None,
+            details: details.clone(),
+        }]
+    );
+
+    let outcome = service
+        .import_plugins(/*cwd*/ None, details)
+        .await
+        .expect("import authenticated curated plugin");
+    assert_eq!(
+        outcome,
+        PluginImportOutcome {
+            succeeded_marketplaces: vec!["openai-curated".to_string()],
+            succeeded_plugin_ids: vec!["sample@openai-curated".to_string()],
+            failed_marketplaces: Vec::new(),
+            failed_plugin_ids: Vec::new(),
+            raw_errors: Vec::new(),
+        }
+    );
+}
 
 #[tokio::test]
 async fn detect_home_lists_enabled_plugins_from_settings() {

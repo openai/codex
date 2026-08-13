@@ -1,7 +1,7 @@
 use crate::plugins::plugins_manager_for_config;
 use crate::plugins::test_support::load_plugins_config;
 use crate::plugins::test_support::write_file;
-use crate::plugins::test_support::write_openai_curated_marketplace;
+use crate::plugins::test_support::write_openai_api_curated_marketplace;
 use codex_core_plugins::startup_sync::curated_plugins_repo_path;
 use codex_tools::DiscoverablePluginInfo;
 use pretty_assertions::assert_eq;
@@ -11,7 +11,7 @@ async fn list_discoverable_plugins(
     config: &crate::config::Config,
     loaded_plugin_app_connector_ids: &[String],
 ) -> anyhow::Result<Vec<DiscoverablePluginInfo>> {
-    let plugins_manager = plugins_manager_for_config(config);
+    let plugins_manager = plugins_manager_for_config(config, /*auth_mode*/ None);
     super::list_tool_suggest_discoverable_plugins(
         config,
         &plugins_manager,
@@ -25,7 +25,7 @@ async fn list_discoverable_plugins(
 async fn list_tool_suggest_discoverable_plugins_returns_empty_when_plugins_feature_disabled() {
     let codex_home = tempdir().expect("tempdir should succeed");
     let curated_root = curated_plugins_repo_path(codex_home.path());
-    write_openai_curated_marketplace(&curated_root, &["slack"]);
+    write_openai_api_curated_marketplace(&curated_root, &["slack"]);
     write_file(
         &codex_home.path().join(crate::config::CONFIG_TOML_FILE),
         r#"[features]
@@ -43,7 +43,7 @@ plugins = false
 async fn list_tool_suggest_discoverable_plugins_omits_disabled_tool_suggestions() {
     let codex_home = tempdir().expect("tempdir should succeed");
     let curated_root = curated_plugins_repo_path(codex_home.path());
-    write_openai_curated_marketplace(&curated_root, &["slack"]);
+    write_openai_api_curated_marketplace(&curated_root, &["slack"]);
     write_file(
         &codex_home.path().join(crate::config::CONFIG_TOML_FILE),
         r#"[features]
@@ -51,7 +51,7 @@ plugins = true
 
 [tool_suggest]
 disabled_tools = [
-  { type = "plugin", id = "slack@openai-curated" }
+  { type = "plugin", id = "slack@openai-api-curated" }
 ]
 "#,
     );
@@ -66,14 +66,14 @@ disabled_tools = [
 async fn list_tool_suggest_discoverable_plugins_includes_configured_plugin_ids() {
     let codex_home = tempdir().expect("tempdir should succeed");
     let curated_root = curated_plugins_repo_path(codex_home.path());
-    write_openai_curated_marketplace(&curated_root, &["sample"]);
+    write_openai_api_curated_marketplace(&curated_root, &["sample"]);
     write_file(
         &codex_home.path().join(crate::config::CONFIG_TOML_FILE),
         r#"[features]
 plugins = true
 
 [tool_suggest]
-discoverables = [{ type = "plugin", id = "sample@openai-curated" }]
+discoverables = [{ type = "plugin", id = "sample@openai-api-curated" }]
 "#,
     );
 
@@ -83,7 +83,7 @@ discoverables = [{ type = "plugin", id = "sample@openai-curated" }]
     assert_eq!(
         discoverable_plugins,
         vec![DiscoverablePluginInfo {
-            id: "sample@openai-curated".to_string(),
+            id: "sample@openai-api-curated".to_string(),
             remote_plugin_id: None,
             name: "sample".to_string(),
             description: Some(

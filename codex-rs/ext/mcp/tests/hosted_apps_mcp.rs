@@ -28,7 +28,7 @@ async fn contributes_hosted_plugin_runtime_without_an_executor() -> TestResult {
         .build()
         .await?;
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
-    let manager = installed_manager(&config);
+    let manager = installed_manager(&config, Some(auth.api_auth_mode()));
 
     let servers = manager.effective_servers(&config, Some(&auth)).await;
     let server = servers
@@ -60,7 +60,7 @@ async fn runtime_overlay_preserves_disabled_server() -> TestResult {
         .build()
         .await?;
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
-    let manager = installed_manager(&config);
+    let manager = installed_manager(&config, Some(auth.api_auth_mode()));
 
     let servers = manager.effective_servers(&config, Some(&auth)).await;
     let server = servers
@@ -87,7 +87,10 @@ async fn default_fallback_overwrites_reserved_config_without_an_extension() -> T
         .build()
         .await?;
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
-    let manager = McpManager::new(Arc::new(plugins_manager_for_config(&config)));
+    let manager = McpManager::new(Arc::new(plugins_manager_for_config(
+        &config,
+        Some(auth.api_auth_mode()),
+    )));
 
     let servers = manager.effective_servers(&config, Some(&auth)).await;
     let server = servers
@@ -116,7 +119,10 @@ async fn later_extension_can_remove_same_name_registration() -> TestResult {
     codex_mcp_extension::install(&mut builder);
     builder.mcp_server_contributor(Arc::new(RemoveCodexApps));
     let manager = McpManager::new_with_extensions(
-        Arc::new(plugins_manager_for_config(&config)),
+        Arc::new(plugins_manager_for_config(
+            &config,
+            Some(auth.api_auth_mode()),
+        )),
         Arc::new(builder.build()),
         codex_core::CodexAppsToolsCache::default(),
     );
@@ -137,7 +143,7 @@ async fn hosted_apps_mcp_requires_chatgpt_auth() -> TestResult {
         .build()
         .await?;
     let auth = CodexAuth::from_api_key("test");
-    let manager = installed_manager(&config);
+    let manager = installed_manager(&config, Some(auth.api_auth_mode()));
 
     let servers = manager.effective_servers(&config, Some(&auth)).await;
     assert!(!servers.contains_key(CODEX_APPS_MCP_SERVER_NAME));
@@ -161,8 +167,10 @@ async fn disabled_apps_remove_reserved_server_config_for_all_hosts() -> TestResu
         .build()
         .await?;
     let managers = [
-        installed_manager(&config),
-        McpManager::new(Arc::new(plugins_manager_for_config(&config))),
+        installed_manager(&config, /*auth_mode*/ None),
+        McpManager::new(Arc::new(plugins_manager_for_config(
+            &config, /*auth_mode*/ None,
+        ))),
     ];
     for manager in managers {
         let servers = manager.runtime_servers(&config).await;
@@ -171,11 +179,14 @@ async fn disabled_apps_remove_reserved_server_config_for_all_hosts() -> TestResu
     Ok(())
 }
 
-fn installed_manager(config: &Config) -> McpManager {
+fn installed_manager(
+    config: &Config,
+    auth_mode: Option<codex_protocol::auth::AuthMode>,
+) -> McpManager {
     let mut builder = ExtensionRegistryBuilder::new();
     codex_mcp_extension::install(&mut builder);
     McpManager::new_with_extensions(
-        Arc::new(plugins_manager_for_config(config)),
+        Arc::new(plugins_manager_for_config(config, auth_mode)),
         Arc::new(builder.build()),
         codex_core::CodexAppsToolsCache::default(),
     )

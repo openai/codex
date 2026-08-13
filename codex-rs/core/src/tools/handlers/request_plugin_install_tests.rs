@@ -2,7 +2,7 @@ use super::*;
 use crate::plugins::plugins_manager_for_config;
 use crate::plugins::test_support::load_plugins_config;
 use crate::plugins::test_support::write_curated_plugin_sha;
-use crate::plugins::test_support::write_openai_curated_marketplace;
+use crate::plugins::test_support::write_openai_api_curated_marketplace;
 use crate::plugins::test_support::write_plugins_feature_config;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::config_toml::ConfigToml;
@@ -35,15 +35,15 @@ fn request_plugin_install_does_not_support_parallel_tool_calls() {
 async fn verified_plugin_install_completed_requires_installed_plugin() {
     let codex_home = tempdir().expect("tempdir should succeed");
     let curated_root = curated_plugins_repo_path(codex_home.path());
-    write_openai_curated_marketplace(&curated_root, &["sample"]);
+    write_openai_api_curated_marketplace(&curated_root, &["sample"]);
     write_curated_plugin_sha(codex_home.path());
     write_plugins_feature_config(codex_home.path());
 
     let config = load_plugins_config(codex_home.path()).await;
-    let plugins_manager = plugins_manager_for_config(&config);
+    let plugins_manager = plugins_manager_for_config(&config, /*auth_mode*/ None);
 
     assert!(!verified_plugin_install_completed(
-        "sample@openai-curated",
+        "sample@openai-api-curated",
         &config,
         &plugins_manager,
     ));
@@ -54,7 +54,7 @@ async fn verified_plugin_install_completed_requires_installed_plugin() {
             PluginInstallRequest {
                 plugin_name: "sample".to_string(),
                 marketplace_path: AbsolutePathBuf::try_from(
-                    curated_root.join(".agents/plugins/marketplace.json"),
+                    curated_root.join(".agents/plugins/api_marketplace.json"),
                 )
                 .expect("marketplace path"),
             },
@@ -64,7 +64,7 @@ async fn verified_plugin_install_completed_requires_installed_plugin() {
 
     let refreshed_config = load_plugins_config(codex_home.path()).await;
     assert!(verified_plugin_install_completed(
-        "sample@openai-curated",
+        "sample@openai-api-curated",
         &refreshed_config,
         &plugins_manager,
     ));

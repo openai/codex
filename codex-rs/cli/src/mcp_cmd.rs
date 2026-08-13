@@ -524,8 +524,10 @@ async fn run_remove(config_overrides: &CliConfigOverrides, remove_args: RemoveAr
 }
 
 async fn load_mcp_manager(config: &Config) -> Result<McpManager> {
-    let plugins_manager = Arc::new(plugins_manager_for_config(config));
-    plugins_manager.set_auth_mode(load_cli_auth_mode(config).await?);
+    let plugins_manager = Arc::new(plugins_manager_for_config(
+        config,
+        load_cli_auth_mode(config).await?,
+    ));
     Ok(McpManager::new(plugins_manager))
 }
 

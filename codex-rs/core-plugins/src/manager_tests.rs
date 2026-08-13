@@ -45,6 +45,7 @@ use codex_config::SkillConfigRules;
 use codex_config::compose_requirements;
 use codex_config::types::McpServerTransportConfig;
 use codex_login::CodexAuth;
+use codex_model_provider::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_plugin::AppDeclaration;
 use codex_plugin::PluginId;
 use codex_protocol::auth::AuthMode;
@@ -1637,7 +1638,7 @@ enabled = true
     manager.set_auth_mode(/*auth_mode*/ None);
     assert_eq!(
         loaded_plugin_names(&manager, &config).await,
-        vec!["linear@openai-curated".to_string()]
+        vec!["linear@openai-api-curated".to_string()]
     );
 
     for auth_mode in [AuthMode::ApiKey, AuthMode::BedrockApiKey] {
@@ -1650,11 +1651,13 @@ enabled = true
     }
 
     manager.set_auth_mode(/*auth_mode*/ None);
-    config.model_provider_id = AMAZON_BEDROCK_PROVIDER_ID.to_string();
-    assert_eq!(
-        loaded_plugin_names(&manager, &config).await,
-        vec!["linear@openai-api-curated".to_string()]
-    );
+    for model_provider_id in ["openai", AMAZON_BEDROCK_PROVIDER_ID, "ollama"] {
+        config.model_provider_id = model_provider_id.to_string();
+        assert_eq!(
+            loaded_plugin_names(&manager, &config).await,
+            vec!["linear@openai-api-curated".to_string()]
+        );
+    }
 
     manager.set_auth_mode(Some(AuthMode::Chatgpt));
     assert_eq!(
@@ -4679,10 +4682,14 @@ plugins = true
     .unwrap();
 
     let config = load_config(tmp.path(), tmp.path()).await;
-    let marketplaces = test_plugins_manager(tmp.path().to_path_buf())
-        .list_marketplaces_for_config(&config, &[], /*include_openai_curated*/ true)
-        .unwrap()
-        .marketplaces;
+    let marketplaces = test_plugins_manager_with_options(
+        tmp.path().to_path_buf(),
+        Some(Product::Codex),
+        Some(AuthMode::Chatgpt),
+    )
+    .list_marketplaces_for_config(&config, &[], /*include_openai_curated*/ true)
+    .unwrap()
+    .marketplaces;
 
     let curated_marketplace = marketplaces
         .into_iter()
@@ -4843,16 +4850,36 @@ plugins = true
 }
 
 #[tokio::test]
-async fn list_marketplaces_uses_resolved_provider_instead_of_configured_default() {
-    for (configured_provider, resolved_provider, expected_marketplace) in [
+async fn list_marketplaces_selects_curated_catalog_only_from_authentication() {
+    for (configured_provider, resolved_provider, auth_mode, expected_marketplace) in [
         (
             "openai",
             AMAZON_BEDROCK_PROVIDER_ID,
+            None,
             OPENAI_API_CURATED_MARKETPLACE_NAME,
         ),
         (
             AMAZON_BEDROCK_PROVIDER_ID,
             "openai",
+            None,
+            OPENAI_API_CURATED_MARKETPLACE_NAME,
+        ),
+        (
+            "openai",
+            "ollama",
+            None,
+            OPENAI_API_CURATED_MARKETPLACE_NAME,
+        ),
+        (
+            "openai",
+            "ollama",
+            Some(AuthMode::ApiKey),
+            OPENAI_API_CURATED_MARKETPLACE_NAME,
+        ),
+        (
+            "openai",
+            "ollama",
+            Some(AuthMode::Chatgpt),
             OPENAI_CURATED_MARKETPLACE_NAME,
         ),
     ] {
@@ -4874,16 +4901,22 @@ plugins = true
 
         let mut config = load_config(tmp.path(), tmp.path()).await;
         config.model_provider_id = resolved_provider.to_string();
-        let marketplaces = test_plugins_manager(tmp.path().to_path_buf())
-            .list_marketplaces_for_config(&config, &[], /*include_openai_curated*/ true)
-            .unwrap()
-            .marketplaces;
+        let marketplaces = test_plugins_manager_with_options(
+            tmp.path().to_path_buf(),
+            Some(Product::Codex),
+            auth_mode,
+        )
+        .list_marketplaces_for_config(&config, &[], /*include_openai_curated*/ true)
+        .unwrap()
+        .marketplaces;
 
-        assert!(
+        assert_eq!(
             marketplaces
                 .iter()
-                .any(|marketplace| marketplace.name == expected_marketplace),
-            "expected `{expected_marketplace}` for resolved provider `{resolved_provider}`"
+                .map(|marketplace| marketplace.name.as_str())
+                .collect::<Vec<_>>(),
+            vec![expected_marketplace],
+            "unexpected curated catalog for provider `{resolved_provider}` with auth {auth_mode:?}"
         );
     }
 }

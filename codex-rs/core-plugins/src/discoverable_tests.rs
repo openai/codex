@@ -113,6 +113,7 @@ async fn returns_microsoft_fallback_plugins() {
 
     let plugins = load_plugins_config(codex_home.path(), codex_home.path()).await;
     let plugins_manager = test_plugins_manager(codex_home.path().to_path_buf());
+    plugins_manager.set_auth_mode(Some(AuthMode::Chatgpt));
     let discoverable_plugins = list_discoverable_plugins(
         &plugins_manager,
         discovery_input(plugins, &[], &[], &[]),
@@ -190,10 +191,10 @@ source = "/tmp/{bundled_marketplace_name}"
 }
 
 #[tokio::test]
-async fn includes_openai_curated_when_remote_enabled_without_auth() {
+async fn includes_openai_api_curated_when_remote_enabled_without_auth() {
     let codex_home = tempdir().expect("tempdir should succeed");
     let curated_root = curated_plugins_repo_path(codex_home.path());
-    write_openai_curated_marketplace(&curated_root, &["slack"]);
+    write_openai_api_curated_marketplace(&curated_root, &["slack"]);
 
     let plugins = load_plugins_config(codex_home.path(), codex_home.path()).await;
     let plugins_manager = test_plugins_manager(codex_home.path().to_path_buf());
@@ -209,7 +210,7 @@ async fn includes_openai_curated_when_remote_enabled_without_auth() {
             .into_iter()
             .map(|plugin| plugin.id)
             .collect::<Vec<_>>(),
-        vec!["slack@openai-curated".to_string()]
+        vec!["slack@openai-api-curated".to_string()]
     );
 }
 
@@ -300,6 +301,7 @@ async fn reprojects_cached_skill_availability_for_current_config() {
 
     let plugins = load_plugins_config(codex_home.path(), codex_home.path()).await;
     let plugins_manager = test_plugins_manager(codex_home.path().to_path_buf());
+    plugins_manager.set_auth_mode(Some(AuthMode::Chatgpt));
     let expected = ToolSuggestDiscoverablePlugin {
         id: "slack@openai-curated".to_string(),
         remote_plugin_id: None,
@@ -354,6 +356,7 @@ async fn does_not_advertise_skills_when_skill_loading_fails() {
 
     let plugins = load_plugins_config(codex_home.path(), codex_home.path()).await;
     let plugins_manager = test_plugins_manager(codex_home.path().to_path_buf());
+    plugins_manager.set_auth_mode(Some(AuthMode::Chatgpt));
     let discoverable_plugins = list_discoverable_plugins(
         &plugins_manager,
         discovery_input(plugins, &[], &[], &[]),
@@ -393,6 +396,7 @@ async fn clear_cache_invalidates_cached_tool_suggest_metadata() {
 
     let plugins = load_plugins_config(codex_home.path(), codex_home.path()).await;
     let plugins_manager = test_plugins_manager(codex_home.path().to_path_buf());
+    plugins_manager.set_auth_mode(Some(AuthMode::Chatgpt));
     let input = discovery_input(plugins, &[], &[], &[]);
     let expected_cached = vec![ToolSuggestDiscoverablePlugin {
         id: "slack@openai-curated".to_string(),
@@ -465,6 +469,7 @@ source = "/tmp/{marketplace_name}"
 
     let plugins = load_plugins_config(codex_home.path(), codex_home.path()).await;
     let plugins_manager = test_plugins_manager(codex_home.path().to_path_buf());
+    plugins_manager.set_auth_mode(Some(AuthMode::Chatgpt));
     let discoverable_plugins = list_discoverable_plugins(
         &plugins_manager,
         discovery_input(plugins, &[], &[], &[]),
@@ -492,6 +497,7 @@ async fn normalizes_description() {
 
     let plugins = load_plugins_config(codex_home.path(), codex_home.path()).await;
     let plugins_manager = test_plugins_manager(codex_home.path().to_path_buf());
+    plugins_manager.set_auth_mode(Some(AuthMode::Chatgpt));
     let discoverable_plugins = list_discoverable_plugins(
         &plugins_manager,
         discovery_input(plugins, &[], &[], &[]),
@@ -576,6 +582,7 @@ async fn omits_not_available_curated_plugins() {
 
     let plugins = load_plugins_config(codex_home.path(), codex_home.path()).await;
     let plugins_manager = test_plugins_manager(codex_home.path().to_path_buf());
+    plugins_manager.set_auth_mode(Some(AuthMode::Chatgpt));
     let discoverable_plugins = list_discoverable_plugins(
         &plugins_manager,
         discovery_input(plugins, &[], &[], &[]),
@@ -617,6 +624,7 @@ async fn does_not_reload_marketplace_per_plugin() {
 
     let plugins = load_plugins_config(codex_home.path(), codex_home.path()).await;
     let plugins_manager = test_plugins_manager(codex_home.path().to_path_buf());
+    plugins_manager.set_auth_mode(Some(AuthMode::Chatgpt));
     let buffer: &'static std::sync::Mutex<Vec<u8>> =
         Box::leak(Box::new(std::sync::Mutex::new(Vec::new())));
     let subscriber = tracing_subscriber::fmt()

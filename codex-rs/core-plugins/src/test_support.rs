@@ -43,7 +43,11 @@ pub(crate) const TEST_CURATED_PLUGIN_SHA: &str = "0123456789abcdef0123456789abcd
 pub(crate) const TEST_CURATED_PLUGIN_CACHE_VERSION: &str = "01234567";
 
 pub(crate) fn test_plugins_manager(codex_home: PathBuf) -> PluginsManager {
-    PluginsManager::new(codex_home, test_skill_root_loader())
+    PluginsManager::new(
+        codex_home,
+        /*auth_mode*/ None,
+        test_skill_root_loader(),
+    )
 }
 
 pub(crate) fn test_plugins_manager_with_options(
