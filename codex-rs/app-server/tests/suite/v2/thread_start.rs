@@ -7,12 +7,16 @@ use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use codex_app_server_protocol::AskForApproval;
+use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::ListMcpServerStatusParams;
+use codex_app_server_protocol::ListMcpServerStatusResponse;
 use codex_app_server_protocol::McpServerStartupState;
+use codex_app_server_protocol::McpServerStatusDetail;
 use codex_app_server_protocol::McpServerStatusUpdatedNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxMode;
@@ -39,7 +43,9 @@ use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::TrustLevel;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::openai_models::ReasoningEffort;
+use core_test_support::stdio_server_bin;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -1300,7 +1306,7 @@ async fn thread_start_surfaces_cloud_config_bundle_load_errors() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_start_with_elevated_sandbox_trusts_project_and_followup_loads_project_config()
+async fn thread_start_workspace_write_respects_effective_permissions_for_project_trust()
 -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
 
@@ -1321,13 +1327,15 @@ model_reasoning_effort = "high"
         .with_codex_home(codex_home.path())
         .build_initialized()
         .await?;
+    let config_before = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
 
-    mcp.start_thread(ThreadStartParams {
-        cwd: Some(workspace.path().display().to_string()),
-        sandbox: Some(SandboxMode::WorkspaceWrite),
-        ..Default::default()
-    })
-    .await?;
+    let first_response = mcp
+        .start_thread(ThreadStartParams {
+            cwd: Some(workspace.path().display().to_string()),
+            sandbox: Some(SandboxMode::WorkspaceWrite),
+            ..Default::default()
+        })
+        .await?;
 
     let ThreadStartResponse {
         approval_policy,
@@ -1340,23 +1348,111 @@ model_reasoning_effort = "high"
         })
         .await?;
 
-    assert_eq!(approval_policy, AskForApproval::OnRequest);
-    assert_eq!(reasoning_effort, Some(ReasoningEffort::High));
-
     let config_toml = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-    let workspace_abs = workspace.path().to_path_buf().abs();
-    let trusted_root = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &workspace_abs)
-        .await
-        .unwrap_or(workspace_abs);
-    let trusted_root_key = project_trust_key(trusted_root.as_path());
-    assert!(config_toml.contains(&trusted_root_key));
-    assert!(config_toml.contains("trust_level = \"trusted\""));
+    if cfg!(windows) {
+        assert_eq!(
+            first_response.sandbox,
+            codex_app_server_protocol::SandboxPolicy::ReadOnly {
+                network_access: false,
+            }
+        );
+        assert_eq!(reasoning_effort, None);
+        assert_eq!(config_toml, config_before);
+    } else {
+        assert_eq!(approval_policy, AskForApproval::OnRequest);
+        assert_eq!(reasoning_effort, Some(ReasoningEffort::High));
+        let workspace_abs = workspace.path().to_path_buf().abs();
+        let trusted_root = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &workspace_abs)
+            .await
+            .unwrap_or(workspace_abs);
+        let trusted_root_key = project_trust_key(trusted_root.as_path());
+        assert!(config_toml.contains(&trusted_root_key));
+        assert!(config_toml.contains("trust_level = \"trusted\""));
+    }
 
     Ok(())
 }
 
 #[tokio::test]
-async fn thread_start_with_nested_git_cwd_trusts_repo_root() -> Result<()> {
+async fn thread_start_with_managed_read_only_does_not_trust_or_load_project_mcp() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
+    std::fs::write(
+        codex_home.path().join("managed_config.toml"),
+        r#"sandbox_mode = "read-only""#,
+    )?;
+
+    let workspace = TempDir::new()?;
+    std::fs::create_dir(workspace.path().join(".git"))?;
+    let project_config_dir = workspace.path().join(".codex");
+    std::fs::create_dir(&project_config_dir)?;
+    std::fs::write(
+        project_config_dir.join("config.toml"),
+        format!(
+            r#"[mcp_servers.project-server]
+command = {}
+required = true
+"#,
+            toml::Value::String(stdio_server_bin()?),
+        ),
+    )?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build_initialized()
+        .await?;
+    let config_before = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+
+    let request_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            cwd: Some(workspace.path().display().to_string()),
+            permissions: Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string()),
+            environments: Some(Vec::new()),
+            ..Default::default()
+        })
+        .await?;
+    let ThreadStartResponse {
+        thread, sandbox, ..
+    } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
+
+    assert_eq!(
+        sandbox,
+        codex_app_server_protocol::SandboxPolicy::ReadOnly {
+            network_access: false,
+        }
+    );
+    assert_eq!(
+        std::fs::read_to_string(codex_home.path().join("config.toml"))?,
+        config_before
+    );
+    let mcp_status: ListMcpServerStatusResponse = mcp
+        .request(|request_id| ClientRequest::McpServerStatusList {
+            request_id,
+            params: ListMcpServerStatusParams {
+                cursor: None,
+                limit: None,
+                detail: Some(McpServerStatusDetail::ToolsAndAuthOnly),
+                thread_id: Some(thread.id),
+            },
+        })
+        .await?;
+    assert_eq!(
+        mcp_status,
+        ListMcpServerStatusResponse {
+            data: Vec::new(),
+            next_cursor: None,
+        }
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_with_nested_git_cwd_respects_effective_permissions_for_project_trust()
+-> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
 
     let codex_home = TempDir::new()?;
@@ -1371,23 +1467,35 @@ async fn thread_start_with_nested_git_cwd_trusts_repo_root() -> Result<()> {
         .with_codex_home(codex_home.path())
         .build_initialized()
         .await?;
+    let config_before = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
 
-    mcp.start_thread(ThreadStartParams {
-        cwd: Some(nested.display().to_string()),
-        sandbox: Some(SandboxMode::WorkspaceWrite),
-        ..Default::default()
-    })
-    .await?;
+    let ThreadStartResponse { sandbox, .. } = mcp
+        .start_thread(ThreadStartParams {
+            cwd: Some(nested.display().to_string()),
+            sandbox: Some(SandboxMode::WorkspaceWrite),
+            ..Default::default()
+        })
+        .await?;
 
     let config_toml = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-    let nested_abs = nested.abs();
-    let trusted_root = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &nested_abs)
-        .await
-        .expect("git root should resolve");
-    let trusted_root_key = project_trust_key(trusted_root.as_path());
-    let nested_key = project_trust_key(&nested);
-    assert!(config_toml.contains(&trusted_root_key));
-    assert!(!config_toml.contains(&nested_key));
+    if cfg!(windows) {
+        assert_eq!(
+            sandbox,
+            codex_app_server_protocol::SandboxPolicy::ReadOnly {
+                network_access: false,
+            }
+        );
+        assert_eq!(config_toml, config_before);
+    } else {
+        let nested_abs = nested.abs();
+        let trusted_root = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &nested_abs)
+            .await
+            .expect("git root should resolve");
+        let trusted_root_key = project_trust_key(trusted_root.as_path());
+        let nested_key = project_trust_key(&nested);
+        assert!(config_toml.contains(&trusted_root_key));
+        assert!(!config_toml.contains(&nested_key));
+    }
 
     Ok(())
 }

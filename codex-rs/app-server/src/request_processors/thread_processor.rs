@@ -13,8 +13,6 @@ use codex_extension_api::ThreadIdleCause;
 use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::mcp::ClientMcpExtensions;
-use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
-use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_thread_store::PersistContext;
 
@@ -1207,21 +1205,22 @@ impl ThreadRequestProcessor {
             .load_with_overrides(config_overrides.clone(), typesafe_overrides.clone())
             .await
             .map_err(|err| config_load_error(&err))?;
-        // The user may have requested WorkspaceWrite or DangerFullAccess via
-        // the command line, though in the process of deriving the Config, it
-        // could be downgraded to ReadOnly (perhaps there is no sandbox
-        // available on Windows or the enterprise config disallows it). The cwd
-        // should still be considered "trusted" in this case.
-        let requested_permissions_trust_project =
-            requested_permissions_trust_project(&typesafe_overrides, config.cwd.as_path());
-        let effective_permissions_trust_project = permission_profile_trusts_project(
-            &config.permissions.effective_permission_profile(),
-            config.cwd.as_path(),
-        );
+        // Project-local config can launch host processes, so only the effective
+        // permissions after managed constraints can imply project trust.
+        let effective_permission_profile = config.permissions.effective_permission_profile();
+        let effective_permissions_trust_project = match &effective_permission_profile {
+            codex_protocol::models::PermissionProfile::Disabled
+            | codex_protocol::models::PermissionProfile::External { .. } => true,
+            codex_protocol::models::PermissionProfile::Managed { .. } => {
+                effective_permission_profile
+                    .file_system_sandbox_policy()
+                    .can_write_path_with_cwd(config.cwd.as_path(), config.cwd.as_path())
+            }
+        };
 
         if requested_cwd.is_some()
             && config.active_project.trust_level.is_none()
-            && (requested_permissions_trust_project || effective_permissions_trust_project)
+            && effective_permissions_trust_project
         {
             let trust_target = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &config.cwd)
                 .await
@@ -5408,45 +5407,6 @@ fn preview_from_rollout_items(items: &[RolloutItem]) -> String {
         })
         .map(|preview| strip_user_message_prefix(preview.as_str()).to_string())
         .unwrap_or_default()
-}
-
-fn requested_permissions_trust_project(overrides: &ConfigOverrides, cwd: &Path) -> bool {
-    if matches!(
-        overrides.sandbox_mode,
-        Some(
-            codex_protocol::config_types::SandboxMode::WorkspaceWrite
-                | codex_protocol::config_types::SandboxMode::DangerFullAccess
-        )
-    ) {
-        return true;
-    }
-
-    if matches!(
-        overrides.default_permissions.as_deref(),
-        Some(
-            BUILT_IN_PERMISSION_PROFILE_WORKSPACE | BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS
-        )
-    ) {
-        return true;
-    }
-
-    overrides
-        .permission_profile
-        .as_ref()
-        .is_some_and(|profile| permission_profile_trusts_project(profile, cwd))
-}
-
-fn permission_profile_trusts_project(
-    profile: &codex_protocol::models::PermissionProfile,
-    cwd: &Path,
-) -> bool {
-    match profile {
-        codex_protocol::models::PermissionProfile::Disabled
-        | codex_protocol::models::PermissionProfile::External { .. } => true,
-        codex_protocol::models::PermissionProfile::Managed { .. } => profile
-            .file_system_sandbox_policy()
-            .can_write_path_with_cwd(cwd, cwd),
-    }
 }
 
 fn build_thread_from_snapshot(
