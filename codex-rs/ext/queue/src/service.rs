@@ -4,7 +4,6 @@ use std::sync::Mutex as StdMutex;
 use std::sync::Weak;
 
 use codex_core::CodexThread;
-use codex_core::NotSubmittedReason;
 use codex_core::StartIfIdleSubmission;
 use codex_core::ThreadManager;
 use codex_core::TurnInput;
@@ -44,14 +43,12 @@ pub struct QueuedItem {
 pub enum QueueServiceError {
     #[error("queue storage failed: {0}")]
     Storage(#[from] ThreadStoreError),
-    #[error("queued item payload is invalid: {0}")]
+    #[error("queued submission payload is invalid: {0}")]
     InvalidPayload(#[from] serde_json::Error),
     #[error("local queued attachment is invalid: {0}")]
     InvalidAttachment(#[from] std::io::Error),
     #[error("Core failed to submit queued user message: {0}")]
     CoreSubmissionError(#[from] CodexErr),
-    #[error("Core declined to start queued user message: {0:?}")]
-    NotStarted(NotSubmittedReason),
     #[error("only user input can be added to the user-message queue")]
     InvalidInput,
     #[error(
@@ -107,15 +104,29 @@ impl QueuedItemService {
     ) -> Result<QueuedItem, QueueServiceError> {
         let input = prepare_queued_user_input(input).await?;
         let payload = serde_json::to_string(&input)?;
-        let item = queued_item_from_record(self.queue.enqueue(thread_id, payload).await?)?;
-        self.emit_changed(thread_id);
+        let item = {
+            let _dispatch_guard = self.dispatch_guard(thread_id).await;
+            let item = queued_item_from_record(self.queue.enqueue(thread_id, payload).await?)?;
+            self.emit_changed(thread_id);
+            item
+        };
         self.wake_if_loaded(thread_id).await;
         Ok(item)
     }
 
     pub async fn list(&self, thread_id: ThreadId) -> Result<Vec<QueuedItem>, QueueServiceError> {
+        self.list_page(thread_id, /*offset*/ 0, MAX_QUEUE_ITEMS)
+            .await
+    }
+
+    pub async fn list_page(
+        &self,
+        thread_id: ThreadId,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<QueuedItem>, QueueServiceError> {
         self.queue
-            .list_page(thread_id, /*offset*/ 0, MAX_QUEUE_ITEMS)
+            .list_page(thread_id, offset, limit)
             .await?
             .into_iter()
             .map(queued_item_from_record)
@@ -129,9 +140,7 @@ impl QueuedItemService {
         mut input: TurnInput,
     ) -> Result<Option<QueuedItem>, QueueServiceError> {
         let _dispatch_guard = self.dispatch_guard(thread_id).await;
-        if let TurnInput::UserInput { client_id, .. } = &mut input
-            && client_id.is_none()
-        {
+        if let TurnInput::UserInput { client_id, .. } = &mut input {
             *client_id = self
                 .list(thread_id)
                 .await?
@@ -190,11 +199,11 @@ impl QueuedItemService {
         Ok(())
     }
 
-    /// Starts the exact queued message when idle and removes it after submission.
+    /// Starts the selected queued message only when its thread is idle.
     pub async fn start(
         &self,
         thread: &CodexThread,
-        queued_item_id: String,
+        queued_item_id: Option<String>,
         trace: Option<W3cTraceContext>,
     ) -> Result<StartIfIdleSubmission, QueueServiceError> {
         let thread_id = thread.session_configured().thread_id;
@@ -203,21 +212,23 @@ impl QueuedItemService {
             .list(thread_id)
             .await?
             .into_iter()
-            .find(|item| item.id == queued_item_id)
+            .find(|item| queued_item_id.as_ref().is_none_or(|id| item.id == *id))
             .ok_or_else(|| ThreadStoreError::InvalidRequest {
-                message: format!("queued item not found: {queued_item_id}"),
+                message: queued_item_id.as_ref().map_or_else(
+                    || "queue is empty".to_string(),
+                    |id| format!("queued submission not found: {id}"),
+                ),
             })?;
+        let queued_item_id = item.id.clone();
         let input @ TurnInput::UserInput { .. } = item.input else {
             return Err(QueueServiceError::InvalidInput);
         };
         let submission = thread
             .start_turn_if_idle(TurnInputRequest::new(input).with_trace(trace))
-            .await
-            .map_err(QueueServiceError::CoreSubmissionError)?;
-        if let StartIfIdleSubmission::NotSubmitted { reason } = submission {
-            return Err(QueueServiceError::NotStarted(reason));
+            .await?;
+        if matches!(submission, StartIfIdleSubmission::Started { .. }) {
+            self.delete_locked(thread_id, queued_item_id).await?;
         }
-        self.delete_locked(thread_id, queued_item_id).await?;
         Ok(submission)
     }
 
@@ -307,10 +318,22 @@ impl QueuedItemService {
 }
 
 async fn prepare_queued_user_input(mut input: TurnInput) -> Result<TurnInput, QueueServiceError> {
-    validate_queued_user_input(&input)?;
     let TurnInput::UserInput { content, client_id } = &mut input else {
         return Err(QueueServiceError::InvalidInput);
     };
+    if content.is_empty() {
+        return Err(QueueServiceError::InvalidInput);
+    }
+    let actual_chars: usize = content
+        .iter()
+        .filter_map(|item| match item {
+            UserInput::Text { text, .. } => Some(text.chars().count()),
+            _ => None,
+        })
+        .sum();
+    if actual_chars > MAX_USER_INPUT_TEXT_CHARS {
+        return Err(QueueServiceError::InputTooLarge { actual_chars });
+    }
     client_id.get_or_insert_with(|| Uuid::now_v7().to_string());
     if !content.iter().any(|item| {
         matches!(
@@ -335,33 +358,13 @@ async fn prepare_queued_user_input(mut input: TurnInput) -> Result<TurnInput, Qu
     .map_err(QueueServiceError::InvalidAttachment)
 }
 
-fn validate_queued_user_input(input: &TurnInput) -> Result<(), QueueServiceError> {
-    let TurnInput::UserInput { content, .. } = input else {
-        return Err(QueueServiceError::InvalidInput);
-    };
-    if content.is_empty() {
-        return Err(QueueServiceError::InvalidInput);
-    }
-    let actual_chars: usize = content
-        .iter()
-        .filter_map(|item| match item {
-            UserInput::Text { text, .. } => Some(text.chars().count()),
-            _ => None,
-        })
-        .sum();
-    if actual_chars > MAX_USER_INPUT_TEXT_CHARS {
-        return Err(QueueServiceError::InputTooLarge { actual_chars });
-    }
-    Ok(())
-}
-
 impl<C> ThreadLifecycleContributor<C> for QueuedItemService
 where
     C: Send + Sync + 'static,
 {
     fn on_thread_idle<'a>(&'a self, input: ThreadIdleInput<'a>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
-            if input.cause != ThreadIdleCause::Completed {
+            if input.cause == ThreadIdleCause::Interrupted {
                 return;
             }
             let Ok(thread_id) = ThreadId::from_string(input.thread_store.level_id()) else {

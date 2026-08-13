@@ -362,6 +362,7 @@ export type { ProcessExitedNotification } from "./ProcessExitedNotification";
 export type { ProcessOutputDeltaNotification } from "./ProcessOutputDeltaNotification";
 export type { ProcessOutputStream } from "./ProcessOutputStream";
 export type { ProcessTerminalSize } from "./ProcessTerminalSize";
+export type { QueuedSubmission } from "./QueuedSubmission";
 export type { RateLimitReachedType } from "./RateLimitReachedType";
 export type { RateLimitResetCredit } from "./RateLimitResetCredit";
 export type { RateLimitResetCreditStatus } from "./RateLimitResetCreditStatus";
@@ -462,6 +463,7 @@ export type { ThreadMetadataGitInfoUpdateParams } from "./ThreadMetadataGitInfoU
 export type { ThreadMetadataUpdateParams } from "./ThreadMetadataUpdateParams";
 export type { ThreadMetadataUpdateResponse } from "./ThreadMetadataUpdateResponse";
 export type { ThreadNameUpdatedNotification } from "./ThreadNameUpdatedNotification";
+export type { ThreadQueueChangedNotification } from "./ThreadQueueChangedNotification";
 export type { ThreadReadParams } from "./ThreadReadParams";
 export type { ThreadReadResponse } from "./ThreadReadResponse";
 export type { ThreadRealtimeAudioChunk } from "./ThreadRealtimeAudioChunk";

@@ -41,9 +41,18 @@ impl Session {
     }
 
     pub(crate) async fn emit_thread_idle_lifecycle_if_idle(&self, cause: ThreadIdleCause) {
-        if self.active_turn.lock().await.is_some()
-            || self.input_queue.has_trigger_turn_mailbox_items().await
-        {
+        let cause = {
+            let active_turn = self.active_turn.lock().await;
+            if active_turn.is_some() {
+                return;
+            }
+            if self.is_interrupted() {
+                ThreadIdleCause::Interrupted
+            } else {
+                cause
+            }
+        };
+        if self.input_queue.has_trigger_turn_mailbox_items().await {
             return;
         }
 

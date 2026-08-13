@@ -122,7 +122,7 @@ impl SqliteQueueStore {
             transaction.rollback().await?;
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "queue reorder must include every queued item exactly once",
+                "queue reorder must include every queued submission exactly once",
             )
             .into());
         }

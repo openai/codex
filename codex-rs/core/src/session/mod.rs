@@ -1168,6 +1168,14 @@ impl Session {
         self.services.elicitations.subscribe()
     }
 
+    pub(crate) fn mark_interrupted(&self) {
+        self.agent_status.send_replace(AgentStatus::Interrupted);
+    }
+
+    pub(crate) fn is_interrupted(&self) -> bool {
+        matches!(*self.agent_status.borrow(), AgentStatus::Interrupted)
+    }
+
     pub(crate) fn get_tx_event(&self) -> Sender<Event> {
         self.tx_event.clone()
     }

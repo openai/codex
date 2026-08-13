@@ -61,6 +61,8 @@ pub(crate) enum ThreadListenerCommand {
         turn_id: Option<String>,
         goal: ThreadGoal,
     },
+    // EmitThreadQueueChanged orders durable queue updates with thread notifications.
+    EmitThreadQueueChanged,
     // EmitWarning is used to order extension warnings with other thread notifications.
     EmitWarning {
         message: String,

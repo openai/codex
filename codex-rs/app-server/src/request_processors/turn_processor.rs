@@ -16,7 +16,7 @@ use codex_skills::system_cache_root_dir;
 use crate::image_url::REMOTE_IMAGE_URL_ERROR;
 use crate::image_url::is_remote_image_url;
 
-const DIRECT_INPUT_TO_MULTI_AGENT_V2_SUBAGENT_ERROR: &str =
+pub(super) const DIRECT_INPUT_TO_MULTI_AGENT_V2_SUBAGENT_ERROR: &str =
     "direct app-server input is not allowed for multi-agent v2 sub-agents";
 
 /// Mirrors the direct-input policy in both request validation and thread capability responses.
@@ -31,7 +31,9 @@ pub(super) fn can_accept_direct_input(
         )
 }
 
-fn validate_user_input_image_urls(input: &[V2UserInput]) -> Result<(), JSONRPCErrorError> {
+pub(super) fn validate_user_input_image_urls(
+    input: &[V2UserInput],
+) -> Result<(), JSONRPCErrorError> {
     if input.iter().any(|item| {
         matches!(
             item,
@@ -451,7 +453,7 @@ impl TurnRequestProcessor {
             .await
     }
 
-    fn input_too_large_error(actual_chars: usize) -> JSONRPCErrorError {
+    pub(super) fn input_too_large_error(actual_chars: usize) -> JSONRPCErrorError {
         let mut error = invalid_params(format!(
             "Input exceeds the maximum length of {MAX_USER_INPUT_TEXT_CHARS} characters."
         ));
@@ -463,7 +465,7 @@ impl TurnRequestProcessor {
         error
     }
 
-    fn validate_v2_input_limit(items: &[V2UserInput]) -> Result<(), JSONRPCErrorError> {
+    pub(super) fn validate_v2_input_limit(items: &[V2UserInput]) -> Result<(), JSONRPCErrorError> {
         let actual_chars: usize = items.iter().map(V2UserInput::text_char_count).sum();
         if actual_chars > MAX_USER_INPUT_TEXT_CHARS {
             return Err(Self::input_too_large_error(actual_chars));

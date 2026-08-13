@@ -6,6 +6,7 @@ use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadGoal;
 use codex_app_server_protocol::ThreadGoalUpdatedNotification;
+use codex_app_server_protocol::ThreadQueueChangedNotification;
 use codex_app_server_protocol::WarningNotification;
 use codex_core::NewThread;
 use codex_core::StartThreadOptions;
@@ -26,8 +27,8 @@ use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
+use codex_queue_extension::QueuedItemService;
 use codex_rollout::state_db::StateDbHandle;
-use codex_thread_store::QueueStore;
 
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
@@ -45,8 +46,8 @@ pub(crate) struct ThreadExtensionDependencies {
     pub(crate) executor_skill_provider: Arc<dyn codex_skills_extension::SkillProvider>,
     pub(crate) git_attribution_base_url: String,
     pub(crate) http_client_factory: HttpClientFactory,
-    /// Process-scoped persistence backend for queued user messages.
-    pub(crate) queue_store: Option<Arc<dyn QueueStore>>,
+    /// Process-scoped queue shared by idle dispatch and app-server requests.
+    pub(crate) queue_service: Option<Arc<QueuedItemService>>,
 }
 
 pub(crate) fn thread_extensions<S>(
@@ -67,15 +68,10 @@ where
         executor_skill_provider,
         git_attribution_base_url,
         http_client_factory,
-        queue_store,
+        queue_service,
     } = dependencies;
     let mut builder = ExtensionRegistryBuilder::<Config>::with_event_sink(Arc::clone(&event_sink));
-    if let Some(queue) = queue_store {
-        let queue_service = Arc::new(codex_queue_extension::QueuedItemService::new(
-            queue,
-            thread_manager.clone(),
-            event_sink,
-        ));
+    if let Some(queue_service) = queue_service {
         codex_queue_extension::install(&mut builder, queue_service);
     }
     // copybara:strip-for-public begin
@@ -175,6 +171,40 @@ const EXTENSION_WARNING_SUBSCRIBER_TIMEOUT: Duration = Duration::from_secs(10);
 impl ExtensionEventSink for AppServerExtensionEventSink {
     fn emit(&self, event: Event) {
         match event.msg {
+            EventMsg::ThreadQueueChanged(queue_event) => {
+                let thread_id = queue_event.thread_id;
+                if let Some(listener_command_tx) = self
+                    .thread_state_manager
+                    .current_listener_command_tx(thread_id)
+                {
+                    let command = ThreadListenerCommand::EmitThreadQueueChanged;
+                    if listener_command_tx.send(command).is_ok() {
+                        return;
+                    }
+                    tracing::warn!(
+                        "failed to enqueue extension queue update for {thread_id}: listener command channel is closed"
+                    );
+                }
+                let outgoing = Arc::clone(&self.outgoing);
+                let thread_state_manager = self.thread_state_manager.clone();
+                tokio::spawn(async move {
+                    let subscribed_connection_ids = thread_state_manager
+                        .subscribed_connection_ids(thread_id)
+                        .await;
+                    let outgoing = ThreadScopedOutgoingMessageSender::new(
+                        outgoing,
+                        subscribed_connection_ids,
+                        thread_id,
+                    );
+                    outgoing
+                        .send_server_notification(ServerNotification::ThreadQueueChanged(
+                            ThreadQueueChangedNotification {
+                                thread_id: thread_id.to_string(),
+                            },
+                        ))
+                        .await;
+                });
+            }
             EventMsg::ThreadGoalUpdated(thread_goal_event) => {
                 let thread_id = thread_goal_event.thread_id;
                 let turn_id = thread_goal_event.turn_id;

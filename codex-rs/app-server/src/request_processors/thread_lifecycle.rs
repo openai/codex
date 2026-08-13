@@ -1,5 +1,6 @@
 use super::*;
 use crate::extensions::send_thread_warning;
+use codex_app_server_protocol::ThreadQueueChangedNotification;
 use codex_extension_api::ThreadIdleCause;
 use codex_protocol::config_types::MultiAgentMode;
 
@@ -497,6 +498,23 @@ pub(super) async fn handle_thread_listener_command(
                         thread_id: conversation_id.to_string(),
                         turn_id,
                         goal,
+                    },
+                ))
+                .await;
+        }
+        ThreadListenerCommand::EmitThreadQueueChanged => {
+            let subscribed_connection_ids = thread_state_manager
+                .subscribed_connection_ids(conversation_id)
+                .await;
+            let outgoing = ThreadScopedOutgoingMessageSender::new(
+                Arc::clone(outgoing),
+                subscribed_connection_ids,
+                conversation_id,
+            );
+            outgoing
+                .send_server_notification(ServerNotification::ThreadQueueChanged(
+                    ThreadQueueChangedNotification {
+                        thread_id: conversation_id.to_string(),
                     },
                 ))
                 .await;

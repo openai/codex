@@ -83,7 +83,9 @@ impl QueueStore for LocalQueueStore {
                 .await
                 .map_err(|error| match error.downcast_ref::<sqlx::Error>() {
                     Some(sqlx::Error::RowNotFound) => ThreadStoreError::InvalidRequest {
-                        message: format!("queue cannot contain more than {MAX_QUEUE_ITEMS} items"),
+                        message: format!(
+                            "queue cannot contain more than {MAX_QUEUE_ITEMS} submissions"
+                        ),
                     },
                     _ => ThreadStoreError::Internal {
                         message: format!("queue storage failed: {error}"),

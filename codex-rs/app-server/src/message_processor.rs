@@ -37,6 +37,7 @@ use crate::request_processors::ProcessExecRequestProcessor;
 use crate::request_processors::RemoteControlRequestProcessor;
 use crate::request_processors::SearchRequestProcessor;
 use crate::request_processors::ThreadGoalRequestProcessor;
+use crate::request_processors::ThreadQueueRequestProcessor;
 use crate::request_processors::ThreadRequestProcessor;
 use crate::request_processors::TurnRequestProcessor;
 use crate::request_processors::WindowsSandboxRequestProcessor;
@@ -77,6 +78,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::W3cTraceContext;
+use codex_queue_extension::QueuedItemService;
 use codex_rollout::StateDbHandle;
 use codex_state::log_db::LogDbLayer;
 use codex_thread_store::LocalQueueStore;
@@ -121,6 +123,7 @@ pub(crate) struct MessageProcessor {
     remote_control_processor: RemoteControlRequestProcessor,
     search_processor: SearchRequestProcessor,
     thread_goal_processor: ThreadGoalRequestProcessor,
+    thread_queue_processor: ThreadQueueRequestProcessor,
     thread_processor: ThreadRequestProcessor,
     turn_processor: TurnRequestProcessor,
     windows_sandbox_processor: WindowsSandboxRequestProcessor,
@@ -269,7 +272,17 @@ impl MessageProcessor {
             ),
         );
         let goal_service = Arc::new(GoalService::new());
+        let extension_event_sink =
+            app_server_extension_event_sink(outgoing.clone(), thread_state_manager.clone());
+        let mut queue_service = None;
         let thread_manager = Arc::new_cyclic(|thread_manager| {
+            queue_service = queue_store.map(|queue| {
+                Arc::new(QueuedItemService::new(
+                    queue,
+                    thread_manager.clone(),
+                    Arc::clone(&extension_event_sink),
+                ))
+            });
             let manager = ThreadManager::new(
                 config.as_ref(),
                 auth_manager.clone(),
@@ -280,10 +293,7 @@ impl MessageProcessor {
                 thread_extensions(
                     guardian_agent_spawner(thread_manager.clone()),
                     ThreadExtensionDependencies {
-                        event_sink: app_server_extension_event_sink(
-                            outgoing.clone(),
-                            thread_state_manager.clone(),
-                        ),
+                        event_sink: Arc::clone(&extension_event_sink),
                         auth_manager: auth_manager.clone(),
                         state_db: state_db.clone(),
                         analytics_events_client: analytics_events_client.clone(),
@@ -293,7 +303,7 @@ impl MessageProcessor {
                         executor_skill_provider: Arc::clone(&executor_skill_provider),
                         git_attribution_base_url: config.chatgpt_base_url.clone(),
                         http_client_factory: config.http_client_factory(),
-                        queue_store,
+                        queue_service: queue_service.clone(),
                     },
                 ),
                 Arc::new(CodexHomeUserInstructionsProvider::new(
@@ -432,6 +442,12 @@ impl MessageProcessor {
             state_db.clone(),
             Arc::clone(&goal_service),
         );
+        let thread_queue_processor = ThreadQueueRequestProcessor::new(
+            Arc::clone(&thread_manager),
+            Arc::clone(&thread_store),
+            outgoing.clone(),
+            queue_service,
+        );
         let thread_processor = ThreadRequestProcessor::new(
             auth_manager.clone(),
             Arc::clone(&thread_manager),
@@ -522,6 +538,7 @@ impl MessageProcessor {
             remote_control_processor,
             search_processor,
             thread_goal_processor,
+            thread_queue_processor,
             thread_processor,
             turn_processor,
             windows_sandbox_processor,
@@ -1124,6 +1141,36 @@ impl MessageProcessor {
                     .thread_goal_clear(request_id.clone(), params)
                     .await
             }
+            ClientRequest::ThreadQueueAdd { params, .. } => self
+                .thread_queue_processor
+                .add(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::ThreadQueueList { params, .. } => self
+                .thread_queue_processor
+                .list(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::ThreadQueueUpdate { params, .. } => self
+                .thread_queue_processor
+                .update(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::ThreadQueueDelete { params, .. } => self
+                .thread_queue_processor
+                .delete(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::ThreadQueueReorder { params, .. } => self
+                .thread_queue_processor
+                .reorder(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::ThreadQueueStart { params, .. } => self
+                .thread_queue_processor
+                .start(&request_id, params)
+                .await
+                .map(|response| Some(response.into())),
             ClientRequest::ThreadMetadataUpdate { params, .. } => {
                 self.thread_processor.thread_metadata_update(params).await
             }
