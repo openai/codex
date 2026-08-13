@@ -242,7 +242,26 @@ impl LunaSampler {
         let mut deltas = String::new();
         while let Some(event) = stream.rx_event.recv().await {
             match event.map_err(LunaSamplerError::Api)? {
-                ResponseEvent::OutputTextDelta(delta) => deltas.push_str(&delta),
+                ResponseEvent::OutputTextDelta(delta) => {
+                    deltas.push_str(&delta);
+                    if deltas.len() > MAX_OUTPUT_BYTES {
+                        return Err(LunaSamplerError::OutputTooLarge);
+                    }
+
+                    if serde_json::from_str::<serde_json::Map<String, Value>>(&deltas).is_ok() {
+                        let mut remaining_events = stream.rx_event;
+                        tokio::spawn(async move {
+                            // The transport needs a live consumer until completion to keep its
+                            // authenticated WebSocket available for the next sample.
+                            while let Some(event) = remaining_events.recv().await {
+                                if matches!(event, Ok(ResponseEvent::Completed { .. }) | Err(_)) {
+                                    break;
+                                }
+                            }
+                        });
+                        return Ok(deltas);
+                    }
+                }
                 ResponseEvent::OutputItemDone(ResponseItem::Message { role, content, .. })
                     if role == "assistant" =>
                 {
