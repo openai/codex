@@ -387,6 +387,33 @@ impl PermissionProfile {
         }
     }
 
+    /// Intersects managed filesystem permissions with read-only access and restricts network.
+    ///
+    /// Returns `None` when filesystem enforcement belongs to an external caller.
+    pub fn intersect_with_read_only(&self) -> Option<Self> {
+        let mut file_system = self.file_system_sandbox_policy();
+        match file_system.kind {
+            FileSystemSandboxKind::Restricted => {
+                for entry in &mut file_system.entries {
+                    entry.access = match entry.access {
+                        FileSystemAccessMode::Read | FileSystemAccessMode::Write => {
+                            FileSystemAccessMode::Read
+                        }
+                        FileSystemAccessMode::Deny => FileSystemAccessMode::Deny,
+                    };
+                }
+            }
+            FileSystemSandboxKind::Unrestricted => {
+                file_system = FileSystemSandboxPolicy::read_only();
+            }
+            FileSystemSandboxKind::ExternalSandbox => return None,
+        }
+        Some(Self::from_runtime_permissions(
+            &file_system,
+            NetworkSandboxPolicy::Restricted,
+        ))
+    }
+
     /// Managed workspace-write filesystem access with restricted network
     /// access.
     ///

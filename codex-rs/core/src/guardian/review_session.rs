@@ -44,6 +44,7 @@ use crate::config::NetworkProxySpec;
 use crate::config::Permissions;
 use crate::context::ContextualUserFragment;
 use crate::context::GuardianFollowupReviewReminder;
+use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::session::GitEnrichmentPolicy;
 use crate::session::SessionIo;
 use crate::session::session::Session;
@@ -184,6 +185,7 @@ struct GuardianReviewSessionReuseKey {
     zsh_path: Option<PathBuf>,
     features: ManagedFeatures,
     use_experimental_unified_exec_tool: bool,
+    environment_ids: Vec<String>,
 }
 
 impl GuardianReviewSessionReuseKey {
@@ -221,7 +223,17 @@ impl GuardianReviewSessionReuseKey {
             zsh_path: spawn_config.zsh_path.clone(),
             features: spawn_config.features.clone(),
             use_experimental_unified_exec_tool: spawn_config.use_experimental_unified_exec_tool,
+            environment_ids: Vec::new(),
         }
+    }
+
+    fn with_environments(mut self, environments: &TurnEnvironmentSnapshot) -> Self {
+        self.environment_ids = environments
+            .captured_environments()
+            .into_keys()
+            .collect::<Vec<_>>();
+        self.environment_ids.sort_unstable();
+        self
     }
 }
 
@@ -359,16 +371,18 @@ impl GuardianReviewSessionManager {
                 .enabled(Feature::GuardianReuseParentCompaction)
                 .then(|| encrypted_parent_compaction(parent_history.raw_items()))
                 .flatten();
+            let parent_context = GuardianReviewContext::from(parent_turn);
             let reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
                 &spawn_config,
                 parent_session.user_instructions().await,
                 parent_history.history_version(),
-            );
+            )
+            .with_environments(parent_context.environments());
             let spawn_cancel_token = self.cancellation_token.child_token();
             let spawn_cancel_guard = spawn_cancel_token.clone().drop_guard();
             let review_session = spawn_guardian_review_session(
                 &parent_session,
-                &GuardianReviewContext::from(parent_turn),
+                &parent_context,
                 spawn_config,
                 reuse_key,
                 spawn_cancel_token.clone(),
@@ -439,8 +453,8 @@ impl GuardianReviewSessionManager {
             &params.spawn_config,
             params.parent_session.user_instructions().await,
             parent_history.history_version(),
-        );
-        let mut stale_trunk_to_shutdown = None;
+        )
+        .with_environments(params.parent_context.environments());
         let mut spawned_trunk = false;
         let trunk_candidate = match run_before_review_deadline(
             deadline,
@@ -460,8 +474,9 @@ impl GuardianReviewSessionManager {
                 if let Some(trunk) = state.trunk.as_ref()
                     && trunk.reuse_key != next_reuse_key
                     && trunk.review_lock.try_acquire().is_ok()
+                    && let Some(stale_trunk) = state.trunk.take()
                 {
-                    stale_trunk_to_shutdown = state.trunk.take();
+                    stale_trunk.shutdown_in_background();
                 }
 
                 if state.trunk.is_none() {
@@ -503,10 +518,6 @@ impl GuardianReviewSessionManager {
                 return (outcome, GuardianReviewAnalyticsResult::without_session());
             }
         };
-
-        if let Some(review_session) = stale_trunk_to_shutdown {
-            review_session.shutdown_in_background();
-        }
 
         let Some(trunk) = trunk_candidate else {
             return (
@@ -880,7 +891,7 @@ async fn run_review_on_session(
         .total_token_usage()
         .await
         .unwrap_or_default();
-    let guardian_permission_profile = PermissionProfile::read_only();
+    let guardian_permission_profile = params.spawn_config.permissions.permission_profile().clone();
     let parent_turn_environments = params.parent_context.environments().to_selections();
     // TODO(anp): Migrate guardian review thread settings to a PathUri fallback cwd so foreign
     // parent environments do not fall back to the host-native config cwd.
@@ -1127,9 +1138,16 @@ pub(crate) fn build_guardian_review_session_config(
     guardian_config.notify = None;
     guardian_config.developer_instructions = None;
     guardian_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
+    let guardian_permission_profile = parent_config
+        .permissions
+        .permission_profile()
+        .intersect_with_read_only()
+        .unwrap_or(PermissionProfile::External {
+            network: codex_protocol::permissions::NetworkSandboxPolicy::Restricted,
+        });
     guardian_config
         .permissions
-        .set_permission_profile(PermissionProfile::read_only())
+        .set_permission_profile(guardian_permission_profile)
         .map_err(|err| {
             anyhow::anyhow!("guardian review session could not set permission profile: {err}")
         })?;
@@ -1931,7 +1949,8 @@ mod tests {
                 .clone_history()
                 .await
                 .history_version(),
-        );
+        )
+        .with_environments(params.parent_context.environments());
         let manager = Arc::new(GuardianReviewSessionManager {
             state: Arc::new(Mutex::new(GuardianReviewSessionState {
                 trunk: Some(Arc::new(review_session)),

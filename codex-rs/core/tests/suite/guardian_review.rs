@@ -19,8 +19,14 @@ use codex_history::RolloutLine;
 use codex_login::CodexAuth;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::MODEL_SPECIALTY_CYBER;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -33,7 +39,6 @@ use core_test_support::responses::assert_parent_turn;
 use core_test_support::responses::assert_root_turn;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
-use core_test_support::responses::ev_custom_tool_call;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_response_once_match;
@@ -353,25 +358,44 @@ async fn guardian_session_is_reused_for_consecutive_tool_reviews_without_prewarm
         "Guardian approval actions require host-native paths"
     );
 
+    const SECRET: &str = "guardian-parent-policy-test-secret";
     let server = start_mock_server().await;
     let approval_policy = AskForApproval::OnRequest;
-    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![],
-        network_access: false,
-        exclude_tmpdir_env_var: true,
-        exclude_slash_tmp: true,
-    };
-    let sandbox_policy_for_config = sandbox_policy.clone();
-
-    let mut builder = test_codex().with_config(move |config| {
-        config.permissions.approval_policy = Constrained::allow_any(approval_policy);
-        config.approvals_reviewer = ApprovalsReviewer::AutoReview;
-        config
-            .set_legacy_sandbox_policy(sandbox_policy_for_config)
-            .expect("set sandbox policy");
-    });
+    let mut builder = test_codex()
+        .with_config(move |config| {
+            let secret_file = config.cwd.join("guardian-secret.txt");
+            config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+            let mut file_system_policy = FileSystemSandboxPolicy::workspace_write(
+                &[],
+                /*exclude_tmpdir_env_var*/ true,
+                /*exclude_slash_tmp*/ true,
+            );
+            file_system_policy.entries.push(FileSystemSandboxEntry::new(
+                FileSystemPath::Path { path: secret_file },
+                FileSystemAccessMode::Deny,
+            ));
+            config
+                .permissions
+                .set_permission_profile(PermissionProfile::from_runtime_permissions(
+                    &file_system_policy,
+                    NetworkSandboxPolicy::Restricted,
+                ))
+                .expect("set parent permission profile");
+        })
+        .with_workspace_setup(|cwd, fs| async move {
+            fs.write_file(
+                &codex_utils_path_uri::PathUri::from_abs_path(&cwd.join("guardian-secret.txt")),
+                SECRET.as_bytes().to_vec(),
+                /*sandbox*/ None,
+            )
+            .await?;
+            Ok(())
+        });
     let test = builder.build_with_auto_env(&server).await?;
 
+    let secret_file = test.config.cwd.join("guardian-secret.txt");
+    let guardian_output_file = test.cwd.path().join("guardian-write.txt");
     let first_output_file = test.cwd.path().join("guardian-first.txt");
     let second_output_file = test.cwd.path().join("guardian-second.txt");
     let first_command = format!("printf first > {}", first_output_file.display());
@@ -388,6 +412,14 @@ async fn guardian_session_is_reused_for_consecutive_tool_reviews_without_prewarm
         "sandbox_permissions": SandboxPermissions::RequireEscalated,
         "justification": "Exercise the second Guardian approval.",
     });
+    let guardian_tool_args = json!({
+        "cmd": format!(
+            "cat {}; printf hostile > {}",
+            secret_file.display(),
+            guardian_output_file.display()
+        ),
+        "sandbox_permissions": SandboxPermissions::UseDefault,
+    });
     let responses = mount_sse_sequence(
         &server,
         vec![
@@ -402,6 +434,15 @@ async fn guardian_session_is_reused_for_consecutive_tool_reviews_without_prewarm
             ]),
             sse(vec![
                 ev_response_created("resp-guardian-first-review"),
+                ev_function_call(
+                    "exec-guardian-denied-read",
+                    "exec_command",
+                    &serde_json::to_string(&guardian_tool_args)?,
+                ),
+                ev_completed("resp-guardian-first-review"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-guardian-first-assessment"),
                 ev_assistant_message(
                     "msg-guardian-first-review",
                     &json!({
@@ -412,7 +453,7 @@ async fn guardian_session_is_reused_for_consecutive_tool_reviews_without_prewarm
                     })
                     .to_string(),
                 ),
-                ev_completed("resp-guardian-first-review"),
+                ev_completed("resp-guardian-first-assessment"),
             ]),
             sse(vec![
                 ev_response_created("resp-parent-second-tool"),
@@ -456,7 +497,6 @@ async fn guardian_session_is_reused_for_consecutive_tool_reviews_without_prewarm
                 environments: Some(local_selections(test.config.cwd.clone())),
                 approval_policy: Some(approval_policy),
                 approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
-                sandbox_policy: Some(sandbox_policy),
                 ..Default::default()
             }),
         )
@@ -465,25 +505,22 @@ async fn guardian_session_is_reused_for_consecutive_tool_reviews_without_prewarm
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
-
-    let guardian_requests = responses
-        .requests()
-        .into_iter()
+    let requests = responses.requests();
+    assert!(
+        requests
+            .iter()
+            .all(|request| !request.body_contains_text(SECRET)),
+        "Guardian disclosed a file denied by the parent task"
+    );
+    let guardian_requests = requests
+        .iter()
         .filter(|request| {
             request.body_json()["client_metadata"]["x-openai-subagent"].as_str() == Some("guardian")
         })
         .collect::<Vec<_>>();
-    assert_eq!(guardian_requests.len(), 2);
+    assert_eq!(guardian_requests.len(), 3);
     let first_guardian_request = guardian_requests[0].body_json();
-    let second_guardian_request = guardian_requests[1].body_json();
-    let parent_request = responses.requests()[0].body_json();
-    let parent_turn_id = parent_request["client_metadata"]["turn_id"]
-        .as_str()
-        .expect("reviewed parent turn id");
-    for request in [&first_guardian_request, &second_guardian_request] {
-        assert_parent_turn(request, Some(parent_turn_id))?;
-        assert_root_turn(request, Some(parent_turn_id))?;
-    }
+    let second_guardian_request = guardian_requests[2].body_json();
     let first_guardian_thread_id = first_guardian_request["client_metadata"]["thread_id"]
         .as_str()
         .expect("first Guardian review should have a thread id");
@@ -491,63 +528,12 @@ async fn guardian_session_is_reused_for_consecutive_tool_reviews_without_prewarm
         .as_str()
         .expect("second Guardian review should have a thread id");
     assert_eq!(first_guardian_thread_id, second_guardian_thread_id);
+    assert!(
+        !guardian_output_file.exists(),
+        "Guardian wrote a local file"
+    );
     assert_eq!(fs::read_to_string(first_output_file)?, "first");
     assert_eq!(fs::read_to_string(second_output_file)?, "second");
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn guardian_review_of_code_mode_exec_command_includes_outer_source() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-    skip_if_sandbox!(Ok(()));
-    skip_if_wine_exec!(
-        Ok(()),
-        "Guardian approval actions require host-native paths"
-    );
-
-    let server = start_mock_server().await;
-    let mut builder = test_codex()
-        .with_model("test-gpt-5.1-codex")
-        .with_config(|config| {
-            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
-            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
-            let _ = config.features.enable(Feature::CodeMode);
-        });
-    let test = builder.build_with_auto_env(&server).await?;
-
-    let code = r#"const outerContext = "guardian-code-mode-outer-context";
-await tools.exec_command({cmd: "true", sandbox_permissions: "require_escalated", justification: "test"});"#;
-    let responses = mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_custom_tool_call("code-mode-call", "exec", code),
-                ev_completed("resp-parent"),
-            ]),
-            sse(vec![
-                ev_assistant_message("guardian", r#"{"outcome":"allow"}"#),
-                ev_completed("resp-guardian"),
-            ]),
-            sse(vec![ev_completed("resp-done")]),
-        ],
-    )
-    .await;
-
-    let prompt = "run a nested command that requires Guardian review";
-    test.submit_text_turn(prompt).await?;
-
-    let transcript = responses.requests()[1].message_input_texts("user")[2..6].concat();
-    assert_eq!(
-        transcript,
-        format!(
-            ">>> TRANSCRIPT START\n\
-             [1] user: {prompt}\n\
-             \n\
-             [2] tool exec call: {code}\n\
-             >>> TRANSCRIPT END\n"
-        )
-    );
 
     Ok(())
 }

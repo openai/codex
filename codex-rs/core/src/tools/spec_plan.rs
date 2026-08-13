@@ -70,6 +70,7 @@ use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ToolMode;
@@ -890,9 +891,16 @@ fn code_mode_namespace_descriptions(
 #[instrument(level = "trace", skip_all)]
 fn add_core_tool_sources(context: &CoreToolPlanContext<'_>, registry: &mut ToolRegistry) {
     // Guardian reviewers receive only `exec_command`, `write_stdin`, and `view_image`
-    // when an environment is available; all general tool sources stay excluded.
+    // when a managed sandbox can enforce the parent's filesystem restrictions;
+    // all general tool sources stay excluded.
     if crate::guardian::is_guardian_reviewer_source(&context.turn_context.session_source) {
         let turn_context = context.turn_context;
+        if !matches!(
+            turn_context.permission_profile(),
+            PermissionProfile::Managed { .. }
+        ) {
+            return;
+        }
         let environment_mode = tool_environment_mode(context.environments);
         if environment_mode.has_environment() {
             let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
