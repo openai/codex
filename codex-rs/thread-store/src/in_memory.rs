@@ -5,6 +5,8 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
 use std::sync::OnceLock;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use chrono::DateTime;
 use chrono::Utc;
@@ -383,6 +385,33 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn metadata_update_returns_the_materialized_thread() {
+        let store = InMemoryThreadStore::default();
+        let thread_id = ThreadId::default();
+        store
+            .create_thread(create_thread_params(thread_id, ThreadHistoryMode::Legacy))
+            .await
+            .expect("create thread");
+
+        let updated = ThreadStore::update_thread_metadata(
+            &store,
+            UpdateThreadMetadataParams {
+                thread_id,
+                patch: ThreadMetadataPatch {
+                    name: Some(Some("renamed".to_string())),
+                    ..Default::default()
+                },
+                include_archived: false,
+            },
+        )
+        .await
+        .expect("update metadata");
+        let updated = updated.expect("in-memory store returns updated thread");
+        assert_eq!(updated.thread_id, thread_id);
+        assert_eq!(updated.name.as_deref(), Some("renamed"));
+    }
+
     fn create_thread_params(
         thread_id: ThreadId,
         history_mode: ThreadHistoryMode,
@@ -463,6 +492,7 @@ pub struct InMemoryThreadStoreCalls {
 #[derive(Default)]
 pub struct InMemoryThreadStore {
     state: tokio::sync::Mutex<InMemoryThreadStoreState>,
+    omit_metadata_update_result: AtomicBool,
 }
 
 #[derive(Default)]
@@ -497,6 +527,12 @@ impl InMemoryThreadStore {
     /// Returns the calls observed by this store.
     pub async fn calls(&self) -> InMemoryThreadStoreCalls {
         self.state.lock().await.calls.clone()
+    }
+
+    /// Makes metadata updates apply normally while returning no materialized thread.
+    pub fn omit_metadata_update_result_for_testing(&self) {
+        self.omit_metadata_update_result
+            .store(true, Ordering::Relaxed);
     }
 
     async fn create_thread(&self, params: CreateThreadParams) -> ThreadStoreResult<()> {
@@ -930,8 +966,11 @@ impl ThreadStore for InMemoryThreadStore {
     fn update_thread_metadata(
         &self,
         params: UpdateThreadMetadataParams,
-    ) -> ThreadStoreFuture<'_, StoredThread> {
-        Box::pin(InMemoryThreadStore::update_thread_metadata(self, params))
+    ) -> ThreadStoreFuture<'_, Option<StoredThread>> {
+        Box::pin(async move {
+            let updated = InMemoryThreadStore::update_thread_metadata(self, params).await?;
+            Ok((!self.omit_metadata_update_result.load(Ordering::Relaxed)).then_some(updated))
+        })
     }
 
     fn move_thread_to_section(

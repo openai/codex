@@ -336,19 +336,31 @@ impl LiveThread {
         Ok(())
     }
 
+    /// Updates metadata while preserving this API's materialized-thread contract.
+    ///
+    /// Stores may successfully return no thread for a no-op update, so this reads the thread as a
+    /// fallback in that case.
     pub async fn update_metadata(
         &self,
         patch: ThreadMetadataPatch,
         include_archived: bool,
     ) -> ThreadStoreResult<StoredThread> {
         self.flush_pending_metadata_update().await?;
-        self.thread_store
+        let updated = self
+            .thread_store
             .update_thread_metadata(UpdateThreadMetadataParams {
                 thread_id: self.thread_id,
                 patch,
                 include_archived,
             })
-            .await
+            .await?;
+        match updated {
+            Some(thread) => Ok(thread),
+            None => {
+                self.read_thread(include_archived, /*include_history*/ false)
+                    .await
+            }
+        }
     }
 
     /// Returns the live local rollout path for legacy local-only callers.

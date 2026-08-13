@@ -1652,6 +1652,135 @@ async fn rollout_path_resume_and_fork_read_history_through_thread_store() {
 }
 
 #[tokio::test]
+async fn metadata_update_without_result_reads_only_when_the_caller_needs_the_thread() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    config.experimental_thread_store = ThreadStoreConfig::InMemory {
+        id: format!("metadata-update-none-{}", uuid::Uuid::new_v4()),
+    };
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let thread_store = thread_store_from_config(&config, /*state_db*/ None);
+    let in_memory_store = thread_store
+        .as_any()
+        .downcast_ref::<InMemoryThreadStore>()
+        .expect("configured in-memory store");
+    let manager = ThreadManager::new(
+        &config,
+        auth_manager.clone(),
+        build_models_manager(&config, auth_manager),
+        crate::CodexAppsToolsCache::default(),
+        SessionSource::Exec,
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        empty_extension_registry(),
+        Arc::new(crate::test_support::EmptyUserInstructionsProvider),
+        /*analytics_events_client*/ None,
+        thread_store.clone(),
+        /*agent_graph_store*/ None,
+        TEST_INSTALLATION_ID.to_string(),
+        /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
+    );
+    let started = manager
+        .start_thread(StartThreadOptions::new(config))
+        .await
+        .expect("start thread");
+    started
+        .thread
+        .flush_rollout()
+        .await
+        .expect("flush initial metadata");
+    manager
+        .update_thread_metadata(
+            started.thread_id,
+            ThreadMetadataPatch {
+                name: Some(Some("initial name".to_string())),
+                ..Default::default()
+            },
+            /*include_archived*/ false,
+        )
+        .await
+        .expect("flush pending live metadata before measuring calls");
+    in_memory_store.omit_metadata_update_result_for_testing();
+
+    let before_loaded_update = in_memory_store.calls().await;
+    let loaded = manager
+        .update_thread_metadata(
+            started.thread_id,
+            ThreadMetadataPatch {
+                name: Some(Some("loaded name".to_string())),
+                ..Default::default()
+            },
+            /*include_archived*/ false,
+        )
+        .await
+        .expect("update loaded thread metadata");
+    assert_eq!(loaded.name.as_deref(), Some("loaded name"));
+    let after_loaded_update = in_memory_store.calls().await;
+    assert_eq!(
+        after_loaded_update.update_thread_metadata,
+        before_loaded_update.update_thread_metadata + 1
+    );
+    assert_eq!(
+        after_loaded_update.read_thread,
+        before_loaded_update.read_thread + 1
+    );
+
+    started
+        .thread
+        .append_rollout_items(&[RolloutItem::EventMsg(EventMsg::UserMessage(
+            UserMessageEvent {
+                message: "completion-only metadata".to_string(),
+                ..Default::default()
+            },
+        ))])
+        .await
+        .expect("append item with derived metadata");
+    let after_completion_only_update = in_memory_store.calls().await;
+    assert_eq!(
+        after_completion_only_update.update_thread_metadata,
+        after_loaded_update.update_thread_metadata + 1
+    );
+    assert_eq!(
+        after_completion_only_update.read_thread,
+        after_loaded_update.read_thread
+    );
+
+    started
+        .thread
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown loaded thread");
+    let _ = manager.remove_thread(&started.thread_id).await;
+    let before_cold_update = in_memory_store.calls().await;
+    let cold = manager
+        .update_thread_metadata(
+            started.thread_id,
+            ThreadMetadataPatch {
+                name: Some(Some("cold name".to_string())),
+                ..Default::default()
+            },
+            /*include_archived*/ false,
+        )
+        .await
+        .expect("update cold thread metadata");
+    assert_eq!(cold.name.as_deref(), Some("cold name"));
+    let after_cold_update = in_memory_store.calls().await;
+    assert_eq!(
+        after_cold_update.update_thread_metadata,
+        before_cold_update.update_thread_metadata + 1
+    );
+    assert_eq!(
+        after_cold_update.read_thread,
+        before_cold_update.read_thread + 1
+    );
+}
+
+#[tokio::test]
 async fn new_uses_active_provider_for_model_refresh() {
     let server = MockServer::start().await;
     let models_mock = mount_models_once(&server, ModelsResponse { models: vec![] }).await;

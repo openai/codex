@@ -759,7 +759,8 @@ impl ThreadManager {
     ///
     /// Loaded threads route through `CodexThread`/`LiveThread`, so metadata changes stay ordered
     /// with live rollout writes. Cold threads go directly to the store, which owns unloaded JSONL
-    /// compatibility and SQLite metadata updates.
+    /// compatibility and SQLite metadata updates. This API always returns a materialized thread;
+    /// if the store reports a successful no-op without one, it performs a fallback read.
     pub async fn update_thread_metadata(
         &self,
         thread_id: ThreadId,
@@ -777,7 +778,8 @@ impl ThreadManager {
                 .await
                 .map_err(|err| thread_store_metadata_update_error(thread_id, err));
         }
-        self.state
+        let updated = self
+            .state
             .thread_store
             .update_thread_metadata(UpdateThreadMetadataParams {
                 thread_id,
@@ -790,7 +792,20 @@ impl ThreadManager {
                     CodexErr::ThreadNotFound(thread_id)
                 }
                 err => thread_store_metadata_update_error(thread_id, err),
-            })
+            })?;
+        match updated {
+            Some(thread) => Ok(thread),
+            None => self
+                .state
+                .thread_store
+                .read_thread(ReadThreadParams {
+                    thread_id,
+                    include_archived,
+                    include_history: false,
+                })
+                .await
+                .map_err(|err| thread_store_metadata_update_error(thread_id, err)),
+        }
     }
 
     /// Moves a persisted thread to, within, or out of a server-ordered section.

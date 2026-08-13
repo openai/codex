@@ -529,8 +529,12 @@ impl ThreadStore for LocalThreadStore {
     fn update_thread_metadata(
         &self,
         params: UpdateThreadMetadataParams,
-    ) -> ThreadStoreFuture<'_, StoredThread> {
-        Box::pin(async move { update_thread_metadata::update_thread_metadata(self, params).await })
+    ) -> ThreadStoreFuture<'_, Option<StoredThread>> {
+        Box::pin(async move {
+            update_thread_metadata::update_thread_metadata(self, params)
+                .await
+                .map(Some)
+        })
     }
 
     fn move_thread_to_section(
