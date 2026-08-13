@@ -267,7 +267,12 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
         }
         GuardianApprovalRequest::McpToolCall {
             server, tool_name, ..
-        } if server == "node_repl" && tool_name == "js" => {
+        } if server == "node_repl"
+            && tool_name == "js"
+            && parent_context.is_some_and(|context| {
+                context.turn().model_info.node_repl_auto_review_required
+            }) =>
+        {
             push_text(headings.action_intro.to_string());
             push_text(">>> APPROVAL REQUEST START\n".to_string());
             if let Some(reason) = reasons.retry.or(reasons.approval) {

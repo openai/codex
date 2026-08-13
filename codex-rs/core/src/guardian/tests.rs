@@ -1127,14 +1127,25 @@ fn guardian_approval_request_to_json_renders_mcp_tool_call_shape() -> serde_json
 
 #[tokio::test(flavor = "current_thread")]
 async fn build_guardian_prompt_items_explains_node_repl_review_scope() -> anyhow::Result<()> {
-    let (session, turn) = guardian_test_session_and_turn_with_base_url("http://localhost").await;
+    let (session, mut turn) =
+        guardian_test_session_and_turn_with_base_url("http://localhost").await;
+    Arc::get_mut(&mut turn)
+        .expect("turn should be uniquely owned")
+        .model_info
+        .node_repl_auto_review_required = true;
     seed_guardian_parent_history(&session, &turn).await;
+    let context = GuardianReviewContext::from(&turn);
 
-    let prompt = build_guardian_prompt_items(
+    let prompt = build_guardian_prompt_items_with_parent_turn(
         session.as_ref(),
-        Some("Retry the authorized browser inspection.".to_string()),
+        Some(&context),
+        ApprovalRequestReasons {
+            approval: None,
+            retry: Some("Retry the authorized browser inspection.".to_string()),
+        },
         guardian_mcp_request("node_repl", "js"),
         GuardianPromptMode::Full,
+        /*reviewed_node_repl_evidence_sequence*/ 0,
     )
     .await?;
 
@@ -1172,17 +1183,21 @@ async fn build_guardian_prompt_items_explains_node_repl_review_scope() -> anyhow
 async fn build_guardian_prompt_items_keeps_other_requests_generic() -> anyhow::Result<()> {
     let (session, turn) = guardian_test_session_and_turn_with_base_url("http://localhost").await;
     seed_guardian_parent_history(&session, &turn).await;
+    let context = GuardianReviewContext::from(&turn);
 
     for request in [
+        guardian_mcp_request("node_repl", "js"),
         guardian_mcp_request("node_repl", "inspect"),
         guardian_mcp_request("another_server", "js"),
         guardian_shell_request("shell-1"),
     ] {
-        let prompt = build_guardian_prompt_items(
+        let prompt = build_guardian_prompt_items_with_parent_turn(
             session.as_ref(),
-            /*retry_reason*/ None,
+            Some(&context),
+            ApprovalRequestReasons::default(),
             request,
             GuardianPromptMode::Full,
+            /*reviewed_node_repl_evidence_sequence*/ 0,
         )
         .await?;
 
