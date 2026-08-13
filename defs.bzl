@@ -188,8 +188,10 @@ def codex_rust_crate(
         build_script_enabled = True,
         build_script_data = [],
         compile_data = [],
+        binary_compile_data_extra = {},
         lib_data_extra = [],
         rustc_flags_extra = [],
+        binary_rustc_flags_extra = {},
         rustc_env = {},
         deps_extra = [],
         integration_compile_data_extra = [],
@@ -226,7 +228,11 @@ def codex_rust_crate(
         proc_macro: Whether this crate builds a proc-macro library.
         build_script_data: Data files exposed to the build script at runtime.
         compile_data: Non-Rust compile-time data for the library target.
+        binary_compile_data_extra: Mapping from binary names to extra non-Rust
+            compile-time data for those binary targets.
         lib_data_extra: Extra runtime data for the library target.
+        binary_rustc_flags_extra: Mapping from binary names to extra rustc
+            flags for those binary targets.
         rustc_env: Extra rustc_env entries to merge with defaults.
         deps_extra: Extra normal deps beyond @crates resolution.
             Typically only needed when features add additional deps.
@@ -384,7 +390,10 @@ def codex_rust_crate(
             crate_root = main,
             deps = all_crate_deps() + maybe_deps + deps_extra,
             edition = crate_edition,
-            rustc_flags = rustc_flags_extra + WINDOWS_RUSTC_LINK_FLAGS,
+            # Keep per-binary Cargo link behavior scoped to the matching
+            # generated rust_binary instead of leaking it to sibling binaries.
+            compile_data = binary_compile_data_extra.get(binary, []),
+            rustc_flags = rustc_flags_extra + binary_rustc_flags_extra.get(binary, []) + WINDOWS_RUSTC_LINK_FLAGS,
             # rules_rust substitutes workspace status values only for stamped
             # actions, so pass the existing key through to final binaries.
             rustc_env = {"STABLE_GIT_COMMIT": "{STABLE_GIT_COMMIT}"},
@@ -441,6 +450,11 @@ def codex_rust_crate(
     integration_test_binaries = sanitized_binaries
     integration_test_cargo_env = cargo_env
     integration_test_cargo_env_runfiles = cargo_env_runfiles
+    integration_test_data_extra = [
+        data
+        for data in test_data_extra
+        if data not in cargo_env_runfiles
+    ]
     non_windows_sanitized_binaries = []
     non_windows_cargo_env = {}
     non_windows_cargo_env_runfiles = {}
@@ -523,7 +537,7 @@ def codex_rust_crate(
                 crate_name = test_crate_name,
                 crate_root = test,
                 srcs = [test],
-                data = native.glob(["tests/**"], allow_empty = True) + integration_test_binaries + test_data_extra,
+                data = native.glob(["tests/**"], allow_empty = True) + integration_test_binaries + integration_test_data_extra,
                 compile_data = native.glob(["tests/**"], allow_empty = True) + integration_compile_data_extra,
                 deps = all_crate_deps(normal = True, normal_dev = True) + maybe_deps + deps_extra,
                 # Bazel has emitted both `codex-rs/<crate>/...` and
@@ -562,7 +576,7 @@ def codex_rust_crate(
                 crate_name = test_crate_name,
                 crate_root = test,
                 srcs = [test],
-                data = native.glob(["tests/**"], allow_empty = True) + integration_test_binaries + test_data_extra,
+                data = native.glob(["tests/**"], allow_empty = True) + integration_test_binaries + integration_test_data_extra,
                 compile_data = native.glob(["tests/**"], allow_empty = True) + integration_compile_data_extra,
                 deps = all_crate_deps(normal = True, normal_dev = True) + maybe_deps + deps_extra,
                 # Bazel has emitted both `codex-rs/<crate>/...` and
@@ -637,7 +651,7 @@ def codex_rust_crate(
             crate_name = test_crate_name,
             crate_root = test,
             srcs = [test],
-            data = native.glob(["tests/**"], allow_empty = True) + integration_test_binaries + test_data_extra,
+            data = native.glob(["tests/**"], allow_empty = True) + integration_test_binaries + integration_test_data_extra,
             compile_data = native.glob(["tests/**"], allow_empty = True) + integration_compile_data_extra,
             deps = all_crate_deps(normal = True, normal_dev = True) + maybe_deps + deps_extra,
             rustc_flags = rustc_flags_extra + WINDOWS_RUSTC_LINK_FLAGS + [
