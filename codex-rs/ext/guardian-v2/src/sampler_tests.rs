@@ -18,17 +18,75 @@ use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::time::Duration;
+use tokio::net::TcpListener;
+use tokio::net::TcpStream;
 
 use super::LunaSampler;
 use super::LunaSamplerConfig;
 use super::LunaSamplingRequest;
+
+async fn proxy_websocket_servers(servers: &[&responses::WebSocketTestServer]) -> Result<String> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let targets = servers
+        .iter()
+        .map(|server| server.uri().trim_start_matches("ws://").to_owned())
+        .collect::<Vec<_>>();
+    tokio::spawn(async move {
+        for target in targets {
+            let Ok((mut incoming, _)) = listener.accept().await else {
+                return;
+            };
+            tokio::spawn(async move {
+                let Ok(mut outgoing) = TcpStream::connect(target).await else {
+                    return;
+                };
+                let _ = tokio::io::copy_bidirectional(&mut incoming, &mut outgoing).await;
+            });
+        }
+    });
+    Ok(format!("http://{address}/v1"))
+}
+
+fn sampler_config(base_url: String) -> LunaSamplerConfig {
+    LunaSamplerConfig {
+        provider: create_model_provider(
+            ModelProviderInfo::create_openai_provider(Some(base_url)),
+            Some(AuthManager::from_auth_for_testing(CodexAuth::from_api_key(
+                "test-api-key",
+            ))),
+        ),
+        http_client_factory: HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        agent_identity_policy: AgentIdentityAuthPolicy::JwtOnly,
+        session_source: SessionSource::Exec,
+        session_id: "session-1".to_owned(),
+        thread_id: "thread-1".to_owned(),
+        originator: Some("guardian-v2-test".to_owned()),
+        service_tier: None,
+    }
+}
+
+fn sample_request(turn_id: &str) -> LunaSamplingRequest {
+    LunaSamplingRequest {
+        instructions: "Return a risk score.".to_owned(),
+        input: "The user requested a README summary.".to_owned(),
+        output_schema: json!({
+            "type": "object",
+            "properties": { "score": { "type": "number" } },
+            "required": ["score"],
+            "additionalProperties": false
+        }),
+        reasoning_effort: ReasoningEffort::None,
+        turn_id: turn_id.to_owned(),
+    }
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn preconnected_sampler_reuses_authenticated_websocket_for_structured_requests() -> Result<()>
 {
     skip_if_no_network!(Ok(()));
 
-    let server = responses::start_websocket_server(vec![vec![
+    let scripted_requests = vec![
         vec![
             ev_output_text_delta(r#"{"score":0"#),
             ev_output_text_delta(".25}"),
@@ -40,11 +98,12 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_structured_requ
             ev_assistant_message("sample-2", r#"{"score":0.75}"#),
             ev_completed("response-2"),
         ],
-    ]])
-    .await;
-    let base_url = server.uri().replacen("ws://", "http://", 1);
+    ];
+    let idle_server = responses::start_websocket_server(vec![scripted_requests.clone()]).await;
+    let server = responses::start_websocket_server(vec![scripted_requests]).await;
+    let base_url = proxy_websocket_servers(&[&idle_server, &server]).await?;
     let provider = create_model_provider(
-        ModelProviderInfo::create_openai_provider(Some(format!("{base_url}/v1"))),
+        ModelProviderInfo::create_openai_provider(Some(base_url)),
         Some(AuthManager::from_auth_for_testing(CodexAuth::from_api_key(
             "test-api-key",
         ))),
@@ -94,6 +153,18 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_structured_requ
             turn_id: "turn-1".to_owned(),
         })
         .await?;
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while sampler
+            .idle_connections
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
+            < 2
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
     let second = sampler
         .sample(LunaSamplingRequest {
             instructions: "Return a risk score.".to_owned(),
@@ -138,7 +209,7 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_structured_requ
 async fn sampler_returns_complete_json_before_terminal_response_events() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let server = responses::start_websocket_server_with_headers(vec![WebSocketConnectionConfig {
+    let config = WebSocketConnectionConfig {
         requests: vec![vec![
             ev_output_text_delta(r#"{"score":0"#),
             ev_output_text_delta(".25}"),
@@ -146,11 +217,12 @@ async fn sampler_returns_complete_json_before_terminal_response_events() -> Resu
         response_headers: Vec::new(),
         accept_delay: None,
         close_after_requests: false,
-    }])
-    .await;
-    let base_url = server.uri().replacen("ws://", "http://", 1);
+    };
+    let idle_server = responses::start_websocket_server_with_headers(vec![config.clone()]).await;
+    let server = responses::start_websocket_server_with_headers(vec![config]).await;
+    let base_url = proxy_websocket_servers(&[&idle_server, &server]).await?;
     let provider = create_model_provider(
-        ModelProviderInfo::create_openai_provider(Some(format!("{base_url}/v1"))),
+        ModelProviderInfo::create_openai_provider(Some(base_url)),
         Some(AuthManager::from_auth_for_testing(CodexAuth::from_api_key(
             "test-api-key",
         ))),
@@ -185,6 +257,103 @@ async fn sampler_returns_complete_json_before_terminal_response_events() -> Resu
     .await??;
 
     assert_eq!(output, r#"{"score":0.25}"#);
-    server.shutdown().await;
+    drop(sampler);
+    tokio::join!(idle_server.shutdown(), server.shutdown());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sampler_remains_available_when_second_prewarm_fails() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_websocket_server(vec![vec![vec![
+        ev_assistant_message("response-1", r#"{"score":0.25}"#),
+        ev_completed("response-1"),
+    ]]])
+    .await;
+    let sampler =
+        LunaSampler::connect(sampler_config(proxy_websocket_servers(&[&server]).await?)).await?;
+
+    assert_eq!(
+        sampler.sample(sample_request("turn-1")).await?,
+        r#"{"score":0.25}"#
+    );
+    assert_eq!(server.handshakes().len(), 1);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sampler_grows_its_pool_for_overlapping_requests() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let response = |id: &str| {
+        vec![vec![
+            ev_assistant_message(id, r#"{"score":0.25}"#),
+            ev_completed(id),
+        ]]
+    };
+    let first = responses::start_websocket_server(vec![response("response-1")]).await;
+    let second = responses::start_websocket_server(vec![response("response-2")]).await;
+    let third = responses::start_websocket_server(vec![response("response-3")]).await;
+    let sampler = LunaSampler::connect(sampler_config(
+        proxy_websocket_servers(&[&first, &second, &third]).await?,
+    ))
+    .await?;
+
+    let outputs = tokio::try_join!(
+        sampler.sample(sample_request("turn-1")),
+        sampler.sample(sample_request("turn-2")),
+        sampler.sample(sample_request("turn-3")),
+    )?;
+
+    assert_eq!(
+        outputs,
+        (
+            r#"{"score":0.25}"#.to_owned(),
+            r#"{"score":0.25}"#.to_owned(),
+            r#"{"score":0.25}"#.to_owned(),
+        )
+    );
+    for server in [&first, &second, &third] {
+        assert_eq!(server.single_connection().len(), 1);
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sampler_retries_expired_websockets_on_another_warm_connection() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let healthy = responses::start_websocket_server(vec![vec![vec![
+        ev_assistant_message("response-1", r#"{"score":0.25}"#),
+        ev_completed("response-1"),
+    ]]])
+    .await;
+    let expired = responses::start_websocket_server(vec![vec![vec![json!({
+        "type": "error",
+        "status": 400,
+        "error": {
+            "type": "invalid_request_error",
+            "code": "websocket_connection_limit_reached",
+            "message": "Responses websocket connection limit reached (60 minutes)."
+        }
+    })]]])
+    .await;
+    let sampler = LunaSampler::connect(sampler_config(
+        proxy_websocket_servers(&[&healthy, &expired]).await?,
+    ))
+    .await?;
+
+    let output = sampler.sample(sample_request("turn-1")).await?;
+
+    assert_eq!(output, r#"{"score":0.25}"#);
+    let expired_requests = expired.single_connection();
+    let healthy_requests = healthy.single_connection();
+    assert_eq!(expired_requests.len(), 1);
+    assert_eq!(healthy_requests.len(), 1);
+    assert_eq!(
+        expired_requests[0].body_json(),
+        healthy_requests[0].body_json()
+    );
     Ok(())
 }
