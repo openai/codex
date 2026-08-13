@@ -1,0 +1,14 @@
+---
+source: tui/src/history_cell/tests.rs
+expression: "render_lines(&cell.display_lines(width)).join(\"\\n\")"
+---
+
+› Skip tests.
+  
+  I just reprocessed
+  https://example.test/forwarded/threads/10930?page=1&search=&f
+  ilter=all&queue=customer_support_unprocessed&sort=latest_desc
+  &forwardedScope=all
+  can you check where we are with it?
+  
+  [Image #1]

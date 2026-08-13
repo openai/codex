@@ -804,6 +804,94 @@ mod tests {
     }
 
     #[test]
+    fn vt100_user_message_url_wrap_preserves_gutter_and_background() {
+        use crate::history_cell::HistoryCell;
+        use crate::history_cell::UserHistoryCell;
+
+        let width = 36;
+        let height = 12;
+        let backend = VT100Backend::new(width, height);
+        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        term.set_viewport_area(Rect::new(
+            /*x*/ 0,
+            /*y*/ height - 1,
+            /*width*/ width,
+            /*height*/ 1,
+        ));
+
+        let url = "https://example.test/forwarded/threads/10930?page=1&queue=customer_support_unprocessed&forwardedScope=all";
+        let cell = UserHistoryCell {
+            message: url.to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        };
+        let lines = cell
+            .display_hyperlink_lines(width)
+            .into_iter()
+            .map(|line| line.style(ratatui::style::Style::default().bg(Color::Blue)))
+            .collect::<Vec<_>>();
+
+        insert_history_hyperlink_lines_with_mode_and_wrap_policy(
+            &mut term,
+            &lines,
+            InsertHistoryMode::Standard,
+            HistoryLineWrapPolicy::PreWrap,
+        )
+        .expect("insert wrapped user message");
+
+        let screen = term.backend().vt100().screen();
+        let rows = screen.rows(/*start*/ 0, width).collect::<Vec<_>>();
+        let message_rows = rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| !row.trim().is_empty())
+            .collect::<Vec<_>>();
+
+        assert!(message_rows.len() > 1, "expected wrapped URL: {rows:?}");
+        assert!(
+            message_rows[0].1.starts_with("› "),
+            "the first user-message row must retain its prompt: {rows:?}"
+        );
+        assert!(
+            message_rows
+                .iter()
+                .skip(/*n*/ 1)
+                .all(|(_, row)| row.starts_with("  ")),
+            "all wrapped URL rows must preserve the message gutter: {rows:?}"
+        );
+        assert_eq!(
+            message_rows
+                .iter()
+                .enumerate()
+                .map(|(index, (_, row))| {
+                    if index == 0 {
+                        row.strip_prefix("› ").unwrap().trim()
+                    } else {
+                        row.trim()
+                    }
+                })
+                .collect::<String>(),
+            url
+        );
+        for (row, _) in message_rows {
+            assert_ne!(
+                screen.cell(row as u16, /*col*/ 0).unwrap().bgcolor(),
+                vt100::Color::Default,
+                "wrapped user-message gutter lost its background on row {row}"
+            );
+            assert_ne!(
+                screen
+                    .cell(row as u16, /*col*/ width - 1)
+                    .unwrap()
+                    .bgcolor(),
+                vt100::Color::Default,
+                "wrapped user-message row lost its background after the URL on row {row}"
+            );
+        }
+    }
+
+    #[test]
     fn vt100_prefixed_mixed_url_line_wraps_suffix_words_together() {
         let width: u16 = 24;
         let height: u16 = 10;
