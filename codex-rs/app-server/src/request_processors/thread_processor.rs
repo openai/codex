@@ -4,6 +4,9 @@ use super::turn_processor::can_accept_direct_input;
 use super::*;
 use crate::error_code::method_not_found;
 use codex_app_server_protocol::SelectedCapabilityRoot;
+use codex_app_server_protocol::ThreadRevertParams;
+use codex_app_server_protocol::ThreadRevertResponse;
+use codex_app_server_protocol::ThreadRevertedNotification;
 use codex_app_server_protocol::ThreadSection;
 use codex_app_server_protocol::ThreadSectionAppearance;
 use codex_app_server_protocol::ThreadSectionMoveParams;
@@ -31,6 +34,12 @@ struct ThreadListFilters {
     search_term: Option<String>,
     use_state_db_only: bool,
     relation_filter: Option<StoreThreadRelationFilter>,
+}
+
+struct ThreadRevertRuntimeSnapshot {
+    config: Config,
+    settings: ThreadConfigSnapshot,
+    client_mcp_extensions: ClientMcpExtensions,
 }
 
 fn collect_resume_override_mismatches(
@@ -552,6 +561,30 @@ impl ThreadRequestProcessor {
         )
         .await
         .map(|()| None)
+    }
+
+    pub(crate) async fn thread_revert(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadRevertParams,
+        app_server_client_name: Option<String>,
+        app_server_client_version: Option<String>,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        let (response, thread_id) = self
+            .thread_revert_response(
+                &request_id,
+                params,
+                app_server_client_name,
+                app_server_client_version,
+            )
+            .await?;
+        self.outgoing.send_response(request_id, response).await;
+        self.outgoing
+            .send_server_notification(ServerNotification::ThreadReverted(
+                ThreadRevertedNotification { thread_id },
+            ))
+            .await;
+        Ok(None)
     }
 
     pub(crate) async fn thread_archive(
@@ -1532,7 +1565,7 @@ impl ThreadRequestProcessor {
                     archive_thread_ids.push(thread_id);
                 }
             }
-            Err(err) => return Err(thread_store_archive_error("archive", err)),
+            Err(err) => return Err(thread_store_mutation_error("archive", err)),
         }
         for descendant_thread_id in subtree_thread_ids.iter().copied().skip(1) {
             match self
@@ -1573,7 +1606,7 @@ impl ThreadRequestProcessor {
                 writer_lock_thread_ids: subtree_thread_ids,
             })
             .await
-            .map_err(|err| thread_store_archive_error("archive", err))?
+            .map_err(|err| thread_store_mutation_error("archive", err))?
             .into_iter()
             .map(|thread_id| thread_id.to_string())
             .collect();
@@ -1828,7 +1861,7 @@ impl ThreadRequestProcessor {
             .thread_store
             .unarchive_thread(StoreArchiveThreadParams { thread_id })
             .await
-            .map_err(|err| thread_store_archive_error("unarchive", err))?;
+            .map_err(|err| thread_store_mutation_error("unarchive", err))?;
         let (mut thread, _) =
             thread_from_stored_thread(stored_thread, fallback_provider.as_str(), &self.config.cwd);
 
@@ -1849,6 +1882,227 @@ impl ThreadRequestProcessor {
         params: ThreadRollbackParams,
     ) -> Result<(), JSONRPCErrorError> {
         self.thread_rollback_start(request_id, params).await
+    }
+
+    async fn thread_revert_response(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadRevertParams,
+        app_server_client_name: Option<String>,
+        app_server_client_version: Option<String>,
+    ) -> Result<(ThreadRevertResponse, String), JSONRPCErrorError> {
+        let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
+        let ThreadRevertParams {
+            thread_id,
+            before_turn_id,
+        } = params;
+        let (thread_id, thread) = self.load_thread(&thread_id).await?;
+        let config_snapshot = thread.config_snapshot().await;
+        if !matches!(config_snapshot.history_mode, ThreadHistoryMode::Paginated) {
+            return Err(invalid_request(
+                "thread/revert only supports paginated threads",
+            ));
+        }
+        let runtime_snapshot = ThreadRevertRuntimeSnapshot {
+            config: thread.config().await.as_ref().clone(),
+            settings: config_snapshot,
+            client_mcp_extensions: thread.client_mcp_extensions(),
+        };
+
+        // Subscribe before shutdown so a pending idle unload either rejects this request or can
+        // no longer race the replacement runtime. The same listener then drains Core's shutdown
+        // events before we replace it.
+        if matches!(
+            self.ensure_conversation_listener(
+                thread_id,
+                request_id.connection_id,
+                /*raw_events_enabled*/ false,
+            )
+            .await?,
+            EnsureConversationListenerResult::ConnectionClosed
+        ) {
+            return Err(internal_error(format!(
+                "connection closed before thread {thread_id} could be reverted"
+            )));
+        }
+        let thread_state = self.thread_state_manager.thread_state(thread_id).await;
+        let shutdown_drain_rx = thread_state.lock().await.register_shutdown_drain_waiter();
+
+        match wait_for_thread_shutdown(&thread).await {
+            ThreadShutdownResult::Complete => {}
+            ThreadShutdownResult::SubmitFailed => {
+                thread_state.lock().await.take_shutdown_drain_waiter();
+                return Err(internal_error(format!(
+                    "failed to shut down thread {thread_id} before revert"
+                )));
+            }
+            ThreadShutdownResult::TimedOut => {
+                thread_state.lock().await.take_shutdown_drain_waiter();
+                return Err(internal_error(format!(
+                    "timed out shutting down thread {thread_id} before revert"
+                )));
+            }
+        }
+        let drain_result = tokio::time::timeout(Duration::from_secs(10), shutdown_drain_rx)
+            .await
+            .map_err(|_| {
+                internal_error(format!(
+                    "timed out waiting for thread {thread_id} listener to drain shutdown events"
+                ))
+            })
+            .and_then(|result| {
+                result.map_err(|_| {
+                    internal_error(format!(
+                        "thread {thread_id} listener stopped before draining shutdown events"
+                    ))
+                })
+            });
+        if let Err(err) = drain_result {
+            thread_state.lock().await.take_shutdown_drain_waiter();
+            return Err(err);
+        }
+        if self
+            .thread_manager
+            .remove_thread(&thread_id)
+            .await
+            .is_none()
+        {
+            return Err(internal_error(format!(
+                "thread {thread_id} disappeared before revert"
+            )));
+        }
+        // Keep thread state and subscriptions across the internal reload. Full teardown would
+        // force clients to call thread/resume after a successful revert.
+        self.outgoing
+            .cancel_requests_for_thread(thread_id, /*error*/ None)
+            .await;
+
+        let revert_result = self
+            .thread_store
+            .revert_thread(codex_thread_store::RevertThreadParams {
+                thread_id,
+                before_turn_id,
+            })
+            .await
+            .map_err(|err| thread_store_mutation_error("revert", err));
+        let response = self
+            .reload_paginated_thread(
+                request_id,
+                thread_id,
+                runtime_snapshot,
+                app_server_client_name,
+                app_server_client_version,
+            )
+            .await?;
+        revert_result?;
+        Ok((response, thread_id.to_string()))
+    }
+
+    async fn reload_paginated_thread(
+        &self,
+        request_id: &ConnectionRequestId,
+        thread_id: ThreadId,
+        runtime_snapshot: ThreadRevertRuntimeSnapshot,
+        app_server_client_name: Option<String>,
+        app_server_client_version: Option<String>,
+    ) -> Result<ThreadRevertResponse, JSONRPCErrorError> {
+        let ThreadRevertRuntimeSnapshot {
+            config,
+            settings,
+            client_mcp_extensions,
+        } = runtime_snapshot;
+        let thread_id_string = thread_id.to_string();
+        let stored_thread = self
+            .read_stored_thread_for_resume(
+                thread_id_string.as_str(),
+                /*path*/ None,
+                /*include_history*/ false,
+            )
+            .await?;
+        let (thread_history, resume_source_thread) = self
+            .load_resume_initial_history_from_stored_thread(stored_thread)
+            .await?;
+        let response_history = thread_history.clone();
+        let NewThread {
+            thread_id: resumed_thread_id,
+            thread: codex_thread,
+            session_configured,
+            ..
+        } = self
+            .thread_manager
+            .resume_thread_with_history(
+                config,
+                thread_history,
+                self.auth_manager.clone(),
+                self.request_trace_context(request_id).await,
+                client_mcp_extensions,
+            )
+            .await
+            .map_err(|err| internal_error(format!("error reloading thread after revert: {err}")))?;
+        if resumed_thread_id != thread_id {
+            return Err(internal_error(format!(
+                "thread {thread_id} reloaded as {resumed_thread_id} after revert"
+            )));
+        }
+        codex_thread
+            .restore_thread_settings(settings)
+            .await
+            .map_err(|err| {
+                internal_error(format!(
+                    "failed to restore thread settings after revert: {err}"
+                ))
+            })?;
+        Self::set_app_server_client_info(
+            codex_thread.as_ref(),
+            app_server_client_name,
+            app_server_client_version,
+        )
+        .await?;
+        let SessionConfiguredEvent { rollout_path, .. } = session_configured;
+        let rollout_path = rollout_path.ok_or_else(|| {
+            internal_error(format!(
+                "rollout path missing after reloading thread {thread_id}"
+            ))
+        })?;
+        log_listener_attach_result(
+            self.ensure_conversation_listener(
+                thread_id,
+                request_id.connection_id,
+                /*raw_events_enabled*/ false,
+            )
+            .await,
+            thread_id,
+            request_id.connection_id,
+            "thread",
+        );
+        let mut thread = self
+            .load_thread_from_resume_source_or_send_internal(
+                thread_id,
+                codex_thread.as_ref(),
+                &response_history,
+                rollout_path.as_path(),
+                Some(resume_source_thread),
+                /*include_turns*/ false,
+            )
+            .await
+            .map_err(internal_error)?;
+        self.thread_watch_manager.upsert_thread(&thread.id).await;
+        let thread_status = self
+            .thread_watch_manager
+            .loaded_status_for_thread(&thread.id)
+            .await;
+        set_thread_status_and_interrupt_stale_turns(
+            &mut thread,
+            thread_status,
+            /*has_live_in_progress_turn*/ false,
+        );
+        let (turns_backwards_cursor, items_backwards_cursor) =
+            Self::paginated_resume_backwards_cursors(self.thread_store.as_ref(), thread_id).await?;
+        Ok(ThreadRevertResponse {
+            thread,
+            turns_backwards_cursor,
+            items_backwards_cursor,
+        })
     }
 
     async fn thread_rollback_start(
@@ -2857,7 +3111,7 @@ impl ThreadRequestProcessor {
         // durable next cursor still starts after the last returned stored turn.
         let page_size = thread_turns_page_size(params.limit);
         if page_size == 1 {
-            // ThreadStore does not accept an empty page. Use its head cursor as
+            // ThreadStore does not accept an empty page. Use its backwards cursor as
             // the next cursor so the omitted durable row is returned next.
             let mut page = self
                 .paginated_resume_initial_turns_page(thread_id, params)
@@ -3883,6 +4137,32 @@ impl ThreadRequestProcessor {
         };
 
         let stored_thread = result.map_err(thread_store_resume_read_error)?;
+        if let Some(requested_path) = path
+            && matches!(stored_thread.history_mode, ThreadHistoryMode::Paginated)
+        {
+            let current_thread = self
+                .thread_store
+                .read_thread(StoreReadThreadParams {
+                    thread_id: stored_thread.thread_id,
+                    include_archived: true,
+                    include_history: false,
+                })
+                .await
+                .map_err(thread_store_resume_read_error)?;
+            if let Some(current_path) = current_thread.rollout_path.as_ref()
+                && !path_utils::paths_match_after_normalization(
+                    codex_rollout::plain_rollout_path(requested_path).as_path(),
+                    codex_rollout::plain_rollout_path(current_path).as_path(),
+                )
+            {
+                return Err(invalid_request(format!(
+                    "cannot resume paginated thread {} with stale path: requested {}, current {}; omit path and resume by thread id",
+                    stored_thread.thread_id,
+                    requested_path.display(),
+                    current_path.display()
+                )));
+            }
+        }
         if stored_thread.archived_at.is_some() {
             let thread_id = stored_thread.thread_id;
             return Err(invalid_request(format!(
@@ -5188,7 +5468,7 @@ pub(super) fn core_thread_write_error(operation: &str, err: CodexErr) -> JSONRPC
     }
 }
 
-fn thread_store_archive_error(operation: &str, err: ThreadStoreError) -> JSONRPCErrorError {
+fn thread_store_mutation_error(operation: &str, err: ThreadStoreError) -> JSONRPCErrorError {
     match err {
         ThreadStoreError::InvalidRequest { message } | ThreadStoreError::Conflict { message } => {
             invalid_request(message)

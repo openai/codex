@@ -1181,6 +1181,16 @@ impl MessageProcessor {
                     .thread_rollback(&request_id, params, app_server_client_name.as_deref())
                     .await
             }
+            ClientRequest::ThreadRevert { params, .. } => {
+                self.thread_processor
+                    .thread_revert(
+                        request_id.clone(),
+                        params,
+                        app_server_client_name.clone(),
+                        client_version.clone(),
+                    )
+                    .await
+            }
             ClientRequest::ThreadList { params, .. } => {
                 self.thread_processor.thread_list(params).await
             }

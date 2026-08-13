@@ -437,17 +437,17 @@ pub struct ThreadResumeResponse {
     #[experimental("thread/resume.initialTurnsPage")]
     #[serde(default)]
     pub initial_turns_page: Option<TurnsPage>,
-    /// Opaque head cursor for hydrating paginated turns backwards.
+    /// Opaque cursor for hydrating paginated turns backwards.
     ///
     /// Pass this as `cursor` to `thread/turns/list` with
-    /// `sortDirection: "desc"`. The first page includes the cursor's head turn.
+    /// `sortDirection: "desc"`. The first page includes the turn identified by the cursor.
     #[experimental("thread/resume.turnsBackwardsCursor")]
     #[serde(default)]
     pub turns_backwards_cursor: Option<String>,
-    /// Opaque head cursor for hydrating paginated items backwards.
+    /// Opaque cursor for hydrating paginated items backwards.
     ///
     /// Pass this as `cursor` to `thread/items/list` with
-    /// `sortDirection: "desc"`. The first page includes the cursor's head item.
+    /// `sortDirection: "desc"`. The first page includes the item identified by the cursor.
     #[experimental("thread/resume.itemsBackwardsCursor")]
     #[serde(default)]
     pub items_backwards_cursor: Option<String>,
@@ -1117,6 +1117,37 @@ pub struct ThreadRollbackResponse {
     pub thread: Thread,
 }
 
+/// Replace a paginated thread's durable history with the prefix before one turn.
+///
+/// This only changes persisted conversation history. It does not revert local file changes.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadRevertParams {
+    pub thread_id: String,
+    /// Turn excluded from the replacement history, together with every later turn.
+    pub before_turn_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadRevertResponse {
+    /// Updated loaded thread metadata. `turns` is always empty; hydrate retained history through
+    /// `thread/turns/list`.
+    pub thread: Thread,
+    /// Opaque cursor for hydrating paginated turns backwards.
+    ///
+    /// Pass this as `cursor` to `thread/turns/list` with
+    /// `sortDirection: "desc"`. The first page includes the turn identified by the cursor.
+    pub turns_backwards_cursor: Option<String>,
+    /// Opaque cursor for hydrating paginated items backwards.
+    ///
+    /// Pass this as `cursor` to `thread/items/list` with
+    /// `sortDirection: "desc"`. The first page includes the item identified by the cursor.
+    pub items_backwards_cursor: Option<String>,
+}
+
 /// Parameters for listing independently persisted thread sections.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -1702,6 +1733,13 @@ pub struct ThreadUnarchivedNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadClosedNotification {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadRevertedNotification {
     pub thread_id: String,
 }
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

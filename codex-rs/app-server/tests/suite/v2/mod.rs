@@ -92,6 +92,7 @@ mod thread_metadata_update;
 mod thread_name_websocket;
 mod thread_read;
 mod thread_resume;
+mod thread_revert;
 mod thread_rollback;
 mod thread_sections;
 mod thread_settings_update;

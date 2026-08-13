@@ -478,6 +478,7 @@ export type { ThreadRealtimeTranscriptDoneNotification } from "./ThreadRealtimeT
 export type { ThreadResumeInitialTurnsPageParams } from "./ThreadResumeInitialTurnsPageParams";
 export type { ThreadResumeParams } from "./ThreadResumeParams";
 export type { ThreadResumeResponse } from "./ThreadResumeResponse";
+export type { ThreadRevertedNotification } from "./ThreadRevertedNotification";
 export type { ThreadRollbackParams } from "./ThreadRollbackParams";
 export type { ThreadRollbackResponse } from "./ThreadRollbackResponse";
 export type { ThreadSearchResult } from "./ThreadSearchResult";

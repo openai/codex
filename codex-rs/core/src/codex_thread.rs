@@ -20,6 +20,7 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::mcp::CallToolResult;
+use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::PermissionProfile;
@@ -125,6 +126,22 @@ impl ThreadConfigSnapshot {
             reasoning_summary: self.reasoning_summary,
             personality: self.personality,
             collaboration_mode: self.collaboration_mode,
+        }
+    }
+
+    fn into_thread_settings_overrides(self) -> CodexThreadSettingsOverrides {
+        CodexThreadSettingsOverrides {
+            environments: Some(self.environments),
+            profile_workspace_roots: Some(self.profile_workspace_roots),
+            approval_policy: Some(self.approval_policy),
+            approvals_reviewer: Some(self.approvals_reviewer),
+            permission_profile: Some(self.permission_profile),
+            active_permission_profile: self.active_permission_profile,
+            summary: self.reasoning_summary,
+            service_tier: Some(self.service_tier),
+            collaboration_mode: Some(self.collaboration_mode),
+            personality: self.personality,
+            ..Default::default()
         }
     }
 }
@@ -408,6 +425,20 @@ impl CodexThread {
         self.session.preview_settings(&updates).await
     }
 
+    /// Restores effective mutable settings captured from another loaded runtime.
+    ///
+    /// Runtime replacement uses this after resume so clients keep their current thread settings
+    /// rather than reverting to the original layer-backed config.
+    pub async fn restore_thread_settings(
+        &self,
+        snapshot: ThreadConfigSnapshot,
+    ) -> ConstraintResult<()> {
+        let updates = self
+            .thread_settings_update(snapshot.into_thread_settings_overrides())
+            .await;
+        self.session.update_settings(updates).await
+    }
+
     async fn thread_settings_update(
         &self,
         overrides: CodexThreadSettingsOverrides,
@@ -617,6 +648,11 @@ impl CodexThread {
 
     pub async fn config_snapshot(&self) -> ThreadConfigSnapshot {
         self.session.thread_config_snapshot().await
+    }
+
+    /// Returns the MCP extensions declared by the client that created this runtime.
+    pub fn client_mcp_extensions(&self) -> ClientMcpExtensions {
+        self.session.services.client_mcp_extensions.clone()
     }
 
     /// Returns the files that supplied the thread's loaded model instructions.
