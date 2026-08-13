@@ -17,6 +17,7 @@ use serde_json::json;
 
 struct RecordedHistory {
     call_id: String,
+    arguments: String,
     items: Vec<ResponseItem>,
 }
 
@@ -32,6 +33,7 @@ impl ToolLifecycleContributor for ConversationHistoryRecorder {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .push(RecordedHistory {
                     call_id: input.call_id.to_owned(),
+                    arguments: input.payload.log_payload().into_owned(),
                     items: input.conversation_history.items().cloned().collect(),
                 });
         })
@@ -101,6 +103,17 @@ async fn tool_start_receives_conversation_history() -> Result<()> {
         .map(|history| history.call_id.as_str())
         .collect::<Vec<_>>();
     assert_eq!(call_ids, vec![first_call_id, second_call_id]);
+    let arguments = histories
+        .iter()
+        .map(|history| serde_json::from_str::<serde_json::Value>(&history.arguments))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(
+        arguments,
+        vec![
+            json!({ "plan": [{ "step": "Inspect workspace", "status": "in_progress" }] }),
+            json!({ "plan": [{ "step": "Inspect workspace", "status": "completed" }] }),
+        ]
+    );
 
     let first_history = &histories[0].items;
     assert!(first_history.iter().any(|item| matches!(

@@ -8,6 +8,7 @@ use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ResponseItem;
 use codex_extension_api::ToolCallSource;
 use codex_extension_api::ToolName;
+use codex_extension_api::ToolPayload;
 use codex_extension_api::ToolStartInput;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
@@ -16,6 +17,9 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::protocol::SessionSource;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
@@ -27,11 +31,11 @@ use serde_json::json;
 use crate::LunaSampler;
 use crate::LunaSamplerConfig;
 
-struct EmptyConversationHistory;
+struct TestConversationHistory(Vec<ResponseItem>);
 
-impl ConversationHistorySnapshot for EmptyConversationHistory {
+impl ConversationHistorySnapshot for TestConversationHistory {
     fn items(&self) -> Box<dyn Iterator<Item = &ResponseItem> + Send + '_> {
-        Box::new(std::iter::empty())
+        Box::new(self.0.iter())
     }
 }
 
@@ -71,6 +75,53 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
     let thread_store = ExtensionData::new("thread-1");
     let turn_store = ExtensionData::new("turn-1");
     let tool_name = ToolName::plain("read_file");
+    let tool_payload = ToolPayload::Function {
+        arguments: r#"{"path":"README.md"}"#.to_owned(),
+    };
+    let conversation_history = TestConversationHistory(vec![
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_owned(),
+            content: vec![ContentItem::InputText {
+                text: "Inspect the repository guidelines.".to_owned(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::Reasoning {
+            id: None,
+            summary: vec![ReasoningItemReasoningSummary::SummaryText {
+                text: "Find the repository documentation.".to_owned(),
+            }],
+            content: None,
+            encrypted_content: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "list_dir".to_owned(),
+            namespace: None,
+            arguments: r#"{"path":"."}"#.to_owned(),
+            encrypted_function_args: None,
+            call_id: "previous-call".to_owned(),
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::FunctionCallOutput {
+            id: None,
+            call_id: "previous-call".to_owned(),
+            output: FunctionCallOutputPayload::from_text("README.md".to_owned()),
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "read_file".to_owned(),
+            namespace: None,
+            arguments: r#"{"path":"README.md"}"#.to_owned(),
+            encrypted_function_args: None,
+            call_id: "call-1".to_owned(),
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ]);
 
     registry.tool_lifecycle_contributors()[0]
         .on_tool_start(ToolStartInput {
@@ -80,7 +131,8 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
             turn_id: "turn-1",
             call_id: "call-1",
             tool_name: &tool_name,
-            conversation_history: Arc::new(EmptyConversationHistory),
+            payload: &tool_payload,
+            conversation_history: Arc::new(conversation_history),
             source: ToolCallSource::Direct,
         })
         .await;
@@ -102,7 +154,23 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
     );
     assert_eq!(
         request["input"][2]["content"][0]["text"],
-        "Tool: read_file\nCall ID: call-1"
+        concat!(
+            ">>> TRANSCRIPT START\n",
+            "[1] user: Inspect the repository guidelines.\n",
+            "[2] reasoning: Find the repository documentation.\n",
+            "[3] tool list_dir call: {\"path\":\".\"}\n",
+            "[4] tool list_dir result: README.md\n",
+            "[5] tool read_file call: {\"path\":\"README.md\"}\n",
+            ">>> TRANSCRIPT END\n\n",
+            "The Codex agent has requested the following action:\n",
+            ">>> APPROVAL REQUEST START\n",
+            "Planned action JSON:\n",
+            "{\n",
+            "  \"path\": \"README.md\",\n",
+            "  \"tool\": \"read_file\"\n",
+            "}\n",
+            ">>> APPROVAL REQUEST END\n",
+        )
     );
 
     Ok(())

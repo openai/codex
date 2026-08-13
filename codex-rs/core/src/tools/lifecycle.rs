@@ -32,6 +32,7 @@ pub(crate) async fn notify_tool_start(invocation: &ToolInvocation) {
                 turn_id: invocation.turn.sub_id.as_str(),
                 call_id: invocation.call_id.as_str(),
                 tool_name: &invocation.tool_name,
+                payload: &invocation.payload,
                 conversation_history: Arc::clone(&conversation_history),
                 source: extension_tool_call_source(invocation.source.clone()),
             })
