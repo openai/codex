@@ -24,6 +24,21 @@ pub(super) struct McpDesiredState {
 }
 
 impl Session {
+    pub(super) fn mcp_inputs_differ(
+        &self,
+        current: &SessionConfiguration,
+        next: &SessionConfiguration,
+        updates: &SessionSettingsUpdate,
+    ) -> bool {
+        current.cwd() != next.cwd()
+            || current.approval_policy.value() != next.approval_policy.value()
+            || current.approvals_reviewer != next.approvals_reviewer
+            || current.permission_profile() != next.permission_profile()
+            || updates.environments.as_ref().is_some_and(|environments| {
+                environments.environments != self.services.turn_environments.selections()
+            })
+    }
+
     /// Waits on this session's refreshed server before tool execution is admitted.
     pub(crate) async fn wait_for_mcp_server(self: &Arc<Self>, server: &str) {
         self.refresh_mcp_if_dirty().await;
@@ -60,7 +75,7 @@ impl Session {
             .primary()
             .and_then(|environment| environment.cwd().to_abs_path().ok())
             .unwrap_or_else(|| session_configuration.cwd().clone());
-        let config = Self::build_per_turn_config(&session_configuration, cwd);
+        let config = self.build_per_turn_config(&session_configuration, cwd);
         let local_process_cwd = environments
             .local_environment_cwd()
             .unwrap_or_else(|| session_configuration.cwd().clone())
@@ -88,7 +103,7 @@ impl Session {
     ) -> anyhow::Result<()> {
         let cwd = AbsolutePathBuf::from_absolute_path(mcp_runtime_cwd)
             .unwrap_or_else(|_| session_configuration.cwd().clone());
-        let config = Self::build_per_turn_config(session_configuration, cwd);
+        let config = self.build_per_turn_config(session_configuration, cwd);
         let local_process_cwd = resolved_environments
             .local_environment_cwd()
             .unwrap_or_else(|| session_configuration.cwd().clone())

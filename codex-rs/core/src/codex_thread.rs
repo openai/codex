@@ -1,7 +1,6 @@
 use crate::agent::AgentStatus;
 use crate::config::ConstraintResult;
 use crate::elicitation::ElicitationRegistration;
-use crate::environment_config::EnvironmentConfig;
 use crate::session::SessionIo;
 use crate::session::SessionSettingsUpdate;
 use crate::session::session::Session;
@@ -27,6 +26,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EnvironmentConfig;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
@@ -671,7 +671,7 @@ impl CodexThread {
     }
 
     pub async fn environment_selections(&self) -> Vec<TurnEnvironmentSelection> {
-        self.session.thread_environment_selections().await
+        self.session.services.turn_environments.selections()
     }
 
     /// Installs resolved environment configuration and capability roots on this thread.

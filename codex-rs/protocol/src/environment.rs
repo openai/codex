@@ -1,4 +1,4 @@
-use codex_protocol::capabilities::SelectedCapabilityRoot;
+use crate::capabilities::SelectedCapabilityRoot;
 
 /// Resolved configuration supplied by the owner of a thread/environment attachment.
 #[derive(Clone, Debug, PartialEq, Eq)]

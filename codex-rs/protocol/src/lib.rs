@@ -16,6 +16,7 @@ pub mod approvals;
 pub mod capabilities;
 pub mod config_types;
 pub mod dynamic_tools;
+mod environment;
 pub mod error;
 pub mod exec_output;
 pub mod items;

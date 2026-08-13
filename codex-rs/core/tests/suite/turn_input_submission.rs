@@ -13,12 +13,14 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadSettingsOverrides;
+use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
+use core_test_support::test_codex::local;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
@@ -292,11 +294,15 @@ async fn turn_input_submission_applies_thread_settings_only_after_accepted_input
     .await
     .expect("started turn should reach its first model request");
 
+    let steered_cwd = test.config.cwd.join("steered-environment");
+    let steered_environments =
+        TurnEnvironmentSelections::new(steered_cwd.clone(), vec![local(steered_cwd)]);
     let steered = codex
         .start_or_steer_turn(
             user_message_request("steer active turn").with_thread_settings(
                 ThreadSettingsOverrides {
                     approval_policy: Some(AskForApproval::Never),
+                    environments: Some(steered_environments.clone()),
                     ..Default::default()
                 },
             ),
@@ -308,16 +314,25 @@ async fn turn_input_submission_applies_thread_settings_only_after_accepted_input
         codex.config_snapshot().await.approval_policy,
         AskForApproval::Never
     );
+    assert_eq!(
+        codex.environment_selections().await,
+        steered_environments.environments
+    );
 
     release_response
         .send(())
         .expect("response gate should remain open");
     wait_for_event(codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
+    let rejected_cwd = test.config.cwd.join("rejected-environment");
     let rejected = codex
         .steer_turn(
             user_message_request("no active turn").with_thread_settings(ThreadSettingsOverrides {
                 approval_policy: Some(AskForApproval::OnRequest),
+                environments: Some(TurnEnvironmentSelections::new(
+                    rejected_cwd.clone(),
+                    vec![local(rejected_cwd)],
+                )),
                 ..Default::default()
             }),
             "missing-turn".to_string(),
@@ -333,6 +348,10 @@ async fn turn_input_submission_applies_thread_settings_only_after_accepted_input
     assert_eq!(
         codex.config_snapshot().await.approval_policy,
         AskForApproval::Never
+    );
+    assert_eq!(
+        codex.environment_selections().await,
+        steered_environments.environments
     );
     server.shutdown().await;
 }

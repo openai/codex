@@ -92,9 +92,8 @@ pub(crate) struct SessionConfiguration {
     pub(super) permission_profile_state: PermissionProfileState,
     pub(super) windows_sandbox_level: WindowsSandboxLevel,
 
-    /// Sticky thread-level environment selections plus the legacy cwd used
-    /// when a turn does not select an environment.
-    pub(super) environments: TurnEnvironmentSelections,
+    /// Legacy thread cwd used when a turn does not select an environment.
+    pub(super) legacy_fallback_cwd: AbsolutePathBuf,
     /// Directory containing all Codex state for this session.
     pub(super) codex_home: AbsolutePathBuf,
     /// Optional user-facing name for the thread, updated during the session.
@@ -126,25 +125,7 @@ pub(crate) struct SessionConfiguration {
 
 impl SessionConfiguration {
     pub(super) fn cwd(&self) -> &AbsolutePathBuf {
-        &self.environments.legacy_fallback_cwd
-    }
-
-    pub(super) fn environment_selections(&self) -> &[TurnEnvironmentSelection] {
-        &self.environments.environments
-    }
-
-    pub(super) fn primary_workspace_roots(&self) -> Vec<AbsolutePathBuf> {
-        self.environments
-            .environments
-            .first()
-            .map(|environment| {
-                environment
-                    .workspace_roots
-                    .iter()
-                    .filter_map(|workspace_root| workspace_root.to_abs_path().ok())
-                    .collect()
-            })
-            .unwrap_or_default()
+        &self.legacy_fallback_cwd
     }
 
     pub(crate) fn codex_home(&self) -> &AbsolutePathBuf {
@@ -170,16 +151,13 @@ impl SessionConfiguration {
         self.permission_profile_state.permission_profile().clone()
     }
 
-    pub(super) fn mcp_inputs_differ(&self, next: &Self) -> bool {
-        self.environments != next.environments
-            || self.approval_policy.value() != next.approval_policy.value()
-            || self.approvals_reviewer != next.approvals_reviewer
-            || self.permission_profile() != next.permission_profile()
-    }
-
-    fn materialized_permission_profile(&self) -> PermissionProfile {
+    fn materialized_permission_profile(
+        &self,
+        environments: &[TurnEnvironmentSelection],
+    ) -> PermissionProfile {
+        let workspace_roots = ThreadEnvironments::primary_workspace_roots_for(environments);
         self.permission_profile()
-            .materialize_project_roots_with_workspace_roots(&self.primary_workspace_roots())
+            .materialize_project_roots_with_workspace_roots(&workspace_roots)
     }
 
     pub(super) fn active_permission_profile(&self) -> Option<ActivePermissionProfile> {
@@ -206,16 +184,22 @@ impl SessionConfiguration {
             .set_legacy_permission_profile(permission_profile)
     }
 
-    pub(super) fn sandbox_policy(&self) -> SandboxPolicy {
-        let permission_profile = self.materialized_permission_profile();
+    pub(super) fn sandbox_policy(
+        &self,
+        environments: &[TurnEnvironmentSelection],
+    ) -> SandboxPolicy {
+        let permission_profile = self.materialized_permission_profile(environments);
         codex_sandboxing::compatibility_sandbox_policy_for_permission_profile(
             &permission_profile,
             self.cwd(),
         )
     }
 
-    pub(super) fn file_system_sandbox_policy(&self) -> FileSystemSandboxPolicy {
-        self.materialized_permission_profile()
+    pub(super) fn file_system_sandbox_policy(
+        &self,
+        environments: &[TurnEnvironmentSelection],
+    ) -> FileSystemSandboxPolicy {
+        self.materialized_permission_profile(environments)
             .file_system_sandbox_policy()
     }
 
@@ -225,17 +209,25 @@ impl SessionConfiguration {
             .network_sandbox_policy()
     }
 
-    pub(super) fn thread_config_snapshot(&self) -> ThreadConfigSnapshot {
+    pub(super) fn thread_config_snapshot(
+        &self,
+        environment_selections: Vec<TurnEnvironmentSelection>,
+    ) -> ThreadConfigSnapshot {
+        let workspace_roots =
+            ThreadEnvironments::primary_workspace_roots_for(&environment_selections);
         ThreadConfigSnapshot {
             model: self.collaboration_mode.model().to_string(),
             model_provider_id: self.original_config_do_not_use.model_provider_id.clone(),
             service_tier: self.service_tier.clone(),
             approval_policy: self.approval_policy.value(),
             approvals_reviewer: self.approvals_reviewer,
-            permission_profile: self.materialized_permission_profile(),
+            permission_profile: self.materialized_permission_profile(&environment_selections),
             active_permission_profile: self.active_permission_profile(),
-            environments: self.environments.clone(),
-            workspace_roots: self.primary_workspace_roots(),
+            environments: TurnEnvironmentSelections::new(
+                self.legacy_fallback_cwd.clone(),
+                environment_selections,
+            ),
+            workspace_roots,
             profile_workspace_roots: self.profile_workspace_roots().to_vec(),
             ephemeral: self.original_config_do_not_use.ephemeral,
             extra_config: self.original_config_do_not_use.extra_config.clone(), // copybara:strip-for-public
@@ -252,7 +244,10 @@ impl SessionConfiguration {
         }
     }
 
-    pub(super) fn validate_auto_review_requirement(&self) -> ConstraintResult<()> {
+    pub(super) fn validate_auto_review_requirement(
+        &self,
+        environments: &[TurnEnvironmentSelection],
+    ) -> ConstraintResult<()> {
         if self.trusted_guardian_reviewer {
             return Ok(());
         }
@@ -269,7 +264,7 @@ impl SessionConfiguration {
         if self.approval_policy.value() == AskForApproval::OnRequest
             && self.approvals_reviewer == ApprovalsReviewer::AutoReview
             && !self
-                .file_system_sandbox_policy()
+                .file_system_sandbox_policy(environments)
                 .has_full_disk_write_access()
             && self
                 .original_config_do_not_use
@@ -284,10 +279,15 @@ impl SessionConfiguration {
         })
     }
 
-    pub(crate) fn apply(&self, updates: &SessionSettingsUpdate) -> ConstraintResult<Self> {
+    pub(super) fn apply(
+        &self,
+        updates: &SessionSettingsUpdate,
+        current_environments: &[TurnEnvironmentSelection],
+    ) -> ConstraintResult<Self> {
         let mut next_configuration = self.clone();
-        let current_sandbox_policy = self.sandbox_policy();
-        let current_file_system_sandbox_policy = self.file_system_sandbox_policy();
+        let current_sandbox_policy = self.sandbox_policy(current_environments);
+        let current_file_system_sandbox_policy =
+            self.file_system_sandbox_policy(current_environments);
         let current_network_sandbox_policy = self.network_sandbox_policy();
         let legacy_file_system_projection =
             FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_deny_entries(
@@ -372,12 +372,10 @@ impl SessionConfiguration {
         }
 
         let current_cwd = self.cwd().clone();
-        let next_environments = updates
-            .environments
-            .clone()
-            .unwrap_or_else(|| self.environments.clone());
-        let cwd_changed = next_environments.legacy_fallback_cwd != current_cwd;
-        next_configuration.environments = next_environments;
+        if let Some(environments) = &updates.environments {
+            next_configuration.legacy_fallback_cwd = environments.legacy_fallback_cwd.clone();
+        }
+        let cwd_changed = next_configuration.legacy_fallback_cwd != current_cwd;
 
         if let Some(permission_profile) = updates.permission_profile.clone() {
             let active_permission_profile =
@@ -467,7 +465,13 @@ impl SessionConfiguration {
         if let Some(app_server_client_version) = updates.app_server_client_version.clone() {
             next_configuration.app_server_client_version = Some(app_server_client_version);
         }
-        next_configuration.validate_auto_review_requirement()?;
+        let next_environments = updates
+            .environments
+            .as_ref()
+            .map_or(current_environments, |environments| {
+                environments.environments.as_slice()
+            });
+        next_configuration.validate_auto_review_requirement(next_environments)?;
         Ok(next_configuration)
     }
 
@@ -573,6 +577,7 @@ impl Session {
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn new(
         mut session_configuration: SessionConfiguration,
+        environment_selections: &[TurnEnvironmentSelection],
         config: Arc<Config>,
         user_instructions: Option<codex_extension_api::UserInstructions>,
         installation_id: String,
@@ -839,8 +844,7 @@ impl Session {
         let thread_extension_data_for_mcp = &thread_extension_data;
         let mcp_originator = session_configuration.originator.clone();
         let mcp_session_source = session_configuration.session_source.clone();
-        let mcp_runtime_cwd = session_configuration
-            .environment_selections()
+        let mcp_runtime_cwd = environment_selections
             .first()
             .and_then(|environment| environment.cwd.to_abs_path().ok())
             .map(|cwd| cwd.to_path_buf())
@@ -900,7 +904,10 @@ impl Session {
                 model: session_configuration.collaboration_mode.model().to_string(),
                 provider_name: config.model_provider_id.clone(),
                 approval_policy: session_configuration.approval_policy.value().to_string(),
-                sandbox_policy: format!("{:?}", session_configuration.sandbox_policy()),
+                sandbox_policy: format!(
+                    "{:?}",
+                    session_configuration.sandbox_policy(environment_selections)
+                ),
             };
             let rollout_thread_trace = if matches!(
                 session_configuration.session_source,
@@ -1063,7 +1070,7 @@ impl Session {
                 config.features.enabled(Feature::DeferredExecutor),
             ));
             turn_environments.update_selections(
-                session_configuration.environment_selections(),
+                environment_selections,
                 &session_configuration.turn_environment_config(),
             );
             let resolved_environments = turn_environments.snapshot().await;
@@ -1195,7 +1202,7 @@ impl Session {
                     config: config.as_ref(),
                     session_source: &session_configuration.session_source,
                     persistent_thread_state_available: state_db_ctx.is_some(),
-                    environments: session_configuration.environment_selections(),
+                    environments: environment_selections,
                     mcp_resource_client: Some(Arc::clone(&mcp_resource_client)),
                     extension_metrics: Some(Arc::clone(&extension_metrics)),
                     session_store: &session_extension_data,
@@ -1339,7 +1346,8 @@ impl Session {
                     service_tier: session_configuration.service_tier.clone(),
                     approval_policy: session_configuration.approval_policy.value(),
                     approvals_reviewer: session_configuration.approvals_reviewer,
-                    permission_profile: session_configuration.materialized_permission_profile(),
+                    permission_profile: session_configuration
+                        .materialized_permission_profile(environment_selections),
                     active_permission_profile: session_configuration.active_permission_profile(),
                     cwd: session_configuration.cwd().clone(),
                     reasoning_effort: session_configuration.collaboration_mode.reasoning_effort(),

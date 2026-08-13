@@ -5,12 +5,23 @@ use codex_exec_server::SelectedCapabilityRootsStatus;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
+use codex_protocol::protocol::EnvironmentConfig;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 
-use crate::environment_config::EnvironmentConfig;
+use crate::config::ConstraintResult;
 use crate::session::session::Session;
+use crate::session::session::SessionConfiguration;
+use crate::session::session::SessionSettingsUpdate;
 
 impl Session {
+    pub(super) fn apply_session_settings(
+        &self,
+        current: &SessionConfiguration,
+        updates: &SessionSettingsUpdate,
+    ) -> ConstraintResult<SessionConfiguration> {
+        current.apply(updates, &self.services.turn_environments.selections())
+    }
+
     pub(crate) async fn environment_ready(
         &self,
         selection: &TurnEnvironmentSelection,

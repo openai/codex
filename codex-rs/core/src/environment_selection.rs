@@ -16,6 +16,7 @@ use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
+use codex_protocol::protocol::EnvironmentConfig;
 use codex_protocol::protocol::EnvironmentConnectionEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -27,7 +28,6 @@ use futures::future::BoxFuture;
 use futures::future::Shared;
 use tokio_util::task::AbortOnDropHandle;
 
-use crate::environment_config::EnvironmentConfig;
 use crate::session::turn_context::ShellSnapshotTask;
 use crate::session::turn_context::TurnEnvironment;
 use crate::session::turn_context::TurnEnvironmentConfig;
@@ -249,6 +249,38 @@ impl ThreadEnvironments {
         for task in removed_connection_tasks {
             task.abort();
         }
+    }
+
+    pub(crate) fn selections(&self) -> Vec<TurnEnvironmentSelection> {
+        self.environments
+            .load()
+            .iter()
+            .map(|environment| environment.selection.clone())
+            .collect()
+    }
+
+    pub(crate) fn primary_workspace_roots(&self) -> Vec<AbsolutePathBuf> {
+        self.environments
+            .load()
+            .first()
+            .map_or_else(Vec::new, |environment| {
+                Self::primary_workspace_roots_for(std::slice::from_ref(&environment.selection))
+            })
+    }
+
+    pub(crate) fn primary_workspace_roots_for(
+        selections: &[TurnEnvironmentSelection],
+    ) -> Vec<AbsolutePathBuf> {
+        selections
+            .first()
+            .map(|selection| {
+                selection
+                    .workspace_roots
+                    .iter()
+                    .filter_map(|workspace_root| workspace_root.to_abs_path().ok())
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     pub(crate) fn update_environment_configs(&self, config: &TurnEnvironmentConfig) {

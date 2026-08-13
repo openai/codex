@@ -4,6 +4,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_api::AuthProvider;
 use codex_config::types::ApprovalsReviewer;
+use codex_core::CodexThreadSettingsOverrides;
 use codex_core::EnvironmentConfig;
 use codex_core::StartThreadOptions;
 use codex_core::TurnInputRequest;
@@ -537,8 +538,11 @@ async fn settings_update_does_not_retarget_active_turn_environment() -> Result<(
     });
     let test = builder.build(&server).await?;
     let initial_cwd = test.config.cwd.clone();
+    let initial_environments = test.codex.environment_selections().await;
     let next_workspace = TempDir::new()?;
     let next_cwd = next_workspace.path().abs();
+    let next_environments =
+        TurnEnvironmentSelections::new(next_cwd.clone(), vec![local(next_cwd.clone())]);
 
     test.codex
         .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
@@ -552,17 +556,43 @@ async fn settings_update_does_not_retarget_active_turn_environment() -> Result<(
     })
     .await;
 
+    let preview = test
+        .codex
+        .preview_thread_settings_overrides(CodexThreadSettingsOverrides {
+            environments: Some(next_environments.clone()),
+            ..Default::default()
+        })
+        .await?;
+    assert_eq!(
+        preview.environment_selections(),
+        &next_environments.environments
+    );
+    assert_eq!(preview.cwd(), &next_cwd);
+    assert_eq!(preview.workspace_roots, vec![next_cwd.clone()]);
+    assert_eq!(
+        test.codex.environment_selections().await,
+        initial_environments
+    );
+
     submit_thread_settings(
         &test.codex,
         ThreadSettingsOverrides {
-            environments: Some(TurnEnvironmentSelections::new(
-                next_cwd.clone(),
-                vec![local(next_cwd.clone())],
-            )),
+            environments: Some(next_environments.clone()),
             ..Default::default()
         },
     )
     .await?;
+    assert_eq!(
+        test.codex.environment_selections().await,
+        next_environments.environments
+    );
+    let snapshot = test.codex.config_snapshot().await;
+    assert_eq!(
+        snapshot.environment_selections(),
+        next_environments.environments
+    );
+    assert_eq!(snapshot.cwd(), &next_cwd);
+    assert_eq!(snapshot.workspace_roots, vec![next_cwd.clone()]);
     test.codex
         .submit(Op::UserInputAnswer {
             id: request.turn_id,
