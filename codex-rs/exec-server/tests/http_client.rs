@@ -46,6 +46,7 @@ const HTTP_REQUEST_BODY_DELTA_METHOD: &str = "http/request/bodyDelta";
 const INITIALIZE_METHOD: &str = "initialize";
 const INITIALIZED_METHOD: &str = "initialized";
 const TEST_TIMEOUT: Duration = Duration::from_secs(5);
+const BYTE_BUDGET_TEST_TIMEOUT: Duration = Duration::from_secs(30);
 const HTTP_BODY_DELTA_CHANNEL_CAPACITY: u64 = 256;
 const HTTP_BODY_DELTA_BYTE_BUDGET: usize = 16 * 1024 * 1024;
 const OVERFLOWING_BODY_DELTA_FRAMES: u64 = 1_024;
@@ -848,6 +849,16 @@ async fn http_response_body_stream_enforces_queued_byte_budget() -> Result<()> {
                 stream_response: true,
             }
         );
+        peer.write_response(
+            request_id,
+            HttpRequestResponse {
+                status: 200,
+                headers: Vec::new(),
+                body: Vec::new().into(),
+            },
+        )
+        .await?;
+
         let frame_count = HTTP_BODY_DELTA_BYTE_BUDGET / MAX_HTTP_BODY_DELTA_BYTES + 1;
         for seq in 1..=frame_count as u64 {
             peer.write_body_delta(HttpRequestBodyDeltaNotification {
@@ -859,15 +870,6 @@ async fn http_response_body_stream_enforces_queued_byte_budget() -> Result<()> {
             })
             .await?;
         }
-        peer.write_response(
-            request_id,
-            HttpRequestResponse {
-                status: 200,
-                headers: Vec::new(),
-                body: Vec::new().into(),
-            },
-        )
-        .await?;
 
         let (barrier_request_id, barrier_params) = peer.read_http_request().await?;
         assert_eq!(
@@ -925,7 +927,7 @@ async fn http_response_body_stream_enforces_queued_byte_budget() -> Result<()> {
     // Receiving this terminal notification proves the earlier byte-budget
     // notifications have all passed through the ordered notification handler.
     let (_response, mut barrier_stream) = timeout(
-        TEST_TIMEOUT,
+        BYTE_BUDGET_TEST_TIMEOUT,
         client.http_request_stream(HttpRequestParams {
             method: "GET".to_string(),
             url: "https://example.test/mcp/byte-budget-barrier".to_string(),
@@ -1104,7 +1106,7 @@ async fn http_response_body_streams_share_queued_byte_budget() -> Result<()> {
     // This terminal notification is ordered after both streams contend for the
     // budget, so neither stream is drained before the overflow is observed.
     let (_response, mut barrier_stream) = timeout(
-        TEST_TIMEOUT,
+        BYTE_BUDGET_TEST_TIMEOUT,
         client.http_request_stream(HttpRequestParams {
             method: "GET".to_string(),
             url: "https://example.test/mcp/shared-budget-barrier".to_string(),
