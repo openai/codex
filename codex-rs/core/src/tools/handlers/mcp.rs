@@ -3,6 +3,8 @@ use std::sync::OnceLock;
 use std::time::Instant;
 
 use crate::context::NodeReplReviewEvidence;
+use crate::context::NodeReplReviewEvidenceMode;
+use crate::context::node_repl_review_evidence_mode;
 use crate::function_tool::FunctionCallError;
 use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::original_image_detail::can_request_original_image_detail;
@@ -20,8 +22,8 @@ use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolExecutor;
 use crate::tools::registry::ToolTelemetryTags;
-use codex_features::Feature;
 use codex_mcp::ToolInfo;
+use codex_protocol::user_input::UserInput;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
@@ -30,6 +32,8 @@ use codex_tools::ToolSearchSourceInfo;
 use codex_tools::ToolSpec;
 use codex_tools::agent_plugin_mcp_tool_to_responses_api_tool;
 use codex_tools::mcp_tool_to_responses_api_tool;
+use codex_utils_image::PromptImageMode;
+use codex_utils_image::load_data_url_for_prompt_uncached;
 use codex_utils_string::take_bytes_at_char_boundary;
 use futures::future::BoxFuture;
 use serde_json::Map;
@@ -245,14 +249,10 @@ impl CoreToolRuntime for McpHandler {
         let ToolCallSource::CodeMode { cell_id, .. } = &invocation.source else {
             return;
         };
+        let evidence_mode = node_repl_review_evidence_mode(&invocation.turn);
         if self.tool_info.server_name != "node_repl"
             || !result.success_for_logging()
-            || !(invocation.turn.model_info.node_repl_auto_review_required
-                || invocation
-                    .turn
-                    .config
-                    .features
-                    .enabled(Feature::GuardianEnhancedNodeReplTranscripts))
+            || evidence_mode == NodeReplReviewEvidenceMode::Disabled
         {
             return;
         }
@@ -267,23 +267,70 @@ impl CoreToolRuntime for McpHandler {
                 .and_then(Value::as_bool)
                 == Some(true)
         };
-        let mut text_blocks = content
+        let mut captured_image_bytes = 0_usize;
+        let mut items = content
             .iter()
             .filter_map(|item| {
-                if item.get("type")?.as_str()? != "text" || is_encrypted(item) {
+                if is_encrypted(item) {
                     return None;
                 }
-                let text = item.get("text")?.as_str()?;
-                (!text.trim().is_empty()).then(|| text.to_string())
+                match item.get("type").and_then(Value::as_str) {
+                    Some("text") => item
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .filter(|text| !text.trim().is_empty())
+                        .map(|text| UserInput::Text {
+                            text: text.to_string(),
+                            text_elements: Vec::new(),
+                        }),
+                    Some("image") if evidence_mode == NodeReplReviewEvidenceMode::Multimodal => {
+                        let payload = item.get("data").and_then(Value::as_str)?;
+                        let mime_type = item.get("mimeType").and_then(Value::as_str)?;
+                        if payload.is_empty()
+                            || !mime_type
+                                .get(..6)
+                                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("image/"))
+                        {
+                            return None;
+                        }
+                        let image_bytes = "data:;base64,"
+                            .len()
+                            .saturating_add(mime_type.len())
+                            .saturating_add(payload.len());
+                        let next_image_bytes = captured_image_bytes.saturating_add(image_bytes);
+                        if next_image_bytes > NodeReplReviewEvidence::MAX_RETAINED_BYTES {
+                            return None;
+                        }
+                        let detail = item
+                            .get("_meta")
+                            .and_then(|meta| meta.get("codex/imageDetail"))
+                            .and_then(|detail| serde_json::from_value(detail.clone()).ok());
+                        let image_url =
+                            format!("data:{};base64,{payload}", mime_type.to_ascii_lowercase());
+                        load_data_url_for_prompt_uncached(&image_url, PromptImageMode::Original)
+                            .ok()?;
+                        captured_image_bytes = next_image_bytes;
+                        Some(UserInput::Image { image_url, detail })
+                    }
+                    _ => None,
+                }
             })
             .collect::<Vec<_>>();
-        if text_blocks.is_empty()
+        if !items
+            .iter()
+            .any(|item| matches!(item, UserInput::Text { .. }))
             && !content.iter().any(is_encrypted)
             && let Some(content) = result.get("structuredContent")
             && !content.is_null()
             && let Ok(text) = serde_json::to_string(content)
         {
-            text_blocks.push(text);
+            items.insert(
+                /*index*/ 0,
+                UserInput::Text {
+                    text,
+                    text_elements: Vec::new(),
+                },
+            );
         }
         invocation
             .session
@@ -294,7 +341,7 @@ impl CoreToolRuntime for McpHandler {
                 self.tool_info.tool.name.as_ref(),
                 cell_id,
                 &invocation.call_id,
-                text_blocks,
+                items,
             );
     }
 

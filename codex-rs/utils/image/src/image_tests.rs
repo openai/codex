@@ -228,7 +228,7 @@ async fn preserves_large_image_in_original_mode() {
     assert_eq!(processed.bytes.as_ref(), original_bytes);
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test(flavor = "current_thread")]
 async fn data_url_processing_preserves_supported_source_bytes() {
     let image = ImageBuffer::from_pixel(64, 32, Rgba([10u8, 20, 30, 255]));
     let original_bytes = image_bytes(&image, ImageFormat::Png);
@@ -236,7 +236,7 @@ async fn data_url_processing_preserves_supported_source_bytes() {
         .replacen("data:", "DATA:", 1)
         .replacen(";base64,", ";BASE64,", 1);
 
-    let processed = load_data_url_for_prompt(&image_url, PromptImageMode::ResizeToFit)
+    let processed = load_data_url_for_prompt_uncached(&image_url, PromptImageMode::ResizeToFit)
         .expect("process data URL image");
 
     assert_eq!(processed.width, 64);

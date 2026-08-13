@@ -4346,12 +4346,20 @@ contentLength=0"
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(false, false; "disabled")]
-#[test_case(true, false; "manually_enabled")]
-#[test_case(false, true; "required_model_forces_evidence")]
+#[test_case(false, false, false, None; "disabled")]
+#[test_case(false, true, false, None; "image_flag_without_enhanced_stays_disabled")]
+#[test_case(true, false, false, None; "manually_enabled_text_only")]
+#[test_case(true, true, false, None; "manually_enabled_multimodal")]
+#[test_case(false, false, true, None; "required_model_forces_multimodal")]
+#[test_case(true, true, false, Some("unsupported"); "text_fallback_without_image_support")]
+#[test_case(true, true, false, Some("unbounded"); "text_fallback_without_context_bound")]
+#[test_case(true, true, false, Some("small"); "text_fallback_with_insufficient_context")]
+#[test_case(true, true, false, Some("large_prompt"); "images_resume_after_prompt_pressure")]
 async fn code_mode_node_repl_text_evidence_is_visible_only_to_guardian(
     enhanced_transcripts: bool,
+    transcript_images: bool,
     auto_review_required: bool,
+    reviewer_constraint: Option<&'static str>,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
@@ -4364,8 +4372,15 @@ async fn code_mode_node_repl_text_evidence_is_visible_only_to_guardian(
     const DIRECT_UNRELATED_MIDDLE: &str = "direct-unrelated-hidden-middle";
     const OTHER_NODE_REPL_RESULT: &str = "ECHOING: guardian-visible-other-tool-result";
     const UNRELATED_RESULT: &str = "ECHOING: guardian-hidden-unrelated-result";
+    const PRIVATE_IMAGE: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
     let server = responses::start_mock_server().await;
     let mcp_server_bin = remote_aware_stdio_server_bin()?;
+    let check_detail = enhanced_transcripts && transcript_images && reviewer_constraint.is_none();
+    let mut large_image = Cursor::new(Vec::new());
+    if check_detail {
+        DynamicImage::new_rgba8(/*w*/ 2048, /*h*/ 2048)
+            .write_to(&mut large_image, ImageFormat::Png)?;
+    }
     let mut builder = test_codex()
         .with_model_info_override("gpt-5.5", move |model| {
             model.node_repl_auto_review_required = auto_review_required
@@ -4373,6 +4388,26 @@ async fn code_mode_node_repl_text_evidence_is_visible_only_to_guardian(
         .with_config(move |config| {
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
             config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+            if reviewer_constraint.is_some_and(|value| value != "large_prompt") || check_detail {
+                let reviewer = config
+                    .model_catalog
+                    .as_mut()
+                    .expect("bundled model catalog")
+                    .models
+                    .iter_mut()
+                    .find(|model| model.slug == "gpt-5.6-luna")
+                    .expect("API-key Guardian reviewer");
+                if check_detail {
+                    reviewer.use_responses_lite = false;
+                } else if reviewer_constraint == Some("unsupported") {
+                    reviewer.input_modalities =
+                        vec![codex_protocol::openai_models::InputModality::Text];
+                } else {
+                    reviewer.context_window =
+                        (reviewer_constraint == Some("small")).then_some(10_000);
+                    reviewer.max_context_window = reviewer.context_window;
+                }
+            }
             config
                 .features
                 .enable(Feature::CodeMode)
@@ -4384,10 +4419,18 @@ async fn code_mode_node_repl_text_evidence_is_visible_only_to_guardian(
                     enhanced_transcripts,
                 )
                 .expect("configure enhanced transcripts");
+            config
+                .features
+                .set_enabled(Feature::GuardianNodeReplTranscriptImages, transcript_images)
+                .expect("configure Guardian transcript images");
             let mcp: McpServerConfig = serde_json::from_value(serde_json::json!({
                 "command": mcp_server_bin,
                 "environment_id": remote_aware_environment_id(),
-                "env": { "MCP_TEST_ENABLE_NODE_REPL_JS": "1" },
+                "env": {
+                    "MCP_TEST_ENABLE_NODE_REPL_JS": "1",
+                    "MCP_TEST_IMAGE_DATA_URL": format!("data:image/png;base64,{}", BASE64_STANDARD.encode(large_image.into_inner())),
+                    "MCP_TEST_OVERSIZED_INVALID_IMAGE": u8::from(!core_test_support::is_remote_test_environment()).to_string()
+                },
                 "omit_tools_from": ["deferred"],
             }))
             .expect("valid MCP server config");
@@ -4403,9 +4446,22 @@ async fn code_mode_node_repl_text_evidence_is_visible_only_to_guardian(
         });
     let test = builder.build_with_auto_env(&server).await?;
     wait_for_mcp_server(&test.codex, "node_repl").await?;
+    let images_enabled = auto_review_required || (enhanced_transcripts && transcript_images);
+    let reviewer_images = images_enabled && reviewer_constraint.is_none();
+    let snapshot_padding = if images_enabled && reviewer_constraint != Some("large_prompt") {
+        2_500
+    } else {
+        10_000
+    };
+    let padding = "a".repeat(snapshot_padding);
     let snapshot_args = |marker| {
+        let padding = if check_detail && marker == DIRECT_NODE_REPL_MIDDLE {
+            ""
+        } else {
+            padding.as_str()
+        };
         serde_json::json!({
-            "message": format!("{}{}{}", "a".repeat(10_000), marker, "b".repeat(10_000)),
+            "message": format!("{padding}{marker}{padding}"),
         })
         .to_string()
     };
@@ -4413,13 +4469,19 @@ async fn code_mode_node_repl_text_evidence_is_visible_only_to_guardian(
     let code = r#"
 await tools.mcp__node_repl_echo({ message: "guardian-hidden-unrelated-result" });
 await tools.mcp__node_repl__js({ code: 'nodeRepl.fail()' });
-await tools.mcp__node_repl__js({ code: `nodeRepl.write(${JSON.stringify("a".repeat(10000) + ["guardian-visible", "dom-middle"].join("-") + "b".repeat(10000))})` });
+await tools.mcp__node_repl__js({ code: `nodeRepl.write(${JSON.stringify("a".repeat(SNAPSHOT_PADDING) + ["guardian-visible", "dom-middle"].join("-") + "b".repeat(SNAPSHOT_PADDING))})` });
 await tools.mcp__node_repl__echo({ message: ["guardian-visible-other-", "tool-result"].join("") });
 await tools.mcp__node_repl__encrypted_output({});
 await tools.mcp__node_repl__js({ code: 'nodeRepl.empty()' });
+await tools.mcp__node_repl__js({ code: 'await nodeRepl.emitImage(await tab.screenshot())' });
+if (LARGE_IMAGE) await tools.mcp__node_repl__image_scenario({ scenario: "invalid_image_bytes_then_image" });
 await tools.exec_command({ cmd: "true", sandbox_permissions: "require_escalated", justification: "review" });
+await tools.mcp__node_repl__js({ code: 'await nodeRepl.emitImage(await tab.screenshot())' });
+if (LARGE_IMAGE) await tools.mcp__node_repl__image({});
 await tools.exec_command({ cmd: "printf second", sandbox_permissions: "require_escalated", justification: "review again" });
-"#;
+"#
+    .replace("SNAPSHOT_PADDING", &snapshot_padding.to_string())
+    .replace("LARGE_IMAGE", &check_detail.to_string());
     let response_mock = responses::mount_sse_sequence(
         &server,
         vec![
@@ -4442,7 +4504,7 @@ await tools.exec_command({ cmd: "printf second", sandbox_permissions: "require_e
                 ev_completed("resp-unrelated"),
             ]),
             sse(vec![
-                ev_custom_tool_call("code-mode-call", "exec", code),
+                ev_custom_tool_call("code-mode-call", "exec", &code),
                 ev_completed("resp-parent"),
             ]),
             sse(vec![
@@ -4475,12 +4537,43 @@ await tools.exec_command({ cmd: "printf second", sandbox_permissions: "require_e
         OTHER_NODE_REPL_RESULT,
         "Lookup completed",
         "<completed without visible text>",
+        "guardian-visible-before-image",
+        "guardian-visible-after-image",
     ] {
         assert_eq!(
             guardian_text.contains(included),
             evidence_enabled,
             "unexpected Guardian evidence visibility for {included}"
         );
+    }
+    let guardian_request = guardian_requests[0];
+    let reviewer_image_urls = guardian_request.message_input_image_urls("user");
+    let expected_images = usize::from(reviewer_images) + usize::from(check_detail);
+    assert_eq!(reviewer_image_urls.len(), expected_images);
+    if reviewer_images {
+        assert_eq!(reviewer_image_urls[0], PRIVATE_IMAGE);
+        let reviewer_user_content = guardian_request
+            .inputs_of_type("message")
+            .into_iter()
+            .filter(|item| item.get("role").and_then(Value::as_str) == Some("user"))
+            .filter_map(|item| item.get("content").and_then(Value::as_array).cloned())
+            .flatten()
+            .collect::<Vec<_>>();
+        let image_index = reviewer_user_content
+            .iter()
+            .position(|item| item.get("image_url").and_then(Value::as_str) == Some(PRIVATE_IMAGE))
+            .expect("private reviewer image should be present");
+        if check_detail {
+            assert_eq!(reviewer_user_content[image_index]["detail"], "high");
+            let payload = reviewer_image_urls[1].split_once(',').unwrap().1;
+            let dimensions =
+                image::load_from_memory(&BASE64_STANDARD.decode(payload)?)?.dimensions();
+            assert_eq!(dimensions, (1600, 1600));
+        }
+        for (index, marker) in [(image_index - 1, "before"), (image_index + 1, "after")] {
+            let text = reviewer_user_content[index]["text"].as_str().unwrap();
+            assert!(text.contains(marker));
+        }
     }
     for excluded in [
         DIRECT_UNRELATED_MIDDLE,
@@ -4504,8 +4597,19 @@ await tools.exec_command({ cmd: "printf second", sandbox_permissions: "require_e
         usize::from(evidence_enabled),
         "a reused Guardian session must not append the same evidence twice"
     );
+    assert_eq!(
+        guardian_requests[1].message_input_image_urls("user"),
+        if reviewer_constraint == Some("large_prompt") {
+            vec![PRIVATE_IMAGE.to_string()]
+        } else {
+            reviewer_image_urls
+        }
+    );
     let parent_request = requests.last().expect("parent turn should complete");
     let parent_input = serde_json::to_string(&parent_request.input())?;
+    assert!(!parent_input.contains("data:image/png;base64,"));
+    assert!(!parent_input.contains("guardian-visible-before-image"));
+    assert!(!parent_input.contains("guardian-visible-after-image"));
     assert!(
         !parent_input.contains(NODE_REPL_DOM_MIDDLE)
             && !parent_input.contains(OTHER_NODE_REPL_RESULT)

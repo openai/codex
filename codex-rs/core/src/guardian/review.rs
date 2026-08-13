@@ -699,18 +699,10 @@ pub(crate) fn spawn_approval_request_review(
 ) -> oneshot::Receiver<ReviewDecision> {
     let context = context.into();
     let (tx, rx) = oneshot::channel();
+    let runtime = session.services.runtime_handle.clone();
     let spawn_result = std::thread::Builder::new()
         .name("codex-approval-review".to_string())
         .spawn(move || {
-            let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            else {
-                let _ = tx.send(ReviewDecision::denied(
-                    "automatic approval review could not complete",
-                ));
-                return;
-            };
             let decision = runtime.block_on(review_approval_request_with_cancel(
                 &session,
                 context,

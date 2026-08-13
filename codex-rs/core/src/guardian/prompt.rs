@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use codex_features::Feature;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::plaintext_agent_message_content;
 use codex_protocol::protocol::GuardianRiskLevel;
@@ -10,8 +9,9 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::compact::content_items_to_text;
-use crate::context::ContextualUserFragment;
 use crate::context::NodeReplReviewEvidence;
+use crate::context::NodeReplReviewEvidenceMode;
+use crate::context::node_repl_review_evidence_mode;
 use crate::event_mapping::is_contextual_user_message_content;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnEnvironment;
@@ -129,14 +129,10 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
     mode: GuardianPromptMode,
     reviewed_node_repl_evidence_sequence: u64,
 ) -> serde_json::Result<GuardianPromptItems> {
-    let node_repl_transcripts_enabled = parent_context.is_some_and(|context| {
-        context.turn().model_info.node_repl_auto_review_required
-            || context
-                .turn()
-                .config
-                .features
-                .enabled(Feature::GuardianEnhancedNodeReplTranscripts)
-    });
+    let evidence_mode = parent_context
+        .map(|context| node_repl_review_evidence_mode(context.turn()))
+        .unwrap_or(NodeReplReviewEvidenceMode::Disabled);
+    let node_repl_transcripts_enabled = evidence_mode != NodeReplReviewEvidenceMode::Disabled;
     let node_repl_result_token_limit = if node_repl_transcripts_enabled {
         GUARDIAN_MAX_NODE_REPL_TOOL_RESULT_TOKENS
     } else {
@@ -242,8 +238,14 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
             .and_then(|evidence| evidence.snapshot_since(reviewed_node_repl_evidence_sequence))
     {
         node_repl_evidence_sequence = fragment.sequence;
-        push_text(fragment.render());
+        items.extend(fragment.into_inputs(evidence_mode));
     }
+    let mut push_text = |text: String| {
+        items.push(UserInput::Text {
+            text,
+            text_elements: Vec::new(),
+        });
+    };
     match &request {
         GuardianApprovalRequest::NetworkAccess { trigger, .. } => {
             push_text(">>> APPROVAL REQUEST START\n".to_string());

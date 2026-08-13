@@ -576,6 +576,9 @@
             "guardian_enhanced_node_repl_transcripts": {
               "type": "boolean"
             },
+            "guardian_node_repl_transcript_images": {
+              "type": "boolean"
+            },
             "guardian_reuse_parent_compaction": {
               "type": "boolean"
             },
@@ -5228,6 +5231,9 @@
           "type": "boolean"
         },
         "guardian_enhanced_node_repl_transcripts": {
+          "type": "boolean"
+        },
+        "guardian_node_repl_transcript_images": {
           "type": "boolean"
         },
         "guardian_reuse_parent_compaction": {

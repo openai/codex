@@ -255,6 +255,8 @@ pub enum Feature {
     GuardianReuseParentCompaction,
     /// Include completed node_repl Code Mode responses in Guardian reviews.
     GuardianEnhancedNodeReplTranscripts,
+    /// Include completed node_repl Code Mode response images in Guardian reviews.
+    GuardianNodeReplTranscriptImages,
     /// Enable Guardian V2 automatic approval reviews.
     GuardianV2,
     /// Enable persisted thread goals and automatic goal continuation.
@@ -1329,6 +1331,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::GuardianEnhancedNodeReplTranscripts,
         key: "guardian_enhanced_node_repl_transcripts",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::GuardianNodeReplTranscriptImages,
+        key: "guardian_node_repl_transcript_images",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

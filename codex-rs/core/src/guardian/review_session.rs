@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -17,8 +18,12 @@ use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::BaseInstructionsProvenance;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ImageDetail;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelMessages;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::AskForApproval;
@@ -46,6 +51,10 @@ use crate::config::Permissions;
 use crate::context::ContextualUserFragment;
 use crate::context::GuardianFollowupReviewReminder;
 use crate::environment_selection::TurnEnvironmentSnapshot;
+use crate::image_preparation::ImagePreparationMode;
+use crate::image_preparation::ImageResizeNoticeMode;
+use crate::image_preparation::prepare_response_items;
+use crate::image_preparation::unified_image_budget_enabled;
 use crate::session::GitEnrichmentPolicy;
 use crate::session::SessionIo;
 use crate::session::session::Session;
@@ -57,7 +66,9 @@ use codex_protocol::turn_input::TurnInputMode;
 use codex_protocol::turn_input::TurnInputRequest;
 use codex_protocol::turn_input::TurnInputSubmission;
 use codex_protocol::turn_input::TurnStartOptions;
+use codex_protocol::user_input::UserInput;
 use codex_thread_store::PersistContext;
+use codex_tools::normalize_output_image_detail;
 use codex_utils_path_uri::PathUri;
 
 use super::ApprovalRequestReasons;
@@ -73,6 +84,7 @@ use super::prompt::guardian_policy_prompt_with_config_and_template;
 use super::review::guardian_review_session_config;
 
 const GUARDIAN_INTERRUPT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+const GUARDIAN_MAX_IMAGE_ITEM_TOKENS: i64 = 10_000;
 #[derive(Debug)]
 pub(crate) enum GuardianReviewSessionOutcome {
     Completed(anyhow::Result<Option<String>>),
@@ -906,7 +918,6 @@ async fn run_review_on_session(
     if send_followup_reminder {
         append_guardian_followup_reminder(review_session).await;
     }
-
     let prompt_items = run_before_review_deadline(
         deadline,
         params.external_cancel.as_ref(),
@@ -918,7 +929,7 @@ async fn run_review_on_session(
                 .sync_session_approved_hosts_to(&review_session.session.services.network_approval)
                 .await;
 
-            build_guardian_prompt_items_with_parent_turn(
+            let mut prompt_items = build_guardian_prompt_items_with_parent_turn(
                 params.parent_session.as_ref(),
                 Some(&params.parent_context),
                 params.reasons.clone(),
@@ -926,7 +937,91 @@ async fn run_review_on_session(
                 prompt_mode,
                 last_admitted_node_repl_response_sequence,
             )
-            .await
+            .await?;
+
+            if prompt_items
+                .items
+                .iter()
+                .any(|item| matches!(item, UserInput::Image { .. }))
+            {
+                let reviewer_history = review_session.session.clone_history().await;
+                let reviewer_image_urls = reviewer_history
+                    .raw_items()
+                    .flat_map(|item| match item {
+                        ResponseItem::Message { content, .. } => content.as_slice(),
+                        _ => &[],
+                    })
+                    .filter_map(|item| match item {
+                        ContentItem::InputImage { image_url, .. } => Some(image_url.as_str()),
+                        _ => None,
+                    })
+                    .collect::<HashSet<_>>();
+                let context_window = model_info.resolved_context_window().map(|supported| {
+                    params
+                        .spawn_config
+                        .model_context_window
+                        .unwrap_or(supported)
+                        .min(supported)
+                        .saturating_mul(model_info.effective_context_window_percent.clamp(0, 100))
+                        / 100
+                });
+                let admit_images = if let Some(context_window) = context_window.filter(|limit| {
+                    *limit > 0
+                        && !model_info.used_fallback_model_metadata
+                        && model_info.input_modalities.contains(&InputModality::Image)
+                }) {
+                    let features = &params.spawn_config.features;
+                    let mode = if unified_image_budget_enabled(features, &model_info) {
+                        ImagePreparationMode::UnifiedBudget
+                    } else {
+                        ImagePreparationMode::DetailBased
+                    };
+                    prompt_items.items.retain_mut(|item| {
+                        let UserInput::Image { detail, .. } = item else {
+                            return true;
+                        };
+                        *detail = match normalize_output_image_detail(&model_info, *detail) {
+                            _ if mode == ImagePreparationMode::UnifiedBudget => {
+                                Some(ImageDetail::Original)
+                            }
+                            Some(ImageDetail::Low) => Some(ImageDetail::High),
+                            detail => detail,
+                        };
+                        let mut prepared = vec![ResponseInputItem::from(vec![item.clone()]).into()];
+                        prepare_response_items(
+                            &mut prepared,
+                            mode,
+                            ImageResizeNoticeMode::Disabled,
+                        );
+                        let Some(ResponseItem::Message { content, .. }) = prepared.first() else {
+                            return false;
+                        };
+                        content.iter().any(|item| {
+                            matches!(item, ContentItem::InputImage { image_url, .. }
+                                if !reviewer_image_urls.contains(image_url.as_str()))
+                        })
+                    });
+                    let prompt: ResponseItem =
+                        ResponseInputItem::from(prompt_items.items.clone()).into();
+                    let prompt_tokens = crate::context_manager::estimate_item_token_count(&prompt);
+                    let base_instructions = review_session.session.get_base_instructions().await;
+                    let history_tokens = reviewer_history
+                        .estimate_token_count_with_base_instructions(&base_instructions)
+                        .unwrap_or(i64::MAX)
+                        .max(review_session.session.get_total_token_usage().await);
+                    prompt_tokens <= GUARDIAN_MAX_IMAGE_ITEM_TOKENS
+                        && prompt_tokens.saturating_add(history_tokens) <= context_window
+                } else {
+                    false
+                };
+                if !admit_images {
+                    prompt_items
+                        .items
+                        .retain(|item| !matches!(item, UserInput::Image { .. }));
+                }
+            }
+
+            Ok::<_, anyhow::Error>(prompt_items)
         }),
     )
     .await;
@@ -938,7 +1033,7 @@ async fn run_review_on_session(
         Ok(prompt_items) => prompt_items,
         Err(err) => {
             return (
-                GuardianReviewSessionOutcome::PromptBuildFailed(err.into()),
+                GuardianReviewSessionOutcome::PromptBuildFailed(err),
                 false,
                 analytics_result,
             );
