@@ -294,7 +294,7 @@ impl ChatWidget {
         None
     }
 
-    pub(super) fn has_queued_follow_up_messages(&self) -> bool {
+    pub(crate) fn has_queued_follow_up_messages(&self) -> bool {
         self.input_queue.has_queued_follow_up_messages()
     }
 

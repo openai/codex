@@ -496,15 +496,20 @@ impl ChatWidget {
         self.bottom_pane.is_task_running() || self.review.is_review_mode
     }
 
-    fn pause_active_goal_for_interrupt(&self) {
-        if !self.turn_lifecycle.agent_turn_running {
-            return;
-        }
-        if !self
-            .current_goal_status
-            .as_ref()
-            .is_some_and(GoalStatusState::is_active)
-        {
+    pub(crate) fn is_agent_turn_running(&self) -> bool {
+        self.turn_lifecycle.agent_turn_running
+    }
+
+    pub(crate) fn is_active_goal_turn_running(&self) -> bool {
+        self.turn_lifecycle.agent_turn_running
+            && self
+                .current_goal_status
+                .as_ref()
+                .is_some_and(GoalStatusState::is_active)
+    }
+
+    pub(crate) fn pause_active_goal_for_interrupt(&self) {
+        if !self.is_active_goal_turn_running() {
             return;
         }
         let Some(thread_id) = self.thread_id else {

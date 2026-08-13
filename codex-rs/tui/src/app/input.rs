@@ -212,6 +212,84 @@ impl App {
             }
             return;
         }
+        if matches!(self.app_server_target, AppServerTarget::LocalDaemon { .. })
+            && self.overlay.is_none()
+            && self.chat_widget.no_modal_or_popup_active()
+            && self.chat_widget.composer_is_empty()
+            && self.active_side_parent_thread_id().is_none()
+            && matches!(
+                key_event,
+                KeyEvent {
+                    code: KeyCode::Char(c),
+                    modifiers,
+                    kind: KeyEventKind::Press,
+                    ..
+                } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'c')
+            )
+        {
+            let mut running_thread_id = if self.chat_widget.is_agent_turn_running() {
+                self.chat_widget.thread_id()
+            } else {
+                None
+            };
+            let mut running_side_thread_id =
+                running_thread_id.filter(|thread_id| self.side_threads.contains_key(thread_id));
+            if running_side_thread_id.is_none() {
+                for thread_id in self.side_threads.keys().copied() {
+                    if self.active_turn_id_for_thread(thread_id).await.is_some() {
+                        running_side_thread_id = Some(thread_id);
+                        break;
+                    }
+                }
+            }
+            if running_thread_id.is_none() {
+                running_thread_id = running_side_thread_id;
+            }
+
+            if let Some(thread_id) = running_thread_id {
+                let allow_background = running_side_thread_id.is_none()
+                    && !self.chat_widget.has_queued_follow_up_messages();
+                self.chat_widget.show_selection_view(SelectionViewParams {
+                    title: Some("Task is still running".to_string()),
+                    subtitle: Some("Choose what happens to the current task.".to_string()),
+                    footer_hint: Some(standard_popup_hint_line()),
+                    items: [
+                        (
+                            "Cancel task",
+                            "Stop the current task and stay in Codex",
+                            RunningTaskExitAction::CancelTask,
+                        ),
+                        (
+                            "Run in background",
+                            "Exit Codex and leave the task running",
+                            RunningTaskExitAction::RunInBackground,
+                        ),
+                        (
+                            "Exit",
+                            "Stop the current task and exit Codex",
+                            RunningTaskExitAction::Exit,
+                        ),
+                    ]
+                    .into_iter()
+                    .filter(|(_, _, action)| {
+                        allow_background || *action != RunningTaskExitAction::RunInBackground
+                    })
+                    .map(|(name, description, action)| SelectionItem {
+                        name: name.to_string(),
+                        description: Some(description.to_string()),
+                        actions: vec![Box::new(move |tx| {
+                            tx.send(AppEvent::RunningTaskExit { action, thread_id });
+                        })],
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    })
+                    .collect(),
+                    ..Default::default()
+                });
+                return;
+            }
+        }
+
         if side_return_shortcut_matches(key_event)
             && self.maybe_return_from_side(tui, app_server).await
         {
