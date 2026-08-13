@@ -16,8 +16,10 @@ use crate::session::step_context::StepContext;
 use codex_api::HostedFileUploadContext;
 use codex_api::OPENAI_FILE_UPLOAD_LIMIT_BYTES;
 use codex_api::upload_openai_file;
-use codex_http_client::RouteAwareClientPool;
 use codex_login::CodexAuth;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
+use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
@@ -51,8 +53,8 @@ pub(crate) async fn rewrite_mcp_tool_arguments_for_openai_files(
             continue;
         };
         let Some(uploaded_value) = rewrite_argument_value_for_openai_files(
+            sess,
             step_context,
-            &sess.services.openai_file_upload_client_pool,
             auth.as_ref(),
             field_name,
             optional_fields,
@@ -74,8 +76,8 @@ pub(crate) async fn rewrite_mcp_tool_arguments_for_openai_files(
 }
 
 async fn rewrite_argument_value_for_openai_files(
+    sess: &Session,
     step_context: &StepContext,
-    client_pool: &RouteAwareClientPool,
     auth: Option<&CodexAuth>,
     field_name: &str,
     optional_fields: &[String],
@@ -85,8 +87,8 @@ async fn rewrite_argument_value_for_openai_files(
     match value {
         JsonValue::String(file_path) => {
             let rewritten = build_uploaded_argument_value(
+                sess,
                 step_context,
-                client_pool,
                 auth,
                 FileArgumentLocation {
                     field_name,
@@ -106,8 +108,8 @@ async fn rewrite_argument_value_for_openai_files(
                     return Ok(None);
                 };
                 let rewritten = build_uploaded_argument_value(
+                    sess,
                     step_context,
-                    client_pool,
                     auth,
                     FileArgumentLocation {
                         field_name,
@@ -127,8 +129,8 @@ async fn rewrite_argument_value_for_openai_files(
 }
 
 async fn build_uploaded_argument_value(
+    sess: &Session,
     step_context: &StepContext,
-    client_pool: &RouteAwareClientPool,
     auth: Option<&CodexAuth>,
     argument: FileArgumentLocation<'_>,
     optional_fields: &[String],
@@ -158,9 +160,43 @@ async fn build_uploaded_argument_value(
         .cwd()
         .join(file_path)
         .map_err(|error| contextualize_error(error.to_string()))?;
+    let additional_permissions = merge_permission_profiles(
+        sess.granted_session_permissions(&turn_environment.environment_id)
+            .await
+            .as_ref(),
+        sess.granted_turn_permissions(&turn_environment.environment_id)
+            .await
+            .as_ref(),
+    );
+    let file_system_policy = effective_file_system_sandbox_policy(
+        &turn_environment
+            .permission_profile()
+            .file_system_sandbox_policy(),
+        additional_permissions.as_ref(),
+    );
+    let requires_sandbox = !file_system_policy.has_full_disk_read_access()
+        || file_system_policy
+            .entries
+            .iter()
+            .any(|entry| entry.access == FileSystemAccessMode::Deny);
+    let sandbox = requires_sandbox.then(|| {
+        turn_context.file_system_sandbox_context(additional_permissions, turn_environment)
+    });
+    if sandbox.is_some() {
+        let environment_info = turn_environment
+            .environment
+            .info()
+            .await
+            .map_err(|error| contextualize_error(error.to_string()))?;
+        if !environment_info.capabilities.sandboxed_file_streaming {
+            return Err(contextualize_error(
+                "selected executor does not support sandboxed file streaming".to_string(),
+            ));
+        }
+    }
     let fs = turn_environment.environment.get_filesystem();
     let metadata = fs
-        .get_metadata(&path_uri, /*sandbox*/ None)
+        .get_metadata(&path_uri, sandbox.as_ref())
         .await
         .map_err(|error| contextualize_error(error.to_string()))?;
     if !metadata.is_file {
@@ -178,7 +214,7 @@ async fn build_uploaded_argument_value(
         )));
     }
     let contents = fs
-        .read_file_stream(&path_uri, /*sandbox*/ None)
+        .read_file_stream(&path_uri, sandbox.as_ref())
         .await
         .map_err(|error| contextualize_error(error.to_string()))?;
     let file_name = path_uri
@@ -196,7 +232,7 @@ async fn build_uploaded_argument_value(
     let uploaded = upload_openai_file(
         turn_context.config.chatgpt_base_url.trim_end_matches('/'),
         upload_auth.as_ref(),
-        client_pool,
+        &sess.services.openai_file_upload_client_pool,
         file_name,
         metadata.size,
         contents,
@@ -368,8 +404,8 @@ mod tests {
             .environments = step_environments;
 
         let rewritten = build_uploaded_argument_value(
+            &session,
             &step_context,
-            &session.services.openai_file_upload_client_pool,
             Some(&auth),
             FileArgumentLocation {
                 field_name: "file",
@@ -406,8 +442,8 @@ mod tests {
         let step_context = StepContext::for_test(Arc::new(turn_context));
 
         let error = build_uploaded_argument_value(
+            &session,
             &step_context,
-            &session.services.openai_file_upload_client_pool,
             Some(&auth),
             FileArgumentLocation {
                 field_name: "file",
@@ -483,8 +519,8 @@ mod tests {
         turn_context.config = Arc::new(config);
         let step_context = StepContext::for_test(Arc::new(turn_context));
         let rewritten = rewrite_argument_value_for_openai_files(
+            &session,
             &step_context,
-            &session.services.openai_file_upload_client_pool,
             Some(&auth),
             "file",
             &[],
@@ -597,8 +633,8 @@ mod tests {
         turn_context.config = Arc::new(config);
         let step_context = StepContext::for_test(Arc::new(turn_context));
         let rewritten = rewrite_argument_value_for_openai_files(
+            &session,
             &step_context,
-            &session.services.openai_file_upload_client_pool,
             Some(&auth),
             "files",
             &[],

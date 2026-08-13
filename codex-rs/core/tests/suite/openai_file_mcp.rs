@@ -5,9 +5,17 @@ use std::path::Path;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_core::config::Config;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
+use core_test_support::PathExt;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::apps_test_server::CALENDAR_EXTRACT_TEXT_TOOL_NAME;
 use core_test_support::apps_test_server::DIRECT_CALENDAR_EXTRACT_TEXT_TOOL as DOCUMENT_EXTRACT_HOOK_MATCHER;
@@ -27,6 +35,8 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::namespace_child_tool;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use core_test_support::skip_if_sandbox;
+use core_test_support::skip_if_target_windows;
 use core_test_support::test_codex::TestCodex;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -41,6 +51,37 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 const STREAMED_FILE_SIZE: usize = 2 * 1024 * 1024;
+
+fn restrict_apps_upload_reads(config: &mut Config, denied_file_name: &str) {
+    let denied_path =
+        AbsolutePathBuf::from_absolute_path(config.cwd.as_path().join(denied_file_name))
+            .expect("denied file path should be absolute");
+    let mut file_system_policy = FileSystemSandboxPolicy::read_only();
+    file_system_policy.entries.push(FileSystemSandboxEntry::new(
+        FileSystemPath::Path { path: denied_path },
+        FileSystemAccessMode::Deny,
+    ));
+    config
+        .permissions
+        .set_permission_profile(PermissionProfile::from_runtime_permissions(
+            &file_system_policy,
+            NetworkSandboxPolicy::Restricted,
+        ))
+        .expect("test config should allow a restricted read policy");
+
+    let user_config_path = config.codex_home.join("config.toml").abs();
+    let user_config = toml::from_str(
+        r#"
+[apps.calendar]
+default_tools_approval_mode = "approve"
+"#,
+    )
+    .expect("Apps approval config should parse");
+    config.config_layer_stack = config
+        .config_layer_stack
+        .with_user_config(&user_config_path, user_config)
+        .expect("Apps approval config should be valid");
+}
 
 fn write_post_tool_use_hook(home: &Path) -> Result<()> {
     let script_path = home.join("post_tool_use_hook.py");
@@ -135,7 +176,11 @@ async fn mount_file_upload_mocks(server: &MockServer, file_size_bytes: u64) {
         .await;
 }
 
-async fn run_extract_turn(test: &TestCodex, server: &MockServer) -> Result<ResponseMock> {
+async fn run_extract_turn(
+    test: &TestCodex,
+    server: &MockServer,
+    permission_profile: PermissionProfile,
+) -> Result<ResponseMock> {
     let mock = mount_sse_sequence(
         server,
         vec![
@@ -172,7 +217,7 @@ async fn run_extract_turn(test: &TestCodex, server: &MockServer) -> Result<Respo
     test.submit_turn_with_approval_and_permission_profile(
         "Extract the report text with the app tool.",
         AskForApproval::Never,
-        PermissionProfile::Disabled,
+        permission_profile,
     )
     .await?;
 
@@ -197,7 +242,7 @@ async fn codex_apps_file_params_omit_fields_absent_from_tool_schema() -> Result<
             Ok(())
         });
     let test = builder.build_with_auto_env(&server).await?;
-    let mock = run_extract_turn(&test, &server).await?;
+    let mock = run_extract_turn(&test, &server, PermissionProfile::Disabled).await?;
 
     let requests = mock.requests();
     let search_output = requests[1].tool_search_output("extract-search-1");
@@ -269,7 +314,7 @@ async fn codex_apps_file_params_pass_uploaded_file_to_post_tool_use_hook() -> Re
         });
     let test = builder.build(&server).await?;
     tokio::fs::write(test.cwd.path().join("report.txt"), b"hello world").await?;
-    let _responses = run_extract_turn(&test, &server).await?;
+    let _responses = run_extract_turn(&test, &server, PermissionProfile::Disabled).await?;
 
     let hook_inputs = read_post_tool_use_hook_inputs(test.codex_home_path())?;
     assert_eq!(hook_inputs.len(), 1);
@@ -279,6 +324,89 @@ async fn codex_apps_file_params_pass_uploaded_file_to_post_tool_use_hook() -> Re
     );
 
     server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_apps_file_params_stream_allowed_file_under_restricted_read_policy() -> Result<()> {
+    skip_if_target_windows!(
+        Ok(()),
+        "Windows restricted-token sandbox cannot enforce deny-read policies"
+    );
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    mount_file_upload_mocks(&server, STREAMED_FILE_SIZE as u64).await;
+
+    let mut builder = apps_enabled_builder(apps_server.chatgpt_base_url)
+        .with_config(|config| restrict_apps_upload_reads(config, "private.txt"))
+        .with_workspace_setup(|cwd, fs| async move {
+            let report_path = PathUri::from_abs_path(&cwd.join("report.txt"));
+            fs.write_file(
+                &report_path,
+                vec![b'x'; STREAMED_FILE_SIZE],
+                /*sandbox*/ None,
+            )
+            .await?;
+            Ok(())
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    let permission_profile = test.config.permissions.permission_profile().clone();
+
+    run_extract_turn(&test, &server, permission_profile).await?;
+
+    let apps_tool_call =
+        recorded_apps_tool_call_by_name(&server, CALENDAR_EXTRACT_TEXT_TOOL_NAME).await;
+    assert_eq!(
+        apps_tool_call.pointer("/params/arguments/file"),
+        Some(&schema_filtered_uploaded_file(&server))
+    );
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_apps_file_params_reject_denied_file_before_upload() -> Result<()> {
+    skip_if_target_windows!(
+        Ok(()),
+        "Windows restricted-token sandbox cannot enforce deny-read policies"
+    );
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    let mut builder = apps_enabled_builder(apps_server.chatgpt_base_url)
+        .with_config(|config| restrict_apps_upload_reads(config, "report.txt"))
+        .with_workspace_setup(|cwd, fs| async move {
+            let report_path = PathUri::from_abs_path(&cwd.join("report.txt"));
+            fs.write_file(&report_path, b"private".to_vec(), /*sandbox*/ None)
+                .await?;
+            Ok(())
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    let permission_profile = test.config.permissions.permission_profile().clone();
+
+    let responses = run_extract_turn(&test, &server, permission_profile).await?;
+    let requests = responses.requests();
+    let output = requests[2]
+        .function_call_output_text("extract-call-1")
+        .context("denied Apps upload should return a tool error")?;
+
+    assert!(
+        output.contains("failed to upload `report.txt`")
+            && (output.contains("Permission denied") || output.contains("Operation not permitted")),
+        "unexpected upload error: {output}"
+    );
+    assert!(
+        server
+            .received_requests()
+            .await
+            .context("mock server should expose received requests")?
+            .iter()
+            .all(|request| request.url.path() != "/files"),
+        "denied files must not start an upload"
+    );
     Ok(())
 }
 // copybara:strip-for-public begin
