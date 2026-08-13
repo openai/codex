@@ -3299,6 +3299,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-guardian-v2"
+version = "0.0.0"
+dependencies = [
+ "codex-extension-api",
+]
+
+[[package]]
 name = "codex-history"
 version = "0.0.0"
 dependencies = [

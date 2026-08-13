@@ -1,0 +1,17 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-guardian-v2"
+version.workspace = true
+
+[lib]
+name = "codex_guardian_v2"
+path = "src/lib.rs"
+test = false
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-extension-api = { workspace = true }
