@@ -79,6 +79,8 @@ def validate_skill(skill_path):
     if not isinstance(description, str):
         return False, f"Description must be a string, got {type(description).__name__}"
     description = description.strip()
+    if description.startswith("[TODO:"):
+        return False, "Description contains an unfinished TODO placeholder"
     if description:
         if "<" in description or ">" in description:
             return False, "Description cannot contain angle brackets (< or >)"
@@ -87,6 +89,28 @@ def validate_skill(skill_path):
                 False,
                 f"Description is too long ({len(description)} characters). Maximum is 1024 characters.",
             )
+
+    body = content[match.end() :]
+    fence_marker = None
+    fence_length = 0
+    for line in body.splitlines():
+        fence = re.match(r"^[ \t]*(?:(?:[-+*]|\d+[.)])[ \t]+)?(`{3,}|~{3,})(.*)$", line)
+        if fence:
+            marker = fence.group(1)
+            if fence_marker is None:
+                fence_marker = marker[0]
+                fence_length = len(marker)
+            elif (
+                marker[0] == fence_marker
+                and len(marker) >= fence_length
+                and not fence.group(2).strip()
+            ):
+                fence_marker = None
+                fence_length = 0
+            continue
+
+        if fence_marker is None and re.fullmatch(r"[ ]{0,3}\[TODO:[^\n]*\][ \t]*", line):
+            return False, "Skill instructions contain an unfinished TODO placeholder"
 
     return True, "Skill is valid!"
 
