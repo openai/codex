@@ -146,78 +146,74 @@ fn synthetic_output_id(prefix: &str, item_id: Option<&str>) -> Option<ResponseIt
 }
 
 pub(crate) fn remove_orphan_outputs(items: &mut Vec<ResponseItemEnvelope>) {
-    let function_call_ids: HashSet<String> = items
-        .iter()
-        .filter_map(|envelope| match &envelope.item {
-            ResponseItem::FunctionCall { call_id, .. } => Some(call_id.clone()),
-            _ => None,
-        })
-        .collect();
-
-    let tool_search_call_ids: HashSet<String> = items
-        .iter()
-        .filter_map(|envelope| match &envelope.item {
+    let mut function_call_ids = HashSet::new();
+    let mut tool_search_call_ids = HashSet::new();
+    let mut custom_tool_call_ids = HashSet::new();
+    for envelope in items.iter() {
+        match &envelope.item {
+            ResponseItem::FunctionCall { call_id, .. }
+            | ResponseItem::LocalShellCall {
+                call_id: Some(call_id),
+                ..
+            } => {
+                function_call_ids.insert(call_id.as_str());
+            }
             ResponseItem::ToolSearchCall {
                 call_id: Some(call_id),
                 ..
-            } => Some(call_id.clone()),
-            _ => None,
-        })
-        .collect();
+            } => {
+                tool_search_call_ids.insert(call_id.as_str());
+            }
+            ResponseItem::CustomToolCall { call_id, .. } => {
+                custom_tool_call_ids.insert(call_id.as_str());
+            }
+            _ => {}
+        }
+    }
 
-    let local_shell_call_ids: HashSet<String> = items
-        .iter()
-        .filter_map(|envelope| match &envelope.item {
-            ResponseItem::LocalShellCall {
-                call_id: Some(call_id),
-                ..
-            } => Some(call_id.clone()),
-            _ => None,
-        })
-        .collect();
-
-    let custom_tool_call_ids: HashSet<String> = items
-        .iter()
-        .filter_map(|envelope| match &envelope.item {
-            ResponseItem::CustomToolCall { call_id, .. } => Some(call_id.clone()),
-            _ => None,
-        })
-        .collect();
-
-    items.retain(|envelope| match &envelope.item {
-        ResponseItem::FunctionCallOutput { call_id, .. } => {
-            let has_match =
-                function_call_ids.contains(call_id) || local_shell_call_ids.contains(call_id);
-            if !has_match {
+    let mut orphan_positions = Vec::new();
+    for (position, envelope) in items.iter().enumerate() {
+        match &envelope.item {
+            ResponseItem::FunctionCallOutput { call_id, .. }
+                if !function_call_ids.contains(call_id.as_str()) =>
+            {
                 error_or_panic(format!(
                     "Orphan function call output for call id: {call_id}"
                 ));
+                orphan_positions.push(position);
             }
-            has_match
-        }
-        ResponseItem::CustomToolCallOutput { call_id, .. } => {
-            let has_match = custom_tool_call_ids.contains(call_id);
-            if !has_match {
+            ResponseItem::CustomToolCallOutput { call_id, .. }
+                if !custom_tool_call_ids.contains(call_id.as_str()) =>
+            {
                 error_or_panic(format!(
                     "Orphan custom tool call output for call id: {call_id}"
                 ));
+                orphan_positions.push(position);
             }
-            has_match
-        }
-        ResponseItem::ToolSearchOutput { execution, .. } if execution == "server" => true,
-        ResponseItem::ToolSearchOutput {
-            call_id: Some(call_id),
-            ..
-        } => {
-            let has_match = tool_search_call_ids.contains(call_id);
-            if !has_match {
+            ResponseItem::ToolSearchOutput {
+                call_id: Some(call_id),
+                execution,
+                ..
+            } if execution != "server" && !tool_search_call_ids.contains(call_id.as_str()) => {
                 error_or_panic(format!("Orphan tool search output for call id: {call_id}"));
+                orphan_positions.push(position);
             }
-            has_match
+            _ => {}
         }
-        ResponseItem::ToolSearchOutput { call_id: None, .. } => true,
-        _ => true,
-    });
+    }
+
+    if !orphan_positions.is_empty() {
+        let mut orphan_positions = orphan_positions.into_iter().peekable();
+        let mut position = 0;
+        items.retain(|_| {
+            let retain = orphan_positions.peek() != Some(&position);
+            if !retain {
+                orphan_positions.next();
+            }
+            position += 1;
+            retain
+        });
+    }
 }
 
 pub(crate) fn remove_corresponding_for(items: &mut Vec<ResponseItemEnvelope>, item: &ResponseItem) {
