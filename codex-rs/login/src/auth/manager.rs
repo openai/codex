@@ -2612,6 +2612,10 @@ impl AuthManager {
         self.external_auth_provider().is_some()
     }
 
+    pub fn is_workload_identity_selected(&self) -> bool {
+        self.workload_identity_selected
+    }
+
     pub fn is_external_chatgpt_auth_active(&self) -> bool {
         self.auth_cached()
             .as_ref()
