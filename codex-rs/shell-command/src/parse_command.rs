@@ -12,6 +12,30 @@ pub fn shlex_join(tokens: &[String]) -> String {
         .unwrap_or_else(|_| "<command included NUL byte>".to_string())
 }
 
+/// Tokenizes a PowerShell command while preserving Windows paths and reader aliases.
+pub fn tokenize_powershell_command(command: &str) -> Vec<String> {
+    let normalized = command.replace('\\', "/");
+    let mut tokens = shlex_split(&normalized)
+        .unwrap_or_else(|| normalized.split_whitespace().map(str::to_string).collect());
+    if let Some(executable) = tokens.first_mut()
+        && matches!(
+            executable.to_ascii_lowercase().as_str(),
+            "get-content" | "gc" | "type"
+        )
+    {
+        *executable = "Get-Content".to_owned();
+        // POSIX shlex must not silently rewrite a PowerShell file path.
+        if tokens
+            .iter()
+            .skip(1)
+            .any(|argument| !normalized.contains(argument))
+        {
+            return Vec::new();
+        }
+    }
+    tokens
+}
+
 /// Extracts the shell and script from a command, regardless of platform
 pub fn extract_shell_command(command: &[String]) -> Option<(&str, &str)> {
     extract_bash_command(command).or_else(|| extract_powershell_command(command))
@@ -1246,6 +1270,102 @@ mod tests {
     }
 
     #[test]
+    fn powershell_file_reads_are_classified() {
+        for (shell, script, path) in [
+            (
+                "powershell",
+                r"Get-Content C:\skills\demo\SKILL.md",
+                "C:/skills/demo/SKILL.md",
+            ),
+            (
+                "powershell",
+                r#"get-content -Raw "C:\skills and plugins\SKILL.md""#,
+                "C:/skills and plugins/SKILL.md",
+            ),
+            (
+                "powershell",
+                r"Get-Content 'C:\skills and plugins\SKILL.md'",
+                "C:/skills and plugins/SKILL.md",
+            ),
+            (
+                "powershell",
+                r"Get-Content -Path C:\skills\demo\SKILL.md",
+                "C:/skills/demo/SKILL.md",
+            ),
+            (
+                "powershell",
+                r"Get-Content -LiteralPath C:\skills\demo\SKILL.md",
+                "C:/skills/demo/SKILL.md",
+            ),
+            (
+                "powershell",
+                r"Get-Content C:\skills\demo\SKILL.md -Raw",
+                "C:/skills/demo/SKILL.md",
+            ),
+            (
+                "powershell",
+                r"Get-Content -Raw -LiteralPath C:\skills\demo\SKILL.md",
+                "C:/skills/demo/SKILL.md",
+            ),
+            (
+                "powershell",
+                r"Get-Content C:\workspace\README.md",
+                "C:/workspace/README.md",
+            ),
+            (
+                "powershell",
+                "gc C:/skills/demo/SKILL.md",
+                "C:/skills/demo/SKILL.md",
+            ),
+            (
+                "powershell",
+                "type C:/skills/demo/SKILL.md",
+                "C:/skills/demo/SKILL.md",
+            ),
+            (
+                r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                "Get-Content C:/skills/demo/SKILL.md",
+                "C:/skills/demo/SKILL.md",
+            ),
+        ] {
+            assert_parsed(
+                &vec_str(&[shell, "-NoProfile", "-Command", script]),
+                vec![ParsedCommand::Read {
+                    cmd: script.to_string(),
+                    name: PathBuf::from(path)
+                        .file_name()
+                        .expect("file path")
+                        .to_string_lossy()
+                        .into_owned(),
+                    path: PathBuf::from(path),
+                }],
+            );
+        }
+    }
+
+    #[test]
+    fn complex_powershell_file_reads_are_intentionally_not_classified() {
+        for script in [
+            r"Get-Content 'C:\Users\O''Brien\skill\SKILL.md'",
+            r#"Get-Content "$(Remove-Item C:/important)/skills/demo/SKILL.md""#,
+            "Get-Content -ReadCount:([IO.File]::Delete('C:/important')) C:/skills/demo/SKILL.md",
+            "Get-Content C:/Users/Alice/.ssh/id_rsa,C:/skills/demo/SKILL.md",
+            "Get-Content C:/skills/demo/SKILL.md -Raw; Remove-Item C:/important",
+            "Get-Content C:/skills/demo/SKILL.md C:/important",
+            "Get-Content C:/skills/*/SKILL.md",
+            "Get-Content -Encoding UTF8 C:/skills/demo/SKILL.md",
+            "Get-Content -Raw",
+        ] {
+            assert_parsed(
+                &vec_str(&["powershell", "-Command", script]),
+                vec![ParsedCommand::Unknown {
+                    cmd: script.to_string(),
+                }],
+            );
+        }
+    }
+
+    #[test]
     fn pwsh_with_noprofile_and_c_alias_is_stripped() {
         assert_parsed(
             &vec_str(&["pwsh", "-NoProfile", "-c", "Write-Host hi"]),
@@ -1277,7 +1397,29 @@ pub fn parse_command_impl(command: &[String]) -> Vec<ParsedCommand> {
         return commands;
     }
 
-    if let Some((_, script)) = extract_powershell_command(command) {
+    let powershell_command = command
+        .first()
+        .filter(|shell| shell.contains('\\'))
+        .map(|shell| {
+            let mut normalized = command.to_vec();
+            normalized[0] = shell.rsplit(['/', '\\']).next().unwrap_or(shell).to_owned();
+            normalized
+        });
+    if let Some((_, script)) =
+        extract_powershell_command(powershell_command.as_deref().unwrap_or(command))
+    {
+        let tokens = tokenize_powershell_command(script);
+        if tokens
+            .first()
+            .is_some_and(|executable| executable == "Get-Content")
+            && let [ParsedCommand::Read { name, path, .. }] = parse_command_impl(&tokens).as_slice()
+        {
+            return vec![ParsedCommand::Read {
+                cmd: script.to_string(),
+                name: name.clone(),
+                path: path.clone(),
+            }];
+        }
         return vec![ParsedCommand::Unknown {
             cmd: script.to_string(),
         }];
@@ -2253,8 +2395,32 @@ fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
                 path,
             }
         }
-        Some((head, tail)) if head == "cat" => {
-            if let Some(path) = single_non_flag_operand(tail, &[]) {
+        Some((head, tail)) if head == "cat" || head.eq_ignore_ascii_case("Get-Content") => {
+            let path = if head == "cat" {
+                single_non_flag_operand(tail, &[])
+            } else {
+                // Intentionally miss complex reads: conservative presentation should not
+                // require implementing PowerShell's full expression and argument grammar.
+                if tail.iter().all(|argument| {
+                    !argument.starts_with('-')
+                        || ["-Raw", "-Path", "-LiteralPath"]
+                            .iter()
+                            .any(|flag| argument.eq_ignore_ascii_case(flag))
+                }) {
+                    single_non_flag_operand(tail, &[])
+                } else {
+                    None
+                }
+                .filter(|path| {
+                    !path.is_empty()
+                        && !path.starts_with('-')
+                        && path.chars().all(|character| {
+                            character.is_alphanumeric()
+                                || matches!(character, ' ' | '/' | '\\' | '.' | '-' | '_' | ':')
+                        })
+                })
+            };
+            if let Some(path) = path {
                 let name = short_display_path(&path);
                 ParsedCommand::Read {
                     cmd: shlex_join(main_cmd),

@@ -53,7 +53,6 @@ use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_remote;
-use core_test_support::skip_if_target_windows;
 use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_mcp_server;
@@ -1241,7 +1240,6 @@ async fn production_turn_aliases_executor_skill_roots() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn executor_skill_invocation_is_environment_scoped_and_deduplicated() -> Result<()> {
-    skip_if_target_windows!(Ok(()), "executes a POSIX cat command");
     skip_if_remote!(Ok(()), "executor fixture uses a host-local skill path");
     skip_if_no_network!(Ok(()));
 
@@ -1280,8 +1278,13 @@ async fn executor_skill_invocation_is_environment_scoped_and_deduplicated() -> R
         ],
         warnings: Vec::new(),
     };
+    let read_command = if cfg!(windows) {
+        format!("Get-Content -LiteralPath \"{}\"", skill_path.display())
+    } else {
+        format!("cat {}", skill_path.display())
+    };
     let command = json!({
-        "cmd": format!("cat {}", skill_path.display()),
+        "cmd": read_command,
         "login": false,
     })
     .to_string();

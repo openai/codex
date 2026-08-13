@@ -85,6 +85,7 @@ fn powershell_skill_doc_read_matches_common_forms() {
         format!("Get-Content -Raw {path}"),
         format!("Get-Content \"{spaced_path}\""),
         format!("Get-Content -Raw \"{spaced_path}\""),
+        format!("get-content   -raw '{spaced_path}'"),
     ] {
         let found = detect_implicit_skill_invocation_for_command(
             &outcome,
@@ -101,11 +102,26 @@ fn powershell_skill_doc_read_matches_common_forms() {
 }
 
 #[test]
-fn powershell_get_content_path_preserves_windows_backslashes() {
-    assert_eq!(
-        powershell_get_content_path(r#"Get-Content C:\skills\example\SKILL.md"#),
-        Some(r#"C:\skills\example\SKILL.md"#)
-    );
+fn windows_executor_skill_reads_share_powershell_classification() {
+    let workdir = PathUri::parse("file:///C:/skills").expect("Windows workdir URI");
+    let document = PathUri::parse("file:///C:/skills/demo/SKILL.md").expect("skill URI");
+
+    for command in [
+        r"Get-Content C:\skills\demo\SKILL.md",
+        r"get-content -Raw C:\skills\demo\SKILL.md",
+        r"Get-Content -Path C:\skills\demo\SKILL.md",
+        r"Get-Content -LiteralPath C:\skills\demo\SKILL.md",
+        r"Get-Content C:\skills\demo\SKILL.md -Raw",
+        r"Get-Content -Raw -LiteralPath C:\skills\demo\SKILL.md",
+        r"gc C:\skills\demo\SKILL.md",
+        r"type C:\skills\demo\SKILL.md",
+    ] {
+        assert_eq!(
+            implicit_skill_accesses_for_command(command, &workdir),
+            vec![ImplicitSkillAccess::Document(document.clone())],
+            "command: {command}"
+        );
+    }
 }
 
 #[test]

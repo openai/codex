@@ -965,6 +965,34 @@ mod tests {
     }
 
     #[test]
+    fn powershell_skill_read_snapshot() {
+        let command = vec![
+            "powershell.exe".to_string(),
+            "-Command".to_string(),
+            r"Get-Content C:\skills\demo\SKILL.md".to_string(),
+        ];
+        let parsed = codex_shell_command::parse_command::parse_command(&command);
+        let cell = new_active_exec_command(
+            "call-id".to_string(),
+            command,
+            parsed,
+            ExecCommandSource::Agent,
+            /*interaction_input*/ None,
+            /*animations_enabled*/ false,
+        );
+        let rendered = cell
+            .display_lines(/*width*/ 80)
+            .iter()
+            .map(render_line_text)
+            .join("\n");
+
+        insta::assert_snapshot!(rendered, @r"
+        • Exploring
+          └ Read SKILL.md
+        ");
+    }
+
+    #[test]
     fn command_truncation_ellipsis_does_not_include_transcript_hint() {
         let truncated = ExecCell::limit_lines_from_start(
             &[
