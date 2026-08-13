@@ -7,11 +7,26 @@ version.workspace = true
 [lib]
 name = "codex_guardian_v2"
 path = "src/lib.rs"
-test = false
 doctest = false
 
 [lints]
 workspace = true
 
 [dependencies]
+codex-api = { workspace = true }
 codex-extension-api = { workspace = true }
+codex-http-client = { workspace = true }
+codex-login = { workspace = true }
+codex-model-provider = { workspace = true }
+codex-protocol = { workspace = true }
+http = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+codex-model-provider-info = { workspace = true }
+core_test_support = { workspace = true }
+pretty_assertions = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
