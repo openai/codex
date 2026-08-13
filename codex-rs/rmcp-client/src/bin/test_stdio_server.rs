@@ -124,6 +124,23 @@ impl TestToolServer {
             Self::image_scenario_tool(),
             sandbox_meta_tool,
         ];
+        if std::env::var_os("MCP_TEST_ENABLE_NODE_REPL_JS").is_some() {
+            #[expect(clippy::expect_used)]
+            let schema: JsonObject = serde_json::from_value(json!({
+                "type": "object",
+                "properties": { "code": { "type": "string" } },
+                "required": ["code"],
+                "additionalProperties": false
+            }))
+            .expect("js tool schema should deserialize");
+            let mut tool = Tool::new(
+                Cow::Borrowed("js"),
+                Cow::Borrowed("Run JavaScript in the test Node REPL."),
+                Arc::new(schema),
+            );
+            tool.annotations = Some(ToolAnnotations::new().read_only(true));
+            tools.push(tool);
+        }
         if let Some(process_label) = dynamic_server_process_label()
             && let Some(echo) = tools.iter_mut().find(|tool| tool.name == "echo")
         {
@@ -396,6 +413,11 @@ struct EchoArgs {
     env_var: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct JsArgs {
+    code: String,
+}
+
 const DEFAULT_SYNC_TIMEOUT_MS: u64 = 1_000;
 
 static SYNC_BARRIERS: OnceLock<tokio::sync::Mutex<HashMap<String, SyncBarrierState>>> =
@@ -597,6 +619,33 @@ impl ServerHandler for TestToolServer {
         context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
     ) -> Result<rmcp::model::CallToolResponse, McpError> {
         match request.name.as_ref() {
+            "js" => {
+                let args = Self::parse_call_args::<JsArgs>(&request, "js")?;
+                if args.code == "nodeRepl.fail()" {
+                    Ok(CallToolResult::error(vec![
+                        rmcp::model::ContentBlock::text("guardian-hidden-failed-result"),
+                    ]))
+                } else if args.code == "nodeRepl.empty()" {
+                    Ok(CallToolResult::success(vec![
+                        rmcp::model::ContentBlock::text(" "),
+                    ]))
+                } else if let Some(text) = args.code.strip_prefix("nodeRepl.write(")
+                    && let Some(text) = text.strip_suffix(')')
+                {
+                    let text = serde_json::from_str::<String>(text)
+                        .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
+                    let mut result =
+                        CallToolResult::success(vec![rmcp::model::ContentBlock::text(text)]);
+                    result.structured_content =
+                        Some(json!({ "text": "guardian-hidden-structured-override" }));
+                    let mut meta = MetaObject::new();
+                    meta.insert("ui".to_string(), json!("guardian-hidden-ui-preview"));
+                    result.meta = Some(meta);
+                    Ok(result)
+                } else {
+                    Err(McpError::invalid_params("unsupported test js source", None))
+                }
+            }
             "client_capabilities" => Ok(Self::structured_result(json!({
                 "supportsOpenaiFormElicitation": self
                     .supports_openai_form_elicitation

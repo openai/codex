@@ -96,6 +96,9 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
         Vec::new()
     }
 
+    /// Observes a tool result only after all PostToolUse hooks accept it.
+    fn on_tool_result_accepted(&self, _invocation: &ToolInvocation, _result: &dyn ToolOutput) {}
+
     fn post_tool_use_payload(
         &self,
         invocation: &ToolInvocation,
@@ -845,6 +848,7 @@ impl ToolRegistry {
                         });
                     }
                 }
+                tool.on_tool_result_accepted(&invocation, result.result.as_ref());
                 dispatch_trace.record_completed(
                     &invocation,
                     &result.call_id,

@@ -506,6 +506,7 @@ async fn build_guardian_prompt_prefers_retry_reason_over_approval_reason() -> an
             justification: None,
         },
         GuardianPromptMode::Full,
+        /*reviewed_node_repl_evidence_sequence*/ 0,
     )
     .await?;
 
@@ -543,6 +544,7 @@ async fn build_guardian_prompt_truncates_oversized_approval_reason() -> anyhow::
             justification: None,
         },
         GuardianPromptMode::Full,
+        /*reviewed_node_repl_evidence_sequence*/ 0,
     )
     .await?;
 
@@ -639,6 +641,7 @@ async fn build_guardian_prompt_includes_parent_turn_denied_reads() -> anyhow::Re
             justification: Some("Need to inspect the secret file.".to_string()),
         },
         GuardianPromptMode::Full,
+        /*reviewed_node_repl_evidence_sequence*/ 0,
     )
     .await?;
 
@@ -945,7 +948,7 @@ fn collect_guardian_transcript_entries_keeps_manual_approval_developer_message()
 
 #[test]
 fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
-    let items = vec![
+    let mut items = vec![
         ResponseItem::Message {
             id: None,
             role: "user".to_string(),
@@ -1000,6 +1003,13 @@ fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
             text: "repo is public".to_string(),
         }
     );
+    if let ResponseItem::FunctionCall { namespace, .. } = &mut items[1] {
+        *namespace = Some("mcp__node_repl__".to_string());
+    }
+    assert!(matches!(
+        collect_guardian_transcript_entries(&items)[2].kind,
+        GuardianTranscriptEntryKind::NodeReplToolResult(_)
+    ));
 }
 
 #[test]

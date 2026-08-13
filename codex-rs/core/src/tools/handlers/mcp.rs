@@ -2,12 +2,15 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Instant;
 
+use crate::context::NodeReplReviewEvidence;
 use crate::function_tool::FunctionCallError;
 use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::original_image_detail::can_request_original_image_detail;
 use crate::session::session::Session;
 use crate::tools::context::McpToolOutput;
+use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::context::boxed_tool_output;
 use crate::tools::flat_tool_name;
@@ -17,6 +20,7 @@ use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolExecutor;
 use crate::tools::registry::ToolTelemetryTags;
+use codex_features::Feature;
 use codex_mcp::ToolInfo;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
@@ -235,6 +239,63 @@ impl CoreToolRuntime for McpHandler {
 
     fn mcp_server_name(&self) -> Option<&str> {
         Some(&self.tool_info.server_name)
+    }
+
+    fn on_tool_result_accepted(&self, invocation: &ToolInvocation, result: &dyn ToolOutput) {
+        let ToolCallSource::CodeMode { cell_id, .. } = &invocation.source else {
+            return;
+        };
+        if self.tool_info.server_name != "node_repl"
+            || !result.success_for_logging()
+            || !(invocation.turn.model_info.node_repl_auto_review_required
+                || invocation
+                    .turn
+                    .config
+                    .features
+                    .enabled(Feature::GuardianEnhancedNodeReplTranscripts))
+        {
+            return;
+        }
+
+        let result = result.code_mode_result(&invocation.payload);
+        let Some(content) = result.get("content").and_then(Value::as_array) else {
+            return;
+        };
+        let is_encrypted = |item: &Value| {
+            item.get("_meta")
+                .and_then(|meta| meta.get("codex/encryptedContent"))
+                .and_then(Value::as_bool)
+                == Some(true)
+        };
+        let mut text_blocks = content
+            .iter()
+            .filter_map(|item| {
+                if item.get("type")?.as_str()? != "text" || is_encrypted(item) {
+                    return None;
+                }
+                let text = item.get("text")?.as_str()?;
+                (!text.trim().is_empty()).then(|| text.to_string())
+            })
+            .collect::<Vec<_>>();
+        if text_blocks.is_empty()
+            && !content.iter().any(is_encrypted)
+            && let Some(content) = result.get("structuredContent")
+            && !content.is_null()
+            && let Ok(text) = serde_json::to_string(content)
+        {
+            text_blocks.push(text);
+        }
+        invocation
+            .session
+            .services
+            .thread_extension_data
+            .get_or_init(NodeReplReviewEvidence::default)
+            .record(
+                self.tool_info.tool.name.as_ref(),
+                cell_id,
+                &invocation.call_id,
+                text_blocks,
+            );
     }
 
     fn telemetry_tags(&self, _invocation: &ToolInvocation) -> ToolTelemetryTags {

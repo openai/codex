@@ -8,6 +8,7 @@ use codex_config::types::McpServerTransportConfig;
 use codex_core::StartThreadOptions;
 use codex_core::TurnInputRequest;
 use codex_core::config::Config;
+use codex_core::config::Constrained;
 use codex_core::config::CurrentTimeReminderConfig;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistryBuilder;
@@ -21,6 +22,7 @@ use codex_features::CurrentTimeSource;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_models_manager::bundled_models_response;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
@@ -69,6 +71,7 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::namespace_child_tool;
 use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_sandbox;
 use core_test_support::skip_if_wine_exec;
 use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::TestCodex;
@@ -4338,6 +4341,177 @@ isError=false
 contentLength=0"
     );
 
+    Ok(())
+}
+
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[test_case(false, false; "disabled")]
+#[test_case(true, false; "manually_enabled")]
+#[test_case(false, true; "required_model_forces_evidence")]
+async fn code_mode_node_repl_text_evidence_is_visible_only_to_guardian(
+    enhanced_transcripts: bool,
+    auto_review_required: bool,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_wine_exec!(
+        Ok(()),
+        "Guardian approval actions require host-native paths"
+    );
+    const NODE_REPL_DOM_MIDDLE: &str = "guardian-visible-dom-middle";
+    const DIRECT_NODE_REPL_MIDDLE: &str = "direct-node-repl-visible-middle";
+    const DIRECT_UNRELATED_MIDDLE: &str = "direct-unrelated-hidden-middle";
+    const OTHER_NODE_REPL_RESULT: &str = "ECHOING: guardian-visible-other-tool-result";
+    const UNRELATED_RESULT: &str = "ECHOING: guardian-hidden-unrelated-result";
+    let server = responses::start_mock_server().await;
+    let mcp_server_bin = remote_aware_stdio_server_bin()?;
+    let mut builder = test_codex()
+        .with_model_info_override("gpt-5.5", move |model| {
+            model.node_repl_auto_review_required = auto_review_required
+        })
+        .with_config(move |config| {
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+            config
+                .features
+                .enable(Feature::CodeMode)
+                .expect("enable Code Mode");
+            config
+                .features
+                .set_enabled(
+                    Feature::GuardianEnhancedNodeReplTranscripts,
+                    enhanced_transcripts,
+                )
+                .expect("configure enhanced transcripts");
+            let mcp: McpServerConfig = serde_json::from_value(serde_json::json!({
+                "command": mcp_server_bin,
+                "environment_id": remote_aware_environment_id(),
+                "env": { "MCP_TEST_ENABLE_NODE_REPL_JS": "1" },
+                "omit_tools_from": ["deferred"],
+            }))
+            .expect("valid MCP server config");
+            config
+                .mcp_servers
+                .set(
+                    ["node_repl", "node_repl_"]
+                        .into_iter()
+                        .map(|name| (name.into(), mcp.clone()))
+                        .collect(),
+                )
+                .expect("configure MCP servers");
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    wait_for_mcp_server(&test.codex, "node_repl").await?;
+    let snapshot_args = |marker| {
+        serde_json::json!({
+            "message": format!("{}{}{}", "a".repeat(10_000), marker, "b".repeat(10_000)),
+        })
+        .to_string()
+    };
+
+    let code = r#"
+await tools.mcp__node_repl_echo({ message: "guardian-hidden-unrelated-result" });
+await tools.mcp__node_repl__js({ code: 'nodeRepl.fail()' });
+await tools.mcp__node_repl__js({ code: `nodeRepl.write(${JSON.stringify("a".repeat(10000) + ["guardian-visible", "dom-middle"].join("-") + "b".repeat(10000))})` });
+await tools.mcp__node_repl__echo({ message: ["guardian-visible-other-", "tool-result"].join("") });
+await tools.mcp__node_repl__encrypted_output({});
+await tools.mcp__node_repl__js({ code: 'nodeRepl.empty()' });
+await tools.exec_command({ cmd: "true", sandbox_permissions: "require_escalated", justification: "review" });
+await tools.exec_command({ cmd: "printf second", sandbox_permissions: "require_escalated", justification: "review again" });
+"#;
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                responses::ev_function_call_with_namespace(
+                    "node-repl-call",
+                    "mcp__node_repl",
+                    "echo",
+                    &snapshot_args(DIRECT_NODE_REPL_MIDDLE),
+                ),
+                ev_completed("resp-node-repl"),
+            ]),
+            sse(vec![
+                responses::ev_function_call_with_namespace(
+                    "unrelated-call",
+                    "mcp__node_repl_",
+                    "echo",
+                    &snapshot_args(DIRECT_UNRELATED_MIDDLE),
+                ),
+                ev_completed("resp-unrelated"),
+            ]),
+            sse(vec![
+                ev_custom_tool_call("code-mode-call", "exec", code),
+                ev_completed("resp-parent"),
+            ]),
+            sse(vec![
+                ev_assistant_message("guardian", r#"{"outcome":"allow"}"#),
+                ev_completed("resp-guardian"),
+            ]),
+            sse(vec![
+                ev_assistant_message("guardian-again", r#"{"outcome":"allow"}"#),
+                ev_completed("resp-guardian-again"),
+            ]),
+            sse(vec![ev_completed("resp-done")]),
+        ],
+    )
+    .await;
+    test.submit_text_turn("review a nested node_repl tool response")
+        .await?;
+    let requests = response_mock.requests();
+    let guardian_requests = requests
+        .iter()
+        .filter(|request| {
+            request.body_json()["client_metadata"]["x-openai-subagent"].as_str() == Some("guardian")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(guardian_requests.len(), 2);
+    let guardian_text = guardian_requests[0].message_input_texts("user").concat();
+    let evidence_enabled = enhanced_transcripts || auto_review_required;
+    for included in [
+        DIRECT_NODE_REPL_MIDDLE,
+        NODE_REPL_DOM_MIDDLE,
+        OTHER_NODE_REPL_RESULT,
+        "Lookup completed",
+        "<completed without visible text>",
+    ] {
+        assert_eq!(
+            guardian_text.contains(included),
+            evidence_enabled,
+            "unexpected Guardian evidence visibility for {included}"
+        );
+    }
+    for excluded in [
+        DIRECT_UNRELATED_MIDDLE,
+        UNRELATED_RESULT,
+        "guardian-hidden-failed-result",
+        "gAAAA-test",
+        "guardian-hidden-ui-preview",
+        "guardian-hidden-structured-override",
+    ] {
+        assert!(
+            !guardian_text.contains(excluded),
+            "protected, failed, unrelated, or duplicate evidence leaked: {excluded}"
+        );
+    }
+    assert_eq!(
+        guardian_requests[1]
+            .message_input_texts("user")
+            .concat()
+            .matches(NODE_REPL_DOM_MIDDLE)
+            .count(),
+        usize::from(evidence_enabled),
+        "a reused Guardian session must not append the same evidence twice"
+    );
+    let parent_request = requests.last().expect("parent turn should complete");
+    let parent_input = serde_json::to_string(&parent_request.input())?;
+    assert!(
+        !parent_input.contains(NODE_REPL_DOM_MIDDLE)
+            && !parent_input.contains(OTHER_NODE_REPL_RESULT)
+            && !parent_input.contains(UNRELATED_RESULT),
+        "nested MCP responses leaked into parent model history: {parent_input}"
+    );
     Ok(())
 }
 

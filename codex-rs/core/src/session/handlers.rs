@@ -15,6 +15,7 @@ use crate::session::thread_settings;
 use crate::session::turn_input;
 
 use crate::config::Config;
+use crate::context::NodeReplReviewEvidence;
 use crate::review_prompts::resolve_review_request;
 use crate::session::spawn_review_thread;
 use crate::tasks::CompactTask;
@@ -324,6 +325,16 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
         .collect::<Vec<_>>();
     sess.apply_rollout_reconstruction(turn_context.as_ref(), replay_items.as_slice())
         .await;
+    if sess
+        .services
+        .thread_extension_data
+        .remove::<NodeReplReviewEvidence>()
+        .is_some()
+    {
+        sess.guardian_review_session
+            .invalidate_for_node_repl_evidence()
+            .await;
+    }
     sess.services
         .agent_control
         .rollout_budget()

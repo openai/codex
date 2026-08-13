@@ -34,6 +34,7 @@ pub(crate) use approval_request::GuardianMcpAnnotations;
 pub(crate) use approval_request::GuardianNetworkAccessTrigger;
 #[cfg(test)]
 pub(crate) use approval_request::guardian_approval_request_to_json;
+pub(crate) use prompt::guardian_truncate_text;
 pub(crate) use review::GuardianReviewOptions;
 pub(crate) use review::guardian_timeout_message;
 pub(crate) use review::is_guardian_reviewer_source;
@@ -61,6 +62,7 @@ const GUARDIAN_MAX_MESSAGE_TRANSCRIPT_TOKENS: usize = 10_000;
 const GUARDIAN_MAX_TOOL_TRANSCRIPT_TOKENS: usize = 10_000;
 const GUARDIAN_MAX_MESSAGE_ENTRY_TOKENS: usize = 2_000;
 const GUARDIAN_MAX_TOOL_ENTRY_TOKENS: usize = 1_000;
+pub(crate) const GUARDIAN_MAX_NODE_REPL_TOOL_RESULT_TOKENS: usize = 6_000;
 const GUARDIAN_MAX_ACTION_STRING_TOKENS: usize = 16_000;
 const GUARDIAN_RECENT_ENTRY_LIMIT: usize = 40;
 const TRUNCATION_TAG: &str = "truncated";
@@ -220,8 +222,6 @@ use prompt::build_guardian_prompt_items_with_parent_turn;
 use prompt::collect_guardian_transcript_entries;
 #[cfg(test)]
 use prompt::guardian_output_schema;
-#[cfg(test)]
-use prompt::guardian_truncate_text;
 #[cfg(test)]
 use prompt::parse_guardian_assessment;
 #[cfg(test)]

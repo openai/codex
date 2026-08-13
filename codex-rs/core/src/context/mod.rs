@@ -20,6 +20,7 @@ mod model_switch_instructions;
 mod multi_agent_mode_instructions;
 mod multi_agent_usage_hint;
 mod network_rule_saved;
+mod node_repl_review_evidence;
 mod permissions_instructions;
 mod personality_spec_instructions;
 mod plugin_instructions;
@@ -64,6 +65,7 @@ pub(crate) use legacy_unified_exec_process_limit_warning::LegacyUnifiedExecProce
 pub(crate) use model_switch_instructions::ModelSwitchInstructions;
 pub(crate) use multi_agent_usage_hint::MultiAgentUsageHint;
 pub(crate) use network_rule_saved::NetworkRuleSaved;
+pub(crate) use node_repl_review_evidence::NodeReplReviewEvidence;
 pub use permissions_instructions::ApprovalPromptContext;
 pub use permissions_instructions::PermissionsInstructions;
 pub(crate) use personality_spec_instructions::PersonalitySpecInstructions;
