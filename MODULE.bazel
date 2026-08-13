@@ -5,7 +5,6 @@ bazel_dep(name = "platforms", version = "1.0.0")
 
 # Expose the public protobuf rules already used transitively by rules_rs.
 bazel_dep(name = "protobuf", version = "34.0.bcr.1", repo_name = "com_google_protobuf")
-bazel_dep(name = "rules_proto", version = "7.1.0")
 bazel_dep(name = "llvm", version = "0.8.11")
 bazel_dep(name = "windows_support", version = "0.2.0")
 

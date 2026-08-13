@@ -1,4 +1,4 @@
-load("@rules_proto//proto:defs.bzl", "proto_library")
+load("@com_google_protobuf//bazel:proto_library.bzl", "proto_library")
 load("@rules_rust//extensions/prost:defs.bzl", "rust_prost_library")
 load("//:defs.bzl", "codex_rust_crate")
 
