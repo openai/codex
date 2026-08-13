@@ -516,8 +516,29 @@ async fn rejected_queue_messages_are_consumed_without_retrying_or_blocking_follo
         hook_log.lines().collect::<Vec<_>>()
     );
     assert!(queue.list(thread_id).await?.is_empty());
+    assert_eq!(2, responses.requests().len());
+    Ok(())
+}
 
-    let rejected = staging.enqueue(thread_id, user_input("blocked")).await?;
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn explicitly_started_rejected_queue_messages_are_consumed() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let responses =
+        responses::mount_sse_once(&server, responses::sse_completed("unexpected-turn")).await;
+    let test = test_codex()
+        .with_pre_build_hook(write_rejecting_prompt_hook)
+        .with_config(trust_discovered_hooks)
+        .with_config(|config| config.include_environment_context = false)
+        .build_with_auto_env(&server)
+        .await?;
+    let thread_id = test.session_configured.thread_id;
+    let queue = QueuedItemService::new(
+        loaded_thread_queue(&test)?,
+        Weak::new(),
+        Arc::new(NoopExtensionEventSink),
+    );
+
+    let rejected = queue.enqueue(thread_id, user_input("blocked")).await?;
     let submission = tokio::time::timeout(
         Duration::from_secs(10),
         queue.start(test.codex.as_ref(), rejected.id, /*trace*/ None),
@@ -531,11 +552,8 @@ async fn rejected_queue_messages_are_consumed_without_retrying_or_blocking_follo
     .await;
     assert!(queue.list(thread_id).await?.is_empty());
     let hook_log = std::fs::read_to_string(test.codex_home_path().join("queue_prompt_hook.log"))?;
-    assert_eq!(
-        vec!["A", "blocked", "C", "blocked"],
-        hook_log.lines().collect::<Vec<_>>()
-    );
-    assert_eq!(2, responses.requests().len());
+    assert_eq!(vec!["blocked"], hook_log.lines().collect::<Vec<_>>());
+    assert!(responses.requests().is_empty());
     Ok(())
 }
 
