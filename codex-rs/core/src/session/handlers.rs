@@ -565,6 +565,15 @@ pub(super) async fn submission_loop(
                     let _ = reply.send(result);
                     false
                 }
+                Op::RecoverTurn {
+                    thread_settings,
+                    reply,
+                } => {
+                    let result =
+                        turn_input::handle_recovery(&sess, thread_settings, sub.id.clone()).await;
+                    let _ = reply.send(result);
+                    false
+                }
                 Op::ThreadSettings { thread_settings } => {
                     thread_settings::update(&sess, sub.id.clone(), thread_settings).await;
                     false

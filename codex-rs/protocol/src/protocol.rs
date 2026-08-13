@@ -571,6 +571,12 @@ pub enum Op {
         reply: oneshot::Sender<CodexResult<TurnInputSubmission>>,
     },
 
+    /// Resume an interrupted regular turn.
+    RecoverTurn {
+        thread_settings: ThreadSettingsOverrides,
+        reply: oneshot::Sender<CodexResult<TurnInputSubmission>>,
+    },
+
     /// Apply persistent thread-settings overrides without starting a turn.
     ///
     /// This uses the same submission queue as turn starts so app-server can
@@ -864,6 +870,7 @@ impl Op {
             Self::RealtimeConversationClose => "realtime_conversation_close",
             Self::RealtimeConversationListVoices => "realtime_conversation_list_voices",
             Self::TurnInput { .. } => "turn_input",
+            Self::RecoverTurn { .. } => "recover_turn",
             Self::ThreadSettings { .. } => "thread_settings",
             Self::InterAgentCommunication { .. } => "inter_agent_communication",
             Self::ExecApproval { .. } => "exec_approval",

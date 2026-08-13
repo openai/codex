@@ -146,11 +146,22 @@ pub(super) async fn handle(
 ) -> CodexResult<TurnInputSubmission> {
     match mode {
         TurnInputMode::StartOrSteer => start_or_steer(session, request, submission_id).await,
-        TurnInputMode::StartIfIdle => start_if_idle(session, request, submission_id).await,
+        TurnInputMode::StartIfIdle => {
+            start_if_idle(session, request, submission_id, /*is_recovery*/ false).await
+        }
         TurnInputMode::Steer { expected_turn_id } => {
             steer(session, request, expected_turn_id, submission_id).await
         }
     }
+}
+
+pub(super) async fn handle_recovery(
+    session: &Arc<Session>,
+    thread_settings: ThreadSettingsOverrides,
+    submission_id: String,
+) -> CodexResult<TurnInputSubmission> {
+    let request = TurnInputRequest::user_input(Vec::new()).with_thread_settings(thread_settings);
+    start_if_idle(session, request, submission_id, /*is_recovery*/ true).await
 }
 
 async fn start_or_steer(
@@ -242,6 +253,7 @@ async fn start_if_idle(
     session: &Arc<Session>,
     request: TurnInputRequest,
     submission_id: String,
+    is_recovery: bool,
 ) -> CodexResult<TurnInputSubmission> {
     let TurnInputRequest {
         input,
@@ -252,13 +264,16 @@ async fn start_if_idle(
         ..
     } = request;
     let has_user_input = has_nonempty_user_input(&input);
+    let is_automatic_idle_work = !has_user_input && !is_recovery;
     let can_start_root_turn = start.parent_turn_id.is_none() && start.root_turn_id.is_none();
     if session.input_queue.has_trigger_turn_mailbox_items().await {
         return Ok(TurnInputSubmission::NotSubmitted {
             reason: NotSubmittedReason::PendingTriggerTurn,
         });
     }
-    if !has_user_input && session.collaboration_mode().await.mode == ModeKind::Plan {
+    // Empty non-recovery starts are automatic wakeups, not explicit user requests.
+    // Do not let them start a Plan turn.
+    if is_automatic_idle_work && session.collaboration_mode().await.mode == ModeKind::Plan {
         return Ok(TurnInputSubmission::NotSubmitted {
             reason: NotSubmittedReason::PlanMode,
         });
@@ -292,7 +307,7 @@ async fn start_if_idle(
     };
     // Automatic work must not use persistent settings to start a turn
     // whose effective collaboration mode is Plan.
-    if !has_user_input && settings.would_enter_plan_mode() {
+    if is_automatic_idle_work && settings.would_enter_plan_mode() {
         session.clear_reserved_idle_turn(&turn_state).await;
         return Ok(TurnInputSubmission::NotSubmitted {
             reason: NotSubmittedReason::PlanMode,
@@ -332,7 +347,9 @@ async fn start_if_idle(
             turn_context.session_telemetry.user_prompt(content);
         }
         task_input.push(pending_turn_input(input));
-    } else {
+    } else if is_automatic_idle_work {
+        // Recovery resumes an existing turn, so it must not queue a new empty
+        // user message for that turn.
         session
             .input_queue
             .extend_pending_input_for_turn_state(

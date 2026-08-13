@@ -41,6 +41,7 @@ use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::protocol::W3cTraceContext;
+use codex_protocol::turn_input::RecoverTurnRequest;
 use codex_protocol::turn_input::StartIfIdleSubmission;
 use codex_protocol::turn_input::SteerSubmission;
 use codex_protocol::turn_input::TurnInputMode;
@@ -292,6 +293,41 @@ impl CodexThread {
             }
             TurnInputSubmission::Steered { .. } => {
                 unreachable!("start-if-idle submission cannot steer")
+            }
+        }
+    }
+
+    /// Resumes an interrupted regular turn only when the thread is idle.
+    ///
+    /// Recovery starts no new user input and preserves the turn ID that was
+    /// already recorded for the interrupted turn.
+    pub async fn recover_turn_if_idle(
+        &self,
+        request: RecoverTurnRequest,
+    ) -> CodexResult<StartIfIdleSubmission> {
+        self.session
+            .services
+            .agent_control
+            .ensure_execution_capacity_for_turn_start(self)
+            .await?;
+        let RecoverTurnRequest {
+            turn_id,
+            thread_settings,
+            trace,
+        } = request;
+        match self
+            .io
+            .submit_recover_turn(thread_settings, trace, turn_id)
+            .await?
+        {
+            TurnInputSubmission::Started { turn_id } => {
+                Ok(StartIfIdleSubmission::Started { turn_id })
+            }
+            TurnInputSubmission::NotSubmitted { reason } => {
+                Ok(StartIfIdleSubmission::NotSubmitted { reason })
+            }
+            TurnInputSubmission::Steered { .. } => {
+                unreachable!("recovered turn submission cannot steer")
             }
         }
     }

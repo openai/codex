@@ -38,6 +38,17 @@ pub struct TurnInputRequest {
     pub trace: Option<W3cTraceContext>,
 }
 
+/// Request to resume sampling for an interrupted regular turn.
+///
+/// Sampling restarts under `turn_id`, which must be the ID already recorded
+/// for that turn.
+#[derive(Clone, Debug)]
+pub struct RecoverTurnRequest {
+    pub turn_id: String,
+    pub thread_settings: ThreadSettingsOverrides,
+    pub trace: Option<W3cTraceContext>,
+}
+
 impl TurnInputRequest {
     /// Creates turn input that can be passed to one of the submission methods.
     pub fn new(input: TurnInput) -> Self {

@@ -120,6 +120,7 @@ use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadHistoryMode;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
@@ -846,6 +847,27 @@ impl SessionIo {
             op: Op::TurnInput {
                 request: Box::new(request),
                 mode,
+                reply: reply_tx,
+            },
+            trace,
+            parent_turn_id: None,
+            root_turn_id: None,
+        })
+        .await?;
+        reply_rx.await.unwrap_or(Err(CodexErr::InternalAgentDied))
+    }
+
+    pub(crate) async fn submit_recover_turn(
+        &self,
+        thread_settings: ThreadSettingsOverrides,
+        trace: Option<W3cTraceContext>,
+        turn_id: String,
+    ) -> CodexResult<TurnInputSubmission> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.submit_with_id(Submission {
+            id: turn_id,
+            op: Op::RecoverTurn {
+                thread_settings,
                 reply: reply_tx,
             },
             trace,

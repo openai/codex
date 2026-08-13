@@ -1,4 +1,5 @@
 use codex_core::NotSubmittedReason;
+use codex_core::RecoverTurnRequest;
 use codex_core::StartIfIdleSubmission;
 use codex_core::SteerSubmission;
 use codex_core::TurnInput;
@@ -82,6 +83,67 @@ async fn start_turn_if_idle_rejects_non_user_input_that_requests_plan_mode() {
         test.codex.config_snapshot().await.collaboration_mode,
         original_collaboration_mode
     );
+}
+
+#[tokio::test]
+async fn recover_turn_if_idle_preserves_id_and_resumes_plan_mode() {
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let test = test_codex()
+        .build_with_auto_env(&server)
+        .await
+        .expect("build recovered turn session");
+    let turn_id = "durable-recovered-turn";
+
+    let submission = test
+        .codex
+        .recover_turn_if_idle(RecoverTurnRequest {
+            turn_id: turn_id.to_string(),
+            thread_settings: ThreadSettingsOverrides {
+                collaboration_mode: Some(CollaborationMode {
+                    mode: ModeKind::Plan,
+                    settings: Settings {
+                        model: test.session_configured.model.clone(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
+            trace: None,
+        })
+        .await
+        .expect("recovered turn should start");
+    assert_eq!(
+        submission,
+        StartIfIdleSubmission::Started {
+            turn_id: turn_id.to_string(),
+        }
+    );
+
+    let started = wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnStarted(_))
+    })
+    .await;
+    let EventMsg::TurnStarted(started) = started else {
+        unreachable!("wait_for_event returned unexpected event");
+    };
+    assert_eq!(started.turn_id, turn_id);
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let user_input_groups = response_mock
+        .single_request()
+        .message_input_text_groups("user");
+    assert_eq!(user_input_groups.len(), 1);
+    assert_eq!(user_input_groups[0].len(), 1);
+    assert!(user_input_groups[0][0].starts_with("<environment_context>"));
 }
 
 /// Concurrent submissions must start exactly one turn and steer the other message.

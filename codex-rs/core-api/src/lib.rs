@@ -33,6 +33,7 @@ pub use codex_core::LoadedAgentsMd;
 pub use codex_core::McpManager;
 pub use codex_core::NewThread;
 pub use codex_core::NotSubmittedReason;
+pub use codex_core::RecoverTurnRequest;
 pub use codex_core::StartIfIdleSubmission;
 pub use codex_core::StartThreadOptions;
 pub use codex_core::StateDbHandle;

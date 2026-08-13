@@ -9,6 +9,7 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::TurnAbortReason;
@@ -170,6 +171,63 @@ async fn start_only_rejects_active_turn_without_injecting() {
             .input_queue
             .get_pending_input(&session.active_turn)
             .await
+    );
+
+    session.abort_all_tasks(TurnAbortReason::Interrupted).await;
+}
+
+#[tokio::test]
+async fn recovery_rejects_active_turn_without_injecting_or_applying_settings() {
+    let (session, turn_context, _rx) = make_session_and_context_with_rx().await;
+    let original_approval_policy = session
+        .get_config()
+        .await
+        .permissions
+        .approval_policy
+        .value();
+    session
+        .spawn_task(
+            Arc::clone(&turn_context),
+            Vec::new(),
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
+
+    let submission = handle_recovery(
+        &session,
+        ThreadSettingsOverrides {
+            approval_policy: Some(AskForApproval::Never),
+            ..Default::default()
+        },
+        "recovered-turn".to_string(),
+    )
+    .await
+    .expect("recovery should return a typed rejection");
+
+    assert_eq!(
+        submission,
+        TurnInputSubmission::NotSubmitted {
+            reason: NotSubmittedReason::NotIdle,
+        }
+    );
+    assert_eq!(
+        session
+            .get_config()
+            .await
+            .permissions
+            .approval_policy
+            .value(),
+        original_approval_policy
+    );
+    assert_eq!(
+        session
+            .input_queue
+            .get_pending_input(&session.active_turn)
+            .await,
+        (Vec::<TurnInput>::new(), None, None)
     );
 
     session.abort_all_tasks(TurnAbortReason::Interrupted).await;
