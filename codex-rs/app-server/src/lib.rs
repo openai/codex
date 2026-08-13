@@ -3,6 +3,7 @@
 
 use codex_arg0::Arg0DispatchPaths;
 use codex_code_mode::CodeModeSessionProvider;
+use codex_code_mode::GrpcCodeModeSessionProvider;
 use codex_code_mode::WebSocketCodeModeSessionProvider;
 use codex_config::LoaderOverrides;
 use codex_config::NoopThreadConfigLoader;
@@ -553,6 +554,20 @@ pub async fn run_main_with_transport_options(
                 }
                 Some(Arc::new(
                     WebSocketCodeModeSessionProvider::with_http_client_factory(
+                        url.to_string(),
+                        config.http_client_factory(),
+                    ),
+                ))
+            }
+            CodeModeHostTransport::Grpc(url) => {
+                if !config.features.enabled(Feature::CodeModeHost) {
+                    return Err(std::io::Error::new(
+                        ErrorKind::InvalidInput,
+                        "remote code-mode host requires the code_mode_host feature to be enabled",
+                    ));
+                }
+                Some(Arc::new(
+                    GrpcCodeModeSessionProvider::with_http_client_factory(
                         url.to_string(),
                         config.http_client_factory(),
                     ),

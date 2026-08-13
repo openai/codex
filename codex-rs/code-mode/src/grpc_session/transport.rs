@@ -72,6 +72,11 @@ impl SharedTransport {
                         if !matches!(target.scheme(), "http" | "https") {
                             return Err("gRPC code-mode host URL must use http or https".to_string());
                         }
+                        if !target.username().is_empty() || target.password().is_some() {
+                            return Err(
+                                "gRPC code-mode host URL must not include credentials".to_string(),
+                            );
+                        }
                         if target.path() != "/"
                             || target.query().is_some()
                             || target.fragment().is_some()

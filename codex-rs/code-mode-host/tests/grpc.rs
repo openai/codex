@@ -176,6 +176,27 @@ async fn start_active_wait(
 }
 
 #[tokio::test]
+async fn grpc_endpoints_reject_credentials_without_disclosing_them() {
+    for endpoint in [
+        "http://alice:secret@host.example",
+        "https://alice:secret@host.example",
+        "https://alice@host.example",
+        "https://:secret@host.example",
+    ] {
+        let provider = GrpcCodeModeSessionProvider::new(endpoint);
+        let error = provider
+            .create_session(Arc::new(NoopCodeModeSessionDelegate))
+            .await
+            .err()
+            .expect("gRPC credentials should be rejected");
+
+        assert!(error.contains("must not include credentials"));
+        assert!(!error.contains("alice"));
+        assert!(!error.contains("secret"));
+    }
+}
+
+#[tokio::test]
 async fn tcp_session_persists_values_and_forwards_tools_notifications_and_closure() -> Result<()> {
     let host = HostHarness::start("grpc://127.0.0.1:0").await?;
     assert!(host.endpoint.starts_with("http://127.0.0.1:"));
