@@ -29,7 +29,7 @@ impl ContextualUserFragment for CurrentTimeReminder {
     }
 
     fn type_markers() -> (&'static str, &'static str) {
-        ("", "")
+        ("<current_time_reminder>", "</current_time_reminder>")
     }
 
     fn body(&self) -> String {

@@ -26,7 +26,8 @@ const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(25);
 #[cfg(not(windows))]
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 const CURRENT_TIME_AT: i64 = 1_781_717_655;
-const CURRENT_TIME_REMINDER: &str = "It is 2026-06-17 17:34:15 UTC.";
+const CURRENT_TIME_REMINDER: &str =
+    "<current_time_reminder>It is 2026-06-17 17:34:15 UTC.</current_time_reminder>";
 
 #[tokio::test]
 async fn current_time_read_round_trip_adds_reminder_to_model_input() -> Result<()> {
