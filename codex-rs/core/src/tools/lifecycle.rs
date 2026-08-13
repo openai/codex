@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use codex_extension_api::ToolCallOutcome;
 use codex_extension_api::ToolCallSource as ExtensionToolCallSource;
 use codex_extension_api::ToolFinishInput;
@@ -10,20 +12,27 @@ use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 
 pub(crate) async fn notify_tool_start(invocation: &ToolInvocation) {
-    for contributor in invocation
+    let contributors = invocation
         .session
         .services
         .extensions
-        .tool_lifecycle_contributors()
-    {
+        .tool_lifecycle_contributors();
+    if contributors.is_empty() {
+        return;
+    }
+    let thread_store = &invocation.session.services.thread_extension_data;
+    let conversation_history = invocation.session.conversation_history_snapshot().await;
+
+    for contributor in contributors {
         contributor
             .on_tool_start(ToolStartInput {
                 session_store: &invocation.session.services.session_extension_data,
-                thread_store: &invocation.session.services.thread_extension_data,
+                thread_store,
                 turn_store: invocation.turn.extension_data.as_ref(),
                 turn_id: invocation.turn.sub_id.as_str(),
                 call_id: invocation.call_id.as_str(),
                 tool_name: &invocation.tool_name,
+                conversation_history: Arc::clone(&conversation_history),
                 source: extension_tool_call_source(invocation.source.clone()),
             })
             .await;

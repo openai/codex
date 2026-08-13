@@ -112,6 +112,55 @@ fn raw_items(history: &ContextManager) -> Vec<ResponseItem> {
     history.raw_items().cloned().collect()
 }
 
+#[test]
+fn conversation_history_snapshot_shares_response_items_until_history_changes() {
+    let mut history = create_history_with_items(vec![assistant_msg("original")]);
+    let snapshot = history.conversation_history_snapshot();
+
+    let original = history.raw_items().next().expect("original history item");
+    let shared = snapshot.items().next().expect("shared snapshot item");
+    assert!(std::ptr::eq(original, shared));
+
+    history.record_items(
+        std::iter::once(&assistant_msg("later")),
+        TruncationPolicy::Tokens(10_000),
+    );
+
+    assert_eq!(
+        snapshot.items().cloned().collect::<Vec<_>>(),
+        vec![assistant_msg("original")],
+    );
+    assert_eq!(
+        raw_items(&history),
+        vec![assistant_msg("original"), assistant_msg("later")],
+    );
+}
+
+#[test]
+fn conversation_history_snapshot_excludes_contextual_user_messages() {
+    let contextual_message = crate::context::ContextualUserFragment::into(UserInstructions {
+        directory: None,
+        text: "Follow the repository instructions.".to_string(),
+    });
+    let user_message = user_input_text_msg("Review this repository.");
+    let assistant_message = assistant_msg("I will inspect the repository.");
+    let developer_message = developer_msg(
+        "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nDeveloper context\n</INSTRUCTIONS>",
+    );
+    let history = create_history_with_items(vec![
+        contextual_message,
+        user_message.clone(),
+        assistant_message.clone(),
+        developer_message.clone(),
+    ]);
+    let snapshot = history.conversation_history_snapshot();
+
+    assert_eq!(
+        snapshot.items().cloned().collect::<Vec<_>>(),
+        vec![user_message, assistant_message, developer_message],
+    );
+}
+
 struct TestWorldStateSection;
 
 impl WorldStateSection for TestWorldStateSection {

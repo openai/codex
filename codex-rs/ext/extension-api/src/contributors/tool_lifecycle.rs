@@ -1,8 +1,10 @@
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use codex_tools::ToolName;
 
+use crate::ConversationHistorySnapshot;
 use crate::ExtensionData;
 
 /// Future returned by one tool-lifecycle callback.
@@ -57,6 +59,8 @@ pub struct ToolStartInput<'a> {
     pub call_id: &'a str,
     /// Tool name as routed by the host.
     pub tool_name: &'a ToolName,
+    /// Shared read-only snapshot of the conversation when the tool started.
+    pub conversation_history: Arc<dyn ConversationHistorySnapshot>,
     /// Source that issued the tool call.
     pub source: ToolCallSource,
 }

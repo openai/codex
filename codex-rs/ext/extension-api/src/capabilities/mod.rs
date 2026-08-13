@@ -1,10 +1,12 @@
 mod agent;
+mod conversation_history;
 mod events;
 mod metrics;
 mod response_items;
 
 pub use agent::AgentSpawnFuture;
 pub use agent::AgentSpawner;
+pub use conversation_history::ConversationHistorySnapshot;
 pub use events::ExtensionEventSink;
 pub use events::ExtensionWarning;
 pub use events::NoopExtensionEventSink;
