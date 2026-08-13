@@ -6,7 +6,6 @@ use std::path::Path;
 use codex_core::TurnInputRequest;
 use codex_core::shell::default_user_shell;
 use codex_features::Feature;
-use codex_prompts::APPLY_PATCH_TOOL_INSTRUCTIONS;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ReasoningSummary;
@@ -198,23 +197,11 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
     ]);
     let body0 = req1.single_request().body_json();
 
-    let expected_instructions = if expected_tools_names.contains(&"apply_patch") {
-        base_instructions
-    } else {
-        [base_instructions, APPLY_PATCH_TOOL_INSTRUCTIONS.to_string()].join("\n")
-    };
-
-    assert_eq!(
-        body0["instructions"],
-        serde_json::json!(expected_instructions),
-    );
+    assert_eq!(body0["instructions"], serde_json::json!(base_instructions),);
     assert_tool_names(&body0, &expected_tools_names);
 
     let body1 = req2.single_request().body_json();
-    assert_eq!(
-        body1["instructions"],
-        serde_json::json!(expected_instructions),
-    );
+    assert_eq!(body1["instructions"], serde_json::json!(base_instructions),);
     assert_tool_names(&body1, &expected_tools_names);
 
     Ok(())

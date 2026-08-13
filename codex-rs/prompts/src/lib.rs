@@ -1,4 +1,3 @@
-mod apply_patch;
 mod compact;
 mod goals;
 mod permissions_instructions;
@@ -6,7 +5,6 @@ mod realtime;
 mod review_exit;
 mod review_request;
 
-pub use apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
 pub use compact::SUMMARIZATION_PROMPT;
 pub use compact::SUMMARY_PREFIX;
 pub use goals::budget_limit_prompt;
