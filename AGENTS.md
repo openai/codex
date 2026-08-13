@@ -75,7 +75,11 @@ In the codex-rs folder where the rust code lives:
 Run `just fmt` (in the `codex-rs` directory) automatically after you have finished making code changes anywhere in this repository; do not ask for approval to run it. Additionally, run the tests:
 
 1. Do not run `cargo test` directly. Use `just test` so test execution follows the repo defaults.
-2. Run the test for the specific project that was changed. For example, if changes were made in `codex-rs/tui`, run `just test -p codex-tui`.
+2. Run tests for the changed package. For unit tests, use
+   `just test -p <package> --lib <filter>` for library targets or
+   `just test -p <package> --bin <target> <filter>` for binary targets. For integration tests, use
+   `just test -p <package> --test <target> <filter>`. Omit the target restriction when validating the
+   entire package.
 3. Once those pass, run appropriate CLI, app-server, or core integration tests.
 
 Before finalizing a large change to `codex-rs`, run `just fix -p <project>` (in `codex-rs` directory) to fix any linter issues in the code. Prefer scoping with `-p` to avoid slow workspace‑wide Clippy builds; only run `just fix` without `-p` if you changed shared crates. Do not re-run tests after running `fix` or `fmt`.
@@ -161,7 +165,7 @@ See `codex-rs/tui/styles.md`.
   - Styled spans: use "text".red(), "text".green(), "text".magenta(), "text".dim(), etc.
   - Prefer these over constructing styles with `Span::styled` and `Style` directly.
   - Example: patch summary file lines
-    - Desired: vec!["  └ ".into(), "M".red(), " ".dim(), "tui/src/app.rs".dim()]
+    - Desired: `vec!["  └ ".into(), "M".red(), " ".dim(), "tui/src/app.rs".dim()]`
 
 ### TUI Styling (ratatui)
 
