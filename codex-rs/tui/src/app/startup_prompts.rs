@@ -284,6 +284,7 @@ pub(super) async fn handle_model_migration_prompt_if_needed(
         model_link,
         upgrade_copy,
         migration_markdown,
+        ..
     }) = upgrade
     {
         if migration_prompt_hidden(config, migration_config_key.as_str()) {

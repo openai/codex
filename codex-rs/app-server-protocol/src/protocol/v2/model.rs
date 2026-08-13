@@ -128,6 +128,9 @@ pub struct ModelUpgradeInfo {
     pub upgrade_copy: Option<String>,
     pub model_link: Option<String>,
     pub migration_markdown: Option<String>,
+    /// Informational Unix timestamp for this upgrade's scheduled retirement, if known.
+    #[ts(type = "number | null")]
+    pub retirement_at: Option<i64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

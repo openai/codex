@@ -34,6 +34,10 @@ fn model_from_preset(preset: ModelPreset) -> Model {
             upgrade_copy: upgrade.upgrade_copy.clone(),
             model_link: upgrade.model_link.clone(),
             migration_markdown: upgrade.migration_markdown.clone(),
+            retirement_at: upgrade
+                .retirement_at
+                .as_ref()
+                .map(chrono::DateTime::timestamp),
         }),
         availability_nux: preset.availability_nux.map(Into::into),
         display_name: preset.display_name.to_string(),

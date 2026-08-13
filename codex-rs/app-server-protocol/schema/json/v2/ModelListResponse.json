@@ -197,6 +197,14 @@
             "null"
           ]
         },
+        "retirementAt": {
+          "description": "Informational Unix timestamp for this upgrade's scheduled retirement, if known.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "upgradeCopy": {
           "type": [
             "string",

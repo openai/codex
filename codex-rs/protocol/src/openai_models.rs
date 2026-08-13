@@ -6,6 +6,8 @@
 use std::fmt;
 use std::str::FromStr;
 
+use chrono::DateTime;
+use chrono::Utc;
 use schemars::JsonSchema;
 use schemars::r#gen::SchemaGenerator;
 use schemars::schema::InstanceType;
@@ -187,6 +189,15 @@ pub struct ModelUpgrade {
     pub model_link: Option<String>,
     pub upgrade_copy: Option<String>,
     pub migration_markdown: Option<String>,
+    /// Informational time when the model associated with this upgrade is scheduled to retire.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_rfc3339_timestamp"
+    )]
+    #[schemars(with = "Option<String>")]
+    #[ts(type = "string", optional)]
+    pub retirement_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
@@ -616,6 +627,29 @@ impl ModelInstructionsVariables {
 pub struct ModelInfoUpgrade {
     pub model: String,
     pub migration_markdown: String,
+    /// Informational time when the model associated with this upgrade is scheduled to retire.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_rfc3339_timestamp"
+    )]
+    #[schemars(with = "Option<String>")]
+    #[ts(type = "string", optional)]
+    pub retirement_at: Option<DateTime<Utc>>,
+}
+
+fn deserialize_optional_rfc3339_timestamp<'de, D>(
+    deserializer: D,
+) -> Result<Option<DateTime<Utc>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value
+        .as_ref()
+        .and_then(serde_json::Value::as_str)
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&Utc)))
 }
 
 impl From<&ModelUpgrade> for ModelInfoUpgrade {
@@ -623,6 +657,7 @@ impl From<&ModelUpgrade> for ModelInfoUpgrade {
         ModelInfoUpgrade {
             model: upgrade.id.clone(),
             migration_markdown: upgrade.migration_markdown.clone().unwrap_or_default(),
+            retirement_at: upgrade.retirement_at,
         }
     }
 }
@@ -750,6 +785,7 @@ impl From<ModelInfo> for ModelPreset {
                 model_link: None,
                 upgrade_copy: None,
                 migration_markdown: Some(upgrade.migration_markdown.clone()),
+                retirement_at: upgrade.retirement_at,
             }),
             show_in_picker: info.visibility == ModelVisibility::List,
             multi_agent_version: info.multi_agent_version,
@@ -1446,6 +1482,102 @@ mod tests {
         assert_eq!(model.comp_hash, None);
         assert_eq!(model.auto_review_model_override, None);
         assert_eq!(model.tool_mode, None);
+    }
+
+    #[test]
+    fn model_info_deserializes_optional_upgrade_retirement_at() {
+        let base = serde_json::to_value(test_model(/*spec*/ None))
+            .expect("serialize test model without retirement time");
+
+        let mut absent = base.clone();
+        absent
+            .as_object_mut()
+            .expect("model info should be an object")
+            .insert(
+                "upgrade".to_string(),
+                serde_json::json!({
+                    "model": "replacement-model",
+                    "migration_markdown": "Use the replacement model."
+                }),
+            );
+        let absent = serde_json::from_value::<ModelInfo>(absent)
+            .expect("deserialize model info without upgrade retirement time");
+        assert_eq!(
+            absent
+                .upgrade
+                .as_ref()
+                .and_then(|upgrade| upgrade.retirement_at.as_ref())
+                .map(DateTime::timestamp),
+            None
+        );
+
+        let mut null = base.clone();
+        null.as_object_mut()
+            .expect("model info should be an object")
+            .insert(
+                "upgrade".to_string(),
+                serde_json::json!({
+                    "model": "replacement-model",
+                    "migration_markdown": "Use the replacement model.",
+                    "retirement_at": null
+                }),
+            );
+        let null = serde_json::from_value::<ModelInfo>(null)
+            .expect("deserialize model info with null upgrade retirement time");
+        assert_eq!(
+            null.upgrade
+                .as_ref()
+                .and_then(|upgrade| upgrade.retirement_at.as_ref())
+                .map(DateTime::timestamp),
+            None
+        );
+
+        let mut populated = base;
+        populated
+            .as_object_mut()
+            .expect("model info should be an object")
+            .insert(
+                "upgrade".to_string(),
+                serde_json::json!({
+                    "model": "replacement-model",
+                    "migration_markdown": "Use the replacement model.",
+                    "retirement_at": "2030-01-01T00:00:00Z"
+                }),
+            );
+        let populated = serde_json::from_value::<ModelInfo>(populated)
+            .expect("deserialize model info with upgrade retirement time");
+        assert_eq!(
+            populated
+                .upgrade
+                .as_ref()
+                .and_then(|upgrade| upgrade.retirement_at.as_ref())
+                .map(DateTime::timestamp),
+            Some(1_893_456_000)
+        );
+
+        let mut malformed = serde_json::to_value(test_model(/*spec*/ None))
+            .expect("serialize test model for malformed retirement time");
+        malformed
+            .as_object_mut()
+            .expect("model info should be an object")
+            .insert(
+                "upgrade".to_string(),
+                serde_json::json!({
+                    "model": "replacement-model",
+                    "migration_markdown": "Use the replacement model.",
+                    "retirement_at": "not-a-timestamp"
+                }),
+            );
+        let malformed = serde_json::from_value::<ModelInfo>(malformed)
+            .expect("tolerate malformed upgrade retirement time");
+        assert_eq!(
+            malformed
+                .upgrade
+                .as_ref()
+                .and_then(|upgrade| upgrade.retirement_at.as_ref())
+                .map(DateTime::timestamp),
+            None
+        );
     }
 
     #[test]

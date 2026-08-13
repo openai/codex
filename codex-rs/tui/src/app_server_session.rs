@@ -1519,6 +1519,13 @@ fn model_preset_from_api_model(model: ApiModel) -> ModelPreset {
                 .as_ref()
                 .and_then(|info| info.upgrade_copy.clone()),
             migration_markdown: upgrade_info.and_then(|info| info.migration_markdown),
+            retirement_at: model
+                .upgrade_info
+                .as_ref()
+                .and_then(|info| info.retirement_at)
+                .and_then(|retirement_at| {
+                    chrono::DateTime::<chrono::Utc>::from_timestamp(retirement_at, 0)
+                }),
         }
     });
 
@@ -2154,6 +2161,72 @@ mod tests {
             plan_type: None,
             rate_limit_reached_type: None,
         }
+    }
+
+    fn api_model_with_upgrade_retirement_at(retirement_at: Option<i64>) -> ApiModel {
+        ApiModel {
+            id: "model-id".to_string(),
+            model: "current-model".to_string(),
+            upgrade: Some("replacement-model".to_string()),
+            upgrade_info: Some(codex_app_server_protocol::ModelUpgradeInfo {
+                model: "replacement-model".to_string(),
+                upgrade_copy: None,
+                model_link: None,
+                migration_markdown: None,
+                retirement_at,
+            }),
+            availability_nux: None,
+            display_name: "Current model".to_string(),
+            description: "A test model".to_string(),
+            model_specialty: None,
+            hidden: false,
+            supported_reasoning_efforts: Vec::new(),
+            default_reasoning_effort: ReasoningEffort::Medium,
+            input_modalities: Vec::new(),
+            supports_personality: false,
+            multi_agent_version: None,
+            additional_speed_tiers: Vec::new(),
+            service_tiers: Vec::new(),
+            default_service_tier: None,
+            is_default: false,
+        }
+    }
+
+    #[test]
+    fn model_preset_from_api_model_preserves_upgrade_retirement_at() {
+        let retirement_at = chrono::DateTime::parse_from_rfc3339("2030-01-01T00:00:00Z")
+            .expect("valid RFC 3339 timestamp")
+            .with_timezone(&chrono::Utc);
+        let expected_upgrade = |retirement_at| {
+            Some(ModelUpgrade {
+                id: "replacement-model".to_string(),
+                migration_config_key: "current-model".to_string(),
+                model_link: None,
+                upgrade_copy: None,
+                migration_markdown: None,
+                retirement_at,
+            })
+        };
+
+        assert_eq!(
+            vec![
+                model_preset_from_api_model(api_model_with_upgrade_retirement_at(Some(
+                    retirement_at.timestamp(),
+                )))
+                .upgrade,
+                model_preset_from_api_model(api_model_with_upgrade_retirement_at(
+                    /*retirement_at*/ None,
+                ))
+                .upgrade,
+                model_preset_from_api_model(api_model_with_upgrade_retirement_at(Some(i64::MAX)))
+                    .upgrade,
+            ],
+            vec![
+                expected_upgrade(Some(retirement_at)),
+                expected_upgrade(None),
+                expected_upgrade(None),
+            ]
+        );
     }
 
     #[test]

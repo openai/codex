@@ -22,6 +22,7 @@ fn model_presets_with_test_upgrades() -> Vec<ModelPreset> {
             model_link: None,
             upgrade_copy: None,
             migration_markdown: None,
+            retirement_at: None,
         });
     }
     presets
@@ -305,6 +306,7 @@ async fn model_migration_prompt_skips_when_target_missing_or_hidden() {
         model_link: None,
         upgrade_copy: None,
         migration_markdown: None,
+        retirement_at: None,
     });
     available.retain(|preset| preset.model != "gpt-5.2");
     available.push(current.clone());
