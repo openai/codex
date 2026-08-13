@@ -225,28 +225,29 @@ async fn file_system_read_file_stream_returns_bounded_chunks(
         .collect::<Vec<_>>();
     std::fs::write(&file_path, &contents)?;
 
-    let chunks = file_system
-        .read_file_stream(
-            &PathUri::from_host_native_path(file_path)?,
-            /*sandbox*/ None,
-        )
-        .await
-        .with_context(|| format!("mode={implementation}"))?
-        .try_collect::<Vec<_>>()
-        .await?;
+    let path = PathUri::from_host_native_path(file_path)?;
+    let sandbox = read_only_sandbox(tmp.path().to_path_buf());
+    for sandbox in [None, Some(&sandbox)] {
+        let chunks = file_system
+            .read_file_stream(&path, sandbox)
+            .await
+            .with_context(|| format!("mode={implementation}"))?
+            .try_collect::<Vec<_>>()
+            .await?;
 
-    assert!(
-        chunks
-            .iter()
-            .all(|chunk| !chunk.is_empty() && chunk.len() <= FILE_READ_CHUNK_SIZE)
-    );
-    assert_eq!(
-        chunks
-            .iter()
-            .flat_map(|chunk| chunk.iter().copied())
-            .collect::<Vec<_>>(),
-        contents
-    );
+        assert!(
+            chunks
+                .iter()
+                .all(|chunk| !chunk.is_empty() && chunk.len() <= FILE_READ_CHUNK_SIZE)
+        );
+        assert_eq!(
+            chunks
+                .iter()
+                .flat_map(|chunk| chunk.iter().copied())
+                .collect::<Vec<_>>(),
+            contents
+        );
+    }
 
     Ok(())
 }
@@ -690,6 +691,14 @@ async fn file_system_sandboxed_metadata_and_read_allow_readable_root(
         .await
         .with_context(|| format!("mode={implementation}"))?;
     assert_eq!(contents, b"sandboxed hello");
+
+    let chunks = file_system
+        .read_file_stream(&PathUri::from_host_native_path(&file_path)?, Some(&sandbox))
+        .await
+        .with_context(|| format!("stream mode={implementation}"))?
+        .try_collect::<Vec<_>>()
+        .await?;
+    assert_eq!(chunks.concat(), b"sandboxed hello");
 
     Ok(())
 }

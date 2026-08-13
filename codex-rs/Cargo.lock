@@ -3031,6 +3031,7 @@ dependencies = [
  "pretty_assertions",
  "prost",
  "rcgen",
+ "rustix 1.1.4",
  "rustls",
  "serde",
  "serde_json",

@@ -67,6 +67,15 @@ impl FileSystemSandboxRunner {
         sandbox: &FileSystemSandboxContext,
         request: FsHelperRequest,
     ) -> Result<FsHelperPayload, JSONRPCErrorError> {
+        let command = self.sandbox_command(sandbox)?;
+        let request_json = serde_json::to_vec(&request).map_err(json_error)?;
+        run_command(command, request_json).await
+    }
+
+    pub(crate) fn sandbox_command(
+        &self,
+        sandbox: &FileSystemSandboxContext,
+    ) -> Result<SandboxExecRequest, JSONRPCErrorError> {
         let cwd = sandbox_cwd(sandbox)?;
         let native_workspace_roots = sandbox
             .workspace_roots
@@ -98,10 +107,7 @@ impl FileSystemSandboxRunner {
             &file_system_policy,
             network_policy,
         );
-        let command =
-            self.sandbox_exec_request(&permission_profile, &cwd, workspace_roots, sandbox)?;
-        let request_json = serde_json::to_vec(&request).map_err(json_error)?;
-        run_command(command, request_json).await
+        self.sandbox_exec_request(&permission_profile, &cwd, workspace_roots, sandbox)
     }
 
     fn sandbox_exec_request(
@@ -305,7 +311,7 @@ async fn run_command(
     command: SandboxExecRequest,
     request_json: Vec<u8>,
 ) -> Result<FsHelperPayload, JSONRPCErrorError> {
-    let mut child = spawn_command(command)?;
+    let mut child = spawn_command(command, std::process::Stdio::piped())?;
     let mut stdin = child
         .stdin
         .take()
@@ -314,6 +320,17 @@ async fn run_command(
     stdin.shutdown().await.map_err(io_error)?;
     drop(stdin);
 
+    let output = wait_for_helper_output(child).await?;
+    let response: FsHelperResponse = serde_json::from_slice(&output.stdout).map_err(json_error)?;
+    match response {
+        FsHelperResponse::Ok(payload) => Ok(payload),
+        FsHelperResponse::Error(error) => Err(error),
+    }
+}
+
+pub(crate) async fn wait_for_helper_output(
+    child: tokio::process::Child,
+) -> Result<std::process::Output, JSONRPCErrorError> {
     let output = child.wait_with_output().await.map_err(io_error)?;
     if !output.status.success() {
         return Err(internal_error(format!(
@@ -322,14 +339,10 @@ async fn run_command(
             stderr = String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
-    let response: FsHelperResponse = serde_json::from_slice(&output.stdout).map_err(json_error)?;
-    match response {
-        FsHelperResponse::Ok(payload) => Ok(payload),
-        FsHelperResponse::Error(error) => Err(error),
-    }
+    Ok(output)
 }
 
-fn spawn_command(
+pub(crate) fn spawn_command(
     SandboxExecRequest {
         command: argv,
         cwd,
@@ -337,6 +350,7 @@ fn spawn_command(
         arg0,
         ..
     }: SandboxExecRequest,
+    stdin: std::process::Stdio,
 ) -> Result<tokio::process::Child, JSONRPCErrorError> {
     let Some((program, args)) = argv.split_first() else {
         return Err(invalid_request("fs sandbox command was empty".to_string()));
@@ -355,14 +369,23 @@ fn spawn_command(
     env.retain(|name, _| !codex_protocol::shell_environment::is_non_inheritable_env_var(name));
     command.env_clear();
     command.envs(env);
-    command.stdin(std::process::Stdio::piped());
+    command.stdin(stdin);
     command.stdout(std::process::Stdio::piped());
     command.stderr(std::process::Stdio::piped());
     command.kill_on_drop(true);
+    // macOS cannot receive passed fds with close-on-exec set atomically.
+    #[cfg(target_os = "macos")]
+    // SAFETY: Descriptor cleanup only uses fork-safe system calls.
+    unsafe {
+        command.pre_exec(|| {
+            codex_utils_pty::pty::close_inherited_fds_except(&[]);
+            Ok(())
+        });
+    }
     command.spawn().map_err(io_error)
 }
 
-fn io_error(err: std::io::Error) -> JSONRPCErrorError {
+pub(crate) fn io_error(err: std::io::Error) -> JSONRPCErrorError {
     internal_error(err.to_string())
 }
 

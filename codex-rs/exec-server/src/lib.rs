@@ -32,6 +32,7 @@ mod resolved_capability;
 mod rpc;
 mod rpc_server_requests;
 mod runtime_paths;
+mod sandboxed_file_open;
 mod sandboxed_file_system;
 mod server;
 mod telemetry;

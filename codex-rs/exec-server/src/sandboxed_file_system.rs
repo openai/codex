@@ -3,12 +3,14 @@ use base64::engine::general_purpose::STANDARD;
 use codex_exec_server_protocol::JSONRPCErrorError;
 use codex_utils_path_uri::PathUri;
 use tokio::io;
+use tokio_util::io::ReaderStream;
 
 use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
 use crate::ExecServerRuntimePaths;
 use crate::ExecutorFileSystem;
 use crate::ExecutorFileSystemFuture;
+use crate::FILE_READ_CHUNK_SIZE;
 use crate::FileMetadata;
 use crate::FileSystemReadStream;
 use crate::FileSystemResult;
@@ -36,6 +38,22 @@ pub struct SandboxedFileSystem {
 }
 
 impl SandboxedFileSystem {
+    pub(crate) async fn open_file_for_read(
+        &self,
+        path: &PathUri,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<tokio::fs::File> {
+        let sandbox = require_platform_sandbox(sandbox)?;
+        validate_native_path(path)?;
+        let command = self
+            .sandbox_runner
+            .sandbox_command(sandbox)
+            .map_err(map_sandbox_error)?;
+        crate::sandboxed_file_open::open(command, path.clone())
+            .await
+            .map_err(map_sandbox_error)
+    }
+
     pub fn new(runtime_paths: ExecServerRuntimePaths) -> Self {
         Self {
             sandbox_runner: FileSystemSandboxRunner::new(runtime_paths),
@@ -295,14 +313,15 @@ impl ExecutorFileSystem for SandboxedFileSystem {
 
     fn read_file_stream<'a>(
         &'a self,
-        _path: &'a PathUri,
-        _sandbox: Option<&'a FileSystemSandboxContext>,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, FileSystemReadStream> {
-        Box::pin(async {
-            Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "streaming file reads do not support platform sandboxing",
-            ))
+        Box::pin(async move {
+            let file = self.open_file_for_read(path, sandbox).await?;
+            Ok(FileSystemReadStream::new(ReaderStream::with_capacity(
+                file,
+                FILE_READ_CHUNK_SIZE,
+            )))
         })
     }
 

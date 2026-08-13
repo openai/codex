@@ -630,6 +630,16 @@ async fn file_system_sandboxed_read_rejects_symlink_escape(
     };
     assert_sandbox_denied(&error);
 
+    let error = file_system
+        .read_file_stream(
+            &PathUri::from_host_native_path(&requested_path)?,
+            Some(&sandbox),
+        )
+        .await
+        .err()
+        .context("streaming read should be blocked")?;
+    assert_sandbox_denied(&error);
+
     Ok(())
 }
 

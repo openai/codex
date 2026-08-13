@@ -118,6 +118,9 @@ pub struct EnvironmentCapabilities {
     /// Whether this executor supports the `environmentConfig/read` request.
     #[serde(default)]
     pub environment_config_read: bool,
+    /// Whether filesystem streams can use the requested platform sandbox.
+    #[serde(default)]
+    pub sandboxed_file_streaming: bool,
 }
 
 /// Status returned by an initialized exec-server connection.
@@ -179,6 +182,7 @@ impl EnvironmentInfo {
                 network_proxy_launch: true,
                 capability_discovery_sandbox: true,
                 environment_config_read: true,
+                sandboxed_file_streaming: true,
             },
         }
     }
@@ -931,6 +935,7 @@ mod tests {
                 network_proxy_launch: true,
                 capability_discovery_sandbox: true,
                 environment_config_read: false,
+                sandboxed_file_streaming: false,
             }
         );
     }
@@ -945,6 +950,7 @@ mod tests {
                 "networkProxyLaunch": false,
                 "capabilityDiscoverySandbox": false,
                 "environmentConfigRead": false,
+                "sandboxedFileStreaming": false,
             },
         });
         let info: EnvironmentInfo = serde_json::from_value(expected.clone())

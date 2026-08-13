@@ -14,6 +14,7 @@ use crate::protocol::FS_CANONICALIZE_METHOD;
 use crate::protocol::FS_COPY_METHOD;
 use crate::protocol::FS_CREATE_DIRECTORY_METHOD;
 use crate::protocol::FS_GET_METADATA_METHOD;
+use crate::protocol::FS_OPEN_METHOD;
 use crate::protocol::FS_READ_DIRECTORY_METHOD;
 use crate::protocol::FS_READ_FILE_METHOD;
 use crate::protocol::FS_REMOVE_METHOD;
@@ -47,6 +48,8 @@ pub const CODEX_FS_HELPER_ARG1: &str = "--codex-run-as-fs-helper";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "operation", content = "params")]
 pub(crate) enum FsHelperRequest {
+    #[serde(rename = "fs/open")]
+    Open(FsReadFileParams),
     #[serde(rename = "fs/readFile")]
     ReadFile(FsReadFileParams),
     #[serde(rename = "fs/writeFile")]
@@ -75,8 +78,21 @@ pub(crate) enum FsHelperResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FsHelperOpenResponse {
+    // Windows duplicates the handle from the helper process.
+    #[cfg(windows)]
+    pub(crate) process_id: u32,
+    // Unix passes the fd directly instead.
+    #[cfg(windows)]
+    pub(crate) file_handle: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "operation", content = "response")]
 pub(crate) enum FsHelperPayload {
+    #[serde(rename = "fs/open")]
+    Open(FsHelperOpenResponse),
     #[serde(rename = "fs/readFile")]
     ReadFile(FsReadFileResponse),
     #[serde(rename = "fs/writeFile")]
@@ -100,6 +116,7 @@ pub(crate) enum FsHelperPayload {
 impl FsHelperPayload {
     fn operation(&self) -> &'static str {
         match self {
+            Self::Open(_) => FS_OPEN_METHOD,
             Self::ReadFile(_) => FS_READ_FILE_METHOD,
             Self::WriteFile(_) => FS_WRITE_FILE_METHOD,
             Self::CreateDirectory(_) => FS_CREATE_DIRECTORY_METHOD,
@@ -203,6 +220,9 @@ pub(crate) async fn run_direct_request(
 ) -> Result<FsHelperPayload, JSONRPCErrorError> {
     let file_system = DirectFileSystem;
     match request {
+        FsHelperRequest::Open(_) => Err(invalid_request(
+            "opening a file requires descriptor handoff".to_string(),
+        )),
         FsHelperRequest::ReadFile(params) => {
             let data = file_system
                 .read_file(&params.path, /*sandbox*/ None)
@@ -316,7 +336,7 @@ pub(crate) async fn run_direct_request(
     }
 }
 
-fn map_fs_error(err: io::Error) -> JSONRPCErrorError {
+pub(crate) fn map_fs_error(err: io::Error) -> JSONRPCErrorError {
     match err.kind() {
         io::ErrorKind::NotFound => not_found(err.to_string()),
         io::ErrorKind::InvalidInput | io::ErrorKind::PermissionDenied => {

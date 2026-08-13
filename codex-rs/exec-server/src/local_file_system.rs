@@ -99,10 +99,7 @@ impl LocalFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<tokio::fs::File> {
         if sandbox.is_some_and(FileSystemSandboxContext::should_run_in_sandbox) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "streaming file reads do not support platform sandboxing",
-            ));
+            return self.sandboxed()?.open_file_for_read(path, sandbox).await;
         }
         self.unsandboxed.open_file_for_read(path, sandbox).await
     }
