@@ -2,6 +2,8 @@ use super::residency::is_v2_resident_session_source;
 use super::*;
 use crate::agent::role::apply_role_to_config_for_multi_agent_v2;
 use crate::config::PermissionProfileSnapshot;
+use crate::context::ContextualUserFragment;
+use crate::context::CurrentTimeReminder;
 use codex_extension_api::ExtensionDataInit;
 
 const AGENT_NAMES: &str = include_str!("../agent_names.txt");
@@ -81,7 +83,7 @@ fn keep_forked_rollout_item(item: &RolloutItem, preserve_reference_context_item:
     }
 }
 
-fn is_multi_agent_v2_usage_hint_message(item: &ResponseItem, usage_hint_texts: &[String]) -> bool {
+fn is_fork_excluded_developer_message(item: &ResponseItem, usage_hint_texts: &[String]) -> bool {
     let ResponseItem::Message { role, content, .. } = item else {
         return false;
     };
@@ -92,9 +94,10 @@ fn is_multi_agent_v2_usage_hint_message(item: &ResponseItem, usage_hint_texts: &
         return false;
     };
 
-    usage_hint_texts
-        .iter()
-        .any(|usage_hint_text| usage_hint_text == text)
+    CurrentTimeReminder::matches_text(text)
+        || usage_hint_texts
+            .iter()
+            .any(|usage_hint_text| usage_hint_text == text)
 }
 
 async fn load_agent_model_context(
@@ -720,7 +723,7 @@ impl AgentControl {
             if matches!(response_item, ResponseItem::AgentMessage { .. }) {
                 return false;
             }
-            if is_multi_agent_v2_usage_hint_message(
+            if is_fork_excluded_developer_message(
                 response_item,
                 &multi_agent_v2_usage_hint_texts_to_filter,
             ) {

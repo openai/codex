@@ -3,6 +3,7 @@ use codex_core::StartThreadOptions;
 use codex_core::ThreadConfigSnapshot;
 use codex_core::TurnInputRequest;
 use codex_core::config::AgentRoleConfig;
+use codex_core::config::CurrentTimeReminderConfig;
 use codex_features::Feature;
 use codex_history::RolloutItem;
 use codex_models_manager::bundled_models_response;
@@ -1046,11 +1047,13 @@ enum FullHistoryV2ModelSelection {
     ConfiguredDefault,
     ExplicitOverride,
     WorldStateIdentity,
+    CurrentTimeReminders,
 }
 
 #[test_case(FullHistoryV2ModelSelection::ConfiguredDefault; "configured default with omitted fork_turns")]
 #[test_case(FullHistoryV2ModelSelection::ExplicitOverride; "explicit override with fork_turns all")]
 #[test_case(FullHistoryV2ModelSelection::WorldStateIdentity; "world state appends context window when agent identity changes")]
+#[test_case(FullHistoryV2ModelSelection::CurrentTimeReminders; "full fork drops inherited current-time reminders")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_context(
     selection: FullHistoryV2ModelSelection,
@@ -1070,7 +1073,8 @@ async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_co
     .await;
     let (spawn_args, expected_model, expected_reasoning_effort) = match selection {
         FullHistoryV2ModelSelection::ConfiguredDefault
-        | FullHistoryV2ModelSelection::WorldStateIdentity => (
+        | FullHistoryV2ModelSelection::WorldStateIdentity
+        | FullHistoryV2ModelSelection::CurrentTimeReminders => (
             json!({
                 "message": CHILD_PROMPT,
                 "task_name": "worker",
@@ -1144,6 +1148,16 @@ async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_co
                 .expect("test config should allow feature update");
             config.model_context_window = Some(128_000);
         }
+        if matches!(selection, FullHistoryV2ModelSelection::CurrentTimeReminders) {
+            config
+                .features
+                .enable(Feature::CurrentTimeReminder)
+                .expect("test config should allow feature update");
+            config.current_time_reminder = Some(CurrentTimeReminderConfig {
+                reminder_interval_seconds: 0,
+                ..CurrentTimeReminderConfig::default()
+            });
+        }
         config.model = Some(INHERITED_MODEL.to_string());
         config.model_reasoning_effort = Some(INHERITED_REASONING_EFFORT);
         config.agent_default_subagent_model = Some(V2_DEFAULT_MODEL.to_string());
@@ -1164,10 +1178,21 @@ async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_co
     test.submit_turn(TURN_0_FORK_PROMPT).await?;
     let _ = seed_turn.single_request();
     test.submit_turn(TURN_1_PROMPT).await?;
-    let _ = spawn_turn.single_request();
+    let parent_request = spawn_turn.single_request();
 
     let child_request = wait_for_request_with_model(&child_request_log, expected_model).await?;
     assert!(child_request.body_contains_text(TURN_0_FORK_PROMPT));
+    if matches!(selection, FullHistoryV2ModelSelection::CurrentTimeReminders) {
+        let reminder_count = |request: &ResponsesRequest| {
+            request
+                .message_input_texts("developer")
+                .into_iter()
+                .filter(|text| text.starts_with("<current_time_reminder>"))
+                .count()
+        };
+        assert_eq!(reminder_count(&parent_request), 2);
+        assert_eq!(reminder_count(&child_request), 1);
+    }
     let child_body = child_request.body_json();
     if matches!(selection, FullHistoryV2ModelSelection::WorldStateIdentity) {
         let child_thread_id = ThreadId::from_string(
