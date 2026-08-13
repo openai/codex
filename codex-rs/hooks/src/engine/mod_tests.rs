@@ -198,6 +198,234 @@ fn requirements_with_managed_hooks_only(
     )
 }
 
+fn required_hooks_stack(
+    managed_hooks: ManagedHooksRequirementsToml,
+    source: RequirementSource,
+) -> ConfigLayerStack {
+    ConfigLayerStack::new(
+        Vec::new(),
+        ConfigRequirements {
+            managed_hooks: Some(ConstrainedWithSource::new(
+                Constrained::allow_any(managed_hooks.clone()),
+                Some(source),
+            )),
+            ..ConfigRequirements::default()
+        },
+        ConfigRequirementsToml {
+            hooks: Some(managed_hooks),
+            ..ConfigRequirementsToml::default()
+        },
+    )
+    .expect("config layer stack")
+}
+
+#[test]
+fn required_managed_hooks_allow_disabled_hooks_feature() {
+    let temp = tempdir().expect("create temp dir");
+    let managed_hooks =
+        managed_hooks_for_current_platform(temp.path(), pre_tool_use_hook_events("echo managed"));
+    let config_layer_stack = required_hooks_stack(
+        managed_hooks,
+        RequirementSource::LegacyManagedConfigTomlFromMdm,
+    );
+
+    let (hooks, _result_receiver) = crate::Hooks::new(
+        crate::HooksConfig {
+            feature_enabled: false,
+            config_layer_stack: Some(config_layer_stack),
+            ..Default::default()
+        },
+        ThreadId::new(),
+    )
+    .expect("disabled hooks feature should not enforce managed requirements hooks");
+
+    assert!(hooks.startup_warnings().is_empty());
+}
+
+#[test]
+fn required_managed_hooks_reject_invalid_matchers() {
+    let temp = tempdir().expect("create temp dir");
+    let mut events = pre_tool_use_hook_events("echo managed");
+    events.pre_tool_use[0].matcher = Some("[".to_string());
+    let config_layer_stack = required_hooks_stack(
+        managed_hooks_for_current_platform(temp.path(), events),
+        RequirementSource::LegacyManagedConfigTomlFromMdm,
+    );
+
+    let error = crate::Hooks::new(
+        crate::HooksConfig {
+            feature_enabled: true,
+            config_layer_stack: Some(config_layer_stack),
+            ..Default::default()
+        },
+        ThreadId::new(),
+    )
+    .err()
+    .expect("invalid required managed matcher should reject startup");
+
+    assert!(error.to_string().contains("invalid matcher"));
+}
+
+#[test]
+fn required_managed_hooks_allow_invalid_matchers_without_handlers() {
+    let temp = tempdir().expect("create temp dir");
+    let mut events = pre_tool_use_hook_events("echo managed");
+    events.pre_tool_use.push(MatcherGroup {
+        matcher: Some("[".to_string()),
+        hooks: Vec::new(),
+    });
+    let config_layer_stack = required_hooks_stack(
+        managed_hooks_for_current_platform(temp.path(), events),
+        RequirementSource::LegacyManagedConfigTomlFromMdm,
+    );
+
+    let (hooks, _result_receiver) = crate::Hooks::new(
+        crate::HooksConfig {
+            feature_enabled: true,
+            config_layer_stack: Some(config_layer_stack),
+            ..Default::default()
+        },
+        ThreadId::new(),
+    )
+    .expect("an empty matcher group should not prevent required managed hooks from loading");
+
+    assert_eq!(hooks.startup_warnings().len(), 1);
+    assert!(hooks.startup_warnings()[0].contains("invalid matcher"));
+}
+
+#[test]
+fn required_managed_hooks_reject_empty_commands() {
+    let temp = tempdir().expect("create temp dir");
+    let config_layer_stack = required_hooks_stack(
+        managed_hooks_for_current_platform(temp.path(), pre_tool_use_hook_events("  ")),
+        RequirementSource::LegacyManagedConfigTomlFromMdm,
+    );
+
+    let error = crate::Hooks::new(
+        crate::HooksConfig {
+            feature_enabled: true,
+            config_layer_stack: Some(config_layer_stack),
+            ..Default::default()
+        },
+        ThreadId::new(),
+    )
+    .err()
+    .expect("empty required managed command should reject startup");
+
+    assert!(error.to_string().contains("skipping empty hook command"));
+}
+
+#[test]
+fn required_managed_hooks_reject_unsupported_handler_types() {
+    let temp = tempdir().expect("create temp dir");
+    let events = HookEventsToml {
+        pre_tool_use: vec![MatcherGroup {
+            matcher: Some("^Bash$".to_string()),
+            hooks: vec![HookHandlerConfig::McpTool {
+                server: "policy".to_string(),
+                tool: "check".to_string(),
+                input: Default::default(),
+                timeout_sec: None,
+                status_message: None,
+            }],
+        }],
+        ..Default::default()
+    };
+    let config_layer_stack = required_hooks_stack(
+        managed_hooks_for_current_platform(temp.path(), events),
+        RequirementSource::LegacyManagedConfigTomlFromMdm,
+    );
+
+    let error = crate::Hooks::new(
+        crate::HooksConfig {
+            feature_enabled: true,
+            config_layer_stack: Some(config_layer_stack),
+            ..Default::default()
+        },
+        ThreadId::new(),
+    )
+    .err()
+    .expect("unsupported required managed handler should reject startup");
+
+    assert!(
+        error
+            .to_string()
+            .contains("MCP tool hooks are not supported yet")
+    );
+}
+
+#[test]
+fn required_managed_hooks_with_unknown_source_still_reject_discovery_failures() {
+    let temp = tempdir().expect("create temp dir");
+    let config_layer_stack = required_hooks_stack(
+        managed_hooks_for_current_platform(temp.path(), pre_tool_use_hook_events("")),
+        RequirementSource::Unknown,
+    );
+
+    let error = crate::Hooks::new(
+        crate::HooksConfig {
+            feature_enabled: true,
+            config_layer_stack: Some(config_layer_stack),
+            ..Default::default()
+        },
+        ThreadId::new(),
+    )
+    .err()
+    .expect("unknown-source managed requirements hook should still reject startup");
+
+    assert!(error.to_string().contains("skipping empty hook command"));
+}
+
+#[test]
+fn valid_required_managed_hooks_allow_startup() {
+    let temp = tempdir().expect("create temp dir");
+    let config_layer_stack = required_hooks_stack(
+        managed_hooks_for_current_platform(temp.path(), pre_tool_use_hook_events("echo managed")),
+        RequirementSource::LegacyManagedConfigTomlFromMdm,
+    );
+
+    let (hooks, _result_receiver) = crate::Hooks::new(
+        crate::HooksConfig {
+            feature_enabled: true,
+            config_layer_stack: Some(config_layer_stack),
+            ..Default::default()
+        },
+        ThreadId::new(),
+    )
+    .expect("valid managed requirements hook should allow startup");
+
+    assert!(hooks.startup_warnings().is_empty());
+}
+
+#[test]
+fn managed_config_layer_hook_failures_remain_startup_warnings() {
+    let temp = tempdir().expect("create temp dir");
+    let config_path =
+        AbsolutePathBuf::try_from(temp.path().join("config.toml")).expect("absolute config path");
+    let config_layer_stack = ConfigLayerStack::new(
+        vec![ConfigLayerEntry::new(
+            ConfigLayerSource::System { file: config_path },
+            config_toml_with_pre_tool_use("  "),
+        )],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("config layer stack");
+
+    let (hooks, _result_receiver) = crate::Hooks::new(
+        crate::HooksConfig {
+            feature_enabled: true,
+            config_layer_stack: Some(config_layer_stack),
+            ..Default::default()
+        },
+        ThreadId::new(),
+    )
+    .expect("managed config layer hooks should remain optional");
+
+    assert_eq!(hooks.startup_warnings().len(), 1);
+    assert!(hooks.startup_warnings()[0].contains("skipping empty hook command"));
+}
+
 #[tokio::test]
 async fn requirements_managed_hooks_execute_from_managed_dir() {
     let temp = tempdir().expect("create temp dir");

@@ -1163,7 +1163,7 @@ impl Session {
                 resolved_environments.single_local_environment(),
             )
             .await;
-            let (hooks, async_hook_results) = Hooks::new(hooks_config, thread_id);
+            let (hooks, async_hook_results) = Hooks::new(hooks_config, thread_id)?;
             for warning in hooks.startup_warnings() {
                 post_session_configured_events.push(Event {
                     id: INITIAL_SUBMIT_ID.to_owned(),

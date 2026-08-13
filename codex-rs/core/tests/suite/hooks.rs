@@ -3,6 +3,7 @@ use std::path::Path;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_config::test_support::CloudConfigBundleFixture;
 use codex_core::StartThreadOptions;
 use codex_core::TurnInputRequest;
 use codex_core::config::Config;
@@ -235,6 +236,37 @@ async fn user_shell_logs_command_metadata() -> Result<()> {
     .await
 }
 // copybara:strip-for-public end
+
+#[tokio::test]
+async fn managed_hook_discovery_failure_rejects_session_startup_when_hooks_enabled() -> Result<()> {
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_cloud_config_bundle(
+        CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            r#"
+[hooks]
+
+[[hooks.PreToolUse]]
+matcher = "["
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "echo managed"
+"#,
+        ),
+    );
+
+    let result = builder.build_with_auto_env(&server).await;
+    let Err(error) = result else {
+        panic!("session startup should reject an invalid managed hook matcher");
+    };
+    let error = format!("{error:#}");
+    assert!(
+        error.contains("managed") && error.contains("invalid matcher"),
+        "unexpected managed hook startup error: {error}"
+    );
+
+    Ok(())
+}
 
 fn restrictive_workspace_write_profile() -> PermissionProfile {
     PermissionProfile::workspace_write_with(

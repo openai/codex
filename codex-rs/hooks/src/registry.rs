@@ -57,16 +57,24 @@ pub struct Hooks {
 }
 
 impl Hooks {
-    /// Bind this session's hook runtime and output files to its thread.
+    /// Bind this session's hook runtime and output files to its thread, rejecting unloadable
+    /// required managed hooks.
     pub fn new(
         config: HooksConfig,
         thread_id: ThreadId,
-    ) -> (Self, Receiver<codex_protocol::protocol::HookCompletedEvent>) {
+    ) -> anyhow::Result<(Self, Receiver<codex_protocol::protocol::HookCompletedEvent>)> {
         let (result_sender, result_receiver) = async_channel::unbounded();
         let hooks = Self::from_config(config, |shell| {
             CommandHookRuntime::new(shell, thread_id, result_sender)
         });
-        (hooks, result_receiver)
+        let required_load_errors = hooks.engine.required_load_errors();
+        if !required_load_errors.is_empty() {
+            anyhow::bail!(
+                "failed to load required managed hooks: {}",
+                required_load_errors.join("; ")
+            );
+        }
+        Ok((hooks, result_receiver))
     }
 
     /// Preserve in-flight background hooks while applying a refreshed configuration.

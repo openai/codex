@@ -146,6 +146,7 @@ pub struct HookListEntry {
 pub(crate) struct ClaudeHooksEngine {
     pub(crate) handlers: Vec<ConfiguredHandler>,
     warnings: Vec<String>,
+    required_load_errors: Vec<String>,
     pub(crate) command_runtime: CommandHookRuntime,
 }
 
@@ -162,6 +163,7 @@ impl ClaudeHooksEngine {
             return Self {
                 handlers: Vec::new(),
                 warnings: Vec::new(),
+                required_load_errors: Vec::new(),
                 command_runtime,
             };
         }
@@ -177,12 +179,17 @@ impl ClaudeHooksEngine {
         Self {
             handlers: discovered.handlers,
             warnings: discovered.warnings,
+            required_load_errors: discovered.required_load_errors,
             command_runtime,
         }
     }
 
     pub(crate) fn warnings(&self) -> &[String] {
         &self.warnings
+    }
+
+    pub(crate) fn required_load_errors(&self) -> &[String] {
+        &self.required_load_errors
     }
 
     pub(crate) fn preview_session_start(

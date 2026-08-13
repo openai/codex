@@ -40,6 +40,7 @@ pub(crate) struct DiscoveryResult {
     pub handlers: Vec<ConfiguredHandler>,
     pub hook_entries: Vec<HookListEntry>,
     pub warnings: Vec<String>,
+    pub required_load_errors: Vec<String>,
 }
 
 struct HookHandlerSource<'a> {
@@ -47,10 +48,25 @@ struct HookHandlerSource<'a> {
     key_source: String,
     source: HookSource,
     is_managed: bool,
+    requirement: HookRequirement<'a>,
     bypass_hook_trust: bool,
     hook_states: &'a HashMap<String, HookStateToml>,
     env: HashMap<String, String>,
     plugin_id: Option<String>,
+}
+
+enum HookRequirement<'a> {
+    Required(&'a mut Vec<String>),
+    Optional,
+}
+
+impl HookHandlerSource<'_> {
+    fn record_load_failure(&mut self, warning: String, warnings: &mut Vec<String>) {
+        if let HookRequirement::Required(required_load_errors) = &mut self.requirement {
+            required_load_errors.push(warning.clone());
+        }
+        warnings.push(warning);
+    }
 }
 
 struct NormalizedHandler {
@@ -82,6 +98,7 @@ pub(crate) fn discover_handlers(
     let mut handlers = Vec::new();
     let mut hook_entries = Vec::new();
     let mut warnings = plugin_hook_load_warnings;
+    let mut required_load_errors = Vec::new();
     let mut display_order = 0_i64;
     let mut visited_json_hook_folders = HashSet::new();
     let hook_states = hook_states_from_stack(config_layer_stack);
@@ -97,7 +114,7 @@ pub(crate) fn discover_handlers(
     };
 
     if let Some(config_layer_stack) = config_layer_stack {
-        append_managed_requirement_handlers(
+        required_load_errors = append_managed_requirement_handlers(
             &mut handlers,
             &mut hook_entries,
             &mut warnings,
@@ -115,6 +132,7 @@ pub(crate) fn discover_handlers(
                 key_source: policy_path.display().to_string(),
                 source: hook_source,
                 is_managed,
+                requirement: HookRequirement::Optional,
                 bypass_hook_trust: false,
                 hook_states: &hook_states,
                 env: HashMap::new(),
@@ -154,6 +172,7 @@ pub(crate) fn discover_handlers(
                         key_source: source_path.display().to_string(),
                         source: hook_source,
                         is_managed,
+                        requirement: HookRequirement::Optional,
                         bypass_hook_trust: policy.bypass_hook_trust,
                         hook_states: &hook_states,
                         env: HashMap::new(),
@@ -180,6 +199,7 @@ pub(crate) fn discover_handlers(
         handlers,
         hook_entries,
         warnings,
+        required_load_errors,
     }
 }
 
@@ -191,10 +211,11 @@ fn append_managed_requirement_handlers(
     config_layer_stack: &ConfigLayerStack,
     hook_states: &HashMap<String, HookStateToml>,
     policy: HookDiscoveryPolicy,
-) {
+) -> Vec<String> {
     let Some(managed_hooks) = config_layer_stack.requirements().managed_hooks.as_ref() else {
-        return;
+        return Vec::new();
     };
+    let mut required_load_errors = Vec::new();
     let source_path = managed_hooks_source_path(managed_hooks.get(), managed_hooks.source.as_ref());
     append_hook_events(
         handlers,
@@ -206,6 +227,7 @@ fn append_managed_requirement_handlers(
             key_source: source_path.display().to_string(),
             source: hook_source_for_requirement_source(managed_hooks.source.as_ref()),
             is_managed: true,
+            requirement: HookRequirement::Required(&mut required_load_errors),
             bypass_hook_trust: false,
             hook_states,
             env: HashMap::new(),
@@ -214,6 +236,7 @@ fn append_managed_requirement_handlers(
         managed_hooks.get().hooks.clone(),
         policy,
     );
+    required_load_errors
 }
 
 fn append_plugin_hook_sources(
@@ -257,6 +280,7 @@ fn append_plugin_hook_sources(
                 ),
                 source: HookSource::Plugin,
                 is_managed: false,
+                requirement: HookRequirement::Optional,
                 bypass_hook_trust: policy.bypass_hook_trust,
                 hook_states,
                 env,
@@ -428,7 +452,7 @@ fn append_hook_events(
     hook_entries: &mut Vec<HookListEntry>,
     warnings: &mut Vec<String>,
     display_order: &mut i64,
-    source: HookHandlerSource<'_>,
+    mut source: HookHandlerSource<'_>,
     hook_events: HookEventsToml,
     policy: HookDiscoveryPolicy,
 ) {
@@ -442,7 +466,7 @@ fn append_hook_events(
             hook_entries,
             warnings,
             display_order,
-            &source,
+            &mut source,
             event_name,
             groups,
         );
@@ -454,7 +478,7 @@ fn append_matcher_groups(
     hook_entries: &mut Vec<HookListEntry>,
     warnings: &mut Vec<String>,
     display_order: &mut i64,
-    source: &HookHandlerSource<'_>,
+    source: &mut HookHandlerSource<'_>,
     event_name: codex_protocol::protocol::HookEventName,
     groups: Vec<MatcherGroup>,
 ) {
@@ -463,10 +487,15 @@ fn append_matcher_groups(
         if let Some(matcher) = matcher
             && let Err(err) = validate_matcher_pattern(matcher)
         {
-            warnings.push(format!(
+            let warning = format!(
                 "invalid matcher {matcher:?} in {}: {err}",
                 source.path.display()
-            ));
+            );
+            if group.hooks.is_empty() {
+                warnings.push(warning);
+            } else {
+                source.record_load_failure(warning, warnings);
+            }
             continue;
         }
         for (handler_index, handler) in group.hooks.iter().cloned().enumerate() {
@@ -485,10 +514,10 @@ fn append_matcher_groups(
                         command
                     };
                     if command.trim().is_empty() {
-                        warnings.push(format!(
-                            "skipping empty hook command in {}",
-                            source.path.display()
-                        ));
+                        source.record_load_failure(
+                            format!("skipping empty hook command in {}", source.path.display()),
+                            warnings,
+                        );
                         continue;
                     }
                     let timeout_sec = normalize_command_hook(
@@ -549,24 +578,33 @@ fn append_matcher_groups(
                     }
                 }
                 HookHandlerConfig::McpTool { .. } => {
-                    warnings.push(format!(
-                        "skipping MCP tool hook in {}: MCP tool hooks are not supported yet",
-                        source.path.display()
-                    ));
+                    source.record_load_failure(
+                        format!(
+                            "skipping MCP tool hook in {}: MCP tool hooks are not supported yet",
+                            source.path.display()
+                        ),
+                        warnings,
+                    );
                     continue;
                 }
                 HookHandlerConfig::Prompt {} => {
-                    warnings.push(format!(
-                        "skipping prompt hook in {}: prompt hooks are not supported yet",
-                        source.path.display()
-                    ));
+                    source.record_load_failure(
+                        format!(
+                            "skipping prompt hook in {}: prompt hooks are not supported yet",
+                            source.path.display()
+                        ),
+                        warnings,
+                    );
                     continue;
                 }
                 HookHandlerConfig::Agent {} => {
-                    warnings.push(format!(
-                        "skipping agent hook in {}: agent hooks are not supported yet",
-                        source.path.display()
-                    ));
+                    source.record_load_failure(
+                        format!(
+                            "skipping agent hook in {}: agent hooks are not supported yet",
+                            source.path.display()
+                        ),
+                        warnings,
+                    );
                     continue;
                 }
             };
@@ -797,6 +835,7 @@ mod tests {
             key_source: path.display().to_string(),
             source: hook_source(),
             is_managed: true,
+            requirement: super::HookRequirement::Optional,
             bypass_hook_trust: false,
             hook_states,
             env: std::collections::HashMap::new(),
@@ -814,6 +853,7 @@ mod tests {
             key_source: path.display().to_string(),
             source: HookSource::User,
             is_managed: false,
+            requirement: super::HookRequirement::Optional,
             bypass_hook_trust,
             hook_states,
             env: std::collections::HashMap::new(),
@@ -901,7 +941,7 @@ mod tests {
             &mut entries,
             &mut warnings,
             &mut display_order,
-            &hook_handler_source(&source_path, &hook_states),
+            &mut hook_handler_source(&source_path, &hook_states),
             event_name,
             vec![match additional_context_limit {
                 Some(limit) => command_group_with_additional_context_limit(limit),
@@ -985,7 +1025,7 @@ mod tests {
             &mut Vec::new(),
             &mut warnings,
             &mut display_order,
-            &hook_handler_source(&source_path, &hook_states),
+            &mut hook_handler_source(&source_path, &hook_states),
             HookEventName::UserPromptSubmit,
             vec![command_group(Some("["))],
         );
@@ -1024,7 +1064,7 @@ mod tests {
             &mut Vec::new(),
             &mut warnings,
             &mut display_order,
-            &hook_handler_source(&source_path, &hook_states),
+            &mut hook_handler_source(&source_path, &hook_states),
             HookEventName::PreToolUse,
             vec![command_group(Some("^Bash$"))],
         );
@@ -1064,7 +1104,7 @@ mod tests {
             &mut hook_entries,
             &mut warnings,
             &mut display_order,
-            &hook_handler_source(&source_path, &hook_states),
+            &mut hook_handler_source(&source_path, &hook_states),
             HookEventName::SessionEnd,
             vec![MatcherGroup {
                 matcher: Some("other".to_string()),
@@ -1146,7 +1186,7 @@ mod tests {
             &mut hook_entries,
             &mut warnings,
             &mut display_order,
-            &unmanaged_hook_handler_source(
+            &mut unmanaged_hook_handler_source(
                 &source_path,
                 &hook_states,
                 /*bypass_hook_trust*/ true,
@@ -1182,7 +1222,7 @@ mod tests {
             &mut hook_entries,
             &mut warnings,
             &mut display_order,
-            &unmanaged_hook_handler_source(
+            &mut unmanaged_hook_handler_source(
                 &source_path,
                 &hook_states,
                 /*bypass_hook_trust*/ true,
@@ -1211,7 +1251,7 @@ mod tests {
             &mut Vec::new(),
             &mut warnings,
             &mut display_order,
-            &hook_handler_source(&source_path, &hook_states),
+            &mut hook_handler_source(&source_path, &hook_states),
             HookEventName::PreToolUse,
             vec![command_group(Some("*"))],
         );
@@ -1234,7 +1274,7 @@ mod tests {
             &mut Vec::new(),
             &mut warnings,
             &mut display_order,
-            &hook_handler_source(&source_path, &hook_states),
+            &mut hook_handler_source(&source_path, &hook_states),
             HookEventName::PostToolUse,
             vec![command_group(Some("Edit|Write"))],
         );
@@ -1292,7 +1332,7 @@ mod tests {
             &mut Vec::new(),
             &mut warnings,
             &mut display_order,
-            &hook_handler_source(&source_path, &hook_states),
+            &mut hook_handler_source(&source_path, &hook_states),
             HookEventName::PreToolUse,
             vec![MatcherGroup {
                 matcher: Some("^Bash$".to_string()),

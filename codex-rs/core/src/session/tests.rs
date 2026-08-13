@@ -782,7 +782,8 @@ async fn preview_session_start_hooks(
             ..HooksConfig::default()
         },
         thread_id,
-    );
+    )
+    .expect("initialize hooks for session-start preview");
 
     Ok(
         hooks.preview_session_start(&codex_hooks::SessionStartRequest {
@@ -5840,7 +5841,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             ..HooksConfig::default()
         },
         thread_id,
-    );
+    )
+    .expect("initialize test hooks");
     let services = SessionServices {
         mcp_runtime,
         mcp_handler_cache: Default::default(),
@@ -8023,7 +8025,8 @@ where
             ..HooksConfig::default()
         },
         thread_id,
-    );
+    )
+    .expect("initialize test hooks");
     let services = SessionServices {
         mcp_runtime,
         mcp_handler_cache: Default::default(),
