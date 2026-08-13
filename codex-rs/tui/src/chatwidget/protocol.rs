@@ -15,6 +15,8 @@ impl ChatWidget {
             return;
         }
 
+        let was_replaying_turn_completion = self.thread_usage.replaying_turn_completion;
+        self.thread_usage.replaying_turn_completion = replay_kind.is_some();
         let from_replay = replay_kind.is_some();
         let is_resume_initial_replay =
             matches!(replay_kind, Some(ReplayKind::ResumeInitialMessages));
@@ -230,6 +232,7 @@ impl ChatWidget {
             | ServerNotification::AccountLoginCompleted(_) => {}
             ServerNotification::ContextCompacted(_) => {}
         }
+        self.thread_usage.replaying_turn_completion = was_replaying_turn_completion;
     }
 
     pub(super) fn handle_turn_completed_notification(
@@ -241,6 +244,8 @@ impl ChatWidget {
         // this TUI already rendered locally. Once that turn ends, another
         // client can submit the same text and it still needs its own user cell.
         self.last_rendered_user_message_display = None;
+        let was_replaying_turn_completion = self.thread_usage.replaying_turn_completion;
+        self.thread_usage.replaying_turn_completion = replay_kind.is_some();
         match notification.turn.status {
             TurnStatus::Completed => {
                 let last_agent_message =
@@ -311,6 +316,7 @@ impl ChatWidget {
             }
             TurnStatus::InProgress => {}
         }
+        self.thread_usage.replaying_turn_completion = was_replaying_turn_completion;
     }
 
     fn handle_item_started_notification(

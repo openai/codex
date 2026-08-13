@@ -1,0 +1,6 @@
+---
+source: tui/src/chatwidget/tests/status_surface_previews.rs
+expression: snapshot
+---
+status line: 5.2 credits · ~$0.21
+terminal title: 5.2 credits | ~$0.21

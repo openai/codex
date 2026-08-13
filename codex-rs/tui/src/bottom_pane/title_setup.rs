@@ -72,6 +72,10 @@ pub(crate) enum TerminalTitleItem {
     TotalInputTokens,
     /// Total output tokens generated.
     TotalOutputTokens,
+    /// Estimated credits attributed directly to the current enterprise thread.
+    ThreadCredits,
+    /// Estimated dollar cost attributed directly to the current enterprise thread.
+    EstimatedThreadCost,
     /// Full thread UUID.
     #[strum(to_string = "thread-id", serialize = "session-id")]
     SessionId,
@@ -118,6 +122,12 @@ impl TerminalTitleItem {
             TerminalTitleItem::UsedTokens => "Total tokens used in session (omitted when zero)",
             TerminalTitleItem::TotalInputTokens => "Total input tokens used in session",
             TerminalTitleItem::TotalOutputTokens => "Total output tokens used in session",
+            TerminalTitleItem::ThreadCredits => {
+                "Estimated current-thread credits (Enterprise workspaces only; omitted when unavailable)"
+            }
+            TerminalTitleItem::EstimatedThreadCost => {
+                "Estimated current-thread cost (Enterprise workspaces only; omitted when unavailable)"
+            }
             TerminalTitleItem::SessionId => {
                 "Current thread identifier (omitted until thread starts)"
             }
@@ -149,6 +159,10 @@ impl TerminalTitleItem {
             TerminalTitleItem::TotalInputTokens => Some(StatusSurfacePreviewItem::TotalInputTokens),
             TerminalTitleItem::TotalOutputTokens => {
                 Some(StatusSurfacePreviewItem::TotalOutputTokens)
+            }
+            TerminalTitleItem::ThreadCredits => Some(StatusSurfacePreviewItem::ThreadCredits),
+            TerminalTitleItem::EstimatedThreadCost => {
+                Some(StatusSurfacePreviewItem::EstimatedThreadCost)
             }
             TerminalTitleItem::SessionId => Some(StatusSurfacePreviewItem::SessionId),
             TerminalTitleItem::FastMode => Some(StatusSurfacePreviewItem::FastMode),
@@ -534,6 +548,17 @@ mod tests {
     }
 
     #[test]
+    fn thread_usage_items_are_independently_selectable() {
+        assert_eq!(
+            parse_terminal_title_items(["thread-credits", "estimated-thread-cost"].into_iter()),
+            Some(vec![
+                TerminalTitleItem::ThreadCredits,
+                TerminalTitleItem::EstimatedThreadCost,
+            ])
+        );
+    }
+
+    #[test]
     fn parse_terminal_title_items_accepts_kebab_case_variants() {
         let items = parse_terminal_title_items(
             [
@@ -553,6 +578,8 @@ mod tests {
                 "used-tokens",
                 "total-input-tokens",
                 "total-output-tokens",
+                "thread-credits",
+                "estimated-thread-cost",
                 "session-id",
                 "fast-mode",
             ]
@@ -577,6 +604,8 @@ mod tests {
                 TerminalTitleItem::UsedTokens,
                 TerminalTitleItem::TotalInputTokens,
                 TerminalTitleItem::TotalOutputTokens,
+                TerminalTitleItem::ThreadCredits,
+                TerminalTitleItem::EstimatedThreadCost,
                 TerminalTitleItem::SessionId,
                 TerminalTitleItem::FastMode,
             ])

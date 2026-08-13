@@ -1,8 +1,10 @@
 use super::*;
 use crate::bottom_pane::goal_status_indicator_line;
+use crate::chatwidget::ThreadUsageOutcome;
 use crate::chatwidget::rate_limits::NUDGE_MODEL_SLUG;
 use crate::chatwidget::rate_limits::get_limits_duration;
 use codex_app_server_protocol::SpendControlLimitSnapshot;
+use codex_app_server_protocol::ThreadUsage;
 use pretty_assertions::assert_eq;
 use ratatui::backend::TestBackend;
 use serial_test::serial;
@@ -2848,6 +2850,632 @@ async fn status_line_legacy_context_usage_renders_context_used_percent() {
     assert!(
         drain_insert_history(&mut rx).is_empty(),
         "legacy context-usage should remain a valid status line item"
+    );
+}
+
+#[tokio::test]
+async fn status_line_estimated_thread_cost_fetches_and_renders_backend_estimate() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.has_codex_backend_auth = true;
+    chat.plan_type = Some(PlanType::Business);
+    chat.config.tui_status_line = Some(vec!["estimated-thread-cost".to_string()]);
+
+    chat.refresh_status_line();
+    assert_eq!(status_line_text(&chat), None);
+    let request_id = match rx.try_recv() {
+        Ok(AppEvent::RefreshThreadUsage {
+            thread_id: requested_thread_id,
+            request_id,
+        }) => {
+            assert_eq!(requested_thread_id, thread_id);
+            request_id
+        }
+        event => panic!("expected estimated thread usage refresh, got {event:?}"),
+    };
+
+    assert!(chat.finish_thread_usage_refresh(
+        thread_id,
+        request_id,
+        Ok(ThreadUsageOutcome::Available(ThreadUsage {
+            thread_id: thread_id.to_string(),
+            estimated_usage_credits_micros: 46_000_000,
+            estimated_usage_usd_micros: Some(1_820_000),
+            groups: Vec::new(),
+        })),
+    ));
+    assert_eq!(status_line_text(&chat), Some("~$1.82".to_string()));
+    assert!(rx.try_recv().is_err(), "idle refresh must not poll");
+}
+
+#[tokio::test]
+async fn status_line_thread_credits_fetches_and_renders_fractional_credits() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.has_codex_backend_auth = true;
+    chat.plan_type = Some(PlanType::Business);
+    chat.config.tui_status_line = Some(vec!["thread-credits".to_string()]);
+
+    chat.refresh_status_line();
+    assert_eq!(status_line_text(&chat), None);
+    let request_id = match rx.try_recv() {
+        Ok(AppEvent::RefreshThreadUsage {
+            thread_id: requested_thread_id,
+            request_id,
+        }) => {
+            assert_eq!(requested_thread_id, thread_id);
+            request_id
+        }
+        event => panic!("expected thread credits refresh, got {event:?}"),
+    };
+
+    assert!(chat.finish_thread_usage_refresh(
+        thread_id,
+        request_id,
+        Ok(ThreadUsageOutcome::Available(ThreadUsage {
+            thread_id: thread_id.to_string(),
+            estimated_usage_credits_micros: 5_240_000,
+            estimated_usage_usd_micros: Some(210_000),
+            groups: Vec::new(),
+        })),
+    ));
+    assert_eq!(status_line_text(&chat), Some("5.2 credits".to_string()));
+    assert!(rx.try_recv().is_err(), "idle refresh must not poll");
+}
+
+#[tokio::test]
+async fn status_line_thread_credits_and_cost_share_one_backend_request() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.has_codex_backend_auth = true;
+    chat.plan_type = Some(PlanType::Business);
+    chat.config.tui_status_line = Some(vec![
+        "thread-credits".to_string(),
+        "estimated-thread-cost".to_string(),
+    ]);
+
+    chat.refresh_status_line();
+    let request_id = match rx.try_recv() {
+        Ok(AppEvent::RefreshThreadUsage { request_id, .. }) => request_id,
+        event => panic!("expected a shared thread usage refresh, got {event:?}"),
+    };
+    assert!(rx.try_recv().is_err(), "both items must share one request");
+
+    assert!(chat.finish_thread_usage_refresh(
+        thread_id,
+        request_id,
+        Ok(ThreadUsageOutcome::Available(ThreadUsage {
+            thread_id: thread_id.to_string(),
+            estimated_usage_credits_micros: 5_200_000,
+            estimated_usage_usd_micros: Some(210_000),
+            groups: Vec::new(),
+        })),
+    ));
+    assert_eq!(
+        status_line_text(&chat),
+        Some("5.2 credits · ~$0.21".to_string())
+    );
+    assert!(rx.try_recv().is_err(), "idle refresh must not poll");
+}
+
+#[tokio::test]
+async fn status_line_thread_credits_remain_visible_when_usd_is_unavailable() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.has_codex_backend_auth = true;
+    chat.plan_type = Some(PlanType::Business);
+    chat.config.tui_status_line = Some(vec![
+        "thread-credits".to_string(),
+        "estimated-thread-cost".to_string(),
+    ]);
+
+    chat.refresh_status_line();
+    let request_id = match rx.try_recv() {
+        Ok(AppEvent::RefreshThreadUsage { request_id, .. }) => request_id,
+        event => panic!("expected a shared thread usage refresh, got {event:?}"),
+    };
+    assert!(chat.finish_thread_usage_refresh(
+        thread_id,
+        request_id,
+        Ok(ThreadUsageOutcome::Available(ThreadUsage {
+            thread_id: thread_id.to_string(),
+            estimated_usage_credits_micros: 5_200_000,
+            estimated_usage_usd_micros: None,
+            groups: Vec::new(),
+        })),
+    ));
+
+    assert_eq!(status_line_text(&chat), Some("5.2 credits".to_string()));
+    assert!(
+        rx.try_recv().is_err(),
+        "credits-only estimates must not trigger retries"
+    );
+}
+
+#[tokio::test]
+async fn terminal_title_thread_usage_fetches_and_renders_without_status_line() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.has_codex_backend_auth = true;
+    chat.plan_type = Some(PlanType::Business);
+    chat.config.tui_status_line = Some(Vec::new());
+    chat.config.tui_terminal_title = Some(vec![
+        "thread-credits".to_string(),
+        "estimated-thread-cost".to_string(),
+    ]);
+
+    chat.refresh_terminal_title();
+    let request_id = match rx.try_recv() {
+        Ok(AppEvent::RefreshThreadUsage {
+            thread_id: requested_thread_id,
+            request_id,
+        }) => {
+            assert_eq!(requested_thread_id, thread_id);
+            request_id
+        }
+        event => panic!("expected title-only thread usage refresh, got {event:?}"),
+    };
+    assert!(chat.finish_thread_usage_refresh(
+        thread_id,
+        request_id,
+        Ok(ThreadUsageOutcome::Available(ThreadUsage {
+            thread_id: thread_id.to_string(),
+            estimated_usage_credits_micros: 5_200_000,
+            estimated_usage_usd_micros: Some(210_000),
+            groups: Vec::new(),
+        })),
+    ));
+
+    assert_eq!(
+        chat.last_terminal_title,
+        Some("5.2 credits | ~$0.21".to_string())
+    );
+    assert_eq!(status_line_text(&chat), None);
+    assert!(rx.try_recv().is_err(), "title-only refresh must not poll");
+}
+
+#[tokio::test]
+async fn terminal_title_thread_credits_remain_visible_when_usd_is_unavailable() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.has_codex_backend_auth = true;
+    chat.plan_type = Some(PlanType::Business);
+    chat.config.tui_status_line = Some(Vec::new());
+    chat.config.tui_terminal_title = Some(vec![
+        "thread-credits".to_string(),
+        "estimated-thread-cost".to_string(),
+    ]);
+
+    chat.refresh_terminal_title();
+    let request_id = match rx.try_recv() {
+        Ok(AppEvent::RefreshThreadUsage { request_id, .. }) => request_id,
+        event => panic!("expected title-only thread usage refresh, got {event:?}"),
+    };
+    assert!(chat.finish_thread_usage_refresh(
+        thread_id,
+        request_id,
+        Ok(ThreadUsageOutcome::Available(ThreadUsage {
+            thread_id: thread_id.to_string(),
+            estimated_usage_credits_micros: 5_200_000,
+            estimated_usage_usd_micros: None,
+            groups: Vec::new(),
+        })),
+    ));
+
+    assert_eq!(chat.last_terminal_title, Some("5.2 credits".to_string()));
+    assert!(
+        rx.try_recv().is_err(),
+        "credits-only title estimates must not trigger retries"
+    );
+}
+
+#[tokio::test]
+async fn terminal_title_and_status_line_share_one_thread_usage_request() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.has_codex_backend_auth = true;
+    chat.plan_type = Some(PlanType::Business);
+    chat.config.tui_status_line = Some(vec!["estimated-thread-cost".to_string()]);
+    chat.config.tui_terminal_title = Some(vec!["thread-credits".to_string()]);
+
+    chat.refresh_status_surfaces();
+    let request_id = match rx.try_recv() {
+        Ok(AppEvent::RefreshThreadUsage { request_id, .. }) => request_id,
+        event => panic!("expected a shared title/footer thread usage request, got {event:?}"),
+    };
+    assert!(
+        rx.try_recv().is_err(),
+        "title and footer must share one request"
+    );
+    assert!(chat.finish_thread_usage_refresh(
+        thread_id,
+        request_id,
+        Ok(ThreadUsageOutcome::Available(ThreadUsage {
+            thread_id: thread_id.to_string(),
+            estimated_usage_credits_micros: 5_200_000,
+            estimated_usage_usd_micros: Some(210_000),
+            groups: Vec::new(),
+        })),
+    ));
+
+    assert_eq!(chat.last_terminal_title, Some("5.2 credits".to_string()));
+    assert_eq!(status_line_text(&chat), Some("~$0.21".to_string()));
+}
+
+#[tokio::test]
+async fn status_line_estimated_thread_cost_avoids_unsupported_plan_requests() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.has_codex_backend_auth = true;
+    chat.plan_type = Some(PlanType::Pro);
+    chat.config.tui_status_line = Some(vec![
+        "estimated-thread-cost".to_string(),
+        "run-state".to_string(),
+    ]);
+
+    chat.refresh_status_line();
+
+    assert_eq!(status_line_text(&chat), Some("Ready".to_string()));
+    assert!(
+        rx.try_recv().is_err(),
+        "unsupported plans must not query usage"
+    );
+}
+
+#[tokio::test]
+async fn status_line_estimated_thread_cost_stops_after_backend_disables_feature() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.has_codex_backend_auth = true;
+    chat.plan_type = Some(PlanType::EnterpriseCbpAutomation);
+    chat.config.tui_status_line = Some(vec!["estimated-thread-cost".to_string()]);
+    chat.refresh_status_line();
+    let request_id = match rx.try_recv() {
+        Ok(AppEvent::RefreshThreadUsage { request_id, .. }) => request_id,
+        event => panic!("expected estimated thread usage refresh, got {event:?}"),
+    };
+
+    assert!(chat.finish_thread_usage_refresh(
+        thread_id,
+        request_id,
+        Ok(ThreadUsageOutcome::Disabled),
+    ));
+    chat.refresh_thread_usage_after_turn();
+
+    assert_eq!(status_line_text(&chat), None);
+    assert!(rx.try_recv().is_err(), "disabled feature must not retry");
+}
+
+#[tokio::test]
+async fn status_line_estimated_thread_cost_preserves_cached_amount_during_settlement() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.has_codex_backend_auth = true;
+    chat.plan_type = Some(PlanType::Business);
+    chat.config.tui_status_line = Some(vec!["estimated-thread-cost".to_string()]);
+    chat.refresh_status_line();
+    let initial_request_id = match rx.try_recv() {
+        Ok(AppEvent::RefreshThreadUsage { request_id, .. }) => request_id,
+        event => panic!("expected initial thread usage refresh, got {event:?}"),
+    };
+    assert!(chat.finish_thread_usage_refresh(
+        thread_id,
+        initial_request_id,
+        Ok(ThreadUsageOutcome::Available(ThreadUsage {
+            thread_id: thread_id.to_string(),
+            estimated_usage_credits_micros: 46_000_000,
+            estimated_usage_usd_micros: Some(1_820_000),
+            groups: Vec::new(),
+        })),
+    ));
+
+    chat.refresh_thread_usage_after_turn();
+    let settlement_request_id = match rx.try_recv() {
+        Ok(AppEvent::RefreshThreadUsage { request_id, .. }) => request_id,
+        event => panic!("expected post-turn thread usage refresh, got {event:?}"),
+    };
+    assert!(chat.finish_thread_usage_refresh(
+        thread_id,
+        settlement_request_id,
+        Ok(ThreadUsageOutcome::Available(ThreadUsage {
+            thread_id: thread_id.to_string(),
+            estimated_usage_credits_micros: 0,
+            estimated_usage_usd_micros: Some(0),
+            groups: Vec::new(),
+        })),
+    ));
+
+    assert_eq!(status_line_text(&chat), Some("~$1.82".to_string()));
+    assert!(
+        rx.try_recv().is_err(),
+        "settlement must not poll continuously"
+    );
+}
+
+#[tokio::test]
+async fn completed_turn_refreshes_estimated_thread_cost() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.has_codex_backend_auth = true;
+    chat.plan_type = Some(PlanType::Business);
+    chat.config.tui_status_line = Some(vec!["estimated-thread-cost".to_string()]);
+    chat.refresh_status_line();
+
+    let initial_request_id = match rx.try_recv() {
+        Ok(AppEvent::RefreshThreadUsage { request_id, .. }) => request_id,
+        event => panic!("expected initial thread usage refresh, got {event:?}"),
+    };
+    assert!(chat.finish_thread_usage_refresh(
+        thread_id,
+        initial_request_id,
+        Ok(ThreadUsageOutcome::Available(ThreadUsage {
+            thread_id: thread_id.to_string(),
+            estimated_usage_credits_micros: 46_000_000,
+            estimated_usage_usd_micros: Some(1_820_000),
+            groups: Vec::new(),
+        })),
+    ));
+
+    chat.on_task_complete(
+        /*last_agent_message*/ None, /*duration_ms*/ None, /*from_replay*/ false,
+    );
+
+    let request_id = std::iter::from_fn(|| rx.try_recv().ok())
+        .find_map(|event| match event {
+            AppEvent::RefreshThreadUsage {
+                thread_id: requested_thread_id,
+                request_id,
+            } if requested_thread_id == thread_id => Some(request_id),
+            _ => None,
+        })
+        .expect("completed turns should refresh estimated thread usage");
+    assert!(chat.finish_thread_usage_refresh(
+        thread_id,
+        request_id,
+        Ok(ThreadUsageOutcome::Available(ThreadUsage {
+            thread_id: thread_id.to_string(),
+            estimated_usage_credits_micros: 50_000_000,
+            estimated_usage_usd_micros: Some(2_100_000),
+            groups: Vec::new(),
+        })),
+    ));
+    assert_eq!(status_line_text(&chat), Some("~$2.10".to_string()));
+}
+
+#[tokio::test]
+async fn completed_turn_refreshes_credits_only_terminal_title() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.has_codex_backend_auth = true;
+    chat.plan_type = Some(PlanType::Business);
+    chat.config.tui_status_line = Some(Vec::new());
+    chat.config.tui_terminal_title = Some(vec!["thread-credits".to_string()]);
+    chat.refresh_terminal_title();
+
+    let initial_request_id = match rx.try_recv() {
+        Ok(AppEvent::RefreshThreadUsage { request_id, .. }) => request_id,
+        event => panic!("expected title-only thread usage refresh, got {event:?}"),
+    };
+    assert!(chat.finish_thread_usage_refresh(
+        thread_id,
+        initial_request_id,
+        Ok(ThreadUsageOutcome::Available(ThreadUsage {
+            thread_id: thread_id.to_string(),
+            estimated_usage_credits_micros: 5_200_000,
+            estimated_usage_usd_micros: None,
+            groups: Vec::new(),
+        })),
+    ));
+
+    chat.on_task_complete(
+        /*last_agent_message*/ None, /*duration_ms*/ None, /*from_replay*/ false,
+    );
+
+    let request_id = std::iter::from_fn(|| rx.try_recv().ok())
+        .find_map(|event| match event {
+            AppEvent::RefreshThreadUsage {
+                thread_id: requested_thread_id,
+                request_id,
+            } if requested_thread_id == thread_id => Some(request_id),
+            _ => None,
+        })
+        .expect("completed turns should refresh title-only thread usage");
+    assert!(chat.finish_thread_usage_refresh(
+        thread_id,
+        request_id,
+        Ok(ThreadUsageOutcome::Available(ThreadUsage {
+            thread_id: thread_id.to_string(),
+            estimated_usage_credits_micros: 6_200_000,
+            estimated_usage_usd_micros: None,
+            groups: Vec::new(),
+        })),
+    ));
+    assert_eq!(chat.last_terminal_title, Some("6.2 credits".to_string()));
+}
+
+#[tokio::test]
+async fn interrupted_turn_refreshes_estimated_thread_usage() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.has_codex_backend_auth = true;
+    chat.plan_type = Some(PlanType::Business);
+    chat.config.tui_status_line = Some(vec!["estimated-thread-cost".to_string()]);
+    chat.refresh_status_line();
+
+    let initial_request_id = match rx.try_recv() {
+        Ok(AppEvent::RefreshThreadUsage { request_id, .. }) => request_id,
+        event => panic!("expected initial thread usage refresh, got {event:?}"),
+    };
+    assert!(chat.finish_thread_usage_refresh(
+        thread_id,
+        initial_request_id,
+        Ok(ThreadUsageOutcome::Available(ThreadUsage {
+            thread_id: thread_id.to_string(),
+            estimated_usage_credits_micros: 46_000_000,
+            estimated_usage_usd_micros: Some(1_820_000),
+            groups: Vec::new(),
+        })),
+    ));
+
+    chat.on_interrupted_turn(TurnAbortReason::Interrupted);
+
+    assert!(
+        std::iter::from_fn(|| rx.try_recv().ok()).any(|event| {
+            matches!(
+                event,
+                AppEvent::RefreshThreadUsage {
+                    thread_id: requested_thread_id,
+                    ..
+                } if requested_thread_id == thread_id
+            )
+        }),
+        "interrupted turns must refresh estimated thread usage"
+    );
+}
+
+#[tokio::test]
+async fn failed_turn_refreshes_estimated_thread_usage() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.has_codex_backend_auth = true;
+    chat.plan_type = Some(PlanType::Business);
+    chat.config.tui_status_line = Some(vec!["estimated-thread-cost".to_string()]);
+    chat.refresh_status_line();
+
+    let initial_request_id = match rx.try_recv() {
+        Ok(AppEvent::RefreshThreadUsage { request_id, .. }) => request_id,
+        event => panic!("expected initial thread usage refresh, got {event:?}"),
+    };
+    assert!(chat.finish_thread_usage_refresh(
+        thread_id,
+        initial_request_id,
+        Ok(ThreadUsageOutcome::Available(ThreadUsage {
+            thread_id: thread_id.to_string(),
+            estimated_usage_credits_micros: 46_000_000,
+            estimated_usage_usd_micros: Some(1_820_000),
+            groups: Vec::new(),
+        })),
+    ));
+
+    chat.handle_non_retry_error(
+        "turn failed after generating tokens".to_string(),
+        /*codex_error_info*/ None,
+    );
+
+    assert!(
+        std::iter::from_fn(|| rx.try_recv().ok()).any(|event| {
+            matches!(
+                event,
+                AppEvent::RefreshThreadUsage {
+                    thread_id: requested_thread_id,
+                    ..
+                } if requested_thread_id == thread_id
+            )
+        }),
+        "failed turns must refresh estimated thread usage"
+    );
+}
+
+#[tokio::test]
+async fn status_line_estimated_thread_cost_rejects_stale_thread_completions() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let previous_thread_id = ThreadId::new();
+    let active_thread_id = ThreadId::new();
+    chat.thread_id = Some(previous_thread_id);
+    chat.has_codex_backend_auth = true;
+    chat.plan_type = Some(PlanType::Business);
+    chat.config.tui_status_line = Some(vec!["estimated-thread-cost".to_string()]);
+    chat.refresh_status_line();
+    let previous_request_id = match rx.try_recv() {
+        Ok(AppEvent::RefreshThreadUsage { request_id, .. }) => request_id,
+        event => panic!("expected previous-thread usage refresh, got {event:?}"),
+    };
+
+    chat.thread_id = Some(active_thread_id);
+    chat.refresh_status_line();
+    let active_request_id = match rx.try_recv() {
+        Ok(AppEvent::RefreshThreadUsage { request_id, .. }) => request_id,
+        event => panic!("expected active-thread usage refresh, got {event:?}"),
+    };
+    assert!(!chat.finish_thread_usage_refresh(
+        previous_thread_id,
+        previous_request_id,
+        Ok(ThreadUsageOutcome::Available(ThreadUsage {
+            thread_id: previous_thread_id.to_string(),
+            estimated_usage_credits_micros: 46_000_000,
+            estimated_usage_usd_micros: Some(1_820_000),
+            groups: Vec::new(),
+        })),
+    ));
+    assert_eq!(status_line_text(&chat), None);
+
+    assert!(chat.finish_thread_usage_refresh(
+        active_thread_id,
+        active_request_id,
+        Ok(ThreadUsageOutcome::Available(ThreadUsage {
+            thread_id: active_thread_id.to_string(),
+            estimated_usage_credits_micros: 1_000_000,
+            estimated_usage_usd_micros: Some(400),
+            groups: Vec::new(),
+        })),
+    ));
+    assert_eq!(status_line_text(&chat), Some("~$0.0004".to_string()));
+}
+
+#[tokio::test]
+async fn status_line_estimated_thread_cost_footer_snapshot() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.has_codex_backend_auth = true;
+    chat.plan_type = Some(PlanType::Business);
+    chat.show_welcome_banner = false;
+    chat.config.tui_status_line = Some(vec![
+        "model-with-reasoning".to_string(),
+        "thread-credits".to_string(),
+        "estimated-thread-cost".to_string(),
+    ]);
+    chat.refresh_status_line();
+    let request_id = match rx.try_recv() {
+        Ok(AppEvent::RefreshThreadUsage { request_id, .. }) => request_id,
+        event => panic!("expected estimated thread usage refresh, got {event:?}"),
+    };
+    assert!(chat.finish_thread_usage_refresh(
+        thread_id,
+        request_id,
+        Ok(ThreadUsageOutcome::Available(ThreadUsage {
+            thread_id: thread_id.to_string(),
+            estimated_usage_credits_micros: 5_200_000,
+            estimated_usage_usd_micros: Some(210_000),
+            groups: Vec::new(),
+        })),
+    ));
+
+    let width = 80;
+    let height = chat.desired_height(width);
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("create terminal");
+    terminal
+        .draw(|frame| chat.render(frame.area(), frame.buffer_mut()))
+        .expect("draw estimated-thread-cost footer");
+    assert_chatwidget_snapshot!(
+        "status_line_estimated_thread_cost_footer",
+        normalized_backend_snapshot(terminal.backend())
     );
 }
 

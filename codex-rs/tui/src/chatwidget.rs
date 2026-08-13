@@ -1220,6 +1220,7 @@ impl ChatWidget {
             self.refresh_terminal_title();
         }
         self.refresh_status_line_if_workspace_headline_due();
+        self.refresh_thread_usage_if_settlement_due();
     }
 
     fn flush_active_cell(&mut self) {

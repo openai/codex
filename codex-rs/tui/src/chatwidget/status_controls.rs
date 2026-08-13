@@ -340,6 +340,13 @@ impl ChatWidget {
             }
         }
 
+        if self
+            .estimated_thread_usage()
+            .is_some_and(|usage| usage.estimated_usage_usd_micros.is_none())
+        {
+            preview_data.suppress_placeholder(StatusSurfacePreviewItem::EstimatedThreadCost);
+        }
+
         preview_data
     }
 

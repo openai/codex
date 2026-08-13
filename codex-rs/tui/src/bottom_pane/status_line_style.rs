@@ -43,7 +43,9 @@ impl StatusLineAccent {
             | StatusLineItem::ContextWindowSize
             | StatusLineItem::UsedTokens
             | StatusLineItem::TotalInputTokens
-            | StatusLineItem::TotalOutputTokens => Self::Usage,
+            | StatusLineItem::TotalOutputTokens
+            | StatusLineItem::ThreadCredits
+            | StatusLineItem::EstimatedThreadCost => Self::Usage,
             StatusLineItem::FiveHourLimit | StatusLineItem::WeeklyLimit => Self::Limit,
             StatusLineItem::CodexVersion | StatusLineItem::SessionId => Self::Metadata,
             StatusLineItem::FastMode | StatusLineItem::RawOutput => Self::Mode,
@@ -231,6 +233,23 @@ mod tests {
         assert!(line.spans[1].style.add_modifier.contains(Modifier::DIM));
         assert_eq!(line.spans[2].style.fg, Some(Color::Green));
         assert!(!line.spans[2].style.add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn thread_usage_items_share_an_accent_and_dim_separator() {
+        let line = status_line_from_segments_with_resolver(
+            [
+                (StatusLineItem::ThreadCredits, "5.2 credits".to_string()),
+                (StatusLineItem::EstimatedThreadCost, "~$0.21".to_string()),
+            ],
+            /*use_theme_colors*/ true,
+            |_| None,
+        )
+        .expect("thread usage status line");
+
+        assert_eq!(line_text(&line), "5.2 credits · ~$0.21");
+        assert_eq!(line.spans[0].style, line.spans[2].style);
+        assert!(line.spans[1].style.add_modifier.contains(Modifier::DIM));
     }
 
     #[test]

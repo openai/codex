@@ -134,6 +134,8 @@ fn terminal_title_item_id(item: &str) -> Option<&'static str> {
         "context-used" | "context-usage" => Some("context-used"),
         "five-hour-limit" => Some("five-hour-limit"),
         "weekly-limit" => Some("weekly-limit"),
+        "thread-credits" => Some("thread-credits"),
+        "estimated-thread-cost" => Some("estimated-thread-cost"),
         "codex-version" => Some("codex-version"),
         "used-tokens" => Some("used-tokens"),
         "total-input-tokens" => Some("total-input-tokens"),
@@ -304,6 +306,27 @@ mod tests {
                 .details
                 .contains(&"terminal title project value: project".to_string())
         );
+    }
+
+    #[test]
+    fn terminal_title_accepts_thread_usage_items() {
+        let check = terminal_title_check_from_inputs(TerminalTitleInputs {
+            configured_items: Some(vec![
+                "thread-credits".to_string(),
+                "estimated-thread-cost".to_string(),
+            ]),
+            cwd: PathBuf::from("/workspace/project"),
+            project_root: None,
+        });
+
+        assert_eq!(check.status, CheckStatus::Ok);
+        assert_eq!(check.summary, "terminal title configured");
+        assert!(
+            check.details.contains(
+                &"terminal title items: thread-credits, estimated-thread-cost".to_string()
+            )
+        );
+        assert!(check.issues.is_empty());
     }
 
     #[test]

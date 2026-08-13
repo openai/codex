@@ -124,6 +124,12 @@ pub(crate) enum StatusLineItem {
     /// Total output tokens generated.
     TotalOutputTokens,
 
+    /// Estimated credits attributed directly to the current enterprise thread.
+    ThreadCredits,
+
+    /// Estimated dollar cost attributed directly to the current enterprise thread.
+    EstimatedThreadCost,
+
     /// Full thread UUID.
     #[strum(to_string = "thread-id", serialize = "session-id")]
     SessionId,
@@ -182,6 +188,12 @@ impl StatusLineItem {
             StatusLineItem::UsedTokens => "Total tokens used in session (omitted when zero)",
             StatusLineItem::TotalInputTokens => "Total input tokens used in session",
             StatusLineItem::TotalOutputTokens => "Total output tokens used in session",
+            StatusLineItem::ThreadCredits => {
+                "Estimated current-thread credits (Enterprise workspaces only; omitted when unavailable)"
+            }
+            StatusLineItem::EstimatedThreadCost => {
+                "Estimated current-thread cost in USD (Enterprise workspaces only; omitted when unavailable)"
+            }
             StatusLineItem::SessionId => "Current thread identifier (omitted until thread starts)",
             StatusLineItem::FastMode => "Whether Fast mode is currently active",
             StatusLineItem::RawOutput => "Whether raw scrollback mode is active",
@@ -219,6 +231,8 @@ impl StatusLineItem {
             StatusLineItem::UsedTokens => StatusSurfacePreviewItem::UsedTokens,
             StatusLineItem::TotalInputTokens => StatusSurfacePreviewItem::TotalInputTokens,
             StatusLineItem::TotalOutputTokens => StatusSurfacePreviewItem::TotalOutputTokens,
+            StatusLineItem::ThreadCredits => StatusSurfacePreviewItem::ThreadCredits,
+            StatusLineItem::EstimatedThreadCost => StatusSurfacePreviewItem::EstimatedThreadCost,
             StatusLineItem::SessionId => StatusSurfacePreviewItem::SessionId,
             StatusLineItem::FastMode => StatusSurfacePreviewItem::FastMode,
             StatusLineItem::RawOutput => StatusSurfacePreviewItem::RawOutput,
@@ -436,6 +450,19 @@ mod tests {
             "context-remaining"
         );
     }
+
+    #[test]
+    fn thread_usage_items_are_independently_selectable() {
+        assert_eq!(
+            "thread-credits".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::ThreadCredits)
+        );
+        assert_eq!(
+            "estimated-thread-cost".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::EstimatedThreadCost)
+        );
+    }
+
     #[test]
     fn project_name_is_canonical_and_accepts_legacy_ids() {
         assert_eq!(StatusLineItem::ProjectRoot.to_string(), "project-name");
@@ -671,6 +698,32 @@ mod tests {
         );
 
         assert_snapshot!(render_lines(&view, /*width*/ 72));
+    }
+
+    #[test]
+    fn setup_view_snapshot_includes_thread_usage_items() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let view = StatusLineSetupView::new(
+            Some(&[
+                StatusLineItem::ThreadCredits.to_string(),
+                StatusLineItem::EstimatedThreadCost.to_string(),
+            ]),
+            /*use_theme_colors*/ true,
+            StatusSurfacePreviewData::from_iter([
+                (
+                    StatusLineItem::ThreadCredits.preview_item(),
+                    "5.2 credits".to_string(),
+                ),
+                (
+                    StatusLineItem::EstimatedThreadCost.preview_item(),
+                    "~$1.82".to_string(),
+                ),
+            ]),
+            AppEventSender::new(tx_raw),
+            crate::keymap::RuntimeKeymap::defaults().list,
+        );
+
+        assert_snapshot!(render_lines(&view, /*width*/ 100));
     }
 
     fn render_lines(view: &StatusLineSetupView, width: u16) -> String {

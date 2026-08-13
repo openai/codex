@@ -1,0 +1,21 @@
+---
+source: tui/src/bottom_pane/status_line_setup.rs
+expression: "render_lines(&view, 100)"
+---
+                                                                                                    
+  Configure Status Line                                                                             
+  Select which items to display in the status line.                                                 
+                                                                                                    
+  Type to search                                                                                    
+  >                                                                                                 
+› [x] Use theme colors       Apply colors from the active /theme                                    
+  ───────────────────────                                                                           
+  [x] thread-credits         Estimated current-thread credits (Enterprise workspaces only; omitte…  
+  [x] estimated-thread-cost  Estimated current-thread cost in USD (Enterprise workspaces only; om…  
+  [ ] model                  Current model name                                                     
+  [ ] model-with-reasoning   Current model name with reasoning level                                
+  [ ] reasoning              Current reasoning level                                                
+  [ ] current-dir            Current working directory                                              
+                                                                                                    
+  5.2 credits · ~$1.82                                                                              
+  Press space to toggle; ←/→ to move; enter to confirm and close; esc to close
