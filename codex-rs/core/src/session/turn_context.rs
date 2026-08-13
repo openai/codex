@@ -243,14 +243,24 @@ impl TurnContext {
         }
     }
 
-    pub(crate) fn plugin_metrics_operation_for_command(
+    pub(crate) async fn plugin_metrics_operation_for_command(
         &self,
         command: &[String],
-        cwd: &AbsolutePathBuf,
+        cwd: &PathUri,
+        environment: &Environment,
     ) -> Option<ResolvedPluginMetricsOperation> {
-        self.extension_data
-            .get::<TrustedPluginRoots>()?
-            .resolve_metrics_operation(command, cwd)
+        let trusted_roots = self.extension_data.get::<TrustedPluginRoots>()?;
+        if environment.is_remote() {
+            trusted_roots
+                .resolve_metrics_operation_in_filesystem(
+                    command,
+                    cwd,
+                    environment.get_filesystem().as_ref(),
+                )
+                .await
+        } else {
+            trusted_roots.resolve_metrics_operation(command, &cwd.to_abs_path().ok()?)
+        }
     }
 
     pub(crate) fn permission_profile(&self) -> PermissionProfile {

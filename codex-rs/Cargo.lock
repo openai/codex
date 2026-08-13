@@ -2913,6 +2913,7 @@ dependencies = [
  "codex-utils-plugins",
  "dirs",
  "flate2",
+ "futures",
  "http 1.4.0",
  "libc",
  "pretty_assertions",

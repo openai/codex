@@ -63,8 +63,8 @@ fn resolved_operation() -> ResolvedPluginMetricsOperation {
     }
 }
 
-#[test]
-fn sidecar_keeps_valid_rows_and_first_duplicate_then_cleans_up() {
+#[tokio::test]
+async fn sidecar_keeps_valid_rows_and_first_duplicate_then_cleans_up() {
     let sidecar = create_sidecar();
     let path = sidecar.absolute_output_path();
     std::fs::write(
@@ -87,7 +87,10 @@ fn sidecar_keeps_valid_rows_and_first_duplicate_then_cleans_up() {
     )
     .expect("write output");
 
-    let batch = sidecar.finish(/*exit_code*/ 0).expect("valid measurements");
+    let batch = sidecar
+        .finish(/*exit_code*/ 0)
+        .await
+        .expect("valid measurements");
     let execution_id = batch.execution_id.clone();
     assert_eq!(
         batch,
@@ -118,8 +121,8 @@ fn sidecar_keeps_valid_rows_and_first_duplicate_then_cleans_up() {
     assert!(!path.exists());
 }
 
-#[test]
-fn malformed_oversized_and_nonzero_outputs_are_ignored_and_cleaned_up() {
+#[tokio::test]
+async fn malformed_oversized_and_nonzero_outputs_are_ignored_and_cleaned_up() {
     for output in [
         r#"{"version":2,"measurements":[]}"#.as_bytes().to_vec(),
         r#"{"version":1,"measurements":[],"unknown":true}"#.as_bytes().to_vec(),
@@ -134,7 +137,7 @@ fn malformed_oversized_and_nonzero_outputs_are_ignored_and_cleaned_up() {
         let sidecar = create_sidecar();
         let path = sidecar.absolute_output_path();
         std::fs::write(path.as_path(), output).expect("write output");
-        assert_eq!(sidecar.finish(/*exit_code*/ 0), None);
+        assert_eq!(sidecar.finish(/*exit_code*/ 0).await, None);
         assert!(!path.exists());
     }
 
@@ -145,7 +148,7 @@ fn malformed_oversized_and_nonzero_outputs_are_ignored_and_cleaned_up() {
         r#"{"version":1,"measurements":[{"name":"files_scanned","value":1}]}"#,
     )
     .expect("write output");
-    assert_eq!(sidecar.finish(/*exit_code*/ 1), None);
+    assert_eq!(sidecar.finish(/*exit_code*/ 1).await, None);
     assert!(!path.exists());
 }
 
@@ -176,8 +179,8 @@ fn reserved_output_env_is_absent_without_sidecar_and_cannot_be_overridden() {
 }
 
 #[cfg(unix)]
-#[test]
-fn sidecar_reads_the_original_file_after_path_replacement() {
+#[tokio::test]
+async fn sidecar_reads_the_original_file_after_path_replacement() {
     let sidecar = create_sidecar();
     let path = sidecar.absolute_output_path();
     std::fs::remove_file(path.as_path()).expect("remove original output path");
@@ -187,6 +190,6 @@ fn sidecar_reads_the_original_file_after_path_replacement() {
     )
     .expect("write replacement output");
 
-    assert_eq!(sidecar.finish(/*exit_code*/ 0), None);
+    assert_eq!(sidecar.finish(/*exit_code*/ 0).await, None);
     assert!(!path.exists());
 }

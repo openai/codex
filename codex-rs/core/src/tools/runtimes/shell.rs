@@ -11,6 +11,7 @@ pub(crate) mod zsh_fork_backend;
 use crate::exec::ExecCapturePolicy;
 use crate::guardian::GuardianNetworkAccessTrigger;
 use crate::plugins::metrics::finish_and_track_measurements;
+use crate::plugins::metrics::sidecar_for_command;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::execute_env;
@@ -212,15 +213,14 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             managed_network_for_sandbox_permissions(req.network.as_ref(), sandbox_permissions);
         let mut env = exec_env_for_sandbox_permissions(&req.env, sandbox_permissions);
         let explicit_env_overrides = req.explicit_env_overrides.clone();
-        let metrics_sidecar = (!req.turn_environment.environment.is_remote()
-            && ctx.session.services.analytics_events_client.is_enabled())
-        .then(|| {
-            ctx.step_context
-                .turn
-                .plugin_metrics_operation_for_command(&req.command, &req.cwd)
-        })
-        .flatten()
-        .and_then(PluginMetricsSidecar::create);
+        let cwd = PathUri::from_abs_path(&req.cwd);
+        let metrics_sidecar = sidecar_for_command(
+            ctx,
+            &req.command,
+            &cwd,
+            req.turn_environment.environment.as_ref(),
+        )
+        .await;
         if let Some(sidecar) = metrics_sidecar.as_ref() {
             sidecar.install_output_env(&mut env);
         }
@@ -320,7 +320,8 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             &ctx.session,
             &ctx.step_context.turn,
             &ctx.call_id,
-        );
+        )
+        .await;
         Ok(out)
     }
 }

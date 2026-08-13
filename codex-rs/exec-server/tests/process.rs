@@ -211,6 +211,8 @@ async fn exec_server_runs_ordinary_requests_serially_by_default() -> anyhow::Res
     expected_environment_info.temporary_directories = Some(vec![PathUri::from_host_native_path(
         temporary_directory.path(),
     )?]);
+    expected_environment_info.temp_dir =
+        Some(PathUri::from_host_native_path(temporary_directory.path())?);
     assert_eq!(
         serde_json::from_value::<EnvironmentInfo>(result)?,
         expected_environment_info

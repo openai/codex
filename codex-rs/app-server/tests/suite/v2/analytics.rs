@@ -259,8 +259,7 @@ const TEST_CURATED_PLUGIN_SHA: &str = "0123456789abcdef0123456789abcdef01234567"
 #[derive(Clone, Copy)]
 enum PluginMetricsRuntime {
     Classic,
-    Unified,
-    UnifiedBackground,
+    Unified { remote: bool, background: bool },
 }
 
 fn write_curated_metrics_plugin(codex_home: &Path) -> Result<PathBuf> {
@@ -324,9 +323,12 @@ async fn assert_plugin_measurement_analytics(runtime: PluginMetricsRuntime) -> R
     skip_if_wine_exec!(Ok(()), "plugin metrics fixture is Unix-only");
 
     let codex_home = TempDir::new()?;
-    let script_path = write_curated_metrics_plugin(codex_home.path())?;
-    let background = matches!(runtime, PluginMetricsRuntime::UnifiedBackground);
-    let unified_exec = !matches!(runtime, PluginMetricsRuntime::Classic);
+    let script_path = write_curated_metrics_plugin(codex_home.path())?.canonicalize()?;
+    let (remote, background) = match runtime {
+        PluginMetricsRuntime::Classic => (false, false),
+        PluginMetricsRuntime::Unified { remote, background } => (remote, background),
+    };
+    let unified_exec = matches!(runtime, PluginMetricsRuntime::Unified { .. });
     let mut command = vec![
         "/bin/sh".to_string(),
         script_path.to_string_lossy().into_owned(),
@@ -339,7 +341,7 @@ async fn assert_plugin_measurement_analytics(runtime: PluginMetricsRuntime) -> R
         PluginMetricsRuntime::Classic => {
             create_shell_command_sse_response(command, /*workdir*/ None, Some(5_000), call_id)?
         }
-        PluginMetricsRuntime::Unified | PluginMetricsRuntime::UnifiedBackground => {
+        PluginMetricsRuntime::Unified { .. } => {
             let arguments = serde_json::to_string(&json!({
                 "cmd": shlex::try_join(command.iter().map(String::as_str))?,
                 "yield_time_ms": if background { 10 } else { 1_000 },
@@ -381,11 +383,19 @@ enabled = true
     )?;
     mount_analytics_capture(&analytics_server, codex_home.path()).await?;
 
-    let mut mcp = TestAppServer::builder()
+    let mut builder = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_managed_config()
-        .build()
-        .await?;
+        .without_managed_config();
+    if remote {
+        builder = builder.with_exec_server_delay(Duration::ZERO);
+    }
+    let mut mcp = builder.build().await?;
+    if remote {
+        assert_eq!(
+            mcp.auto_env_params()?.environment_id,
+            codex_exec_server::REMOTE_ENVIRONMENT_ID
+        );
+    }
     timeout(Duration::from_secs(10), mcp.initialize()).await??;
     let thread_request = mcp
         .send_thread_start_request_with_auto_env(ThreadStartParams {
@@ -576,11 +586,40 @@ async fn classic_plugin_script_emits_measurement_analytics() -> Result<()> {
 #[cfg_attr(windows, ignore = "plugin metrics fixture is Unix-only")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_plugin_script_emits_measurement_analytics() -> Result<()> {
-    assert_plugin_measurement_analytics(PluginMetricsRuntime::Unified).await
+    assert_plugin_measurement_analytics(PluginMetricsRuntime::Unified {
+        remote: false,
+        background: false,
+    })
+    .await
+}
+
+#[cfg_attr(windows, ignore = "plugin metrics fixture is Unix-only")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_unified_plugin_script_emits_measurement_analytics() -> Result<()> {
+    assert_plugin_measurement_analytics(PluginMetricsRuntime::Unified {
+        remote: true,
+        background: false,
+    })
+    .await
 }
 
 #[cfg_attr(windows, ignore = "plugin metrics fixture is Unix-only")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_background_plugin_script_emits_measurements_after_turn_completion() -> Result<()> {
-    assert_plugin_measurement_analytics(PluginMetricsRuntime::UnifiedBackground).await
+    assert_plugin_measurement_analytics(PluginMetricsRuntime::Unified {
+        remote: false,
+        background: true,
+    })
+    .await
+}
+
+#[cfg_attr(windows, ignore = "plugin metrics fixture is Unix-only")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_unified_background_plugin_script_emits_measurements_after_turn_completion()
+-> Result<()> {
+    assert_plugin_measurement_analytics(PluginMetricsRuntime::Unified {
+        remote: true,
+        background: true,
+    })
+    .await
 }

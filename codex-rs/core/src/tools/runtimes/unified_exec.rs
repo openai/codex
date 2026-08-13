@@ -9,6 +9,7 @@ use crate::exec::ExecExpiration;
 use crate::guardian::GUARDIAN_REVIEW_TIMEOUT;
 use crate::guardian::GuardianNetworkAccessTrigger;
 use crate::guardian::routes_approval_to_guardian;
+use crate::plugins::metrics::sidecar_for_command;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecServerEnvConfig;
 use crate::sandboxing::SandboxPermissions;
@@ -337,16 +338,13 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecAttempt> for UnifiedExecRunt
             None => (env, None, None),
         };
         let explicit_env_overrides = req.explicit_env_overrides.clone();
-        let metrics_sidecar = (!environment_is_remote
-            && ctx.session.services.analytics_events_client.is_enabled())
-        .then(|| {
-            let cwd = req.cwd.to_abs_path().ok()?;
-            ctx.step_context
-                .turn
-                .plugin_metrics_operation_for_command(&req.command, &cwd)
-        })
-        .flatten()
-        .and_then(PluginMetricsSidecar::create);
+        let metrics_sidecar = sidecar_for_command(
+            ctx,
+            &req.command,
+            &req.cwd,
+            req.turn_environment.environment.as_ref(),
+        )
+        .await;
         if let Some(sidecar) = metrics_sidecar.as_ref() {
             sidecar.install_output_env(&mut env);
         }

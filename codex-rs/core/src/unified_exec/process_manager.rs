@@ -251,14 +251,15 @@ struct InitialExecCommandGuard {
 }
 
 impl InitialExecCommandGuard {
-    fn finish_plugin_metrics(&mut self, context: &UnifiedExecContext, exit_code: i32) {
+    async fn finish_plugin_metrics(&mut self, context: &UnifiedExecContext, exit_code: i32) {
         finish_and_track_measurements(
             self.metrics_sidecar.take(),
             exit_code,
             &context.session,
             &context.step_context.turn,
             &context.call_id,
-        );
+        )
+        .await;
     }
 }
 
@@ -661,7 +662,8 @@ impl UnifiedExecProcessManager {
                         &context.session,
                         &context.step_context.turn,
                         &context.call_id,
-                    );
+                    )
+                    .await;
                     (None, exit_code)
                 }
                 ProcessStatus::Unknown => {
@@ -694,7 +696,9 @@ impl UnifiedExecProcessManager {
             }
             let exit_code = process.exit_code();
             let exit = exit_code.unwrap_or(-1);
-            initial_exec_command_guard.finish_plugin_metrics(context, exit);
+            initial_exec_command_guard
+                .finish_plugin_metrics(context, exit)
+                .await;
             emit_exec_end_for_unified_exec(
                 Arc::clone(&context.session),
                 Arc::clone(&context.step_context.turn),

@@ -216,7 +216,8 @@ pub(crate) fn spawn_exit_watcher(
                 &session_ref,
                 &turn_ref,
                 &call_id,
-            );
+            )
+            .await;
             emit_exec_end_for_unified_exec(
                 session_ref,
                 turn_ref,

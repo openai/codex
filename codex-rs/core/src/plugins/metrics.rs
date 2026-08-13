@@ -1,10 +1,35 @@
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use crate::tools::sandboxing::ToolCtx;
 use codex_analytics::PluginMeasurementsInput;
 use codex_core_plugins::PluginMetricsSidecar;
+use codex_exec_server::Environment;
+use codex_utils_path_uri::PathUri;
+
+/// Creates a metrics sidecar for one plugin command.
+pub(crate) async fn sidecar_for_command(
+    ctx: &ToolCtx,
+    command: &[String],
+    cwd: &PathUri,
+    environment: &Environment,
+) -> Option<PluginMetricsSidecar> {
+    if !ctx.session.services.analytics_events_client.is_enabled() {
+        return None;
+    }
+    let resolved = ctx
+        .step_context
+        .turn
+        .plugin_metrics_operation_for_command(command, cwd, environment)
+        .await?;
+    if environment.is_remote() {
+        PluginMetricsSidecar::create_remote(environment, resolved).await
+    } else {
+        PluginMetricsSidecar::create(resolved)
+    }
+}
 
 /// Finishes a metrics sidecar and publishes any valid rows.
-pub(crate) fn finish_and_track_measurements(
+pub(crate) async fn finish_and_track_measurements(
     metrics_sidecar: Option<PluginMetricsSidecar>,
     exit_code: i32,
     session: &Session,
@@ -14,7 +39,7 @@ pub(crate) fn finish_and_track_measurements(
     let Some(metrics_sidecar) = metrics_sidecar else {
         return;
     };
-    let Some(batch) = metrics_sidecar.finish(exit_code) else {
+    let Some(batch) = metrics_sidecar.finish(exit_code).await else {
         return;
     };
     session

@@ -138,6 +138,7 @@ impl SandboxedFileSystem {
                 path: path.clone(),
                 recursive: Some(options.recursive),
                 sandbox: None,
+                private: None,
             }),
         )
         .await?

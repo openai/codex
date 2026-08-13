@@ -38,6 +38,7 @@ codex-utils-plugins = { workspace = true }
 chrono = { workspace = true }
 dirs = { workspace = true }
 flate2 = { workspace = true }
+futures = { workspace = true }
 http = { workspace = true }
 regex = { workspace = true }
 semver = { workspace = true }

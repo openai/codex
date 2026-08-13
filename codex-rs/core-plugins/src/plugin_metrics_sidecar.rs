@@ -1,8 +1,15 @@
 use crate::ResolvedPluginMetricsOperation;
 use codex_analytics::PluginMeasurementRow;
+use codex_exec_server::Environment;
+use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::FileSystemReadStream;
+use codex_exec_server::RemoveOptions;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathConvention;
+use codex_utils_path_uri::PathUri;
+use futures::StreamExt;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -10,6 +17,7 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::io::Seek;
 use std::io::SeekFrom;
+use std::sync::Arc;
 use tempfile::NamedTempFile;
 use uuid::Uuid;
 
@@ -26,12 +34,49 @@ pub struct PluginMeasurementBatch {
 }
 
 pub struct PluginMetricsSidecar {
-    output_file: NamedTempFile,
-    _output_dir: tempfile::TempDir,
+    output: PluginMetricsOutput,
     absolute_output_dir: AbsolutePathBuf,
     output_env_value: String,
     resolved: ResolvedPluginMetricsOperation,
     execution_id: String,
+}
+
+enum PluginMetricsOutput {
+    Local {
+        file: NamedTempFile,
+        _directory: tempfile::TempDir,
+    },
+    Remote {
+        file_stream: tokio::sync::Mutex<FileSystemReadStream>,
+        _directory: RemotePluginMetricsDirectory,
+    },
+}
+
+struct RemotePluginMetricsDirectory {
+    filesystem: Arc<dyn ExecutorFileSystem>,
+    path: PathUri,
+}
+
+impl Drop for RemotePluginMetricsDirectory {
+    fn drop(&mut self) {
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let filesystem = Arc::clone(&self.filesystem);
+        let path = self.path.clone();
+        runtime.spawn(async move {
+            let _ = filesystem
+                .remove(
+                    &path,
+                    RemoveOptions {
+                        recursive: true,
+                        force: true,
+                    },
+                    /*sandbox*/ None,
+                )
+                .await;
+        });
+    }
 }
 
 #[derive(Deserialize)]
@@ -65,12 +110,64 @@ impl PluginMetricsSidecar {
         let absolute_output_path = AbsolutePathBuf::from_absolute_path(output_file.path()).ok()?;
         let output_env_value = absolute_output_path.as_path().to_str()?.to_string();
         Some(Self {
-            output_file,
-            _output_dir: sidecar_dir,
+            output: PluginMetricsOutput::Local {
+                file: output_file,
+                _directory: sidecar_dir,
+            },
             absolute_output_dir,
             output_env_value,
             resolved,
             execution_id: Uuid::new_v4().to_string(),
+        })
+    }
+
+    pub async fn create_remote(
+        environment: &Environment,
+        resolved: ResolvedPluginMetricsOperation,
+    ) -> Option<Self> {
+        let temp_dir = environment.info().await.ok()?.temp_dir?;
+        // Permission overlays still use host-native AbsolutePathBuf roots, so a
+        // foreign executor path cannot be granted its exact sidecar directory.
+        if !cfg!(unix) || temp_dir.infer_path_convention() != Some(PathConvention::Posix) {
+            tracing::debug!(
+                executor_temp_dir = %temp_dir,
+                "plugin metrics require POSIX executor paths on a POSIX frontend"
+            );
+            return None;
+        }
+        let execution_id = Uuid::new_v4().to_string();
+        let directory_path = temp_dir
+            .join(&format!("codex-plugin-metrics-{execution_id}"))
+            .ok()?;
+        let absolute_output_dir = directory_path.to_abs_path().ok()?;
+        environment
+            .create_private_directory(&directory_path)
+            .await
+            .ok()?;
+        let directory = RemotePluginMetricsDirectory {
+            filesystem: environment.get_filesystem(),
+            path: directory_path,
+        };
+        let output_path = directory.path.join("measurements.json").ok()?;
+        directory
+            .filesystem
+            .write_file(&output_path, Vec::new(), /*sandbox*/ None)
+            .await
+            .ok()?;
+        let file_stream = directory
+            .filesystem
+            .read_file_stream(&output_path, /*sandbox*/ None)
+            .await
+            .ok()?;
+        Some(Self {
+            output: PluginMetricsOutput::Remote {
+                file_stream: tokio::sync::Mutex::new(file_stream),
+                _directory: directory,
+            },
+            absolute_output_dir,
+            output_env_value: output_path.inferred_native_path_string(),
+            resolved,
+            execution_id,
         })
     }
 
@@ -83,7 +180,7 @@ impl PluginMetricsSidecar {
 
     #[cfg(test)]
     fn absolute_output_path(&self) -> AbsolutePathBuf {
-        AbsolutePathBuf::from_absolute_path(self.output_file.path()).expect("absolute output path")
+        AbsolutePathBuf::from_absolute_path(&self.output_env_value).expect("absolute output path")
     }
 
     pub fn additional_permissions(&self) -> AdditionalPermissionProfile {
@@ -96,11 +193,32 @@ impl PluginMetricsSidecar {
         }
     }
 
-    pub fn finish(mut self, exit_code: i32) -> Option<PluginMeasurementBatch> {
+    pub async fn finish(mut self, exit_code: i32) -> Option<PluginMeasurementBatch> {
         if exit_code != 0 {
             return None;
         }
-        let rows = parse_output(self.output_file.as_file_mut(), &self.resolved)?;
+        let mut contents = Vec::new();
+        match &mut self.output {
+            PluginMetricsOutput::Local { file, .. } => {
+                let output_file = file.as_file_mut();
+                output_file.seek(SeekFrom::Start(0)).ok()?;
+                output_file
+                    .take(MAX_OUTPUT_BYTES + 1)
+                    .read_to_end(&mut contents)
+                    .ok()?;
+            }
+            PluginMetricsOutput::Remote { file_stream, .. } => {
+                let file_stream = file_stream.get_mut();
+                while let Some(chunk) = file_stream.next().await {
+                    let chunk = chunk.ok()?;
+                    if contents.len().saturating_add(chunk.len()) > MAX_OUTPUT_BYTES as usize {
+                        return None;
+                    }
+                    contents.extend_from_slice(&chunk);
+                }
+            }
+        }
+        let rows = parse_output(&contents, &self.resolved)?;
         (!rows.is_empty()).then(|| PluginMeasurementBatch {
             plugin_id: self.resolved.plugin_id.as_key(),
             execution_id: self.execution_id,
@@ -119,19 +237,13 @@ pub fn strip_output_env(env: &mut HashMap<String, String>) {
 }
 
 fn parse_output(
-    output_file: &mut std::fs::File,
+    contents: &[u8],
     resolved: &ResolvedPluginMetricsOperation,
 ) -> Option<Vec<PluginMeasurementRow>> {
-    let mut contents = Vec::new();
-    output_file.seek(SeekFrom::Start(0)).ok()?;
-    output_file
-        .take(MAX_OUTPUT_BYTES + 1)
-        .read_to_end(&mut contents)
-        .ok()?;
     if contents.len() as u64 > MAX_OUTPUT_BYTES {
         return None;
     }
-    let output: OutputEnvelope = serde_json::from_slice(&contents).ok()?;
+    let output: OutputEnvelope = serde_json::from_slice(contents).ok()?;
     if output.version != 1 || output.measurements.len() > MAX_OUTPUT_ROWS {
         return None;
     }

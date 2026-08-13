@@ -37,9 +37,11 @@ use crate::local_file_system::LocalFileSystem;
 use crate::local_process::LocalProcess;
 use crate::process::ExecBackend;
 use crate::protocol::EnvironmentInfo;
+use crate::protocol::FsCreateDirectoryParams;
 use crate::remote::NoiseRendezvousEnvironmentConfig;
 use crate::remote_file_system::RemoteFileSystem;
 use crate::remote_process::RemoteProcess;
+use codex_utils_path_uri::PathUri;
 use tokio::sync::watch;
 use tokio_util::task::AbortOnDropHandle;
 
@@ -897,6 +899,26 @@ impl Environment {
         }
     }
 
+    /// Atomically creates an owner-private directory on a remote executor.
+    pub async fn create_private_directory(&self, path: &PathUri) -> Result<(), ExecServerError> {
+        let Some(client) = &self.remote_client else {
+            return Err(ExecServerError::Protocol(
+                "private executor directory creation requires a remote environment".to_string(),
+            ));
+        };
+        client
+            .get()
+            .await?
+            .fs_create_directory(FsCreateDirectoryParams {
+                path: path.clone(),
+                recursive: Some(false),
+                sandbox: None,
+                private: Some(true),
+            })
+            .await?;
+        Ok(())
+    }
+
     /// Discovers plugin and skill manifests through the environment's high-level discovery API.
     pub async fn discover_capability_roots(
         &self,
@@ -1077,6 +1099,10 @@ mod tests {
                 PathUri::from_host_native_path(std::env::current_dir().expect("current directory"))
                     .expect("cwd URI")
             )
+        );
+        assert_eq!(
+            info.temp_dir,
+            PathUri::from_host_native_path(std::env::temp_dir()).ok()
         );
     }
 
