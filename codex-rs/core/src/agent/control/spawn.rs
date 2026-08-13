@@ -71,7 +71,8 @@ fn keep_forked_rollout_item(item: &RolloutItem, preserve_reference_context_item:
             | ResponseItem::Other => false,
         },
         RolloutItem::InterAgentCommunication(_)
-        | RolloutItem::InterAgentCommunicationMetadata { .. } => false,
+        | RolloutItem::InterAgentCommunicationMetadata { .. }
+        | RolloutItem::SecurityRiskScore(_) => false,
         // Full-history forks preserve the cached prompt prefix and can keep diffing
         // from the parent's durable baseline. Truncated forks drop part of that prompt,
         // so they must rebuild context on their first child turn.
@@ -794,6 +795,7 @@ impl AgentControl {
                 | RolloutItem::InterAgentCommunication(_)
                 | RolloutItem::InterAgentCommunicationMetadata { .. }
                 | RolloutItem::WorldState(_) => true,
+                RolloutItem::SecurityRiskScore(_) => false,
             }
         });
         // Full forks reuse the parent's reference context instead of rebuilding it. If that

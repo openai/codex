@@ -75,6 +75,7 @@ impl ModelReplayPlanner {
             | RolloutItem::ResponseItem(_)
             | RolloutItem::EventMsg(_)
             | RolloutItem::InterAgentCommunicationMetadata { .. }
+            | RolloutItem::SecurityRiskScore(_)
             | RolloutItem::WorldState(_) => return,
         };
         self.records.push(record);

@@ -236,6 +236,7 @@ fn rollout_item_type(item: &RolloutItem) -> String {
         RolloutItem::Compacted(_) => "compacted".to_string(),
         RolloutItem::TurnContext(_) => "turn_context".to_string(),
         RolloutItem::WorldState(_) => "world_state".to_string(),
+        RolloutItem::SecurityRiskScore(_) => "security_risk_score".to_string(),
         RolloutItem::EventMsg(EventMsg::ItemCompleted(event)) => {
             format!("event.item_completed.{}", turn_item_type(&event.item))
         }

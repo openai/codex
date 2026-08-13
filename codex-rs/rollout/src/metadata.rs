@@ -75,6 +75,7 @@ pub fn builder_from_items(
         | RolloutItem::Compacted(_)
         | RolloutItem::TurnContext(_)
         | RolloutItem::WorldState(_)
+        | RolloutItem::SecurityRiskScore(_)
         | RolloutItem::EventMsg(_) => None,
     }) && let Some(builder) = builder_from_session_meta(session_meta, rollout_path)
     {
@@ -143,6 +144,7 @@ pub async fn extract_metadata_from_rollout(
             | RolloutItem::Compacted(_)
             | RolloutItem::TurnContext(_)
             | RolloutItem::WorldState(_)
+            | RolloutItem::SecurityRiskScore(_)
             | RolloutItem::EventMsg(_) => None,
         }),
         parse_errors,

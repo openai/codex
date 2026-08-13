@@ -220,6 +220,7 @@ impl RollbackPlanner {
                 }
             }
             RolloutItem::WorldState(_) => {}
+            RolloutItem::SecurityRiskScore(_) => self.record_boundaries[index] = None,
         }
 
         Ok(())

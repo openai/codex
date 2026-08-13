@@ -7,6 +7,7 @@ use super::InterAgentCommunication;
 use super::ResponseItem;
 use super::ResponseItemEnvelope;
 use super::RolloutItem;
+use super::SecurityRiskScore;
 use super::SessionMetaLine;
 use super::TurnContextItem;
 use super::WorldStateItem;
@@ -40,6 +41,9 @@ pub(super) enum RolloutItemWire<'a> {
     },
     WorldState {
         payload: Cow<'a, WorldStateItem>,
+    },
+    SecurityRiskScore {
+        payload: Cow<'a, SecurityRiskScore>,
     },
     EventMsg {
         payload: Cow<'a, EventMsg>,
@@ -75,6 +79,9 @@ impl<'a> From<&'a RolloutItem> for RolloutItemWire<'a> {
             RolloutItem::WorldState(payload) => Self::WorldState {
                 payload: Cow::Borrowed(payload),
             },
+            RolloutItem::SecurityRiskScore(payload) => Self::SecurityRiskScore {
+                payload: Cow::Borrowed(payload),
+            },
             RolloutItem::EventMsg(payload) => Self::EventMsg {
                 payload: Cow::Borrowed(payload),
             },
@@ -103,6 +110,9 @@ impl From<RolloutItemWire<'_>> for RolloutItem {
             RolloutItemWire::Compacted { payload } => Self::Compacted(payload.into_owned()),
             RolloutItemWire::TurnContext { payload } => Self::TurnContext(payload.into_owned()),
             RolloutItemWire::WorldState { payload } => Self::WorldState(payload.into_owned()),
+            RolloutItemWire::SecurityRiskScore { payload } => {
+                Self::SecurityRiskScore(payload.into_owned())
+            }
             RolloutItemWire::EventMsg { payload } => Self::EventMsg(payload.into_owned()),
         }
     }

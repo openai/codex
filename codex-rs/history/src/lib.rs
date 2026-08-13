@@ -22,6 +22,7 @@ use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::WorldStateItem;
+use codex_protocol::security_risk::SecurityRiskScore;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Deserializer;
@@ -98,6 +99,7 @@ pub enum RolloutItem {
     Compacted(CompactedItem),
     TurnContext(TurnContextItem),
     WorldState(WorldStateItem),
+    SecurityRiskScore(SecurityRiskScore),
     EventMsg(EventMsg),
 }
 
@@ -410,6 +412,7 @@ fn multi_agent_version_from_items(
             | RolloutItem::InterAgentCommunicationMetadata { .. }
             | RolloutItem::Compacted(_)
             | RolloutItem::WorldState(_)
+            | RolloutItem::SecurityRiskScore(_)
             | RolloutItem::EventMsg(_) => None,
         })
     })

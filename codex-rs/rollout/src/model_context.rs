@@ -153,6 +153,7 @@ impl ModelContextScan {
             RolloutItem::EventMsg(_)
             | RolloutItem::SessionMeta(_)
             | RolloutItem::InterAgentCommunicationMetadata { .. }
+            | RolloutItem::SecurityRiskScore(_)
             | RolloutItem::WorldState(_) => {}
         }
 

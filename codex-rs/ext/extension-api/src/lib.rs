@@ -15,6 +15,7 @@ pub use capabilities::ResponseItemInjectionFuture;
 pub use capabilities::ResponseItemInjector;
 pub use codex_context_fragments::ContextualUserFragment;
 pub use codex_protocol::models::ResponseItem;
+pub use codex_protocol::security_risk::SecurityRiskScore;
 pub use codex_tools::ConversationHistory;
 pub use codex_tools::ExtensionTurnItem;
 pub use codex_tools::FunctionCallError;

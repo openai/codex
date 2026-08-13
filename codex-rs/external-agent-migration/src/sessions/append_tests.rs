@@ -7,6 +7,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ContextCompactedEvent;
 use codex_protocol::protocol::ThreadRolledBackEvent;
+use codex_protocol::security_risk::SecurityRiskScore;
 use pretty_assertions::assert_eq;
 
 #[test]
@@ -62,9 +63,17 @@ fn requires_a_strict_nonempty_model_prefix() {
             event.started_at = Some(9_999);
         }
     }
+    let security_risk = RolloutItem::SecurityRiskScore(SecurityRiskScore {
+        category: "action_risk".to_string(),
+        score: 0.92,
+    });
+    metadata_changed.push(security_risk.clone());
     assert!(model_transcripts_match(&history, &metadata_changed));
     assert!(!model_transcripts_match(&source, &history));
     assert!(plan_append(&source, &metadata_changed).is_some());
+    let mut source_with_security_risk = source.clone();
+    source_with_security_risk.push(security_risk);
+    assert!(plan_append(&source_with_security_risk, &metadata_changed).is_none());
 
     for event in [
         EventMsg::ContextCompacted(ContextCompactedEvent),
