@@ -195,7 +195,7 @@ impl ToolOrchestrator {
                         &otel_tn,
                         otel_ci,
                         &ReviewDecision::Approved,
-                        ToolDecisionSource::Config,
+                        Some(ToolDecisionSource::Config),
                     );
                 }
             }

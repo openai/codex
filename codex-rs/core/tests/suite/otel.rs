@@ -4,6 +4,8 @@ use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
+use codex_protocol::approvals::NetworkPolicyAmendment;
+use codex_protocol::approvals::NetworkPolicyRuleAction;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -1125,6 +1127,73 @@ fn sandbox_outcome_assertion<'a>(
 
 #[test]
 #[traced_test]
+fn network_policy_decisions_omit_source_and_destination() {
+    let telemetry = SessionTelemetry::new(
+        ThreadId::new(),
+        "gpt-5.5",
+        "gpt-5.5",
+        /*account_id*/ None,
+        /*account_email*/ None,
+        Some(TelemetryAuthMode::ApiKey),
+        "Codex_Desktop".to_string(),
+        /*log_user_prompts*/ false,
+        "tty".to_string(),
+        SessionSource::Cli,
+    );
+
+    for (call_id, action, expected_decision) in [
+        (
+            "network-allow",
+            NetworkPolicyRuleAction::Allow,
+            "approved_with_network_policy_allow",
+        ),
+        (
+            "network-deny",
+            NetworkPolicyRuleAction::Deny,
+            "denied_with_network_policy_deny",
+        ),
+    ] {
+        telemetry.tool_decision(
+            "exec_command",
+            call_id,
+            &ReviewDecision::NetworkPolicyAmendment {
+                network_policy_amendment: NetworkPolicyAmendment {
+                    host: "private.example.com".to_string(),
+                    action,
+                },
+            },
+            /*source*/ None,
+        );
+
+        logs_assert(|lines: &[&str]| {
+            let line = lines
+                .iter()
+                .find(|line| {
+                    line.contains("codex.tool_decision")
+                        && line.contains(&format!("call_id={call_id}"))
+                })
+                .ok_or_else(|| format!("missing network tool decision for {call_id}"))?;
+
+            if !line.contains("tool_name=exec_command") {
+                return Err("missing triggering network tool name".to_string());
+            }
+            if !line.contains(&format!("decision={expected_decision}")) {
+                return Err(format!("unexpected network tool decision for {call_id}"));
+            }
+            if line.contains("source=") {
+                return Err("network tool decision unexpectedly included a source".to_string());
+            }
+            if line.contains("private.example.com") {
+                return Err("network tool decision exposed the destination host".to_string());
+            }
+
+            Ok(())
+        });
+    }
+}
+
+#[test]
+#[traced_test]
 fn sandbox_outcome_event_records_outcome() {
     let telemetry = SessionTelemetry::new(
         ThreadId::new(),
@@ -1327,7 +1396,7 @@ async fn handle_shell_command_user_approved_for_session_records_tool_decision() 
 
     logs_assert(tool_decision_assertion(
         "user_approved_session_call",
-        "approvedforsession",
+        "approved_for_session",
         "user",
     ));
 }
@@ -1519,7 +1588,7 @@ async fn handle_sandbox_error_user_approves_for_session_records_tool_decision() 
 
     logs_assert(tool_decision_assertion(
         "sandbox_session_call",
-        "approvedforsession",
+        "approved_for_session",
         "user",
     ));
 }
