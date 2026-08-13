@@ -926,22 +926,48 @@ impl Environment {
     ) -> Result<CapabilityRootsDiscoverResponse, ExecServerError> {
         match &self.remote_client {
             Some(client) => {
+                let mut connection_state = client.subscribe_connection_state();
                 let client = client.get().await?;
-                if params.roots.iter().any(|root| {
-                    root.sandbox
-                        .as_ref()
-                        .is_some_and(crate::FileSystemSandboxContext::should_run_in_sandbox)
-                }) && !client
-                    .environment_info()
-                    .await?
-                    .capabilities
-                    .capability_discovery_sandbox
-                {
-                    return Err(ExecServerError::Protocol(
-                        "exec-server does not support sandboxed capability discovery".to_string(),
-                    ));
+                let discover = || async {
+                    if params.roots.iter().any(|root| {
+                        root.sandbox
+                            .as_ref()
+                            .is_some_and(crate::FileSystemSandboxContext::should_run_in_sandbox)
+                    }) && !client
+                        .environment_info()
+                        .await?
+                        .capabilities
+                        .capability_discovery_sandbox
+                    {
+                        return Err(ExecServerError::Protocol(
+                            "exec-server does not support sandboxed capability discovery"
+                                .to_string(),
+                        ));
+                    }
+                    client.discover_capability_roots(params.clone()).await
+                };
+                match discover().await {
+                    Err(error) if crate::client::is_retryable_recovery_error(&error) => {
+                        tracing::warn!(%error, "replaying capability discovery after executor recovery");
+                        let recovered =
+                            tokio::time::timeout(std::time::Duration::from_secs(8), async {
+                                while self.readiness_result().is_none_or(|result| result.is_err()) {
+                                    if connection_state.changed().await.is_err() {
+                                        return false;
+                                    }
+                                }
+                                true
+                            })
+                            .await
+                            .unwrap_or(false);
+                        if recovered {
+                            discover().await
+                        } else {
+                            Err(error)
+                        }
+                    }
+                    response => response,
                 }
-                client.discover_capability_roots(params).await
             }
             None => crate::discover_capability_roots(self.filesystem.as_ref(), params)
                 .await

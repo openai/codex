@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
@@ -15,12 +17,13 @@ use crate::FileSystemSandboxContext;
 
 /// Thread-scoped cache shared by capability consumers using the high-level executor API.
 ///
-/// A single miss batches every requested root by environment. The cache deliberately has no
-/// invalidation: selected roots are already treated as stable for the lifetime of a thread by the
-/// existing plugin and skill providers.
+/// A single miss batches every requested root by environment. Successful discoveries and
+/// permanent failures remain cached by root and sandbox; transient failures are retried on the
+/// next request. Recovery is reported so dependent MCP projections can be invalidated.
 pub struct ExecutorCapabilityDiscoveryCache {
     environment_manager: Arc<EnvironmentManager>,
     entries: Mutex<Vec<CachedRoot>>,
+    recovered_discovery: AtomicBool,
 }
 
 impl std::fmt::Debug for ExecutorCapabilityDiscoveryCache {
@@ -34,9 +37,9 @@ impl std::fmt::Debug for ExecutorCapabilityDiscoveryCache {
 struct CachedRoot {
     selected_root: SelectedCapabilityRoot,
     sandbox: Option<FileSystemSandboxContext>,
-    // Both successes and failures are memoized for the thread. Retrying a transient failure for
-    // the same stable selected root requires explicit invalidation or a new thread.
     result: Result<Arc<CapabilityRootDiscovery>, String>,
+    // Preserve transport classification after the public snapshot reduces errors to strings.
+    retryable: bool,
 }
 
 impl ExecutorCapabilityDiscoveryCache {
@@ -44,7 +47,13 @@ impl ExecutorCapabilityDiscoveryCache {
         Self {
             environment_manager,
             entries: Mutex::new(Vec::new()),
+            recovered_discovery: AtomicBool::new(false),
         }
+    }
+
+    /// Reports whether a previously failed root has recovered since the last observation.
+    pub fn take_recovered_discovery(&self) -> bool {
+        self.recovered_discovery.swap(false, Ordering::AcqRel)
     }
 
     /// Returns discoveries in the same order as `selected_roots`.
@@ -69,6 +78,7 @@ impl ExecutorCapabilityDiscoveryCache {
                     !entries.iter().any(|cached| {
                         cached.selected_root == **selected_root
                             && cached.sandbox.as_ref() == sandbox
+                            && !cached.retryable
                     })
                 })
                 .cloned()
@@ -81,7 +91,10 @@ impl ExecutorCapabilityDiscoveryCache {
                 .iter_mut()
                 .find(|cached| cached.selected_root == discovered_root.selected_root)
             {
-                if cached.sandbox != discovered_root.sandbox {
+                if cached.sandbox != discovered_root.sandbox || cached.result.is_err() {
+                    if cached.result.is_err() && discovered_root.result.is_ok() {
+                        self.recovered_discovery.store(true, Ordering::Release);
+                    }
                     *cached = discovered_root;
                 }
             } else {
@@ -153,6 +166,7 @@ impl ExecutorCapabilityDiscoveryCache {
                             selected_root,
                             sandbox: sandbox.clone(),
                             result: Err(error.clone()),
+                            retryable: true,
                         })
                         .collect::<Vec<_>>();
                 };
@@ -173,6 +187,7 @@ impl ExecutorCapabilityDiscoveryCache {
                 let response = match environment.discover_capability_roots(params).await {
                     Ok(response) => response,
                     Err(error) => {
+                        let retryable = crate::client::is_retryable_recovery_error(&error);
                         let error = error.to_string();
                         return selected_roots
                             .into_iter()
@@ -180,6 +195,7 @@ impl ExecutorCapabilityDiscoveryCache {
                                 selected_root,
                                 sandbox: sandbox.clone(),
                                 result: Err(error.clone()),
+                                retryable,
                             })
                             .collect();
                     }
@@ -196,6 +212,7 @@ impl ExecutorCapabilityDiscoveryCache {
                             selected_root,
                             sandbox: sandbox.clone(),
                             result: Err(error.clone()),
+                            retryable: false,
                         })
                         .collect();
                 }
@@ -218,6 +235,7 @@ impl ExecutorCapabilityDiscoveryCache {
                             selected_root,
                             sandbox: sandbox.clone(),
                             result,
+                            retryable: false,
                         }
                     })
                     .collect()

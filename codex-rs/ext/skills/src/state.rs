@@ -103,10 +103,9 @@ impl SkillsThreadState {
 
     /// Returns catalogs for stable selected roots.
     ///
-    /// The first catalog returned for a root remains cached until this thread state is dropped.
-    /// Environment availability only controls whether the root is projected into the current
-    /// step; it never invalidates the cache. There is intentionally no filesystem watcher or
-    /// content-based invalidation because selected environment roots are treated as stable.
+    /// Successful catalogs, including empty or warning-bearing catalogs, remain cached until
+    /// this thread state is dropped. Catalogs backed by failed discovery are not cached, so
+    /// later steps can recover. There is no filesystem watcher because selected roots are stable.
     #[tracing::instrument(
         name = "skills.executor.catalog_snapshot",
         level = "info",
@@ -140,6 +139,10 @@ impl SkillsThreadState {
         providers: &SkillProviders,
         query: SkillListQuery,
     ) -> SkillCatalog {
+        let discovery_failed = query
+            .executor_capability_discovery
+            .as_ref()
+            .is_some_and(|discovery| discovery.roots().iter().any(|root| root.result.is_err()));
         let sandbox_contexts = query
             .executor_capability_discovery
             .as_ref()
@@ -158,6 +161,9 @@ impl SkillsThreadState {
         }
         let roots = query.executor_roots.clone();
         let discovered = providers.list_executor_for_turn(query).await;
+        if discovery_failed {
+            return discovered;
+        }
         let mut cache = self
             .executor_discovery_cache
             .lock()

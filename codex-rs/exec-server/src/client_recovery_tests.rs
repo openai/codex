@@ -41,6 +41,9 @@ fn recovery_retries_transient_registry_errors() {
 
     assert!(is_retryable_registry_error(&error));
     assert!(is_retryable_recovery_error(&error));
+    assert!(is_retryable_recovery_error(
+        &ExecServerError::ConnectionAttempt(Arc::new(error))
+    ));
 }
 
 #[test]
@@ -57,6 +60,9 @@ fn recovery_does_not_retry_other_registry_conflicts() {
 
     assert!(!is_retryable_registry_error(&error));
     assert!(!is_retryable_recovery_error(&error));
+    assert!(!is_retryable_recovery_error(
+        &ExecServerError::ConnectionAttempt(Arc::new(error))
+    ));
 }
 
 #[test]

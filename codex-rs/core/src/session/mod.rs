@@ -3143,7 +3143,8 @@ impl Session {
                 &environments,
                 turn_context.windows_sandbox_level,
             )
-            .await;
+            .or_cancel(cancellation_token)
+            .await?;
         let extension_data = codex_extension_api::ExtensionData::new(turn_context.sub_id.clone());
         extension_data.insert(selected_capability_roots.clone());
         if let Some(discovery) = &executor_capability_discovery {
