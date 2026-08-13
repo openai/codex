@@ -446,8 +446,9 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
 
     // `mcp add` assigns new servers to the local environment, so its immediate
     // OAuth discovery uses the local route-aware HTTP client.
-    let http_client: Arc<dyn HttpClient> =
-        Arc::new(RouteAwareHttpClient::new(config.http_client_factory()));
+    let http_client: Arc<dyn HttpClient> = Arc::new(
+        RouteAwareHttpClient::new(config.http_client_factory()).with_tls_backend_fallback(),
+    );
     let login_support = oauth_login_support(
         &transport,
         Arc::clone(&http_client),
@@ -560,8 +561,9 @@ async fn run_login(config: &Config, login_args: LoginArgs) -> Result<()> {
 
     // Standalone `mcp login` runs OAuth from the local CLI process; execution
     // environment routing belongs to app-server and session MCP flows.
-    let http_client: Arc<dyn HttpClient> =
-        Arc::new(RouteAwareHttpClient::new(config.http_client_factory()));
+    let http_client: Arc<dyn HttpClient> = Arc::new(
+        RouteAwareHttpClient::new(config.http_client_factory()).with_tls_backend_fallback(),
+    );
     let http_client = apply_http_headers_helper(http_client, server, config.cwd.to_path_buf())
         .map_err(anyhow::Error::msg)?;
     let explicit_scopes = (!scopes.is_empty()).then_some(scopes);

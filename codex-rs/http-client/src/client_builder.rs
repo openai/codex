@@ -9,6 +9,8 @@ use http::HeaderMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
+
 use crate::BuildCustomCaTransportError;
 use crate::BuildRouteAwareHttpClientError;
 use crate::ClientRouteClass;
@@ -33,6 +35,14 @@ pub struct HttpClientBuilder {
     chatgpt_cloudflare_cookie_store: bool,
     chatgpt_cookie_store: Option<Arc<ChatGptCookieStore>>,
     request_logging: RequestLogging,
+    tls_backend: TlsBackend,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum TlsBackend {
+    #[default]
+    TransportDefault,
+    Rustls,
 }
 
 impl HttpClientFactory {
@@ -83,6 +93,11 @@ impl HttpClientBuilder {
 
     pub(crate) fn follows_redirects(&self) -> bool {
         self.follow_redirects
+    }
+
+    pub(crate) fn with_rustls_tls(mut self) -> Self {
+        self.tls_backend = TlsBackend::Rustls;
+        self
     }
 
     /// Limits only connection establishment, not the request as a whole.
@@ -260,6 +275,10 @@ impl HttpClientBuilder {
 
     fn base_reqwest_builder(self) -> reqwest::ClientBuilder {
         let mut builder = reqwest::Client::builder();
+        if self.tls_backend == TlsBackend::Rustls {
+            ensure_rustls_crypto_provider();
+            builder = builder.use_rustls_tls();
+        }
         if let Some(default_headers) = self.default_headers {
             builder = builder.default_headers(default_headers);
         }
@@ -288,6 +307,7 @@ impl Default for HttpClientBuilder {
             chatgpt_cloudflare_cookie_store: false,
             chatgpt_cookie_store: None,
             request_logging: RequestLogging::Enabled,
+            tls_backend: TlsBackend::TransportDefault,
         }
     }
 }

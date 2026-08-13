@@ -201,6 +201,89 @@ async fn forwards_exact_urls_and_caches_clients_by_resolved_route() {
 }
 
 #[tokio::test]
+async fn cached_tls_backend_only_changes_its_destination_and_route() {
+    let pool = RouteAwareClientPool::with_builder(
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        ClientRouteClass::Other,
+        HttpClientBuilder::new(),
+    )
+    .with_tls_backend_fallback();
+    let rustls_url = "https://mcp.example.com/first";
+    let native_url = "https://another.example.com/first";
+    let proxied_url = "https://mcp.example.com/proxied";
+    let proxy = OutboundProxyRoute::Proxy {
+        url: "http://proxy.example.com".to_string(),
+        no_proxy: None,
+    };
+    let resolver = FakeRouteResolver::new(HashMap::from([
+        (rustls_url.to_string(), OutboundProxyRoute::Direct),
+        (native_url.to_string(), OutboundProxyRoute::Direct),
+        (proxied_url.to_string(), proxy),
+    ]));
+    let fallback_client = HttpClientBuilder::new()
+        .with_rustls_tls()
+        .build_direct()
+        .expect("rustls client should build without proxy autodiscovery");
+    pool.rustls_clients
+        .as_ref()
+        .expect("TLS fallback cache")
+        .remember(
+            &reqwest::Url::parse(rustls_url).expect("valid rustls URL"),
+            &OutboundProxyRoute::Direct,
+            fallback_client,
+        );
+
+    resolve_with(&pool, &resolver, rustls_url)
+        .await
+        .expect("remembered destination should build the rustls client");
+    assert_eq!(pool.clients.lock().expect("client cache lock").len(), 0);
+
+    resolve_with(&pool, &resolver, native_url)
+        .await
+        .expect("another destination should retain its native TLS client");
+    resolve_with(&pool, &resolver, proxied_url)
+        .await
+        .expect("another proxy route should retain its native TLS client");
+    assert_eq!(pool.clients.lock().expect("client cache lock").len(), 2);
+}
+
+#[tokio::test]
+async fn tls_fallback_pool_reselects_routes_for_each_redirect_hop() {
+    let (address, server) = spawn_response_server(vec![
+        "HTTP/1.1 302 Found\r\nLocation: /final\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            .to_string(),
+        "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".to_string(),
+    ]);
+    let initial_url = format!("http://{address}/start");
+    let final_url = format!("http://{address}/final");
+    let resolver = FakeRouteResolver::new(HashMap::from([
+        (initial_url.clone(), OutboundProxyRoute::Direct),
+        (final_url.clone(), OutboundProxyRoute::Direct),
+    ]));
+    let pool = RouteAwareClientPool::new(
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        ClientRouteClass::Other,
+    )
+    .with_tls_backend_fallback();
+    let request = reqwest::Request::new(
+        Method::GET,
+        reqwest::Url::parse(&initial_url).expect("valid initial URL"),
+    );
+
+    let response = pool
+        .send_with_resolver(request, |url| resolver.resolve(url))
+        .await
+        .expect("fallback-enabled client should follow redirects");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(resolver.observed_urls(), vec![initial_url, final_url]);
+    assert_eq!(
+        server.join().expect("redirect server should finish").len(),
+        2
+    );
+}
+
+#[tokio::test]
 async fn reqwest_default_route_preserves_transport_redirects() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).expect("redirect listener should bind");
     let address = listener
@@ -595,7 +678,7 @@ async fn resolve_with(
     request_url: &str,
 ) -> Result<HttpClient, RouteAwareClientPoolError> {
     let resolver = resolver.clone();
-    let (_, client) = pool
+    let (_, client, _) = pool
         .client_for_url_with_resolver(request_url, move |request_url| async move {
             resolver.resolve(request_url).await
         })

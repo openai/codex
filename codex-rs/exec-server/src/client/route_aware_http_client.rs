@@ -73,6 +73,13 @@ impl RouteAwareHttpClient {
         }
     }
 
+    /// Enables narrowly scoped TLS-backend fallback for both redirect policies.
+    pub fn with_tls_backend_fallback(mut self) -> Self {
+        self.follow_redirects = self.follow_redirects.with_tls_backend_fallback();
+        self.stop_redirects = self.stop_redirects.with_tls_backend_fallback();
+        self
+    }
+
     pub(crate) fn runner(
         &self,
         redirect_policy: HttpRedirectPolicy,
