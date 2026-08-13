@@ -591,7 +591,7 @@ async fn load_plugin_command_context(
         .context("failed to load configuration")?;
     let plugins_input = config.plugins_config_input();
     let manager = plugins_manager_for_config(&config);
-    manager.set_auth_mode(load_cli_auth_mode(&config).await);
+    manager.set_auth_mode(load_cli_auth_mode(&config).await?);
     Ok(PluginCommandContext {
         codex_home: codex_home.to_path_buf(),
         plugins_input,
@@ -599,12 +599,14 @@ async fn load_plugin_command_context(
     })
 }
 
-pub(crate) async fn load_cli_auth_mode(config: &Config) -> Option<AuthMode> {
-    AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ true)
-        .await
-        .auth()
-        .await
-        .map(|auth| auth.api_auth_mode())
+pub(crate) async fn load_cli_auth_mode(config: &Config) -> Result<Option<AuthMode>> {
+    Ok(
+        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ true)
+            .await?
+            .auth()
+            .await
+            .map(|auth| auth.api_auth_mode()),
+    )
 }
 
 struct PluginSelection {

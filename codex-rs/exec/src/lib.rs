@@ -81,6 +81,7 @@ use codex_history::RolloutLine;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::default_client::set_default_originator;
 use codex_login::enforce_login_restrictions;
+use codex_login::is_workload_identity_selected;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_otel::set_parent_from_context;
@@ -342,11 +343,15 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     )
     .await;
     let bootstrap_config_toml = &bootstrap_config.config_toml;
+    let bootstrap_auth_config = bootstrap_auth_config(&codex_home, &bootstrap_config)?;
+    // API keys cannot fetch workspace-managed configuration. Preserve the
+    // existing ChatGPT bootstrap identity even when model requests allow
+    // CODEX_API_KEY.
     let cloud_config_bundle = cloud_config_bundle_loader_for_storage(
-        bootstrap_auth_config(&codex_home, &bootstrap_config)?,
+        bootstrap_auth_config,
         /*enable_codex_api_key_env*/ false,
     )
-    .await;
+    .await?;
     let run_cli_overrides = cli_kv_overrides.clone();
     let run_loader_overrides = loader_overrides.clone();
     let run_cloud_config_bundle = cloud_config_bundle.clone();
@@ -460,7 +465,9 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
 
     set_default_client_residency_requirement(config.enforce_residency.value());
 
-    if let Err(err) = enforce_login_restrictions(&config.auth_config()).await {
+    if !is_workload_identity_selected()
+        && let Err(err) = enforce_login_restrictions(&config.auth_config()).await
+    {
         eprintln!("{err}");
         std::process::exit(1);
     }

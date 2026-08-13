@@ -289,6 +289,7 @@ async fn run_script_with_timeout(
     // Handler is kept as guard to control the drop. The `mut` pattern is required because .args()
     // returns a ref of handler.
     let mut handler = Command::new(&args[0]);
+    codex_protocol::shell_environment::scrub_non_inheritable_env_vars(handler.as_std_mut());
     handler.args(&args[1..]);
     handler.stdin(Stdio::null());
     handler.current_dir(cwd);

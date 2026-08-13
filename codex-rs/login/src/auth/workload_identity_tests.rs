@@ -26,14 +26,12 @@ fn complete_environment() -> ProcessEnvironment {
 
 fn resolve_for_test(
     environment: ProcessEnvironment,
-    has_explicit_process_auth: bool,
     chatgpt_login_allowed: bool,
     chatgpt_base_url: &str,
 ) -> Result<Option<WorkloadIdentitySessionConfig>, WorkloadIdentitySessionError> {
     resolve_config(
         chatgpt_base_url,
         environment,
-        has_explicit_process_auth,
         chatgpt_login_allowed,
         auth_route_config(OutboundProxyPolicy::ReqwestDefault),
     )
@@ -44,27 +42,12 @@ fn markers_select_wif_and_partial_configuration_fails_closed() {
     assert!(
         resolve_for_test(
             ProcessEnvironment::default(),
-            /*has_explicit_process_auth*/ false,
             /*chatgpt_login_allowed*/ true,
             "https://chatgpt.com/backend-api",
         )
         .expect("no markers")
         .is_none()
     );
-    assert!(
-        resolve_for_test(
-            ProcessEnvironment {
-                federation_rule_id: Some("partial".into()),
-                ..Default::default()
-            },
-            /*has_explicit_process_auth*/ true,
-            /*chatgpt_login_allowed*/ true,
-            "https://chatgpt.com/backend-api",
-        )
-        .expect("explicit auth wins")
-        .is_none()
-    );
-
     for (environment, missing) in [
         (
             ProcessEnvironment {
@@ -83,7 +66,6 @@ fn markers_select_wif_and_partial_configuration_fails_closed() {
     ] {
         let error = resolve_for_test(
             environment,
-            /*has_explicit_process_auth*/ false,
             /*chatgpt_login_allowed*/ true,
             "https://chatgpt.com/backend-api",
         )
@@ -98,7 +80,6 @@ fn markers_select_wif_and_partial_configuration_fails_closed() {
     assert!(
         resolve_for_test(
             relative,
-            /*has_explicit_process_auth*/ false,
             /*chatgpt_login_allowed*/ true,
             "https://chatgpt.com/backend-api",
         )
@@ -112,7 +93,6 @@ fn markers_select_wif_and_partial_configuration_fails_closed() {
 fn auth_policy_and_app_environment_are_enforced() {
     let policy_error = resolve_for_test(
         complete_environment(),
-        /*has_explicit_process_auth*/ false,
         /*chatgpt_login_allowed*/ false,
         "https://chatgpt.com/backend-api",
     )
@@ -140,7 +120,6 @@ fn auth_policy_and_app_environment_are_enforced() {
     ] {
         let config = resolve_for_test(
             complete_environment(),
-            /*has_explicit_process_auth*/ false,
             /*chatgpt_login_allowed*/ true,
             chatgpt_base_url,
         )
@@ -152,7 +131,6 @@ fn auth_policy_and_app_environment_are_enforced() {
 
     let error = resolve_for_test(
         complete_environment(),
-        /*has_explicit_process_auth*/ false,
         /*chatgpt_login_allowed*/ true,
         "https://example.invalid/backend-api",
     )

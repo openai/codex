@@ -61,8 +61,18 @@ pub async fn load_auth_manager(
     let http_client_factory = config.http_client_factory();
     let mut auth_config = config.auth_config();
     auth_config.chatgpt_base_url = chatgpt_base_url.or(Some(config.chatgpt_base_url.clone()));
-    let auth_manager =
-        AuthManager::shared_from_auth_config(auth_config, /*enable_codex_api_key_env*/ false).await;
+    let auth_manager = match AuthManager::shared_from_auth_config(
+        auth_config,
+        /*enable_codex_api_key_env*/ false,
+    )
+    .await
+    {
+        Ok(auth_manager) => auth_manager,
+        Err(error) => {
+            append_error_log(format!("failed to load auth: {error}"));
+            return (None, http_client_factory);
+        }
+    };
     (Some(auth_manager), http_client_factory)
 }
 

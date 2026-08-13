@@ -771,7 +771,7 @@ async fn managed_auth_policy_survives_unusable_requirements_file_changes() -> Re
     let auth_manager = codex_login::AuthManager::shared_from_config(
         &startup, /*enable_codex_api_key_env*/ false,
     )
-    .await;
+    .await?;
     std::fs::write(
         &requirements_path,
         "allowed_login_methods = [\"chatgpt\"]\nallowed_chatgpt_workspaces = []\n",

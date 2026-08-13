@@ -9,7 +9,10 @@ use app_test_support::ChatGptAuthFixture;
 use app_test_support::write_chatgpt_auth;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::CLIENT_ID;
+use codex_login::CODEX_ACCESS_TOKEN_ENV_VAR;
 use codex_login::REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR;
+use codex_protocol::shell_environment::OPENAI_FEDERATION_RULE_ID_ENV_VAR;
+use codex_protocol::shell_environment::OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR;
 use predicates::str::contains;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -77,6 +80,24 @@ fn login_status_reports_auth_storage_errors() -> Result<()> {
         .assert()
         .failure()
         .stderr(contains("Error checking login status:"));
+
+    Ok(())
+}
+
+#[test]
+fn login_status_validates_configured_workload_identity() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_file_auth_config(codex_home.path())?;
+    let missing_assertion = codex_home.path().join("missing-identity-token");
+
+    codex_command(codex_home.path())?
+        .env_remove(CODEX_ACCESS_TOKEN_ENV_VAR)
+        .env(OPENAI_FEDERATION_RULE_ID_ENV_VAR, "rule-test")
+        .env(OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR, &missing_assertion)
+        .args(["login", "status"])
+        .assert()
+        .failure()
+        .stderr(contains("could not read workload identity assertion file"));
 
     Ok(())
 }

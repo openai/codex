@@ -350,8 +350,9 @@ async fn build_report(
     let config_result = load_config(root_config_overrides, interactive, arg0_paths).await;
     match &config_result {
         Ok(config) => {
-            let auth_manager =
+            let auth_manager_result =
                 AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ true).await;
+            let auth_manager = auth_manager_result.as_ref().ok().cloned();
             let reachability_plan = provider_reachability_plan(config);
             let (
                 config_check,
@@ -370,13 +371,27 @@ async fn build_report(
                 reachability_check,
             ) = tokio::join!(
                 async { run_sync_check("config", progress.clone(), || config_check(config)) },
-                async { run_sync_check("auth", progress.clone(), || auth_check(config)) },
+                async {
+                    run_sync_check("auth", progress.clone(), || match &auth_manager_result {
+                        Ok(_) => auth_check(config),
+                        Err(error) => DoctorCheck::new(
+                            "auth.load",
+                            "auth",
+                            CheckStatus::Fail,
+                            "authentication could not be initialized",
+                        )
+                        .detail(error.to_string())
+                        .remediation(
+                            "Fix the reported authentication error, then rerun codex doctor.",
+                        ),
+                    })
+                },
                 async { run_sync_check("updates", progress.clone(), || updates_check(config)) },
                 async { run_sync_check("network", progress.clone(), network_check) },
                 run_async_check(
                     "websocket",
                     progress.clone(),
-                    websocket_reachability_check(config, Some(auth_manager)),
+                    websocket_reachability_check(config, auth_manager),
                 ),
                 run_async_check("MCP", progress.clone(), mcp_check(config)),
                 async {

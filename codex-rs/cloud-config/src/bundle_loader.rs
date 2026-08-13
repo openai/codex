@@ -87,19 +87,25 @@ where
 pub async fn cloud_config_bundle_loader_for_storage(
     auth_config: AuthConfig,
     enable_codex_api_key_env: bool,
-) -> CloudConfigBundleLoader {
-    let codex_home = auth_config.codex_home.clone();
-    let chatgpt_base_url = auth_config
-        .chatgpt_base_url
-        .clone()
-        .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
-    let http_client_factory = auth_config.auth_route_config.http_client_factory().clone();
+) -> std::io::Result<CloudConfigBundleLoader> {
     let auth_manager =
-        AuthManager::shared_from_auth_config(auth_config, enable_codex_api_key_env).await;
+        AuthManager::shared_from_auth_config(auth_config.clone(), enable_codex_api_key_env).await?;
+    Ok(cloud_config_bundle_loader_from_auth_config(
+        auth_config,
+        auth_manager,
+    ))
+}
+
+fn cloud_config_bundle_loader_from_auth_config(
+    auth_config: AuthConfig,
+    auth_manager: Arc<AuthManager>,
+) -> CloudConfigBundleLoader {
     cloud_config_bundle_loader(
         auth_manager,
-        chatgpt_base_url,
-        codex_home,
-        http_client_factory,
+        auth_config
+            .chatgpt_base_url
+            .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string()),
+        auth_config.codex_home,
+        auth_config.auth_route_config.http_client_factory().clone(),
     )
 }

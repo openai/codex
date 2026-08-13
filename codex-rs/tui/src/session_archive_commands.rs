@@ -13,7 +13,6 @@ use crate::Cli;
 use crate::app_server_session::AppServerSession;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
-use crate::legacy_core::config::bootstrap_auth_config;
 use crate::legacy_core::config::load_config_toml_with_layer_stack;
 use crate::legacy_core::config::resolve_oss_provider;
 use crate::legacy_core::config::resolve_profile_v2_config_path;
@@ -22,7 +21,6 @@ use crate::named_session_lookup::SessionCollection;
 use crate::named_session_lookup::SessionNameLookupMode;
 use codex_app_server_protocol::Thread as AppServerThread;
 use codex_arg0::Arg0DispatchPaths;
-use codex_cloud_config::cloud_config_bundle_loader_for_storage;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::ConfigLoadOptions;
 use codex_config::LoaderOverrides;
@@ -278,12 +276,14 @@ async fn start_app_server_for_archive_command(
         launch_loader_overrides.user_config_profile = Some(profile_v2.clone());
     }
 
-    let reuse_implicit_local_daemon = super::can_reuse_implicit_local_daemon(
-        &cli_kv_overrides,
-        &launch_loader_overrides,
-        strict_config,
-        cli.bypass_hook_trust,
-    );
+    let workload_identity_selected = codex_login::is_workload_identity_selected();
+    let reuse_implicit_local_daemon = !workload_identity_selected
+        && super::can_reuse_implicit_local_daemon(
+            &cli_kv_overrides,
+            &launch_loader_overrides,
+            strict_config,
+            cli.bypass_hook_trust,
+        );
     let default_daemon = if explicit_remote_endpoint.is_none() && reuse_implicit_local_daemon {
         super::maybe_probe_default_daemon_socket(codex_home.as_path()).await
     } else {
@@ -293,7 +293,8 @@ async fn start_app_server_for_archive_command(
         explicit_remote_endpoint,
         default_daemon,
         reuse_implicit_local_daemon,
-    );
+        workload_identity_selected,
+    )?;
     let remote_cwd_override = cli
         .cwd
         .clone()
@@ -337,14 +338,12 @@ async fn start_app_server_for_archive_command(
     .await
     .wrap_err("failed to load config.toml")?;
     let config_toml = &bootstrap_config.config_toml;
-    let cloud_config_bundle = cloud_config_bundle_loader_for_storage(
-        app_server_target.auth_config_for_cloud_loader(bootstrap_auth_config(
-            codex_home.as_path(),
-            &bootstrap_config,
-        )?),
-        /*enable_codex_api_key_env*/ false,
+    let cloud_config_bundle = super::cloud_config_bundle_for_app_server_target(
+        &app_server_target,
+        &bootstrap_config,
+        codex_home.as_path(),
     )
-    .await;
+    .await?;
 
     let model_provider = if cli.oss {
         resolve_oss_provider(cli.oss_provider.as_deref(), config_toml)

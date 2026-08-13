@@ -523,14 +523,14 @@ async fn run_remove(config_overrides: &CliConfigOverrides, remove_args: RemoveAr
     Ok(())
 }
 
-async fn load_mcp_manager(config: &Config) -> McpManager {
+async fn load_mcp_manager(config: &Config) -> Result<McpManager> {
     let plugins_manager = Arc::new(plugins_manager_for_config(config));
-    plugins_manager.set_auth_mode(load_cli_auth_mode(config).await);
-    McpManager::new(plugins_manager)
+    plugins_manager.set_auth_mode(load_cli_auth_mode(config).await?);
+    Ok(McpManager::new(plugins_manager))
 }
 
 async fn run_login(config: &Config, login_args: LoginArgs) -> Result<()> {
-    let mcp_manager = load_mcp_manager(config).await;
+    let mcp_manager = load_mcp_manager(config).await?;
     let mcp_servers = mcp_manager.configured_servers(config).await;
 
     let LoginArgs {
@@ -599,7 +599,7 @@ async fn run_login(config: &Config, login_args: LoginArgs) -> Result<()> {
 }
 
 async fn run_logout(config: &Config, logout_args: LogoutArgs) -> Result<()> {
-    let mcp_manager = load_mcp_manager(config).await;
+    let mcp_manager = load_mcp_manager(config).await?;
     let mcp_servers = mcp_manager.configured_servers(config).await;
 
     let LogoutArgs { name } = logout_args;
@@ -629,9 +629,9 @@ async fn run_logout(config: &Config, logout_args: LogoutArgs) -> Result<()> {
 }
 
 async fn run_list(config: &Config, list_args: ListArgs) -> Result<()> {
-    let mcp_manager = load_mcp_manager(config).await;
+    let mcp_manager = load_mcp_manager(config).await?;
     let auth_manager =
-        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ true).await;
+        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ true).await?;
     let auth = auth_manager.auth().await;
     let mcp_servers = mcp_manager.configured_servers(config).await;
     let effective_mcp_servers = mcp_manager.effective_servers(config, auth.as_ref()).await;
@@ -894,7 +894,7 @@ async fn run_list(config: &Config, list_args: ListArgs) -> Result<()> {
 }
 
 async fn run_get(config: &Config, get_args: GetArgs) -> Result<()> {
-    let mcp_manager = load_mcp_manager(config).await;
+    let mcp_manager = load_mcp_manager(config).await?;
     let mcp_servers = mcp_manager.configured_servers(config).await;
 
     let Some(server) = mcp_servers.get(&get_args.name) else {

@@ -10,9 +10,11 @@
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::Config;
 use codex_login::AuthKeyringBackendKind;
+use codex_login::AuthManager;
 use codex_login::AuthRouteConfig;
 use codex_login::CLIENT_ID;
 use codex_login::ServerOptions;
+use codex_login::is_workload_identity_selected;
 use codex_login::login_with_access_token;
 use codex_login::login_with_api_key;
 use codex_login::logout_with_revoke;
@@ -439,8 +441,21 @@ pub async fn run_login_with_device_code_fallback_to_browser(
 pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
 
-    match config
-        .auth_config()
+    if is_workload_identity_selected() {
+        match AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await {
+            Ok(_) => {
+                eprintln!("Logged in using workload identity");
+                std::process::exit(0);
+            }
+            Err(err) => {
+                eprintln!("Error checking login status: {err}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    let auth_config = config.auth_config();
+    match auth_config
         .load_auth(/*enable_codex_api_key_env*/ false)
         .await
     {

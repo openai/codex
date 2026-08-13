@@ -26,8 +26,6 @@ use super::ExternalAuthRefreshContext;
 use super::RefreshTokenError;
 use super::RefreshTokenFailedError;
 use super::RefreshTokenFailedReason;
-use super::read_codex_access_token_from_env;
-use super::read_codex_api_key_from_env;
 use crate::AuthRouteConfig;
 
 const PROD_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
@@ -101,22 +99,21 @@ pub(super) enum WorkloadIdentitySessionError {
     InvalidConfiguration(String),
 }
 
-pub fn is_workload_identity_selected(
-    auth_config: &AuthConfig,
-    enable_codex_api_key_env: bool,
-) -> bool {
-    !has_explicit_process_auth(auth_config, enable_codex_api_key_env)
-        && ProcessEnvironment::read().has_marker()
+/// Returns whether workload identity was selected through process configuration.
+///
+/// Either marker selects workload identity. Partial configuration then fails validation rather
+/// than falling back to another credential source.
+pub fn is_workload_identity_selected() -> bool {
+    ProcessEnvironment::read().has_marker()
 }
 
 fn resolve_config(
     chatgpt_base_url: &str,
     environment: ProcessEnvironment,
-    has_explicit_process_auth: bool,
     chatgpt_login_allowed: bool,
     auth_route_config: AuthRouteConfig,
 ) -> Result<Option<WorkloadIdentitySessionConfig>, WorkloadIdentitySessionError> {
-    if has_explicit_process_auth || !environment.has_marker() {
+    if !environment.has_marker() {
         return Ok(None);
     }
     if !chatgpt_login_allowed {
@@ -142,14 +139,6 @@ fn resolve_config(
         http_client_factory: auth_route_config.http_client_factory().clone(),
         token_url: auth_environment.token_url()?,
     }))
-}
-
-fn has_explicit_process_auth(auth_config: &AuthConfig, enable_codex_api_key_env: bool) -> bool {
-    (enable_codex_api_key_env
-        && auth_config.is_login_method_allowed(ForcedLoginMethod::Api)
-        && read_codex_api_key_from_env().is_some())
-        || (auth_config.is_login_method_allowed(ForcedLoginMethod::Chatgpt)
-            && read_codex_access_token_from_env().is_some())
 }
 
 fn required_path(
@@ -303,17 +292,6 @@ struct WorkloadIdentitySessionEntry {
 }
 
 impl WorkloadIdentitySessionRegistry {
-    fn has_active_session(&self) -> Result<bool, WorkloadIdentitySessionError> {
-        let entry = self
-            .entry
-            .lock()
-            .map_err(|_| WorkloadIdentitySessionError::RegistryUnavailable)?;
-        Ok(entry
-            .as_ref()
-            .and_then(|active| active.session.upgrade())
-            .is_some())
-    }
-
     fn session(
         &self,
         config: WorkloadIdentitySessionConfig,
@@ -354,17 +332,14 @@ pub(super) struct WorkloadIdentityExternalAuth {
 impl WorkloadIdentityExternalAuth {
     pub(super) fn from_process_config(
         auth_config: &AuthConfig,
-        enable_codex_api_key_env: bool,
     ) -> Result<Option<Self>, WorkloadIdentitySessionError> {
         let registry = process_registry();
-        let active_session = registry.has_active_session()?;
         resolve_config(
             auth_config
                 .chatgpt_base_url
                 .as_deref()
                 .unwrap_or("https://chatgpt.com/backend-api"),
             ProcessEnvironment::read(),
-            has_explicit_process_auth(auth_config, enable_codex_api_key_env) && !active_session,
             auth_config.is_login_method_allowed(ForcedLoginMethod::Chatgpt),
             auth_config.auth_route_config.clone(),
         )?

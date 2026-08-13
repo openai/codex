@@ -38,7 +38,8 @@ pub(super) async fn load_mcp_config(
             .context("failed to resolve cloud configuration authentication")?,
         /*enable_codex_api_key_env*/ false,
     )
-    .await;
+    .await
+    .context("failed to initialize cloud configuration authentication")?;
 
     ConfigBuilder::default()
         .codex_home(codex_home.to_path_buf())

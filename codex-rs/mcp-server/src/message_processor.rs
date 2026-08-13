@@ -54,13 +54,14 @@ impl MessageProcessor {
         environment_manager: Arc<EnvironmentManager>,
         state_db: Option<StateDbHandle>,
         installation_id: String,
-    ) -> Self {
+    ) -> std::io::Result<Self> {
         let outgoing = Arc::new(outgoing);
         let auth_manager = AuthManager::shared_from_config(
             config.as_ref(),
             /*enable_codex_api_key_env*/ false,
         )
-        .await;
+        .await
+        .map_err(std::io::Error::other)?;
         let user_instructions_provider = Arc::new(CodexHomeUserInstructionsProvider::new(
             config.codex_home.clone(),
         ));
@@ -110,13 +111,13 @@ impl MessageProcessor {
             /*attestation_provider*/ None,
             /*external_time_provider*/ None,
         ));
-        Self {
+        Ok(Self {
             outgoing,
             initialized: false,
             arg0_paths,
             thread_manager,
             active_turns,
-        }
+        })
     }
 
     pub(crate) async fn process_request(&mut self, request: JsonRpcRequest<ClientRequest>) {

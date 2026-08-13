@@ -234,7 +234,9 @@ async fn build_test_processor(
 ) {
     let (outgoing_tx, outgoing_rx) = mpsc::channel(16);
     let auth_manager =
-        AuthManager::shared_from_config(config.as_ref(), /*enable_codex_api_key_env*/ false).await;
+        AuthManager::shared_from_config(config.as_ref(), /*enable_codex_api_key_env*/ false)
+            .await
+            .expect("test auth manager");
     let config_manager = ConfigManager::new(
         config.codex_home.to_path_buf(),
         Vec::new(),

@@ -206,6 +206,37 @@ pub enum RefreshTokenError {
     Transient(#[from] std::io::Error),
 }
 
+/// Error returned when constructing an [`AuthManager`] from resolved configuration.
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct AuthManagerInitializationError(AuthManagerInitializationErrorSource);
+
+#[derive(Debug, Error)]
+enum AuthManagerInitializationErrorSource {
+    #[error(transparent)]
+    WorkloadIdentityConfiguration(WorkloadIdentitySessionError),
+    #[error(transparent)]
+    InitialAuth(RefreshTokenError),
+}
+
+impl From<WorkloadIdentitySessionError> for AuthManagerInitializationError {
+    fn from(error: WorkloadIdentitySessionError) -> Self {
+        Self(AuthManagerInitializationErrorSource::WorkloadIdentityConfiguration(error))
+    }
+}
+
+impl From<RefreshTokenError> for AuthManagerInitializationError {
+    fn from(error: RefreshTokenError) -> Self {
+        Self(AuthManagerInitializationErrorSource::InitialAuth(error))
+    }
+}
+
+impl From<AuthManagerInitializationError> for std::io::Error {
+    fn from(error: AuthManagerInitializationError) -> Self {
+        Self::other(error)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExternalAuthRefreshReason {
     Unauthorized,
@@ -2615,40 +2646,20 @@ impl AuthManager {
         )
     }
 
-    /// Convenience constructor returning an `Arc` wrapper from resolved config.
+    /// Builds a shared manager and activates process-configured workload identity when selected.
     pub async fn shared_from_config(
         config: &impl AuthManagerConfig,
         enable_codex_api_key_env: bool,
-    ) -> Arc<Self> {
+    ) -> Result<Arc<Self>, AuthManagerInitializationError> {
         Self::shared_from_auth_config(auth_config_from(config), enable_codex_api_key_env).await
     }
 
-    /// Builds a shared manager using restrictions resolved before authentication.
+    /// Activates workload identity against an auth config resolved before full runtime config.
     pub async fn shared_from_auth_config(
         auth_config: AuthConfig,
         enable_codex_api_key_env: bool,
-    ) -> Arc<Self> {
-        Arc::new(Self::new_from_auth_config(auth_config, enable_codex_api_key_env).await)
-    }
-
-    /// Constructs a manager and activates process-configured workload identity when selected.
-    pub async fn try_shared_from_config(
-        config: &impl AuthManagerConfig,
-        enable_codex_api_key_env: bool,
-    ) -> Result<Arc<Self>, RefreshTokenError> {
-        Self::try_shared_from_auth_config(auth_config_from(config), enable_codex_api_key_env).await
-    }
-
-    /// Activates workload identity against an auth config resolved before full runtime config.
-    pub async fn try_shared_from_auth_config(
-        auth_config: AuthConfig,
-        enable_codex_api_key_env: bool,
-    ) -> Result<Arc<Self>, RefreshTokenError> {
-        let external_auth = WorkloadIdentityExternalAuth::from_process_config(
-            &auth_config,
-            enable_codex_api_key_env,
-        )
-        .map_err(configured_workload_identity_error)?;
+    ) -> Result<Arc<Self>, AuthManagerInitializationError> {
+        let external_auth = WorkloadIdentityExternalAuth::from_process_config(&auth_config)?;
         let mut manager = Self::new_from_auth_config(auth_config, enable_codex_api_key_env).await;
         manager.workload_identity_selected = external_auth.is_some();
         let manager = Arc::new(manager);
@@ -2965,13 +2976,6 @@ fn auth_config_from(config: &impl AuthManagerConfig) -> AuthConfig {
         managed_auth_policy: config.managed_auth_policy(),
         auth_route_config: config.auth_route_config(),
     }
-}
-
-fn configured_workload_identity_error(error: WorkloadIdentitySessionError) -> RefreshTokenError {
-    RefreshTokenError::Permanent(RefreshTokenFailedError::new(
-        RefreshTokenFailedReason::Other,
-        error.to_string(),
-    ))
 }
 
 #[cfg(test)]
