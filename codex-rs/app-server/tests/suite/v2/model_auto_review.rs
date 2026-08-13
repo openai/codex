@@ -8,6 +8,7 @@ use codex_app_server_protocol::ApprovalsReviewer::User;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::AskForApproval::Never;
 use codex_app_server_protocol::AskForApproval::OnRequest;
+use codex_app_server_protocol::AskForApproval::UnlessTrusted;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxMode;
@@ -32,8 +33,19 @@ use tokio::time::timeout;
 const TIMEOUT: Duration = Duration::from_secs(10);
 const MODEL: &str = "protected-model";
 const REQUIREMENTS: &str = "[auto_review]\nrequired_on_models = [\"protected-model\"]\n";
-const UNSAFE: [(Option<AskForApproval>, Option<ApprovalsReviewer>); 2] =
-    [(Some(Never), None), (None, Some(User))];
+const APPROVAL_POLICIES: [AskForApproval; 4] = [
+    UnlessTrusted,
+    OnRequest,
+    AskForApproval::Granular {
+        sandbox_approval: true,
+        rules: false,
+        skill_approval: false,
+        request_permissions: true,
+        mcp_elicitations: false,
+    },
+    Never,
+];
+const UNSAFE: [(Option<AskForApproval>, Option<ApprovalsReviewer>); 1] = [(None, Some(User))];
 
 macro_rules! params {
     ($ty:ident, $($field:ident $(= $value:expr)?),* $(,)?) => {
@@ -74,20 +86,36 @@ async fn assert_error(server: &mut TestAppServer, request_id: i64, message: &str
     Ok(())
 }
 
-async fn assert_protected_update(server: &mut TestAppServer) -> Result<()> {
+async fn assert_protected_update(
+    server: &mut TestAppServer,
+    expected_policy: AskForApproval,
+) -> Result<()> {
     let updated: SettingsUpdated =
         timeout(TIMEOUT, server.read_notification("thread/settings/updated")).await??;
     let settings = updated.thread_settings;
-    assert_protected(
+    assert_protected_with_policy(
         &settings.model,
         settings.approval_policy,
         settings.approvals_reviewer,
+        expected_policy,
     );
     Ok(())
 }
 
 fn assert_protected(model: &str, policy: AskForApproval, reviewer: ApprovalsReviewer) {
-    assert_eq!((model, policy, reviewer), (MODEL, OnRequest, AutoReview));
+    assert_protected_with_policy(model, policy, reviewer, OnRequest);
+}
+
+fn assert_protected_with_policy(
+    model: &str,
+    policy: AskForApproval,
+    reviewer: ApprovalsReviewer,
+    expected_policy: AskForApproval,
+) {
+    assert_eq!(
+        (model, policy, reviewer),
+        (MODEL, expected_policy, AutoReview)
+    );
 }
 
 #[tokio::test]
@@ -101,6 +129,21 @@ async fn thread_start_enforces_protected_model_auto_review() -> Result<()> {
         started.approval_policy,
         started.approvals_reviewer,
     );
+    for approval_policy in APPROVAL_POLICIES {
+        let started = server
+            .start_thread(params!(
+                StartParams,
+                model = Some(MODEL.to_string()),
+                approval_policy = Some(approval_policy),
+            ))
+            .await?;
+        assert_protected_with_policy(
+            &started.model,
+            started.approval_policy,
+            started.approvals_reviewer,
+            approval_policy,
+        );
+    }
     for (approval_policy, approvals_reviewer) in UNSAFE {
         let started = server
             .start_thread(params!(
@@ -125,10 +168,11 @@ async fn thread_start_enforces_protected_model_auto_review() -> Result<()> {
             sandbox = Some(SandboxMode::DangerFullAccess),
         ))
         .await?;
-    assert_protected(
+    assert_protected_with_policy(
         &started.model,
         started.approval_policy,
         started.approvals_reviewer,
+        Never,
     );
     assert!(matches!(
         started.sandbox,
@@ -162,7 +206,7 @@ async fn thread_and_turn_settings_enforce_protected_model_auto_review() -> Resul
         ))
         .await?;
     let _: UpdateResponse = timeout(TIMEOUT, server.read_response(id)).await??;
-    assert_protected_update(&mut server).await?;
+    assert_protected_update(&mut server, OnRequest).await?;
     for (approval_policy, approvals_reviewer) in UNSAFE {
         let id = server
             .send_thread_settings_update_request(params!(
@@ -173,6 +217,17 @@ async fn thread_and_turn_settings_enforce_protected_model_auto_review() -> Resul
             ))
             .await?;
         assert_error(&mut server, id, "you need to use auto review").await?;
+    }
+    for approval_policy in APPROVAL_POLICIES {
+        let id = server
+            .send_thread_settings_update_request(params!(
+                UpdateParams,
+                thread_id = thread.id.clone(),
+                approval_policy = Some(approval_policy),
+            ))
+            .await?;
+        let _: UpdateResponse = timeout(TIMEOUT, server.read_response(id)).await??;
+        assert_protected_update(&mut server, approval_policy).await?;
     }
     let id = server
         .send_thread_settings_update_request(params!(
@@ -209,7 +264,27 @@ async fn thread_and_turn_settings_enforce_protected_model_auto_review() -> Resul
         ))
         .await?;
     let _: TurnResponse = timeout(TIMEOUT, server.read_response(id)).await??;
-    assert_protected_update(&mut server).await
+    assert_protected_update(&mut server, OnRequest).await?;
+
+    for approval_policy in APPROVAL_POLICIES {
+        let policy_turn_thread = server
+            .start_thread(params!(
+                StartParams,
+                approval_policy = Some(approval_policy)
+            ))
+            .await?
+            .thread;
+        let id = server
+            .send_turn_start_request(params!(
+                TurnParams,
+                thread_id = policy_turn_thread.id,
+                model = Some(MODEL.to_string()),
+            ))
+            .await?;
+        let _: TurnResponse = timeout(TIMEOUT, server.read_response(id)).await??;
+        assert_protected_update(&mut server, approval_policy).await?;
+    }
+    Ok(())
 }
 
 #[tokio::test]
@@ -257,7 +332,12 @@ async fn thread_resume_and_fork_upgrade_legacy_protected_model_settings() -> Res
         ))
         .await?;
     let fork: ForkResponse = timeout(TIMEOUT, server.read_response(id)).await??;
-    assert_protected(&fork.model, fork.approval_policy, fork.approvals_reviewer);
+    assert_protected_with_policy(
+        &fork.model,
+        fork.approval_policy,
+        fork.approvals_reviewer,
+        Never,
+    );
     let id = server
         .send_thread_fork_request(params!(
             ForkParams,
@@ -276,19 +356,21 @@ async fn thread_resume_and_fork_upgrade_legacy_protected_model_settings() -> Res
         ))
         .await?;
     let resumed: ResumeResponse = timeout(TIMEOUT, server.read_response(id)).await??;
-    assert_protected(
+    assert_protected_with_policy(
         &resumed.model,
         resumed.approval_policy,
         resumed.approvals_reviewer,
+        Never,
     );
     let id = server
         .send_thread_resume_request(params!(ResumeParams, thread_id))
         .await?;
     let resumed: ResumeResponse = timeout(TIMEOUT, server.read_response(id)).await??;
-    assert_protected(
+    assert_protected_with_policy(
         &resumed.model,
         resumed.approval_policy,
         resumed.approvals_reviewer,
+        Never,
     );
     Ok(())
 }

@@ -613,11 +613,6 @@ impl Session {
                 }
             }
             config
-                .permissions
-                .approval_policy
-                .set(AskForApproval::OnRequest)
-                .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
-            config
                 .config_layer_stack
                 .requirements()
                 .approvals_reviewer

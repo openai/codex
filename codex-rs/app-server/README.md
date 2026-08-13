@@ -876,7 +876,7 @@ required_on_models = ["protected-model"]
 ignore_rules = ["protected-model"]
 ```
 
-Models in `required_on_models` always start with `approvalPolicy: "on-request"` and `approvalsReviewer: "auto_review"`, even when clients provide incompatible startup values. Full Access is automatically downgraded to workspace-write access. Incompatible runtime overrides or disabled Guardian automatic review are rejected. Models in `ignore_rules` ignore saved command-prefix approvals.
+Models in `required_on_models` use `approvalsReviewer: "auto_review"` while preserving any valid configured `approvalPolicy`. Full Access is downgraded to workspace-write access. Incompatible runtime overrides or disabled Guardian automatic review are rejected. Models in `ignore_rules` ignore saved command-prefix approvals.
 
 ```json
 { "method": "turn/start", "id": 30, "params": {

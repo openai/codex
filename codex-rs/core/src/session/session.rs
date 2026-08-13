@@ -261,8 +261,7 @@ impl SessionConfiguration {
             return Ok(());
         }
 
-        if self.approval_policy.value() == AskForApproval::OnRequest
-            && self.approvals_reviewer == ApprovalsReviewer::AutoReview
+        if self.approvals_reviewer == ApprovalsReviewer::AutoReview
             && !self
                 .file_system_sandbox_policy(environments)
                 .has_full_disk_write_access()
@@ -351,21 +350,15 @@ impl SessionConfiguration {
                 .config_layer_stack
                 .requirements()
                 .auto_review_required_for_model(next_configuration.collaboration_mode.model())
+            && updates.approvals_reviewer.is_none()
         {
-            if updates.approval_policy.is_none() {
-                next_configuration
-                    .approval_policy
-                    .set(AskForApproval::OnRequest)?;
-            }
-            if updates.approvals_reviewer.is_none() {
-                next_configuration
-                    .original_config_do_not_use
-                    .config_layer_stack
-                    .requirements()
-                    .approvals_reviewer
-                    .can_set(&ApprovalsReviewer::AutoReview)?;
-                next_configuration.approvals_reviewer = ApprovalsReviewer::AutoReview;
-            }
+            next_configuration
+                .original_config_do_not_use
+                .config_layer_stack
+                .requirements()
+                .approvals_reviewer
+                .can_set(&ApprovalsReviewer::AutoReview)?;
+            next_configuration.approvals_reviewer = ApprovalsReviewer::AutoReview;
         }
         if let Some(windows_sandbox_level) = updates.windows_sandbox_level {
             next_configuration.windows_sandbox_level = windows_sandbox_level;
