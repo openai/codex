@@ -18,6 +18,7 @@ use std::io::Write;
 use std::net::Ipv4Addr;
 use std::net::TcpListener;
 use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::PermissionsExt;
 use std::process::Output;
 use std::process::Stdio;
 use std::time::Duration;
@@ -82,7 +83,9 @@ async fn should_skip_bwrap_tests() -> bool {
         NETWORK_TIMEOUT_MS,
     )
     .await;
+    let stderr = String::from_utf8_lossy(&output.stderr);
     is_bwrap_unavailable_output(&output)
+        || (!output.status.success() && is_managed_proxy_permission_error(stderr.as_ref()))
 }
 
 fn is_managed_proxy_permission_error(stderr: &str) -> bool {
@@ -169,6 +172,207 @@ fn linux_sandbox_command(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     cmd
+}
+
+#[tokio::test]
+async fn sandboxed_commands_have_a_seccomp_filtered_namespace_reaper() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bubblewrap is unavailable");
+        return;
+    }
+
+    let mut env = create_env_from_core_vars();
+    strip_proxy_env(&mut env);
+
+    assert_seccomp_filtered_namespace_reaper(
+        &PermissionProfile::read_only(),
+        /*allow_network_for_proxy*/ false,
+        env,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn managed_proxy_commands_have_a_seccomp_filtered_namespace_reaper() {
+    if let Some(skip_reason) = managed_proxy_skip_reason().await {
+        eprintln!("skipping managed proxy test: {skip_reason}");
+        return;
+    }
+
+    let mut env = create_env_from_core_vars();
+    strip_proxy_env(&mut env);
+    env.insert("HTTP_PROXY".to_string(), "http://127.0.0.1:9".to_string());
+
+    for permission_profile in [PermissionProfile::read_only(), PermissionProfile::Disabled] {
+        assert_seccomp_filtered_namespace_reaper(
+            &permission_profile,
+            /*allow_network_for_proxy*/ true,
+            env.clone(),
+        )
+        .await;
+    }
+}
+
+async fn assert_seccomp_filtered_namespace_reaper(
+    permission_profile: &PermissionProfile,
+    allow_network_for_proxy: bool,
+    env: HashMap<String, String>,
+) {
+    let inherited_seccomp_filters = std::fs::read_to_string("/proc/self/status")
+        .expect("test process status should be readable")
+        .lines()
+        .find_map(|line| line.strip_prefix("Seccomp_filters:"))
+        .and_then(|count| count.trim().parse::<usize>().ok())
+        .expect("test process status should expose its seccomp filter count");
+
+    let output = run_linux_sandbox_direct(
+        &[
+            "bash",
+            "-c",
+            "if [ \"$(readlink /proc/1/ns/pid 2>/dev/null)\" != \"$(readlink /proc/self/ns/pid 2>/dev/null)\" ]; then printf 'namespace proc unavailable\\n'; exit 0; fi; printf '%s\\n' \"$PPID\"; awk '$1 == \"Seccomp:\" && FNR == NR { print $2 } $1 == \"Seccomp_filters:\" { print $2 }' /proc/1/status /proc/self/status",
+        ],
+        permission_profile,
+        allow_network_for_proxy,
+        env,
+        NETWORK_TIMEOUT_MS,
+    )
+    .await;
+
+    assert_eq!(
+        output.status.success(),
+        true,
+        "sandboxed command should execute; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    if output.stdout == b"namespace proc unavailable\n" {
+        eprintln!("skipping namespace reaper check: a namespaced proc mount is unavailable");
+        return;
+    }
+    let expected_filter_count = inherited_seccomp_filters + 1;
+    assert_eq!(
+        output.stdout,
+        format!("1\n2\n{expected_filter_count}\n{expected_filter_count}\n").as_bytes()
+    );
+}
+
+#[tokio::test]
+async fn namespace_reaper_collects_orphaned_descendants() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bubblewrap is unavailable");
+        return;
+    }
+
+    let mut env = create_env_from_core_vars();
+    strip_proxy_env(&mut env);
+
+    let output = run_linux_sandbox_direct(
+        &[
+            "bash",
+            "-c",
+            "if [ \"$(readlink /proc/1/ns/pid 2>/dev/null)\" != \"$(readlink /proc/self/ns/pid 2>/dev/null)\" ]; then printf 'namespace proc unavailable\\n'; exit 0; fi; orphan=$(bash -c 'sleep 0.05 </dev/null >/dev/null 2>&1 & printf \"%s\\n\" \"$!\"'); for _ in $(seq 1 100); do if [ ! -e \"/proc/$orphan\" ]; then printf 'orphan reaped\\n'; exit 0; fi; sleep 0.01; done; exit 1",
+        ],
+        &PermissionProfile::read_only(),
+        /*allow_network_for_proxy*/ false,
+        env,
+        NETWORK_TIMEOUT_MS,
+    )
+    .await;
+
+    assert_eq!(
+        output.status.success(),
+        true,
+        "namespace init should reap orphaned descendants; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    if output.stdout == b"namespace proc unavailable\n" {
+        eprintln!("skipping orphan reaping check: a namespaced proc mount is unavailable");
+        return;
+    }
+    assert_eq!(output.stdout, b"orphan reaped\n");
+}
+
+#[tokio::test]
+async fn unsupported_system_bwrap_falls_back_to_bundled_bwrap() {
+    if option_env!("CODEX_BWRAP_SHA256")
+        .is_some_and(|digest| digest.chars().any(|character| character != '0'))
+    {
+        eprintln!("skipping system bwrap fallback test: bundled binaries require a release digest");
+        return;
+    }
+
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bubblewrap is unavailable");
+        return;
+    }
+
+    let Some(system_bwrap) = codex_sandboxing::find_system_bwrap_in_path() else {
+        eprintln!("skipping system bwrap fallback test: no system bubblewrap is available");
+        return;
+    };
+
+    let tempdir = tempfile::tempdir().expect("create isolated sandbox installation");
+    let sandbox_executable = tempdir.path().join("codex-linux-sandbox");
+    let original_executable = env!("CARGO_BIN_EXE_codex-linux-sandbox");
+    if std::fs::hard_link(original_executable, &sandbox_executable).is_err() {
+        std::fs::copy(original_executable, &sandbox_executable).expect("copy sandbox executable");
+    }
+
+    let resources_dir = tempdir.path().join("codex-resources");
+    std::fs::create_dir(&resources_dir).expect("create bundled resource directory");
+    std::os::unix::fs::symlink(&system_bwrap, resources_dir.join("bwrap"))
+        .expect("install bundled bubblewrap");
+
+    let system_dir = tempdir.path().join("system");
+    std::fs::create_dir(&system_dir).expect("create fake system binary directory");
+    let unsupported_bwrap = system_dir.join("bwrap");
+    std::fs::write(
+        &unsupported_bwrap,
+        "#!/bin/sh\nif [ \"$1\" = \"--help\" ]; then printf '%s\\n' '--perms'; exit 0; fi\nexit 91\n",
+    )
+    .expect("write unsupported system bubblewrap");
+    std::fs::set_permissions(&unsupported_bwrap, std::fs::Permissions::from_mode(0o755))
+        .expect("make unsupported system bubblewrap executable");
+
+    let mut env = create_env_from_core_vars();
+    strip_proxy_env(&mut env);
+    let original_path = env.get("PATH").cloned().unwrap_or_default();
+    env.insert(
+        "PATH".to_string(),
+        format!("{}:{original_path}", system_dir.display()),
+    );
+
+    let cwd = std::env::current_dir().expect("current directory should exist");
+    let permission_profile =
+        serde_json::to_string(&PermissionProfile::read_only()).expect("serialize profile");
+    let output = tokio::time::timeout(
+        Duration::from_millis(NETWORK_TIMEOUT_MS),
+        Command::new(&sandbox_executable)
+            .args([
+                "--sandbox-policy-cwd",
+                cwd.to_str().expect("UTF-8 current directory"),
+                "--permission-profile",
+                &permission_profile,
+                "--",
+                "bash",
+                "-c",
+                "printf 'bundled fallback\\n'",
+            ])
+            .current_dir(&cwd)
+            .env_clear()
+            .envs(env)
+            .output(),
+    )
+    .await
+    .expect("bundled bubblewrap should not time out")
+    .expect("sandbox command should execute");
+
+    assert_eq!(
+        output.status.success(),
+        true,
+        "unsupported system bubblewrap should fall back to bundled bubblewrap; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"bundled fallback\n");
 }
 
 #[tokio::test]

@@ -118,17 +118,17 @@ fn cleanup_proxy_socket_dir(socket_dir: &Path) -> io::Result<()> {
     }
 }
 
-pub(crate) fn harden_bridge_process() -> io::Result<()> {
+pub(crate) fn harden_bridge_process(expected_parent_pid: libc::pid_t) -> io::Result<()> {
     detach_bridge_stdio()?;
-    set_parent_death_signal()?;
+    set_parent_death_signal(expected_parent_pid)?;
     codex_process_hardening::disable_process_dumping()
 }
 
-fn set_parent_death_signal() -> io::Result<()> {
+fn set_parent_death_signal(expected_parent_pid: libc::pid_t) -> io::Result<()> {
     let res = unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) };
     if res != 0 {
         Err(io::Error::last_os_error())
-    } else if unsafe { libc::getppid() } == 1 {
+    } else if unsafe { libc::getppid() } != expected_parent_pid {
         Err(io::Error::other("parent process already exited"))
     } else {
         Ok(())

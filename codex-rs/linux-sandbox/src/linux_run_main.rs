@@ -198,7 +198,40 @@ pub fn run_main() -> ! {
         ) {
             panic!("error applying Linux sandbox restrictions: {e:?}");
         }
-        exec_or_panic(command);
+
+        let signal_mask = ForwardedSignalMask::block();
+        let command_pid = unsafe { libc::fork() };
+        if command_pid < 0 {
+            let err = std::io::Error::last_os_error();
+            panic!("failed to fork sandboxed command: {err}");
+        }
+
+        if command_pid == 0 {
+            reset_forwarded_signal_handlers_to_default();
+            signal_mask.restore();
+            exec_or_panic(command);
+        }
+
+        let signal_forwarders = install_bwrap_signal_forwarders(command_pid);
+        signal_mask.restore();
+        loop {
+            let mut status = 0;
+            let reaped_pid = unsafe { libc::waitpid(-1, &mut status, 0) };
+            if reaped_pid == command_pid {
+                let exit_signal_mask = ForwardedSignalMask::block();
+                signal_forwarders.restore();
+                exit_signal_mask.restore();
+                exit_with_wait_status(status);
+            }
+            if reaped_pid >= 0 {
+                continue;
+            }
+
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() != Some(libc::EINTR) {
+                panic!("failed to reap sandboxed child: {err}");
+            }
+        }
     }
 
     if file_system_sandbox_policy.has_full_disk_write_access() && !allow_network_for_proxy {

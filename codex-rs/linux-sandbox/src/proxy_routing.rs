@@ -377,6 +377,7 @@ fn spawn_host_bridge(
     attribution_token: Option<&str>,
 ) -> io::Result<libc::pid_t> {
     let (read_fd, write_fd) = create_ready_pipe()?;
+    let parent_pid = unsafe { libc::getpid() };
     let pid = unsafe { libc::fork() };
     if pid < 0 {
         let err = io::Error::last_os_error();
@@ -389,7 +390,7 @@ fn spawn_host_bridge(
         if close_fd(read_fd).is_err() {
             unsafe { libc::_exit(1) };
         }
-        let result = run_host_bridge(endpoint, uds_path, write_fd, attribution_token);
+        let result = run_host_bridge(endpoint, uds_path, write_fd, attribution_token, parent_pid);
         if result.is_err() {
             unsafe { libc::_exit(1) };
         }
@@ -413,8 +414,9 @@ fn run_host_bridge(
     uds_path: &Path,
     ready_fd: libc::c_int,
     attribution_token: Option<&str>,
+    parent_pid: libc::pid_t,
 ) -> io::Result<()> {
-    harden_bridge_process()?;
+    harden_bridge_process(parent_pid)?;
     if uds_path.exists() {
         std::fs::remove_file(uds_path)?;
     }
@@ -447,6 +449,7 @@ fn run_host_bridge(
 
 fn spawn_local_bridge(uds_path: &Path) -> io::Result<u16> {
     let (read_fd, write_fd) = create_ready_pipe()?;
+    let parent_pid = unsafe { libc::getpid() };
     let pid = unsafe { libc::fork() };
     if pid < 0 {
         let err = io::Error::last_os_error();
@@ -459,7 +462,7 @@ fn spawn_local_bridge(uds_path: &Path) -> io::Result<u16> {
         if close_fd(read_fd).is_err() {
             unsafe { libc::_exit(1) };
         }
-        let result = run_local_bridge(uds_path, write_fd);
+        let result = run_local_bridge(uds_path, write_fd, parent_pid);
         if result.is_err() {
             unsafe { libc::_exit(1) };
         }
@@ -473,8 +476,12 @@ fn spawn_local_bridge(uds_path: &Path) -> io::Result<u16> {
     Ok(u16::from_be_bytes(port_bytes))
 }
 
-fn run_local_bridge(uds_path: &Path, ready_fd: libc::c_int) -> io::Result<()> {
-    harden_bridge_process()?;
+fn run_local_bridge(
+    uds_path: &Path,
+    ready_fd: libc::c_int,
+    parent_pid: libc::pid_t,
+) -> io::Result<()> {
+    harden_bridge_process(parent_pid)?;
     let listener = bind_local_loopback_listener()?;
     let port = listener.local_addr()?.port();
 

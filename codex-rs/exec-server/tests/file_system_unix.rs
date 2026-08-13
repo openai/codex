@@ -117,7 +117,7 @@ set -euo pipefail
 
 for arg in "$@"; do
   if [[ "${arg}" == "--help" ]]; then
-    echo "Usage: bwrap --argv0 --perms"
+    echo "Usage: bwrap --argv0 --perms --as-pid-1"
     exit 0
   fi
 done
