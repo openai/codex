@@ -3700,7 +3700,7 @@ fn mcp_init_error_display_prompts_for_github_pat() {
     };
     let err: StartupOutcomeError = anyhow::anyhow!("OAuth is unsupported").into();
 
-    let display = mcp_init_error_display(server_name, Some(&config), &err);
+    let display = mcp_init_error_display(server_name, Some(&config), &err, /*reason*/ None);
 
     let expected = format!(
         "GitHub MCP does not support OAuth. Log in by adding a personal access token (https://github.com/settings/personal-access-tokens) to your environment and config.toml:\n[mcp_servers.{server_name}]\nbearer_token_env_var = CODEX_GITHUB_PERSONAL_ACCESS_TOKEN"
@@ -3728,15 +3728,59 @@ fn mcp_init_error_display_prompts_for_login_when_auth_required() {
             is_authentication_required: true,
         },
     ] {
-        let display = mcp_init_error_display(server_name, /*config*/ None, &error);
+        let display = mcp_init_error_display(
+            server_name,
+            /*config*/ None,
+            &error,
+            /*reason*/ None,
+        );
         assert_eq!(expected, display);
 
-        let executor_display = mcp_init_error_display(server_name, Some(&executor_config), &error);
+        let executor_display = mcp_init_error_display(
+            server_name,
+            Some(&executor_config),
+            &error,
+            /*reason*/ None,
+        );
         assert_eq!(
             format!(
                 "The {server_name} MCP server is not logged in. Use your client's MCP OAuth sign-in flow."
             ),
             executor_display
+        );
+    }
+}
+
+#[test]
+fn mcp_init_error_display_identifies_oauth_reauthentication() {
+    let server_name = "example";
+    let error = StartupOutcomeError::Failed {
+        error: "authorization required: Bearer error=\"invalid_token\"".to_string(),
+        is_authentication_required: true,
+    };
+    let executor_config: McpServerConfig = serde_json::from_value(serde_json::json!({
+        "url": "https://example.com/mcp",
+        "environment_id": "executor-1",
+    }))
+    .expect("executor MCP configuration should deserialize");
+
+    for (config, recovery_hint) in [
+        (None, "Run `codex mcp login example`."),
+        (
+            Some(&executor_config),
+            "Use your client's MCP OAuth sign-in flow.",
+        ),
+    ] {
+        assert_eq!(
+            mcp_init_error_display(
+                server_name,
+                config,
+                &error,
+                Some(McpStartupFailureReason::ReauthenticationRequired),
+            ),
+            format!(
+                "The {server_name} MCP server requires OAuth reauthentication. {recovery_hint}"
+            ),
         );
     }
 }
@@ -3816,7 +3860,7 @@ fn mcp_init_error_display_reports_generic_errors() {
     };
     let err: StartupOutcomeError = anyhow::anyhow!("boom").into();
 
-    let display = mcp_init_error_display(server_name, Some(&config), &err);
+    let display = mcp_init_error_display(server_name, Some(&config), &err, /*reason*/ None);
 
     let expected = format!("MCP client for `{server_name}` failed to start: {err:#}");
 
@@ -3832,7 +3876,12 @@ fn mcp_init_error_display_includes_startup_timeout_hint() {
     ] {
         let err: StartupOutcomeError = anyhow::anyhow!(error).into();
 
-        let display = mcp_init_error_display(server_name, /*config*/ None, &err);
+        let display = mcp_init_error_display(
+            server_name,
+            /*config*/ None,
+            &err,
+            /*reason*/ None,
+        );
 
         assert_eq!(
             "MCP client for `slow` timed out after 30 seconds. Add or adjust `startup_timeout_sec` in your config.toml:\n[mcp_servers.slow]\nstartup_timeout_sec = XX",

@@ -413,17 +413,19 @@ impl McpConnectionSet {
                         },
                     );
                     if let Some(error) = unchanged_auth_failure {
+                        let reason = connection_identity
+                            .oauth_credentials()
+                            .ok()
+                            .flatten()
+                            .map(|_| McpStartupFailureReason::ReauthenticationRequired);
                         let status = McpStartupStatus::Failed {
                             error: mcp_init_error_display(
                                 &server_name,
                                 Some(&configured_config),
                                 &error,
+                                reason,
                             ),
-                            reason: connection_identity
-                                .oauth_credentials()
-                                .ok()
-                                .flatten()
-                                .map(|_| McpStartupFailureReason::ReauthenticationRequired),
+                            reason,
                         };
                         let tx_event = tx_event.clone();
                         let submit_id = startup_submit_id.clone();
@@ -603,6 +605,7 @@ impl McpConnectionSet {
                                 server_name.as_str(),
                                 Some(&configured_config),
                                 error,
+                                reason,
                             );
                             McpStartupStatus::Failed {
                                 error: error_str,

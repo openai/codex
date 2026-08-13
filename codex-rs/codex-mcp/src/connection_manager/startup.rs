@@ -76,6 +76,7 @@ pub(super) fn mcp_init_error_display(
     server_name: &str,
     config: Option<&McpServerConfig>,
     error: &StartupOutcomeError,
+    reason: Option<McpStartupFailureReason>,
 ) -> String {
     if let Some(McpServerTransportConfig::StreamableHttp {
         url,
@@ -101,7 +102,13 @@ pub(super) fn mcp_init_error_display(
         } else {
             format!("Run `codex mcp login {server_name}`.")
         };
-        format!("The {server_name} MCP server is not logged in. {recovery_hint}")
+        let auth_status = match reason {
+            Some(McpStartupFailureReason::ReauthenticationRequired) => {
+                "requires OAuth reauthentication"
+            }
+            None => "is not logged in",
+        };
+        format!("The {server_name} MCP server {auth_status}. {recovery_hint}")
     } else if matches!(
         error,
         StartupOutcomeError::Failed { error, .. }

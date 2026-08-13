@@ -3289,13 +3289,22 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
         .build_with_auto_env(&server)
         .await?;
     // Phase 5: replace rejected credentials as an external OAuth login would.
-    let mut failure_reason = None;
+    let recovery_hint = if credential_config.is_local_environment() {
+        format!("Run `codex mcp login {server_name}`.")
+    } else {
+        "Use your client's MCP OAuth sign-in flow.".to_string()
+    };
+    let expected_failure = (
+        format!("The {server_name} MCP server requires OAuth reauthentication. {recovery_hint}"),
+        Some(McpStartupFailureReason::ReauthenticationRequired),
+    );
+    let mut failure = None;
     let startup = wait_for_event(&fixture.codex, |event| {
         if let EventMsg::McpStartupUpdate(update) = event
             && update.server == server_name
-            && let McpStartupStatus::Failed { reason, .. } = &update.status
+            && let McpStartupStatus::Failed { error, reason } = &update.status
         {
-            failure_reason = *reason;
+            failure = Some((error.clone(), *reason));
         }
         matches!(event, EventMsg::McpStartupComplete(_))
     })
@@ -3305,10 +3314,7 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
     };
     assert_eq!(startup.failed.len(), 1);
     assert_eq!(startup.failed[0].server, server_name);
-    assert_eq!(
-        failure_reason,
-        Some(McpStartupFailureReason::ReauthenticationRequired),
-    );
+    assert_eq!(failure, Some(expected_failure.clone()));
 
     let store_lock = fs::OpenOptions::new()
         .read(true)
@@ -3322,23 +3328,23 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
             "continue while OAuth credentials are locked",
         ))
         .await?;
-    let (contended_turn, refreshed_failure_reason, refreshed_failed_servers) =
+    let (contended_turn, refreshed_failure, refreshed_failed_servers) =
         tokio::time::timeout(Duration::from_secs(5), async {
             let mut contended_turn = None;
-            let mut refreshed_failure_reason = None;
+            let mut refreshed_failure = None;
             let mut refreshed_failed_servers = None;
             let mut refreshed_starting = false;
             while contended_turn.is_none()
-                || refreshed_failure_reason.is_none()
+                || refreshed_failure.is_none()
                 || refreshed_failed_servers.is_none()
             {
                 match fixture.codex.next_event().await?.msg {
                     EventMsg::McpStartupUpdate(update) if update.server == server_name => {
                         match update.status {
                             McpStartupStatus::Starting => refreshed_starting = true,
-                            McpStartupStatus::Failed { reason, .. } => {
+                            McpStartupStatus::Failed { error, reason } => {
                                 assert!(refreshed_starting);
-                                refreshed_failure_reason = Some(reason);
+                                refreshed_failure = Some((error, reason));
                             }
                             McpStartupStatus::Ready | McpStartupStatus::Cancelled => {}
                         }
@@ -3352,16 +3358,13 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
             }
             Ok::<_, anyhow::Error>((
                 contended_turn.expect("turn completion was observed"),
-                refreshed_failure_reason.expect("failure status was observed"),
+                refreshed_failure.expect("failure status was observed"),
                 refreshed_failed_servers.expect("startup summary was observed"),
             ))
         })
         .await
         .context("OAuth credential-store contention blocked the user turn or startup status")??;
-    assert_eq!(
-        refreshed_failure_reason,
-        Some(McpStartupFailureReason::ReauthenticationRequired),
-    );
+    assert_eq!(refreshed_failure, expected_failure);
     assert_eq!(
         refreshed_failed_servers
             .into_iter()
