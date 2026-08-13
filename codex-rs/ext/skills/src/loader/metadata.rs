@@ -62,6 +62,14 @@ struct DependencyTool {
     transport: Option<String>,
     command: Option<String>,
     url: Option<String>,
+    oauth: Option<DependencyOAuth>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DependencyOAuth {
+    #[serde(alias = "callback_port")]
+    callback_port: Option<u16>,
 }
 
 pub(super) async fn load_host_skill_metadata(
@@ -186,6 +194,7 @@ fn resolve_dependency_tool(tool: DependencyTool) -> Option<SkillToolDependency> 
         "dependencies.tools.command",
     );
     let url = resolve_str(tool.url, MAX_DEPENDENCY_URL_LEN, "dependencies.tools.url");
+    let oauth_callback_port = tool.oauth.and_then(|oauth| oauth.callback_port);
 
     Some(SkillToolDependency {
         r#type,
@@ -194,6 +203,7 @@ fn resolve_dependency_tool(tool: DependencyTool) -> Option<SkillToolDependency> 
         transport,
         command,
         url,
+        oauth_callback_port,
     })
 }
 

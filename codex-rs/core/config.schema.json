@@ -1592,6 +1592,12 @@
       "additionalProperties": false,
       "description": "OAuth client settings used when Codex launches an MCP OAuth flow.",
       "properties": {
+        "callback_port": {
+          "description": "Fixed callback port that takes precedence over Codex's global OAuth callback port.",
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
         "client_id": {
           "description": "Explicit OAuth client identifier to present during authorization and token exchange.",
           "type": "string"

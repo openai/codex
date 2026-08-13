@@ -1056,6 +1056,7 @@ fn blocking_replace_mcp_servers_round_trips() {
             scopes: None,
             oauth: Some(McpServerOAuthConfig {
                 client_id: Some("eci-prd-pub-codex-123".to_string()),
+                callback_port: Some(9876),
             }),
             oauth_resource: Some("https://resource.example.com".to_string()),
             tools: HashMap::new(),
@@ -1084,6 +1085,7 @@ Z-Header = \"z\"
 
 [mcp_servers.http.oauth]
 client_id = \"eci-prd-pub-codex-123\"
+callback_port = 9876
 
 [mcp_servers.stdio]
 command = \"cmd\"

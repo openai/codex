@@ -210,7 +210,7 @@ impl McpRequestProcessor {
             client_registration,
             server.oauth_resource.as_deref(),
             timeout_secs,
-            mcp_config.mcp_oauth_callback_port,
+            server.oauth_callback_port(mcp_config.mcp_oauth_callback_port),
             mcp_config.mcp_oauth_callback_url.as_deref(),
             http_client,
             redirect_mode,

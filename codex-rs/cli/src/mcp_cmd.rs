@@ -429,6 +429,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
             .clone()
             .map(|client_id| McpServerOAuthConfig {
                 client_id: Some(client_id),
+                callback_port: None,
             }),
         oauth_resource: oauth_resource.clone(),
         tools: HashMap::new(),
@@ -593,7 +594,7 @@ async fn run_login(config: &Config, login_args: LoginArgs) -> Result<()> {
         server.oauth_client_id(),
         client_registration,
         server.oauth_resource.as_deref(),
-        config.mcp_oauth_callback_port,
+        server.oauth_callback_port(config.mcp_oauth_callback_port),
         config.mcp_oauth_callback_url.as_deref(),
         http_client,
     )

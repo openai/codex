@@ -14,6 +14,7 @@ fn dependency_names_outrank_description_only_matches() {
             transport: None,
             command: None,
             url: None,
+            oauth_callback_port: None,
         }],
     };
     let documents = [
@@ -80,6 +81,7 @@ fn dependency_records_are_bounded() {
             transport: None,
             command: None,
             url: None,
+            oauth_callback_port: None,
         })
         .collect::<Vec<_>>();
     tools.push(SkillToolDependency {
@@ -89,6 +91,7 @@ fn dependency_records_are_bounded() {
         transport: None,
         command: None,
         url: None,
+        oauth_callback_port: None,
     });
     let dependencies = SkillDependencies { tools };
     let document = SkillSelectionDocument {

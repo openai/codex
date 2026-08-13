@@ -147,14 +147,20 @@ fn serialize_mcp_server_table(config: &McpServerConfig) -> TomlTable {
     {
         entry["scopes"] = array_from_iter(scopes.iter().cloned());
     }
-    if let Some(oauth) = &config.oauth
-        && let Some(client_id) = &oauth.client_id
-        && !client_id.is_empty()
-    {
+    if let Some(oauth) = &config.oauth {
         let mut oauth_table = TomlTable::new();
         oauth_table.set_implicit(false);
-        oauth_table["client_id"] = value(client_id.clone());
-        entry["oauth"] = TomlItem::Table(oauth_table);
+        if let Some(client_id) = &oauth.client_id
+            && !client_id.is_empty()
+        {
+            oauth_table["client_id"] = value(client_id.clone());
+        }
+        if let Some(callback_port) = oauth.callback_port {
+            oauth_table["callback_port"] = value(i64::from(callback_port));
+        }
+        if !oauth_table.is_empty() {
+            entry["oauth"] = TomlItem::Table(oauth_table);
+        }
     }
     if let Some(resource) = &config.oauth_resource
         && !resource.is_empty()

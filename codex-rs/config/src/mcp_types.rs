@@ -145,6 +145,10 @@ pub struct McpServerOAuthConfig {
     /// Explicit OAuth client identifier to present during authorization and token exchange.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_id: Option<String>,
+
+    /// Fixed callback port that takes precedence over Codex's global OAuth callback port.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub callback_port: Option<u16>,
 }
 
 /// Authentication flow Codex attempts after resolving an HTTP MCP server's
@@ -271,6 +275,18 @@ impl McpServerConfig {
         self.oauth
             .as_ref()
             .and_then(|oauth| oauth.client_id.as_deref())
+    }
+
+    pub fn oauth_callback_port(&self, global_callback_port: Option<u16>) -> Option<u16> {
+        let callback_port = self.oauth.as_ref().and_then(|oauth| oauth.callback_port);
+        if let Some(callback_port) = callback_port {
+            tracing::info!(
+                callback_port,
+                ?global_callback_port,
+                "using plugin-specific MCP OAuth callback port instead of the global callback port"
+            );
+        }
+        callback_port.or(global_callback_port)
     }
 }
 

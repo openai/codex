@@ -68,6 +68,7 @@ policy:
                     transport: Some("stdio".to_string()),
                     command: Some("deploy-mcp".to_string()),
                     url: None,
+                    oauth_callback_port: None,
                 }],
             }),
             policy: Some(SkillPolicy {

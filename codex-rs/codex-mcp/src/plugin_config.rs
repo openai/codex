@@ -266,12 +266,10 @@ fn normalize_plugin_mcp_server_value(
     }
 
     if let Some(JsonValue::Object(mut oauth)) = object.remove("oauth") {
-        if oauth.remove("callbackPort").is_some() {
-            let plugin_display = source.display();
-            warn!(
-                plugin = %plugin_display,
-                "plugin MCP server OAuth callbackPort is ignored; Codex uses global MCP OAuth callback settings"
-            );
+        if let Some(callback_port) = oauth.remove("callbackPort") {
+            oauth
+                .entry("callback_port".to_string())
+                .or_insert(callback_port);
         }
 
         if let Some(client_id) = oauth.remove("clientId") {

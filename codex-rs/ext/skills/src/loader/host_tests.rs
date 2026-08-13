@@ -117,6 +117,8 @@ async fn loads_host_frontmatter_dependencies_and_policy() {
     - type: mcp
       value: demo-tool
       description: Demo tool
+      oauth:
+        callbackPort: 3118
 policy:
   allow_implicit_invocation: false
   products: [codex, CHATGPT, atlas]
@@ -141,6 +143,7 @@ policy:
                     transport: None,
                     command: None,
                     url: None,
+                    oauth_callback_port: Some(3118),
                 }],
             }),
             policy: Some(SkillPolicy {

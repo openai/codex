@@ -1818,10 +1818,16 @@ async fn plugin_install_starts_mcp_oauth_through_configured_http_proxy() -> Resu
         .mount(&proxy)
         .await;
 
+    let plugin_callback_listener = TcpListener::bind("127.0.0.1:0").await?;
+    let plugin_callback_port = plugin_callback_listener.local_addr()?.port();
+    let global_callback_listener = TcpListener::bind("127.0.0.1:0").await?;
+    let global_callback_port = global_callback_listener.local_addr()?.port();
+    drop(plugin_callback_listener);
+
     let codex_home = TempDir::new()?;
     std::fs::write(
         codex_home.path().join("config.toml"),
-        "[features]\nplugins = true\n",
+        format!("mcp_oauth_callback_port = {global_callback_port}\n\n[features]\nplugins = true\n"),
     )?;
     let repo_root = TempDir::new()?;
     write_plugin_marketplace(
@@ -1833,7 +1839,18 @@ async fn plugin_install_starts_mcp_oauth_through_configured_http_proxy() -> Resu
         /*auth_policy*/ None,
     )?;
     write_plugin_source(repo_root.path(), "sample-plugin", &[])?;
-    write_plugin_mcp_config(repo_root.path(), "sample-plugin", resource_url)?;
+    std::fs::write(
+        repo_root.path().join("sample-plugin/.mcp.json"),
+        serde_json::to_vec_pretty(&json!({
+            "mcpServers": {
+                "sample-mcp": {
+                    "type": "http",
+                    "url": format!("{resource_url}/mcp"),
+                    "oauth": {"callbackPort": plugin_callback_port},
+                }
+            }
+        }))?,
+    )?;
     let marketplace_path =
         AbsolutePathBuf::try_from(repo_root.path().join(".agents/plugins/marketplace.json"))?;
 
@@ -1871,13 +1888,27 @@ async fn plugin_install_starts_mcp_oauth_through_configured_http_proxy() -> Resu
     )
     .await?;
 
-    let resource_metadata_requested = proxy
-        .received_requests()
-        .await
-        .unwrap_or_default()
+    let requests = proxy.received_requests().await.unwrap_or_default();
+    let resource_metadata_requested = requests
         .iter()
         .any(|request| request.url.path() == "/oauth-resource");
     assert!(resource_metadata_requested);
+
+    let registration_request = requests
+        .iter()
+        .find(|request| request.url.path() == "/oauth/register")
+        .expect("OAuth client registration request");
+    let registration: serde_json::Value = serde_json::from_slice(&registration_request.body)?;
+    let redirect_uri: Uri = registration["redirect_uris"][0]
+        .as_str()
+        .expect("OAuth client registration redirect URI")
+        .parse()?;
+    assert_eq!(
+        redirect_uri
+            .authority()
+            .and_then(axum::http::uri::Authority::port_u16),
+        Some(plugin_callback_port)
+    );
     Ok(())
 }
 

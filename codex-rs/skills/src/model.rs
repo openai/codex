@@ -90,6 +90,7 @@ pub struct SkillToolDependency {
     pub transport: Option<String>,
     pub command: Option<String>,
     pub url: Option<String>,
+    pub oauth_callback_port: Option<u16>,
 }
 
 fn matches_product_restriction(

@@ -364,6 +364,7 @@ fn deserialize_streamable_http_server_config_with_oauth_client_id() {
 
             [oauth]
             client_id = "eci-prd-pub-codex-123"
+            callback_port = 9876
         "#,
     )
     .expect("should deserialize http config with oauth client id");
@@ -372,8 +373,37 @@ fn deserialize_streamable_http_server_config_with_oauth_client_id() {
         cfg.oauth,
         Some(McpServerOAuthConfig {
             client_id: Some("eci-prd-pub-codex-123".to_string()),
+            callback_port: Some(9876),
         })
     );
+}
+
+#[test]
+fn oauth_callback_port_prefers_server_port_over_global_port() {
+    let cfg: McpServerConfig = toml::from_str(
+        r#"
+            url = "https://example.com/mcp"
+
+            [oauth]
+            callback_port = 9876
+        "#,
+    )
+    .expect("should deserialize http config with oauth callback port");
+
+    assert_eq!(cfg.oauth_callback_port(Some(4321)), Some(9876));
+}
+
+#[test]
+fn oauth_callback_port_falls_back_to_global_port() {
+    let cfg: McpServerConfig = toml::from_str(
+        r#"
+            url = "https://example.com/mcp"
+        "#,
+    )
+    .expect("should deserialize http config without oauth callback port");
+
+    assert_eq!(cfg.oauth_callback_port(Some(4321)), Some(4321));
+    assert_eq!(cfg.oauth_callback_port(/*global_callback_port*/ None), None);
 }
 
 #[test]

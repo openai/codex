@@ -76,6 +76,7 @@ fn connector_dependencies_make_generic_skills_discoverable() {
             transport: None,
             command: None,
             url: None,
+            oauth_callback_port: None,
         }],
     };
     let documents = [

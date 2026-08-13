@@ -582,6 +582,7 @@ fn declared_placement_preserves_local_plugin_normalization() {
         scopes: None,
         oauth: Some(McpServerOAuthConfig {
             client_id: Some("client-id".to_string()),
+            callback_port: Some(9876),
         }),
         oauth_resource: None,
         tools: HashMap::new(),

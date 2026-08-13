@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use codex_config::McpServerConfig;
+use codex_config::McpServerOAuthConfig;
 use codex_config::McpServerTransportConfig;
 use codex_config::load_global_mcp_servers;
 use codex_login::default_client::is_first_party_originator;
@@ -174,6 +175,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
         );
         let oauth_client_id = server_config.oauth_client_id();
         let oauth_credential_name = server_config.oauth_credential_name(&name);
+        let callback_port = server_config.oauth_callback_port(config.mcp_oauth_callback_port);
         let first_attempt = perform_oauth_login(
             oauth_credential_name.as_ref(),
             &oauth_config.url,
@@ -185,7 +187,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
             oauth_client_id,
             McpOAuthClientRegistration::Auto,
             server_config.oauth_resource.as_deref(),
-            config.mcp_oauth_callback_port,
+            callback_port,
             config.mcp_oauth_callback_url.as_deref(),
             Arc::clone(&http_client),
         )
@@ -204,7 +206,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
                     oauth_client_id,
                     McpOAuthClientRegistration::Auto,
                     server_config.oauth_resource.as_deref(),
-                    config.mcp_oauth_callback_port,
+                    callback_port,
                     config.mcp_oauth_callback_url.as_deref(),
                     Arc::clone(&http_client),
                 )
@@ -405,7 +407,12 @@ fn mcp_dependency_to_server_config(
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
-            oauth: None,
+            oauth: dependency
+                .oauth_callback_port
+                .map(|callback_port| McpServerOAuthConfig {
+                    client_id: None,
+                    callback_port: Some(callback_port),
+                }),
             oauth_resource: None,
             tools: HashMap::new(),
         });
