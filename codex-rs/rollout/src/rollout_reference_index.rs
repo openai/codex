@@ -1,13 +1,15 @@
 //! Indexes direct fork references found in local rollout files.
 
 use std::collections::HashMap;
-use std::collections::HashSet;
+use std::collections::hash_map::Entry;
 use std::io;
 use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
 
 use codex_protocol::RolloutId;
+use codex_protocol::ThreadId;
 use codex_protocol::protocol::HistoryPosition;
 
 use crate::ARCHIVED_SESSIONS_SUBDIR;
@@ -20,8 +22,15 @@ use crate::compression::RolloutFile;
 /// cheap inverse-reference questions without each reimplementing rollout discovery.
 #[derive(Debug, Default)]
 pub struct RolloutReferenceIndex {
-    history_base_by_rollout: HashMap<RolloutId, HistoryPosition>,
+    rollouts_by_id: HashMap<RolloutId, IndexedRollout>,
     reference_counts_by_rollout: HashMap<RolloutId, usize>,
+}
+
+#[derive(Debug)]
+struct IndexedRollout {
+    thread_id: ThreadId,
+    path: PathBuf,
+    history_base: Option<HistoryPosition>,
 }
 
 impl RolloutReferenceIndex {
@@ -64,15 +73,27 @@ impl RolloutReferenceIndex {
 
     /// Returns the direct history-base edge for `rollout_id`, if one was discovered.
     pub fn history_base(&self, rollout_id: RolloutId) -> Option<&HistoryPosition> {
-        self.history_base_by_rollout.get(&rollout_id)
+        self.rollouts_by_id
+            .get(&rollout_id)
+            .and_then(|rollout| rollout.history_base.as_ref())
+    }
+
+    /// Returns rollout IDs and paths whose session metadata belongs to `thread_id`.
+    pub fn rollouts_for_thread(
+        &self,
+        thread_id: ThreadId,
+    ) -> impl Iterator<Item = (RolloutId, &Path)> {
+        self.rollouts_by_id
+            .iter()
+            .filter(move |(_, rollout)| rollout.thread_id == thread_id)
+            .map(|(rollout_id, rollout)| (*rollout_id, rollout.path.as_path()))
     }
 
     async fn scan_with_deadline(
         codex_home: &Path,
         deadline: ScanDeadline,
     ) -> io::Result<Option<Self>> {
-        let mut history_base_by_rollout = HashMap::new();
-        let mut seen_rollout_ids = HashSet::new();
+        let mut rollouts_by_id = HashMap::new();
         let mut stack = vec![
             codex_home.join(ARCHIVED_SESSIONS_SUBDIR),
             codex_home.join(SESSIONS_SUBDIR),
@@ -111,17 +132,21 @@ impl RolloutReferenceIndex {
                 let Ok(meta) = crate::read_session_meta_line(rollout_file.path()).await else {
                     continue;
                 };
-                if !seen_rollout_ids.insert(rollout_id) {
-                    continue;
-                }
-                if let Some(history_base) = meta.meta.history_base {
-                    history_base_by_rollout.insert(rollout_id, history_base);
+                if let Entry::Vacant(entry) = rollouts_by_id.entry(rollout_id) {
+                    entry.insert(IndexedRollout {
+                        thread_id: meta.meta.id,
+                        path: rollout_file.into_path(),
+                        history_base: meta.meta.history_base,
+                    });
                 }
             }
         }
 
         let mut reference_counts_by_rollout = HashMap::new();
-        for (rollout_id, history_base) in &history_base_by_rollout {
+        for (rollout_id, rollout) in &rollouts_by_id {
+            let Some(history_base) = rollout.history_base else {
+                continue;
+            };
             if history_base.thread_id == *rollout_id {
                 continue;
             }
@@ -130,7 +155,7 @@ impl RolloutReferenceIndex {
                 .or_default() += 1;
         }
         Ok(Some(Self {
-            history_base_by_rollout,
+            rollouts_by_id,
             reference_counts_by_rollout,
         }))
     }

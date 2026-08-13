@@ -19,6 +19,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_rollout::ARCHIVED_SESSIONS_SUBDIR;
+use codex_rollout::RolloutReferenceIndex;
 use codex_rollout::ThreadItem;
 use codex_rollout::find_thread_names_by_ids;
 use codex_state::ThreadMetadata;
@@ -66,9 +67,31 @@ pub(super) fn rollout_path_is_archived(codex_home: &Path, path: &Path) -> bool {
             .any(|component| component.as_os_str() == OsStr::new(ARCHIVED_SESSIONS_SUBDIR))
 }
 
-pub(super) fn matching_rollout_file_name(
-    rollout_path: &Path,
+/// Returns rollout files whose session metadata belongs to `thread_id`.
+pub(super) async fn owned_rollout_paths(
+    store: &LocalThreadStore,
     thread_id: ThreadId,
+) -> ThreadStoreResult<Vec<PathBuf>> {
+    RolloutReferenceIndex::scan(store.config.codex_home.as_path())
+        .await
+        .map_err(|err| ThreadStoreError::Internal {
+            message: format!("failed to scan thread rollout files: {err}"),
+        })
+        .map(|index| owned_rollout_paths_from_index(&index, thread_id))
+}
+
+pub(super) fn owned_rollout_paths_from_index(
+    index: &RolloutReferenceIndex,
+    thread_id: ThreadId,
+) -> Vec<PathBuf> {
+    index
+        .rollouts_for_thread(thread_id)
+        .map(|(_, path)| path.to_path_buf())
+        .collect()
+}
+
+pub(super) fn validated_rollout_file_name(
+    rollout_path: &Path,
     display_path: &Path,
 ) -> ThreadStoreResult<std::ffi::OsString> {
     let Some(file_name) = rollout_path.file_name().map(OsStr::to_owned) else {
@@ -79,17 +102,12 @@ pub(super) fn matching_rollout_file_name(
             ),
         });
     };
-    let required_plain_suffix = format!("{thread_id}.jsonl");
-    let required_compressed_suffix = format!("{required_plain_suffix}.zst");
-    let file_name_str = file_name.to_string_lossy();
-    if file_name_str.ends_with(required_plain_suffix.as_str())
-        || file_name_str.ends_with(required_compressed_suffix.as_str())
-    {
+    if codex_rollout::rollout_id_from_path(rollout_path).is_some() {
         Ok(file_name)
     } else {
         Err(ThreadStoreError::InvalidRequest {
             message: format!(
-                "rollout path `{}` does not match thread id {thread_id}",
+                "rollout path `{}` has an invalid filename",
                 display_path.display()
             ),
         })
@@ -99,6 +117,13 @@ pub(super) fn matching_rollout_file_name(
 pub(super) fn touch_modified_time(path: &Path) -> std::io::Result<()> {
     let times = FileTimes::new().set_modified(SystemTime::now());
     OpenOptions::new().append(true).open(path)?.set_times(times)
+}
+
+pub(super) fn restore_rollout_moves(moves: &[(PathBuf, PathBuf)]) -> std::io::Result<()> {
+    for (source, destination) in moves.iter().rev() {
+        std::fs::rename(destination, source)?;
+    }
+    Ok(())
 }
 
 pub(super) fn stored_thread_from_rollout_item(
