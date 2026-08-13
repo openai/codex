@@ -3,6 +3,7 @@ mod sse;
 mod telemetry;
 
 pub use crate::retry::RetryOn;
+pub use crate::retry::RetryOperation;
 pub use crate::retry::RetryPolicy;
 pub use crate::retry::backoff;
 pub use crate::retry::run_with_retry;

@@ -11,6 +11,7 @@ futures = { workspace = true }
 http = { workspace = true }
 rand = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "time", "sync"] }
+tracing = { workspace = true }
 
 [lints]
 workspace = true

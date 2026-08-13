@@ -6,6 +6,7 @@ use crate::client::ModelClientSession;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::util::backoff;
+use codex_client::RetryOperation;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::protocol::EventMsg;
@@ -23,6 +24,7 @@ pub(crate) enum ResponsesStreamRequest {
 
 pub(crate) struct ResponsesStreamRetryState {
     retries: u64,
+    connection_retries: u64,
     connection_retry_delay: Duration,
 }
 
@@ -30,6 +32,7 @@ impl Default for ResponsesStreamRetryState {
     fn default() -> Self {
         Self {
             retries: 0,
+            connection_retries: 0,
             connection_retry_delay: INITIAL_CONNECTION_RETRY_DELAY,
         }
     }
@@ -46,6 +49,11 @@ pub(crate) async fn handle_retryable_response_stream_error(
     turn_context: &TurnContext,
     request: ResponsesStreamRequest,
 ) -> Result<(), CodexErr> {
+    let operation = match request {
+        ResponsesStreamRequest::Sampling => RetryOperation::Sampling,
+        ResponsesStreamRequest::RemoteCompactionV2 => RetryOperation::RemoteCompactionV2,
+    };
+
     if matches!(request, ResponsesStreamRequest::Sampling)
         && matches!(err.details(), CodexErrorDetails::ConnectionFailed(_))
         && !turn_context.session_source.is_internal()
@@ -60,6 +68,8 @@ pub(crate) async fn handle_retryable_response_stream_error(
         );
         sess.notify_stream_error(turn_context, "Reconnecting... waiting for network", err)
             .await;
+        retry_state.connection_retries = retry_state.connection_retries.saturating_add(1);
+        codex_client::record_retry!(retry_state.connection_retries, retry_delay, operation);
         tokio::time::sleep(retry_delay).await;
         retry_state.connection_retry_delay = retry_delay
             .saturating_mul(2)
@@ -105,6 +115,7 @@ pub(crate) async fn handle_retryable_response_stream_error(
             )
             .await;
         }
+        codex_client::record_retry!(retry_count, delay, operation);
         tokio::time::sleep(delay).await;
         return Ok(());
     }
