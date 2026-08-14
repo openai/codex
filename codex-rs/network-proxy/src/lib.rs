@@ -48,6 +48,8 @@ pub use mitm_hook::MitmHookConfig;
 pub use mitm_hook::MitmHookMatchConfig;
 pub use network_policy::NetworkDecision;
 pub use network_policy::NetworkDecisionSource;
+pub use network_policy::NetworkPolicyAuditEvent;
+pub use network_policy::NetworkPolicyAuditObserver;
 pub use network_policy::NetworkPolicyDecider;
 pub use network_policy::NetworkPolicyDeciderFuture;
 pub use network_policy::NetworkPolicyDecision;

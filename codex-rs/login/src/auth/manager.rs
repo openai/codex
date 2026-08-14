@@ -566,7 +566,12 @@ impl CodexAuth {
     /// Returns `None` if Codex backend auth does not expose an account id.
     pub fn get_account_id(&self) -> Option<String> {
         match self {
-            Self::Headers(_) => None,
+            Self::Headers(headers) => headers
+                .headers()
+                .get("chatgpt-account-id")
+                .and_then(|value| value.to_str().ok())
+                .filter(|account_id| !account_id.is_empty() && account_id.trim() == *account_id)
+                .map(ToOwned::to_owned),
             Self::AgentIdentity(auth) => Some(auth.account_id().to_string()),
             Self::PersonalAccessToken(auth) => Some(auth.account_id().to_string()),
             _ => self.get_current_token_data().and_then(|t| t.account_id),

@@ -12,6 +12,7 @@ use arc_swap::ArcSwap;
 use arc_swap::ArcSwapOption;
 use codex_exec_server_protocol::JSONRPCNotification;
 use codex_network_proxy::NetworkPolicyDecider;
+use codex_network_proxy::NetworkProxyAuditMetadata;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use serde_json::Value;
@@ -106,6 +107,8 @@ use crate::protocol::INITIALIZE_METHOD;
 use crate::protocol::INITIALIZED_METHOD;
 use crate::protocol::InitializeParams;
 use crate::protocol::InitializeResponse;
+use crate::protocol::NETWORK_POLICY_DECISION_METHOD;
+use crate::protocol::NetworkPolicyDecisionNotification;
 use crate::protocol::ProcessOutputChunk;
 use crate::protocol::ProcessSandboxType;
 use crate::protocol::ProcessSignal;
@@ -123,6 +126,7 @@ use crate::rpc_server_requests::MAX_IN_FLIGHT_SERVER_CALLS;
 use codex_http_client::HttpClientFactory;
 
 pub(crate) mod http_client;
+mod network_policy_audit;
 #[path = "client_recovery.rs"]
 mod recovery;
 pub(crate) use recovery::is_retryable_recovery_error;
@@ -189,14 +193,24 @@ pub(crate) struct SessionState {
     ordered_events: StdMutex<OrderedSessionEvents>,
     recoverable: AtomicBool,
     next_write_id: AtomicU64,
-    network_policy_controller: ArcSwapOption<NetworkPolicyDecisionController>,
-    network_policy_cancelled: CancellationToken,
+    network_policy: NetworkPolicyState,
+}
+
+struct NetworkPolicyState {
+    controller: ArcSwapOption<NetworkPolicyDecisionController>,
+    cancelled: CancellationToken,
+    audit: Option<NetworkPolicyAuditContext>,
 }
 
 #[derive(Clone)]
 struct NetworkPolicyDecisionController {
     decider: Arc<dyn NetworkPolicyDecider>,
     timeout: Duration,
+}
+
+struct NetworkPolicyAuditContext {
+    metadata: NetworkProxyAuditMetadata,
+    execution_id: Option<String>,
 }
 
 #[derive(Default)]
@@ -932,10 +946,20 @@ impl ExecServerClient {
             }
 
             let process_id = params.process_id.clone();
-            let state = Arc::new(SessionState::new(/*recoverable*/ false));
+            let mut state = SessionState::new(/*recoverable*/ false);
+            state.network_policy.audit =
+                params
+                    .network_proxy
+                    .as_ref()
+                    .map(|launch| NetworkPolicyAuditContext {
+                        metadata: launch.audit_metadata.clone(),
+                        execution_id: launch.execution_id.clone(),
+                    });
+            let state = Arc::new(state);
             if let Some(controller) = network_policy_controller.as_ref() {
                 state
-                    .network_policy_controller
+                    .network_policy
+                    .controller
                     .store(Some(Arc::new(controller.clone())));
             }
             if let Err(error) = self.inner.insert_session(&process_id, Arc::clone(&state)) {
@@ -1185,8 +1209,11 @@ impl SessionState {
             ordered_events: StdMutex::new(OrderedSessionEvents::default()),
             recoverable: AtomicBool::new(recoverable),
             next_write_id: AtomicU64::new(1),
-            network_policy_controller: ArcSwapOption::empty(),
-            network_policy_cancelled: CancellationToken::new(),
+            network_policy: NetworkPolicyState {
+                controller: ArcSwapOption::empty(),
+                cancelled: CancellationToken::new(),
+                audit: None,
+            },
         }
     }
 
@@ -1448,7 +1475,7 @@ impl Session {
     }
 
     pub(crate) fn cancel_network_policy_decisions(&self) {
-        self.state.network_policy_cancelled.cancel();
+        self.state.network_policy.cancelled.cancel();
     }
 
     pub(crate) async fn unregister(&self) {
@@ -1505,8 +1532,8 @@ impl Inner {
         let mut next_sessions = sessions.as_ref().clone();
         next_sessions.remove(process_id);
         self.sessions.store(Arc::new(next_sessions));
-        expected.network_policy_cancelled.cancel();
-        expected.network_policy_controller.store(None);
+        expected.network_policy.cancelled.cancel();
+        expected.network_policy.controller.store(None);
     }
 
     fn take_all_sessions(&self) -> HashMap<ProcessId, Arc<SessionState>> {
@@ -1545,8 +1572,8 @@ fn fail_all_sessions(inner: &Arc<Inner>, message: String) {
     let sessions = inner.take_all_sessions();
 
     for (_, session) in sessions {
-        session.network_policy_cancelled.cancel();
-        session.network_policy_controller.store(None);
+        session.network_policy.cancelled.cancel();
+        session.network_policy.controller.store(None);
         // Sessions synthesize a closed read response and emit a pushed Failed
         // event. That covers both polling consumers and streaming consumers
         // such as environment-backed MCP stdio.
@@ -1615,6 +1642,24 @@ async fn handle_server_notification(
             inner
                 .handle_http_body_delta_notification(notification.params)
                 .await?;
+        }
+        NETWORK_POLICY_DECISION_METHOD => {
+            let Ok(params) = serde_json::from_value::<NetworkPolicyDecisionNotification>(
+                notification.params.unwrap_or(Value::Null),
+            ) else {
+                debug!("ignoring malformed exec-server network policy decision notification");
+                return Ok(());
+            };
+            let Some(session) = inner.get_session(&params.process_id) else {
+                debug!("ignoring network policy decision for an unknown exec-server process");
+                return Ok(());
+            };
+            let Some(context) = session.network_policy.audit.as_ref() else {
+                return Ok(());
+            };
+            if !network_policy_audit::emit_network_policy_decision(context, &params) {
+                debug!("ignoring invalid exec-server network policy decision notification");
+            }
         }
         other => {
             debug!("ignoring unknown exec-server notification: {other}");

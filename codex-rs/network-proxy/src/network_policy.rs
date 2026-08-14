@@ -27,6 +27,27 @@ pub enum NetworkProtocol {
     Socks5Udp,
 }
 
+/// A completed network-policy audit decision without tenant or session identity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NetworkPolicyAuditEvent {
+    pub timestamp: String,
+    pub scope: String,
+    pub decision: String,
+    pub source: String,
+    pub reason: String,
+    pub protocol: NetworkProtocol,
+    pub host: String,
+    pub port: u16,
+    pub method: Option<String>,
+    pub client: Option<String>,
+    pub policy_override: bool,
+}
+
+/// Observes final network-policy decisions without delaying or altering enforcement.
+///
+/// Implementations must return immediately and treat notification delivery as best effort.
+pub type NetworkPolicyAuditObserver = Arc<dyn Fn(NetworkPolicyAuditEvent) + Send + Sync + 'static>;
+
 impl NetworkProtocol {
     pub const fn as_policy_protocol(self) -> &'static str {
         match self {
@@ -236,11 +257,12 @@ struct PolicyAuditEventArgs<'a> {
 
 fn emit_policy_audit_event(state: &NetworkProxyState, args: PolicyAuditEventArgs<'_>) {
     let metadata = state.audit_metadata();
+    let timestamp = audit_timestamp();
     tracing::event!(
         target: AUDIT_TARGET,
         tracing::Level::INFO,
         event.name = POLICY_DECISION_EVENT_NAME,
-        event.timestamp = %audit_timestamp(),
+        event.timestamp = %timestamp,
         conversation.id = metadata.conversation_id.as_deref(),
         app.version = metadata.app_version.as_deref(),
         auth_mode = metadata.auth_mode.as_deref(),
@@ -262,6 +284,21 @@ fn emit_policy_audit_event(state: &NetworkProxyState, args: PolicyAuditEventArgs
         execution.id = args.execution_id,
         network.policy.override = args.policy_override,
     );
+    if let Some(observer) = &state.policy_audit_observer {
+        observer(NetworkPolicyAuditEvent {
+            timestamp,
+            scope: args.scope.to_string(),
+            decision: args.decision.to_string(),
+            source: args.source.to_string(),
+            reason: args.reason.to_string(),
+            protocol: args.protocol,
+            host: args.server_address.to_string(),
+            port: args.server_port,
+            method: args.method.map(str::to_string),
+            client: args.client_addr.map(str::to_string),
+            policy_override: args.policy_override,
+        });
+    }
 }
 
 fn audit_timestamp() -> String {
@@ -631,6 +668,53 @@ mod tests {
                 4 | 7 | 10 | 13 | 16 | 19 | 23 => true,
                 _ => value.is_ascii_digit(),
             })
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn policy_audit_observer_receives_domain_and_non_domain_decisions() {
+        let mut state = network_proxy_state_for_policy(NetworkProxyConfig::default());
+        let (captured_tx, captured_rx) = std::sync::mpsc::channel();
+        state.set_policy_audit_observer(Arc::new(move |event| {
+            captured_tx
+                .send(event)
+                .expect("observer should capture the policy decision");
+        }));
+        let decider: Arc<dyn NetworkPolicyDecider> =
+            Arc::new(|_request| async { NetworkDecision::Allow });
+        let request = NetworkPolicyRequest::new(NetworkPolicyRequestArgs {
+            protocol: NetworkProtocol::Http,
+            host: "example.com".to_string(),
+            port: 80,
+            environment_id: None,
+            client_addr: None,
+            method: None,
+            command: None,
+            exec_policy_hint: None,
+        });
+        evaluate_host_policy(&state, Some(&decider), &request)
+            .await
+            .expect("evaluate domain policy");
+        emit_block_decision_audit_event(
+            &state,
+            BlockDecisionAuditEventArgs {
+                source: NetworkDecisionSource::ModeGuard,
+                reason: REASON_METHOD_NOT_ALLOWED,
+                protocol: NetworkProtocol::Http,
+                server_address: "unix-socket",
+                server_port: 0,
+                method: Some("POST"),
+                client_addr: None,
+            },
+        );
+
+        let events: Vec<_> = captured_rx.try_iter().collect();
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| (event.scope.as_str(), event.decision.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("domain", "allow"), ("non_domain", "deny")]
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

@@ -7,6 +7,7 @@ use crate::mitm::MitmState;
 use crate::mitm_hook::HookEvaluation;
 use crate::mitm_hook::MitmHooksByHost;
 use crate::mitm_hook::evaluate_mitm_hooks;
+use crate::network_policy::NetworkPolicyAuditObserver;
 use crate::policy::Host;
 use crate::policy::is_loopback_host;
 use crate::policy::is_non_public_ip;
@@ -232,6 +233,7 @@ pub struct NetworkProxyState {
     state: Arc<RwLock<ConfigState>>,
     reloader: Arc<dyn ConfigReloader>,
     blocked_request_observer: Arc<RwLock<Option<Arc<dyn BlockedRequestObserver>>>>,
+    pub(crate) policy_audit_observer: Option<NetworkPolicyAuditObserver>,
     credential_broker: CredentialBroker,
     audit_metadata: NetworkProxyAuditMetadata,
     execution_attributions: Arc<Mutex<HashMap<String, ExecutionAttribution>>>,
@@ -266,6 +268,7 @@ impl Clone for NetworkProxyState {
             state: self.state.clone(),
             reloader: self.reloader.clone(),
             blocked_request_observer: self.blocked_request_observer.clone(),
+            policy_audit_observer: self.policy_audit_observer.clone(),
             credential_broker: self.credential_broker.clone(),
             audit_metadata: self.audit_metadata.clone(),
             execution_attributions: self.execution_attributions.clone(),
@@ -351,6 +354,7 @@ impl NetworkProxyState {
             state: Arc::new(RwLock::new(state)),
             reloader,
             blocked_request_observer: Arc::new(RwLock::new(blocked_request_observer)),
+            policy_audit_observer: None,
             audit_metadata,
             execution_attributions: Arc::new(Mutex::new(HashMap::new())),
             environment_id: None,
@@ -411,6 +415,11 @@ impl NetworkProxyState {
     ) {
         let mut observer = self.blocked_request_observer.write().await;
         *observer = blocked_request_observer;
+    }
+
+    /// Installs a best-effort observer for every final domain and non-domain policy decision.
+    pub fn set_policy_audit_observer(&mut self, observer: NetworkPolicyAuditObserver) {
+        self.policy_audit_observer = Some(observer);
     }
 
     pub fn audit_metadata(&self) -> &NetworkProxyAuditMetadata {

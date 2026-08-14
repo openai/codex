@@ -33,6 +33,31 @@ const WORKSPACE_ID_ALLOWED: &str = "123e4567-e89b-42d3-a456-426614174000";
 const WORKSPACE_ID_SECOND_ALLOWED: &str = "123e4567-e89b-42d3-a456-426614174001";
 const WORKSPACE_ID_DISALLOWED: &str = "123e4567-e89b-42d3-a456-426614174002";
 
+#[test]
+fn header_auth_exposes_a_valid_chatgpt_account_id() {
+    for (account_id_header, expected_account_id) in [
+        (
+            Some(WORKSPACE_ID_ALLOWED.as_bytes()),
+            Some(WORKSPACE_ID_ALLOWED),
+        ),
+        (None, None),
+        (Some(b""), None),
+        (Some(b" account "), None),
+        (Some(&[0xff]), None),
+    ] {
+        let mut headers = http::HeaderMap::new();
+        if let Some(account_id_header) = account_id_header {
+            headers.insert(
+                "chatgpt-account-id",
+                http::HeaderValue::from_bytes(account_id_header).expect("valid header bytes"),
+            );
+        }
+
+        let auth = CodexAuth::Headers(AuthHeaders::new(headers));
+        assert_eq!(auth.get_account_id().as_deref(), expected_account_id);
+    }
+}
+
 #[tokio::test]
 async fn refresh_without_id_token() {
     let codex_home = tempdir().unwrap();

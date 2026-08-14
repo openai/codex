@@ -8,6 +8,9 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use codex_exec_server_protocol::JSONRPCErrorError;
+use codex_network_proxy::NetworkPolicyAuditEvent;
+use codex_network_proxy::NetworkPolicyAuditObserver;
+use codex_network_proxy::NetworkProtocol;
 use codex_network_proxy::NetworkProxyHandle;
 use codex_protocol::config_types::EnvironmentVariablePattern;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
@@ -46,7 +49,10 @@ use crate::protocol::ExecOutputDeltaNotification;
 use crate::protocol::ExecOutputStream;
 use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
+use crate::protocol::ExecServerNetworkProtocol;
 use crate::protocol::MAX_NETWORK_POLICY_PROCESS_ID_BYTES;
+use crate::protocol::NETWORK_POLICY_DECISION_METHOD;
+use crate::protocol::NetworkPolicyDecisionNotification;
 use crate::protocol::ProcessOutputChunk;
 use crate::protocol::ProcessSandboxType;
 use crate::protocol::ProcessSignal;
@@ -294,11 +300,44 @@ impl LocalProcess {
                     process_shutdown.clone(),
                 )
             });
+        let network_policy_audit_observer = params.network_proxy.as_ref().map(|_| {
+            let process_id = process_id.clone();
+            let inner = Arc::downgrade(&self.inner);
+            Arc::new(move |event: NetworkPolicyAuditEvent| {
+                let Some(inner) = inner.upgrade() else {
+                    return;
+                };
+                let Some(notifications) = notification_sender(&inner) else {
+                    return;
+                };
+                let notification = NetworkPolicyDecisionNotification {
+                    process_id: process_id.clone(),
+                    timestamp: event.timestamp,
+                    scope: event.scope,
+                    decision: event.decision,
+                    source: event.source,
+                    reason: event.reason,
+                    protocol: match event.protocol {
+                        NetworkProtocol::Http => ExecServerNetworkProtocol::Http,
+                        NetworkProtocol::HttpsConnect => ExecServerNetworkProtocol::HttpsConnect,
+                        NetworkProtocol::Socks5Tcp => ExecServerNetworkProtocol::Socks5Tcp,
+                        NetworkProtocol::Socks5Udp => ExecServerNetworkProtocol::Socks5Udp,
+                    },
+                    host: event.host,
+                    port: event.port,
+                    method: event.method,
+                    client: event.client,
+                    policy_override: event.policy_override,
+                };
+                let _ = notifications.try_notify(NETWORK_POLICY_DECISION_METHOD, &notification);
+            }) as NetworkPolicyAuditObserver
+        });
         let prepared = prepare_exec_request(
             &params,
             child_env(&params),
             self.runtime_paths.as_ref(),
             network_policy_decider,
+            network_policy_audit_observer,
         )
         .await?;
         if prepared.command.is_empty() {
@@ -1110,6 +1149,102 @@ mod tests {
             managed_network: None,
             network_proxy: None,
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn executor_proxy_sends_final_network_policy_notification() {
+        let (outgoing_tx, mut outgoing_rx) = mpsc::channel(NOTIFICATION_CHANNEL_CAPACITY);
+        let backend = LocalProcess::with_runtime_paths(
+            RpcNotificationSender::new(outgoing_tx),
+            ExecServerTelemetry::default(),
+            /*runtime_paths*/ None,
+        );
+        let proxy_config = RemoteNetworkProxyConfig::from_effective_config(&NetworkProxyConfig {
+            enabled: true,
+            ..NetworkProxyConfig::default()
+        })
+        .expect("build remote network proxy config");
+        let mut params = test_exec_params(HashMap::new());
+        params.process_id = ProcessId::from("audit-process");
+        params.argv = vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "printf '%s\\n' \"$HTTP_PROXY\"; exec sleep 60".to_string(),
+        ];
+        params.network_proxy = Some(
+            RemoteNetworkProxyLaunchConfig::new(proxy_config)
+                .for_execution("environment-1".to_string(), "execution-1".to_string()),
+        );
+        backend
+            .exec(params)
+            .await
+            .expect("start process with proxy");
+        let output = backend
+            .exec_read(ReadParams {
+                process_id: ProcessId::from("audit-process"),
+                after_seq: None,
+                max_bytes: None,
+                wait_ms: Some(1_000),
+            })
+            .await
+            .expect("read executor proxy address");
+        let proxy_addr = String::from_utf8(
+            output
+                .chunks
+                .into_iter()
+                .find(|chunk| matches!(chunk.stream, ExecOutputStream::Stdout))
+                .expect("executor proxy address output")
+                .chunk
+                .into_inner(),
+        )
+        .expect("UTF-8 proxy address");
+        let proxy_addr = proxy_addr
+            .trim()
+            .strip_prefix("http://")
+            .expect("HTTP executor proxy address");
+        let mut stream = tokio::net::TcpStream::connect(proxy_addr)
+            .await
+            .expect("connect to executor proxy");
+        stream
+            .write_all(b"CONNECT 8.8.8.8:443 HTTP/1.1\r\nHost: 8.8.8.8:443\r\n\r\n")
+            .await
+            .expect("write CONNECT request");
+        let mut response = [0_u8; 256];
+        let response_len = timeout(Duration::from_secs(2), stream.read(&mut response))
+            .await
+            .expect("proxy response timeout")
+            .expect("read proxy response");
+        assert!(String::from_utf8_lossy(&response[..response_len]).starts_with("HTTP/1.1 403"));
+
+        let notification = timeout(Duration::from_secs(2), async {
+            loop {
+                match outgoing_rx.recv().await {
+                    Some(RpcServerOutboundMessage::Notification(notification))
+                        if notification.method == NETWORK_POLICY_DECISION_METHOD =>
+                    {
+                        break serde_json::from_value::<NetworkPolicyDecisionNotification>(
+                            notification
+                                .params
+                                .expect("network policy notification params"),
+                        )
+                        .expect("deserialize network policy notification");
+                    }
+                    Some(_) => {}
+                    None => panic!("outbound notifications closed"),
+                }
+            }
+        })
+        .await
+        .expect("network policy notification timeout");
+        assert_eq!(notification.process_id, ProcessId::from("audit-process"));
+        assert_eq!(notification.decision, "deny");
+        assert_eq!(notification.host, "8.8.8.8");
+        assert_eq!(
+            notification.protocol,
+            ExecServerNetworkProtocol::HttpsConnect
+        );
+        backend.shutdown().await;
     }
 
     fn telemetry_backend() -> (

@@ -37,6 +37,7 @@ use crate::rpc_server_requests::RpcServerRequestSender;
 pub(crate) const SESSION_ALREADY_ATTACHED_ERROR_CODE: i64 = -32010;
 const MAX_IN_FLIGHT_REGULAR_CALLS: usize = 1024;
 const RESERVED_CLEANUP_CALLS: usize = 1;
+const RESERVED_OUTBOUND_CONTROL_MESSAGES: usize = 16;
 
 #[derive(Debug)]
 pub(crate) enum RpcCallError {
@@ -152,6 +153,25 @@ impl RpcNotificationSender {
             ))
             .await
             .map_err(|_| internal_error("RPC connection closed while sending notification".into()))
+    }
+
+    pub(crate) fn try_notify<P: Serialize>(&self, method: &str, params: &P) -> bool {
+        let Ok(permit) = self.outgoing_tx.try_reserve() else {
+            return false;
+        };
+        if self.outgoing_tx.capacity() < RESERVED_OUTBOUND_CONTROL_MESSAGES {
+            return false;
+        }
+        let Ok(params) = serde_json::to_value(params) else {
+            return false;
+        };
+        permit.send(RpcServerOutboundMessage::Notification(
+            JSONRPCNotification {
+                method: method.to_string(),
+                params: Some(params),
+            },
+        ));
+        true
     }
 }
 
@@ -793,6 +813,7 @@ mod tests {
     use tokio::io::AsyncBufReadExt;
     use tokio::io::AsyncWriteExt;
     use tokio::io::BufReader;
+    use tokio::sync::mpsc;
     use tokio::task::JoinSet;
     use tokio::time::timeout;
     use tracing::Instrument;
@@ -800,11 +821,27 @@ mod tests {
     use tracing_subscriber::prelude::*;
 
     use super::MAX_IN_FLIGHT_REGULAR_CALLS;
+    use super::RESERVED_OUTBOUND_CONTROL_MESSAGES;
     use super::RpcCallError;
     use super::RpcClient;
+    use super::RpcNotificationSender;
     use crate::connection::JsonRpcConnection;
     use crate::connection::JsonRpcConnectionEvent;
     use crate::connection::JsonRpcTransport;
+
+    #[tokio::test]
+    async fn best_effort_notifications_preserve_outbound_control_capacity() {
+        let (outgoing_tx, _outgoing_rx) = mpsc::channel(RESERVED_OUTBOUND_CONTROL_MESSAGES + 2);
+        let notifications = RpcNotificationSender::new(outgoing_tx);
+
+        assert!(notifications.try_notify("network/policyDecision", &serde_json::json!({"n": 1})));
+        assert!(notifications.try_notify("network/policyDecision", &serde_json::json!({"n": 2})));
+        assert!(!notifications.try_notify("network/policyDecision", &serde_json::json!({"n": 3})));
+        notifications
+            .response(RequestId::Integer(7), serde_json::json!({"ok": true}))
+            .await
+            .expect("reserved capacity must remain available for controller responses");
+    }
 
     async fn read_jsonrpc_line<R>(lines: &mut tokio::io::Lines<BufReader<R>>) -> JSONRPCMessage
     where

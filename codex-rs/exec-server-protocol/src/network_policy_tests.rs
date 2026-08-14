@@ -3,6 +3,7 @@ use pretty_assertions::assert_eq;
 use super::ExecServerNetworkPolicyDecision;
 use super::ExecServerNetworkPolicyRequest;
 use super::ExecServerNetworkProtocol;
+use super::NetworkPolicyDecisionNotification;
 use super::NetworkPolicyRequestParams;
 use super::NetworkPolicyRequestResponse;
 use crate::ProcessId;
@@ -72,4 +73,46 @@ fn network_policy_request_uses_stable_json_shapes() {
             serde_json::json!({"decision": decision_json})
         );
     }
+}
+
+#[test]
+fn network_policy_decision_notification_uses_stable_json_shape() {
+    let notification = NetworkPolicyDecisionNotification {
+        process_id: ProcessId::from("process-1"),
+        timestamp: "2026-08-11T12:34:56.789Z".to_string(),
+        scope: "domain".to_string(),
+        decision: "deny".to_string(),
+        source: "baseline_policy".to_string(),
+        reason: "not_allowed".to_string(),
+        protocol: ExecServerNetworkProtocol::HttpsConnect,
+        host: "example.com".to_string(),
+        port: 443,
+        method: Some("CONNECT".to_string()),
+        client: Some("127.0.0.1".to_string()),
+        policy_override: false,
+    };
+    let expected = serde_json::json!({
+        "processId": "process-1",
+        "timestamp": "2026-08-11T12:34:56.789Z",
+        "scope": "domain",
+        "decision": "deny",
+        "source": "baseline_policy",
+        "reason": "not_allowed",
+        "protocol": "https_connect",
+        "host": "example.com",
+        "port": 443,
+        "method": "CONNECT",
+        "client": "127.0.0.1",
+        "policyOverride": false,
+    });
+
+    assert_eq!(
+        serde_json::to_value(&notification).expect("serialize policy decision notification"),
+        expected
+    );
+    assert_eq!(
+        serde_json::from_value::<NetworkPolicyDecisionNotification>(expected)
+            .expect("deserialize policy decision notification"),
+        notification
+    );
 }

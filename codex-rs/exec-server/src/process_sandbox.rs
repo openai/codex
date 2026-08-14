@@ -4,6 +4,7 @@ use std::sync::Arc;
 use codex_exec_server_protocol::JSONRPCErrorError;
 use codex_network_proxy::CUSTOM_CA_ENV_KEYS;
 use codex_network_proxy::ManagedNetworkSandboxContext;
+use codex_network_proxy::NetworkPolicyAuditObserver;
 use codex_network_proxy::NetworkPolicyDecider;
 use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::NetworkProxyHandle;
@@ -79,6 +80,7 @@ pub(crate) async fn prepare_exec_request(
     env: HashMap<String, String>,
     runtime_paths: Option<&ExecServerRuntimePaths>,
     network_policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
+    network_policy_audit_observer: Option<NetworkPolicyAuditObserver>,
 ) -> Result<PreparedExecRequest, JSONRPCErrorError> {
     #[cfg(target_os = "windows")]
     let mut env = env;
@@ -102,6 +104,7 @@ pub(crate) async fn prepare_exec_request(
             network_proxy,
             env,
             network_policy_decider,
+            network_policy_audit_observer,
         )
         .await?;
     let Some(sandbox_context) = params.sandbox.as_ref() else {
@@ -295,6 +298,7 @@ async fn prepare_managed_network(
     network_proxy: Option<&RemoteNetworkProxyLaunchConfig>,
     env: HashMap<String, String>,
     network_policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
+    network_policy_audit_observer: Option<NetworkPolicyAuditObserver>,
 ) -> Result<
     (
         HashMap<String, String>,
@@ -307,8 +311,11 @@ async fn prepare_managed_network(
     let Some(network_proxy) = network_proxy.cloned() else {
         return Ok((env, managed_network.cloned(), None, None));
     };
-    let state = NetworkProxyState::from_remote_launch_config(network_proxy)
+    let mut state = NetworkProxyState::from_remote_launch_config(network_proxy)
         .map_err(|err| invalid_params(format!("invalid network proxy config: {err}")))?;
+    if let Some(observer) = network_policy_audit_observer {
+        state.set_policy_audit_observer(observer);
+    }
     let mut builder = NetworkProxy::builder().state(Arc::new(state));
     if let Some(network_policy_decider) = network_policy_decider {
         builder = builder.policy_decider_arc(network_policy_decider);
