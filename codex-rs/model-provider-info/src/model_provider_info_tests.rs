@@ -262,6 +262,45 @@ fn test_create_amazon_bedrock_provider() {
     );
 }
 
+#[test]
+fn test_create_amazon_bedrock_runtime_provider() {
+    let mut expected = ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None);
+    expected.name = "Amazon Bedrock Runtime".to_string();
+    expected.http_headers = None;
+
+    assert_eq!(
+        ModelProviderInfo::create_amazon_bedrock_runtime_provider(/*aws*/ None),
+        expected
+    );
+}
+
+#[test]
+fn test_create_amazon_bedrock_runtime_provider_with_aws_configuration() {
+    let provider =
+        ModelProviderInfo::create_amazon_bedrock_runtime_provider(Some(ModelProviderAwsAuthInfo {
+            profile: Some("runtime-profile".to_string()),
+            region: Some("us-west-2".to_string()),
+        }));
+
+    assert_eq!(
+        (
+            provider.name.as_str(),
+            provider.aws,
+            provider.http_headers,
+            provider.supports_standalone_web_search,
+        ),
+        (
+            "Amazon Bedrock Runtime",
+            Some(ModelProviderAwsAuthInfo {
+                profile: Some("runtime-profile".to_string()),
+                region: Some("us-west-2".to_string()),
+            }),
+            None,
+            false,
+        )
+    );
+}
+
 fn provider_auth_for_test() -> ModelProviderAuthInfo {
     ModelProviderAuthInfo {
         command: "token-fetcher".to_string(),
@@ -291,14 +330,39 @@ fn test_amazon_bedrock_provider_adds_mantle_client_agent_header() {
 }
 
 #[test]
-fn test_built_in_model_providers_include_amazon_bedrock() {
+fn test_built_in_model_providers_include_amazon_bedrock_endpoints() {
     let providers = built_in_model_providers(/*openai_base_url*/ None);
 
     assert_eq!(
-        providers
+        [
+            AMAZON_BEDROCK_PROVIDER_ID,
+            AMAZON_BEDROCK_RUNTIME_PROVIDER_ID
+        ]
+        .into_iter()
+        .map(|provider_id| {
+            providers
+                .get(provider_id)
+                .map(ModelProviderInfo::is_amazon_bedrock)
+        })
+        .collect::<Vec<_>>(),
+        vec![Some(true), Some(true)]
+    );
+}
+
+#[test]
+fn test_built_in_model_providers_include_amazon_bedrock_runtime() {
+    let providers = built_in_model_providers(/*openai_base_url*/ None);
+    let runtime = providers
+        .get(AMAZON_BEDROCK_RUNTIME_PROVIDER_ID)
+        .expect("Amazon Bedrock Runtime provider should be built in");
+
+    assert!(runtime.is_amazon_bedrock());
+    assert!(runtime.is_amazon_bedrock_runtime());
+    assert!(
+        !providers
             .get(AMAZON_BEDROCK_PROVIDER_ID)
-            .map(ModelProviderInfo::is_amazon_bedrock),
-        Some(true)
+            .expect("Amazon Bedrock provider should be built in")
+            .is_amazon_bedrock_runtime()
     );
 }
 
@@ -345,6 +409,36 @@ fn test_merge_configured_model_providers_applies_amazon_bedrock_profile_override
         profile: Some("codex-bedrock".to_string()),
         region: Some("us-west-2".to_string()),
     });
+
+    assert_eq!(
+        merge_configured_model_providers(
+            built_in_model_providers(/*openai_base_url*/ None),
+            configured_model_providers,
+        ),
+        Ok(expected)
+    );
+}
+
+#[test]
+fn test_merge_configured_model_providers_applies_runtime_overrides_independently() {
+    let runtime_aws = ModelProviderAwsAuthInfo {
+        profile: Some("runtime-profile".to_string()),
+        region: Some("eu-west-1".to_string()),
+    };
+    let configured_model_providers = std::collections::HashMap::from([(
+        AMAZON_BEDROCK_RUNTIME_PROVIDER_ID.to_string(),
+        ModelProviderInfo {
+            base_url: Some("https://runtime.example.com/openai/v1".to_string()),
+            aws: Some(runtime_aws.clone()),
+            ..ModelProviderInfo::default()
+        },
+    )]);
+    let mut expected = built_in_model_providers(/*openai_base_url*/ None);
+    let expected_runtime = expected
+        .get_mut(AMAZON_BEDROCK_RUNTIME_PROVIDER_ID)
+        .expect("Amazon Bedrock Runtime provider should be built in");
+    expected_runtime.base_url = Some("https://runtime.example.com/openai/v1".to_string());
+    expected_runtime.aws = Some(runtime_aws);
 
     assert_eq!(
         merge_configured_model_providers(

@@ -62,3 +62,33 @@ async fn read_amazon_bedrock_provider_capabilities() -> Result<()> {
     assert_eq!(received, expected);
     Ok(())
 }
+
+#[tokio::test]
+async fn read_amazon_bedrock_runtime_provider_capabilities() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        r#"model_provider = "amazon-bedrock-runtime"
+"#,
+    )?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+
+    let request_id = mcp
+        .send_model_provider_capabilities_read_request(ModelProviderCapabilitiesReadParams {})
+        .await?;
+    let received: ModelProviderCapabilitiesReadResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
+
+    assert_eq!(
+        received,
+        ModelProviderCapabilitiesReadResponse {
+            namespace_tools: true,
+            image_generation: false,
+            web_search: false,
+        }
+    );
+    Ok(())
+}

@@ -4,8 +4,8 @@ use codex_model_provider_info::ModelProviderAwsAuthInfo;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
 
-use super::auth::BedrockAuthMethod;
-use super::auth::resolve_auth_method;
+use super::BedrockEndpoint;
+use super::auth::resolve_region;
 
 const BEDROCK_MANTLE_SERVICE_NAME: &str = "bedrock-mantle";
 const BEDROCK_MANTLE_SUPPORTED_REGIONS: [&str; 12] = [
@@ -58,19 +58,8 @@ pub(super) async fn bedrock_mantle_runtime_base_url(
     managed_auth: Option<&BedrockApiKeyAuth>,
     aws: &ModelProviderAwsAuthInfo,
 ) -> Result<String> {
-    let region = resolve_region(managed_auth, aws).await?;
+    let region = resolve_region(managed_auth, aws, BedrockEndpoint::Mantle).await?;
     base_url(&region)
-}
-
-async fn resolve_region(
-    managed_auth: Option<&BedrockApiKeyAuth>,
-    aws: &ModelProviderAwsAuthInfo,
-) -> Result<String> {
-    match resolve_auth_method(managed_auth, aws).await? {
-        BedrockAuthMethod::ManagedBearerToken { region, .. }
-        | BedrockAuthMethod::EnvBearerToken { region, .. } => Ok(region),
-        BedrockAuthMethod::AwsSdkAuth { context } => Ok(context.region().to_string()),
-    }
 }
 
 #[cfg(test)]

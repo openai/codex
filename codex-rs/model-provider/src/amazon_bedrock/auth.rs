@@ -17,8 +17,10 @@ use http::HeaderMap;
 
 use crate::BearerAuthProvider;
 
+use super::BedrockEndpoint;
 use super::mantle::aws_auth_config;
 use super::mantle::region_from_config;
+use super::runtime;
 
 const AWS_BEARER_TOKEN_BEDROCK_ENV_VAR: &str = "AWS_BEARER_TOKEN_BEDROCK";
 const AWS_REGION_ENV_VAR: &str = "AWS_REGION";
@@ -33,6 +35,7 @@ pub(super) enum BedrockAuthMethod {
 pub(super) async fn resolve_auth_method(
     managed_auth: Option<&BedrockApiKeyAuth>,
     aws: &ModelProviderAwsAuthInfo,
+    endpoint: BedrockEndpoint,
 ) -> Result<BedrockAuthMethod> {
     if let Some(managed_auth) = managed_auth {
         return Ok(BedrockAuthMethod::ManagedBearerToken {
@@ -46,7 +49,10 @@ pub(super) async fn resolve_auth_method(
         return Ok(BedrockAuthMethod::EnvBearerToken { token, region });
     }
 
-    let config = aws_auth_config(aws);
+    let config = match endpoint {
+        BedrockEndpoint::Mantle => aws_auth_config(aws),
+        BedrockEndpoint::Runtime => runtime::aws_auth_config(aws),
+    };
     let context = AwsAuthContext::load(config)
         .await
         .map_err(aws_auth_error_to_codex_error)?;
@@ -56,8 +62,9 @@ pub(super) async fn resolve_auth_method(
 pub(super) async fn resolve_provider_auth(
     managed_auth: Option<&BedrockApiKeyAuth>,
     aws: &ModelProviderAwsAuthInfo,
+    endpoint: BedrockEndpoint,
 ) -> Result<SharedAuthProvider> {
-    match resolve_auth_method(managed_auth, aws).await? {
+    match resolve_auth_method(managed_auth, aws, endpoint).await? {
         BedrockAuthMethod::ManagedBearerToken { token, .. }
         | BedrockAuthMethod::EnvBearerToken { token, .. } => Ok(Arc::new(BearerAuthProvider {
             token: Some(token),
@@ -65,8 +72,20 @@ pub(super) async fn resolve_provider_auth(
             is_fedramp_account: false,
         })),
         BedrockAuthMethod::AwsSdkAuth { context } => {
-            Ok(Arc::new(BedrockMantleSigV4AuthProvider::new(context)))
+            Ok(Arc::new(BedrockSigV4AuthProvider::new(context, endpoint)))
         }
+    }
+}
+
+pub(super) async fn resolve_region(
+    managed_auth: Option<&BedrockApiKeyAuth>,
+    aws: &ModelProviderAwsAuthInfo,
+    endpoint: BedrockEndpoint,
+) -> Result<String> {
+    match resolve_auth_method(managed_auth, aws, endpoint).await? {
+        BedrockAuthMethod::ManagedBearerToken { region, .. }
+        | BedrockAuthMethod::EnvBearerToken { region, .. } => Ok(region),
+        BedrockAuthMethod::AwsSdkAuth { context } => Ok(context.region().to_string()),
     }
 }
 
@@ -123,20 +142,23 @@ fn remove_headers_not_preserved_by_bedrock_mantle(headers: &mut HeaderMap) {
     }
 }
 
-/// AWS SigV4 auth provider for Bedrock Mantle OpenAI-compatible requests.
+/// AWS SigV4 auth provider for Bedrock OpenAI-compatible requests.
 #[derive(Debug)]
-struct BedrockMantleSigV4AuthProvider {
+struct BedrockSigV4AuthProvider {
     context: AwsAuthContext,
+    endpoint: BedrockEndpoint,
 }
 
-impl BedrockMantleSigV4AuthProvider {
-    fn new(context: AwsAuthContext) -> Self {
-        Self { context }
+impl BedrockSigV4AuthProvider {
+    fn new(context: AwsAuthContext, endpoint: BedrockEndpoint) -> Self {
+        Self { context, endpoint }
     }
 
     async fn apply_auth(&self, request: Request) -> std::result::Result<Request, AuthError> {
         let mut request = request;
-        remove_headers_not_preserved_by_bedrock_mantle(&mut request.headers);
+        if self.endpoint == BedrockEndpoint::Mantle {
+            remove_headers_not_preserved_by_bedrock_mantle(&mut request.headers);
+        }
         let prepared = request.prepare_body_for_send().map_err(AuthError::Build)?;
         let signed = self
             .context
@@ -157,11 +179,11 @@ impl BedrockMantleSigV4AuthProvider {
     }
 }
 
-impl AuthProvider for BedrockMantleSigV4AuthProvider {
+impl AuthProvider for BedrockSigV4AuthProvider {
     fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
 
     fn apply_auth(&self, request: Request) -> codex_api::AuthProviderFuture<'_> {
-        Box::pin(BedrockMantleSigV4AuthProvider::apply_auth(self, request))
+        Box::pin(BedrockSigV4AuthProvider::apply_auth(self, request))
     }
 }
 

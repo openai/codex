@@ -268,6 +268,37 @@ async fn thread_start_provider_model_fallback_uses_bedrock_static_catalog() -> R
 }
 
 #[tokio::test]
+async fn thread_start_bedrock_runtime_prefers_global_cross_region_models() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        r#"model_provider = "amazon-bedrock-runtime"
+"#,
+    )?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+
+    for model in ["global.openai.gpt-5.6-sol", "us.openai.gpt-5.6-sol"] {
+        let response =
+            start_thread_with_model(&mut mcp, model, /*allow_provider_model_fallback*/ true)
+                .await?;
+        assert_eq!(response.model, model);
+    }
+
+    let response = start_thread_with_model(
+        &mut mcp,
+        "openai.gpt-5.6-sol",
+        /*allow_provider_model_fallback*/ true,
+    )
+    .await?;
+    assert_eq!(response.model, "global.openai.gpt-5.6-sol");
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_start_provider_model_fallback_ignores_dynamic_catalog() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
