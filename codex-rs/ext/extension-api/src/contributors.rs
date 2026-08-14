@@ -299,12 +299,18 @@ pub trait ToolContributor: Send + Sync {
 /// exposed input without rewriting the invocation. Use `ToolContributor` for
 /// owning a tool implementation and hooks for policy that changes tool payloads.
 pub trait ToolLifecycleContributor: Send + Sync {
-    /// Called once the host has accepted a tool call for execution.
+    /// Called after pre-tool hooks finalize an invocation and before execution.
+    ///
+    /// Calls blocked by hooks, or whose hook-provided input cannot be applied,
+    /// do not reach this callback.
     fn on_tool_start<'a>(&'a self, _input: ToolStartInput<'a>) -> ToolLifecycleFuture<'a> {
         Box::pin(std::future::ready(()))
     }
 
     /// Called after the tool call returns, is blocked, fails, or is cancelled.
+    ///
+    /// A matching start callback does not exist when execution is blocked,
+    /// hook-provided input cannot be applied, or cancellation wins first.
     fn on_tool_finish<'a>(&'a self, _input: ToolFinishInput<'a>) -> ToolLifecycleFuture<'a> {
         Box::pin(std::future::ready(()))
     }

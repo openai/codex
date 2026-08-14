@@ -613,8 +613,6 @@ impl ToolRegistry {
                 }
             });
         // copybara:strip-for-public end
-        notify_tool_start(&invocation).await;
-
         if let Some(pre_tool_use_payload) = tool.pre_tool_use_payload(&invocation) {
             // copybara:strip-for-public begin
             if let Some(log) = internal_tool_input_log.as_mut() {
@@ -705,6 +703,8 @@ impl ToolRegistry {
                 } => {}
             }
         }
+
+        notify_tool_start(&invocation).await;
 
         // copybara:strip-for-public begin
         if let Some(mut log) = internal_tool_input_log {
