@@ -38,6 +38,7 @@ pub use model::SkillMetadata;
 pub use model::SkillPolicy;
 pub use model::SkillToolDependency;
 pub use model_delegation::SkillModel;
+pub use model_delegation::SkillModelDelegationInstruction;
 pub use name_counts::build_skill_name_counts;
 pub use parser::ParsedSkillFrontmatter;
 pub use parser::SkillParseError;
