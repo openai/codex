@@ -4,6 +4,7 @@ use std::sync::PoisonError;
 use codex_code_mode_protocol::CodeModeNestedToolCall;
 use codex_code_mode_protocol::grpc as proto;
 use codex_code_mode_protocol::host::MAX_FRAME_BYTES;
+use codex_protocol::ToolName;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use prost::Message;
@@ -99,6 +100,9 @@ impl GrpcSession {
             name: invocation.tool_name.name,
             namespace: invocation.tool_name.namespace,
         };
+        let canonical_tool_name =
+            ToolName::new(tool_name.namespace.clone(), tool_name.name.clone())
+                .with_default_namespace();
         let (sequence, subscriptions) = {
             let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
             let Some(execution) = state.cells.get(&cell_id) else {
@@ -113,7 +117,9 @@ impl GrpcSession {
                 .filter(|subscription| {
                     subscription.filters.is_empty()
                         || subscription.filters.iter().any(|filter| {
-                            filter.name == tool_name.name && filter.namespace == tool_name.namespace
+                            ToolName::new(filter.namespace.clone(), filter.name.clone())
+                                .with_default_namespace()
+                                == canonical_tool_name
                         })
                 })
                 .map(|subscription| (subscription.id, subscription.sender.clone()))
