@@ -142,17 +142,23 @@ pub(super) async fn run_main_inner(
             strict_config,
             cli.bypass_hook_trust,
         );
+    let search_only_config_override = !workload_identity_selected
+        && cli.web_search
+        && startup_preflight::has_only_search_config_override(&cli_kv_overrides)
+        && loader_overrides_are_default(&launch_loader_overrides)
+        && !strict_config
+        && !cli.bypass_hook_trust;
     let initial_screen = if cli.resume_picker || cli.fork_picker {
         startup_draft::StartupDraftInitialScreen::SessionPicker
     } else if !cli.oss
         && explicit_remote_endpoint.is_none()
-        && reuse_implicit_local_daemon
+        && (reuse_implicit_local_daemon || search_only_config_override)
         && launch_loader_overrides.packaged_defaults_path.is_none()
         && startup_preflight::should_delay_startup_composer_for_first_login(
             &codex_home,
             codex_config::loader::system_config_toml_file(),
             || codex_config::loader::has_local_managed_configuration(&codex_home),
-            |name| std::env::var(name).ok(),
+            |name| std::env::var_os(name),
         )
     {
         startup_draft::StartupDraftInitialScreen::Onboarding

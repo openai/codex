@@ -518,7 +518,27 @@ async fn startup_draft_waits_for_onboarding_before_accepting_input() {
         ]
         .into_iter(),
     );
-    pump.initial_screen = StartupDraftInitialScreen::Onboarding;
+    let codex_home = tempfile::tempdir().expect("create an existing custom Codex home");
+    std::fs::write(codex_home.path().join("history.jsonl"), "")
+        .expect("create existing startup history");
+    let system_config_path = codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(
+        codex_home.path().join("system.toml"),
+    )
+    .expect("resolve missing system configuration");
+    let search_override = [("web_search".to_string(), toml::Value::String("live".into()))];
+    pump.initial_screen =
+        if crate::startup_preflight::has_only_search_config_override(&search_override)
+            && crate::startup_preflight::should_delay_startup_composer_for_first_login(
+                codex_home.path(),
+                Ok(system_config_path),
+                || Ok(false),
+                |name| (name == "CODEX_HOME").then(|| codex_home.path().as_os_str().to_os_string()),
+            )
+        {
+            StartupDraftInitialScreen::Onboarding
+        } else {
+            StartupDraftInitialScreen::Composer
+        };
     let mut tui = crate::tui::test_support::make_test_tui().expect("create test terminal");
     pump.show_initial_screen(&mut tui)
         .expect("keep the composer hidden until onboarding finishes");
