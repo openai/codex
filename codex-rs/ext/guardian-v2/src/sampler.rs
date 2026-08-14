@@ -33,7 +33,7 @@ use thiserror::Error;
 use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::Semaphore;
 
-const MODEL: &str = "gpt-5.6-luna";
+pub(crate) const MODEL: &str = "gpt-5.6-luna";
 const MAX_OUTPUT_BYTES: usize = 8 * 1024;
 const INITIAL_WEBSOCKET_CONNECTIONS: usize = 2;
 const MAX_WEBSOCKET_CONNECTIONS: usize = 8;
@@ -60,6 +60,8 @@ pub struct LunaSamplerConfig {
     pub originator: Option<String>,
     /// Optional inference service tier.
     pub service_tier: Option<String>,
+    /// Luna model's host-resolved encrypted-compaction compatibility hash.
+    pub luna_compaction_hash: Option<String>,
 }
 
 /// One tool-less structured Luna request over an already-open connection.
@@ -68,6 +70,10 @@ pub struct LunaSamplingRequest {
     pub instructions: String,
     /// Ordered untrusted input entries that the model should classify.
     pub input: Vec<String>,
+    /// Opaque parent compaction to reuse only for compatible model configurations.
+    pub parent_compaction: Option<ResponseItem>,
+    /// Current parent model's encrypted-compaction compatibility hash.
+    pub parent_compaction_hash: Option<String>,
     /// Strict JSON schema constraining the model response.
     pub output_schema: Value,
     /// Reasoning budget explicitly selected for this request.
@@ -263,36 +269,48 @@ impl LunaSampler {
             ("turn_id".to_owned(), request.turn_id),
             (RESPONSES_LITE_METADATA_KEY.to_owned(), "true".to_owned()),
         ]);
+        let mut input = vec![
+            ResponseItem::AdditionalTools {
+                id: None,
+                role: "developer".to_owned(),
+                tools: Vec::new(),
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "developer".to_owned(),
+                content: vec![ContentItem::InputText {
+                    text: request.instructions,
+                }],
+                phase: None,
+                internal_chat_message_metadata_passthrough: None,
+            },
+        ];
+        if request
+            .parent_compaction_hash
+            .as_deref()
+            .zip(self.config.luna_compaction_hash.as_deref())
+            .is_some_and(|(parent_hash, luna_hash)| {
+                !parent_hash.is_empty() && parent_hash == luna_hash
+            })
+            && let Some(parent_compaction) = request.parent_compaction
+        {
+            input.push(parent_compaction);
+        }
+        input.push(ResponseItem::Message {
+            id: None,
+            role: "user".to_owned(),
+            content: request
+                .input
+                .into_iter()
+                .map(|text| ContentItem::InputText { text })
+                .collect(),
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        });
         let request = ResponsesApiRequest {
             model: MODEL.to_owned(),
             instructions: String::new(),
-            input: vec![
-                ResponseItem::AdditionalTools {
-                    id: None,
-                    role: "developer".to_owned(),
-                    tools: Vec::new(),
-                },
-                ResponseItem::Message {
-                    id: None,
-                    role: "developer".to_owned(),
-                    content: vec![ContentItem::InputText {
-                        text: request.instructions,
-                    }],
-                    phase: None,
-                    internal_chat_message_metadata_passthrough: None,
-                },
-                ResponseItem::Message {
-                    id: None,
-                    role: "user".to_owned(),
-                    content: request
-                        .input
-                        .into_iter()
-                        .map(|text| ContentItem::InputText { text })
-                        .collect(),
-                    phase: None,
-                    internal_chat_message_metadata_passthrough: None,
-                },
-            ],
+            input,
             tools: None,
             tool_choice: "none".to_owned(),
             parallel_tool_calls: false,

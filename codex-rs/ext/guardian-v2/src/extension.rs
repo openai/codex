@@ -7,6 +7,7 @@ use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ExtensionWarning;
+use codex_extension_api::ResponseItem;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadOriginator;
 use codex_extension_api::ThreadStartInput;
@@ -20,6 +21,7 @@ use codex_login::AgentIdentityAuthPolicy;
 use codex_login::AuthManager;
 use codex_model_provider::create_model_provider;
 use codex_protocol::ThreadId;
+use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::security_risk::SecurityRiskScore;
 use serde_json::json;
@@ -27,6 +29,7 @@ use serde_json::json;
 use crate::LunaSampler;
 use crate::LunaSamplerConfig;
 use crate::LunaSamplingRequest;
+use crate::sampler::MODEL;
 use crate::transcript::TranscriptConfig;
 
 const CLASSIFIER_INSTRUCTIONS: &str = "Classify the risk of the assistant tool action. Consider \
@@ -52,6 +55,15 @@ impl ThreadLifecycleContributor<Config> for GuardianV2Extension {
             }
 
             let thread_id = input.thread_store.level_id().to_string();
+            let luna_compaction_hash = if let Some(thread_manager) = self.thread_manager.upgrade() {
+                thread_manager
+                    .get_models_manager()
+                    .get_model_info(MODEL, &input.config.to_models_manager_config())
+                    .await
+                    .comp_hash
+            } else {
+                None
+            };
             let sampler = LunaSampler::connect(LunaSamplerConfig {
                 provider: create_model_provider(
                     input.config.model_provider.clone(),
@@ -71,6 +83,7 @@ impl ThreadLifecycleContributor<Config> for GuardianV2Extension {
                     .get::<ThreadOriginator>()
                     .map(|originator| originator.0.clone()),
                 service_tier: input.config.service_tier.clone(),
+                luna_compaction_hash,
             })
             .await;
 
@@ -99,9 +112,14 @@ impl ToolLifecycleContributor for GuardianV2Extension {
         let turn_id = input.turn_id.to_owned();
         let tool_name = input.tool_name.to_string();
         let payload = input.payload.clone();
+        let parent_compaction_hash = input
+            .thread_store
+            .get::<ModelInfo>()
+            .and_then(|model_info| model_info.comp_hash.clone());
         let conversation_history = Arc::clone(&input.conversation_history);
 
         tokio::spawn(async move {
+            let parent_compaction = encrypted_parent_compaction(conversation_history.items());
             let transcript = TranscriptConfig::default().build(conversation_history.items());
             drop(conversation_history);
             let arguments = match payload {
@@ -142,6 +160,8 @@ impl ToolLifecycleContributor for GuardianV2Extension {
                     .sample(LunaSamplingRequest {
                         instructions: CLASSIFIER_INSTRUCTIONS.to_owned(),
                         input: classification_input,
+                        parent_compaction,
+                        parent_compaction_hash,
                         output_schema: json!({
                             "type": "object",
                             "properties": {
@@ -212,6 +232,33 @@ impl ToolLifecycleContributor for GuardianV2Extension {
         });
 
         Box::pin(std::future::ready(()))
+    }
+}
+
+fn encrypted_parent_compaction<'a>(
+    items: impl Iterator<Item = &'a ResponseItem>,
+) -> Option<ResponseItem> {
+    let item = items
+        .filter(|item| {
+            matches!(
+                item,
+                ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. }
+            )
+        })
+        .last()?;
+
+    match item {
+        ResponseItem::Compaction {
+            id: Some(_),
+            encrypted_content,
+            ..
+        } if !encrypted_content.is_empty() => Some(item.clone()),
+        ResponseItem::ContextCompaction {
+            id: Some(_),
+            encrypted_content: Some(encrypted_content),
+            ..
+        } if !encrypted_content.is_empty() => Some(item.clone()),
+        _ => None,
     }
 }
 

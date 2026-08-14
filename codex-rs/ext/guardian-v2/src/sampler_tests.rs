@@ -6,6 +6,8 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_protocol::ResponseItemId;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::SessionSource;
 use core_test_support::responses;
@@ -63,6 +65,7 @@ fn sampler_config(base_url: String) -> LunaSamplerConfig {
         thread_id: "thread-1".to_owned(),
         originator: Some("guardian-v2-test".to_owned()),
         service_tier: None,
+        luna_compaction_hash: None,
     }
 }
 
@@ -70,6 +73,8 @@ fn sample_request(turn_id: &str) -> LunaSamplingRequest {
     LunaSamplingRequest {
         instructions: "Return a risk score.".to_owned(),
         input: vec!["The user requested a README summary.".to_owned()],
+        parent_compaction: None,
+        parent_compaction_hash: None,
         output_schema: json!({
             "type": "object",
             "properties": { "score": { "type": "number" } },
@@ -118,6 +123,7 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_structured_requ
         thread_id: "thread-1".to_owned(),
         originator: Some("guardian-v2-test".to_owned()),
         service_tier: None,
+        luna_compaction_hash: None,
     })
     .await?;
 
@@ -161,6 +167,8 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_structured_requ
                 "The user requested a README summary.".to_owned(),
                 "The assistant inspected README.md.".to_owned(),
             ],
+            parent_compaction: None,
+            parent_compaction_hash: None,
             output_schema: schema.clone(),
             reasoning_effort: ReasoningEffort::None,
             turn_id: "turn-1".to_owned(),
@@ -182,6 +190,8 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_structured_requ
         .sample(LunaSamplingRequest {
             instructions: "Return a risk score.".to_owned(),
             input: vec!["The user requested a source review.".to_owned()],
+            parent_compaction: None,
+            parent_compaction_hash: None,
             output_schema: schema,
             reasoning_effort: ReasoningEffort::Medium,
             turn_id: "turn-2".to_owned(),
@@ -227,6 +237,70 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_structured_requ
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sampler_reuses_parent_compaction_only_for_matching_model_hashes() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    for (parent_hash, luna_hash, should_reuse) in [
+        (Some("compatible"), Some("compatible"), true),
+        (Some("parent"), Some("luna"), false),
+        (None, Some("compatible"), false),
+        (Some("compatible"), None, false),
+        (Some(""), Some(""), false),
+    ] {
+        let events = vec![
+            ev_assistant_message("sample", r#"{"score":0.25}"#),
+            ev_completed("response-1"),
+        ];
+        let server =
+            responses::start_websocket_server(vec![Vec::new(), vec![events.clone(), events]]).await;
+        let mut config = sampler_config(format!(
+            "http://{}/v1",
+            server.uri().trim_start_matches("ws://")
+        ));
+        config.luna_compaction_hash = luna_hash.map(str::to_owned);
+        let sampler = LunaSampler::connect(config).await?;
+        let parent_compaction = ResponseItem::Compaction {
+            id: Some(ResponseItemId::from_server("cmp_parent".to_owned())),
+            encrypted_content: "opaque encrypted summary".to_owned(),
+            internal_chat_message_metadata_passthrough: None,
+        };
+        let mut request = sample_request("turn-1");
+        request.parent_compaction = Some(parent_compaction.clone());
+        request.parent_compaction_hash = parent_hash.map(str::to_owned);
+
+        assert_eq!(sampler.sample(request).await?, r#"{"score":0.25}"#);
+
+        let request = server
+            .wait_for_request(/*connection_index*/ 1, /*request_index*/ 0)
+            .await
+            .body_json();
+        let input = request["input"].as_array().expect("input items");
+        assert_eq!(input[0]["type"], "additional_tools");
+        assert_eq!(input[1]["role"], "developer");
+        if should_reuse {
+            assert_eq!(input.len(), 4);
+            assert_eq!(input[2], serde_json::to_value(&parent_compaction)?);
+            assert_eq!(input[3]["role"], "user");
+
+            let mut switched_request = sample_request("turn-2");
+            switched_request.parent_compaction = Some(parent_compaction);
+            switched_request.parent_compaction_hash = Some("incompatible".to_owned());
+            assert_eq!(sampler.sample(switched_request).await?, r#"{"score":0.25}"#);
+            let switched_request = server
+                .wait_for_request(/*connection_index*/ 1, /*request_index*/ 1)
+                .await
+                .body_json();
+            assert_eq!(switched_request["input"][2]["role"], "user");
+        } else {
+            assert_eq!(input.len(), 3);
+            assert_eq!(input[2]["role"], "user");
+        }
+    }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sampler_returns_complete_json_before_terminal_response_events() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -257,6 +331,7 @@ async fn sampler_returns_complete_json_before_terminal_response_events() -> Resu
         thread_id: "thread-1".to_owned(),
         originator: None,
         service_tier: None,
+        luna_compaction_hash: None,
     })
     .await?;
 
@@ -265,6 +340,8 @@ async fn sampler_returns_complete_json_before_terminal_response_events() -> Resu
         sampler.sample(LunaSamplingRequest {
             instructions: "Return a risk score.".to_owned(),
             input: vec!["The user requested a README summary.".to_owned()],
+            parent_compaction: None,
+            parent_compaction_hash: None,
             output_schema: json!({
                 "type": "object",
                 "properties": { "score": { "type": "number" } },
