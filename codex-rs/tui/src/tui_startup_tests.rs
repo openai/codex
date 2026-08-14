@@ -12,9 +12,6 @@ use std::time::Instant;
 use crossterm::event::Event;
 use crossterm::event::KeyCode;
 
-use super::InitializedTerminal;
-use super::Tui;
-
 const STARTUP_INPUT_CHILD_TEST: &str = "tui::startup_tests::startup_typeahead_pty_child";
 
 #[test]
@@ -54,6 +51,10 @@ fn startup_preserves_typeahead_and_discards_buffered_action_key_after_first_draw
         .expect("queue typeahead");
 
     let signals = tempfile::tempdir().expect("create pty synchronization directory");
+    let draft_ready = signals.path().join("draft-ready");
+    let draft_queued = signals.path().join("draft-queued");
+    let handoff_ready = signals.path().join("handoff-ready");
+    let handoff_queued = signals.path().join("handoff-queued");
     let action_ready = signals.path().join("action-ready");
     let action_queued = signals.path().join("action-queued");
     let fresh_ready = signals.path().join("fresh-ready");
@@ -75,8 +76,36 @@ fn startup_preserves_typeahead_and_discards_buffered_action_key_after_first_draw
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn startup input pty child");
+    let mut output = master.try_clone().expect("clone pty output reader");
+    let output_reader = std::thread::spawn(move || {
+        let mut captured = Vec::new();
+        let mut buffer = [0; 4096];
+        loop {
+            match output.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(read) => captured.extend_from_slice(&buffer[..read]),
+                Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(_) => break,
+            }
+        }
+        captured
+    });
 
     let result = (|| -> Result<(), String> {
+        wait_for_file(&draft_ready)?;
+        master
+            .write_all(b"abc\r\x1b[DZ")
+            .map_err(|err| format!("failed to queue editable startup input: {err}"))?;
+        std::fs::write(&draft_queued, [])
+            .map_err(|err| format!("failed to signal editable startup input: {err}"))?;
+
+        wait_for_file(&handoff_ready)?;
+        master
+            .write_all(b"!\x1b[D")
+            .map_err(|err| format!("failed to queue post-handoff startup input: {err}"))?;
+        std::fs::write(&handoff_queued, [])
+            .map_err(|err| format!("failed to signal post-handoff startup input: {err}"))?;
+
         for suffix in ["y", "1"] {
             let ready = signals.path().join(format!("alt-{suffix}-ready"));
             wait_for_file(&ready)?;
@@ -146,6 +175,7 @@ fn startup_preserves_typeahead_and_discards_buffered_action_key_after_first_draw
         let _ = child.kill();
     }
     let status = child.wait().expect("wait for startup input pty child");
+    let output = output_reader.join().expect("join pty output reader");
     let mut stderr = String::new();
     child
         .stderr
@@ -155,10 +185,11 @@ fn startup_preserves_typeahead_and_discards_buffered_action_key_after_first_draw
         .expect("read child stderr");
     assert!(
         result.is_ok() && status.success(),
-        "startup input pty child failed: {}\n{stderr}",
+        "startup input pty child failed: {}\n{stderr}\n{}",
         result
             .err()
-            .unwrap_or_else(|| "child exited unsuccessfully".to_string())
+            .unwrap_or_else(|| "child exited unsuccessfully".to_string()),
+        String::from_utf8_lossy(&output)
     );
 }
 
@@ -169,11 +200,10 @@ async fn startup_typeahead_pty_child() {
         return;
     };
     let signals = PathBuf::from(signals);
-    let InitializedTerminal {
-        terminal,
-        enhanced_keys_supported,
-        stderr_guard,
-    } = super::init().expect("initialize terminal");
+    let mut startup_draft = crate::startup_draft::StartupDraft::new(
+        crate::startup_draft::StartupDraftInitialScreen::Composer,
+    )
+    .expect("initialize the real startup composer");
 
     let mut typeahead = Vec::new();
     for _ in 0..5 {
@@ -209,7 +239,45 @@ async fn startup_typeahead_pty_child() {
         Event::Key(key) if key.code == KeyCode::Up
     ));
 
-    let mut tui = Tui::new(terminal, enhanced_keys_supported, stderr_guard);
+    std::fs::write(signals.join("draft-ready"), []).expect("signal editable startup composer");
+    let draft_queued = signals.join("draft-queued");
+    let startup_result = startup_draft
+        .run_until(async {
+            while !draft_queued.exists() {
+                tokio::time::sleep(Duration::from_millis(/*millis*/ 10)).await;
+            }
+            tokio::time::sleep(Duration::from_millis(/*millis*/ 100)).await;
+            "startup completed"
+        })
+        .await
+        .expect("edit the real composer while startup work is pending");
+    assert_eq!(startup_result, "startup completed");
+
+    let (mut tui, mut terminal_restore_guard, mut startup_draft) = startup_draft.into_parts();
+    std::fs::write(signals.join("handoff-ready"), []).expect("signal startup terminal handoff");
+    let handoff_queued = signals.join("handoff-queued");
+    startup_draft
+        .run_until(&mut tui, async {
+            while !handoff_queued.exists() {
+                tokio::time::sleep(Duration::from_millis(/*millis*/ 10)).await;
+            }
+            tokio::time::sleep(Duration::from_millis(/*millis*/ 100)).await;
+        })
+        .await
+        .expect("keep the real composer editable after terminal ownership transfers");
+    startup_draft
+        .flush_pending_events(&mut tui)
+        .await
+        .expect("flush real startup terminal input");
+    tui.pause_events();
+    let draft = startup_draft.into_draft();
+    assert_eq!(
+        draft.text, "abZ!c",
+        "startup Enter must not submit the draft"
+    );
+    assert_eq!(draft.cursor, 3, "startup cursor edits must survive handoff");
+    assert!(draft.local_images.is_empty());
+
     tui.draw(u16::MAX, |_| {}).expect("draw actionable screen");
     crossterm::event::buffer_input(b"\x1b").expect("buffer a standalone escape");
     let escape_started_at = Instant::now();
@@ -308,7 +376,9 @@ async fn startup_typeahead_pty_child() {
         .expect_err("an unresolved escape at a protected boundary must fail closed");
     assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
 
-    super::restore_after_exit().expect("restore terminal");
+    terminal_restore_guard
+        .restore()
+        .expect("restore terminal after startup draft handoff");
 }
 
 fn wait_for_file(path: &Path) -> Result<(), String> {

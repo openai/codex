@@ -39,6 +39,82 @@ fn strict_config_rejects_unknown_config_override() -> Result<()> {
 }
 
 #[test]
+fn interactive_validates_config_before_requiring_terminal() -> Result<()> {
+    let cases: &[(&[&str], &str, &str, &str)] = &[
+        (&[], "config.toml", "model = [", "Error loading config.toml"),
+        (
+            &["--strict-config"],
+            "config.toml",
+            "unknown_key = true",
+            "unknown configuration field",
+        ),
+        (
+            &["--strict-config", "-c", "foo=bar"],
+            "config.toml",
+            "",
+            "unknown configuration field",
+        ),
+        (
+            &["--profile", "work"],
+            "work.config.toml",
+            "model = [",
+            "work.config.toml",
+        ),
+        (
+            &["-c", "model_provider=\"missing\""],
+            "config.toml",
+            "",
+            "Model provider `missing` not found",
+        ),
+        (&[], "config.toml", "", "stdin is not a terminal"),
+    ];
+
+    for &(args, config_file, contents, expected_error) in cases {
+        let codex_home = TempDir::new()?;
+        std::fs::write(codex_home.path().join(config_file), contents)?;
+
+        let mut cmd = codex_command(codex_home.path())?;
+        cmd.env("TERM", "xterm-256color")
+            .current_dir(codex_home.path())
+            .args(args)
+            .assert()
+            .failure()
+            .stderr(contains(expected_error));
+    }
+
+    Ok(())
+}
+
+#[test]
+fn interactive_remote_default_preserves_remote_working_directory_before_requiring_terminal()
+-> Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(codex_home.path().join("config.toml"), "")?;
+    std::fs::write(
+        codex_home.path().join("environments.toml"),
+        r#"default = "remote"
+include_local = false
+
+[[environments]]
+id = "remote"
+url = "ws://127.0.0.1:4512"
+"#,
+    )?;
+    let remote_only_cwd = codex_home.path().join("remote-only-working-directory");
+
+    let mut cmd = codex_command(codex_home.path())?;
+    cmd.env("TERM", "xterm-256color")
+        .current_dir(codex_home.path())
+        .arg("--cd")
+        .arg(remote_only_cwd)
+        .assert()
+        .failure()
+        .stderr(contains("stdin is not a terminal"));
+
+    Ok(())
+}
+
+#[test]
 fn strict_config_is_not_supported_for_cloud_command() -> Result<()> {
     let codex_home = TempDir::new()?;
 

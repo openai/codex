@@ -3,10 +3,116 @@
 use std::collections::HashSet;
 use std::collections::VecDeque;
 
+use crate::bottom_pane::ComposerDraftSnapshot;
+
 use super::user_messages::remap_colliding_paste_placeholders;
 use super::*;
 
 impl ChatWidget {
+    /// Restore the exact draft entered before the fully initialized composer became available.
+    pub(crate) fn restore_startup_draft(&mut self, draft: ComposerDraftSnapshot) {
+        let existing_draft = self.bottom_pane.composer_draft_snapshot();
+        let existing_cursor = existing_draft.cursor;
+        let existing_message = UserMessage {
+            text: existing_draft.text,
+            text_elements: existing_draft.text_elements,
+            local_images: existing_draft.local_images,
+            remote_image_urls: existing_draft.remote_image_urls,
+            mention_bindings: existing_draft.mention_bindings,
+        };
+        let existing_has_content =
+            !self.bottom_pane.composer_is_empty() || !existing_draft.pending_pastes.is_empty();
+
+        let startup_message = UserMessage {
+            text: draft.text,
+            text_elements: draft.text_elements,
+            local_images: draft.local_images,
+            remote_image_urls: draft.remote_image_urls,
+            mention_bindings: draft.mention_bindings,
+        };
+        let startup_has_content = !startup_message.text.is_empty()
+            || !startup_message.local_images.is_empty()
+            || !startup_message.remote_image_urls.is_empty()
+            || !draft.pending_pastes.is_empty();
+
+        let cursor = if existing_has_content && startup_has_content {
+            let mut used_paste_placeholders = HashSet::new();
+            let (existing_message, mut pending_pastes) = remap_colliding_paste_placeholders(
+                existing_message,
+                existing_draft.pending_pastes,
+                &mut used_paste_placeholders,
+            );
+            let startup_offset = existing_message.text.len().saturating_add(1);
+            let preceding_text_element = startup_message
+                .text_elements
+                .iter()
+                .enumerate()
+                .take_while(|(_, element)| element.byte_range.end <= draft.cursor)
+                .last()
+                .map(|(index, element)| (index, element.byte_range.end));
+            let (startup_message, startup_pending_pastes) = remap_colliding_paste_placeholders(
+                startup_message,
+                draft.pending_pastes,
+                &mut used_paste_placeholders,
+            );
+            let cursor_adjustment = preceding_text_element.map_or(0, |(index, original_end)| {
+                startup_message.text_elements[index]
+                    .byte_range
+                    .end
+                    .saturating_sub(original_end)
+            });
+            pending_pastes.extend(startup_pending_pastes);
+            self.restore_composer_state(Self::composer_state_from_user_message(
+                merge_user_messages(vec![existing_message, startup_message]),
+                pending_pastes,
+            ));
+            startup_offset
+                .saturating_add(draft.cursor)
+                .saturating_add(cursor_adjustment)
+        } else if existing_has_content {
+            existing_cursor
+        } else {
+            self.restore_composer_state(Self::composer_state_from_user_message(
+                startup_message,
+                draft.pending_pastes,
+            ));
+            draft.cursor
+        };
+        self.bottom_pane.set_composer_cursor(cursor);
+        self.bottom_pane.restore_startup_composer_state(
+            draft.last_composer_activity_at,
+            draft.startup_local_history,
+        );
+        if startup_has_content && self.config.tui_vim_mode_default {
+            self.bottom_pane.enable_vim_in_insert_mode();
+        }
+    }
+
+    /// Includes protected prompts deferred by streaming or the approval idle timer.
+    pub(crate) fn has_pending_protected_request(&self) -> bool {
+        self.bottom_pane.has_pending_approval() || self.interrupts.has_pending_prompt()
+    }
+
+    /// Transfer startup input only after protected views and required sandbox setup finish.
+    pub(crate) fn restore_startup_draft_when_ready(
+        &mut self,
+        pending_draft: &mut Option<ComposerDraftSnapshot>,
+    ) {
+        if self.has_active_view()
+            || self.has_pending_protected_request()
+            || !self.bottom_pane.composer_input_enabled()
+        {
+            return;
+        }
+        #[cfg(any(target_os = "windows", test))]
+        if self.elevated_windows_sandbox_setup_required() {
+            return;
+        }
+        if let Some(draft) = pending_draft.take() {
+            self.restore_startup_draft(draft);
+        }
+    }
+
     pub(crate) fn set_initial_user_message_submit_suppressed(&mut self, suppressed: bool) {
         self.suppress_initial_user_message_submit = suppressed;
     }

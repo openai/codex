@@ -693,6 +693,15 @@ impl Tui {
         self.event_broker.resume_events();
     }
 
+    /// Reclaim terminal modes and stderr after a panic hook ran inside a recovery boundary.
+    pub(crate) fn recover_after_caught_panic(&mut self) -> Result<()> {
+        set_modes()?;
+        self._stderr_guard.recover_after_caught_panic()?;
+        self.terminal.invalidate_viewport();
+        self.frame_requester().schedule_frame();
+        Ok(())
+    }
+
     /// Discard buffered typeahead before a startup screen that can confirm an action.
     ///
     /// Startup probes can leave parsed key events in crossterm's queue, while later bootstrap

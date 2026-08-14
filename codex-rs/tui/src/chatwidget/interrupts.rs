@@ -44,6 +44,20 @@ impl InterruptManager {
         self.queue.is_empty()
     }
 
+    /// Excludes lifecycle events that never claim protected interactive input.
+    pub(crate) fn has_pending_prompt(&self) -> bool {
+        self.queue.iter().any(|interrupt| {
+            matches!(
+                interrupt,
+                QueuedInterrupt::ExecApproval(_)
+                    | QueuedInterrupt::ApplyPatchApproval(_)
+                    | QueuedInterrupt::Elicitation { .. }
+                    | QueuedInterrupt::RequestPermissions(_)
+                    | QueuedInterrupt::RequestUserInput(_)
+            )
+        })
+    }
+
     pub(crate) fn push_exec_approval(&mut self, ev: ExecApprovalRequestEvent) {
         self.queue.push_back(QueuedInterrupt::ExecApproval(ev));
     }
@@ -80,6 +94,9 @@ impl InterruptManager {
     }
 
     pub(crate) fn remove_resolved_prompt(&mut self, request: &ResolvedAppServerRequest) -> bool {
+        if !self.has_pending_prompt() {
+            return false;
+        }
         let original_len = self.queue.len();
         self.queue
             .retain(|queued| !queued.matches_resolved_prompt(request));
@@ -196,6 +213,7 @@ mod tests {
         let mut manager = InterruptManager::new();
         manager.push_user_input(user_input("call-a", "turn"));
         manager.push_user_input(user_input("call-b", "turn"));
+        assert!(manager.has_pending_prompt());
 
         assert!(
             manager.remove_resolved_prompt(&ResolvedAppServerRequest::UserInput {
@@ -204,10 +222,17 @@ mod tests {
         );
 
         assert_eq!(manager.queue.len(), 1);
+        assert!(manager.has_pending_prompt());
         let Some(QueuedInterrupt::RequestUserInput(remaining)) = manager.queue.front() else {
             panic!("expected remaining queued user input");
         };
         assert_eq!(remaining.item_id, "call-a");
+        assert!(
+            manager.remove_resolved_prompt(&ResolvedAppServerRequest::UserInput {
+                call_id: "call-a".to_string(),
+            })
+        );
+        assert!(!manager.has_pending_prompt());
     }
 
     #[test]
@@ -234,6 +259,7 @@ mod tests {
     fn remove_resolved_prompt_keeps_lifecycle_events() {
         let mut manager = InterruptManager::new();
         manager.push_item_started(command_execution("call"));
+        assert!(!manager.has_pending_prompt());
 
         assert!(
             !manager.remove_resolved_prompt(&ResolvedAppServerRequest::ExecApproval {

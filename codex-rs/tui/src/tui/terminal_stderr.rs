@@ -53,6 +53,24 @@ impl TerminalStderrGuard {
         Ok(Self { active: false })
     }
 
+    /// Reclaim stderr after a caught panic temporarily restored terminal ownership.
+    pub(super) fn recover_after_caught_panic(&mut self) -> io::Result<()> {
+        if !self.active {
+            return Ok(());
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let mut state = lock_state()?;
+            if !state.owner_active {
+                suppress_locked(&mut state)?;
+                state.owner_active = true;
+            }
+        }
+
+        Ok(())
+    }
+
     #[cfg(target_os = "macos")]
     fn install_suppression() -> io::Result<Self> {
         let mut state = lock_state()?;
@@ -239,7 +257,7 @@ mod tests {
         let mut output = tempfile::tempfile()?;
         let capture = CapturedStderr::start(&output)?;
 
-        let _guard = TerminalStderrGuard::install_suppression()?;
+        let mut guard = TerminalStderrGuard::install_suppression()?;
         write_stderr("hidden while active\n")?;
         pause()?;
         write_stderr("visible while paused\n")?;
@@ -247,11 +265,19 @@ mod tests {
         write_stderr("hidden after resume\n")?;
         finish()?;
         write_stderr("visible after finish\n")?;
+        guard.recover_after_caught_panic()?;
+        write_stderr("hidden after caught panic\n")?;
+        finish()?;
+        write_stderr("visible after recovered ownership\n")?;
+
         drop(capture);
         output.rewind()?;
         let mut captured = String::new();
         output.read_to_string(&mut captured)?;
-        assert_eq!(captured, "visible while paused\nvisible after finish\n");
+        assert_eq!(
+            captured,
+            "visible while paused\nvisible after finish\nvisible after recovered ownership\n"
+        );
         Ok(())
     }
 

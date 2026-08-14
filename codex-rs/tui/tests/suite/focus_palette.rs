@@ -16,7 +16,8 @@ use anyhow::bail;
 use anyhow::ensure;
 use tempfile::TempDir;
 
-const STARTUP_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 15);
+// Full startup continues after the composer first appears and can be slower under Rosetta in CI.
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 30);
 const FOCUS_INPUT_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 5);
 const FOCUS_PROBE_INPUT: &str = "focus-palette-24527";
 

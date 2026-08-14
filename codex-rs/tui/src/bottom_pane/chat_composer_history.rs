@@ -280,20 +280,31 @@ impl ChatComposerHistory {
 
     /// Updates persistent history metadata when a new session is configured.
     ///
-    /// This clears fetched entries, local entries, navigation cursors, and active search state
-    /// because offsets only make sense within one history log snapshot. Reusing old offsets after a
-    /// log-id change would allow a stale async response to hydrate the wrong prompt.
+    /// Startup-local entries survive the first session configuration because they were recorded
+    /// before a thread existed. Later configurations clear local history, while every configuration
+    /// resets fetched entries, navigation cursors, and search state tied to the old history log.
     pub fn set_metadata(&mut self, thread_id: ThreadId, log_id: u64, entry_count: usize) {
-        self.thread_id = Some(thread_id);
+        let had_configured_thread = self.thread_id.replace(thread_id).is_some();
         self.persistent_log_id = Some(log_id);
         self.persistent_entry_count = entry_count;
         self.fetched_history.clear();
-        self.local_history.clear();
+        if had_configured_thread {
+            self.local_history.clear();
+        }
         self.replay_seeded_history.clear();
         self.history_cursor = None;
         self.pending_navigation_direction = None;
         self.last_history_text = None;
         self.search = None;
+    }
+
+    /// Return draft history recorded before the composer became associated with a thread.
+    pub(crate) fn startup_local_history(&self) -> &[HistoryEntry] {
+        if self.thread_id.is_none() {
+            &self.local_history
+        } else {
+            &[]
+        }
     }
 
     /// Records a current-session submission so it can be recalled with full draft metadata.
@@ -1000,6 +1011,30 @@ mod tests {
             history.local_history.last().unwrap(),
             &HistoryEntry::new("world".to_string())
         );
+    }
+
+    #[test]
+    fn initial_metadata_preserves_startup_history_but_session_changes_clear_it() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let mut history = ChatComposerHistory::new();
+        let startup_entry = HistoryEntry::new("cleared during startup".to_string());
+        history.record_local_submission(startup_entry.clone());
+
+        assert_eq!(
+            history.startup_local_history(),
+            std::slice::from_ref(&startup_entry)
+        );
+
+        history.set_metadata(test_thread_id(), /*log_id*/ 1, /*entry_count*/ 0);
+
+        assert!(history.startup_local_history().is_empty());
+        assert_eq!(history.navigate_up(&tx), Some(startup_entry));
+
+        history.record_local_submission(HistoryEntry::new("thread-owned draft".to_string()));
+        history.set_metadata(ThreadId::new(), /*log_id*/ 2, /*entry_count*/ 0);
+
+        assert_eq!(history.navigate_up(&tx), None);
     }
 
     #[test]

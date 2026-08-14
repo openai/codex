@@ -1,0 +1,44 @@
+---
+source: tui/src/startup_draft_tests.rs
+expression: "snapshots.join(\"\\n---\\n\")"
+---
+empty (48 columns):
+╭───────────────────────────────────────╮
+│ >_ OpenAI Codex (v<VERSION>)              │
+│                                       │
+│ model:     loading   /model to change │
+│ directory: loading                    │
+╰───────────────────────────────────────╯
+
+
+› Ask Codex to do anything
+
+  ? for shortcuts
+---
+multiline (48 columns):
+╭───────────────────────────────────────╮
+│ >_ OpenAI Codex (v<VERSION>)              │
+│                                       │
+│ model:     loading   /model to change │
+│ directory: loading                    │
+╰───────────────────────────────────────╯
+
+
+› first startup line
+  second startup line
+
+
+---
+narrow (18 columns):
+╭────────────────╮
+│ >_ OpenAI Cod… │
+│                │
+│ model:     lo… │
+│ directory: …ng │
+╰────────────────╯
+
+
+› first startup
+  line
+  second startup
+  line

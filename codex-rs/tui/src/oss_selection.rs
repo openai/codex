@@ -49,7 +49,7 @@ struct ProviderOption {
 }
 
 #[derive(Clone)]
-enum ProviderStatus {
+pub(crate) enum ProviderStatus {
     Running,
     NotRunning,
     Unknown,
@@ -318,7 +318,16 @@ pub(crate) struct OssProviderSelection {
     pub(crate) manually_selected: bool,
 }
 
-pub async fn select_oss_provider() -> io::Result<OssProviderSelection> {
+pub(crate) enum OssProviderDetection {
+    AutoSelected(OssProviderSelection),
+    NeedsSelection {
+        lmstudio_status: ProviderStatus,
+        ollama_status: ProviderStatus,
+    },
+}
+
+/// Probe local providers without suspending the interactive startup composer.
+pub(crate) async fn detect_oss_provider() -> OssProviderDetection {
     // These probes intentionally bypass proxy discovery because both targets are
     // hardcoded plaintext loopback endpoints. Preserve the legacy custom-CA fallback so an
     // invalid inherited certificate bundle cannot prevent best-effort provider detection.
@@ -333,23 +342,30 @@ pub async fn select_oss_provider() -> io::Result<OssProviderSelection> {
     match (&lmstudio_status, &ollama_status) {
         (ProviderStatus::Running, ProviderStatus::NotRunning) => {
             let provider = LMSTUDIO_OSS_PROVIDER_ID.to_string();
-            return Ok(OssProviderSelection {
+            OssProviderDetection::AutoSelected(OssProviderSelection {
                 provider,
                 manually_selected: false,
-            });
+            })
         }
         (ProviderStatus::NotRunning, ProviderStatus::Running) => {
             let provider = OLLAMA_OSS_PROVIDER_ID.to_string();
-            return Ok(OssProviderSelection {
+            OssProviderDetection::AutoSelected(OssProviderSelection {
                 provider,
                 manually_selected: false,
-            });
+            })
         }
-        _ => {
-            // Both running or both not running - show UI
-        }
+        _ => OssProviderDetection::NeedsSelection {
+            lmstudio_status,
+            ollama_status,
+        },
     }
+}
 
+/// Run the actionable provider picker after provider discovery requires a user decision.
+pub(crate) async fn select_oss_provider(
+    lmstudio_status: ProviderStatus,
+    ollama_status: ProviderStatus,
+) -> io::Result<OssProviderSelection> {
     let mut widget = OssSelectionWidget::new(lmstudio_status, ollama_status)?;
 
     enable_raw_mode()?;
