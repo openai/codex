@@ -1,9 +1,6 @@
 use codex_code_mode_protocol::grpc;
-use codex_code_mode_protocol::grpc::MAX_TOOL_ERROR_BYTES;
 use codex_code_mode_protocol::host::MAX_FRAME_BYTES;
 use prost::Message;
-
-const TRUNCATED_SUFFIX: &str = "... [truncated]";
 
 pub(super) fn request(
     session_id: &str,
@@ -27,12 +24,12 @@ fn request_with_maximum(
                 })
             }
             Err(error) => grpc::complete_tool_call_request::Outcome::Failed(grpc::ToolCallFailed {
-                message: bounded_error(format!("failed to encode code-mode tool result: {error}")),
+                message: format!("failed to encode code-mode tool result: {error}"),
             }),
         },
-        Err(message) => grpc::complete_tool_call_request::Outcome::Failed(grpc::ToolCallFailed {
-            message: bounded_error(message),
-        }),
+        Err(message) => {
+            grpc::complete_tool_call_request::Outcome::Failed(grpc::ToolCallFailed { message })
+        }
     };
     let mut request = grpc::CompleteToolCallRequest {
         session_id: session_id.to_string(),
@@ -43,26 +40,13 @@ fn request_with_maximum(
     if encoded_bytes > maximum_message_bytes {
         request.outcome = Some(grpc::complete_tool_call_request::Outcome::Failed(
             grpc::ToolCallFailed {
-                message: bounded_error(format!(
+                message: format!(
                     "code-mode tool result of {encoded_bytes} encoded bytes exceeds the gRPC message limit of {maximum_message_bytes} bytes"
-                )),
+                ),
             },
         ));
     }
     request
-}
-
-fn bounded_error(mut message: String) -> String {
-    if message.len() <= MAX_TOOL_ERROR_BYTES {
-        return message;
-    }
-    let mut boundary = MAX_TOOL_ERROR_BYTES - TRUNCATED_SUFFIX.len();
-    while !message.is_char_boundary(boundary) {
-        boundary -= 1;
-    }
-    message.truncate(boundary);
-    message.push_str(TRUNCATED_SUFFIX);
-    message
 }
 
 #[cfg(test)]

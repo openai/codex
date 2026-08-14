@@ -83,14 +83,7 @@ impl GrpcCodeModeHost {
                     Status::invalid_argument(format!("invalid code-mode tool output JSON: {error}"))
                 })?,
             ),
-            Some(proto::complete_tool_call_request::Outcome::Failed(error)) => {
-                validation::bounded(
-                    &error.message,
-                    validation::MAX_TOOL_ERROR_BYTES,
-                    "tool error message",
-                )?;
-                Err(error.message)
-            }
+            Some(proto::complete_tool_call_request::Outcome::Failed(error)) => Err(error.message),
             None => {
                 return Err(Status::invalid_argument(
                     "tool completion is missing its outcome",

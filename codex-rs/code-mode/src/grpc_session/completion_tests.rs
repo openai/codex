@@ -2,8 +2,6 @@ use codex_code_mode_protocol::grpc;
 use pretty_assertions::assert_eq;
 use prost::Message;
 
-use super::MAX_TOOL_ERROR_BYTES;
-use super::TRUNCATED_SUFFIX;
 use super::request;
 use super::request_with_maximum;
 
@@ -22,17 +20,15 @@ fn completion_size_includes_the_protobuf_envelope() {
 }
 
 #[test]
-fn delegate_errors_are_truncated_at_a_utf8_boundary() {
-    let error = "🦀".repeat(MAX_TOOL_ERROR_BYTES);
-    let completion = request("session", "invocation", Err(error));
+fn delegate_errors_larger_than_64_kib_are_preserved() {
+    let error = "🦀".repeat(64 * 1024);
+    let completion = request("session", "invocation", Err(error.clone()));
     let Some(grpc::complete_tool_call_request::Outcome::Failed(failure)) = completion.outcome
     else {
         panic!("expected a failed tool completion");
     };
 
-    assert!(failure.message.len() <= MAX_TOOL_ERROR_BYTES);
-    assert!(failure.message.ends_with(TRUNCATED_SUFFIX));
-    assert!(failure.message.starts_with('🦀'));
+    assert_eq!(failure.message, error);
 }
 
 #[test]
