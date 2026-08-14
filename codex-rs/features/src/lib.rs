@@ -826,7 +826,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::UnifiedExec,
         key: "unified_exec",
         stage: Stage::Stable,
-        default_enabled: !cfg!(windows),
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::ShellZshFork,
