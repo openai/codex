@@ -40,9 +40,8 @@ use codex_rmcp_client::perform_oauth_login;
 use codex_utils_cli::CliConfigOverrides;
 use codex_utils_cli::format_env_display;
 
+use crate::cloud_config;
 use crate::plugin_cmd::load_cli_auth_mode;
-
-mod cloud_config;
 
 /// Subcommands:
 /// - `list`   — list configured servers (with `--json`)
@@ -227,13 +226,11 @@ impl McpCli {
 
         match subcommand {
             McpSubcommand::List(args) => {
-                let config =
-                    cloud_config::load_mcp_config(&config_overrides, loader_overrides).await?;
+                let config = cloud_config::load_config(&config_overrides, loader_overrides).await?;
                 run_list(&config, args).await?;
             }
             McpSubcommand::Get(args) => {
-                let config =
-                    cloud_config::load_mcp_config(&config_overrides, loader_overrides).await?;
+                let config = cloud_config::load_config(&config_overrides, loader_overrides).await?;
                 run_get(&config, args).await?;
             }
             McpSubcommand::Add(args) => {
@@ -243,13 +240,11 @@ impl McpCli {
                 run_remove(&config_overrides, args).await?;
             }
             McpSubcommand::Login(args) => {
-                let config =
-                    cloud_config::load_mcp_config(&config_overrides, loader_overrides).await?;
+                let config = cloud_config::load_config(&config_overrides, loader_overrides).await?;
                 run_login(&config, args).await?;
             }
             McpSubcommand::Logout(args) => {
-                let config =
-                    cloud_config::load_mcp_config(&config_overrides, loader_overrides).await?;
+                let config = cloud_config::load_config(&config_overrides, loader_overrides).await?;
                 run_logout(&config, args).await?;
             }
         }

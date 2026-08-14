@@ -1,9 +1,23 @@
 use std::path::Path;
 
+use anyhow::Context;
 use anyhow::Result;
+use app_test_support::ChatGptAuthFixture;
+use app_test_support::write_chatgpt_auth;
+use codex_config::ConfigLoadOptions;
+use codex_config::types::AuthCredentialsStoreMode;
+use codex_core::config::load_config_toml_with_layer_stack;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use predicates::str::contains;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use tempfile::TempDir;
+use wiremock::Mock;
+use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::header;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 fn codex_command(codex_home: &Path) -> Result<assert_cmd::Command> {
     let mut cmd = assert_cmd::Command::new(codex_utils_cargo_bin::cargo_bin("codex")?);
@@ -114,6 +128,93 @@ async fn features_list_is_sorted_alphabetically_by_feature_name() -> Result<()> 
     expected_names.sort();
 
     assert_eq!(actual_names, expected_names);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn features_list_honors_cloud_managed_feature_requirements() -> Result<()> {
+    let server = MockServer::start().await;
+    let chatgpt_base_url = format!("{}/backend-api", server.uri());
+    let codex_home = TempDir::new()?;
+    let user_config = format!(
+        "cli_auth_credentials_store = \"file\"\nchatgpt_base_url = \"{chatgpt_base_url}\"\n\n[features]\nfast_mode = true\n"
+    );
+    std::fs::write(codex_home.path().join("config.toml"), &user_config)?;
+
+    let bootstrap_config = load_config_toml_with_layer_stack(
+        codex_home.path(),
+        Some(&AbsolutePathBuf::from_absolute_path(codex_home.path())?),
+        Vec::new(),
+        ConfigLoadOptions::default(),
+    )
+    .await?;
+    if bootstrap_config.config_toml.cli_auth_credentials_store
+        != Some(AuthCredentialsStoreMode::File)
+        || bootstrap_config.config_toml.chatgpt_base_url.as_deref()
+            != Some(chatgpt_base_url.as_str())
+    {
+        eprintln!(
+            "skipping cloud-managed feature subprocess: host-managed authentication or backend routing prevents isolated mock credentials"
+        );
+        return Ok(());
+    }
+
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("workspace-123")
+            .chatgpt_account_id("workspace-123")
+            .chatgpt_user_id("user-123")
+            .plan_type("enterprise"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/wham/config/bundle"))
+        .and(header("authorization", "Bearer chatgpt-token"))
+        .and(header("chatgpt-account-id", "workspace-123"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "requirements_toml": {
+                "enterprise_managed": [{
+                    "id": "managed-feature-requirements",
+                    "name": "Managed feature requirements",
+                    "contents": "[features]\nfast_mode = false\n",
+                }],
+            },
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut cmd = codex_command(codex_home.path())?;
+    let output = cmd
+        .current_dir(codex_home.path())
+        .env("NO_PROXY", "127.0.0.1,localhost")
+        .env("no_proxy", "127.0.0.1,localhost")
+        .env_remove("CODEX_ACCESS_TOKEN")
+        .env_remove("CODEX_API_KEY")
+        .env_remove("OPENAI_API_KEY")
+        .args(["features", "list"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let stdout = String::from_utf8(output)?;
+    let fast_mode = stdout
+        .lines()
+        .find(|line| line.starts_with("fast_mode "))
+        .context("feature list should include fast_mode")?;
+
+    assert_eq!(
+        fast_mode.split_whitespace().collect::<Vec<_>>(),
+        ["fast_mode", "stable", "false"]
+    );
+    assert_eq!(
+        std::fs::read_to_string(codex_home.path().join("config.toml"))?,
+        user_config
+    );
+    server.verify().await;
 
     Ok(())
 }

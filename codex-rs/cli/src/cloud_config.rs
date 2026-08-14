@@ -12,7 +12,7 @@ use codex_core::config::load_config_toml_with_layer_stack;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
 
-pub(super) async fn load_mcp_config(
+pub(crate) async fn load_config(
     config_overrides: &CliConfigOverrides,
     loader_overrides: LoaderOverrides,
 ) -> Result<Config> {
