@@ -1,6 +1,7 @@
 use std::io;
 use std::io::IsTerminal;
 use std::io::Write;
+use std::path::Path;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -73,6 +74,17 @@ pub(crate) async fn run(
     };
     let json = command.json;
     let verbose = command.verbose;
+    let thread_history_db_path = config.sqlite.thread_history_db_path();
+    let thread_storage_before = if mode == RolloutMigrationMode::Apply && !json {
+        thread_storage_bytes(
+            config.codex_home.as_path(),
+            thread_history_db_path.as_path(),
+        )
+        .await
+        .ok()
+    } else {
+        None
+    };
     let state_db = if mode == RolloutMigrationMode::Apply {
         Some(
             codex_rollout::state_db::try_init(&config)
@@ -97,11 +109,21 @@ pub(crate) async fn run(
         .await;
     progress.finish();
     let report = result?;
+    let thread_storage = match thread_storage_before {
+        Some(before) => thread_storage_bytes(
+            config.codex_home.as_path(),
+            thread_history_db_path.as_path(),
+        )
+        .await
+        .ok()
+        .map(|after| (before, after)),
+        None => None,
+    };
 
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
-        print_human_report(&report, mode, verbose, progress.elapsed());
+        print_human_report(&report, mode, verbose, progress.elapsed(), thread_storage);
     }
 
     if report
@@ -272,6 +294,7 @@ fn print_human_report(
     mode: RolloutMigrationMode,
     verbose: bool,
     elapsed: Duration,
+    thread_storage: Option<(u64, u64)>,
 ) {
     let mut counts = MigrationCounts::default();
     for outcome in &report.outcomes {
@@ -303,6 +326,13 @@ fn print_human_report(
             counts.skipped_busy,
             counts.failed,
         ),
+    }
+    if let Some((before, after)) = thread_storage {
+        println!(
+            "Disk used for thread storage: {} -> {}",
+            format_bytes(before),
+            format_bytes(after)
+        );
     }
     if mode == RolloutMigrationMode::DryRun && counts.eligible > 0 {
         println!("Run `codex migrate-rollouts --apply` to migrate eligible sessions.");
@@ -366,4 +396,55 @@ fn format_elapsed(elapsed: Duration) -> String {
         return format!("{minutes}m{:02}s", seconds % 60);
     }
     format!("{hours}h{:02}m{:02}s", minutes % 60, seconds % 60)
+}
+
+async fn thread_storage_bytes(codex_home: &Path, thread_history_db_path: &Path) -> io::Result<u64> {
+    let mut bytes = 0_u64;
+    let mut directories = vec![
+        codex_home.join(codex_rollout::SESSIONS_SUBDIR),
+        codex_home.join(codex_rollout::ARCHIVED_SESSIONS_SUBDIR),
+    ];
+    while let Some(directory) = directories.pop() {
+        let mut entries = match tokio::fs::read_dir(&directory).await {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        while let Some(entry) = entries.next_entry().await? {
+            let file_type = entry.file_type().await?;
+            if file_type.is_dir() {
+                directories.push(entry.path());
+            } else if file_type.is_file() {
+                bytes = bytes.saturating_add(entry.metadata().await?.len());
+            }
+        }
+    }
+
+    for suffix in ["", "-wal", "-shm"] {
+        let mut path = thread_history_db_path.as_os_str().to_owned();
+        path.push(suffix);
+        match tokio::fs::metadata(path).await {
+            Ok(metadata) => bytes = bytes.saturating_add(metadata.len()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(bytes)
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = KIB * 1024.0;
+    const GIB: f64 = MIB * 1024.0;
+
+    let bytes = bytes as f64;
+    if bytes >= GIB {
+        format!("{:.1} GB", bytes / GIB)
+    } else if bytes >= MIB {
+        format!("{:.1} MB", bytes / MIB)
+    } else if bytes >= KIB {
+        format!("{:.1} KB", bytes / KIB)
+    } else {
+        format!("{} B", bytes as u64)
+    }
 }
