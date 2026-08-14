@@ -17,6 +17,7 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
@@ -704,6 +705,7 @@ timeout = 900
                                 PathUri::parse("file:///D:/other-workspace")
                                     .expect("valid Windows workspace root"),
                             ],
+                            config: EnvironmentConfigState::FromThread,
                         }],
                     )
                 }),

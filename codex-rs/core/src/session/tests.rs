@@ -66,6 +66,7 @@ use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
+use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TurnEnvironmentSelections;
@@ -6644,6 +6645,7 @@ async fn request_permissions_tool_resolves_relative_paths_against_selected_envir
                 environment_id: "remote".to_string(),
                 cwd: PathUri::from_abs_path(&environment_cwd),
                 workspace_roots: Vec::new(),
+                config: EnvironmentConfigState::FromThread,
             },
             current_environment.environment,
             current_environment.shell,
@@ -7243,6 +7245,7 @@ async fn primary_environment_uses_first_turn_environment() {
                 environment_id: "second".to_string(),
                 cwd: second_cwd_uri.clone(),
                 workspace_roots: Vec::new(),
+                config: EnvironmentConfigState::FromThread,
             },
             Arc::clone(&first_environment.environment),
             /*shell*/ None,
@@ -8654,6 +8657,7 @@ async fn conflicting_ready_environment_root_ids_keep_first_location() {
                 environment_id: environment_id.clone(),
                 cwd: local_environment.cwd().clone(),
                 workspace_roots: local_environment.workspace_roots().to_vec(),
+                config: EnvironmentConfigState::FromThread,
             },
             environment,
             local_environment.shell.clone(),
@@ -8913,6 +8917,7 @@ async fn record_context_updates_emits_environment_item_for_cwd_changes() {
                 environment_id: environment.selection.environment_id,
                 cwd: PathUri::from_abs_path(&cwd),
                 workspace_roots: Vec::new(),
+                config: EnvironmentConfigState::FromThread,
             },
             environment.environment,
             environment.shell,
@@ -8972,6 +8977,7 @@ async fn record_context_updates_use_environment_permission_profile_and_workspace
                 environment_id: environment.selection.environment_id,
                 cwd,
                 workspace_roots: vec![PathUri::from_abs_path(&workspace_root)],
+                config: EnvironmentConfigState::FromThread,
             },
             environment.environment,
             environment.shell,
@@ -9047,6 +9053,7 @@ async fn record_context_updates_omits_environment_item_when_disabled() {
                 environment_id: environment.selection.environment_id,
                 cwd: PathUri::from_abs_path(&test_path_buf("/new-repo").abs()),
                 workspace_roots: Vec::new(),
+                config: EnvironmentConfigState::FromThread,
             },
             environment.environment,
             environment.shell,
@@ -9515,6 +9522,7 @@ async fn turn_context_item_stores_local_cwd() {
             environment_id: "remote".to_string(),
             cwd,
             workspace_roots: Vec::new(),
+            config: EnvironmentConfigState::FromThread,
         },
         environment.environment,
         environment.shell,

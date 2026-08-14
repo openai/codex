@@ -112,6 +112,7 @@ pub use codex_protocol::error::Result as CodexResult;
 pub use codex_protocol::models::PermissionProfile;
 pub use codex_protocol::openai_models::ModelPreset;
 pub use codex_protocol::protocol::AskForApproval;
+pub use codex_protocol::protocol::EnvironmentConfigState;
 pub use codex_protocol::protocol::EventMsg;
 pub use codex_protocol::protocol::Op;
 pub use codex_protocol::protocol::SessionConfiguredEvent;

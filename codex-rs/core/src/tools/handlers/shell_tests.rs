@@ -25,6 +25,7 @@ use crate::tools::handlers::ShellCommandHandler;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::CoreToolRuntime;
 use crate::turn_diff_tracker::TurnDiffTracker;
+use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_shell_command::is_safe_command::is_known_safe_command;
 use codex_shell_command::powershell::try_find_powershell_executable_blocking;
@@ -108,6 +109,7 @@ async fn shell_command_handler_to_exec_params_uses_selected_environment() {
             environment_id: "selected-environment".to_string(),
             cwd: PathUri::from_abs_path(&selected_cwd),
             workspace_roots: Vec::new(),
+            config: EnvironmentConfigState::FromThread,
         },
         Arc::clone(
             &turn_context

@@ -442,6 +442,7 @@ use codex_protocol::protocol::ConversationSpeechParams;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::ConversationStartTransport;
 use codex_protocol::protocol::ConversationTextParams;
+use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::EventMsg;
 #[cfg(test)]
 use codex_protocol::protocol::GitInfo as CoreGitInfo;
@@ -637,6 +638,7 @@ fn resolve_turn_environment_selections(
             environment_id,
             cwd,
             workspace_roots,
+            config: EnvironmentConfigState::FromThread,
         });
     }
     thread_manager

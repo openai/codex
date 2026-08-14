@@ -37,6 +37,7 @@ use codex_otel::THREAD_SKILLS_KEPT_TOTAL_METRIC;
 use codex_otel::THREAD_SKILLS_TRUNCATED_METRIC;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
+use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_CLOSE_TAG;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
@@ -1031,6 +1032,7 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
         environment_id: "turn-env".to_string(),
         cwd: PathUri::parse("file:///workspace").expect("cwd URI"),
         workspace_roots: Vec::new(),
+        config: EnvironmentConfigState::FromThread,
     };
     let available_sections = registry.context_contributors()[0]
         .contribute_world_state(WorldStateContributionInput {
@@ -1752,6 +1754,7 @@ async fn root_qualified_locator_selects_only_the_matching_executor_skill() -> Te
                 environment_id: "env-1".to_string(),
                 cwd: PathUri::parse("file:///workspace").expect("cwd URI"),
                 workspace_roots: Vec::new(),
+                config: EnvironmentConfigState::FromThread,
             }],
             ready_selected_capability_roots: &selected_roots,
             executor_capability_discovery: None,

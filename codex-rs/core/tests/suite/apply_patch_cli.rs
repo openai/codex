@@ -31,6 +31,7 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::ThreadSettingsOverrides;
@@ -1886,6 +1887,7 @@ async fn apply_patch_turn_diff_tracks_local_and_remote_environment_paths() -> Re
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
             cwd: PathUri::from_abs_path(&shared_cwd),
             workspace_roots: vec![PathUri::from_abs_path(&shared_cwd)],
+            config: EnvironmentConfigState::FromThread,
         },
     ];
     test.codex

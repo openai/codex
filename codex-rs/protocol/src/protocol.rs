@@ -91,6 +91,7 @@ pub use crate::approvals::NetworkApprovalProtocol;
 pub use crate::approvals::NetworkPolicyAmendment;
 pub use crate::approvals::NetworkPolicyRuleAction;
 pub use crate::environment::EnvironmentConfig;
+pub use crate::environment::EnvironmentConfigState;
 pub use crate::legacy_events::HasLegacyEvent;
 pub use crate::permissions::FileSystemAccessMode;
 pub use crate::permissions::FileSystemPath;
@@ -146,6 +147,7 @@ pub struct TurnEnvironmentSelection {
     pub environment_id: String,
     pub cwd: PathUri,
     pub workspace_roots: Vec<PathUri>,
+    pub config: EnvironmentConfigState,
 }
 
 #[derive(Debug, Clone, PartialEq)]

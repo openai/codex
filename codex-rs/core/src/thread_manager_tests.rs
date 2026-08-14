@@ -25,6 +25,7 @@ use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AgentMessageEvent;
+use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
@@ -1143,6 +1144,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         environment_id: "local".to_string(),
         cwd: PathUri::from_abs_path(&selected_cwd),
         workspace_roots: Vec::new(),
+        config: EnvironmentConfigState::FromThread,
     }];
     let default_cwd = config.cwd.clone();
     let mut source_config = config.clone();

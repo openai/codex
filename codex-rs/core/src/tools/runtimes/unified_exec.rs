@@ -520,6 +520,7 @@ mod tests {
     use codex_exec_server::Environment;
     use codex_exec_server::LOCAL_ENVIRONMENT_ID;
     use codex_protocol::models::PermissionProfile;
+    use codex_protocol::protocol::EnvironmentConfigState;
     use codex_protocol::protocol::TurnEnvironmentSelection;
     use codex_tools::ZshForkConfig;
     use codex_utils_absolute_path::AbsolutePathBuf;
@@ -535,6 +536,7 @@ mod tests {
                 environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
                 cwd,
                 workspace_roots: Vec::new(),
+                config: EnvironmentConfigState::FromThread,
             },
             Arc::new(Environment::default_for_tests()),
             /*shell*/ None,

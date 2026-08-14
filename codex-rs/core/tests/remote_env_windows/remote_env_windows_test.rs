@@ -9,6 +9,7 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandStatus;
 use codex_protocol::protocol::TurnEnvironmentSelection;
@@ -115,6 +116,7 @@ async fn windows_exec_server_runs_with_native_shell_and_cwd() -> Result<()> {
                         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                         cwd: cwd.clone(),
                         workspace_roots: vec![cwd],
+                        config: EnvironmentConfigState::FromThread,
                     }
                 }],
             );

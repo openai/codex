@@ -7,6 +7,7 @@ use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_sandboxing::SandboxManager;
@@ -23,6 +24,7 @@ fn test_turn_environment(environment_id: &str) -> crate::session::turn_context::
             environment_id: environment_id.to_string(),
             cwd: PathUri::from_abs_path(&std::env::temp_dir().abs()),
             workspace_roots: Vec::new(),
+            config: EnvironmentConfigState::FromThread,
         },
         std::sync::Arc::new(codex_exec_server::Environment::default_for_tests()),
         /*shell*/ None,

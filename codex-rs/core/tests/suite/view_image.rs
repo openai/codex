@@ -29,6 +29,7 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::TurnEnvironmentSelection;
@@ -748,6 +749,7 @@ async fn view_image_routes_to_selected_remote_environment() -> anyhow::Result<()
         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
         cwd: remote_cwd_uri.clone(),
         workspace_roots: vec![remote_cwd_uri],
+        config: EnvironmentConfigState::FromThread,
     };
     let relative_call_id = "call-view-image-relative-multi-env";
     let absolute_call_id = "call-view-image-absolute-multi-env";

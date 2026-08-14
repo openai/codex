@@ -17,6 +17,7 @@ use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::EnvironmentConfig;
+use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::EnvironmentConnectionEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -46,6 +47,7 @@ pub(crate) fn default_thread_environment_selections(
             environment_id,
             cwd: PathUri::from_abs_path(cwd),
             workspace_roots: workspace_roots.iter().map(PathUri::from_abs_path).collect(),
+            config: EnvironmentConfigState::FromThread,
         })
         .collect()
 }
@@ -80,17 +82,25 @@ pub(crate) struct StartingTurnEnvironment {
 }
 
 impl SelectedTurnEnvironment {
-    fn has_installed_environment_config(&self) -> bool {
-        self.config.selected_capability_roots.is_some()
-    }
-
-    // Thread settings still own permissions, but cannot overwrite shell policy
-    // that was installed specifically for this environment attachment.
-    fn update_thread_config(&mut self, config: &TurnEnvironmentConfig) {
-        if !self.has_installed_environment_config() {
-            self.config.allow_login_shell = config.allow_login_shell;
-        }
-        self.config.permission_profile = config.permission_profile.clone();
+    fn apply_configuration(
+        &mut self,
+        selection_config: EnvironmentConfigState,
+        thread_config: &TurnEnvironmentConfig,
+    ) {
+        self.config = match &selection_config {
+            EnvironmentConfigState::FromThread => thread_config.clone(),
+            EnvironmentConfigState::Ready(config) => TurnEnvironmentConfig {
+                allow_login_shell: config.allow_login_shell,
+                // temp read from thread_config; will go away once perms on EnvironmentConfig,
+                // then we can just assign passed config directly
+                permission_profile: thread_config.permission_profile.clone(),
+                selected_capability_roots: Some(config.selected_capability_roots.clone()),
+            },
+            EnvironmentConfigState::Pending => {
+                unreachable!("pending environment configuration is not supported yet")
+            }
+        };
+        self.selection.config = selection_config;
     }
 }
 
@@ -156,7 +166,10 @@ impl ThreadEnvironments {
                 };
                 // Child threads get their own settings, but inherit any
                 // environment-owned policy that was already installed.
-                inherited_environment.update_thread_config(&thread_environment_config);
+                inherited_environment.apply_configuration(
+                    inherited_environment.selection.config.clone(),
+                    &thread_environment_config,
+                );
                 Some(inherited_environment)
             })
             .collect();
@@ -182,13 +195,18 @@ impl ThreadEnvironments {
             if !seen_environment_ids.insert(selected_environment.environment_id.as_str()) {
                 continue;
             }
-            if let Some(environment) = previous
-                .iter()
-                .find(|environment| environment.selection == *selected_environment)
-                && !matches!(environment.resolution.clone().now_or_never(), Some(Err(_)))
+            if let Some(environment) = previous.iter().find(|environment| {
+                let previous = &environment.selection;
+                previous.environment_id == selected_environment.environment_id
+                    && previous.cwd == selected_environment.cwd
+                    && previous.workspace_roots == selected_environment.workspace_roots
+            }) && !matches!(environment.resolution.clone().now_or_never(), Some(Err(_)))
             {
                 let mut environment = environment.clone();
-                environment.update_thread_config(thread_environment_config);
+                environment.apply_configuration(
+                    selected_environment.config.clone(),
+                    thread_environment_config,
+                );
                 next.push(environment);
                 continue;
             }
@@ -224,13 +242,18 @@ impl ThreadEnvironments {
             .remote_handle();
             drop(tokio::spawn(resolution_task));
             let resolution = resolution.boxed().shared();
-            next.push(SelectedTurnEnvironment {
+            let mut selected = SelectedTurnEnvironment {
                 selection: selected_environment.clone(),
                 config: thread_environment_config.clone(),
                 environment,
                 connection_events_task,
                 resolution,
-            });
+            };
+            selected.apply_configuration(
+                selected_environment.config.clone(),
+                thread_environment_config,
+            );
+            next.push(selected);
         }
         let removed_connection_tasks = previous
             .iter()
@@ -290,7 +313,7 @@ impl ThreadEnvironments {
             .iter()
             .map(|environment| {
                 let mut environment = environment.clone();
-                environment.update_thread_config(config);
+                environment.apply_configuration(environment.selection.config.clone(), config);
                 environment
             })
             .collect();
@@ -315,8 +338,8 @@ impl ThreadEnvironments {
             )));
         };
 
-        environment.config.allow_login_shell = config.allow_login_shell;
-        environment.config.selected_capability_roots = Some(config.selected_capability_roots);
+        let thread_config = environment.config.clone();
+        environment.apply_configuration(EnvironmentConfigState::Ready(config), &thread_config);
         self.environments.store(Arc::new(environments));
         Ok(())
     }
@@ -787,6 +810,7 @@ mod tests {
                 environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                 cwd: cwd_uri.clone(),
                 workspace_roots: vec![cwd_uri],
+                config: EnvironmentConfigState::FromThread,
             }]
         );
     }
@@ -820,11 +844,13 @@ url = "ws://127.0.0.1:8765"
                     environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
                     cwd: cwd_uri.clone(),
                     workspace_roots: vec![cwd_uri.clone()],
+                    config: EnvironmentConfigState::FromThread,
                 },
                 TurnEnvironmentSelection {
                     environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                     cwd: cwd_uri.clone(),
                     workspace_roots: vec![cwd_uri],
+                    config: EnvironmentConfigState::FromThread,
                 },
             ]
         );
@@ -870,6 +896,7 @@ url = "ws://127.0.0.1:8765"
                 environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
                 cwd: PathUri::from_abs_path(&cwd),
                 workspace_roots: Vec::new(),
+                config: EnvironmentConfigState::FromThread,
             }],
             &expected_config,
         );
@@ -890,6 +917,7 @@ url = "ws://127.0.0.1:8765"
             environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
             cwd: cwd_uri.clone(),
             workspace_roots: Vec::new(),
+            config: EnvironmentConfigState::FromThread,
         };
 
         let resolved = resolve_turn_environments(
@@ -900,6 +928,7 @@ url = "ws://127.0.0.1:8765"
                     environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
                     cwd: cwd_uri.join("other").expect("other cwd URI"),
                     workspace_roots: Vec::new(),
+                    config: EnvironmentConfigState::FromThread,
                 },
             ],
         )
@@ -921,6 +950,7 @@ url = "ws://127.0.0.1:8765"
                 environment_id: "local".to_string(),
                 cwd: selected_cwd_uri,
                 workspace_roots: Vec::new(),
+                config: EnvironmentConfigState::FromThread,
             }],
         )
         .await;
@@ -960,6 +990,7 @@ url = "ws://127.0.0.1:8765"
             environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
             cwd: cwd_uri.clone(),
             workspace_roots: Vec::new(),
+            config: EnvironmentConfigState::FromThread,
         };
 
         let resolved = resolve_turn_environments(
@@ -969,6 +1000,7 @@ url = "ws://127.0.0.1:8765"
                     environment_id: "missing".to_string(),
                     cwd: cwd_uri,
                     workspace_roots: Vec::new(),
+                    config: EnvironmentConfigState::FromThread,
                 },
                 local.clone(),
             ],
@@ -997,6 +1029,7 @@ url = "ws://127.0.0.1:8765"
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
             cwd: PathUri::from_abs_path(&AbsolutePathBuf::current_dir().expect("cwd")),
             workspace_roots: Vec::new(),
+            config: EnvironmentConfigState::FromThread,
         };
         let environments = Arc::new(ThreadEnvironments::new(
             manager,
@@ -1056,11 +1089,13 @@ url = "ws://127.0.0.1:8765"
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
             cwd: cwd.clone(),
             workspace_roots: Vec::new(),
+            config: EnvironmentConfigState::FromThread,
         };
         let local = TurnEnvironmentSelection {
             environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
             cwd,
             workspace_roots: Vec::new(),
+            config: EnvironmentConfigState::FromThread,
         };
         let turn_environments = ThreadEnvironments::new(
             manager,
@@ -1163,6 +1198,7 @@ url = "ws://127.0.0.1:8765"
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
             cwd: PathUri::from_abs_path(&AbsolutePathBuf::current_dir().expect("cwd")),
             workspace_roots: Vec::new(),
+            config: EnvironmentConfigState::FromThread,
         };
         let environments = ThreadEnvironments::new(
             Arc::clone(&manager),
@@ -1248,6 +1284,7 @@ url = "ws://127.0.0.1:8765"
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
             cwd: PathUri::from_abs_path(&cwd),
             workspace_roots: Vec::new(),
+            config: EnvironmentConfigState::FromThread,
         };
         let (tx_event, rx_event) = async_channel::unbounded();
         let environments = Arc::new(ThreadEnvironments::new(
@@ -1337,6 +1374,7 @@ url = "ws://127.0.0.1:8765"
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
             cwd: PathUri::from_abs_path(&cwd),
             workspace_roots: Vec::new(),
+            config: EnvironmentConfigState::FromThread,
         };
         let inherited_environment = Arc::new(
             Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
@@ -1391,6 +1429,7 @@ url = "ws://127.0.0.1:8765"
             environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
             cwd: PathUri::from_abs_path(&cwd),
             workspace_roots: Vec::new(),
+            config: EnvironmentConfigState::FromThread,
         };
         let root = |id: &str| SelectedCapabilityRoot {
             id: id.to_string(),
@@ -1482,6 +1521,7 @@ url = "ws://127.0.0.1:8765"
                 environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
                 cwd: cwd_uri.clone(),
                 workspace_roots: Vec::new(),
+                config: EnvironmentConfigState::FromThread,
             }],
         )
         .await;
@@ -1496,6 +1536,7 @@ url = "ws://127.0.0.1:8765"
                     environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                     cwd: remote_cwd_uri.clone(),
                     workspace_roots: Vec::new(),
+                    config: EnvironmentConfigState::FromThread,
                 },
                 remote_environment.clone(),
                 /*shell*/ None,
@@ -1509,6 +1550,7 @@ url = "ws://127.0.0.1:8765"
                         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                         cwd: remote_cwd_uri,
                         workspace_roots: Vec::new(),
+                        config: EnvironmentConfigState::FromThread,
                     },
                     remote_environment,
                     /*shell*/ None,
@@ -1535,6 +1577,7 @@ url = "ws://127.0.0.1:8765"
                     environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
                     cwd: PathUri::from_abs_path(&cwd),
                     workspace_roots: Vec::new(),
+                    config: EnvironmentConfigState::FromThread,
                 },
                 config: test_environment_config(),
                 resolution: futures::future::pending().boxed().shared(),

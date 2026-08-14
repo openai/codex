@@ -26,6 +26,7 @@ use codex_hooks::HooksConfig;
 use codex_model_provider::create_model_provider;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::McpInvocation;
@@ -1111,6 +1112,7 @@ async fn mcp_sandbox_cwd_uses_matching_server_environment_uri() -> anyhow::Resul
                 environment_id: "remote".to_string(),
                 cwd: secondary_cwd.clone(),
                 workspace_roots: Vec::new(),
+                config: EnvironmentConfigState::FromThread,
             },
             environment,
             /*shell*/ None,

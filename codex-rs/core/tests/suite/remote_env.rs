@@ -56,6 +56,7 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ENVIRONMENTS_INSTRUCTIONS_OPEN_TAG;
+use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
@@ -415,6 +416,7 @@ async fn explicit_remote_shell_runs_in_remote_cwd() -> Result<()> {
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
             cwd: PathUri::from_abs_path(&test.config.cwd),
             workspace_roots: vec![PathUri::from_abs_path(&test.config.cwd)],
+            config: EnvironmentConfigState::FromThread,
         }]),
     )
     .await?;
@@ -693,6 +695,7 @@ async fn deferred_executor_promotes_primary_environment_when_startup_completes()
         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
         cwd: PathUri::from_abs_path(&test.config.cwd),
         workspace_roots: vec![PathUri::from_abs_path(&test.config.cwd)],
+        config: EnvironmentConfigState::FromThread,
     };
 
     test.submit_turn_with_environments(
@@ -1005,36 +1008,69 @@ async fn shared_executor_keeps_ready_capability_roots_scoped_to_each_attachment(
         },
     };
 
+    for config in [
+        EnvironmentConfigState::Pending,
+        EnvironmentConfigState::Ready(EnvironmentConfig {
+            allow_login_shell: false,
+            selected_capability_roots: vec![root("duplicate"), root("duplicate")],
+        }),
+    ] {
+        let invalid_selection = TurnEnvironmentSelection {
+            config,
+            ..selection.clone()
+        };
+        assert!(
+            test.codex
+                .preview_thread_settings_overrides(CodexThreadSettingsOverrides {
+                    environments: Some(TurnEnvironmentSelections::new(
+                        test.config.cwd.clone(),
+                        vec![invalid_selection],
+                    )),
+                    ..Default::default()
+                })
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            test.codex.environment_selections().await,
+            vec![selection.clone()]
+        );
+    }
+
     let mut second_thread_init = ExtensionDataInit::new();
     second_thread_init.insert(vec![root("startup-root")]);
     let second = test
         .thread_manager
         .start_thread(StartThreadOptions {
-            environments: Some(vec![selection.clone()]),
+            environments: Some(vec![TurnEnvironmentSelection {
+                config: EnvironmentConfigState::Ready(EnvironmentConfig {
+                    allow_login_shell: true,
+                    selected_capability_roots: vec![root("startup-root"), root("second-root")],
+                }),
+                ..selection.clone()
+            }]),
             thread_extension_init: second_thread_init,
             ..StartThreadOptions::new(test.config.clone())
         })
         .await?;
 
-    test.codex
-        .environment_ready(
-            &selection,
-            EnvironmentConfig {
-                allow_login_shell: false,
-                selected_capability_roots: vec![root("first-root")],
-            },
-        )
-        .await?;
-    second
-        .thread
-        .environment_ready(
-            &selection,
-            EnvironmentConfig {
-                allow_login_shell: true,
-                selected_capability_roots: vec![root("startup-root"), root("second-root")],
-            },
-        )
-        .await?;
+    submit_thread_settings(
+        &test.codex,
+        ThreadSettingsOverrides {
+            environments: Some(TurnEnvironmentSelections::new(
+                test.config.cwd.clone(),
+                vec![TurnEnvironmentSelection {
+                    config: EnvironmentConfigState::Ready(EnvironmentConfig {
+                        allow_login_shell: false,
+                        selected_capability_roots: vec![root("first-root")],
+                    }),
+                    ..selection.clone()
+                }],
+            )),
+            ..Default::default()
+        },
+    )
+    .await?;
 
     assert_eq!(
         test.codex.inspect_selected_capability_roots().ready_roots,
@@ -1071,24 +1107,27 @@ async fn shared_executor_keeps_ready_capability_roots_scoped_to_each_attachment(
     .into_iter()
     .enumerate()
     {
+        let mut request = TurnInputRequest::user_input(vec![UserInput::Text {
+            text: prompt.to_string(),
+            text_elements: Vec::new(),
+        }]);
         if index == 2 {
-            test.codex
-                .environment_ready(
-                    &selection,
-                    EnvironmentConfig {
-                        allow_login_shell: false,
-                        selected_capability_roots: vec![root("first-updated-root")],
-                    },
-                )
-                .await?;
+            request = request.with_thread_settings(ThreadSettingsOverrides {
+                environments: Some(TurnEnvironmentSelections::new(
+                    test.config.cwd.clone(),
+                    vec![TurnEnvironmentSelection {
+                        config: EnvironmentConfigState::Ready(EnvironmentConfig {
+                            allow_login_shell: false,
+                            selected_capability_roots: vec![root("first-updated-root")],
+                        }),
+                        ..selection.clone()
+                    }],
+                )),
+                ..Default::default()
+            });
         }
 
-        thread
-            .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
-                text: prompt.to_string(),
-                text_elements: Vec::new(),
-            }]))
-            .await?;
+        thread.start_or_steer_turn(request).await?;
         wait_for_event(thread, |event| matches!(event, EventMsg::TurnComplete(_))).await;
     }
 
@@ -1288,6 +1327,7 @@ async fn ready_before_selection_exposes_remote_tools_and_capability_context_afte
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
             cwd: PathUri::from_abs_path(&test.config.cwd),
             workspace_roots: vec![PathUri::from_abs_path(&test.config.cwd)],
+            config: EnvironmentConfigState::FromThread,
         }]),
     )
     .await?;
@@ -1390,6 +1430,7 @@ async fn deferred_executor_stays_pending_after_materialization() -> Result<()> {
                         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                         cwd: PathUri::from_abs_path(&test.config.cwd),
                         workspace_roots: vec![PathUri::from_abs_path(&test.config.cwd)],
+                        config: EnvironmentConfigState::FromThread,
                     }],
                 )),
                 ..Default::default()
@@ -1514,6 +1555,7 @@ async fn deferred_executor_spawn_agent_inherits_ready_step_environments(
         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
         cwd: PathUri::from_abs_path(&test.config.cwd),
         workspace_roots: vec![PathUri::from_abs_path(&test.config.cwd)],
+        config: EnvironmentConfigState::FromThread,
     };
     let expected_environments = vec![remote_selection, local(test.config.cwd.clone())];
     let mut created_threads = test.thread_manager.subscribe_thread_created();
@@ -1646,6 +1688,7 @@ async fn deferred_executor_guardian_uses_newly_ready_step_environment() -> Resul
         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
         cwd: PathUri::from_abs_path(&remote_cwd),
         workspace_roots: vec![PathUri::from_abs_path(&remote_cwd)],
+        config: EnvironmentConfigState::FromThread,
     };
     let permission_profile = PermissionProfile::from_runtime_permissions(
         &FileSystemSandboxPolicy::restricted(vec![
@@ -2142,6 +2185,7 @@ async fn exec_command_routes_to_selected_remote_environment() -> Result<()> {
         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
         cwd: PathUri::from_abs_path(&remote_cwd),
         workspace_roots: vec![PathUri::from_abs_path(&remote_cwd)],
+        config: EnvironmentConfigState::FromThread,
     };
     let multi_env_output = exec_command_routing_output(
         &test,
@@ -2280,11 +2324,13 @@ async fn remote_exec_materializes_target_roots_before_sandbox_selection() -> Res
                             environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
                             cwd: PathUri::from_abs_path(&local_cwd.path().abs()),
                             workspace_roots: Vec::new(),
+                            config: EnvironmentConfigState::FromThread,
                         },
                         TurnEnvironmentSelection {
                             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                             cwd: remote_cwd_uri.clone(),
                             workspace_roots: vec![remote_cwd_uri.clone()],
+                            config: EnvironmentConfigState::FromThread,
                         },
                     ],
                 )),
@@ -2453,6 +2499,7 @@ async fn remote_request_permissions_grant_unblocks_later_remote_exec() -> Result
                 environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                 cwd: PathUri::from_abs_path(&remote_cwd),
                 workspace_roots: vec![PathUri::from_abs_path(&remote_cwd)],
+                config: EnvironmentConfigState::FromThread,
             },
         ],
         AskForApproval::OnRequest,
@@ -2595,6 +2642,7 @@ async fn apply_patch_freeform_routes_to_selected_remote_environment() -> Result<
                 environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                 cwd: PathUri::from_abs_path(&remote_cwd),
                 workspace_roots: vec![PathUri::from_abs_path(&remote_cwd)],
+                config: EnvironmentConfigState::FromThread,
             },
         ]),
     )
@@ -2679,6 +2727,7 @@ async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
             cwd: PathUri::from_abs_path(&remote_cwd),
             workspace_roots: vec![PathUri::from_abs_path(&remote_cwd)],
+            config: EnvironmentConfigState::FromThread,
         },
     ];
     let local_patch = format!(
@@ -2881,6 +2930,7 @@ async fn apply_patch_intercepted_exec_command_routes_to_selected_remote_environm
                 environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                 cwd: PathUri::from_abs_path(&remote_cwd),
                 workspace_roots: vec![PathUri::from_abs_path(&remote_cwd)],
+                config: EnvironmentConfigState::FromThread,
             },
         ]),
     )

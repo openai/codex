@@ -21,6 +21,7 @@ use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::openai_models::WebSearchToolType;
+use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -907,6 +908,7 @@ async fn zsh_fork_unified_exec_keeps_shell_parameter_when_remote_environment_ava
                         environment_id: "remote".to_string(),
                         cwd: remote_cwd,
                         workspace_roots: Vec::new(),
+                        config: EnvironmentConfigState::FromThread,
                     },
                     Arc::new(
                         codex_exec_server::Environment::create_for_tests(Some(

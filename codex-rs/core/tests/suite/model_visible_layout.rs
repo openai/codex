@@ -23,6 +23,7 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::TurnEnvironmentSelection;
@@ -217,6 +218,7 @@ async fn model_visible_environment_context_preserves_foreign_workspace_roots() -
                         environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
                         cwd: PathUri::from_abs_path(&test.config.cwd),
                         workspace_roots: vec![foreign_root],
+                        config: EnvironmentConfigState::FromThread,
                     }],
                 )),
                 ..Default::default()

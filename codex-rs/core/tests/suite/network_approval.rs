@@ -19,6 +19,7 @@ use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::GuardianAssessmentStatus;
@@ -1837,6 +1838,7 @@ async fn approved_network_host_for_one_environment_still_prompts_in_another() ->
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
             cwd: PathUri::from_abs_path(&remote_cwd),
             workspace_roots: vec![PathUri::from_abs_path(&remote_cwd)],
+            config: EnvironmentConfigState::FromThread,
         },
     ];
 

@@ -6,12 +6,58 @@ use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::EnvironmentConfig;
+use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 
 use crate::config::ConstraintResult;
 use crate::session::session::Session;
 use crate::session::session::SessionConfiguration;
 use crate::session::session::SessionSettingsUpdate;
+
+pub(super) fn validate_environment_selections(
+    selections: &[TurnEnvironmentSelection],
+) -> CodexResult<()> {
+    for selection in selections {
+        match &selection.config {
+            EnvironmentConfigState::FromThread => {}
+            EnvironmentConfigState::Pending => {
+                return Err(CodexErr::InvalidRequest(
+                    "pending environment configuration is not supported yet".to_string(),
+                ));
+            }
+            EnvironmentConfigState::Ready(config) => {
+                validate_environment_config(selection, config)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_environment_config(
+    selection: &TurnEnvironmentSelection,
+    config: &EnvironmentConfig,
+) -> CodexResult<()> {
+    if config.selected_capability_roots.len() > MAX_SELECTED_CAPABILITY_ROOTS {
+        return Err(CodexErr::InvalidRequest(format!(
+            "environment readiness contains more than {MAX_SELECTED_CAPABILITY_ROOTS} selected capability roots"
+        )));
+    }
+
+    let mut root_ids = HashSet::with_capacity(config.selected_capability_roots.len());
+    for root in &config.selected_capability_roots {
+        let CapabilityRootLocation::Environment { environment_id, .. } = &root.location;
+        if root.id.trim().is_empty()
+            || environment_id != &selection.environment_id
+            || !root_ids.insert(root.id.as_str())
+        {
+            return Err(CodexErr::InvalidRequest(format!(
+                "selected capability roots must have unique non-empty IDs and belong to environment `{}`",
+                selection.environment_id
+            )));
+        }
+    }
+    Ok(())
+}
 
 impl Session {
     pub(super) fn apply_session_settings(
@@ -27,25 +73,7 @@ impl Session {
         selection: &TurnEnvironmentSelection,
         config: EnvironmentConfig,
     ) -> CodexResult<()> {
-        if config.selected_capability_roots.len() > MAX_SELECTED_CAPABILITY_ROOTS {
-            return Err(CodexErr::InvalidRequest(format!(
-                "environment readiness contains more than {MAX_SELECTED_CAPABILITY_ROOTS} selected capability roots"
-            )));
-        }
-
-        let mut root_ids = HashSet::with_capacity(config.selected_capability_roots.len());
-        for root in &config.selected_capability_roots {
-            let CapabilityRootLocation::Environment { environment_id, .. } = &root.location;
-            if root.id.trim().is_empty()
-                || environment_id != &selection.environment_id
-                || !root_ids.insert(root.id.as_str())
-            {
-                return Err(CodexErr::InvalidRequest(format!(
-                    "selected capability roots must have unique non-empty IDs and belong to environment `{}`",
-                    selection.environment_id
-                )));
-            }
-        }
+        validate_environment_config(selection, &config)?;
 
         // grab session lock so installation can't race w/ thread settings updates
         let _state = self.state.lock().await;

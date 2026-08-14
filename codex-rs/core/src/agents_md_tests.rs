@@ -23,6 +23,7 @@ use codex_exec_server::RemoveOptions;
 use codex_extension_api::UserInstructions;
 use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
@@ -337,6 +338,7 @@ fn resolved_local_environments<const N: usize>(
                         environment_id: environment_id.to_string(),
                         cwd: PathUri::from_abs_path(&cwd),
                         workspace_roots: Vec::new(),
+                        config: EnvironmentConfigState::FromThread,
                     },
                     Arc::new(
                         Environment::create_for_tests(/*exec_server_url*/ None)

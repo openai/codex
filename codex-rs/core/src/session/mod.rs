@@ -709,7 +709,7 @@ impl Session {
             user_shell_override,
         };
         session_configuration
-            .validate_auto_review_requirement(&environment_selections)
+            .validate(&environment_selections)
             .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
 
         // Generate a unique ID for the lifetime of this session.
