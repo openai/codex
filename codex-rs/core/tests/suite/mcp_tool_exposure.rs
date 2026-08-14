@@ -1,5 +1,6 @@
 use anyhow::Result;
 use codex_config::Constrained;
+use codex_core::EnvironmentConfig;
 use codex_core::TurnInputRequest;
 use codex_core::config::Config;
 use codex_extension_api::ExtensionFuture;
@@ -14,6 +15,8 @@ use codex_history::RolloutItem;
 use codex_history::RolloutLine;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::McpResourceClient;
+use codex_protocol::capabilities::CapabilityRootLocation;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -77,6 +80,7 @@ struct CoalescingMcpContributor {
 struct AppsMcpServerContributor {
     id: &'static str,
     url: String,
+    root_resolved: Option<Arc<Semaphore>>,
 }
 
 struct SessionSourceMcpContributor {
@@ -138,9 +142,16 @@ impl McpServerContributor<Config> for AppsMcpServerContributor {
 
     fn contribute<'a>(
         &'a self,
-        _context: McpServerContributionContext<'a, Config>,
+        context: McpServerContributionContext<'a, Config>,
     ) -> ExtensionFuture<'a, Vec<McpServerContribution>> {
         Box::pin(async move {
+            if context
+                .ready_selected_capability_roots()
+                .is_some_and(|roots| !roots.is_empty())
+                && let Some(root_resolved) = &self.root_resolved
+            {
+                root_resolved.add_permits(1);
+            }
             let config = serde_json::from_value(json!({ "url": self.url }))
                 .expect("test Apps MCP server config should be valid");
             vec![McpServerContribution::Set {
@@ -410,6 +421,128 @@ async fn rapid_mcp_refreshes_coalesce_to_the_latest_config() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn root_reconciliation_reuses_pending_apps_startup() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let apps_server = AppsTestServer::mount_searchable(&server).await?;
+    let gated_apps_mock = responses::start_mock_server().await;
+    let (gated_apps_server, startup_control) =
+        AppsTestServer::mount_with_startup_control(&gated_apps_mock).await?;
+    let release_startup = startup_control.hold_next_successful_initialize();
+
+    let response = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let root_resolved = Arc::new(Semaphore::new(0));
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.mcp_server_contributor(Arc::new(AppsMcpServerContributor {
+        id: "pending_apps_root_reconciliation_test",
+        url: format!("{}/api/codex/ps/mcp", gated_apps_server.chatgpt_base_url),
+        root_resolved: Some(Arc::clone(&root_resolved)),
+    }));
+    let mut builder = search_capable_apps_builder(apps_server.chatgpt_base_url)
+        .with_extensions(Arc::new(extensions.build()))
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodeModeOnly)
+                .expect("test config should allow feature update");
+            config.code_mode.direct_only_tool_namespaces =
+                vec![SEARCH_CALENDAR_NAMESPACE.to_string()];
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while startup_control.initialize_attempts() == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("initial Apps startup should begin before root reconciliation");
+
+    let selection = test
+        .codex
+        .environment_selections()
+        .await
+        .into_iter()
+        .next()
+        .expect("thread should select its executor environment");
+    test.codex
+        .environment_ready(
+            &selection,
+            EnvironmentConfig {
+                allow_login_shell: false,
+                selected_capability_roots: vec![SelectedCapabilityRoot {
+                    id: "calendar-root".to_string(),
+                    location: CapabilityRootLocation::Environment {
+                        environment_id: selection.environment_id.clone(),
+                        path: selection.cwd.clone(),
+                    },
+                }],
+            },
+        )
+        .await?;
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "inspect Calendar tools after root discovery".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    tokio::time::timeout(Duration::from_secs(5), root_resolved.acquire())
+        .await
+        .expect("root reconciliation should not wait for pending Apps startup")
+        .expect("root reconciliation semaphore should remain open")
+        .forget();
+    assert_eq!(startup_control.initialize_attempts(), 1);
+
+    release_startup
+        .send(())
+        .expect("initial Apps startup should remain in flight");
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    assert_eq!(startup_control.initialize_attempts(), 1);
+    let list_requests = gated_apps_mock
+        .received_requests()
+        .await
+        .expect("Apps mock server should capture requests")
+        .into_iter()
+        .filter(|request| {
+            serde_json::from_slice::<Value>(&request.body)
+                .ok()
+                .and_then(|body| {
+                    body.get("method")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+                .as_deref()
+                == Some("tools/list")
+        })
+        .count();
+    assert_eq!(list_requests, 1);
+    let body = response.single_request().body_json();
+    assert!(
+        namespace_child_tool(
+            &body,
+            SEARCH_CALENDAR_NAMESPACE,
+            SEARCH_CALENDAR_CREATE_TOOL,
+        )
+        .is_some(),
+        "shared Apps tools should remain model-visible after root reconciliation: {body}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn out_of_band_resource_read_reconciles_the_published_mcp_runtime() -> Result<()> {
     let server = responses::start_mock_server().await;
 
@@ -516,6 +649,7 @@ async fn elevated_apps_catalog_limit_requires_host_owned_registration() -> Resul
             extensions.mcp_server_contributor(Arc::new(AppsMcpServerContributor {
                 id,
                 url: format!("{}/api/codex/ps/mcp", apps_server.chatgpt_base_url),
+                root_resolved: None,
             }));
             builder = builder.with_extensions(Arc::new(extensions.build()));
         }
@@ -854,6 +988,7 @@ async fn apps_guidance_and_deferred_namespace_appear_after_recovery_within_a_tur
     extensions.mcp_server_contributor(Arc::new(AppsMcpServerContributor {
         id: "deferred_apps_recovery_test",
         url: format!("{}/api/codex/ps/mcp", gated_apps_server.chatgpt_base_url),
+        root_resolved: None,
     }));
     let call_id = "pause-for-apps";
     let response = mount_sse_sequence(

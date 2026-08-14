@@ -4169,6 +4169,101 @@ async fn reconciliation_reuses_an_unchanged_ready_server() {
 }
 
 #[tokio::test]
+async fn reconciliation_reuses_an_unchanged_pending_server_without_waiting() -> anyhow::Result<()> {
+    let runtime_context = reusable_server_runtime_context();
+    let mut config = reusable_server_config("http://127.0.0.1:1");
+    let tools = vec![
+        create_test_tool("docs", "search"),
+        create_test_tool("docs", "write"),
+    ];
+    let mut previous =
+        manager_with_reusable_ready_server(&config, &runtime_context, tools.clone()).await;
+    let managed_client = create_test_managed_client(tools).await;
+    let (pending_client, startup_started, release_startup) =
+        create_gated_async_managed_client(managed_client);
+    let startup = tokio::spawn({
+        let pending_client = pending_client.clone();
+        async move { pending_client.client().await }
+    });
+    startup_started.await?;
+    let connection = Arc::get_mut(
+        &mut previous
+            .servers
+            .get_mut("docs")
+            .expect("test server should exist")
+            .connection,
+    )
+    .expect("test server should have one connection owner");
+    connection.client = pending_client;
+    config.enabled_tools = Some(vec!["search".to_string()]);
+
+    let reconciled = tokio::time::timeout(
+        Duration::from_millis(100),
+        reconcile_reusable_server(&previous, config, runtime_context),
+    )
+    .await
+    .expect("reconciliation must not wait for an unchanged pending MCP server");
+
+    assert!(previous.shares_test_connection_with(&reconciled, "docs"));
+    release_startup
+        .send(())
+        .map_err(|()| anyhow!("pending startup should still be running"))?;
+    startup.await??;
+    assert_eq!(
+        model_tool_names(&reconciled.list_all_tools().await),
+        HashSet::from([ToolName::namespaced("mcp__docs", "search")])
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn reconciliation_cancels_a_reused_pending_server_when_disabled() -> anyhow::Result<()> {
+    let runtime_context = reusable_server_runtime_context();
+    let mut config = reusable_server_config("http://127.0.0.1:1");
+    let tools = vec![create_test_tool("docs", "search")];
+    let mut previous =
+        manager_with_reusable_ready_server(&config, &runtime_context, tools.clone()).await;
+    let managed_client = create_test_managed_client(tools).await;
+    let (pending_client, startup_started, release_startup) =
+        create_gated_async_managed_client(managed_client);
+    let cancellation = pending_client.cancel_token.clone();
+    let startup = tokio::spawn({
+        let pending_client = pending_client.clone();
+        async move { pending_client.client().await }
+    });
+    startup_started.await?;
+    let connection = Arc::get_mut(
+        &mut previous
+            .servers
+            .get_mut("docs")
+            .expect("test server should exist")
+            .connection,
+    )
+    .expect("test server should have one connection owner");
+    connection.client = pending_client;
+
+    let reused =
+        reconcile_reusable_server(&previous, config.clone(), runtime_context.clone()).await;
+    assert!(previous.shares_test_connection_with(&reused, "docs"));
+
+    config.enabled = false;
+    let removed = reconcile_reusable_server(&reused, config, runtime_context).await;
+    assert!(!removed.servers.contains_key("docs"));
+    drop(previous);
+    drop(reused);
+
+    assert!(
+        cancellation.is_cancelled(),
+        "disabling a reused pending MCP server should cancel its obsolete startup"
+    );
+    release_startup
+        .send(())
+        .map_err(|()| anyhow!("pending startup should remain available for test cleanup"))?;
+    startup.await??;
+    Ok(())
+}
+
+#[tokio::test]
 async fn reconciliation_retries_non_oauth_authentication_failures() {
     let runtime_context = reusable_server_runtime_context();
     let config = reusable_server_config("http://127.0.0.1:1");
