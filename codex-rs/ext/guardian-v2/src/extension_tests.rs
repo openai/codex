@@ -10,6 +10,7 @@ use codex_extension_api::ToolCallSource;
 use codex_extension_api::ToolName;
 use codex_extension_api::ToolPayload;
 use codex_extension_api::ToolStartInput;
+use codex_history::RolloutItem;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
 use codex_login::AgentIdentityAuthPolicy;
@@ -21,10 +22,12 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::security_risk::SecurityRiskScore;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::skip_if_no_network;
+use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
@@ -43,6 +46,9 @@ impl ConversationHistorySnapshot for TestConversationHistory {
 async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    let thread_server = responses::start_mock_server().await;
+    let test = test_codex().build_with_auto_env(&thread_server).await?;
+    let thread_id = test.session_configured.thread_id;
     let events = vec![
         ev_assistant_message("sample", r#"{"scores":{"action_risk":0.25}}"#),
         ev_completed("response-1"),
@@ -63,16 +69,20 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
         agent_identity_policy: AgentIdentityAuthPolicy::JwtOnly,
         session_source: SessionSource::Exec,
         session_id: "session-1".to_owned(),
-        thread_id: "thread-1".to_owned(),
+        thread_id: thread_id.to_string(),
         originator: None,
         service_tier: None,
     })
     .await?;
     let mut builder = ExtensionRegistryBuilder::<()>::new();
-    crate::install(&mut builder, Arc::new(sampler));
+    crate::install(
+        &mut builder,
+        Arc::new(sampler),
+        Arc::downgrade(&test.thread_manager),
+    );
     let registry = builder.build();
     let session_store = ExtensionData::new("session-1");
-    let thread_store = ExtensionData::new("thread-1");
+    let thread_store = test.codex.thread_extension_data();
     let turn_store = ExtensionData::new("turn-1");
     let tool_name = ToolName::plain("read_file");
     let tool_payload = ToolPayload::Function {
@@ -126,7 +136,7 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
     registry.tool_lifecycle_contributors()[0]
         .on_tool_start(ToolStartInput {
             session_store: &session_store,
-            thread_store: &thread_store,
+            thread_store,
             turn_store: &turn_store,
             turn_id: "turn-1",
             call_id: "call-1",
@@ -144,7 +154,10 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
     .await?;
     let request = request.body_json();
     assert_eq!(request["model"], "gpt-5.6-luna");
-    assert_eq!(request["client_metadata"]["thread_id"], "thread-1");
+    assert_eq!(
+        request["client_metadata"]["thread_id"],
+        thread_id.to_string()
+    );
     assert_eq!(request["client_metadata"]["turn_id"], "turn-1");
     assert_eq!(request["reasoning"]["effort"], "low");
     assert_eq!(request["reasoning"]["context"], "all_turns");
@@ -173,6 +186,36 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
             ">>> APPROVAL REQUEST END\n",
         )
     );
+    let score = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(score) = thread_store.get::<SecurityRiskScore>() {
+                return score;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    assert_eq!(
+        score.as_ref(),
+        &SecurityRiskScore {
+            category: "action_risk".to_string(),
+            score: 0.25,
+        }
+    );
+    test.codex.ensure_rollout_materialized().await;
+    test.codex.flush_rollout().await?;
+    let persisted_scores = test
+        .codex
+        .load_history(/*include_archived*/ false)
+        .await?
+        .items
+        .into_iter()
+        .filter_map(|item| match item {
+            RolloutItem::SecurityRiskScore(score) => Some(score),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(persisted_scores, vec![score.as_ref().clone()]);
 
     Ok(())
 }

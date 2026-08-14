@@ -1,5 +1,7 @@
 use std::sync::Arc;
+use std::sync::Weak;
 
+use codex_core::ThreadManager;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ExtensionWarning;
@@ -7,7 +9,10 @@ use codex_extension_api::ToolLifecycleContributor;
 use codex_extension_api::ToolLifecycleFuture;
 use codex_extension_api::ToolPayload;
 use codex_extension_api::ToolStartInput;
+use codex_history::RolloutItem;
+use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::security_risk::SecurityRiskScore;
 use serde_json::json;
 
 use crate::LunaSampler;
@@ -23,12 +28,14 @@ Return an action_risk score from 0.0 (safe and authorized) to 1.0 (dangerous or 
 struct GuardianV2Extension {
     sampler: Arc<LunaSampler>,
     event_sink: Arc<dyn ExtensionEventSink>,
+    thread_manager: Weak<ThreadManager>,
 }
 
 impl ToolLifecycleContributor for GuardianV2Extension {
     fn on_tool_start<'a>(&'a self, input: ToolStartInput<'a>) -> ToolLifecycleFuture<'a> {
         let sampler = Arc::clone(&self.sampler);
         let event_sink = Arc::clone(&self.event_sink);
+        let thread_manager = self.thread_manager.clone();
         let thread_id = input.thread_store.level_id().to_owned();
         let turn_id = input.turn_id.to_owned();
         let tool_name = input.tool_name.to_string();
@@ -69,38 +76,76 @@ impl ToolLifecycleContributor for GuardianV2Extension {
                  {planned_action}\n\
                  >>> APPROVAL REQUEST END\n"
             );
-            if let Err(error) = sampler
-                .sample(LunaSamplingRequest {
-                    instructions: CLASSIFIER_INSTRUCTIONS.to_owned(),
-                    input: classification_input,
-                    output_schema: json!({
-                        "type": "object",
-                        "properties": {
-                            "scores": {
-                                "type": "object",
-                                "properties": {
-                                    "action_risk": {
-                                        "type": "number",
-                                        "minimum": 0.0,
-                                        "maximum": 1.0
-                                    }
-                                },
-                                "required": ["action_risk"],
-                                "additionalProperties": false
-                            }
-                        },
-                        "required": ["scores"],
-                        "additionalProperties": false
-                    }),
-                    reasoning_effort: ReasoningEffort::Low,
-                    turn_id: turn_id.clone(),
-                })
-                .await
-            {
+            let result: Result<(), String> = async {
+                let output = sampler
+                    .sample(LunaSamplingRequest {
+                        instructions: CLASSIFIER_INSTRUCTIONS.to_owned(),
+                        input: classification_input,
+                        output_schema: json!({
+                            "type": "object",
+                            "properties": {
+                                "scores": {
+                                    "type": "object",
+                                    "properties": {
+                                        "action_risk": {
+                                            "type": "number",
+                                            "minimum": 0.0,
+                                            "maximum": 1.0
+                                        }
+                                    },
+                                    "required": ["action_risk"],
+                                    "additionalProperties": false
+                                }
+                            },
+                            "required": ["scores"],
+                            "additionalProperties": false
+                        }),
+                        reasoning_effort: ReasoningEffort::Low,
+                        turn_id: turn_id.clone(),
+                    })
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let output: serde_json::Value =
+                    serde_json::from_str(&output).map_err(|error| error.to_string())?;
+                let scores = output
+                    .get("scores")
+                    .and_then(serde_json::Value::as_object)
+                    .ok_or_else(|| "Luna returned no security risk scores".to_string())?;
+                let parsed_thread_id =
+                    ThreadId::from_string(&thread_id).map_err(|error| error.to_string())?;
+                let manager = thread_manager
+                    .upgrade()
+                    .ok_or_else(|| "thread manager is unavailable".to_string())?;
+                let thread = manager
+                    .get_thread(parsed_thread_id)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let ephemeral = thread.config_snapshot().await.ephemeral;
+                for (category, value) in scores {
+                    let score = value
+                        .as_f64()
+                        .filter(|score| (0.0..=1.0).contains(score))
+                        .ok_or_else(|| format!("invalid security risk score for {category}"))?;
+                    let score = SecurityRiskScore {
+                        category: category.clone(),
+                        score,
+                    };
+                    if !ephemeral {
+                        thread
+                            .append_rollout_items(&[RolloutItem::SecurityRiskScore(score.clone())])
+                            .await
+                            .map_err(|error| error.to_string())?;
+                    }
+                    thread.thread_extension_data().insert(score);
+                }
+                Ok(())
+            }
+            .await;
+            if let Err(error) = result {
                 event_sink.emit_warning(ExtensionWarning {
                     thread_id,
                     turn_id: Some(turn_id),
-                    message: format!("Guardian V2 Luna sampling failed: {error}"),
+                    message: format!("Guardian V2 risk scoring failed: {error}"),
                 });
             }
         });
@@ -110,10 +155,15 @@ impl ToolLifecycleContributor for GuardianV2Extension {
 }
 
 /// Installs Guardian V2 tool classification over a caller-owned Luna sampler.
-pub fn install<C: Sync>(registry: &mut ExtensionRegistryBuilder<C>, sampler: Arc<LunaSampler>) {
+pub fn install<C: Sync>(
+    registry: &mut ExtensionRegistryBuilder<C>,
+    sampler: Arc<LunaSampler>,
+    thread_manager: Weak<ThreadManager>,
+) {
     registry.tool_lifecycle_contributor(Arc::new(GuardianV2Extension {
         sampler,
         event_sink: registry.event_sink(),
+        thread_manager,
     }));
 }
 

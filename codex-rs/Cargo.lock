@@ -3307,7 +3307,9 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "codex-api",
+ "codex-core",
  "codex-extension-api",
+ "codex-history",
  "codex-http-client",
  "codex-login",
  "codex-model-provider",
