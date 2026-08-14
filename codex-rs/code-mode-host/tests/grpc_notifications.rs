@@ -273,7 +273,7 @@ async fn termination_cancels_pending_notifications() -> Result<()> {
 }
 
 #[tokio::test]
-async fn oversized_notification_text_is_truncated_at_a_utf8_boundary() -> Result<()> {
+async fn oversized_notification_text_is_delivered_unchanged() -> Result<()> {
     let host = HostHarness::start("grpc://127.0.0.1:0").await?;
     let provider = GrpcCodeModeSessionProvider::new(host.endpoint);
     let delegate = Arc::new(RecordingDelegate::default());
@@ -292,17 +292,13 @@ async fn oversized_notification_text_is_truncated_at_a_utf8_boundary() -> Result
     );
     timeout(TEST_TIMEOUT, delegate.notification_delivered.notified())
         .await
-        .context("truncated notification was not delivered")?;
+        .context("oversized notification was not delivered")?;
     assert_eq!(
         *delegate
             .notifications
             .lock()
             .unwrap_or_else(PoisonError::into_inner),
-        vec![(
-            "call-1".to_string(),
-            cell_id("1"),
-            format!("{}... [truncated]", "🦀".repeat(252)),
-        )]
+        vec![("call-1".to_string(), cell_id("1"), "🦀".repeat(512),)]
     );
 
     session.shutdown().await.map_err(anyhow::Error::msg)?;

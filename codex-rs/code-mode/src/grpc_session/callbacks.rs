@@ -16,9 +16,6 @@ use super::conversion;
 use super::deadline;
 use super::state::CallbackAdmission;
 
-const MAX_NOTIFICATION_BYTES: usize = 1_024;
-const TRUNCATED_NOTIFICATION_SUFFIX: &str = "... [truncated]";
-
 impl SessionInner {
     pub(super) fn spawn_session_events(
         self: &Arc<Self>,
@@ -197,15 +194,8 @@ impl SessionInner {
 
     fn handle_notification(
         self: &Arc<Self>,
-        mut notification: grpc::Notification,
+        notification: grpc::Notification,
     ) -> Result<(), String> {
-        if notification.text.len() > MAX_NOTIFICATION_BYTES {
-            let boundary = notification
-                .text
-                .floor_char_boundary(MAX_NOTIFICATION_BYTES - TRUNCATED_NOTIFICATION_SUFFIX.len());
-            notification.text.truncate(boundary);
-            notification.text.push_str(TRUNCATED_NOTIFICATION_SUFFIX);
-        }
         let admission = self
             .state
             .lock()
