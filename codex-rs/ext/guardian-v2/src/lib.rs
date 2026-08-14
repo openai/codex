@@ -1,3 +1,4 @@
+mod config;
 mod extension;
 mod sampler;
 mod transcript;

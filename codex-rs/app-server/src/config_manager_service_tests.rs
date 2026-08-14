@@ -861,6 +861,33 @@ async fn reserved_builtin_provider_override_rejected() {
 }
 
 #[tokio::test]
+async fn write_value_rejects_invalid_guardian_review_threshold() -> Result<()> {
+    let tmp = tempdir()?;
+    let path = tmp.path().join(CONFIG_TOML_FILE);
+    let initial = "[features.guardianv2]\nenabled = true\nreview_threshold = 0.8\n";
+    std::fs::write(&path, initial)?;
+    let service = ConfigManager::without_managed_config_for_tests(tmp.path().to_path_buf());
+
+    let error = service
+        .write_value(ConfigValueWriteParams {
+            file_path: Some(path.display().to_string()),
+            key_path: "features.guardianv2.review_threshold".to_string(),
+            value: serde_json::json!(2.0),
+            merge_strategy: MergeStrategy::Replace,
+            expected_version: None,
+        })
+        .await
+        .expect_err("Guardian review thresholds above 1.0 must be rejected");
+
+    assert_eq!(
+        error.write_error_code(),
+        Some(ConfigWriteErrorCode::ConfigValidationError)
+    );
+    assert_eq!(std::fs::read_to_string(&path)?, initial);
+    Ok(())
+}
+
+#[tokio::test]
 async fn write_value_rejects_feature_requirement_conflict() {
     let tmp = tempdir().expect("tempdir");
     std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "").unwrap();

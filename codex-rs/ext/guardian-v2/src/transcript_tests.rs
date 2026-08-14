@@ -76,6 +76,7 @@ fn transcript_keeps_conversation_and_configured_sources() {
 
     let output_and_reasoning = TranscriptConfig {
         sources: vec![TranscriptSource::ToolOutputs, TranscriptSource::Reasoning],
+        ..TranscriptConfig::default()
     };
 
     let transcript = output_and_reasoning.build(&items);
@@ -90,6 +91,7 @@ fn transcript_keeps_conversation_and_configured_sources() {
 
     let calls_only = TranscriptConfig {
         sources: vec![TranscriptSource::ToolCalls],
+        ..TranscriptConfig::default()
     };
 
     let transcript = calls_only.build(&items);
@@ -323,6 +325,7 @@ fn configured_reasoning_counts_against_message_budget() {
 
     let transcript = TranscriptConfig {
         sources: vec![TranscriptSource::Reasoning],
+        ..TranscriptConfig::default()
     }
     .build(&items);
 

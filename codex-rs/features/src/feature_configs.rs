@@ -1,4 +1,6 @@
 use crate::FeatureConfig;
+use crate::FeatureToml;
+use codex_protocol::openai_models::ReasoningEffort;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -69,6 +71,139 @@ impl FeatureConfig for NonPrefixedMcpToolNamesConfigToml {
     fn enabled(&self) -> Option<bool> {
         self.enabled
     }
+}
+
+/// Optional conversation sources available to the Guardian v2 classifier.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GuardianV2TranscriptSource {
+    ToolCalls,
+    ToolOutputs,
+    Reasoning,
+}
+
+/// Bounds and optional sources for the Guardian v2 conversation transcript.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GuardianV2TranscriptConfigToml {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sources: Option<Vec<GuardianV2TranscriptSource>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 100, max = 100000))]
+    pub max_message_entry_tokens: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 100, max = 100000))]
+    pub max_tool_entry_tokens: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 100, max = 100000))]
+    pub max_message_transcript_tokens: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 100, max = 100000))]
+    pub max_tool_transcript_tokens: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1))]
+    pub max_recent_non_user_entries: Option<usize>,
+}
+
+/// User-configurable prompt, approval, and context settings for Guardian v2.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GuardianV2ConfigToml {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub classifier_instructions: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub review_threshold: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffort>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 100, max = 100000))]
+    pub max_action_tokens: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 100, max = 100000))]
+    pub max_classifier_instruction_tokens: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transcript: Option<GuardianV2TranscriptConfigToml>,
+}
+
+impl FeatureConfig for GuardianV2ConfigToml {
+    fn enabled(&self) -> Option<bool> {
+        self.enabled
+    }
+}
+
+pub(crate) fn deserialize_guardian_v2_feature<'de, D>(
+    deserializer: D,
+) -> Result<Option<FeatureToml<GuardianV2ConfigToml>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    const MIN_TOKENS: usize = 100;
+    const MAX_TOKENS: usize = 100_000;
+
+    let feature = Option::<FeatureToml<GuardianV2ConfigToml>>::deserialize(deserializer)?;
+    let Some(FeatureToml::Config(config)) = feature.as_ref() else {
+        return Ok(feature);
+    };
+
+    if let Some(threshold) = config.review_threshold
+        && (!threshold.is_finite() || !(0.0..=1.0).contains(&threshold))
+    {
+        return Err(serde::de::Error::custom(
+            "Guardian v2 review_threshold must be between 0.0 and 1.0",
+        ));
+    }
+
+    let transcript = config.transcript.as_ref();
+    let message_entry = transcript.and_then(|value| value.max_message_entry_tokens);
+    let tool_entry = transcript.and_then(|value| value.max_tool_entry_tokens);
+    let message_total = transcript.and_then(|value| value.max_message_transcript_tokens);
+    let tool_total = transcript.and_then(|value| value.max_tool_transcript_tokens);
+    for (field, tokens) in [
+        ("max_action_tokens", config.max_action_tokens),
+        (
+            "max_classifier_instruction_tokens",
+            config.max_classifier_instruction_tokens,
+        ),
+        ("transcript max_message_entry_tokens", message_entry),
+        ("transcript max_tool_entry_tokens", tool_entry),
+        ("transcript max_message_transcript_tokens", message_total),
+        ("transcript max_tool_transcript_tokens", tool_total),
+    ] {
+        if let Some(tokens) = tokens
+            && !(MIN_TOKENS..=MAX_TOKENS).contains(&tokens)
+        {
+            return Err(serde::de::Error::custom(format!(
+                "Guardian v2 {field} must be between {MIN_TOKENS} and {MAX_TOKENS} tokens"
+            )));
+        }
+    }
+
+    if transcript
+        .and_then(|value| value.max_recent_non_user_entries)
+        .is_some_and(|count| count == 0)
+    {
+        return Err(serde::de::Error::custom(
+            "Guardian v2 transcript max_recent_non_user_entries must be positive",
+        ));
+    }
+
+    for (kind, entry, total) in [
+        ("message", message_entry, message_total),
+        ("tool", tool_entry, tool_total),
+    ] {
+        if let (Some(entry), Some(total)) = (entry, total)
+            && entry > total
+        {
+            return Err(serde::de::Error::custom(format!(
+                "Guardian v2 transcript max_{kind}_entry_tokens must not exceed max_{kind}_transcript_tokens"
+            )));
+        }
+    }
+
+    Ok(feature)
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]

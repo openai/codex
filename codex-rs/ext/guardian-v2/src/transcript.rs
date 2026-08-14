@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use codex_extension_api::ResponseItem;
+pub(crate) use codex_features::GuardianV2TranscriptSource as TranscriptSource;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
@@ -8,10 +9,10 @@ use codex_protocol::models::plaintext_agent_message_content;
 use codex_protocol::protocol::TruncationPolicy;
 
 pub(crate) const MAX_MESSAGE_ENTRY_TOKENS: usize = 2_000;
-const MAX_TOOL_ENTRY_TOKENS: usize = 1_000;
-const MAX_MESSAGE_TRANSCRIPT_TOKENS: usize = 10_000;
-const MAX_TOOL_TRANSCRIPT_TOKENS: usize = 10_000;
-const MAX_RECENT_NON_USER_ENTRIES: usize = 40;
+pub(crate) const MAX_TOOL_ENTRY_TOKENS: usize = 1_000;
+pub(crate) const MAX_MESSAGE_TRANSCRIPT_TOKENS: usize = 10_000;
+pub(crate) const MAX_TOOL_TRANSCRIPT_TOKENS: usize = 10_000;
+pub(crate) const MAX_RECENT_NON_USER_ENTRIES: usize = 40;
 const MANUAL_APPROVAL_DEVELOPER_PREFIX: &str =
     "The user has manually approved a specific action that was previously `Rejected`.";
 
@@ -28,22 +29,25 @@ struct TranscriptEntry {
     tokens: usize,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum TranscriptSource {
-    ToolCalls,
-    ToolOutputs,
-    Reasoning,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TranscriptConfig {
     pub(crate) sources: Vec<TranscriptSource>,
+    pub(crate) max_message_entry_tokens: usize,
+    pub(crate) max_tool_entry_tokens: usize,
+    pub(crate) max_message_transcript_tokens: usize,
+    pub(crate) max_tool_transcript_tokens: usize,
+    pub(crate) max_recent_non_user_entries: usize,
 }
 
 impl Default for TranscriptConfig {
     fn default() -> Self {
         Self {
             sources: vec![TranscriptSource::ToolCalls, TranscriptSource::ToolOutputs],
+            max_message_entry_tokens: MAX_MESSAGE_ENTRY_TOKENS,
+            max_tool_entry_tokens: MAX_TOOL_ENTRY_TOKENS,
+            max_message_transcript_tokens: MAX_MESSAGE_TRANSCRIPT_TOKENS,
+            max_tool_transcript_tokens: MAX_TOOL_TRANSCRIPT_TOKENS,
+            max_recent_non_user_entries: MAX_RECENT_NON_USER_ENTRIES,
         }
     }
 }
@@ -194,9 +198,9 @@ impl TranscriptConfig {
                 _ => TranscriptEntryKind::Message,
             };
             let token_cap = match kind {
-                TranscriptEntryKind::Tool => MAX_TOOL_ENTRY_TOKENS,
+                TranscriptEntryKind::Tool => self.max_tool_entry_tokens,
                 TranscriptEntryKind::User | TranscriptEntryKind::Message => {
-                    MAX_MESSAGE_ENTRY_TOKENS
+                    self.max_message_entry_tokens
                 }
             };
             let text = truncate_entry(&text, token_cap);
@@ -222,7 +226,8 @@ impl TranscriptConfig {
 
         if let Some(&latest_user_index) = user_indices.last()
             && !included[latest_user_index]
-            && message_tokens + entries[latest_user_index].tokens <= MAX_MESSAGE_TRANSCRIPT_TOKENS
+            && message_tokens + entries[latest_user_index].tokens
+                <= self.max_message_transcript_tokens
         {
             included[latest_user_index] = true;
             message_tokens += entries[latest_user_index].tokens;
@@ -230,7 +235,7 @@ impl TranscriptConfig {
 
         for &index in user_indices.iter().rev() {
             if included[index]
-                || message_tokens + entries[index].tokens > MAX_MESSAGE_TRANSCRIPT_TOKENS
+                || message_tokens + entries[index].tokens > self.max_message_transcript_tokens
             {
                 continue;
             }
@@ -242,17 +247,17 @@ impl TranscriptConfig {
         let mut retained_non_user_entries = 0;
         for (index, entry) in entries.iter().enumerate().rev() {
             if entry.kind == TranscriptEntryKind::User
-                || retained_non_user_entries >= MAX_RECENT_NON_USER_ENTRIES
+                || retained_non_user_entries >= self.max_recent_non_user_entries
             {
                 continue;
             }
 
             let fits_budget = match entry.kind {
                 TranscriptEntryKind::Tool => {
-                    tool_tokens + entry.tokens <= MAX_TOOL_TRANSCRIPT_TOKENS
+                    tool_tokens + entry.tokens <= self.max_tool_transcript_tokens
                 }
                 TranscriptEntryKind::Message => {
-                    message_tokens + entry.tokens <= MAX_MESSAGE_TRANSCRIPT_TOKENS
+                    message_tokens + entry.tokens <= self.max_message_transcript_tokens
                 }
                 TranscriptEntryKind::User => unreachable!("user entries were selected separately"),
             };

@@ -583,7 +583,7 @@
               "type": "boolean"
             },
             "guardianv2": {
-              "type": "boolean"
+              "$ref": "#/definitions/FeatureToml_for_GuardianV2ConfigToml"
             },
             "hooks": {
               "type": "boolean"
@@ -1031,6 +1031,16 @@
         }
       ]
     },
+    "FeatureToml_for_GuardianV2ConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/GuardianV2ConfigToml"
+        }
+      ]
+    },
     "FeatureToml_for_MultiAgentV2ConfigToml": {
       "anyOf": [
         {
@@ -1218,6 +1228,94 @@
         "sandbox_approval"
       ],
       "type": "object"
+    },
+    "GuardianV2ConfigToml": {
+      "additionalProperties": false,
+      "description": "User-configurable prompt, approval, and context settings for Guardian v2.",
+      "properties": {
+        "classifier_instructions": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "max_action_tokens": {
+          "format": "uint",
+          "maximum": 100000.0,
+          "minimum": 100.0,
+          "type": "integer"
+        },
+        "max_classifier_instruction_tokens": {
+          "format": "uint",
+          "maximum": 100000.0,
+          "minimum": 100.0,
+          "type": "integer"
+        },
+        "reasoning_effort": {
+          "$ref": "#/definitions/ReasoningEffort"
+        },
+        "review_threshold": {
+          "format": "double",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "transcript": {
+          "$ref": "#/definitions/GuardianV2TranscriptConfigToml"
+        }
+      },
+      "type": "object"
+    },
+    "GuardianV2TranscriptConfigToml": {
+      "additionalProperties": false,
+      "description": "Bounds and optional sources for the Guardian v2 conversation transcript.",
+      "properties": {
+        "max_message_entry_tokens": {
+          "format": "uint",
+          "maximum": 100000.0,
+          "minimum": 100.0,
+          "type": "integer"
+        },
+        "max_message_transcript_tokens": {
+          "format": "uint",
+          "maximum": 100000.0,
+          "minimum": 100.0,
+          "type": "integer"
+        },
+        "max_recent_non_user_entries": {
+          "format": "uint",
+          "minimum": 1.0,
+          "type": "integer"
+        },
+        "max_tool_entry_tokens": {
+          "format": "uint",
+          "maximum": 100000.0,
+          "minimum": 100.0,
+          "type": "integer"
+        },
+        "max_tool_transcript_tokens": {
+          "format": "uint",
+          "maximum": 100000.0,
+          "minimum": 100.0,
+          "type": "integer"
+        },
+        "sources": {
+          "items": {
+            "$ref": "#/definitions/GuardianV2TranscriptSource"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "GuardianV2TranscriptSource": {
+      "description": "Optional conversation sources available to the Guardian v2 classifier.",
+      "enum": [
+        "tool_calls",
+        "tool_outputs",
+        "reasoning"
+      ],
+      "type": "string"
     },
     "History": {
       "additionalProperties": false,
@@ -5243,7 +5341,7 @@
           "type": "boolean"
         },
         "guardianv2": {
-          "type": "boolean"
+          "$ref": "#/definitions/FeatureToml_for_GuardianV2ConfigToml"
         },
         "hooks": {
           "type": "boolean"

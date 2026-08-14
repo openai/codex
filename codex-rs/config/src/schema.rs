@@ -53,6 +53,15 @@ pub fn features_schema(schema_gen: &mut SchemaGenerator) -> Schema {
             );
             continue;
         }
+        if feature.id == codex_features::Feature::GuardianV2 {
+            validation.properties.insert(
+                feature.key.to_string(),
+                schema_gen.subschema_for::<codex_features::FeatureToml<
+                    codex_features::GuardianV2ConfigToml,
+                >>(),
+            );
+            continue;
+        }
         if feature.id == codex_features::Feature::MultiAgentV2 {
             validation.properties.insert(
                 feature.key.to_string(),

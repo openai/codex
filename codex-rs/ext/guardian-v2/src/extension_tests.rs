@@ -37,6 +37,7 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 
 use super::encrypted_parent_compaction;
+use crate::config::DEFAULT_MODEL_CONTEXT_ITEM_TOKENS;
 use crate::sampler::MODEL;
 
 const TEST_GUARDIAN_POLICY: &str =
@@ -124,8 +125,19 @@ async fn sample_conversation_history(
     arguments: &str,
     guardian_policy: Option<&str>,
 ) -> Result<(serde_json::Value, TestCodex, ExtensionRegistry<Config>)> {
+    sample_configured_conversation_history(conversation_history, arguments, guardian_policy, "")
+        .await
+}
+
+async fn sample_configured_conversation_history(
+    conversation_history: Vec<ResponseItem>,
+    arguments: &str,
+    guardian_policy: Option<&str>,
+    guardian_config: &str,
+) -> Result<(serde_json::Value, TestCodex, ExtensionRegistry<Config>)> {
     let thread_server = responses::start_mock_server().await;
     let guardian_policy = guardian_policy.map(str::to_owned);
+    let guardian_config = guardian_config.to_owned();
     let test = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_model_info_override("codex-auto-review", |model_info| {
@@ -140,6 +152,12 @@ async fn sample_conversation_history(
         })
         .with_model("gpt-5.5")
         .with_config(move |config| config.guardian_policy_config = guardian_policy)
+        .with_pre_build_hook(move |home| {
+            if !guardian_config.is_empty() {
+                std::fs::write(home.join("config.toml"), guardian_config)
+                    .expect("Guardian v2 configuration should be written");
+            }
+        })
         .build_with_auto_env(&thread_server)
         .await?;
     let events = vec![
@@ -209,6 +227,140 @@ async fn sample_conversation_history(
     )
     .await?;
     Ok((request.body_json(), test, registry))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn contributor_uses_configured_prompt_effort_threshold_and_transcript() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let configuration = r#"
+[features.guardianv2]
+enabled = true
+classifier_instructions = "Use the experimental security classification prompt."
+review_threshold = 0.60
+reasoning_effort = "minimal"
+max_action_tokens = 128
+max_classifier_instruction_tokens = 100000
+
+[features.guardianv2.transcript]
+sources = ["tool_outputs", "reasoning"]
+max_message_entry_tokens = 128
+max_tool_entry_tokens = 100
+max_message_transcript_tokens = 256
+max_tool_transcript_tokens = 128
+max_recent_non_user_entries = 8
+"#;
+    let conversation_history = vec![
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_owned(),
+            content: vec![ContentItem::InputText {
+                text: "Review the pending action.".to_owned(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::Reasoning {
+            id: None,
+            summary: vec![ReasoningItemReasoningSummary::SummaryText {
+                text: "Evaluate the action carefully.".to_owned(),
+            }],
+            content: None,
+            encrypted_content: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "list_dir".to_owned(),
+            namespace: None,
+            arguments: r#"{"path":"."}"#.to_owned(),
+            encrypted_function_args: None,
+            call_id: "previous-call".to_owned(),
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::FunctionCallOutput {
+            id: None,
+            call_id: "previous-call".to_owned(),
+            output: FunctionCallOutputPayload::from_text("README.md".to_owned()),
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ];
+    let arguments = json!({"body": "x".repeat(4_000)}).to_string();
+    let (request, test, registry) = sample_configured_conversation_history(
+        conversation_history,
+        &arguments,
+        Some(TEST_GUARDIAN_POLICY),
+        configuration,
+    )
+    .await?;
+
+    assert_eq!(
+        request["input"][1],
+        json!({
+            "type": "message",
+            "role": "developer",
+            "content": [{
+                "type": "input_text",
+                "text": format!(
+                    "Use the experimental security classification prompt.\n\n# Security Policy\n{TEST_GUARDIAN_POLICY}"
+                )
+            }]
+        })
+    );
+    assert_eq!(request["reasoning"]["effort"], "minimal");
+
+    let content = request["input"][2]["content"]
+        .as_array()
+        .expect("Luna user content should be an array");
+    let transcript = content
+        .iter()
+        .filter_map(|item| item["text"].as_str())
+        .collect::<Vec<_>>();
+    assert!(transcript.contains(&"[2] reasoning: Evaluate the action carefully.\n"));
+    assert!(transcript.contains(&"[3] tool list_dir result: README.md\n"));
+    assert!(
+        !transcript
+            .iter()
+            .any(|entry| entry.contains("list_dir call"))
+    );
+
+    let action = content[content.len() - 2]["text"]
+        .as_str()
+        .expect("planned action should be a text item");
+    assert!(action.len() <= TruncationPolicy::Tokens(/*limit*/ 128).byte_budget());
+    let action: serde_json::Value = serde_json::from_str(action)?;
+    assert_eq!(action["tool"], "read_file");
+
+    let session_store = ExtensionData::new("session-1");
+    let thread_store = test.codex.thread_extension_data();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while thread_store.get::<SecurityRiskScore>().is_none() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    thread_store.insert(SecurityRiskScore {
+        scores: BTreeMap::from([("action_risk".to_owned(), 0.65)]),
+        sampled_at: None,
+    });
+    assert_eq!(
+        registry
+            .approval_review(&session_store, thread_store, "review action")
+            .await,
+        None
+    );
+    thread_store.insert(SecurityRiskScore {
+        scores: BTreeMap::from([("action_risk".to_owned(), 0.55)]),
+        sampled_at: None,
+    });
+    assert_eq!(
+        registry
+            .approval_review(&session_store, thread_store, "review action")
+            .await,
+        Some(ReviewDecision::Approved)
+    );
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -290,7 +442,7 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
                 "type": "input_text",
                 "text": format!(
                     "{}\n\n# Security Policy\n{TEST_GUARDIAN_POLICY}",
-                    super::CLASSIFIER_INSTRUCTIONS,
+                    crate::config::DEFAULT_CLASSIFIER_INSTRUCTIONS,
                 ),
             }],
         })
@@ -401,7 +553,7 @@ async fn contributor_uses_catalog_policy_without_a_configured_override() -> Resu
                 "type": "input_text",
                 "text": format!(
                     "{}\n\n# Security Policy\n{TEST_CATALOG_GUARDIAN_POLICY}",
-                    super::CLASSIFIER_INSTRUCTIONS,
+                    crate::config::DEFAULT_CLASSIFIER_INSTRUCTIONS,
                 ),
             }],
         })
@@ -437,13 +589,14 @@ async fn contributor_bounds_configured_policy_in_luna_developer_instructions() -
         .as_str()
         .expect("Luna request should contain developer instructions");
 
-    assert!(instructions.starts_with(super::CLASSIFIER_INSTRUCTIONS));
+    assert!(instructions.starts_with(crate::config::DEFAULT_CLASSIFIER_INSTRUCTIONS));
     assert!(instructions.contains("# Security Policy\nReject unsafe uploads."));
     assert!(instructions.contains("<truncated omitted_approx_tokens="));
     assert!(instructions.ends_with("Require explicit approval."));
     assert!(
         instructions.len()
-            <= TruncationPolicy::Tokens(super::MAX_CLASSIFIER_INSTRUCTION_TOKENS).byte_budget()
+            <= TruncationPolicy::Tokens(crate::config::DEFAULT_MODEL_CONTEXT_ITEM_TOKENS)
+                .byte_budget()
     );
 
     Ok(())
@@ -634,7 +787,7 @@ async fn contributor_reuses_the_latest_compatible_parent_compaction() -> Result<
             .replace("\r\n", "\n")
             .starts_with(&format!(
                 "{}\n\n# Security Policy\n## Environment Profile\n",
-                super::CLASSIFIER_INSTRUCTIONS,
+                crate::config::DEFAULT_CLASSIFIER_INSTRUCTIONS,
             ))
     );
     assert_eq!(
@@ -671,7 +824,8 @@ async fn contributor_bounds_oversized_actions_and_fairly_truncates_nested_fields
         .as_str()
         .expect("the current action should be an input text item");
     let action = serde_json::from_str::<serde_json::Value>(action_text)?;
-    let max_action_bytes = TruncationPolicy::Tokens(super::MAX_ACTION_TOKENS).byte_budget();
+    let max_action_bytes =
+        TruncationPolicy::Tokens(DEFAULT_MODEL_CONTEXT_ITEM_TOKENS).byte_budget();
     assert!(action_text.ends_with('\n'));
     assert!(
         action_text.len() <= max_action_bytes,
@@ -724,10 +878,10 @@ fn guardian_action_bounds_structurally_oversized_arrays() -> Result<()> {
         },
     };
 
-    let rendered = action.render()?;
+    let rendered = action.render(DEFAULT_MODEL_CONTEXT_ITEM_TOKENS)?;
     assert!(
         rendered.len().saturating_add(1)
-            <= TruncationPolicy::Tokens(super::MAX_ACTION_TOKENS).byte_budget()
+            <= TruncationPolicy::Tokens(DEFAULT_MODEL_CONTEXT_ITEM_TOKENS).byte_budget()
     );
     let action = serde_json::from_str::<serde_json::Value>(&rendered)?;
     assert_eq!(
@@ -745,7 +899,7 @@ fn guardian_action_bounds_structurally_oversized_arrays() -> Result<()> {
 #[test]
 fn guardian_action_bounds_structurally_oversized_object_keys() -> Result<()> {
     let oversized_key = "oversized_key_".to_owned()
-        + &"k".repeat(TruncationPolicy::Tokens(super::MAX_ACTION_TOKENS).byte_budget());
+        + &"k".repeat(TruncationPolicy::Tokens(DEFAULT_MODEL_CONTEXT_ITEM_TOKENS).byte_budget());
     let mut arguments = serde_json::Map::from_iter([
         (
             "_guardian_omitted_fields".to_owned(),
@@ -767,10 +921,10 @@ fn guardian_action_bounds_structurally_oversized_object_keys() -> Result<()> {
         },
     };
 
-    let rendered = action.render()?;
+    let rendered = action.render(DEFAULT_MODEL_CONTEXT_ITEM_TOKENS)?;
     assert!(
         rendered.len().saturating_add(1)
-            <= TruncationPolicy::Tokens(super::MAX_ACTION_TOKENS).byte_budget()
+            <= TruncationPolicy::Tokens(DEFAULT_MODEL_CONTEXT_ITEM_TOKENS).byte_budget()
     );
     let action = serde_json::from_str::<serde_json::Value>(&rendered)?;
     let fields = action

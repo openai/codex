@@ -117,6 +117,135 @@ fn code_mode_host_feature_config_preserves_boolean_toggle() {
 }
 
 #[test]
+fn guardian_v2_feature_config_preserves_boolean_toggle() {
+    let features: FeaturesToml =
+        toml::from_str("guardianv2 = true").expect("Guardian v2 boolean should deserialize");
+
+    assert_eq!(features.guardianv2, Some(FeatureToml::Enabled(true)));
+    assert_eq!(
+        features.entries(),
+        BTreeMap::from([("guardianv2".to_owned(), true)])
+    );
+}
+
+#[test]
+fn guardian_v2_feature_config_deserializes_classifier_and_transcript_settings() {
+    let features: FeaturesToml = toml::from_str(
+        r#"
+[guardianv2]
+enabled = true
+classifier_instructions = "Review this action"
+review_threshold = 0.65
+reasoning_effort = "minimal"
+max_action_tokens = 512
+max_classifier_instruction_tokens = 256
+
+[guardianv2.transcript]
+sources = ["tool_outputs", "reasoning"]
+max_message_entry_tokens = 128
+max_tool_entry_tokens = 128
+max_message_transcript_tokens = 512
+max_tool_transcript_tokens = 256
+max_recent_non_user_entries = 12
+"#,
+    )
+    .expect("Guardian v2 settings should deserialize");
+
+    assert_eq!(
+        features.guardianv2,
+        Some(FeatureToml::Config(crate::GuardianV2ConfigToml {
+            enabled: Some(true),
+            classifier_instructions: Some("Review this action".to_owned()),
+            review_threshold: Some(0.65),
+            reasoning_effort: Some(codex_protocol::openai_models::ReasoningEffort::Minimal),
+            max_action_tokens: Some(512),
+            max_classifier_instruction_tokens: Some(256),
+            transcript: Some(crate::GuardianV2TranscriptConfigToml {
+                sources: Some(vec![
+                    crate::GuardianV2TranscriptSource::ToolOutputs,
+                    crate::GuardianV2TranscriptSource::Reasoning,
+                ]),
+                max_message_entry_tokens: Some(128),
+                max_tool_entry_tokens: Some(128),
+                max_message_transcript_tokens: Some(512),
+                max_tool_transcript_tokens: Some(256),
+                max_recent_non_user_entries: Some(12),
+            }),
+        }))
+    );
+    assert_eq!(
+        features.entries(),
+        BTreeMap::from([("guardianv2".to_owned(), true)])
+    );
+}
+
+#[test]
+fn guardian_v2_feature_config_rejects_invalid_settings() {
+    for setting in [
+        "max_action_tokens",
+        "max_classifier_instruction_tokens",
+        "transcript.max_message_entry_tokens",
+        "transcript.max_tool_entry_tokens",
+        "transcript.max_message_transcript_tokens",
+        "transcript.max_tool_transcript_tokens",
+    ] {
+        for value in [99, 100_001] {
+            let settings = format!("[guardianv2]\n{setting} = {value}");
+            assert!(
+                toml::from_str::<FeaturesToml>(&settings).is_err(),
+                "out-of-range Guardian v2 setting should fail: {setting} = {value}"
+            );
+        }
+    }
+
+    for settings in [
+        "review_threshold = -0.1",
+        "review_threshold = 1.1",
+        "review_threshold = nan",
+        "transcript.max_recent_non_user_entries = 0",
+        "transcript.max_message_entry_tokens = 200\ntranscript.max_message_transcript_tokens = 100",
+        "transcript.max_tool_entry_tokens = 200\ntranscript.max_tool_transcript_tokens = 100",
+    ] {
+        assert!(
+            toml::from_str::<FeaturesToml>(&format!("[guardianv2]\n{settings}")).is_err(),
+            "invalid Guardian v2 settings should fail: {settings}"
+        );
+    }
+}
+
+#[test]
+fn guardian_v2_feature_config_accepts_boundary_values() {
+    for (threshold, tokens) in [(0.0, 100), (1.0, 100_000)] {
+        let features: FeaturesToml = toml::from_str(&format!(
+            "[guardianv2]\n\
+             review_threshold = {threshold:.1}\n\
+             max_action_tokens = {tokens}\n\
+             max_classifier_instruction_tokens = {tokens}\n\
+             [guardianv2.transcript]\n\
+             max_message_entry_tokens = {tokens}\n\
+             max_tool_entry_tokens = {tokens}\n\
+             max_message_transcript_tokens = {tokens}\n\
+             max_tool_transcript_tokens = {tokens}\n\
+             max_recent_non_user_entries = 1"
+        ))
+        .expect("Guardian v2 boundary settings should deserialize");
+
+        assert!(matches!(features.guardianv2, Some(FeatureToml::Config(_))));
+    }
+
+    for setting in [
+        "max_message_transcript_tokens",
+        "max_tool_transcript_tokens",
+    ] {
+        let features: FeaturesToml =
+            toml::from_str(&format!("[guardianv2.transcript]\n{setting} = 100"))
+                .expect("partial Guardian v2 transcript settings should deserialize");
+
+        assert!(matches!(features.guardianv2, Some(FeatureToml::Config(_))));
+    }
+}
+
+#[test]
 fn code_mode_host_feature_config_deserializes_fallback_setting() {
     let features: FeaturesToml = toml::from_str(
         r#"
