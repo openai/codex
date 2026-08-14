@@ -34,6 +34,13 @@ pub(super) fn managed_preferences_requirements_source() -> RequirementSource {
     }
 }
 
+pub(super) fn has_managed_preferences() -> io::Result<bool> {
+    Ok(
+        load_managed_preference(MANAGED_PREFERENCES_CONFIG_KEY)?.is_some()
+            || load_managed_preference(MANAGED_PREFERENCES_REQUIREMENTS_KEY)?.is_some(),
+    )
+}
+
 pub(crate) async fn load_managed_admin_config_layer(
     override_base64: Option<&str>,
     strict_config: bool,

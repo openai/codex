@@ -176,6 +176,7 @@ mod startup_draft;
 mod startup_error;
 mod startup_hooks_review;
 mod startup_orchestration;
+mod startup_preflight;
 mod status;
 mod status_indicator_widget;
 mod streaming;
@@ -1194,6 +1195,12 @@ async fn run_ratatui_app(
         initial_config
     };
     startup_draft.apply_config(&config);
+    if !(cli.resume_picker || cli.fork_picker)
+        && let Err(err) = startup_draft.show(&mut tui)
+    {
+        shutdown_startup_session(app_server.take(), &mut terminal_restore_guard).await;
+        return Err(err.into());
+    }
 
     let missing_session_exit =
         |id_str: &str,

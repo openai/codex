@@ -500,6 +500,90 @@ async fn startup_draft_applies_editor_keymap_without_enabling_vim() {
 }
 
 #[tokio::test]
+async fn startup_draft_waits_for_onboarding_before_accepting_input() {
+    let mut composer_pump = startup_test_pump(std::iter::empty());
+    let mut composer_tui =
+        crate::tui::test_support::make_test_tui().expect("create composer test terminal");
+    composer_pump
+        .show_initial_screen(&mut composer_tui)
+        .expect("draw the composer when no protected screen is expected");
+    assert!(!composer_tui.terminal.viewport_area.is_empty());
+    drop(composer_tui);
+
+    let mut pump = startup_test_pump(
+        [
+            TuiEvent::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)),
+            TuiEvent::Paste("not a draft".to_string()),
+            TuiEvent::Draw,
+        ]
+        .into_iter(),
+    );
+    pump.initial_screen = StartupDraftInitialScreen::Onboarding;
+    let mut tui = crate::tui::test_support::make_test_tui().expect("create test terminal");
+    pump.show_initial_screen(&mut tui)
+        .expect("keep the composer hidden until onboarding finishes");
+
+    pump.flush_pending_events(&mut tui)
+        .await
+        .expect("ignore input before onboarding owns the screen");
+    assert!(pump.bottom_pane.composer_is_empty());
+    assert!(tui.terminal.viewport_area.is_empty());
+    let hidden_area = tui.terminal.viewport_area;
+    let mut frames = format!(
+        "before onboarding: hidden ({}x{} viewport)",
+        hidden_area.width, hidden_area.height
+    );
+
+    pump.show(&mut tui)
+        .expect("show the composer after onboarding finishes");
+    assert!(!tui.terminal.viewport_area.is_empty());
+    let area = tui.terminal.viewport_area;
+    let renderable = startup_draft_renderable(&pump.header, &pump.bottom_pane);
+    let mut buffer = Buffer::empty(area);
+    renderable.render(area, &mut buffer);
+    let visible_frame = (area.top()..area.bottom())
+        .map(|row| {
+            (area.left()..area.right())
+                .map(|column| buffer[(column, row)].symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .replace(crate::version::CODEX_CLI_VERSION, "<VERSION>");
+    drop(renderable);
+    frames.push_str(&format!("\n---\nafter onboarding:\n{visible_frame}"));
+    insta::assert_snapshot!("startup_draft_onboarding_transition", frames);
+
+    pump.handle_event(
+        &mut tui,
+        TuiEvent::Key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE)),
+    )
+    .expect("edit the composer after onboarding finishes");
+    pump.bottom_pane.flush_composer_paste_burst();
+    assert_eq!(pump.bottom_pane.composer_text(), "y");
+}
+
+#[tokio::test]
+async fn startup_draft_allows_cancellation_before_onboarding_appears() {
+    for character in ['c', 'd'] {
+        let mut pump = startup_test_pump(std::iter::once(TuiEvent::Key(KeyEvent::new(
+            KeyCode::Char(character),
+            KeyModifiers::CONTROL,
+        ))));
+        pump.initial_screen = StartupDraftInitialScreen::Onboarding;
+        let mut tui = crate::tui::test_support::make_test_tui().expect("create test terminal");
+
+        let error = pump
+            .flush_pending_events(&mut tui)
+            .await
+            .expect_err("cancel startup before onboarding appears");
+        assert!(super::StartupCancelled::matches(&error));
+    }
+}
+
+#[tokio::test]
 async fn startup_draft_waits_for_session_picker_before_accepting_input() {
     let mut pump = startup_test_pump(
         [

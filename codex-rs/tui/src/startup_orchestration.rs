@@ -135,13 +135,6 @@ pub(super) async fn run_main_inner(
         .await;
     }
 
-    let initial_screen = if cli.resume_picker || cli.fork_picker {
-        startup_draft::StartupDraftInitialScreen::SessionPicker
-    } else {
-        startup_draft::StartupDraftInitialScreen::Composer
-    };
-    let mut startup_draft = startup_draft::StartupDraft::new(initial_screen)?;
-
     let reuse_implicit_local_daemon = !workload_identity_selected
         && can_reuse_implicit_local_daemon(
             &cli_kv_overrides,
@@ -149,6 +142,25 @@ pub(super) async fn run_main_inner(
             strict_config,
             cli.bypass_hook_trust,
         );
+    let initial_screen = if cli.resume_picker || cli.fork_picker {
+        startup_draft::StartupDraftInitialScreen::SessionPicker
+    } else if !cli.oss
+        && explicit_remote_endpoint.is_none()
+        && reuse_implicit_local_daemon
+        && launch_loader_overrides.packaged_defaults_path.is_none()
+        && startup_preflight::should_delay_startup_composer_for_first_login(
+            &codex_home,
+            codex_config::loader::system_config_toml_file(),
+            || codex_config::loader::has_local_managed_configuration(&codex_home),
+            |name| std::env::var(name).ok(),
+        )
+    {
+        startup_draft::StartupDraftInitialScreen::Onboarding
+    } else {
+        startup_draft::StartupDraftInitialScreen::Composer
+    };
+    let mut startup_draft = startup_draft::StartupDraft::new(initial_screen)?;
+
     let default_daemon = if explicit_remote_endpoint.is_none() && reuse_implicit_local_daemon {
         startup_draft
             .run_until(maybe_probe_default_daemon_socket(&codex_home))

@@ -51,6 +51,7 @@ const STARTUP_PASTE_NEWLINE_TIMEOUT: Duration = Duration::from_millis(120);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum StartupDraftInitialScreen {
     Composer,
+    Onboarding,
     SessionPicker,
 }
 
@@ -115,9 +116,7 @@ impl StartupDraft {
                 pending_paste_newline: None,
             },
         };
-        if initial_screen == StartupDraftInitialScreen::Composer {
-            draft.pump.show(&mut draft.tui)?;
-        }
+        draft.pump.show_initial_screen(&mut draft.tui)?;
         Ok(draft)
     }
 
@@ -230,7 +229,15 @@ impl StartupDraftPump {
         self.bottom_pane.composer_draft_snapshot()
     }
 
-    /// Reveal the editable composer once a requested session picker has finished.
+    /// Draw the initial composer only when no protected startup screen must appear first.
+    fn show_initial_screen(&mut self, tui: &mut Tui) -> io::Result<()> {
+        if self.initial_screen == StartupDraftInitialScreen::Composer {
+            self.show(tui)?;
+        }
+        Ok(())
+    }
+
+    /// Reveal the editable composer once an expected protected screen has finished.
     pub(crate) fn show(&mut self, tui: &mut Tui) -> io::Result<()> {
         self.initial_screen = StartupDraftInitialScreen::Composer;
         self.draw(tui, tui.terminal.last_known_screen_size)
@@ -274,7 +281,7 @@ impl StartupDraftPump {
         }
         match event {
             TuiEvent::Key(key) => {
-                if self.initial_screen == StartupDraftInitialScreen::SessionPicker
+                if self.initial_screen != StartupDraftInitialScreen::Composer
                     && !key_hint::ctrl(KeyCode::Char('c')).is_press(key)
                     && !key_hint::ctrl(KeyCode::Char('d')).is_press(key)
                 {

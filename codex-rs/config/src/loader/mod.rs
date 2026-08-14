@@ -730,6 +730,25 @@ fn system_requirements_toml_file_with_overrides(
     }
 }
 
+/// Check local managed configuration sources without loading or parsing configuration.
+///
+/// Filesystem or managed-preference errors are returned so callers can conservatively avoid
+/// assuming that administrator-controlled configuration is absent.
+pub fn has_local_managed_configuration(codex_home: &Path) -> io::Result<bool> {
+    if layer_io::managed_config_default_path(codex_home).try_exists()?
+        || system_requirements_toml_file()?.as_path().try_exists()?
+    {
+        return Ok(true);
+    }
+
+    #[cfg(target_os = "macos")]
+    if macos::has_managed_preferences()? {
+        return Ok(true);
+    }
+
+    Ok(false)
+}
+
 #[cfg(unix)]
 pub fn system_config_toml_file() -> io::Result<AbsolutePathBuf> {
     AbsolutePathBuf::from_absolute_path(Path::new(SYSTEM_CONFIG_TOML_FILE_UNIX))
