@@ -204,6 +204,7 @@ fn ignores_legacy_abort_without_turn_id_and_context_only_records() {
     }));
     let security_risk = project(RolloutItem::SecurityRiskScore(SecurityRiskScore {
         scores: BTreeMap::from([("action_risk".to_string(), 0.92)]),
+        sampled_at: None,
     }));
 
     assert!(aborted.is_empty());

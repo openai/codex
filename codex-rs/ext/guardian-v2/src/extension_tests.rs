@@ -284,8 +284,10 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
         score.as_ref(),
         &SecurityRiskScore {
             scores: BTreeMap::from([("action_risk".to_string(), 0.8)]),
+            sampled_at: score.sampled_at,
         }
     );
+    assert!(score.sampled_at.is_some());
     assert_eq!(
         registry.approval_requirement(thread_store),
         ApprovalRequirement::RequireAutomaticReview
@@ -307,6 +309,7 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
 
     thread_store.insert(SecurityRiskScore {
         scores: BTreeMap::from([("action_risk".to_string(), 0.25)]),
+        sampled_at: None,
     });
     assert_eq!(
         registry.approval_requirement(thread_store),
@@ -316,6 +319,7 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
     let disabled_thread_store = ExtensionData::new("disabled-thread");
     disabled_thread_store.insert(SecurityRiskScore {
         scores: BTreeMap::from([("action_risk".to_string(), 0.8)]),
+        sampled_at: None,
     });
     assert_eq!(
         registry.approval_requirement(&disabled_thread_store),

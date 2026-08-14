@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use std::sync::Weak;
+use std::time::SystemTime;
 
 use codex_core::ThreadManager;
 use codex_core::config::Config;
@@ -133,6 +134,7 @@ impl ToolLifecycleContributor for GuardianV2Extension {
         let Some(sampler) = input.thread_store.get::<LunaSampler>() else {
             return Box::pin(std::future::ready(()));
         };
+        let sampled_at = SystemTime::now();
         let event_sink = Arc::clone(&self.event_sink);
         let thread_manager = self.thread_manager.clone();
         let thread_id = input.thread_store.level_id().to_owned();
@@ -239,8 +241,15 @@ impl ToolLifecycleContributor for GuardianV2Extension {
                             .ok_or_else(|| format!("invalid security risk score for {category}"))
                     })
                     .collect::<Result<_, _>>()?;
-                let score = SecurityRiskScore { scores };
-                thread.thread_extension_data().insert(score.clone());
+                let score = SecurityRiskScore {
+                    scores,
+                    sampled_at: Some(sampled_at.into()),
+                };
+                thread
+                    .thread_extension_data()
+                    .insert_if(score.clone(), |previous| {
+                        previous.is_none_or(|previous| previous.sampled_at < score.sampled_at)
+                    });
                 if !ephemeral {
                     thread
                         .append_rollout_items(&[RolloutItem::SecurityRiskScore(score)])

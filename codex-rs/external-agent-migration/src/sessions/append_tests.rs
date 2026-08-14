@@ -66,6 +66,7 @@ fn requires_a_strict_nonempty_model_prefix() {
     }
     let security_risk = RolloutItem::SecurityRiskScore(SecurityRiskScore {
         scores: BTreeMap::from([("action_risk".to_string(), 0.92)]),
+        sampled_at: None,
     });
     metadata_changed.push(security_risk.clone());
     assert!(model_transcripts_match(&history, &metadata_changed));

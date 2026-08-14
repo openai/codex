@@ -1,5 +1,6 @@
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
+use std::sync::Barrier;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
@@ -27,6 +28,36 @@ fn typed_values_can_be_inserted_replaced_and_removed() {
     );
     assert_eq!(data.get::<String>(), None);
     assert_eq!(data.get::<u64>().as_deref(), Some(&42));
+}
+
+#[test]
+fn conditional_insert_keeps_the_newest_concurrent_value() {
+    const CALLER_COUNT: u64 = 16;
+
+    let data = Arc::new(ExtensionData::new("thread-1"));
+    let callers_ready = Arc::new(Barrier::new(CALLER_COUNT as usize));
+    let handles = (0..CALLER_COUNT)
+        .map(|value| {
+            let data = Arc::clone(&data);
+            let callers_ready = Arc::clone(&callers_ready);
+            std::thread::spawn(move || {
+                callers_ready.wait();
+                data.insert_if(value, |existing| {
+                    existing.is_none_or(|existing| value > *existing)
+                });
+            })
+        })
+        .collect::<Vec<_>>();
+
+    for handle in handles {
+        handle.join().expect("insertion thread should succeed");
+    }
+
+    assert_eq!(data.get::<u64>().as_deref(), Some(&(CALLER_COUNT - 1)));
+    assert!(!data.insert_if(/*value*/ 0_u64, |existing| {
+        existing.is_none_or(|existing| *existing == 0)
+    }));
+    assert_eq!(data.get::<u64>().as_deref(), Some(&(CALLER_COUNT - 1)));
 }
 
 #[test]

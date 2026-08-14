@@ -443,6 +443,7 @@ async fn load_rollout_items_preserves_security_risk_scores() -> std::io::Result<
             ("action_risk".to_string(), 0.76),
             ("data_exfiltration".to_string(), 0.31),
         ]),
+        sampled_at: None,
     };
     let security_risk_item = RolloutItem::SecurityRiskScore(security_risk.clone());
     for history_mode in [ThreadHistoryMode::Legacy, ThreadHistoryMode::Paginated] {
