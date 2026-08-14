@@ -22,6 +22,7 @@ use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
 use codex_analytics::CompactionTrigger;
 use codex_models_manager::model_info::model_info_from_slug;
+use codex_protocol::AgentPath;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::SessionSource;
@@ -260,6 +261,7 @@ fn turn_metadata_state_includes_sandbox_metadata() {
     assert_eq!(auto_review_enabled, Some(true));
     assert_eq!(session_id, Some("session-a"));
     assert_eq!(thread_id, Some("thread-a"));
+    assert_eq!(json["agent_name"].as_str(), Some("/root"));
     assert!(json.get("forked_from_thread_id").is_none());
     assert!(json.get("parent_thread_id").is_none());
     assert!(json.get("subagent_kind").is_none());
@@ -317,7 +319,7 @@ fn turn_metadata_state_includes_thread_spawn_subagent_parent_without_fork() {
         &SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id,
             depth: 1,
-            agent_path: None,
+            agent_path: Some(AgentPath::root().join("worker").expect("agent path")),
             agent_nickname: None,
             agent_role: None,
         }),
@@ -340,6 +342,7 @@ fn turn_metadata_state_includes_thread_spawn_subagent_parent_without_fork() {
         Some("22222222-2222-4222-8222-222222222222")
     );
     assert_eq!(json["subagent_kind"].as_str(), Some("thread_spawn"));
+    assert_eq!(json["agent_name"].as_str(), Some("/root/worker"));
 }
 
 #[test]
@@ -384,6 +387,9 @@ fn turn_metadata_state_includes_forked_thread_spawn_subagent_lineage() {
         Some("33333333-3333-4333-8333-333333333333")
     );
     assert_eq!(json["subagent_kind"].as_str(), Some("thread_spawn"));
+    // V1 subagents have no canonical agent path and are intentionally unsupported by
+    // agent-name-addressed history and notes; their metadata falls back to the root agent.
+    assert_eq!(json["agent_name"].as_str(), Some("/root"));
 }
 
 #[test]
@@ -424,6 +430,7 @@ fn turn_metadata_state_includes_known_parent_for_non_thread_spawn_subagents_with
             Some("44444444-4444-4444-8444-444444444444")
         );
         assert_eq!(json["subagent_kind"].as_str(), Some(subagent_kind));
+        assert_eq!(json["agent_name"].as_str(), Some("/root"));
     }
 }
 
@@ -483,12 +490,14 @@ fn turn_metadata_state_includes_model_and_reasoning_effort_only_in_request_meta(
 
     let header = test_turn_metadata_header(&state);
     let header_json: Value = serde_json::from_str(&header).expect("json");
+    assert_eq!(header_json["agent_name"].as_str(), Some("/root"));
     assert!(header_json.get("model").is_none());
     assert!(header_json.get("reasoning_effort").is_none());
 
     let meta = state
         .current_meta_value_for_mcp_request(test_mcp_turn_metadata_context())
         .expect("turn metadata should be present");
+    assert!(meta.get("agent_name").is_none());
     assert!(meta.get("request_kind").is_none());
     assert_eq!(meta["model"].as_str(), Some("gpt-5.4"));
     assert_eq!(meta["reasoning_effort"].as_str(), Some("high"));
@@ -694,6 +703,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
         ),
         ("session_id".to_string(), "client-supplied".to_string()),
         ("thread_id".to_string(), "client-supplied".to_string()),
+        ("agent_name".to_string(), "client-supplied".to_string()),
         ("installation_id".to_string(), "client-supplied".to_string()),
         (
             "x-codex-installation-id".to_string(),
@@ -769,6 +779,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
     assert_eq!(json["session_id"].as_str(), Some("session-a"));
     assert_eq!(json["thread_id"].as_str(), Some("thread-a"));
     assert!(json.get(LEGACY_CODE_MODE_TOOL_NAMES_KEY).is_none());
+    assert_eq!(json["agent_name"].as_str(), Some("/root"));
     assert_eq!(
         json[TOOL_NAMESPACES_INFO_KEY],
         serde_json::json!({

@@ -18,9 +18,12 @@ use codex_internal_history_notes_extension::install;
 use codex_login::AuthHeaders;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_protocol::AgentPath;
+use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TruncationPolicy;
 use http::HeaderMap;
 use http::HeaderValue;
@@ -47,7 +50,6 @@ async fn installed_extension_exposes_and_invokes_history_notes_tools() -> TestRe
         })))
         .mount(&server)
         .await;
-
     let codex_home = TempDir::new()?;
     let mut config = ConfigBuilder::default()
         .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
@@ -69,14 +71,21 @@ async fn installed_extension_exposes_and_invokes_history_notes_tools() -> TestRe
     let mut builder = ExtensionRegistryBuilder::<Config>::new();
     install(&mut builder, auth_manager);
     let registry = builder.build();
-    let session_store = ExtensionData::new("session");
+    let session_store = ExtensionData::new("session-123");
     let thread_store = ExtensionData::new("thread-123");
+    let session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id: ThreadId::new(),
+        depth: 1,
+        agent_path: Some(AgentPath::root().join("worker").expect("agent path")),
+        agent_nickname: None,
+        agent_role: None,
+    });
 
     for contributor in registry.thread_lifecycle_contributors() {
         contributor
             .on_thread_start(ThreadStartInput {
                 config: &config,
-                session_source: &SessionSource::Cli,
+                session_source: &session_source,
                 persistent_thread_state_available: true,
                 environments: &[],
                 mcp_resource_client: None,
@@ -134,7 +143,13 @@ async fn installed_extension_exposes_and_invokes_history_notes_tools() -> TestRe
     assert_eq!(requests.len(), 1);
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&requests[0].body)?,
-        json!({"current_thread_id": "thread-123", "path": "notes.md"})
+        json!({
+            "path": "notes.md",
+            "context": {
+                "session_id": "session-123",
+                "current_agent_name": "/root/worker",
+            }
+        })
     );
 
     let mut disabled_config = config.clone();

@@ -17,7 +17,7 @@ use wiremock::matchers::path;
 use super::HistoryNotesBackend;
 
 #[tokio::test]
-async fn routes_through_codex_backend_and_injects_current_thread_id() {
+async fn routes_through_codex_backend_and_injects_trusted_session_agent_context() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/backend-api/codex/alpha/notes/v2/read_file"))
@@ -46,8 +46,15 @@ async fn routes_through_codex_backend_and_injects_current_thread_id() {
     let response = backend
         .call(
             "alpha/notes/v2/read_file",
-            "thread-123",
-            json!({"path": "notes.md"}),
+            "session-123",
+            "/root/worker",
+            json!({
+                "path": "notes.md",
+                "context": {
+                    "session_id": "spoofed-session",
+                    "current_agent_name": "/root/spoofed",
+                }
+            }),
         )
         .await
         .expect("History request should succeed");
@@ -57,6 +64,12 @@ async fn routes_through_codex_backend_and_injects_current_thread_id() {
     assert_eq!(requests.len(), 1);
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&requests[0].body).expect("JSON body"),
-        json!({"current_thread_id": "thread-123", "path": "notes.md"})
+        json!({
+            "path": "notes.md",
+            "context": {
+                "session_id": "session-123",
+                "current_agent_name": "/root/worker",
+            }
+        })
     );
 }

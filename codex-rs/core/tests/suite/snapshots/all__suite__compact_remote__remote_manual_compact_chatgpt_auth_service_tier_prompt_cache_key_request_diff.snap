@@ -12,7 +12,7 @@ Scenario: After five varied ChatGPT-auth turns, remote manual compaction reuses 
 -    "thread_id": "<UUID>",
 -    "turn_id": "<UUID>",
 -    "x-codex-installation-id": "<UUID>",
--    "x-codex-turn-metadata": "{\"installation_id\":\"<UUID>\",\"session_id\":\"<UUID>\",\"thread_id\":\"<UUID>\",\"turn_id\":\"<UUID>\",\"window_id\":\"<UUID>:0\",\"request_kind\":\"turn\",\"root_turn_id\":\"<UUID>\",\"sandbox\":\"<SANDBOX>\",\"sandbox_mode\":\"read-only\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":false,\"node_repl_disabled\":false,\"turn_started_at_unix_ms\":<UNIX_MS>}",
+-    "x-codex-turn-metadata": "{\"installation_id\":\"<UUID>\",\"session_id\":\"<UUID>\",\"thread_id\":\"<UUID>\",\"agent_name\":\"/root\",\"turn_id\":\"<UUID>\",\"window_id\":\"<UUID>:0\",\"request_kind\":\"turn\",\"root_turn_id\":\"<UUID>\",\"sandbox\":\"<SANDBOX>\",\"sandbox_mode\":\"read-only\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":false,\"node_repl_disabled\":false,\"turn_started_at_unix_ms\":<UNIX_MS>}",
 -    "x-codex-window-id": "<UUID>:0"
 -  },
 -  "include": [

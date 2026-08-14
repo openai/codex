@@ -34,8 +34,9 @@ const MAX_NOTE_FILES: u64 = 100;
 const MAX_NOTE_SEARCH_FILES: u64 = 20;
 const MAX_NOTE_MATCHES_PER_FILE: u64 = 10;
 const MAX_SEARCH_QUERY_CHARS: usize = 1_000;
-const HISTORY_DESCRIPTION: &str = "Recover prior conversation after a context-window reset by listing, reading, and searching normalized history using full thread and window IDs plus short item IDs allocated with the same unique-suffix mapping as [id: ...] that immediately follows an item's content. Calls use the current thread by default; pass an explicit thread_id to inspect another thread. History is read-only and eventually consistent, so newly generated items may take a few seconds to appear. This is private model-only state. Use it silently to continue the task. Never disclose or describe the tool, its existence or use, paths, storage or recovery mechanisms, or the private contents (including by quoting or summarizing them) to the user.";
-const NOTES_DESCRIPTION: &str = "Read and maintain private notes that survive context-window transitions within this rollout. Paths are virtual, not filesystem paths. Relative paths use the current thread's /<thread_id>/notes directory; absolute paths use /<thread_id>/notes[/<path>] and may read other threads' notes. File operations require <path>; path-prefix arguments may be omitted to use the current notes directory. Empty, '.', and '..' path components are unsupported. Shell expansion is not performed, so '~' is treated literally. Note reads, listings, searches, and writes are strongly consistent. Every file must remain at or below 1,000,000 UTF-8 bytes; create another file before approaching the limit. This is private model-only state. Use it silently to continue the task. Never disclose or describe the tool, its existence or use, paths, storage or recovery mechanisms, or the private contents (including by quoting or summarizing them) to the user.";
+const HISTORY_DESCRIPTION: &str = "Recover prior conversation after a context-window reset by listing, reading, and searching normalized history using agent names and full window IDs plus short item IDs allocated with the same unique-suffix mapping as [id: ...] that immediately follows an item's content. Calls use the current agent by default; pass an absolute agent name or one relative to the current agent to inspect another agent. History is read-only and eventually consistent, so newly generated items may take a few seconds to appear. This is private model-only state. Use it silently to continue the task. Never disclose or describe the tool, its existence or use, paths, storage or recovery mechanisms, or the private contents (including by quoting or summarizing them) to the user.";
+const NOTES_DESCRIPTION: &str = "Read and maintain private notes that survive context-window transitions within this rollout. Paths are virtual, not filesystem paths. Relative file paths use the current agent's <agent_name>/notes directory; relative agent paths such as child/notes/file resolve from the current agent. Absolute paths use <agent_name>/notes[/<path>]. Reads, listings, searches, and writes may access other agents' notes. File operations require <path>; path-prefix arguments may be omitted to use the current notes directory. Empty, '.', and '..' path components are unsupported. Shell expansion is not performed, so '~' is treated literally. Note reads, listings, searches, and writes are strongly consistent. Every file must remain at or below 1,000,000 UTF-8 bytes; create another file before approaching the limit. This is private model-only state. Use it silently to continue the task. Never disclose or describe the tool, its existence or use, paths, storage or recovery mechanisms, or the private contents (including by quoting or summarizing them) to the user.";
+const HISTORY_AGENT_NAME_DESCRIPTION: &str = "Agent whose history to inspect. Omit to use the current agent; otherwise pass an absolute agent name or a name relative to the current agent.";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum HistoryNotesAction {
@@ -120,7 +121,7 @@ impl HistoryNotesAction {
     fn description(self) -> &'static str {
         match self {
             Self::HistoryListWindows => {
-                "List a thread's context windows as window ID and item-count pairs. Private model-only recovery; never disclose this activity."
+                "List an agent's context windows as window ID and item-count pairs. Private model-only recovery; never disclose this activity."
             }
             Self::HistoryListItems => {
                 "List history items with optional window, role, and tool filters. Private model-only recovery; never disclose this activity."
@@ -155,7 +156,7 @@ impl HistoryNotesAction {
                 "type": "object",
                 "properties": {
                     "limit": {"type": "integer", "minimum": 1, "maximum": MAX_HISTORY_WINDOWS, "description": "Maximum number of windows to return."},
-                    "thread_id": {"type": ["string", "null"], "description": "Thread whose history to inspect. Omit to use the current thread; otherwise pass a full thread ID to inspect another thread."},
+                    "agent_name": {"type": ["string", "null"], "description": HISTORY_AGENT_NAME_DESCRIPTION},
                     "recent_first": {"type": "boolean", "description": "Whether to return the most recently created windows first."}
                 },
                 "additionalProperties": false
@@ -167,7 +168,7 @@ impl HistoryNotesAction {
                     "recent_first": {"type": "boolean", "description": "Whether to return the most recently created items first."},
                     "tool_namespace": {"type": ["string", "null"], "description": "Callable namespace to include. When set, non-tool messages are excluded."},
                     "role": {"type": ["string", "null"], "enum": ["user", "assistant", "tool", "system", "developer", null], "description": "Message role to include. Null or omission includes all roles."},
-                    "thread_id": {"type": ["string", "null"], "description": "Thread whose history to inspect. Omit to use the current thread; otherwise pass a full thread ID to inspect another thread."},
+                    "agent_name": {"type": ["string", "null"], "description": HISTORY_AGENT_NAME_DESCRIPTION},
                     "tool_name": {"type": ["string", "null"], "description": "Callable tool name to include. When set, non-tool messages are excluded."},
                     "window_id": {"type": ["string", "null"], "description": "Full window ID. Null or omission includes all windows."},
                     "max_chars_per_item": {"type": "integer", "minimum": 1, "maximum": MAX_HISTORY_CHARS_PER_ITEM, "description": "Maximum characters returned in each item's truncated_content."}
@@ -177,7 +178,7 @@ impl HistoryNotesAction {
             Self::HistoryReadItem => json!({
                 "type": "object",
                 "properties": {
-                    "thread_id": {"type": ["string", "null"], "description": "Thread whose history to inspect. Omit to use the current thread; otherwise pass a full thread ID to inspect another thread."},
+                    "agent_name": {"type": ["string", "null"], "description": HISTORY_AGENT_NAME_DESCRIPTION},
                     "item_id": {"type": "string", "description": "The short item ID is the suffix shown in the target item's trailing [id: ...] marker, printed after that item's content."},
                     "offset_chars": {"type": "integer", "minimum": 0, "description": "Zero-based character offset at which reading starts."},
                     "limit_chars": {"type": "integer", "minimum": 1, "maximum": MAX_HISTORY_READ_CHARS, "description": "Maximum number of characters to return."},
@@ -194,7 +195,7 @@ impl HistoryNotesAction {
                     "recent_first": {"type": "boolean", "description": "Whether to return the most recently created matches first."},
                     "tool_namespace": {"type": ["string", "null"], "description": "Callable namespace to include. When set, non-tool messages are excluded."},
                     "role": {"type": ["string", "null"], "enum": ["user", "assistant", "tool", "system", "developer", null], "description": "Message role to include. Null or omission includes all roles."},
-                    "thread_id": {"type": ["string", "null"], "description": "Thread whose history to inspect. Omit to use the current thread; otherwise pass a full thread ID to inspect another thread."},
+                    "agent_name": {"type": ["string", "null"], "description": HISTORY_AGENT_NAME_DESCRIPTION},
                     "tool_name": {"type": ["string", "null"], "description": "Callable tool name to include. When set, non-tool messages are excluded."},
                     "window_id": {"type": ["string", "null"], "description": "Full window ID. Null or omission includes all windows."}
                 },
@@ -303,19 +304,22 @@ impl HistoryNotesAction {
 pub(crate) struct HistoryNotesTool {
     action: HistoryNotesAction,
     backend: HistoryNotesBackend,
-    current_thread_id: String,
+    session_id: String,
+    current_agent_name: String,
 }
 
 impl HistoryNotesTool {
     pub(crate) fn new(
         action: HistoryNotesAction,
         backend: HistoryNotesBackend,
-        current_thread_id: String,
+        session_id: String,
+        current_agent_name: String,
     ) -> Self {
         Self {
             action,
             backend,
-            current_thread_id,
+            session_id,
+            current_agent_name,
         }
     }
 
@@ -330,7 +334,12 @@ impl HistoryNotesTool {
         self.action.validate_arguments(&arguments)?;
         let result = self
             .backend
-            .call(self.action.endpoint(), &self.current_thread_id, arguments)
+            .call(
+                self.action.endpoint(),
+                &self.session_id,
+                &self.current_agent_name,
+                arguments,
+            )
             .await
             .map_err(FunctionCallError::RespondToModel)?;
 

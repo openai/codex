@@ -26,6 +26,7 @@ use crate::client::X_OPENAI_SUBAGENT_HEADER;
 pub(crate) const INSTALLATION_ID_KEY: &str = "installation_id";
 pub(crate) const SESSION_ID_KEY: &str = "session_id";
 pub(crate) const THREAD_ID_KEY: &str = "thread_id";
+pub(crate) const AGENT_NAME_KEY: &str = "agent_name";
 pub(crate) const TURN_ID_KEY: &str = "turn_id";
 pub(crate) const WINDOW_ID_KEY: &str = "window_id";
 pub(crate) const REQUEST_KIND_KEY: &str = "request_kind";
@@ -55,6 +56,7 @@ const RESERVED_METADATA_KEYS: &[&str] = &[
     X_CODEX_INSTALLATION_ID_HEADER,
     SESSION_ID_KEY,
     THREAD_ID_KEY,
+    AGENT_NAME_KEY,
     TURN_ID_KEY,
     WINDOW_ID_KEY,
     X_CODEX_WINDOW_ID_HEADER,
@@ -203,6 +205,7 @@ pub struct CodexResponsesMetadata {
     pub(crate) installation_id: String,
     pub(crate) session_id: String,
     pub(crate) thread_id: String,
+    pub(crate) agent_name: Option<String>,
     pub(crate) turn_id: Option<String>,
     pub(crate) routing_hint: Option<HeaderValue>,
     pub(crate) window_id: String,
@@ -236,6 +239,7 @@ impl CodexResponsesMetadata {
             installation_id,
             session_id,
             thread_id,
+            agent_name: None,
             turn_id: None,
             routing_hint: None,
             window_id,
@@ -354,6 +358,9 @@ impl CodexResponsesMetadata {
             installation_id: has_request_identity.then_some(self.installation_id.as_str()),
             session_id: has_turn_identity.then_some(self.session_id.as_str()),
             thread_id: has_turn_identity.then_some(self.thread_id.as_str()),
+            agent_name: has_turn_identity
+                .then_some(self.agent_name.as_deref())
+                .flatten(),
             turn_id: has_turn_identity
                 .then_some(self.turn_id.as_deref())
                 .flatten(),
@@ -473,6 +480,8 @@ struct CodexTurnMetadataPayload<'a> {
     session_id: Option<&'a str>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     thread_id: Option<&'a str>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_name: Option<&'a str>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     turn_id: Option<&'a str>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

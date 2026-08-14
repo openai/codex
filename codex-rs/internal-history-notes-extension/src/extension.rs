@@ -12,6 +12,7 @@ use codex_extension_api::ToolContributor;
 use codex_extension_api::ToolExecutor;
 use codex_login::AuthManager;
 use codex_model_provider::create_model_provider;
+use codex_protocol::AgentPath;
 
 use crate::backend::HistoryNotesBackend;
 use crate::tools::HistoryNotesAction;
@@ -23,6 +24,10 @@ struct HistoryNotesExtension {
 
 struct HistoryNotesExtensionConfig {
     backend: HistoryNotesBackend,
+}
+
+struct HistoryNotesAgentIdentity {
+    agent_name: String,
 }
 
 impl HistoryNotesExtension {
@@ -50,6 +55,14 @@ impl ThreadLifecycleContributor<Config> for HistoryNotesExtension {
         input: ThreadStartInput<'a, Config>,
     ) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
+            let agent_name = input
+                .session_source
+                .get_agent_path()
+                .unwrap_or_else(AgentPath::root)
+                .to_string();
+            input
+                .thread_store
+                .insert(HistoryNotesAgentIdentity { agent_name });
             self.update_config(input.thread_store, input.config);
         })
     }
@@ -70,10 +83,13 @@ impl ConfigContributor<Config> for HistoryNotesExtension {
 impl ToolContributor for HistoryNotesExtension {
     fn tools(
         &self,
-        _session_store: &ExtensionData,
+        session_store: &ExtensionData,
         thread_store: &ExtensionData,
     ) -> Vec<Arc<dyn ToolExecutor<ToolCall>>> {
         let Some(config) = thread_store.get::<HistoryNotesExtensionConfig>() else {
+            return Vec::new();
+        };
+        let Some(identity) = thread_store.get::<HistoryNotesAgentIdentity>() else {
             return Vec::new();
         };
 
@@ -83,7 +99,8 @@ impl ToolContributor for HistoryNotesExtension {
                 Arc::new(HistoryNotesTool::new(
                     action,
                     config.backend.clone(),
-                    thread_store.level_id().to_string(),
+                    session_store.level_id().to_string(),
+                    identity.agent_name.clone(),
                 )) as Arc<dyn ToolExecutor<ToolCall>>
             })
             .collect()

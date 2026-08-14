@@ -7,6 +7,7 @@ use codex_login::default_client::create_client;
 use codex_model_provider::SharedModelProvider;
 use http::Method;
 use serde_json::Value;
+use serde_json::json;
 
 const HISTORY_NOTES_BACKEND_TIMEOUT: Duration = Duration::from_secs(35);
 
@@ -23,15 +24,19 @@ impl HistoryNotesBackend {
     pub(crate) async fn call(
         &self,
         path: &str,
-        current_thread_id: &str,
+        session_id: &str,
+        current_agent_name: &str,
         mut arguments: Value,
     ) -> Result<Value, String> {
         let Some(arguments_object) = arguments.as_object_mut() else {
             return Err("History tool arguments must be a JSON object".to_string());
         };
         arguments_object.insert(
-            "current_thread_id".to_string(),
-            Value::String(current_thread_id.to_string()),
+            "context".to_string(),
+            json!({
+                "session_id": session_id,
+                "current_agent_name": current_agent_name,
+            }),
         );
 
         let provider =

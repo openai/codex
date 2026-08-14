@@ -12,6 +12,7 @@ use std::sync::atomic::Ordering;
 use serde_json::Value;
 use tokio::task::JoinHandle;
 
+use crate::responses_metadata::AGENT_NAME_KEY;
 use crate::responses_metadata::CodexResponsesMetadata;
 use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::responses_metadata::PARENT_TURN_ID_KEY;
@@ -27,6 +28,7 @@ use codex_git_utils::get_git_remote_urls_assume_git_repo;
 use codex_git_utils::get_git_repo_root;
 use codex_git_utils::get_has_changes_in_repo;
 use codex_git_utils::get_head_commit_hash;
+use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
@@ -100,6 +102,7 @@ pub(crate) struct TurnMetadataState {
     repo_root: Option<PathBuf>,
     session_id: String,
     thread_id: String,
+    agent_name: String,
     forked_from_thread_id: Option<ThreadId>,
     parent_thread_id: Option<ThreadId>,
     parent_turn_id: OnceLock<String>,
@@ -151,11 +154,16 @@ impl TurnMetadataState {
         );
         let sandbox_mode =
             Some(permission_profile_policy_tag(permission_profile, cwd.as_path()).to_string());
+        let agent_name = session_source
+            .get_agent_path()
+            .unwrap_or_else(AgentPath::root)
+            .to_string();
         Self {
             cwd,
             repo_root,
             session_id,
             thread_id,
+            agent_name,
             forked_from_thread_id,
             parent_thread_id,
             parent_turn_id: OnceLock::new(),
@@ -190,6 +198,7 @@ impl TurnMetadataState {
         let Value::Object(mut metadata) = responses_metadata.turn_metadata_value()? else {
             return None;
         };
+        metadata.remove(AGENT_NAME_KEY);
         metadata.remove(PARENT_TURN_ID_KEY);
         metadata.remove(ROOT_TURN_ID_KEY);
         metadata.insert(
@@ -343,6 +352,7 @@ impl TurnMetadataState {
         }
         CodexResponsesMetadata {
             turn_id: Some(self.turn_id.clone()),
+            agent_name: Some(self.agent_name.clone()),
             forked_from_thread_id: self.forked_from_thread_id,
             parent_thread_id: self.parent_thread_id,
             parent_turn_id: self.parent_turn_id.get().cloned(),
