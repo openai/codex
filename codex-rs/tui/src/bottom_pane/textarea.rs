@@ -1007,7 +1007,22 @@ impl TextArea {
         }
         let mut target = self.cursor_pos;
         for _ in 0..n {
-            target = self.prev_atomic_boundary(target);
+            if let Some((boundary, ch)) = self.text[..target].char_indices().next_back()
+                && matches!(
+                    ch,
+                    // Thai-only special casing is not ideal; refactor if it becomes more complex.
+                    // All Thai nonspacing marks: vowel signs, tone marks, and other diacritics.
+                    '\u{0e31}' | '\u{0e34}'..='\u{0e3a}' | '\u{0e47}'..='\u{0e4e}'
+                )
+                && !self
+                    .elements
+                    .iter()
+                    .any(|element| target > element.range.start && target <= element.range.end)
+            {
+                target = boundary;
+            } else {
+                target = self.prev_atomic_boundary(target);
+            }
             if target == 0 {
                 break;
             }
@@ -2243,6 +2258,63 @@ mod tests {
         t.set_cursor(t.text().len());
         t.delete_forward(/*n*/ 1);
         assert_eq!(t.text(), "b");
+    }
+
+    #[test]
+    fn delete_backward_removes_thai_marks_one_at_a_time() {
+        let mut t = ta_with("ที่");
+
+        t.input(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+
+        let area = Rect::new(0, 0, /*width*/ 8, /*height*/ 1);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        let mut state = TextAreaState::default();
+        terminal
+            .draw(|frame| {
+                StatefulWidgetRef::render_ref(&(&t), frame.area(), frame.buffer_mut(), &mut state);
+            })
+            .unwrap();
+        insta::assert_snapshot!(
+            "textarea_thai_backspace_preserves_remaining_marks",
+            format!("cursor: {:?}\n{}", t.cursor_pos(area), terminal.backend())
+        );
+        assert_eq!(t.text(), "ที");
+
+        t.delete_backward(/*n*/ 1);
+        assert_eq!(t.text(), "ท");
+
+        t.delete_backward(/*n*/ 1);
+        assert_eq!(t.text(), "");
+    }
+
+    #[test]
+    fn delete_backward_preserves_other_grapheme_behavior() {
+        let mut thai_spacing_vowel = ta_with("ซ้ำ");
+        thai_spacing_vowel.delete_backward(/*n*/ 1);
+        assert_eq!(thai_spacing_vowel.text(), "ซ้");
+
+        let mut decomposed_latin = ta_with("e\u{301}");
+        decomposed_latin.delete_backward(/*n*/ 1);
+        assert_eq!(decomposed_latin.text(), "");
+
+        let mut family_emoji = ta_with("👨\u{200d}👩\u{200d}👧\u{200d}👦");
+        family_emoji.delete_backward(/*n*/ 1);
+        assert_eq!(family_emoji.text(), "");
+    }
+
+    #[test]
+    fn delete_backward_keeps_thai_elements_atomic() {
+        let mut t = TextArea::new();
+        t.insert_str("before ");
+        t.insert_element("ที่");
+        t.insert_str(" after");
+
+        t.set_cursor(t.elements[0].range.end);
+        t.delete_backward(/*n*/ 1);
+
+        assert_eq!(t.text(), "before  after");
+        assert_eq!(t.cursor(), "before ".len());
+        assert!(t.elements.is_empty());
     }
 
     #[test]
