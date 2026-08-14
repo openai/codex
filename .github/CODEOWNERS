@@ -28,10 +28,10 @@
 /codex-rs/external-agent-migration/ @stefanstokic-oai @kevinv-openai @jinma-oai @charlesgong-openai @openai/codex-eng @openai/codex-core-agent-team
 /codex-rs/tui/src/external_agent_config_migration/ @stefanstokic-oai @kevinv-openai @jinma-oai @charlesgong-openai @openai/codex-eng @openai/codex-core-agent-team
 
-# Keep macOS AKV signing changes reviewed by Codex maintainers.
-/.github/actions/setup-akv-pkcs11-codesigning/ @openai/codex-core-agent-team
-/.github/scripts/macos-signing/ @openai/codex-core-agent-team
-/.github/workflows/rust-release.yml @openai/codex-core-agent-team
+# Keep public macOS AKV signing changes reviewed by Codex maintainers.
+/public/.github/actions/setup-akv-pkcs11-codesigning/ @openai/codex-core-agent-team
+/public/.github/scripts/macos-signing/ @openai/codex-core-agent-team
+/public/.github/workflows/rust-release.yml @openai/codex-core-agent-team
 
 # Keep ownership changes reviewed by the same team.
 /.github/CODEOWNERS @openai/codex-core-agent-team
