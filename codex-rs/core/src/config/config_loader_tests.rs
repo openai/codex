@@ -219,6 +219,68 @@ invalid = ["#,
 }
 
 #[tokio::test]
+async fn ignore_project_config_skips_project_discovery() -> std::io::Result<()> {
+    let tmp = tempdir().expect("tempdir");
+    let codex_home = tmp.path().join("home");
+    let workspace = tmp.path().join("workspace");
+    tokio::fs::create_dir_all(codex_home.as_path()).await?;
+    tokio::fs::create_dir_all(workspace.join(".git")).await?;
+    make_config_for_test(
+        &codex_home,
+        &workspace,
+        TrustLevel::Trusted,
+        /*project_root_markers*/ None,
+    )
+    .await?;
+    let project_config_dir = workspace.join(".codex");
+    tokio::fs::create_dir_all(&project_config_dir).await?;
+    tokio::fs::write(
+        project_config_dir.join(CONFIG_TOML_FILE),
+        r#"model = "from-project"
+invalid = ["#,
+    )
+    .await?;
+
+    let cwd = AbsolutePathBuf::from_absolute_path(&workspace)?;
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        &codex_home,
+        Some(cwd),
+        &[(
+            "model".to_string(),
+            TomlValue::String("from-session".to_string()),
+        )],
+        ConfigLoadOptions {
+            loader_overrides: LoaderOverrides {
+                ignore_project_config: true,
+                ..LoaderOverrides::without_managed_config_for_tests()
+            },
+            cloud_config_bundle: CloudConfigBundleFixture::loader_with_enterprise_config(
+                r#"review_model = "from-cloud""#,
+            ),
+            ..Default::default()
+        },
+        &codex_config::NoopThreadConfigLoader,
+    )
+    .await?;
+
+    assert!(
+        layers
+            .layers_low_to_high()
+            .all(|layer| !matches!(layer.name, ConfigLayerSource::Project { .. }))
+    );
+    assert_eq!(
+        layers.effective_config().get("model"),
+        Some(&TomlValue::String("from-session".to_string()))
+    );
+    assert_eq!(
+        layers.effective_config().get("review_model"),
+        Some(&TomlValue::String("from-cloud".to_string()))
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn ignore_rules_marks_config_stack_for_exec_policy_rule_skip() -> std::io::Result<()> {
     let tmp = tempdir().expect("tempdir");
     let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
