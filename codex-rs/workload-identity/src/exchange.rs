@@ -96,7 +96,6 @@ impl WorkloadIdentityExchange {
                 return Ok(token);
             }
         }
-
         let valid_from = Instant::now();
         let result = match self.exchange_uncached().await {
             Ok(token) => state.store(token, valid_from, Instant::now()),

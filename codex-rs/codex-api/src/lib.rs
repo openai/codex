@@ -22,6 +22,7 @@ pub use crate::api_bridge::map_api_error;
 pub use crate::auth::AgentIdentityTelemetry;
 pub use crate::auth::AuthError;
 pub use crate::auth::AuthHeaderTelemetry;
+pub use crate::auth::AuthHeadersFuture;
 pub use crate::auth::AuthProvider;
 pub use crate::auth::AuthProviderFuture;
 pub use crate::auth::SharedAuthProvider;

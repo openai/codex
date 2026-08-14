@@ -18,6 +18,7 @@ use codex_cli::run_login_with_api_key;
 use codex_cli::run_login_with_chatgpt;
 use codex_cli::run_login_with_device_code;
 use codex_cli::run_logout;
+use codex_cloud_config::cloud_config_bundle_loader_for_storage;
 use codex_cloud_tasks::Cli as CloudTasksCli;
 use codex_exec::Cli as ExecCli;
 use codex_exec::Command as ExecCommand;
@@ -72,9 +73,12 @@ use codex_config::LoaderOverrides;
 use codex_core::build_models_manager;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
+use codex_core::config::ConfigLoadOptions;
 use codex_core::config::ConfigOverrides;
+use codex_core::config::bootstrap_auth_config;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
+use codex_core::config::load_config_toml_with_layer_stack;
 use codex_core::config::resolve_profile_v2_config_path;
 use codex_features::FEATURES;
 use codex_features::Stage;
@@ -82,6 +86,7 @@ use codex_features::is_known_feature_key;
 use codex_home::CodexHomeUserInstructionsProvider;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_login::is_workload_identity_selected;
 use codex_login::read_codex_access_token_from_env;
 use codex_memories_write::clear_memory_roots_contents;
 use codex_models_manager::bundled_models_response;
@@ -1735,7 +1740,12 @@ async fn run_exec_server_command(
         let environment_id = cmd
             .environment_id
             .ok_or_else(|| anyhow::anyhow!("--environment-id is required when --remote is set"))?;
-        let config = load_exec_server_config(root_config_overrides, strict_config).await?;
+        let config = load_exec_server_config(
+            root_config_overrides,
+            strict_config,
+            /*enable_workload_identity*/ true,
+        )
+        .await?;
         let (_otel, telemetry) = exec_server_telemetry::init(Some(&config));
         let auth_provider =
             load_exec_server_remote_auth_provider(&config, &base_url, cmd.use_agent_identity_auth)
@@ -1774,7 +1784,12 @@ async fn run_exec_server_command(
         .await?;
         Ok(())
     } else {
-        let config_result = load_exec_server_config(root_config_overrides, strict_config).await;
+        let config_result = load_exec_server_config(
+            root_config_overrides,
+            strict_config,
+            /*enable_workload_identity*/ false,
+        )
+        .await;
         let config = if strict_config {
             Some(config_result?)
         } else {
@@ -1833,7 +1848,7 @@ async fn load_exec_server_remote_auth_provider(
         return Ok(codex_model_provider::auth_provider_from_auth(&auth));
     }
 
-    let auth = load_exec_server_remote_auth(
+    let (auth_manager, auth) = load_exec_server_remote_auth(
         config,
         "remote exec-server registration requires ChatGPT authentication or API key authentication; run `codex login` or set CODEX_API_KEY",
     )
@@ -1849,7 +1864,14 @@ async fn load_exec_server_remote_auth_provider(
         validate_api_key_remote_host(base_url)?;
     }
 
-    Ok(codex_model_provider::auth_provider_from_auth(&auth))
+    if auth_manager.is_workload_identity_selected() {
+        Ok(codex_model_provider::auth_provider_from_auth_manager(
+            auth_manager,
+            &auth,
+        ))
+    } else {
+        Ok(codex_model_provider::auth_provider_from_auth(&auth))
+    }
 }
 
 fn is_supported_exec_server_remote_auth(auth: &CodexAuth) -> bool {
@@ -1893,21 +1915,44 @@ fn validate_api_key_remote_host(base_url: &str) -> anyhow::Result<()> {
 async fn load_exec_server_config(
     root_config_overrides: &CliConfigOverrides,
     strict_config: bool,
+    enable_workload_identity: bool,
 ) -> anyhow::Result<codex_core::config::Config> {
     let cli_kv_overrides = root_config_overrides
         .parse_overrides()
         .map_err(anyhow::Error::msg)?;
-    Ok(ConfigBuilder::default()
+    let bootstrap_cli_overrides = cli_kv_overrides.clone();
+    let mut builder = ConfigBuilder::default()
         .cli_overrides(cli_kv_overrides)
-        .strict_config(strict_config)
-        .build()
-        .await?)
+        .strict_config(strict_config);
+    if enable_workload_identity && is_workload_identity_selected() {
+        let codex_home = find_codex_home()?;
+        let bootstrap_cwd = AbsolutePathBuf::current_dir()?;
+        let bootstrap_config = load_config_toml_with_layer_stack(
+            &codex_home,
+            Some(&bootstrap_cwd),
+            bootstrap_cli_overrides,
+            ConfigLoadOptions {
+                loader_overrides: LoaderOverrides::default(),
+                strict_config,
+                cloud_config_bundle: Default::default(),
+            },
+        )
+        .await?;
+        let bootstrap_auth_config = bootstrap_auth_config(&codex_home, &bootstrap_config)?;
+        let cloud_config_bundle = cloud_config_bundle_loader_for_storage(
+            bootstrap_auth_config,
+            /*enable_codex_api_key_env*/ false,
+        )
+        .await?;
+        builder = builder.cloud_config_bundle(cloud_config_bundle);
+    }
+    Ok(builder.build().await?)
 }
 
 async fn load_exec_server_remote_auth(
     config: &codex_core::config::Config,
     missing_auth_error: &'static str,
-) -> anyhow::Result<codex_login::CodexAuth> {
+) -> anyhow::Result<(Arc<AuthManager>, codex_login::CodexAuth)> {
     let auth_manager =
         AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ true).await?;
 
@@ -1922,7 +1967,7 @@ async fn load_exec_server_remote_auth(
         }
     };
 
-    Ok(auth)
+    Ok((auth_manager, auth))
 }
 
 async fn enable_feature_in_config(feature: &str) -> anyhow::Result<()> {

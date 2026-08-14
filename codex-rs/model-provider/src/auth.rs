@@ -5,6 +5,8 @@ use std::sync::atomic::Ordering;
 use codex_agent_identity::AgentIdentityKey;
 use codex_agent_identity::authorization_header_for_agent_task;
 use codex_api::AgentIdentityTelemetry;
+use codex_api::AuthError;
+use codex_api::AuthHeadersFuture;
 use codex_api::AuthProvider;
 use codex_api::SharedAuthProvider;
 use codex_login::AuthHeaders;
@@ -128,25 +130,41 @@ struct AuthManagerAuthProvider {
     expected_auth: CodexAuth,
 }
 
+impl AuthManagerAuthProvider {
+    fn is_expected_auth(&self, auth: &CodexAuth) -> bool {
+        auth.uses_codex_backend()
+            && auth.get_account_id() == self.expected_auth.get_account_id()
+            && auth.get_chatgpt_user_id() == self.expected_auth.get_chatgpt_user_id()
+            && auth.is_workspace_account() == self.expected_auth.is_workspace_account()
+    }
+
+    fn current_auth(&self) -> Option<CodexAuth> {
+        self.auth_manager
+            .auth_cached()
+            .filter(|auth| self.is_expected_auth(auth))
+    }
+}
+
 impl AuthProvider for AuthManagerAuthProvider {
     fn add_auth_headers(&self, headers: &mut HeaderMap) {
-        let Some(auth) = self
-            .auth_manager
-            .auth_cached()
-            .filter(CodexAuth::uses_codex_backend)
-        else {
+        let Some(auth) = self.current_auth() else {
             return;
         };
-        // The caller's account-scoped state was built for the expected
-        // identity. Follow token refreshes for that identity, but never cross
-        // an account or workspace boundary without rebuilding that state.
-        if auth.get_account_id() != self.expected_auth.get_account_id()
-            || auth.get_chatgpt_user_id() != self.expected_auth.get_chatgpt_user_id()
-            || auth.is_workspace_account() != self.expected_auth.is_workspace_account()
-        {
-            return;
-        }
         auth_provider_from_auth(&auth).add_auth_headers(headers);
+    }
+
+    fn resolve_auth_headers(&self) -> AuthHeadersFuture<'_> {
+        Box::pin(async move {
+            let auth = self
+                .auth_manager
+                .auth()
+                .await
+                .filter(|auth| self.is_expected_auth(auth))
+                .ok_or_else(|| {
+                    AuthError::Transient("managed authentication is unavailable".to_string())
+                })?;
+            Ok(auth_provider_from_auth(&auth).to_auth_headers())
+        })
     }
 }
 
@@ -523,8 +541,12 @@ mod tests {
         .expect("save reloaded auth");
         auth_manager.reload().await;
 
+        let resolved_headers = provider
+            .resolve_auth_headers()
+            .await
+            .expect("managed auth headers should resolve");
         assert_eq!(
-            provider.to_auth_headers().get(AUTHORIZATION),
+            resolved_headers.get(AUTHORIZATION),
             Some(&HeaderValue::from_static("Bearer header.e30.reloaded"))
         );
 
