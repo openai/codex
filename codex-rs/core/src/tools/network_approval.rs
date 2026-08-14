@@ -604,7 +604,7 @@ impl NetworkApprovalService {
             active_turn
                 .as_ref()
                 .and_then(|(turn_context, _)| turn_context.environments.primary())
-                .map(|environment| environment.environment_id.clone())
+                .map(|environment| environment.selection.environment_id.clone())
         }) else {
             return NetworkDecision::deny(REASON_NOT_ALLOWED);
         };
@@ -666,7 +666,7 @@ impl NetworkApprovalService {
                 turn_context
                     .environments
                     .turn_environments()
-                    .find(|environment| environment.environment_id == environment_id)
+                    .find(|environment| environment.selection.environment_id == environment_id)
                     .map(TurnEnvironment::permission_profile)
             });
         if !permission_profile.is_some_and(permission_profile_allows_network_approval_flow) {
@@ -705,7 +705,7 @@ impl NetworkApprovalService {
             turn_context
                 .environments
                 .turn_environments()
-                .find(|environment| environment.environment_id == environment_id)
+                .find(|environment| environment.selection.environment_id == environment_id)
                 .and_then(|environment| environment.cwd().to_abs_path().ok())
                 .unwrap_or_else(|| {
                     #[allow(deprecated)]

@@ -197,7 +197,7 @@ impl ExecCommandHandler {
             &hook_command,
             &cwd,
             native_cwd.as_ref(),
-            &turn_environment.environment_id,
+            &turn_environment.selection.environment_id,
         )
         .await;
         let shell_mode =
@@ -217,13 +217,13 @@ impl ExecCommandHandler {
             let Some(remote_shell) = turn_environment.shell.as_ref() else {
                 return Err(FunctionCallError::RespondToModel(format!(
                     "environment `{}` does not report a shell",
-                    turn_environment.environment_id
+                    turn_environment.selection.environment_id
                 )));
             };
             if detect_shell_type(Path::new(&requested_shell)) != Some(remote_shell.shell_type) {
                 return Err(FunctionCallError::RespondToModel(format!(
                     "environment `{}` only supports `{}`",
-                    turn_environment.environment_id,
+                    turn_environment.selection.environment_id,
                     remote_shell.name()
                 )));
             }
@@ -258,7 +258,7 @@ impl ExecCommandHandler {
         let permission_cwd = native_cwd.as_ref().unwrap_or(&turn.config.cwd);
         let effective_additional_permissions = apply_granted_turn_permissions(
             context.session.as_ref(),
-            &turn_environment.environment_id,
+            &turn_environment.selection.environment_id,
             permission_cwd.as_path(),
             sandbox_permissions,
             additional_permissions,

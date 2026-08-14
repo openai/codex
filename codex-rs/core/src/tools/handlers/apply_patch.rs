@@ -282,7 +282,7 @@ async fn effective_patch_permissions(
     crate::tools::handlers::EffectiveAdditionalPermissions,
     codex_protocol::permissions::FileSystemSandboxPolicy,
 )> {
-    let environment_id = environment.environment_id.as_str();
+    let environment_id = environment.selection.environment_id.as_str();
     let file_paths = file_paths_for_action(action);
     let native_cwd = cwd.to_abs_path()?;
     let granted_permissions = merge_permission_profiles(
@@ -565,7 +565,7 @@ async fn execute_verified_patch(
     let emitter = ToolEmitter::apply_patch_for_environment(
         changes.clone(),
         apply.auto_approved,
-        turn_environment.environment_id.clone(),
+        turn_environment.selection.environment_id.clone(),
     );
     let event_ctx = ToolEventCtx::new(
         tool_ctx.session.as_ref(),

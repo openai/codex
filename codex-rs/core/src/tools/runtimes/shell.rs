@@ -129,7 +129,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
     ) -> std::io::Result<ApprovalAction> {
         Ok(ApprovalAction::Shell {
             id: call_id.to_string(),
-            environment_id: req.turn_environment.environment_id.clone(),
+            environment_id: req.turn_environment.selection.environment_id.clone(),
             command: req.command.clone(),
             hook_command: req.hook_command.clone(),
             cwd: PathUri::from_abs_path(&req.cwd),
@@ -186,7 +186,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
                 tty: None,
             },
             command: req.hook_command.clone(),
-            environment_id: req.turn_environment.environment_id.clone(),
+            environment_id: req.turn_environment.selection.environment_id.clone(),
             permission_profile: req.turn_environment.permission_profile().clone(),
         })
     }
@@ -307,7 +307,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
                     command,
                     options,
                     managed_network,
-                    Some(&req.turn_environment.environment_id),
+                    Some(&req.turn_environment.selection.environment_id),
                 )
                 .map_err(ToolError::Codex)?;
             execute_env(env, Self::stdout_stream(ctx))

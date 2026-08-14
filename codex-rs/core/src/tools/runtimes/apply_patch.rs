@@ -74,7 +74,7 @@ impl ApplyPatchRuntime {
     fn build_approval_action(req: &ApplyPatchRequest, call_id: &str) -> ApprovalAction {
         ApprovalAction::ApplyPatch {
             id: call_id.to_string(),
-            environment_id: req.turn_environment.environment_id.clone(),
+            environment_id: req.turn_environment.selection.environment_id.clone(),
             cwd: req.action.cwd.clone(),
             files: req.file_paths.clone(),
             patch: req.action.patch.clone(),

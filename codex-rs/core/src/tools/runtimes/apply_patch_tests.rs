@@ -8,6 +8,7 @@ use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::GranularApprovalConfig;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
@@ -18,10 +19,12 @@ use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 fn test_turn_environment(environment_id: &str) -> crate::session::turn_context::TurnEnvironment {
     crate::session::turn_context::TurnEnvironment::new(
-        environment_id.to_string(),
+        TurnEnvironmentSelection {
+            environment_id: environment_id.to_string(),
+            cwd: PathUri::from_abs_path(&std::env::temp_dir().abs()),
+            workspace_roots: Vec::new(),
+        },
         std::sync::Arc::new(codex_exec_server::Environment::default_for_tests()),
-        PathUri::from_abs_path(&std::env::temp_dir().abs()),
-        Vec::new(),
         /*shell*/ None,
         TurnEnvironmentConfig {
             allow_login_shell: true,

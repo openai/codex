@@ -170,7 +170,7 @@ impl Session {
             .turn_environments()
             .map(|environment| {
                 (
-                    environment.environment_id.clone(),
+                    environment.selection.environment_id.clone(),
                     environment.cwd().clone(),
                 )
             })

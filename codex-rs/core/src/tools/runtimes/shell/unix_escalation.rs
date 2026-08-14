@@ -149,7 +149,7 @@ pub(super) async fn try_run_zsh_fork(
             command,
             options,
             managed_network_for_sandbox_permissions(req.network.as_ref(), req.sandbox_permissions),
-            Some(&req.turn_environment.environment_id),
+            Some(&req.turn_environment.selection.environment_id),
         )
         .map_err(ToolError::Codex)?;
     let crate::sandboxing::ExecRequest {
@@ -244,7 +244,7 @@ pub(super) async fn try_run_zsh_fork(
         session: Arc::clone(&ctx.session),
         review_context: GuardianReviewContext::from(&ctx.step_context),
         call_id: ctx.call_id.clone(),
-        environment_id: req.turn_environment.environment_id.clone(),
+        environment_id: req.turn_environment.selection.environment_id.clone(),
         source: GuardianCommandSource::Shell,
         tool_name: ctx.tool_name.clone(),
         approval_policy: ctx.step_context.turn.approval_policy(),
@@ -331,7 +331,7 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         session: Arc::clone(&ctx.session),
         review_context: GuardianReviewContext::from(&ctx.step_context),
         call_id: ctx.call_id.clone(),
-        environment_id: req.turn_environment.environment_id.clone(),
+        environment_id: req.turn_environment.selection.environment_id.clone(),
         source: GuardianCommandSource::UnifiedExec,
         tool_name: ctx.tool_name.clone(),
         approval_policy: ctx.step_context.turn.approval_policy(),

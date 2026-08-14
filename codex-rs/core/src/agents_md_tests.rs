@@ -23,6 +23,7 @@ use codex_exec_server::RemoveOptions;
 use codex_extension_api::UserInstructions;
 use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
@@ -332,13 +333,15 @@ fn resolved_local_environments<const N: usize>(
             .into_iter()
             .map(|(environment_id, cwd)| {
                 TurnEnvironmentState::Ready(TurnEnvironment::new(
-                    environment_id.to_string(),
+                    TurnEnvironmentSelection {
+                        environment_id: environment_id.to_string(),
+                        cwd: PathUri::from_abs_path(&cwd),
+                        workspace_roots: Vec::new(),
+                    },
                     Arc::new(
                         Environment::create_for_tests(/*exec_server_url*/ None)
                             .expect("local environment"),
                     ),
-                    PathUri::from_abs_path(&cwd),
-                    Vec::new(),
                     /*shell*/ None,
                     TurnEnvironmentConfig {
                         allow_login_shell: true,

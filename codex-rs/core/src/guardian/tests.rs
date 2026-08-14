@@ -15,7 +15,6 @@ use crate::guardian::review::guardian_review_session_config;
 use crate::guardian::review::routes_approval_to_guardian_with_reviewer;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
-use crate::session::turn_context::TurnEnvironment;
 use crate::test_support;
 use codex_analytics::GuardianApprovalRequestSource;
 use codex_config::ConfigLayerStack;
@@ -631,17 +630,10 @@ async fn build_guardian_prompt_includes_parent_turn_denied_reads() -> anyhow::Re
     };
     environment.config.permission_profile =
         PermissionProfileSnapshot::legacy(environment_permission_profile);
-    *environment = TurnEnvironment::new(
-        environment.environment_id.clone(),
-        Arc::clone(&environment.environment),
-        environment.cwd().clone(),
-        vec![
-            PathUri::from_abs_path(&workspace_root),
-            PathUri::from_abs_path(&second_workspace_root),
-        ],
-        environment.shell.clone(),
-        environment.config.clone(),
-    );
+    environment.selection.workspace_roots = vec![
+        PathUri::from_abs_path(&workspace_root),
+        PathUri::from_abs_path(&second_workspace_root),
+    ];
     let session = Arc::new(session);
     let turn = Arc::new(turn);
     seed_guardian_parent_history(&session, &turn).await;

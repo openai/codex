@@ -24,6 +24,7 @@ use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_tools::DiscoverablePluginInfo;
 use codex_tools::DiscoverableTool;
 use codex_tools::ResponsesApiNamespaceTool;
@@ -373,7 +374,7 @@ fn duplicate_primary_environment(turn: &mut TurnContext) {
         .primary()
         .expect("primary environment")
         .clone();
-    second_environment.environment_id = "secondary".to_string();
+    second_environment.selection.environment_id = "secondary".to_string();
     turn.environments
         .environments
         .push(TurnEnvironmentState::Ready(second_environment));
@@ -752,7 +753,7 @@ async fn shell_command_is_not_registered_without_a_single_local_environment() {
         else {
             panic!("primary environment should be ready");
         };
-        environment.environment_id = "remote".to_string();
+        environment.selection.environment_id = "remote".to_string();
         environment.environment = Arc::new(
             codex_exec_server::Environment::create_for_tests(Some(
                 "ws://127.0.0.1:1/remote-exec-server".to_string(),
@@ -902,15 +903,17 @@ async fn zsh_fork_unified_exec_keeps_shell_parameter_when_remote_environment_ava
             .environments
             .push(TurnEnvironmentState::Ready(
                 crate::session::turn_context::TurnEnvironment::new(
-                    "remote".to_string(),
+                    TurnEnvironmentSelection {
+                        environment_id: "remote".to_string(),
+                        cwd: remote_cwd,
+                        workspace_roots: Vec::new(),
+                    },
                     Arc::new(
                         codex_exec_server::Environment::create_for_tests(Some(
                             "ws://127.0.0.1:1/remote-exec-server".to_string(),
                         ))
                         .expect("remote test environment"),
                     ),
-                    remote_cwd,
-                    Vec::new(),
                     /*shell*/ None,
                     crate::session::turn_context::TurnEnvironmentConfig {
                         allow_login_shell: true,

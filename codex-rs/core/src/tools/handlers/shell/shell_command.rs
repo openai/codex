@@ -125,7 +125,7 @@ impl ShellCommandHandler {
             capture_policy: ExecCapturePolicy::ShellTool,
             env,
             network: turn_context.network.clone(),
-            network_environment_id: Some(turn_environment.environment_id.clone()),
+            network_environment_id: Some(turn_environment.selection.environment_id.clone()),
             sandbox_permissions,
             windows_sandbox_level: turn_context.windows_sandbox_level,
             windows_sandbox_private_desktop: turn_context

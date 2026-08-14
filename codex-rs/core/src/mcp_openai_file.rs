@@ -161,10 +161,10 @@ async fn build_uploaded_argument_value(
         .join(file_path)
         .map_err(|error| contextualize_error(error.to_string()))?;
     let additional_permissions = merge_permission_profiles(
-        sess.granted_session_permissions(&turn_environment.environment_id)
+        sess.granted_session_permissions(&turn_environment.selection.environment_id)
             .await
             .as_ref(),
-        sess.granted_turn_permissions(&turn_environment.environment_id)
+        sess.granted_turn_permissions(&turn_environment.selection.environment_id)
             .await
             .as_ref(),
     );
@@ -271,7 +271,6 @@ mod tests {
     use crate::environment_selection::TurnEnvironmentState;
     use crate::session::tests::make_session_and_context;
     use crate::session::turn_context::TurnContext;
-    use crate::session::turn_context::TurnEnvironment;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
@@ -285,14 +284,8 @@ mod tests {
         else {
             panic!("expected ready primary environment");
         };
-        *primary = TurnEnvironment::new(
-            primary.environment_id.clone(),
-            Arc::clone(&primary.environment),
-            PathUri::from_abs_path(&cwd),
-            Vec::new(),
-            primary.shell.clone(),
-            primary.config.clone(),
-        );
+        primary.selection.cwd = PathUri::from_abs_path(&cwd);
+        primary.selection.workspace_roots.clear();
     }
 
     #[tokio::test]

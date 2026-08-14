@@ -4,6 +4,7 @@ use crate::session::turn_context::TurnEnvironmentConfig;
 use crate::tools::approvals::ApprovalCacheKey;
 use codex_exec_server::Environment;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
@@ -15,10 +16,12 @@ async fn approval_key_uses_path_uri_and_includes_environment_id() {
     let mut request = ShellRequest {
         command: vec!["echo".to_string(), "hello".to_string()],
         turn_environment: TurnEnvironment::new(
-            "remote".to_string(),
+            TurnEnvironmentSelection {
+                environment_id: "remote".to_string(),
+                cwd: PathUri::from_abs_path(&cwd),
+                workspace_roots: Vec::new(),
+            },
             Arc::new(Environment::default_for_tests()),
-            PathUri::from_abs_path(&cwd),
-            Vec::new(),
             /*shell*/ None,
             TurnEnvironmentConfig {
                 allow_login_shell: true,
@@ -61,7 +64,7 @@ async fn approval_key_uses_path_uri_and_includes_environment_id() {
             additional_permissions: request.additional_permissions.clone(),
         })]
     );
-    request.turn_environment.environment_id = "other".to_string();
+    request.turn_environment.selection.environment_id = "other".to_string();
     let other_key = runtime
         .approval_action(&request, "call-1")
         .expect("build approval action")

@@ -42,10 +42,8 @@ pub(crate) struct TurnEnvironmentConfig {
 
 #[derive(Clone)]
 pub(crate) struct TurnEnvironment {
-    pub(crate) environment_id: String,
+    pub(crate) selection: TurnEnvironmentSelection,
     pub(crate) environment: Arc<Environment>,
-    cwd: PathUri,
-    workspace_roots: Vec<PathUri>,
     pub(crate) shell: Option<shell::Shell>,
     pub(crate) config: TurnEnvironmentConfig,
     pub(crate) shell_snapshot: ShellSnapshotTask,
@@ -53,18 +51,14 @@ pub(crate) struct TurnEnvironment {
 
 impl TurnEnvironment {
     pub(crate) fn new(
-        environment_id: String,
+        selection: TurnEnvironmentSelection,
         environment: Arc<Environment>,
-        cwd: PathUri,
-        workspace_roots: Vec<PathUri>,
         shell: Option<shell::Shell>,
         config: TurnEnvironmentConfig,
     ) -> Self {
         Self {
-            environment_id,
+            selection,
             environment,
-            cwd,
-            workspace_roots,
             shell,
             config,
             shell_snapshot: futures::future::ready(None).boxed().shared(),
@@ -72,7 +66,7 @@ impl TurnEnvironment {
     }
 
     pub(crate) fn shell_snapshot(&self, cwd: &AbsolutePathBuf) -> Option<AbsolutePathBuf> {
-        if self.cwd != PathUri::from_abs_path(cwd) {
+        if self.selection.cwd != PathUri::from_abs_path(cwd) {
             return None;
         }
         self.shell_snapshot
@@ -82,11 +76,11 @@ impl TurnEnvironment {
     }
 
     pub(crate) fn cwd(&self) -> &PathUri {
-        &self.cwd
+        &self.selection.cwd
     }
 
     pub(crate) fn workspace_roots(&self) -> &[PathUri] {
-        &self.workspace_roots
+        &self.selection.workspace_roots
     }
 
     pub(crate) fn permission_profile(&self) -> &PermissionProfile {
@@ -109,21 +103,17 @@ impl TurnEnvironment {
     }
 
     pub(crate) fn selection(&self) -> TurnEnvironmentSelection {
-        TurnEnvironmentSelection {
-            environment_id: self.environment_id.clone(),
-            cwd: self.cwd.clone(),
-            workspace_roots: self.workspace_roots.clone(),
-        }
+        self.selection.clone()
     }
 }
 
 impl std::fmt::Debug for TurnEnvironment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TurnEnvironment")
-            .field("environment_id", &self.environment_id)
+            .field("environment_id", &self.selection.environment_id)
             .field("environment", &self.environment)
-            .field("cwd", &self.cwd)
-            .field("workspace_roots", &self.workspace_roots)
+            .field("cwd", &self.selection.cwd)
+            .field("workspace_roots", &self.selection.workspace_roots)
             .field("shell", &self.shell)
             .field("config", &self.config)
             .finish_non_exhaustive()

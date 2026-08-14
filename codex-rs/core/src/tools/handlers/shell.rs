@@ -95,7 +95,7 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
     let requested_additional_permissions = additional_permissions.clone();
     let effective_additional_permissions = apply_granted_turn_permissions(
         session.as_ref(),
-        &turn_environment.environment_id,
+        &turn_environment.selection.environment_id,
         exec_params.cwd.as_path(),
         exec_params.sandbox_permissions,
         additional_permissions,
