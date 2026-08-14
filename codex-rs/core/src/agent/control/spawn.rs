@@ -4,6 +4,8 @@ use crate::agent::role::apply_role_to_config_for_multi_agent_v2;
 use crate::config::PermissionProfileSnapshot;
 use crate::context::ContextualUserFragment;
 use crate::context::CurrentTimeReminder;
+use crate::context::MultiAgentRoleInstructions;
+use crate::session::multi_agents::resolve_usage_hints;
 use codex_extension_api::ExtensionDataInit;
 
 const AGENT_NAMES: &str = include_str!("../agent_names.txt");
@@ -94,7 +96,8 @@ fn is_fork_excluded_developer_message(item: &ResponseItem, usage_hint_texts: &[S
         return false;
     };
 
-    CurrentTimeReminder::matches_text(text)
+    MultiAgentRoleInstructions::matches_text(text)
+        || CurrentTimeReminder::matches_text(text)
         || usage_hint_texts
             .iter()
             .any(|usage_hint_text| usage_hint_text == text)
@@ -684,19 +687,13 @@ impl AgentControl {
         let multi_agent_v2_usage_hint_texts_to_filter: Vec<String> =
             if multi_agent_version == MultiAgentVersion::V2 {
                 let parent_config = parent_thread.session.get_config().await;
-                [
-                    parent_config
-                        .multi_agent_v2
-                        .root_agent_usage_hint_text
-                        .clone(),
-                    parent_config
-                        .multi_agent_v2
-                        .subagent_usage_hint_text
-                        .clone(),
-                ]
-                .into_iter()
-                .flatten()
-                .collect()
+                let parent_usage_hints =
+                    resolve_usage_hints(&parent_config.multi_agent_v2, /*catalog*/ None);
+                [parent_usage_hints.root, parent_usage_hints.subagent]
+                    .into_iter()
+                    .flatten()
+                    .map(|instructions| instructions.render())
+                    .collect()
             } else {
                 Vec::new()
             };
@@ -792,12 +789,17 @@ impl AgentControl {
                     }
                     true
                 }
+                RolloutItem::WorldState(world_state) => {
+                    if multi_agent_version == MultiAgentVersion::V2 {
+                        world_state.state.remove("multi_agent_usage_hint");
+                    }
+                    true
+                }
                 RolloutItem::EventMsg(_)
                 | RolloutItem::SessionMeta(_)
                 | RolloutItem::TurnContext(_)
                 | RolloutItem::InterAgentCommunication(_)
-                | RolloutItem::InterAgentCommunicationMetadata { .. }
-                | RolloutItem::WorldState(_) => true,
+                | RolloutItem::InterAgentCommunicationMetadata { .. } => true,
                 RolloutItem::SecurityRiskScore(_) => false,
             }
         });
@@ -822,13 +824,15 @@ impl AgentControl {
         }
         if preserve_reference_context_item
             && multi_agent_version == MultiAgentVersion::V2
-            && let Some(subagent_usage_hint_text) =
-                config.multi_agent_v2.subagent_usage_hint_text.clone()
-            && let Some(subagent_usage_hint_message) =
-                crate::context_manager::updates::build_developer_update_item(vec![
-                    subagent_usage_hint_text,
-                ])
+            && let Some(subagent_usage_hint) = options
+                .multi_agent_v2_usage_hints
+                .as_ref()
+                .map(|hints| hints.subagent.clone())
+                .unwrap_or_else(|| {
+                    resolve_usage_hints(&config.multi_agent_v2, /*catalog*/ None).subagent
+                })
         {
+            let subagent_usage_hint_message = ContextualUserFragment::into(subagent_usage_hint);
             forked_rollout_items.push(RolloutItem::ResponseItem(
                 subagent_usage_hint_message.into(),
             ));

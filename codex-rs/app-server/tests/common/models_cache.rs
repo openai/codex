@@ -40,6 +40,7 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
             collaboration_modes: None,
             auto_review: None,
             permissions: None,
+            multi_agent: None,
             token_budget: None,
         }),
         include_skills_usage_instructions: false,

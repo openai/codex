@@ -1808,6 +1808,7 @@ mod tests {
                 policy_template: Some(catalog_template.to_string()),
             }),
             permissions: None,
+            multi_agent: None,
             token_budget: None,
         };
 
@@ -1842,6 +1843,7 @@ mod tests {
                 policy_template: None,
             }),
             permissions: None,
+            multi_agent: None,
             token_budget: None,
         };
 
@@ -1884,6 +1886,7 @@ mod tests {
                 policy_template: Some(String::new()),
             }),
             permissions: None,
+            multi_agent: None,
             token_budget: None,
         };
 

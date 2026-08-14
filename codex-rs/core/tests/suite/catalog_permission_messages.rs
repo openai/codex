@@ -41,6 +41,7 @@ async fn catalog_permission_message_loaded_from_remote_models_is_sent() -> Resul
             workspace_write: None,
             read_only: Some("remote catalog permissions: {{ network_access }}".to_string()),
         }),
+        multi_agent: None,
         token_budget: None,
     });
     let models_mock = mount_models_once(

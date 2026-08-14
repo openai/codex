@@ -531,6 +531,7 @@ pub struct ModelMessages {
     pub collaboration_modes: Option<CollaborationModeMessages>,
     pub auto_review: Option<AutoReviewMessages>,
     pub permissions: Option<PermissionMessages>,
+    pub multi_agent: Option<MultiAgentMessages>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_budget: Option<ModelTokenBudgetConfig>,
 }
@@ -570,6 +571,24 @@ pub struct PermissionMessages {
     pub danger_full_access: Option<String>,
     pub workspace_write: Option<String>,
     pub read_only: Option<String>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
+pub struct MultiAgentMessages {
+    pub role: Option<MultiAgentRoleMessages>,
+    pub mode: Option<MultiAgentModeMessages>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
+pub struct MultiAgentRoleMessages {
+    pub root: Option<String>,
+    pub subagent: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
+pub struct MultiAgentModeMessages {
+    pub explicit: Option<String>,
+    pub hint_text: Option<String>,
 }
 
 impl ModelMessages {
@@ -737,6 +756,7 @@ where
                     collaboration_modes: None,
                     auto_review: None,
                     permissions: None,
+                    multi_agent: None,
                     token_budget: None,
                 });
                 messages.instructions_template = Some(base_instructions);
@@ -925,6 +945,7 @@ mod tests {
                 collaboration_modes: None,
                 auto_review: None,
                 permissions: None,
+                multi_agent: None,
                 token_budget: None,
             }
         );
@@ -1019,6 +1040,28 @@ mod tests {
     }
 
     #[test]
+    fn multi_agent_messages_preserve_missing_and_empty_values() {
+        let messages: ModelMessages = from_str(
+            r#"{"instructions_template":null,"instructions_variables":null,"multi_agent":{"role":{"root":"","subagent":"subagent base"},"mode":{"explicit":"explicit mode","hint_text":""}}}"#,
+        )
+        .expect("multi-agent messages should deserialize");
+
+        assert_eq!(
+            messages.multi_agent,
+            Some(MultiAgentMessages {
+                role: Some(MultiAgentRoleMessages {
+                    root: Some(String::new()),
+                    subagent: Some("subagent base".to_string()),
+                }),
+                mode: Some(MultiAgentModeMessages {
+                    explicit: Some("explicit mode".to_string()),
+                    hint_text: Some(String::new()),
+                }),
+            })
+        );
+    }
+
+    #[test]
     fn collaboration_mode_messages_preserve_missing_and_empty_values() {
         let messages: ModelMessages = from_str(
             r#"{
@@ -1043,6 +1086,7 @@ mod tests {
                 }),
                 auto_review: None,
                 permissions: None,
+                multi_agent: None,
                 token_budget: None,
             }
         );
@@ -1123,6 +1167,7 @@ mod tests {
             collaboration_modes: None,
             auto_review: None,
             permissions: None,
+            multi_agent: None,
             token_budget: None,
         }));
 
@@ -1144,6 +1189,7 @@ mod tests {
             collaboration_modes: None,
             auto_review: None,
             permissions: None,
+            multi_agent: None,
             token_budget: None,
         }));
         assert_eq!(
@@ -1166,6 +1212,7 @@ mod tests {
             collaboration_modes: None,
             auto_review: None,
             permissions: None,
+            multi_agent: None,
             token_budget: None,
         }));
         assert_eq!(
@@ -1199,6 +1246,7 @@ mod tests {
             collaboration_modes: None,
             auto_review: None,
             permissions: None,
+            multi_agent: None,
             token_budget: None,
         }));
 
@@ -1238,6 +1286,7 @@ mod tests {
                 collaboration_modes: None,
                 auto_review: None,
                 permissions: None,
+                multi_agent: None,
                 token_budget: None,
             })
         );
@@ -1288,6 +1337,7 @@ mod tests {
                 collaboration_modes: None,
                 auto_review: None,
                 permissions: None,
+                multi_agent: None,
                 token_budget: None,
             }))],
         };
@@ -1324,6 +1374,7 @@ mod tests {
                 workspace_write: Some("workspace".to_string()),
                 read_only: None,
             }),
+            multi_agent: None,
             token_budget: None,
         };
         let mut value = serde_json::to_value(ModelsResponse {
@@ -1345,6 +1396,7 @@ mod tests {
             collaboration_modes: None,
             auto_review: None,
             permissions: None,
+            multi_agent: None,
             token_budget: None,
         };
         let mut value = serde_json::to_value(ModelsResponse {

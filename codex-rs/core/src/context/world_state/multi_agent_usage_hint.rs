@@ -2,19 +2,18 @@ use super::PreviousSectionState;
 use super::WorldStateHash;
 use super::WorldStateSection;
 use crate::context::ContextualUserFragment;
+use crate::context::MultiAgentRoleInstructions;
 use crate::context::MultiAgentUsageHint;
 
-/// Configured multi-agent instructions currently visible to the model.
+/// Configured or model-owned multi-agent instructions currently visible to the model.
 #[derive(Clone, Debug)]
 pub(crate) struct MultiAgentUsageHintState {
-    instructions: MultiAgentUsageHint,
+    instructions: MultiAgentRoleInstructions,
 }
 
 impl MultiAgentUsageHintState {
-    pub(crate) fn new(text: &str) -> Self {
-        Self {
-            instructions: MultiAgentUsageHint::new(text),
-        }
+    pub(crate) fn new(instructions: MultiAgentRoleInstructions) -> Self {
+        Self { instructions }
     }
 }
 
@@ -38,7 +37,13 @@ impl WorldStateSection for MultiAgentUsageHintState {
             PreviousSectionState::Known(previous) if previous == &self.snapshot() => None,
             PreviousSectionState::Unknown => None,
             PreviousSectionState::Known(_) | PreviousSectionState::Absent => {
-                Some(Box::new(self.instructions.clone()))
+                if self.instructions.markers().0.is_empty() {
+                    Some(Box::new(MultiAgentUsageHint::new(
+                        &self.instructions.body(),
+                    )))
+                } else {
+                    Some(Box::new(self.instructions.clone()))
+                }
             }
         }
     }

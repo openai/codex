@@ -1,5 +1,6 @@
 use super::super::test_support::render_section_cases;
 use super::*;
+use crate::context::MultiAgentRoleInstructions;
 use crate::context::world_state::WorldState;
 use codex_protocol::models::ResponseItem;
 use codex_utils_output_truncation::approx_token_count;
@@ -70,7 +71,9 @@ fn persisted_mode_is_restored_only_when_missing_from_history() {
 fn unchanged_mode_is_reemitted_after_usage_hint_migration() {
     let previous = state(Some(MultiAgentMode::Proactive));
     let current = MultiAgentModeState::new(Some(MultiAgentMode::Proactive)).with_usage_hint(
-        &MultiAgentUsageHintState::new("Current usage instructions."),
+        &MultiAgentUsageHintState::new(MultiAgentRoleInstructions::unmarked(
+            "Current usage instructions.",
+        )),
     );
 
     let instructions = current
@@ -82,6 +85,38 @@ fn unchanged_mode_is_reemitted_after_usage_hint_migration() {
         MultiAgentModeInstructions::from_mode(MultiAgentMode::Proactive)
             .expect("proactive mode should render")
             .render()
+    );
+}
+
+#[test]
+fn catalog_role_updates_remain_separate_from_active_mode() {
+    let previous_hint =
+        MultiAgentUsageHintState::new(MultiAgentRoleInstructions::catalog("Previous role."));
+    let previous_mode =
+        MultiAgentModeState::new(Some(MultiAgentMode::Proactive)).with_usage_hint(&previous_hint);
+    let mut previous = WorldState::default();
+    previous.add_section(previous_hint);
+    previous.add_section(previous_mode);
+
+    let current_role = MultiAgentRoleInstructions::catalog("Current role.");
+    let current_hint = MultiAgentUsageHintState::new(current_role.clone());
+    let current_mode =
+        MultiAgentModeState::new(Some(MultiAgentMode::Proactive)).with_usage_hint(&current_hint);
+    let mut current = WorldState::default();
+    current.add_section(current_hint);
+    current.add_section(current_mode);
+
+    let updates = crate::context_manager::updates::merge_contextual_fragments(
+        current.render_diff(&previous.snapshot()),
+    );
+    let expected_mode = MultiAgentModeInstructions::from_mode(MultiAgentMode::Proactive)
+        .expect("proactive mode should render");
+    assert_eq!(
+        updates,
+        vec![
+            ContextualUserFragment::into(current_role),
+            ContextualUserFragment::into(expected_mode),
+        ],
     );
 }
 

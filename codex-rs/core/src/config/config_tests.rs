@@ -1,7 +1,9 @@
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::edit::apply_blocking;
+use crate::context::ContextualUserFragment;
 use crate::plugins::plugins_manager_for_config;
+use crate::session::multi_agents::resolve_usage_hints;
 use assert_matches::assert_matches;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerEntry;
@@ -87,6 +89,7 @@ use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
+use codex_protocol::openai_models::MultiAgentRoleMessages;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -10991,17 +10994,29 @@ max_concurrent_threads_per_session = 17
 
     let config = resolve_multi_agent_v2_config(&config_toml);
     let concurrency_guidance = "There are 17 available concurrency slots, meaning that up to 17 agents can be active at once, including you.";
-    let expected_suffix = format!(
-        "{DEFAULT_MULTI_AGENT_V2_SHARED_USAGE_HINT_TEXT}\n{DEFAULT_MULTI_AGENT_V2_WAIT_AGENT_USAGE_HINT_TEXT}\n\n{concurrency_guidance}"
+    assert!(config.wait_agent_enabled);
+    for wait_agent_enabled in [true, false] {
+        let mut config = config.clone();
+        config.wait_agent_enabled = wait_agent_enabled;
+        let usage_hints = resolve_usage_hints(&config, /*catalog*/ None);
+        for hint in [usage_hints.root, usage_hints.subagent] {
+            let hint = hint.expect("default usage hints should be present").body();
+            assert!(hint.contains(concurrency_guidance));
+            assert_eq!(
+                hint.contains("When calling `wait_agent`, prefer longer waits"),
+                wait_agent_enabled
+            );
+        }
+    }
+
+    let usage_hints = resolve_usage_hints(
+        &config,
+        Some(&MultiAgentRoleMessages {
+            root: Some(String::new()),
+            subagent: Some(String::new()),
+        }),
     );
-    assert!(
-        [
-            config.root_agent_usage_hint_text,
-            config.subagent_usage_hint_text,
-        ]
-        .into_iter()
-        .all(|hint| hint.is_some_and(|hint| hint.contains(expected_suffix.as_str())))
-    );
+    assert!(usage_hints.root.is_none() && usage_hints.subagent.is_none());
 }
 
 #[test]
@@ -11026,6 +11041,23 @@ expose_spawn_agent_model_overrides = true
         config.subagent_usage_hint_text.as_deref(),
         Some("Subagent guidance.")
     );
+    let usage_hints = resolve_usage_hints(
+        &config,
+        Some(&MultiAgentRoleMessages {
+            root: Some("Catalog root base.".to_string()),
+            subagent: Some("Catalog subagent base.".to_string()),
+        }),
+    );
+    assert_eq!(
+        (
+            usage_hints.root.map(|hint| hint.body()),
+            usage_hints.subagent.map(|hint| hint.body()),
+        ),
+        (
+            Some("Root guidance.".to_string()),
+            Some("Subagent guidance.".to_string()),
+        )
+    );
 }
 
 #[test]
@@ -11033,18 +11065,39 @@ fn multi_agent_v2_exposes_model_overrides_by_default() {
     let config_toml =
         toml::from_str(r#"[features.multi_agent_v2]"#).expect("multi-agent v2 config should parse");
 
-    let config = resolve_multi_agent_v2_config(&config_toml);
+    let mut config = resolve_multi_agent_v2_config(&config_toml);
     assert!(config.expose_spawn_agent_model_overrides);
-    assert!(
-        [
-            config.root_agent_usage_hint_text,
-            config.subagent_usage_hint_text,
-        ]
-        .into_iter()
-        .all(|hint| hint.is_some_and(|hint| {
-            hint.ends_with(DEFAULT_MULTI_AGENT_V2_MODEL_OVERRIDE_USAGE_HINT_TEXT)
-        }))
-    );
+    let usage_hints = resolve_usage_hints(&config, /*catalog*/ None);
+    config.expose_spawn_agent_model_overrides = false;
+    let usage_hints_without_model_overrides = resolve_usage_hints(&config, /*catalog*/ None);
+
+    for (hint, hint_without_model_overrides) in [
+        (usage_hints.root, usage_hints_without_model_overrides.root),
+        (
+            usage_hints.subagent,
+            usage_hints_without_model_overrides.subagent,
+        ),
+    ] {
+        let hint = hint.expect("default usage hints should be present").body();
+        let hint_without_model_overrides = hint_without_model_overrides
+            .expect("default usage hints should be present without model overrides")
+            .body();
+
+        let model_override_guidance = hint
+            .strip_prefix(hint_without_model_overrides.as_str())
+            .expect("model-override guidance should extend the base usage hint");
+        for required_fragment in [
+            "Full-history forks",
+            "`fork_turns`",
+            "`model`",
+            "`reasoning_effort`",
+        ] {
+            assert!(
+                model_override_guidance.contains(required_fragment),
+                "model-override guidance should contain {required_fragment}"
+            );
+        }
+    }
 }
 
 #[tokio::test]
@@ -11108,7 +11161,7 @@ subagent_developer_instructions = "  \t  "
 }
 
 #[tokio::test]
-async fn multi_agent_v2_empty_usage_hint_overrides_clear_default_hints() -> std::io::Result<()> {
+async fn multi_agent_v2_empty_usage_hint_overrides_are_preserved() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
@@ -11125,8 +11178,22 @@ subagent_usage_hint_text = ""
         .build()
         .await?;
 
-    assert_eq!(config.multi_agent_v2.root_agent_usage_hint_text, None);
-    assert_eq!(config.multi_agent_v2.subagent_usage_hint_text, None);
+    let usage_hints = resolve_usage_hints(
+        &config.multi_agent_v2,
+        Some(&MultiAgentRoleMessages {
+            root: Some("catalog root".to_string()),
+            subagent: Some("catalog subagent".to_string()),
+        }),
+    );
+    assert_eq!(
+        (
+            config.multi_agent_v2.root_agent_usage_hint_text.as_deref(),
+            config.multi_agent_v2.subagent_usage_hint_text.as_deref(),
+            usage_hints.root,
+            usage_hints.subagent,
+        ),
+        (Some(""), Some(""), None, None)
+    );
 
     Ok(())
 }

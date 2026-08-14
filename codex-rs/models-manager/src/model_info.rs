@@ -57,6 +57,7 @@ pub fn with_config_overrides(mut model: ModelInfo, config: &ModelsManagerConfig)
             collaboration_modes: None,
             auto_review: None,
             permissions: None,
+            multi_agent: None,
             token_budget: None,
         });
         model_messages.instructions_template = Some(base_instructions.clone());
@@ -198,6 +199,7 @@ fn local_model_messages_for_slug(slug: &str) -> ModelMessages {
             collaboration_modes: None,
             auto_review: None,
             permissions: None,
+            multi_agent: None,
             token_budget: None,
         },
         _ => ModelMessages {
@@ -207,6 +209,7 @@ fn local_model_messages_for_slug(slug: &str) -> ModelMessages {
             collaboration_modes: None,
             auto_review: None,
             permissions: None,
+            multi_agent: None,
             token_budget: None,
         },
     }

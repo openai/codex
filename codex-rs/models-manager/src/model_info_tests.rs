@@ -5,6 +5,9 @@ use codex_protocol::openai_models::ApprovalMessages;
 use codex_protocol::openai_models::AutoReviewMessages;
 use codex_protocol::openai_models::CollaborationModeMessages;
 use codex_protocol::openai_models::ModelTokenBudgetConfig;
+use codex_protocol::openai_models::MultiAgentMessages;
+use codex_protocol::openai_models::MultiAgentModeMessages;
+use codex_protocol::openai_models::MultiAgentRoleMessages;
 use codex_protocol::openai_models::PermissionMessages;
 use pretty_assertions::assert_eq;
 
@@ -39,6 +42,16 @@ fn base_instruction_override_is_literal_and_preserves_catalog_messages() {
         workspace_write: Some(String::new()),
         read_only: None,
     };
+    let multi_agent = MultiAgentMessages {
+        role: Some(MultiAgentRoleMessages {
+            root: Some("root base".to_string()),
+            subagent: Some("subagent base".to_string()),
+        }),
+        mode: Some(MultiAgentModeMessages {
+            explicit: Some("explicit mode".to_string()),
+            hint_text: Some("mode hint".to_string()),
+        }),
+    };
     let token_budget = ModelTokenBudgetConfig {
         reminder_threshold_tokens: 128,
         reminder_message_template: "budget reminder".to_string(),
@@ -57,6 +70,7 @@ fn base_instruction_override_is_literal_and_preserves_catalog_messages() {
         collaboration_modes: Some(collaboration_modes.clone()),
         auto_review: Some(auto_review.clone()),
         permissions: Some(permissions.clone()),
+        multi_agent: Some(multi_agent.clone()),
         token_budget: Some(token_budget.clone()),
     });
     let config = ModelsManagerConfig {
@@ -75,6 +89,7 @@ fn base_instruction_override_is_literal_and_preserves_catalog_messages() {
             collaboration_modes: Some(collaboration_modes),
             auto_review: Some(auto_review),
             permissions: Some(permissions),
+            multi_agent: Some(multi_agent),
             token_budget: Some(token_budget),
         })
     );
@@ -104,6 +119,7 @@ fn disabled_personality_bakes_default_and_preserves_catalog_approval_messages() 
         collaboration_modes: None,
         auto_review: None,
         permissions: None,
+        multi_agent: None,
         token_budget: None,
     });
     let config = ModelsManagerConfig {
@@ -122,6 +138,7 @@ fn disabled_personality_bakes_default_and_preserves_catalog_approval_messages() 
             collaboration_modes: None,
             auto_review: None,
             permissions: None,
+            multi_agent: None,
             token_budget: None,
         })
     );
@@ -147,6 +164,7 @@ fn disabled_personality_uses_plain_base_instructions_for_local_personality_model
                 collaboration_modes: None,
                 auto_review: None,
                 permissions: None,
+                multi_agent: None,
                 token_budget: None,
             }),
             "unexpected model messages for {slug}"
@@ -186,6 +204,7 @@ fn personality_none_strips_catalog_instruction_sources_through_the_next_h1() {
             collaboration_modes: None,
             auto_review: None,
             permissions: None,
+            multi_agent: None,
             token_budget: None,
         });
 

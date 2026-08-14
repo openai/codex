@@ -5,10 +5,12 @@ use crate::agent::next_thread_spawn_depth;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
+use crate::session::multi_agents::resolve_usage_hints;
 use crate::tools::handlers::multi_agents_spec::SpawnAgentToolOptions;
 use crate::tools::handlers::multi_agents_spec::create_spawn_agent_tool_v2;
 use crate::tools::handlers::multi_agents_v2::message_tool::message_content;
 use codex_protocol::AgentPath;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_tools::ToolSpec;
 
 #[derive(Default)]
@@ -122,6 +124,29 @@ async fn handle_spawn_agent(
         /*trigger_turn*/ true,
     );
     let context = AgentCommunicationContext::new(AgentCommunicationKind::Spawn, session.thread_id);
+    let multi_agent_v2_usage_hints =
+        if is_full_history_fork && turn.multi_agent_version == MultiAgentVersion::V2 {
+            let child_model_info = match config.model.as_deref() {
+                Some(model) if model != turn.model_info.slug => Some(
+                    session
+                        .services
+                        .models_manager
+                        .get_model_info(model, &config.to_models_manager_config())
+                        .await,
+                ),
+                _ => None,
+            };
+            let child_catalog = child_model_info
+                .as_ref()
+                .unwrap_or(&turn.model_info)
+                .model_messages
+                .as_ref()
+                .and_then(|messages| messages.multi_agent.as_ref())
+                .and_then(|messages| messages.role.as_ref());
+            Some(resolve_usage_hints(&config.multi_agent_v2, child_catalog))
+        } else {
+            None
+        };
     let spawned_agent = Box::pin(
         session
             .services
@@ -138,6 +163,7 @@ async fn handle_spawn_agent(
                     parent_turn_id: Some(turn.sub_id.clone()),
                     root_turn_id: turn.turn_metadata_state.root_turn_id(),
                     environments: Some(step_context.environments.to_selections()),
+                    multi_agent_v2_usage_hints,
                 },
             ),
     )

@@ -43,6 +43,7 @@ const CONTEXTUAL_DEVELOPER_PREFIXES: &[&str] = &[
     "<model_switch>",
     APPS_INSTRUCTIONS_OPEN_TAG,
     COLLABORATION_MODE_OPEN_TAG,
+    "<multi_agent_role>",
     MULTI_AGENT_MODE_OPEN_TAG,
     ENVIRONMENTS_INSTRUCTIONS_OPEN_TAG,
     "<git_attribution>",

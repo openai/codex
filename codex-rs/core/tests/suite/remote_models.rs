@@ -110,6 +110,7 @@ async fn remote_models_get_model_info_uses_longest_matching_prefix() -> Result<(
             collaboration_modes: None,
             auto_review: None,
             permissions: None,
+            multi_agent: None,
             token_budget: None,
         }),
         ..specific
@@ -123,6 +124,7 @@ async fn remote_models_get_model_info_uses_longest_matching_prefix() -> Result<(
             collaboration_modes: None,
             auto_review: None,
             permissions: None,
+            multi_agent: None,
             token_budget: None,
         }),
         ..generic
@@ -770,6 +772,7 @@ async fn remote_models_apply_legacy_instructions() -> Result<()> {
             collaboration_modes: None,
             auto_review: None,
             permissions: None,
+            multi_agent: None,
             token_budget: None,
         }),
         include_skills_usage_instructions: false,

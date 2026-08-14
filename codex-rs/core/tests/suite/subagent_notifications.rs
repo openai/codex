@@ -10,6 +10,8 @@ use codex_models_manager::bundled_models_response;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::openai_models::MultiAgentMessages;
+use codex_protocol::openai_models::MultiAgentRoleMessages;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::AskForApproval;
@@ -1141,6 +1143,26 @@ async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_co
             .features
             .enable(Feature::MultiAgentV2)
             .expect("test config should allow feature update");
+        let model_catalog = config.model_catalog.get_or_insert_with(|| {
+            bundled_models_response().expect("bundled models.json should parse")
+        });
+        for model in [INHERITED_MODEL, V2_DEFAULT_MODEL, V2_REQUESTED_MODEL] {
+            let model_info = model_catalog
+                .models
+                .iter_mut()
+                .find(|model_info| model_info.slug == model)
+                .unwrap_or_else(|| panic!("{model} should exist in bundled models.json"));
+            let multi_agent = model_info
+                .model_messages
+                .as_mut()
+                .expect("bundled model should include model messages")
+                .multi_agent
+                .get_or_insert_with(MultiAgentMessages::default);
+            multi_agent.role = Some(MultiAgentRoleMessages {
+                root: Some(format!("{model} root role.")),
+                subagent: Some(format!("{model} subagent role.")),
+            });
+        }
         if matches!(selection, FullHistoryV2ModelSelection::WorldStateIdentity) {
             config
                 .features
@@ -1182,6 +1204,18 @@ async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_co
 
     let child_request = wait_for_request_with_model(&child_request_log, expected_model).await?;
     assert!(child_request.body_contains_text(TURN_0_FORK_PROMPT));
+    let child_developer_messages = child_request.message_input_texts("developer");
+    assert_eq!(
+        child_developer_messages
+            .iter()
+            .filter(|message| message.contains(&format!("{expected_model} subagent role.")))
+            .count(),
+        1
+    );
+    assert!(!child_developer_messages.iter().any(|message| {
+        message.contains(&format!("{INHERITED_MODEL} root role."))
+            || message.contains(&format!("{INHERITED_MODEL} subagent role."))
+    }));
     if matches!(selection, FullHistoryV2ModelSelection::CurrentTimeReminders) {
         let reminder_count = |request: &ResponsesRequest| {
             request

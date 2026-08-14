@@ -213,69 +213,7 @@ pub(crate) const DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION: usiz
 pub(crate) const DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS: i64 = 10_000;
 pub(crate) const DEFAULT_MULTI_AGENT_V2_MAX_WAIT_TIMEOUT_MS: i64 = 3600 * 1000;
 pub(crate) const DEFAULT_MULTI_AGENT_V2_DEFAULT_WAIT_TIMEOUT_MS: i64 = 30_000;
-const DEFAULT_MULTI_AGENT_V2_ROOT_AGENT_USAGE_HINT_TEXT: &str = r#"You are `/root`, the primary agent in a team of agents collaborating to fulfill the user's goals.
-
-At the start of your turn, you are the active agent.
-You can spawn sub-agents to handle subtasks, and those sub-agents can spawn their own sub-agents.
-All agents in the team, including the agents that you can assign tasks to, are equally intelligent and capable, and have access to the same set of tools.
-
-You can use `spawn_agent` to create a new agent, `followup_task` to give an existing agent a new task and trigger a turn, and `send_message` to pass a message to a running agent without triggering a turn.
-Child agents can also spawn their own sub-agents.
-You can decide how much context you want to propagate to your sub-agents with the `fork_turns` parameter.
-
-You will receive messages in the analysis channel in the form:
-```
-Message Type: MESSAGE | FINAL_ANSWER
-Task name: <recipient>
-Sender: <author>
-Payload:
-<payload text>
-```
-They may be addressed as to=/root
-"#;
-const DEFAULT_MULTI_AGENT_V2_SUBAGENT_USAGE_HINT_TEXT: &str = r#"You are an agent in a team of agents collaborating to complete a task.
-
-You can spawn sub-agents to handle subtasks, and those sub-agents can spawn their own sub-agents. All agents in the team, including the agents that you can assign tasks to, are equally intelligent and capable, and have access to the same set of tools.
-
-You can use `spawn_agent` to create a new agent, `followup_task` to give an existing agent a new task and trigger a turn, and `send_message` to pass a message to a running agent.
-Child agents can also spawn their own sub-agents.
-
-When you provide a response in the final channel, that content is immediately delivered back to your parent agent.
-
-You will receive messages in the analysis channel in the form:
-```
-Message Type: NEW_TASK | MESSAGE | FINAL_ANSWER
-Task name: <recipient>
-Sender: <author>
-Payload:
-<payload text>
-```
-You may also see them addressed as to=/root/..., which indicates your identity is /root/...
-"#;
-const DEFAULT_MULTI_AGENT_V2_MODEL_OVERRIDE_USAGE_HINT_TEXT: &str = "Full-history forks (`fork_turns` omitted or `\"all\"`) inherit the parent model and reasoning effort and do not accept overrides. Only set `model` or `reasoning_effort` when explicitly requested by the user, applicable `AGENTS.md` instructions, or skill instructions; when doing so, set `fork_turns` to `\"none\"` or a positive integer string.";
 const DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE: &str = "collaboration";
-const DEFAULT_MULTI_AGENT_V2_WAIT_AGENT_USAGE_HINT_TEXT: &str =
-    "When calling `wait_agent`, prefer longer waits (minutes) to avoid busy polling.";
-const DEFAULT_MULTI_AGENT_V2_SHARED_USAGE_HINT_TEXT: &str = r#"Note that collaboration tools cannot be called from inside `functions.exec`. Call `spawn_agent`, `send_message`, `followup_task`, `wait_agent`, `interrupt_agent`, and `list_agents` only as direct tool calls using the recipient shown in their tool definitions, such as `to=functions.collaboration.spawn_agent`, since they are intentionally absent from the `functions.exec` `tools.*` namespace. Available tools in `functions.exec` are explicitly described with a `tools` namespace in the developer message.
-
-All agents share the same directory. In detail:
-- All agents have access to the same container and filesystem as you.
-- All agents use the same current working directory.
-- As a result, edits made by one agent are immediately visible to all other agents.
-"#;
-fn default_multi_agent_v2_usage_hint_text(
-    usage_hint_text: &str,
-    max_concurrency: usize,
-    wait_agent_usage_hint_text: Option<&str>,
-) -> String {
-    let wait_agent_usage_hint_text = match wait_agent_usage_hint_text {
-        Some(wait_agent_usage_hint_text) => format!("{wait_agent_usage_hint_text}\n\n"),
-        None => String::new(),
-    };
-    format!(
-        "{usage_hint_text}\n{DEFAULT_MULTI_AGENT_V2_SHARED_USAGE_HINT_TEXT}\n{wait_agent_usage_hint_text}There are {max_concurrency} available concurrency slots, meaning that up to {max_concurrency} agents can be active at once, including you."
-    )
-}
 
 pub(crate) const HARD_MIN_MULTI_AGENT_V2_TIMEOUT_MS: i64 = 0;
 pub(crate) const HARD_MAX_MULTI_AGENT_V2_TIMEOUT_MS: i64 =
@@ -1298,16 +1236,8 @@ impl MultiAgentV2Config {
             max_wait_timeout_ms: DEFAULT_MULTI_AGENT_V2_MAX_WAIT_TIMEOUT_MS,
             default_wait_timeout_ms: DEFAULT_MULTI_AGENT_V2_DEFAULT_WAIT_TIMEOUT_MS,
             usage_hint_text: None,
-            root_agent_usage_hint_text: Some(default_multi_agent_v2_usage_hint_text(
-                DEFAULT_MULTI_AGENT_V2_ROOT_AGENT_USAGE_HINT_TEXT,
-                max_concurrent_threads_per_session,
-                Some(DEFAULT_MULTI_AGENT_V2_WAIT_AGENT_USAGE_HINT_TEXT),
-            )),
-            subagent_usage_hint_text: Some(default_multi_agent_v2_usage_hint_text(
-                DEFAULT_MULTI_AGENT_V2_SUBAGENT_USAGE_HINT_TEXT,
-                max_concurrent_threads_per_session,
-                Some(DEFAULT_MULTI_AGENT_V2_WAIT_AGENT_USAGE_HINT_TEXT),
-            )),
+            root_agent_usage_hint_text: None,
+            subagent_usage_hint_text: None,
             subagent_developer_instructions: None,
             multi_agent_mode_hint_text: None,
             tool_namespace: Some(DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE.to_string()),
@@ -2725,42 +2655,15 @@ fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config
     let expose_spawn_agent_model_overrides = base
         .and_then(|config| config.expose_spawn_agent_model_overrides)
         .unwrap_or(default.expose_spawn_agent_model_overrides);
+    let root_agent_usage_hint_text = base
+        .and_then(|config| config.root_agent_usage_hint_text.as_ref())
+        .cloned();
+    let subagent_usage_hint_text = base
+        .and_then(|config| config.subagent_usage_hint_text.as_ref())
+        .cloned();
     let wait_agent_enabled = base
         .and_then(|config| config.wait_agent_enabled)
         .unwrap_or(default.wait_agent_enabled);
-    let default_wait_agent_usage_hint_text = if wait_agent_enabled {
-        Some(DEFAULT_MULTI_AGENT_V2_WAIT_AGENT_USAGE_HINT_TEXT)
-    } else {
-        None
-    };
-    let mut default_root_agent_usage_hint_text = Some(default_multi_agent_v2_usage_hint_text(
-        DEFAULT_MULTI_AGENT_V2_ROOT_AGENT_USAGE_HINT_TEXT,
-        max_concurrent_threads_per_session,
-        default_wait_agent_usage_hint_text,
-    ));
-    let mut default_subagent_usage_hint_text = Some(default_multi_agent_v2_usage_hint_text(
-        DEFAULT_MULTI_AGENT_V2_SUBAGENT_USAGE_HINT_TEXT,
-        max_concurrent_threads_per_session,
-        default_wait_agent_usage_hint_text,
-    ));
-    if expose_spawn_agent_model_overrides {
-        default_root_agent_usage_hint_text = Some(append_usage_hint_text(
-            default_root_agent_usage_hint_text.as_deref(),
-            DEFAULT_MULTI_AGENT_V2_MODEL_OVERRIDE_USAGE_HINT_TEXT,
-        ));
-        default_subagent_usage_hint_text = Some(append_usage_hint_text(
-            default_subagent_usage_hint_text.as_deref(),
-            DEFAULT_MULTI_AGENT_V2_MODEL_OVERRIDE_USAGE_HINT_TEXT,
-        ));
-    }
-    let root_agent_usage_hint_text = resolve_optional_prompt_text(
-        base.map(|config| &config.root_agent_usage_hint_text),
-        default_root_agent_usage_hint_text,
-    );
-    let subagent_usage_hint_text = resolve_optional_prompt_text(
-        base.map(|config| &config.subagent_usage_hint_text),
-        default_subagent_usage_hint_text,
-    );
     let subagent_developer_instructions = base
         .and_then(|config| config.subagent_developer_instructions.as_ref())
         .map(|instructions| instructions.trim().to_string());
@@ -2938,24 +2841,6 @@ fn resolve_terminal_resize_reflow_config(config_toml: &ConfigToml) -> TerminalRe
             Some(rows) => TerminalResizeReflowMaxRows::Limit(rows),
             None => TerminalResizeReflowMaxRows::Auto,
         },
-    }
-}
-
-fn resolve_optional_prompt_text(
-    configured: Option<&Option<String>>,
-    default: Option<String>,
-) -> Option<String> {
-    match configured {
-        Some(Some(value)) if value.is_empty() => None,
-        Some(Some(value)) => Some(value.clone()),
-        Some(None) | None => default,
-    }
-}
-
-fn append_usage_hint_text(usage_hint_text: Option<&str>, additional_text: &str) -> String {
-    match usage_hint_text {
-        Some(usage_hint_text) => format!("{usage_hint_text}\n\n{additional_text}"),
-        None => additional_text.to_string(),
     }
 }
 
