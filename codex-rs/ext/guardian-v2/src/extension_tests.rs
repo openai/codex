@@ -3,8 +3,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use codex_core::config::Config;
+use codex_extension_api::ApprovalRequirement;
 use codex_extension_api::ConversationHistorySnapshot;
 use codex_extension_api::ExtensionData;
+use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ResponseItem;
 use codex_extension_api::ThreadStartInput;
@@ -112,11 +115,11 @@ fn encrypted_parent_compaction_rejects_invalid_latest_item() {
 
 async fn sample_conversation_history(
     conversation_history: Vec<ResponseItem>,
-) -> Result<(serde_json::Value, TestCodex)> {
+) -> Result<(serde_json::Value, TestCodex, ExtensionRegistry<Config>)> {
     let thread_server = responses::start_mock_server().await;
     let test = test_codex().build_with_auto_env(&thread_server).await?;
     let events = vec![
-        ev_assistant_message("sample", r#"{"scores":{"action_risk":0.25}}"#),
+        ev_assistant_message("sample", r#"{"scores":{"action_risk":0.8}}"#),
         ev_completed("response-1"),
     ];
     let server = responses::start_websocket_server(vec![Vec::new(), vec![events]]).await;
@@ -137,6 +140,10 @@ async fn sample_conversation_history(
     let registry = builder.build();
     let session_store = ExtensionData::new("session-1");
     let thread_store = test.codex.thread_extension_data();
+    assert_eq!(
+        registry.approval_requirement(thread_store),
+        ApprovalRequirement::Default
+    );
     registry.thread_lifecycle_contributors()[0]
         .on_thread_start(ThreadStartInput {
             config: &config,
@@ -175,14 +182,14 @@ async fn sample_conversation_history(
         server.wait_for_request(/*connection_index*/ 1, /*request_index*/ 0),
     )
     .await?;
-    Ok((request.body_json(), test))
+    Ok((request.body_json(), test, registry))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let (request, test) = sample_conversation_history(vec![
+    let (request, test, registry) = sample_conversation_history(vec![
         ResponseItem::Message {
             id: None,
             role: "user".to_owned(),
@@ -276,8 +283,12 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
     assert_eq!(
         score.as_ref(),
         &SecurityRiskScore {
-            scores: BTreeMap::from([("action_risk".to_string(), 0.25)]),
+            scores: BTreeMap::from([("action_risk".to_string(), 0.8)]),
         }
+    );
+    assert_eq!(
+        registry.approval_requirement(thread_store),
+        ApprovalRequirement::RequireAutomaticReview
     );
     test.codex.ensure_rollout_materialized().await;
     test.codex.flush_rollout().await?;
@@ -293,6 +304,23 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
         })
         .collect::<Vec<_>>();
     assert_eq!(persisted_scores, vec![score.as_ref().clone()]);
+
+    thread_store.insert(SecurityRiskScore {
+        scores: BTreeMap::from([("action_risk".to_string(), 0.25)]),
+    });
+    assert_eq!(
+        registry.approval_requirement(thread_store),
+        ApprovalRequirement::Default
+    );
+
+    let disabled_thread_store = ExtensionData::new("disabled-thread");
+    disabled_thread_store.insert(SecurityRiskScore {
+        scores: BTreeMap::from([("action_risk".to_string(), 0.8)]),
+    });
+    assert_eq!(
+        registry.approval_requirement(&disabled_thread_store),
+        ApprovalRequirement::Default
+    );
 
     Ok(())
 }
@@ -336,7 +364,7 @@ async fn contributor_sends_compacted_conversation_history_to_luna() -> Result<()
         ]
     }));
 
-    let (request, _test) = sample_conversation_history(history).await?;
+    let (request, _test, _registry) = sample_conversation_history(history).await?;
     let content = request["input"][2]["content"]
         .as_array()
         .expect("Luna request should contain separate transcript text items");

@@ -833,7 +833,9 @@ async fn review_guardian_mcp_elicitation(
         request.server_name.as_str(),
         elicitation_connector_id(&request.elicitation),
     );
-    if !crate::guardian::routes_approval_policy_to_guardian(approval_policy, approvals_reviewer) {
+    if !crate::guardian::routes_approval_policy_to_guardian(approval_policy, approvals_reviewer)
+        && !session.extension_strict_auto_review_enabled().await
+    {
         return Ok(None);
     }
 

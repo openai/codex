@@ -2512,7 +2512,9 @@ impl Session {
             });
         };
 
-        if crate::guardian::routes_approval_to_guardian(turn_context.as_ref()) {
+        if crate::guardian::routes_approval_to_guardian(turn_context.as_ref())
+            || self.extension_strict_auto_review_enabled().await
+        {
             let originating_turn_state = {
                 let active = self.active_turn.lock().await;
                 active.as_ref().map(|active| Arc::clone(&active.turn_state))
@@ -2851,11 +2853,41 @@ impl Session {
     pub(crate) async fn active_turn_context_and_strict_auto_review(
         &self,
     ) -> Option<(Arc<TurnContext>, bool)> {
+        let extension_strict_auto_review = self.extension_strict_auto_review_enabled().await;
         let active = self.active_turn.lock().await;
         let active = active.as_ref()?;
         let turn_context = Arc::clone(&active.task.as_ref()?.turn_context);
         let ts = active.turn_state.lock().await;
-        Some((turn_context, ts.strict_auto_review_enabled()))
+        Some((
+            turn_context,
+            ts.strict_auto_review_enabled() || extension_strict_auto_review,
+        ))
+    }
+
+    pub(crate) async fn extension_strict_auto_review_enabled(&self) -> bool {
+        if self
+            .services
+            .extensions
+            .approval_requirement(&self.services.thread_extension_data)
+            != codex_extension_api::ApprovalRequirement::RequireAutomaticReview
+        {
+            return false;
+        }
+
+        let state = self.state.lock().await;
+        let configuration = &state.session_configuration;
+        !configuration.trusted_guardian_reviewer
+            && configuration
+                .original_config_do_not_use
+                .features
+                .enabled(Feature::GuardianApproval)
+            && configuration
+                .original_config_do_not_use
+                .config_layer_stack
+                .requirements()
+                .approvals_reviewer
+                .can_set(&ApprovalsReviewer::AutoReview)
+                .is_ok()
     }
 
     pub(crate) async fn granted_session_permissions(

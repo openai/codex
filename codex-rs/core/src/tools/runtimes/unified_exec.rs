@@ -282,7 +282,8 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecAttempt> for UnifiedExecRunt
                 let mut launch = network.remote_launch_config().await.map_err(|err| {
                     ToolError::Codex(CodexErr::Io(io::Error::other(err.to_string())))
                 })?;
-                if routes_approval_to_guardian(&ctx.step_context.turn)
+                if (routes_approval_to_guardian(&ctx.step_context.turn)
+                    || ctx.session.extension_strict_auto_review_enabled().await)
                     && network.remote_policy_decider().is_some()
                 {
                     let timeout = ctx

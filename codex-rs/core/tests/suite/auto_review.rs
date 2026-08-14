@@ -1,7 +1,12 @@
 use codex_core::TurnInputRequest;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use codex_extension_api::ApprovalPolicyContributor;
+use codex_extension_api::ApprovalRequirement;
+use codex_extension_api::ExtensionData;
+use codex_extension_api::ExtensionRegistryBuilder;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_models_manager::manager::RefreshStrategy;
@@ -49,8 +54,22 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
+struct AutomaticReviewRequested;
+
+struct ThreadApprovalPolicyContributor;
+
+impl ApprovalPolicyContributor for ThreadApprovalPolicyContributor {
+    fn approval_requirement(&self, thread_store: &ExtensionData) -> ApprovalRequirement {
+        if thread_store.get::<AutomaticReviewRequested>().is_some() {
+            ApprovalRequirement::RequireAutomaticReview
+        } else {
+            ApprovalRequirement::Default
+        }
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_model_override_uses_catalog_model_for_strict_auto_review() -> Result<()> {
+async fn remote_model_override_uses_catalog_model_for_extension_strict_auto_review() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
 
@@ -117,7 +136,10 @@ async fn remote_model_override_uses_catalog_model_for_strict_auto_review() -> Re
     )
     .await;
 
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.approval_policy_contributor(Arc::new(ThreadApprovalPolicyContributor));
     let mut builder = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
             config.model = Some("gpt-5.4".to_string());
@@ -205,12 +227,15 @@ async fn remote_model_override_uses_catalog_model_for_strict_auto_review() -> Re
     };
     assert_eq!(permissions_request.call_id, permissions_call_id);
     codex
+        .thread_extension_data()
+        .insert(AutomaticReviewRequested);
+    codex
         .submit(Op::RequestPermissionsResponse {
             id: permissions_request.call_id,
             response: RequestPermissionsResponse {
                 permissions: permissions_request.permissions,
                 scope: PermissionGrantScope::Turn,
-                strict_auto_review: true,
+                strict_auto_review: false,
             },
         })
         .await?;

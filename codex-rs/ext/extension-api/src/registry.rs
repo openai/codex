@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use codex_protocol::protocol::ReviewDecision;
 
+use crate::ApprovalPolicyContributor;
+use crate::ApprovalRequirement;
 use crate::ApprovalReviewContributor;
 use crate::ConfigContributor;
 use crate::ContextContributor;
@@ -33,6 +35,7 @@ impl<C: Sync> Default for ExtensionRegistryBuilder<C> {
                 config_contributors: Vec::new(),
                 token_usage_contributors: Vec::new(),
                 skill_invocation_contributors: Vec::new(),
+                approval_policy_contributors: Vec::new(),
                 approval_review_contributors: Vec::new(),
                 context_contributors: Vec::new(),
                 mcp_server_contributors: Vec::new(),
@@ -61,6 +64,11 @@ impl<C: Sync> ExtensionRegistryBuilder<C> {
     /// Returns the host event sink to pass into extension constructors.
     pub fn event_sink(&self) -> Arc<dyn ExtensionEventSink> {
         Arc::clone(&self.registry.event_sink)
+    }
+
+    /// Registers one thread-scoped approval-policy contributor.
+    pub fn approval_policy_contributor(&mut self, contributor: Arc<dyn ApprovalPolicyContributor>) {
+        self.registry.approval_policy_contributors.push(contributor);
     }
 
     /// Registers one approval-review contributor.
@@ -153,6 +161,7 @@ pub struct ExtensionRegistry<C: Sync> {
     tool_contributors: Vec<Arc<dyn ToolContributor>>,
     tool_lifecycle_contributors: Vec<Arc<dyn ToolLifecycleContributor>>,
     turn_item_contributors: Vec<Arc<dyn TurnItemContributor>>,
+    approval_policy_contributors: Vec<Arc<dyn ApprovalPolicyContributor>>,
     approval_review_contributors: Vec<Arc<dyn ApprovalReviewContributor>>,
 }
 
@@ -185,6 +194,18 @@ impl<C: Sync> ExtensionRegistry<C> {
     /// Returns the registered skill-invocation contributors.
     pub fn skill_invocation_contributors(&self) -> &[Arc<dyn SkillInvocationContributor>] {
         &self.skill_invocation_contributors
+    }
+
+    /// Resolves the strongest approval requirement for the current thread.
+    pub fn approval_requirement(&self, thread_store: &ExtensionData) -> ApprovalRequirement {
+        if self.approval_policy_contributors.iter().any(|contributor| {
+            contributor.approval_requirement(thread_store)
+                == ApprovalRequirement::RequireAutomaticReview
+        }) {
+            ApprovalRequirement::RequireAutomaticReview
+        } else {
+            ApprovalRequirement::Default
+        }
     }
 
     /// Claims the first rendered approval-review prompt accepted by an
