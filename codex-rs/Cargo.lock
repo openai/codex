@@ -2015,6 +2015,7 @@ dependencies = [
  "codex-git-utils",
  "codex-goal-extension",
  "codex-guardian",
+ "codex-guardian-v2",
  "codex-home",
  "codex-hooks",
  "codex-http-client",

@@ -84,7 +84,7 @@ where
             state_db,
             analytics_events_client,
             codex_otel::global(),
-            thread_manager,
+            thread_manager.clone(),
             goal_service,
             |config: &Config| GoalExtensionConfig {
                 enabled: config.features.enabled(codex_features::Feature::Goals),
@@ -99,6 +99,7 @@ where
         http_client_factory,
     );
     codex_guardian::install(&mut builder, guardian_agent_spawner);
+    codex_guardian_v2::install(&mut builder, auth_manager.clone(), thread_manager);
     codex_memories_extension::install(&mut builder, codex_otel::global());
     codex_mcp_extension::install(&mut builder);
     codex_mcp_extension::install_executor_plugins(&mut builder, environment_manager);
