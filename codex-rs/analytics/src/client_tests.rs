@@ -142,7 +142,7 @@ fn sample_accepted_line_fingerprint_event(thread_id: &str) -> TrackEventRequest 
                 repo_hash: None,
                 accepted_added_lines: 1,
                 accepted_deleted_lines: 0,
-                line_fingerprints: Vec::new(),
+                line_fingerprints: [],
             },
         },
     ))

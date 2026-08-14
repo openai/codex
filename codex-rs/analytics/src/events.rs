@@ -1,6 +1,5 @@
 use std::time::Instant;
 
-use crate::facts::AcceptedLineFingerprint;
 use crate::facts::AppInvocation;
 use crate::facts::ArtifactOperation;
 use crate::facts::ArtifactOperationLifecycle;
@@ -216,7 +215,9 @@ pub(crate) struct CodexAcceptedLineFingerprintsEventParams {
     pub(crate) repo_hash: Option<String>,
     pub(crate) accepted_added_lines: u64,
     pub(crate) accepted_deleted_lines: u64,
-    pub(crate) line_fingerprints: Vec<AcceptedLineFingerprint>,
+    // Analytics ingestion and warehouse schemas require this field on the wire.
+    // Keep it statically empty; line fingerprints are no longer generated.
+    pub(crate) line_fingerprints: [(); 0],
 }
 
 #[derive(Serialize)]

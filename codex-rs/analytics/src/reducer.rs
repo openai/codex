@@ -1,6 +1,6 @@
 use crate::accepted_lines::AcceptedLineFingerprintEventInput;
+use crate::accepted_lines::accepted_line_counts_from_unified_diff;
 use crate::accepted_lines::accepted_line_fingerprint_event_requests;
-use crate::accepted_lines::accepted_line_fingerprints_from_unified_diff;
 use crate::accepted_lines::accepted_line_repo_hash_for_cwd;
 use crate::events::AppServerRpcTransport;
 use crate::events::CodexAppMentionedEventRequest;
@@ -3228,7 +3228,7 @@ fn accepted_line_event_input(
     turn_state: &TurnState,
 ) -> Option<(AcceptedLineFingerprintEventInput, PathBuf)> {
     let latest_diff = turn_state.latest_diff.as_deref()?;
-    let summary = accepted_line_fingerprints_from_unified_diff(latest_diff);
+    let summary = accepted_line_counts_from_unified_diff(latest_diff);
     if summary.accepted_added_lines == 0 && summary.accepted_deleted_lines == 0 {
         return None;
     }
@@ -3247,7 +3247,6 @@ fn accepted_line_event_input(
             repo_hash: None,
             accepted_added_lines: summary.accepted_added_lines,
             accepted_deleted_lines: summary.accepted_deleted_lines,
-            line_fingerprints: summary.line_fingerprints,
         },
         resolved_config.permission_profile_cwd,
     ))

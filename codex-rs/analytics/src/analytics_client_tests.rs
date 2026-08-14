@@ -1178,7 +1178,7 @@ fn accepted_line_fingerprints_event_serializes_expected_shape() {
                 repo_hash: Some("repo-hash-1".to_string()),
                 accepted_added_lines: 42,
                 accepted_deleted_lines: 40,
-                line_fingerprints: Vec::new(),
+                line_fingerprints: [],
             },
         },
     ));
