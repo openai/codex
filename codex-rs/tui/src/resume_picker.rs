@@ -5,13 +5,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::app_server_session::AppServerSession;
-use crate::app_server_session::HISTORY_ITEM_PAGE_LIMIT;
-use crate::app_server_session::HISTORY_ITEM_SCAN_LIMIT;
 use crate::clipboard_paste::normalize_pasted_search_query;
 use crate::color::blend;
 use crate::color::is_light;
-use crate::git_action_directives::parse_assistant_markdown;
-use crate::inline_visualization::InlineVisualizationContext;
 use crate::key_hint::KeyBindingListExt;
 use crate::key_hint::is_plain_text_key_event;
 use crate::keymap::ListAction;
@@ -44,8 +40,6 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
-use codex_app_server_protocol::ThreadHistoryMode;
-use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadSortKey;
@@ -84,6 +78,11 @@ mod page_loading;
 
 use page_loading::PageLoadMode;
 use page_loading::PaginationState;
+
+#[path = "resume_picker_transcript_preview.rs"]
+mod transcript_preview;
+
+pub(crate) use transcript_preview::load_transcript_preview;
 
 const PAGE_SIZE: usize = 25;
 const LOAD_NEAR_THRESHOLD: usize = 5;
@@ -836,13 +835,13 @@ enum SessionTranscriptState {
     Failed,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TranscriptPreviewLine {
     speaker: TranscriptPreviewSpeaker,
     text: String,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TranscriptPreviewSpeaker {
     User,
     Assistant,
@@ -880,145 +879,6 @@ async fn load_app_server_page(
         num_scanned_files,
         reached_scan_cap: false,
     })
-}
-
-pub(crate) async fn load_transcript_preview(
-    app_server: &mut AppServerSession,
-    thread_id: ThreadId,
-    config: Option<&Config>,
-) -> std::io::Result<Vec<TranscriptPreviewLine>> {
-    const MAX_PREVIEW_LINES: usize = 6;
-
-    let mut thread = app_server
-        .thread_read(thread_id, /*include_turns*/ false)
-        .await
-        .map_err(std::io::Error::other)?;
-    if thread.history_mode == ThreadHistoryMode::Legacy {
-        app_server
-            .hydrate_initial_thread_history(
-                &mut thread,
-                /*turn_cursor*/ None,
-                /*item_cursor*/ None,
-                /*config*/ None,
-                crate::app_server_session::HistoryHydrationScope::Initial,
-            )
-            .await
-            .map_err(std::io::Error::other)?;
-    }
-    let cwd = thread.cwd.as_path();
-    let inline_visualization_context = config.and_then(|config| {
-        ThreadId::from_string(&thread.id)
-            .ok()
-            .and_then(|thread_id| InlineVisualizationContext::from_config(config, thread_id))
-    });
-    let mut lines = if thread.history_mode == ThreadHistoryMode::Paginated {
-        let mut groups = Vec::new();
-        let mut visible_lines = 0_usize;
-        let mut scanned_items = 0_usize;
-        let mut cursor = None;
-        let mut seen_cursors = HashSet::new();
-        loop {
-            let page = app_server
-                .thread_items_page(
-                    thread_id,
-                    /*turn_id*/ None,
-                    cursor.clone(),
-                    HISTORY_ITEM_PAGE_LIMIT,
-                )
-                .await
-                .map_err(std::io::Error::other)?;
-            scanned_items = scanned_items.saturating_add(page.data.len());
-            for entry in page.data {
-                let item_lines = transcript_preview_lines_for_item(
-                    &entry.item,
-                    cwd,
-                    inline_visualization_context.as_ref(),
-                );
-                visible_lines = visible_lines.saturating_add(item_lines.len());
-                if !item_lines.is_empty() {
-                    groups.push(item_lines);
-                }
-                if visible_lines >= MAX_PREVIEW_LINES {
-                    break;
-                }
-            }
-            if visible_lines >= MAX_PREVIEW_LINES || scanned_items >= HISTORY_ITEM_SCAN_LIMIT {
-                break;
-            }
-            let Some(next_cursor) = page
-                .next_cursor
-                .filter(|next| seen_cursors.insert(next.clone()))
-            else {
-                break;
-            };
-            cursor = Some(next_cursor);
-        }
-        groups.into_iter().rev().flatten().collect::<Vec<_>>()
-    } else {
-        thread
-            .turns
-            .iter()
-            .flat_map(|turn| turn.items.iter())
-            .flat_map(|item| {
-                transcript_preview_lines_for_item(item, cwd, inline_visualization_context.as_ref())
-            })
-            .collect::<Vec<_>>()
-    };
-    if lines.len() > MAX_PREVIEW_LINES {
-        lines.drain(..lines.len() - MAX_PREVIEW_LINES);
-    }
-    Ok(lines)
-}
-
-fn transcript_preview_lines_for_item(
-    item: &ThreadItem,
-    cwd: &Path,
-    inline_visualization_context: Option<&InlineVisualizationContext>,
-) -> Vec<TranscriptPreviewLine> {
-    let line = match item {
-        ThreadItem::UserMessage { content, .. } => TranscriptPreviewLine {
-            speaker: TranscriptPreviewSpeaker::User,
-            text: content
-                .iter()
-                .filter_map(|input| match input {
-                    codex_app_server_protocol::UserInput::Text { text, .. } => Some(text.as_str()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join(" "),
-        },
-        ThreadItem::AgentMessage { text, .. } => {
-            let visible_markdown = parse_assistant_markdown(text, cwd).visible_markdown;
-            let rewritten = crate::inline_visualization::rewrite_inline_visualizations(
-                &visible_markdown,
-                inline_visualization_context,
-            );
-            let mut text = rewritten.markdown.into_owned();
-            for (placeholder, link) in &rewritten.trusted_file_links {
-                text = text.replace(
-                    &format!(
-                        "{}  \n[{}]({placeholder})",
-                        link.markdown_label, link.markdown_destination_label
-                    ),
-                    &format!("{}  \n{}", link.display_label, link.destination),
-                );
-            }
-            TranscriptPreviewLine {
-                speaker: TranscriptPreviewSpeaker::Assistant,
-                text,
-            }
-        }
-        _ => return Vec::new(),
-    };
-
-    line.text
-        .lines()
-        .filter(|text| !text.trim().is_empty())
-        .map(|text| TranscriptPreviewLine {
-            speaker: line.speaker,
-            text: text.trim().to_string(),
-        })
-        .collect()
 }
 
 impl SearchState {
@@ -3567,6 +3427,7 @@ fn render_empty_state_line(state: &PickerState) -> Line<'static> {
 mod tests {
     use super::*;
     use chrono::Duration;
+    use codex_app_server_protocol::ThreadItem;
     use codex_app_server_protocol::ThreadSourceKind;
     use codex_config::CONFIG_TOML_FILE;
     use codex_protocol::ThreadId;
