@@ -188,7 +188,6 @@ async fn list_models_uses_chatgpt_remote_catalog_as_source_of_truth() -> Result<
                 "default_verbosity": null,
                 "apply_patch_tool_type": null,
                 "truncation_policy": {"mode": "bytes", "limit": 10_000},
-                "supports_parallel_tool_calls": false,
                 "supports_image_detail_original": false,
                 "multi_agent_version": "v2",
                 "context_window": 272_000,

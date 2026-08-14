@@ -27,7 +27,6 @@ fn model_info() -> ModelInfo {
             "mode": "bytes",
             "limit": 10000
         },
-        "supports_parallel_tool_calls": false,
         "supports_image_detail_original": true,
         "context_window": null,
         "auto_compact_token_limit": null,

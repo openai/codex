@@ -532,7 +532,6 @@ async fn responses_lite_compact_request_uses_lite_transport_contract() -> Result
     let mut builder = test_codex()
         .with_model_info_override("gpt-5.4", |model_info| {
             model_info.use_responses_lite = true;
-            model_info.supports_parallel_tool_calls = true;
         })
         .with_config(|config| {
             let _ = config.features.disable(Feature::RemoteCompactionV2);
