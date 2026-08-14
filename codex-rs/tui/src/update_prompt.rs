@@ -50,6 +50,7 @@ pub(crate) async fn run_update_prompt_if_needed(
         frame.render_widget_ref(&screen, frame.area());
     })?;
 
+    tui.discard_pending_input_before_interactive_screen()?;
     let events = tui.event_stream();
     tokio::pin!(events);
 

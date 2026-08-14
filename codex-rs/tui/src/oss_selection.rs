@@ -359,20 +359,27 @@ pub async fn select_oss_provider() -> io::Result<OssProviderSelection> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = loop {
+    let result = (|| {
         terminal.draw(|f| {
             (&widget).render_ref(f.area(), f.buffer_mut());
         })?;
+        crate::tui::discard_pending_terminal_input()?;
 
-        if let Event::Key(key_event) = event::read()?
-            && let Some(selection) = widget.handle_key_event(key_event)
-        {
-            break Ok(OssProviderSelection {
-                provider: selection,
-                manually_selected: true,
-            });
+        loop {
+            if let Event::Key(key_event) = event::read()?
+                && let Some(selection) = widget.handle_key_event(key_event)
+            {
+                break Ok(OssProviderSelection {
+                    provider: selection,
+                    manually_selected: true,
+                });
+            }
+
+            terminal.draw(|f| {
+                (&widget).render_ref(f.area(), f.buffer_mut());
+            })?;
         }
-    };
+    })();
 
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;

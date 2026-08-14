@@ -227,6 +227,14 @@ impl OnboardingScreen {
         self.should_exit
     }
 
+    /// Check whether the first unfinished onboarding step can grant directory trust.
+    fn is_trust_step_active(&self) -> bool {
+        self.steps
+            .iter()
+            .find(|step| matches!(step.get_step_state(), StepState::InProgress))
+            .is_some_and(|step| matches!(step, Step::TrustDirectory(_)))
+    }
+
     fn cancel_auth_if_active(&self) {
         for step in &self.steps {
             if let Step::Auth(widget) = step {
@@ -490,8 +498,10 @@ pub(crate) async fn run_onboarding_app(
         frame.render_widget_ref(&onboarding_screen, frame.area());
     })?;
 
+    tui.discard_pending_input_before_interactive_screen()?;
     let tui_events = tui.event_stream();
     tokio::pin!(tui_events);
+    let mut trust_step_was_active = onboarding_screen.is_trust_step_active();
 
     while !onboarding_screen.is_done() {
         tokio::select! {
@@ -570,11 +580,39 @@ pub(crate) async fn run_onboarding_app(
                 }
             }
         }
+
+        discard_pending_input_on_trust_step_transition(
+            &onboarding_screen,
+            &mut trust_step_was_active,
+            |onboarding_screen| {
+                tui.draw(u16::MAX, |frame| {
+                    frame.render_widget_ref(onboarding_screen, frame.area());
+                })?;
+                tui.discard_pending_input_before_interactive_screen()?;
+                Ok(())
+            },
+        )?;
     }
     Ok(OnboardingResult {
         directory_trust_persisted,
         should_exit: onboarding_screen.should_exit(),
     })
+}
+
+/// Render a newly activated trust step before discarding keys from the preceding screen.
+///
+/// Once the step is active, preserve fresh navigation and confirmation input.
+fn discard_pending_input_on_trust_step_transition(
+    onboarding_screen: &OnboardingScreen,
+    trust_step_was_active: &mut bool,
+    render_and_discard: impl FnOnce(&OnboardingScreen) -> Result<()>,
+) -> Result<()> {
+    let trust_step_is_active = onboarding_screen.is_trust_step_active();
+    if trust_step_is_active && !*trust_step_was_active {
+        render_and_discard(onboarding_screen)?;
+    }
+    *trust_step_was_active = trust_step_is_active;
+    Ok(())
 }
 
 async fn persist_selected_trust(
@@ -630,8 +668,10 @@ mod tests {
     use super::OnboardingScreen;
     use super::Step;
     use super::StepStateProvider;
+    use super::discard_pending_input_on_trust_step_transition;
     use super::persist_selected_trust;
     use super::suppress_quit_while_typing_api_key;
+    use crate::onboarding::onboarding_screen::KeyboardHandler;
     use crate::onboarding::trust_directory::TrustDirectorySelection;
     use crate::onboarding::trust_directory::TrustDirectoryWidget;
     use crate::tui::FrameRequester;
@@ -687,6 +727,66 @@ mod tests {
             },
         );
         assert!(!suppressed);
+    }
+
+    #[test]
+    fn buffered_enter_is_discarded_when_trust_step_becomes_active() {
+        let mut onboarding_screen = OnboardingScreen {
+            request_frame: FrameRequester::test_dummy(),
+            steps: vec![Step::TrustDirectory(TrustDirectoryWidget {
+                cwd: PathBuf::from("/workspace/project"),
+                trust_target: PathBuf::from("/workspace/project"),
+                show_windows_create_sandbox_hint: false,
+                should_quit: false,
+                selection: None,
+                highlighted: TrustDirectorySelection::Trust,
+                error: None,
+            })],
+            is_done: false,
+            should_exit: false,
+        };
+
+        let mut buffered_keys = vec![KeyEvent::from(KeyCode::Enter)];
+        let mut trust_step_was_active = false;
+        let mut drain_count = 0;
+        discard_pending_input_on_trust_step_transition(
+            &onboarding_screen,
+            &mut trust_step_was_active,
+            |_| {
+                drain_count += 1;
+                buffered_keys.clear();
+                Ok(())
+            },
+        )
+        .expect("discard buffered trust input");
+        for key in buffered_keys {
+            onboarding_screen.handle_key_event(key);
+        }
+
+        assert!(onboarding_screen.is_trust_step_active());
+        let Step::TrustDirectory(widget) = &onboarding_screen.steps[0] else {
+            panic!("trust step should remain present");
+        };
+        assert_eq!(widget.selection, None);
+        assert_eq!(widget.highlighted, TrustDirectorySelection::Trust);
+
+        let mut navigation_keys = vec![KeyEvent::from(KeyCode::Down)];
+        discard_pending_input_on_trust_step_transition(
+            &onboarding_screen,
+            &mut trust_step_was_active,
+            |_| {
+                drain_count += 1;
+                navigation_keys.clear();
+                Ok(())
+            },
+        )
+        .expect("retain fresh trust navigation");
+        assert_eq!(drain_count, 1);
+        onboarding_screen.handle_key_event(navigation_keys.remove(0));
+        let Step::TrustDirectory(widget) = &onboarding_screen.steps[0] else {
+            panic!("trust step should remain present");
+        };
+        assert_eq!(widget.highlighted, TrustDirectorySelection::Quit);
     }
 
     #[tokio::test]

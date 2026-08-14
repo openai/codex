@@ -535,6 +535,15 @@ async fn run_session_picker_with_loader(
     state.start_initial_load();
     state.request_frame();
 
+    if let Ok(size) = alt.tui.terminal.size() {
+        let list_height = size.height.saturating_sub(PICKER_CHROME_HEIGHT) as usize;
+        state.update_viewport(list_height, list_viewport_width(size.width));
+        state.ensure_minimum_rows_for_view(list_height);
+    }
+    draw_picker(alt.tui, &state, alt.tui.terminal.last_known_screen_size)?;
+    if state.launch_context == SessionPickerLaunchContext::Startup {
+        alt.tui.discard_pending_input_before_interactive_screen()?;
+    }
     let mut tui_events = alt.tui.event_stream().fuse();
     let mut background_events = UnboundedReceiverStream::new(bg_rx).fuse();
 

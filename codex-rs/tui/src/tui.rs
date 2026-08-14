@@ -41,6 +41,10 @@ use tokio::sync::broadcast;
 use tokio_stream::Stream;
 
 pub use self::frame_requester::FrameRequester;
+use self::input_boundary::TerminalInitializationGuard;
+pub(crate) use self::input_boundary::discard_pending_terminal_input;
+#[cfg(all(test, unix))]
+use self::input_boundary::terminal_input_is_readable;
 use crate::custom_terminal;
 use crate::custom_terminal::Terminal as CustomTerminal;
 use crate::insert_history::HistoryLineWrapPolicy;
@@ -61,10 +65,14 @@ mod event_stream;
 mod frame_rate_limiter;
 mod frame_requester;
 mod history_tail;
+mod input_boundary;
 #[cfg(unix)]
 mod job_control;
 mod keyboard_modes;
 mod screen_size;
+#[cfg(all(test, unix))]
+#[path = "tui_startup_tests.rs"]
+mod startup_tests;
 mod terminal_stderr;
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -417,9 +425,8 @@ pub(crate) fn init() -> Result<InitializedTerminal> {
     if !stdout().is_terminal() {
         return Err(std::io::Error::other("stdout is not a terminal"));
     }
+    let mut restore_guard = TerminalInitializationGuard { active: true };
     set_modes()?;
-
-    flush_terminal_input_buffer();
 
     set_panic_hook();
 
@@ -494,11 +501,13 @@ pub(crate) fn init() -> Result<InitializedTerminal> {
 
     let tui = CustomTerminal::with_options_and_cursor_position(backend, cursor_pos)?;
     let stderr_guard = terminal_stderr::TerminalStderrGuard::install()?;
-    Ok(InitializedTerminal {
+    let initialized_terminal = InitializedTerminal {
         terminal: tui,
         enhanced_keys_supported,
         stderr_guard,
-    })
+    };
+    restore_guard.active = false;
+    Ok(initialized_terminal)
 }
 
 #[cfg(not(unix))]
@@ -682,6 +691,19 @@ impl Tui {
     // Inverse of `pause_events`.
     pub fn resume_events(&mut self) {
         self.event_broker.resume_events();
+    }
+
+    /// Discard buffered typeahead before a startup screen that can confirm an action.
+    ///
+    /// Startup probes can leave parsed key events in crossterm's queue, while later bootstrap
+    /// work can leave additional bytes in the terminal input buffer. Neither should activate an
+    /// update, trust, or migration prompt before the user has seen it. Pause the event stream,
+    /// drain all input through crossterm so incomplete bracketed paste remains safely framed.
+    pub(crate) fn discard_pending_input_before_interactive_screen(&mut self) -> Result<()> {
+        self.pause_events();
+        let drain_result = discard_pending_terminal_input();
+        self.resume_events();
+        drain_result
     }
 
     /// Temporarily restore terminal state to run an external interactive program `f`.

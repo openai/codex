@@ -101,6 +101,7 @@ async fn run_startup_hooks_review_app(
     let mut chord_matcher = crate::keymap::KeyChordMatcher::default();
     draw_view(tui, &view)?;
 
+    tui.discard_pending_input_before_interactive_screen()?;
     let tui_events = tui.event_stream();
     tokio::pin!(tui_events);
 

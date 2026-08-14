@@ -840,7 +840,7 @@ impl App {
             &app_event_tx,
             &available_models,
         )
-        .await;
+        .await?;
         if let Some(exit_info) = exit_info {
             app_server
                 .shutdown()

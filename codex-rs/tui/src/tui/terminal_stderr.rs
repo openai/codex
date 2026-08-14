@@ -247,7 +247,6 @@ mod tests {
         write_stderr("hidden after resume\n")?;
         finish()?;
         write_stderr("visible after finish\n")?;
-
         drop(capture);
         output.rewind()?;
         let mut captured = String::new();

@@ -137,14 +137,15 @@ pub(crate) fn migration_copy_for_models(
 pub(crate) async fn run_model_migration_prompt(
     tui: &mut Tui,
     copy: ModelMigrationCopy,
-) -> ModelMigrationOutcome {
+) -> std::io::Result<ModelMigrationOutcome> {
     let alt = AltScreenGuard::enter(tui);
     let mut screen = ModelMigrationScreen::new(alt.tui.frame_requester(), copy);
 
-    let _ = alt.tui.draw(u16::MAX, |frame| {
+    alt.tui.draw(u16::MAX, |frame| {
         frame.render_widget_ref(&screen, frame.area());
-    });
+    })?;
 
+    alt.tui.discard_pending_input_before_interactive_screen()?;
     let events = alt.tui.event_stream();
     tokio::pin!(events);
 
@@ -166,7 +167,7 @@ pub(crate) async fn run_model_migration_prompt(
         }
     }
 
-    screen.outcome()
+    Ok(screen.outcome())
 }
 
 struct ModelMigrationScreen {

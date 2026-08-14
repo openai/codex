@@ -47,12 +47,16 @@ impl ExternalAgentConfigMigrationSource {
 pub(crate) async fn run_external_agent_config_source_prompt(
     tui: &mut Tui,
     sources: &[ExternalAgentConfigMigrationSource],
-) -> Option<ExternalAgentConfigMigrationSource> {
+) -> std::io::Result<Option<ExternalAgentConfigMigrationSource>> {
     let mut screen = ExternalAgentConfigSourceScreen::new(tui.frame_requester(), sources);
-    let _ = tui.draw(u16::MAX, |frame| {
+    if let Err(err) = tui.draw(u16::MAX, |frame| {
         frame.render_widget_ref(&screen, frame.area());
-    });
+    }) {
+        tracing::warn!("failed to draw config migration source prompt: {err}");
+        return Ok(None);
+    }
 
+    tui.discard_pending_input_before_interactive_screen()?;
     let events = tui.event_stream();
     tokio::pin!(events);
 
@@ -73,7 +77,7 @@ pub(crate) async fn run_external_agent_config_source_prompt(
         }
     }
 
-    screen.selection()
+    Ok(screen.selection())
 }
 
 struct ExternalAgentConfigSourceScreen {

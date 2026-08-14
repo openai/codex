@@ -7,12 +7,14 @@
 //! prefers duplicated stdio handles, falls back to the controlling terminal path when stdio is
 //! unavailable, and reports `None` when a response is unavailable.
 //!
-//! Probes run only while the crossterm event stream is absent or paused, so they do not share
-//! crossterm's internal skipped-event queue. Bytes read while looking for probe responses are
-//! consumed from the terminal; callers must therefore own terminal input for the duration of the
-//! short timeout and accept that unrelated buffered input will be discarded.
+//! Probes run only while the crossterm event stream is absent or paused. Startup replays consumed
+//! terminal bytes through crossterm's parser so interleaved user input remains available after the
+//! probe completes.
 
 use std::time::Duration;
+
+#[cfg(unix)]
+mod startup_replay;
 
 /// Default wall-clock budget for each startup probe group.
 pub(crate) const DEFAULT_TIMEOUT: Duration = Duration::from_millis(100);
@@ -31,6 +33,7 @@ pub(crate) struct DefaultColors {
 mod imp {
     use super::DefaultColors;
     use super::parse_default_colors;
+    use super::startup_replay::startup_replay_input;
     use std::fs::File;
     use std::fs::OpenOptions;
     use std::io;
@@ -42,6 +45,11 @@ mod imp {
 
     use crossterm::event::KeyboardEnhancementFlags;
     use ratatui::layout::Position;
+
+    /// Leave larger pastes in the terminal queue for the normal event reader.
+    const MAX_TERMINAL_PROBE_BYTES: usize = 1024;
+    const MAX_STARTUP_PROBE_BYTES: usize = 64 * 1024;
+    const MAX_TERMINAL_CSI_BYTES: usize = 64;
 
     /// Results from the TUI's one-shot startup terminal probe.
     #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -140,14 +148,24 @@ mod imp {
             self.writer.flush()
         }
 
-        fn read_available(&mut self, buffer: &mut Vec<u8>) -> io::Result<()> {
+        fn read_available(
+            &mut self,
+            buffer: &mut Vec<u8>,
+            deadline: Instant,
+            max_bytes: usize,
+        ) -> io::Result<()> {
             let mut chunk = [0_u8; 256];
             loop {
+                if buffer.len() >= max_bytes || Instant::now() >= deadline {
+                    return Ok(());
+                }
+
+                let bytes_to_read = chunk.len().min(max_bytes.saturating_sub(buffer.len()));
                 let count = unsafe {
                     libc::read(
                         self.reader.as_raw_fd(),
                         chunk.as_mut_ptr().cast::<libc::c_void>(),
-                        chunk.len(),
+                        bytes_to_read,
                     )
                 };
                 if count > 0 {
@@ -245,8 +263,8 @@ mod imp {
 
     /// Runs the optional terminal queries needed during TUI startup under one shared deadline.
     ///
-    /// Keeping these queries batched avoids paying one timeout per unsupported capability before
-    /// the first frame can render.
+    /// Bytes read while waiting for terminal responses are replayed through crossterm's event
+    /// parser so keys, bracketed paste, and incomplete sequences survive the startup probe.
     pub(crate) fn startup(
         timeout: Duration,
         keyboard_probe: StartupKeyboardEnhancementProbe,
@@ -260,7 +278,11 @@ mod imp {
                 tty.write_all(b"\x1B[6n\x1B]10;?\x1B\\\x1B]11;?\x1B\\")?;
             }
         }
-        read_startup_probe(&mut tty, timeout, keyboard_probe)
+
+        let mut buffer = Vec::new();
+        let result = read_startup_probe(&mut tty, timeout, keyboard_probe, &mut buffer);
+        crossterm::event::buffer_input(&startup_replay_input(&buffer))?;
+        result
     }
 
     /// Reads available terminal bytes until `parse` recognizes a probe response or time expires.
@@ -276,12 +298,12 @@ mod imp {
         let deadline = Instant::now() + timeout;
         let mut buffer = Vec::new();
         loop {
-            tty.read_available(&mut buffer)?;
+            tty.read_available(&mut buffer, deadline, MAX_TERMINAL_PROBE_BYTES)?;
             if let Some(value) = parse(&buffer) {
                 return Ok(Some(value));
             }
             let now = Instant::now();
-            if now >= deadline {
+            if now >= deadline || buffer.len() >= MAX_TERMINAL_PROBE_BYTES {
                 return Ok(None);
             }
             if !tty.poll_readable(deadline.saturating_duration_since(now))? {
@@ -294,9 +316,9 @@ mod imp {
         tty: &mut Tty,
         timeout: Duration,
         keyboard_probe: StartupKeyboardEnhancementProbe,
+        buffer: &mut Vec<u8>,
     ) -> io::Result<StartupProbe> {
         let deadline = Instant::now() + timeout;
-        let mut buffer = Vec::new();
         let mut probe = StartupProbe {
             cursor_position: None,
             default_colors: None,
@@ -304,18 +326,18 @@ mod imp {
         };
         let mut saw_supported_keyboard = false;
         loop {
-            tty.read_available(&mut buffer)?;
+            tty.read_available(buffer, deadline, MAX_STARTUP_PROBE_BYTES)?;
             update_startup_probe(
                 &mut probe,
                 &mut saw_supported_keyboard,
-                &buffer,
+                buffer,
                 keyboard_probe,
             );
             if startup_probe_complete(&probe, keyboard_probe) {
                 return Ok(probe);
             }
             let now = Instant::now();
-            if now >= deadline {
+            if now >= deadline || buffer.len() >= MAX_STARTUP_PROBE_BYTES {
                 finish_startup_probe(&mut probe, keyboard_probe, saw_supported_keyboard);
                 return Ok(probe);
             }
@@ -382,7 +404,11 @@ mod imp {
     fn parse_cursor_position(buffer: &[u8]) -> Option<Position> {
         for start in find_all_subslices(buffer, b"\x1B[") {
             let rest = &buffer[start + 2..];
-            let Some(end) = rest.iter().position(|b| *b == b'R') else {
+            let Some(end) = rest
+                .iter()
+                .take(MAX_TERMINAL_CSI_BYTES)
+                .position(|b| *b == b'R')
+            else {
                 continue;
             };
             let Ok(payload) = std::str::from_utf8(&rest[..end]) else {
@@ -435,7 +461,11 @@ mod imp {
     fn find_keyboard_flags(buffer: &[u8]) -> Option<KeyboardEnhancementFlags> {
         for start in find_all_subslices(buffer, b"\x1B[?") {
             let rest = &buffer[start + 3..];
-            let Some(end) = rest.iter().position(|b| *b == b'u') else {
+            let Some(end) = rest
+                .iter()
+                .take(MAX_TERMINAL_CSI_BYTES)
+                .position(|b| *b == b'u')
+            else {
                 continue;
             };
             if end == 0 {
@@ -468,7 +498,11 @@ mod imp {
     fn find_primary_device_attributes(buffer: &[u8]) -> Option<()> {
         for start in find_all_subslices(buffer, b"\x1B[?") {
             let rest = &buffer[start + 3..];
-            let Some(end) = rest.iter().position(|b| *b == b'c') else {
+            let Some(end) = rest
+                .iter()
+                .take(MAX_TERMINAL_CSI_BYTES)
+                .position(|b| *b == b'c')
+            else {
                 continue;
             };
             if end > 0 && rest[..end].iter().all(|b| b.is_ascii_digit() || *b == b';') {
@@ -492,6 +526,66 @@ mod imp {
     mod tests {
         use super::*;
         use pretty_assertions::assert_eq;
+        use std::os::fd::OwnedFd;
+        use std::os::unix::net::UnixStream;
+
+        fn tty_with_buffered_input(input: &[u8]) -> Tty {
+            let (reader, mut writer) = UnixStream::pair().expect("create terminal input pair");
+            writer.write_all(input).expect("buffer terminal input");
+
+            let reader: OwnedFd = reader.into();
+            let writer: OwnedFd = writer.into();
+            Tty::new(reader.into(), writer.into()).expect("create terminal probe")
+        }
+
+        #[test]
+        fn terminal_probe_stops_reading_when_its_deadline_expires() {
+            let mut tty = tty_with_buffered_input(b"still queued");
+            let mut buffer = Vec::new();
+
+            tty.read_available(&mut buffer, Instant::now(), MAX_TERMINAL_PROBE_BYTES)
+                .expect("respect terminal probe deadline");
+
+            assert_eq!(buffer, Vec::<u8>::new());
+            let mut queued = [0; 12];
+            let count = unsafe {
+                libc::read(
+                    tty.reader.as_raw_fd(),
+                    queued.as_mut_ptr().cast::<libc::c_void>(),
+                    queued.len(),
+                )
+            };
+            assert_eq!(count, queued.len() as isize);
+            assert_eq!(&queued, b"still queued");
+        }
+
+        #[test]
+        fn terminal_probe_leaves_input_queued_after_reaching_its_byte_budget() {
+            for max_bytes in [MAX_TERMINAL_PROBE_BYTES, MAX_STARTUP_PROBE_BYTES] {
+                let input = [b'x'; 256];
+                let mut tty = tty_with_buffered_input(&input);
+                let mut buffer = vec![b'x'; max_bytes - 32];
+
+                tty.read_available(
+                    &mut buffer,
+                    Instant::now() + Duration::from_secs(/*secs*/ 1),
+                    max_bytes,
+                )
+                .expect("respect terminal probe byte budget");
+
+                assert_eq!(buffer.len(), max_bytes);
+                let mut queued = [0; 224];
+                let count = unsafe {
+                    libc::read(
+                        tty.reader.as_raw_fd(),
+                        queued.as_mut_ptr().cast::<libc::c_void>(),
+                        queued.len(),
+                    )
+                };
+                assert_eq!(count, queued.len() as isize);
+                assert_eq!(queued, [b'x'; 224]);
+            }
+        }
 
         #[test]
         fn parses_cursor_position_as_zero_based() {
@@ -560,60 +654,82 @@ mod imp {
                 StartupKeyboardEnhancementProbe::Query
             ));
         }
+
+        #[test]
+        fn startup_probe_finds_responses_after_large_typeahead() {
+            let mut input = vec![b'x'; 2_048];
+            input.extend_from_slice(
+                b"\x1B[20;10R\x1B]11;rgb:1111/1111/1111\x07\x1B[?64;1;2c\x1B]10;rgb:eeee/eeee/eeee\x1B\\\x1B[?7u",
+            );
+            let mut tty = tty_with_buffered_input(&input);
+            let mut buffer = Vec::new();
+
+            let probe = read_startup_probe(
+                &mut tty,
+                Duration::from_secs(/*secs*/ 1),
+                StartupKeyboardEnhancementProbe::Query,
+                &mut buffer,
+            )
+            .expect("read terminal responses after buffered typeahead");
+
+            assert_eq!(
+                probe,
+                StartupProbe {
+                    cursor_position: Some(Position { x: 9, y: 19 }),
+                    default_colors: Some(DefaultColors {
+                        fg: (238, 238, 238),
+                        bg: (17, 17, 17),
+                    }),
+                    keyboard_enhancement_supported: Some(true),
+                }
+            );
+            let mut expected_replay = vec![b'x'; 2_048];
+            expected_replay.extend_from_slice(b"\x1B[20;10R\x1B[?64;1;2c\x1B[?7u");
+            assert_eq!(startup_replay_input(&buffer), expected_replay);
+        }
+
+        #[test]
+        fn startup_probe_finds_valid_responses_after_many_incomplete_sequences() {
+            let mut input = Vec::new();
+            for _ in 0..2_048 {
+                input.extend_from_slice(b"\x1b[?");
+            }
+            input.extend_from_slice(b"\x1b[20;10R\x1b[?64;1;2c\x1b[?7u");
+
+            assert_eq!(
+                parse_cursor_position(&input),
+                Some(Position { x: 9, y: 19 })
+            );
+            assert_eq!(
+                parse_keyboard_enhancement_support(&input),
+                KeyboardProbeState::SupportedAndFallback
+            );
+        }
     }
 }
 
 #[cfg(windows)]
 mod imp {
     use super::DefaultColors;
-    use super::parse_default_colors;
     use std::io;
-    use std::io::ErrorKind;
     use std::time::Duration;
-    use std::time::Instant;
     use windows_sys::Win32::Foundation::HANDLE;
     use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
-    use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
-    use windows_sys::Win32::Foundation::WAIT_TIMEOUT;
-    use windows_sys::Win32::Storage::FileSystem::ReadFile;
-    use windows_sys::Win32::Storage::FileSystem::WriteFile;
     use windows_sys::Win32::System::Console::CONSOLE_SCREEN_BUFFER_INFOEX;
-    use windows_sys::Win32::System::Console::ENABLE_VIRTUAL_TERMINAL_INPUT;
-    use windows_sys::Win32::System::Console::GetConsoleMode;
     use windows_sys::Win32::System::Console::GetConsoleScreenBufferInfoEx;
     use windows_sys::Win32::System::Console::GetStdHandle;
-    use windows_sys::Win32::System::Console::STD_INPUT_HANDLE;
     use windows_sys::Win32::System::Console::STD_OUTPUT_HANDLE;
-    use windows_sys::Win32::System::Console::SetConsoleMode;
-    use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
-    /// Queries OSC 10 and OSC 11 default colors under one shared deadline.
+    /// Reads default colors from the console screen buffer without consuming terminal input.
     ///
-    /// The Windows path uses raw console handles because crossterm's public color query helper is
-    /// currently Unix-only. Failures and missing responses are reported as `Ok(None)` by callers so
-    /// terminals without OSC 10/11 support keep the existing conservative palette fallback.
-    pub(crate) fn default_colors(timeout: Duration) -> io::Result<Option<DefaultColors>> {
+    /// OSC replies share the console input queue with user keystrokes on Windows. Reading them
+    /// directly during startup can discard composer typeahead, so use the non-reading console
+    /// color fallback instead.
+    pub(crate) fn default_colors(_timeout: Duration) -> io::Result<Option<DefaultColors>> {
         let Ok(output) = std_handle(STD_OUTPUT_HANDLE) else {
             return Ok(None);
         };
-
-        if let Ok(input) = std_handle(STD_INPUT_HANDLE)
-            && let Ok(Some(colors)) = query_osc_default_colors(input, output, timeout)
-        {
-            return Ok(Some(colors));
-        }
-
         Ok(query_console_default_colors(output).ok().flatten())
-    }
-
-    fn query_osc_default_colors(
-        input: HANDLE,
-        output: HANDLE,
-        timeout: Duration,
-    ) -> io::Result<Option<DefaultColors>> {
-        let _vt_input = VirtualTerminalInputMode::enable(input)?;
-        write_all(output, b"\x1B]10;?\x1B\\\x1B]11;?\x1B\\")?;
-        read_until(input, timeout, parse_default_colors)
     }
 
     fn query_console_default_colors(output: HANDLE) -> io::Result<Option<DefaultColors>> {
@@ -653,108 +769,6 @@ mod imp {
             return Err(io::Error::last_os_error());
         }
         Ok(handle)
-    }
-
-    struct VirtualTerminalInputMode {
-        handle: HANDLE,
-        original_mode: u32,
-    }
-
-    impl VirtualTerminalInputMode {
-        fn enable(handle: HANDLE) -> io::Result<Self> {
-            let mut original_mode = 0;
-            if unsafe { GetConsoleMode(handle, &mut original_mode) } == 0 {
-                return Err(io::Error::last_os_error());
-            }
-
-            let requested_mode = original_mode | ENABLE_VIRTUAL_TERMINAL_INPUT;
-            if unsafe { SetConsoleMode(handle, requested_mode) } == 0 {
-                return Err(io::Error::last_os_error());
-            }
-
-            Ok(Self {
-                handle,
-                original_mode,
-            })
-        }
-    }
-
-    impl Drop for VirtualTerminalInputMode {
-        fn drop(&mut self) {
-            unsafe {
-                SetConsoleMode(self.handle, self.original_mode);
-            }
-        }
-    }
-
-    fn write_all(handle: HANDLE, mut bytes: &[u8]) -> io::Result<()> {
-        while !bytes.is_empty() {
-            let mut written = 0;
-            let ok = unsafe {
-                WriteFile(
-                    handle,
-                    bytes.as_ptr().cast(),
-                    bytes.len().min(u32::MAX as usize) as u32,
-                    &mut written,
-                    std::ptr::null_mut(),
-                )
-            };
-            if ok == 0 {
-                return Err(io::Error::last_os_error());
-            }
-            if written == 0 {
-                return Err(io::Error::from(ErrorKind::WriteZero));
-            }
-            bytes = &bytes[written as usize..];
-        }
-        Ok(())
-    }
-
-    fn read_until<T>(
-        handle: HANDLE,
-        timeout: Duration,
-        mut parse: impl FnMut(&[u8]) -> Option<T>,
-    ) -> io::Result<Option<T>> {
-        let deadline = Instant::now() + timeout;
-        let mut buffer = Vec::new();
-        loop {
-            if let Some(value) = parse(&buffer) {
-                return Ok(Some(value));
-            }
-
-            let now = Instant::now();
-            if now >= deadline {
-                return Ok(None);
-            }
-            let timeout_ms = deadline
-                .saturating_duration_since(now)
-                .as_millis()
-                .min(u32::MAX as u128) as u32;
-            match unsafe { WaitForSingleObject(handle, timeout_ms) } {
-                WAIT_OBJECT_0 => read_once(handle, &mut buffer)?,
-                WAIT_TIMEOUT => return Ok(None),
-                _ => return Err(io::Error::last_os_error()),
-            }
-        }
-    }
-
-    fn read_once(handle: HANDLE, buffer: &mut Vec<u8>) -> io::Result<()> {
-        let mut chunk = [0_u8; 256];
-        let mut read = 0;
-        let ok = unsafe {
-            ReadFile(
-                handle,
-                chunk.as_mut_ptr().cast(),
-                chunk.len() as u32,
-                &mut read,
-                std::ptr::null_mut(),
-            )
-        };
-        if ok == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        buffer.extend_from_slice(&chunk[..read as usize]);
-        Ok(())
     }
 
     #[cfg(test)]
@@ -824,6 +838,7 @@ mod imp {
     }
 }
 
+#[cfg(any(unix, test))]
 fn parse_osc_color(buffer: &[u8], slot: u8) -> Option<(u8, u8, u8)> {
     let prefix = format!("\x1B]{slot};");
     let start = find_subslice(buffer, prefix.as_bytes())?;
@@ -834,12 +849,14 @@ fn parse_osc_color(buffer: &[u8], slot: u8) -> Option<(u8, u8, u8)> {
     parse_osc_rgb(payload)
 }
 
+#[cfg(any(unix, test))]
 fn parse_default_colors(buffer: &[u8]) -> Option<DefaultColors> {
     let fg = parse_osc_color(buffer, /*slot*/ 10)?;
     let bg = parse_osc_color(buffer, /*slot*/ 11)?;
     Some(DefaultColors { fg, bg })
 }
 
+#[cfg(any(unix, test))]
 fn osc_payload_end(buffer: &[u8]) -> Option<(usize, usize)> {
     let mut idx = 0;
     while idx < buffer.len() {
@@ -852,6 +869,7 @@ fn osc_payload_end(buffer: &[u8]) -> Option<(usize, usize)> {
     None
 }
 
+#[cfg(any(unix, test))]
 fn parse_osc_rgb(payload: &str) -> Option<(u8, u8, u8)> {
     let (prefix, values) = payload.trim().split_once(':')?;
     if !prefix.eq_ignore_ascii_case("rgb") && !prefix.eq_ignore_ascii_case("rgba") {
@@ -868,6 +886,7 @@ fn parse_osc_rgb(payload: &str) -> Option<(u8, u8, u8)> {
     parts.next().is_none().then_some((r, g, b))
 }
 
+#[cfg(any(unix, test))]
 fn parse_osc_component(component: &str) -> Option<u8> {
     match component.len() {
         2 => u8::from_str_radix(component, 16).ok(),
@@ -878,6 +897,7 @@ fn parse_osc_component(component: &str) -> Option<u8> {
     }
 }
 
+#[cfg(any(unix, test))]
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
         .windows(needle.len())

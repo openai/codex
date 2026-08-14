@@ -181,6 +181,9 @@ impl App {
                         );
                     }
                     Ok(ExternalAgentConfigMigrationFlowOutcome::Cancelled) => {}
+                    Ok(ExternalAgentConfigMigrationFlowOutcome::TerminalError(err)) => {
+                        return Err(err.into());
+                    }
                     Err(error_message) => {
                         self.chat_widget.add_error_message(error_message);
                     }
