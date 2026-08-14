@@ -29,12 +29,6 @@ pub(super) fn session_limits(
 
 pub(super) fn execute_request(request: proto::ExecuteRequest) -> Result<ExecuteRequest, Status> {
     validation::identifier(&request.tool_call_id, "tool call ID")?;
-    if request.enabled_tools.len() > validation::MAX_TOOL_DEFINITIONS {
-        return Err(Status::invalid_argument(format!(
-            "code-mode execution exceeds {} enabled tools",
-            validation::MAX_TOOL_DEFINITIONS
-        )));
-    }
     Ok(ExecuteRequest {
         tool_call_id: request.tool_call_id,
         source: request.source,
