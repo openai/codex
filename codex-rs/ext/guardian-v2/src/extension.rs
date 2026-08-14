@@ -382,11 +382,14 @@ impl ToolLifecycleContributor for GuardianV2Extension {
                     scores,
                     sampled_at: Some(sampled_at.into()),
                 };
-                thread
+                if !thread
                     .thread_extension_data()
                     .insert_if(score.clone(), |previous| {
                         previous.is_none_or(|previous| previous.sampled_at < score.sampled_at)
-                    });
+                    })
+                {
+                    return Ok(());
+                }
                 if !ephemeral {
                     thread
                         .append_rollout_items(&[RolloutItem::SecurityRiskScore(score)])
