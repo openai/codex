@@ -5,6 +5,7 @@ use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 
 use crate::PUBLIC_TOOL_NAME;
+use crate::json_schema_types::render_json_schema_to_typescript;
 
 const MAX_JS_SAFE_INTEGER: u64 = (1_u64 << 53) - 1;
 const DEFERRED_NESTED_TOOLS_GUIDANCE: &str = r#"Some deferred nested tools may be omitted from this description. They are still available on the global `tools` object and listed in `ALL_TOOLS`.
@@ -332,8 +333,7 @@ pub fn build_exec_tool_description(
             }
         }
 
-        let nested_tool_reference = nested_tool_sections.join("\n\n");
-        sections.push(nested_tool_reference);
+        sections.push(nested_tool_sections.join("\n\n"));
     }
 
     sections.join("\n\n")
@@ -400,7 +400,7 @@ pub fn render_code_mode_sample(
 ) -> String {
     let declaration = format!(
         "declare const tools: {{ {} }};",
-        render_code_mode_tool_declaration(tool_name, input_name, input_type, output_type)
+        render_code_mode_tool_declaration(tool_name, input_name, &input_type, &output_type)
     );
     format!("{description}\n\nexec tool declaration:\n```ts\n{declaration}\n```")
 }
@@ -446,8 +446,8 @@ fn render_code_mode_sample_for_definition(definition: &ToolDefinition) -> String
 fn render_code_mode_tool_declaration(
     tool_name: &str,
     input_name: &str,
-    input_type: String,
-    output_type: String,
+    input_type: &str,
+    output_type: &str,
 ) -> String {
     let tool_name = normalize_code_mode_identifier(tool_name);
     format!("{tool_name}({input_name}: {input_type}): Promise<{output_type}>;")
@@ -459,10 +459,6 @@ fn render_tool_heading(global_name: &str, raw_name: &str) -> String {
     } else {
         format!("### `{global_name}` (`{raw_name}`)")
     }
-}
-
-pub fn render_json_schema_to_typescript(schema: &JsonValue) -> String {
-    render_json_schema_to_typescript_inner(schema)
 }
 
 fn mcp_structured_content_schema(output_schema: Option<&JsonValue>) -> Option<&JsonValue> {
@@ -504,226 +500,6 @@ fn mcp_structured_content_schema(output_schema: Option<&JsonValue>) -> Option<&J
             .get("structuredContent")
             .unwrap_or(&JsonValue::Bool(true)),
     )
-}
-
-fn render_json_schema_to_typescript_inner(schema: &JsonValue) -> String {
-    match schema {
-        JsonValue::Bool(true) => "unknown".to_string(),
-        JsonValue::Bool(false) => "never".to_string(),
-        JsonValue::Object(map) => {
-            if let Some(value) = map.get("const") {
-                return render_json_schema_literal(value);
-            }
-
-            if let Some(values) = map.get("enum").and_then(JsonValue::as_array) {
-                let rendered = values
-                    .iter()
-                    .map(render_json_schema_literal)
-                    .collect::<Vec<_>>();
-                if !rendered.is_empty() {
-                    return rendered.join(" | ");
-                }
-            }
-
-            for key in ["anyOf", "oneOf"] {
-                if let Some(variants) = map.get(key).and_then(JsonValue::as_array) {
-                    let rendered = variants
-                        .iter()
-                        .map(render_json_schema_to_typescript_inner)
-                        .collect::<Vec<_>>();
-                    if !rendered.is_empty() {
-                        return rendered.join(" | ");
-                    }
-                }
-            }
-
-            if let Some(variants) = map.get("allOf").and_then(JsonValue::as_array) {
-                let rendered = variants
-                    .iter()
-                    .map(render_json_schema_to_typescript_inner)
-                    .collect::<Vec<_>>();
-                if !rendered.is_empty() {
-                    return rendered.join(" & ");
-                }
-            }
-
-            if let Some(schema_type) = map.get("type") {
-                if let Some(types) = schema_type.as_array() {
-                    let rendered = types
-                        .iter()
-                        .filter_map(JsonValue::as_str)
-                        .map(|schema_type| render_json_schema_type_keyword(map, schema_type))
-                        .collect::<Vec<_>>();
-                    if !rendered.is_empty() {
-                        return rendered.join(" | ");
-                    }
-                }
-
-                if let Some(schema_type) = schema_type.as_str() {
-                    return render_json_schema_type_keyword(map, schema_type);
-                }
-            }
-
-            if map.contains_key("properties")
-                || map.contains_key("additionalProperties")
-                || map.contains_key("required")
-            {
-                return render_json_schema_object(map);
-            }
-
-            if map.contains_key("items") || map.contains_key("prefixItems") {
-                return render_json_schema_array(map);
-            }
-
-            "unknown".to_string()
-        }
-        _ => "unknown".to_string(),
-    }
-}
-
-fn render_json_schema_type_keyword(
-    map: &serde_json::Map<String, JsonValue>,
-    schema_type: &str,
-) -> String {
-    match schema_type {
-        "string" => "string".to_string(),
-        "number" | "integer" => "number".to_string(),
-        "boolean" => "boolean".to_string(),
-        "null" => "null".to_string(),
-        "array" => render_json_schema_array(map),
-        "object" => render_json_schema_object(map),
-        _ => "unknown".to_string(),
-    }
-}
-
-fn render_json_schema_array(map: &serde_json::Map<String, JsonValue>) -> String {
-    if let Some(items) = map.get("items") {
-        let item_type = render_json_schema_to_typescript_inner(items);
-        return format!("Array<{item_type}>");
-    }
-
-    if let Some(items) = map.get("prefixItems").and_then(JsonValue::as_array) {
-        let item_types = items
-            .iter()
-            .map(render_json_schema_to_typescript_inner)
-            .collect::<Vec<_>>();
-        if !item_types.is_empty() {
-            return format!("[{}]", item_types.join(", "));
-        }
-    }
-
-    "unknown[]".to_string()
-}
-
-fn append_additional_properties_line(
-    lines: &mut Vec<String>,
-    map: &serde_json::Map<String, JsonValue>,
-    properties: &serde_json::Map<String, JsonValue>,
-    line_prefix: &str,
-) {
-    if let Some(additional_properties) = map.get("additionalProperties") {
-        let property_type = match additional_properties {
-            JsonValue::Bool(true) => Some("unknown".to_string()),
-            JsonValue::Bool(false) => None,
-            value => Some(render_json_schema_to_typescript_inner(value)),
-        };
-
-        if let Some(property_type) = property_type {
-            lines.push(format!("{line_prefix}[key: string]: {property_type};"));
-        }
-    } else if properties.is_empty() {
-        lines.push(format!("{line_prefix}[key: string]: unknown;"));
-    }
-}
-
-fn has_property_description(value: &JsonValue) -> bool {
-    value
-        .get("description")
-        .and_then(JsonValue::as_str)
-        .is_some_and(|description| !description.is_empty())
-}
-
-fn render_json_schema_object_property(name: &str, value: &JsonValue, required: &[&str]) -> String {
-    let optional = if required.iter().any(|required_name| required_name == &name) {
-        ""
-    } else {
-        "?"
-    };
-    let property_name = render_json_schema_property_name(name);
-    let property_type = render_json_schema_to_typescript_inner(value);
-    format!("{property_name}{optional}: {property_type};")
-}
-
-fn render_json_schema_object(map: &serde_json::Map<String, JsonValue>) -> String {
-    let required = map
-        .get("required")
-        .and_then(JsonValue::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(JsonValue::as_str)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let properties = map
-        .get("properties")
-        .and_then(JsonValue::as_object)
-        .cloned()
-        .unwrap_or_default();
-
-    let mut sorted_properties = properties.iter().collect::<Vec<_>>();
-    sorted_properties.sort_unstable_by_key(|(name_a, _)| *name_a);
-    if sorted_properties
-        .iter()
-        .any(|(_, value)| has_property_description(value))
-    {
-        let mut lines = vec!["{".to_string()];
-        for (name, value) in sorted_properties {
-            if let Some(description) = value.get("description").and_then(JsonValue::as_str) {
-                for description_line in description
-                    .lines()
-                    .map(str::trim)
-                    .filter(|line| !line.is_empty())
-                {
-                    lines.push(format!("  // {description_line}"));
-                }
-            }
-
-            lines.push(format!(
-                "  {}",
-                render_json_schema_object_property(name, value, &required)
-            ));
-        }
-
-        append_additional_properties_line(&mut lines, map, &properties, "  ");
-        lines.push("}".to_string());
-        return lines.join("\n");
-    }
-
-    let mut lines = sorted_properties
-        .into_iter()
-        .map(|(name, value)| render_json_schema_object_property(name, value, &required))
-        .collect::<Vec<_>>();
-
-    append_additional_properties_line(&mut lines, map, &properties, "");
-
-    if lines.is_empty() {
-        return "{}".to_string();
-    }
-
-    format!("{{ {} }}", lines.join(" "))
-}
-
-fn render_json_schema_property_name(name: &str) -> String {
-    if normalize_code_mode_identifier(name) == name {
-        name.to_string()
-    } else {
-        serde_json::to_string(name).unwrap_or_else(|_| format!("\"{}\"", name.replace('"', "\\\"")))
-    }
-}
-
-fn render_json_schema_literal(value: &JsonValue) -> String {
-    serde_json::to_string(value).unwrap_or_else(|_| "unknown".to_string())
 }
 
 #[cfg(test)]
@@ -872,6 +648,48 @@ mod tests {
   // human readable weather forecast
   forecast: string;
 }>;"#
+        ));
+    }
+
+    #[test]
+    fn code_mode_types_structured_content_result_refs() {
+        let definition = ToolDefinition {
+            name: "mcp__sample__search".to_string(),
+            tool_name: ToolName::namespaced("mcp__sample__", "search"),
+            description: "Search".to_string(),
+            kind: CodeModeToolKind::Function,
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            })),
+            output_schema: Some(mcp_call_tool_result_schema(json!({
+                "type": "object",
+                "properties": {
+                    "results": {
+                        "type": "array",
+                        "items": { "$ref": "#/definitions/Result~1item~0v1" }
+                    }
+                },
+                "required": ["results"],
+                "additionalProperties": false,
+                "definitions": {
+                    "Result/item~v1": {
+                        "type": "object",
+                        "properties": {
+                            "id": { "type": "string" },
+                            "score": { "type": "number" }
+                        },
+                        "required": ["id", "score"],
+                        "additionalProperties": false
+                    }
+                }
+            }))),
+        };
+
+        let description = augment_tool_definition(definition).description;
+        assert!(description.contains(
+            "mcp__sample__search(args: {}): Promise<CallToolResult<{ results: Array<{ id: string; score: number; }>; }>>;"
         ));
     }
 

@@ -5418,6 +5418,89 @@ text(JSON.stringify({
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_renders_local_refs_in_outbound_exec_description() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let response = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::CodeModeOnly)
+            .expect("code mode only should be enabled");
+    });
+    let base_test = builder.build_with_auto_env(&server).await?;
+    let new_thread = base_test
+        .thread_manager
+        .start_thread(StartThreadOptions {
+            dynamic_tools: vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
+                name: "boolean_search".to_string(),
+                description: "Search with nested Boolean clauses.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "clauses": {
+                            "type": "array",
+                            "items": { "$ref": "#/$defs/Clause" }
+                        }
+                    },
+                    "$defs": {
+                        "Clause": {
+                            "type": "object",
+                            "properties": {
+                                "query": {
+                                    "oneOf": [
+                                        { "type": "string" },
+                                        {
+                                            "type": "object",
+                                            "properties": {
+                                                "clauses": {
+                                                    "type": "array",
+                                                    "items": { "$ref": "#/$defs/Clause" }
+                                                }
+                                            }
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                }),
+                defer_loading: false,
+            })],
+            ..StartThreadOptions::new(base_test.config.clone())
+        })
+        .await?;
+    let mut test = base_test;
+    test.codex = new_thread.thread;
+    test.session_configured = new_thread.session_configured;
+
+    test.submit_turn("inspect the tool schema").await?;
+
+    let body = response.single_request().body_json();
+    let exec_description = body["tools"]
+        .as_array()
+        .expect("request should contain tools")
+        .iter()
+        .find_map(|tool| {
+            (tool["name"].as_str() == Some("exec"))
+                .then(|| tool["description"].as_str())
+                .flatten()
+        })
+        .expect("Code Mode exec should remain available");
+    assert!(exec_description.contains("query?: string | { clauses?: Array<"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_can_call_hidden_dynamic_tools() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

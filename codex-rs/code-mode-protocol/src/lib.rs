@@ -1,6 +1,7 @@
 mod description;
 pub mod grpc;
 pub mod host;
+mod json_schema_types;
 mod response;
 mod runtime;
 mod session;
@@ -19,7 +20,7 @@ pub use description::is_code_mode_nested_tool;
 pub use description::normalize_code_mode_identifier;
 pub use description::parse_exec_source;
 pub use description::render_code_mode_sample;
-pub use description::render_json_schema_to_typescript;
+pub use json_schema_types::render_json_schema_to_typescript;
 pub use response::DEFAULT_IMAGE_DETAIL;
 pub use response::FunctionCallOutputContentItem;
 pub use response::ImageDetail;
