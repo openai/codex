@@ -70,7 +70,6 @@ done
 
 missing_environment=0
 for variable_name in \
-  APPLE_NOTARIZATION_ISSUER_ID \
   APPLE_NOTARIZATION_AKV_KEY_NAME \
   AZURE_KEYVAULT_NAME
 do

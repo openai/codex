@@ -46,7 +46,6 @@ class NotarizationConfiguration:
         """Load and validate the notarization configuration."""
 
         required = {
-            "issuer_id": "APPLE_NOTARIZATION_ISSUER_ID",
             "vault_name": "AZURE_KEYVAULT_NAME",
             "vault_key_name": "APPLE_NOTARIZATION_AKV_KEY_NAME",
         }
@@ -79,7 +78,8 @@ class NotarizationConfiguration:
         command.extend(
             [
                 "--query",
-                '{id:key.kid,apple_key_id:tags."apple-key-id"}',
+                '{id:key.kid,apple_key_id:tags."apple-key-id",'
+                'apple_issuer_id:tags."apple-issuer-id"}',
                 "--output",
                 "json",
                 "--only-show-errors",
@@ -95,6 +95,7 @@ class NotarizationConfiguration:
             metadata = json.loads(result.stdout)
             returned_key_id = metadata["id"]
             apple_key_id = metadata["apple_key_id"]
+            apple_issuer_id = metadata["apple_issuer_id"]
         except (json.JSONDecodeError, KeyError, TypeError) as error:
             raise NotarizationError("Notarization key metadata is invalid") from error
 
@@ -112,7 +113,16 @@ class NotarizationConfiguration:
             raise NotarizationError("Unexpected notarization key version")
         if not isinstance(apple_key_id, str) or not apple_key_id.strip():
             raise NotarizationError("Notarization key must have an apple-key-id tag")
+        if not isinstance(apple_issuer_id, str) or not apple_issuer_id.strip():
+            raise NotarizationError("Notarization key must have an apple-issuer-id tag")
+        if not re.fullmatch(
+            r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+            r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+            apple_issuer_id.strip(),
+        ):
+            raise NotarizationError("Notarization apple-issuer-id tag must contain a valid UUID")
 
+        values["issuer_id"] = apple_issuer_id.strip()
         values["apple_key_id"] = apple_key_id.strip()
         values["vault_key_version"] = returned_key_version
         return cls(**values)

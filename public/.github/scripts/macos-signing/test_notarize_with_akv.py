@@ -15,14 +15,13 @@ sys.path.insert(0, str(SIGNING_DIRECTORY))
 import notarize_with_akv as notary  # noqa: E402
 
 CONFIGURATION = notary.NotarizationConfiguration(
-    "issuer-id",
+    "01234567-89ab-cdef-0123-456789abcdef",
     "APPLEKEY01",
     "notary-vault",
     "example-signing-key",
     "0123456789abcdef" * 2,
 )
 ENVIRONMENT = {
-    "APPLE_NOTARIZATION_ISSUER_ID": CONFIGURATION.issuer_id,
     "AZURE_KEYVAULT_NAME": CONFIGURATION.vault_name,
     "APPLE_NOTARIZATION_AKV_KEY_NAME": CONFIGURATION.vault_key_name,
 }
@@ -44,8 +43,12 @@ def azure_response(payload):
 
 
 class NotarizationTest(unittest.TestCase):
-    def test_validates_the_apple_key_tag_and_pins_its_version(self) -> None:
-        metadata = {"id": CONFIGURATION.versioned_key_id, "apple_key_id": "APPLEKEY01"}
+    def test_validates_the_apple_key_tags_and_pins_its_version(self) -> None:
+        metadata = {
+            "id": CONFIGURATION.versioned_key_id,
+            "apple_key_id": "APPLEKEY01",
+            "apple_issuer_id": CONFIGURATION.issuer_id,
+        }
         with (
             patch.dict(os.environ, ENVIRONMENT, clear=True),
             patch.object(
@@ -61,7 +64,19 @@ class NotarizationTest(unittest.TestCase):
             show.return_value = azure_response({**metadata, "apple_key_id": None})
             with self.assertRaisesRegex(notary.NotarizationError, "apple-key-id tag"):
                 notary.NotarizationConfiguration.from_environment()
-        self.assertIn('{id:key.kid,apple_key_id:tags."apple-key-id"}', show.call_args.args[0])
+            for issuer_id in (None, "", "   "):
+                with self.subTest(issuer_id=issuer_id):
+                    show.return_value = azure_response({**metadata, "apple_issuer_id": issuer_id})
+                    with self.assertRaisesRegex(notary.NotarizationError, "apple-issuer-id tag"):
+                        notary.NotarizationConfiguration.from_environment()
+            show.return_value = azure_response({**metadata, "apple_issuer_id": "invalid-issuer"})
+            with self.assertRaisesRegex(notary.NotarizationError, "valid UUID"):
+                notary.NotarizationConfiguration.from_environment()
+        self.assertIn(
+            '{id:key.kid,apple_key_id:tags."apple-key-id",'
+            'apple_issuer_id:tags."apple-issuer-id"}',
+            show.call_args.args[0],
+        )
 
         invalid_environment = {**ENVIRONMENT, "APPLE_NOTARIZATION_AKV_KEY_NAME": "../bad"}
         with (
@@ -80,6 +95,9 @@ class NotarizationTest(unittest.TestCase):
             token = notary.create_apple_jwt(CONFIGURATION, issued_at=1_780_000_000)
         header, claims, encoded_signature = token.split(".")
         self.assertEqual(json.loads(notary.base64url_decode(header))["kid"], "APPLEKEY01")
+        self.assertEqual(
+            json.loads(notary.base64url_decode(claims))["iss"], CONFIGURATION.issuer_id
+        )
         self.assertEqual(
             json.loads(notary.base64url_decode(claims))["scope"],
             ["/notary/v2"],

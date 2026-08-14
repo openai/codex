@@ -538,7 +538,6 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
           BINARIES: ${{ matrix.binaries }}
-          APPLE_NOTARIZATION_ISSUER_ID: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
           APPLE_NOTARIZATION_AKV_KEY_NAME: ${{ secrets.AKV_NOTARIZATION_KEY_NAME }}
           APPLE_NOTARIZATION_AKV_KEY_VERSION: ${{ secrets.AKV_NOTARIZATION_KEY_VERSION }}
         run: |
@@ -589,7 +588,6 @@ jobs:
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
-          APPLE_NOTARIZATION_ISSUER_ID: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
           APPLE_NOTARIZATION_AKV_KEY_NAME: ${{ secrets.AKV_NOTARIZATION_KEY_NAME }}
           APPLE_NOTARIZATION_AKV_KEY_VERSION: ${{ secrets.AKV_NOTARIZATION_KEY_VERSION }}
         run: |
@@ -923,7 +921,6 @@ jobs:
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
-          APPLE_NOTARIZATION_ISSUER_ID: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
           APPLE_NOTARIZATION_AKV_KEY_NAME: ${{ secrets.AKV_NOTARIZATION_KEY_NAME }}
           APPLE_NOTARIZATION_AKV_KEY_VERSION: ${{ secrets.AKV_NOTARIZATION_KEY_VERSION }}
         run: |
