@@ -16,6 +16,7 @@ use codex_rollout::CompactedItem;
 use codex_rollout::RolloutItem;
 use codex_rollout::RolloutLine;
 use pretty_assertions::assert_eq;
+use std::collections::BTreeMap;
 
 use super::*;
 use crate::protocol::v2::ThreadItem;
@@ -202,8 +203,7 @@ fn ignores_legacy_abort_without_turn_id_and_context_only_records() {
         window_id: None,
     }));
     let security_risk = project(RolloutItem::SecurityRiskScore(SecurityRiskScore {
-        category: "action_risk".to_string(),
-        score: 0.92,
+        scores: BTreeMap::from([("action_risk".to_string(), 0.92)]),
     }));
 
     assert!(aborted.is_empty());

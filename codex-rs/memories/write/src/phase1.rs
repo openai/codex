@@ -675,6 +675,7 @@ mod tests {
     use codex_protocol::protocol::InterAgentCommunication;
     use codex_protocol::security_risk::SecurityRiskScore;
     use pretty_assertions::assert_eq;
+    use std::collections::BTreeMap;
 
     #[test]
     fn serializes_memory_rollout_with_agents_removed_but_environment_kept() {
@@ -725,8 +726,7 @@ mod tests {
             RolloutItem::ResponseItem(mixed_contextual_message.into()),
             RolloutItem::ResponseItem(skill_message.into()),
             RolloutItem::SecurityRiskScore(SecurityRiskScore {
-                category: "action_risk".to_string(),
-                score: 0.92,
+                scores: BTreeMap::from([("action_risk".to_string(), 0.92)]),
             }),
             RolloutItem::ResponseItem(subagent_message.clone().into()),
         ])

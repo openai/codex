@@ -19,6 +19,7 @@ use codex_protocol::protocol::WorldStateItem;
 use codex_protocol::security_risk::SecurityRiskScore;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use uuid::Uuid;
 
@@ -152,8 +153,7 @@ async fn record_initial_history_ignores_security_risk_scores() {
     let (session, _turn_context) = make_session_and_context().await;
     let user_item = user_message("visible user input");
     let security_risk = SecurityRiskScore {
-        category: "credential_access".to_string(),
-        score: 0.92,
+        scores: BTreeMap::from([("credential_access".to_string(), 0.92)]),
     };
 
     session

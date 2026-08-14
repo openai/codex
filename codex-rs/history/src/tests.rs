@@ -354,7 +354,12 @@ fn rollout_item_variants_preserve_existing_payload_shapes() -> Result<()> {
         }),
         json!({
             "type": "security_risk_score",
-            "payload": { "category": "action_risk", "score": 0.92 },
+            "payload": {
+                "scores": {
+                    "action_risk": 0.92,
+                    "data_exfiltration": 0.31,
+                },
+            },
         }),
         json!({
             "type": "event_msg",

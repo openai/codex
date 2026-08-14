@@ -202,23 +202,24 @@ impl ToolLifecycleContributor for GuardianV2Extension {
                     .await
                     .map_err(|error| error.to_string())?;
                 let ephemeral = thread.config_snapshot().await.ephemeral;
-                for (category, value) in scores {
-                    let score = value
-                        .as_f64()
-                        .filter(|score| (0.0..=1.0).contains(score))
-                        .ok_or_else(|| format!("invalid security risk score for {category}"))?;
-                    let score = SecurityRiskScore {
-                        category: category.clone(),
-                        score,
-                    };
-                    if !ephemeral {
-                        thread
-                            .append_rollout_items(&[RolloutItem::SecurityRiskScore(score.clone())])
-                            .await
-                            .map_err(|error| error.to_string())?;
-                    }
-                    thread.thread_extension_data().insert(score);
+                let scores = scores
+                    .iter()
+                    .map(|(category, value)| {
+                        value
+                            .as_f64()
+                            .filter(|score| (0.0..=1.0).contains(score))
+                            .map(|score| (category.clone(), score))
+                            .ok_or_else(|| format!("invalid security risk score for {category}"))
+                    })
+                    .collect::<Result<_, _>>()?;
+                let score = SecurityRiskScore { scores };
+                if !ephemeral {
+                    thread
+                        .append_rollout_items(&[RolloutItem::SecurityRiskScore(score.clone())])
+                        .await
+                        .map_err(|error| error.to_string())?;
                 }
+                thread.thread_extension_data().insert(score);
                 Ok(())
             }
             .await;

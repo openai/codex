@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -275,8 +276,7 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
     assert_eq!(
         score.as_ref(),
         &SecurityRiskScore {
-            category: "action_risk".to_string(),
-            score: 0.25,
+            scores: BTreeMap::from([("action_risk".to_string(), 0.25)]),
         }
     );
     test.codex.ensure_rollout_materialized().await;

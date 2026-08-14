@@ -23,6 +23,7 @@ use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::security_risk::SecurityRiskScore;
 use codex_utils_absolute_path::test_support::PathExt;
 use pretty_assertions::assert_eq;
+use std::collections::BTreeMap;
 use std::fs;
 use std::fs::File;
 use std::io::Write;
@@ -438,8 +439,10 @@ async fn load_rollout_items_preserves_security_risk_scores() -> std::io::Result<
     let rollout_path = home.path().join("rollout.jsonl");
     let thread_id = ThreadId::new();
     let security_risk = SecurityRiskScore {
-        category: "action_risk".to_string(),
-        score: 0.76,
+        scores: BTreeMap::from([
+            ("action_risk".to_string(), 0.76),
+            ("data_exfiltration".to_string(), 0.31),
+        ]),
     };
     let security_risk_item = RolloutItem::SecurityRiskScore(security_risk.clone());
     for history_mode in [ThreadHistoryMode::Legacy, ThreadHistoryMode::Paginated] {

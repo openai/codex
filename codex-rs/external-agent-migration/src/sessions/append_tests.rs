@@ -9,6 +9,7 @@ use codex_protocol::protocol::ContextCompactedEvent;
 use codex_protocol::protocol::ThreadRolledBackEvent;
 use codex_protocol::security_risk::SecurityRiskScore;
 use pretty_assertions::assert_eq;
+use std::collections::BTreeMap;
 
 #[test]
 fn returns_the_missing_suffix_from_its_visible_boundary() {
@@ -64,8 +65,7 @@ fn requires_a_strict_nonempty_model_prefix() {
         }
     }
     let security_risk = RolloutItem::SecurityRiskScore(SecurityRiskScore {
-        category: "action_risk".to_string(),
-        score: 0.92,
+        scores: BTreeMap::from([("action_risk".to_string(), 0.92)]),
     });
     metadata_changed.push(security_risk.clone());
     assert!(model_transcripts_match(&history, &metadata_changed));
