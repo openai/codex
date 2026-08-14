@@ -361,7 +361,7 @@ fn materialize_cwd_dependent_entry(
             value: FileSystemSpecialPath::ProjectRoots { .. },
         } => resolve_permission_path(&entry.path, cwd)
             .map(|path| FileSystemSandboxEntry {
-                path: FileSystemPath::Path { path },
+                path: path.into(),
                 access: entry.access,
                 missing_path_behavior: entry.missing_path_behavior,
             })

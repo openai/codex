@@ -2535,7 +2535,7 @@ fn apply_managed_filesystem_constraints(
                 continue;
             };
             codex_protocol::permissions::FileSystemSandboxEntry {
-                path: codex_protocol::permissions::FileSystemPath::Path { path },
+                path: path.into(),
                 access: codex_protocol::permissions::FileSystemAccessMode::Deny,
                 missing_path_behavior: None,
             }

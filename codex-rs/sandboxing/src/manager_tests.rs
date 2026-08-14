@@ -199,9 +199,7 @@ fn transform_additional_permissions_preserves_denied_entries() {
             missing_path_behavior: None,
         },
         FileSystemSandboxEntry {
-            path: FileSystemPath::Path {
-                path: denied_path.clone(),
-            },
+            path: denied_path.clone().into(),
             access: FileSystemAccessMode::Deny,
             missing_path_behavior: None,
         },
@@ -250,12 +248,12 @@ fn transform_additional_permissions_preserves_denied_entries() {
                 missing_path_behavior: None,
             },
             FileSystemSandboxEntry {
-                path: FileSystemPath::Path { path: denied_path },
+                path: denied_path.into(),
                 access: FileSystemAccessMode::Deny,
                 missing_path_behavior: None,
             },
             FileSystemSandboxEntry {
-                path: FileSystemPath::Path { path: allowed_path },
+                path: allowed_path.into(),
                 access: FileSystemAccessMode::Write,
                 missing_path_behavior: None,
             },
@@ -279,7 +277,7 @@ fn managed_mitm_ca_bundle_becomes_readable_for_restricted_sandbox() {
             .expect("absolute managed bundle path");
     let permission_profile = PermissionProfile::from_runtime_permissions(
         &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
-            path: FileSystemPath::Path { path: cwd.clone() },
+            path: cwd.clone().into(),
             access: FileSystemAccessMode::Read,
             missing_path_behavior: None,
         }]),
@@ -297,14 +295,12 @@ fn managed_mitm_ca_bundle_becomes_readable_for_restricted_sandbox() {
         file_system_sandbox_policy,
         FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
-                path: FileSystemPath::Path { path: cwd },
+                path: cwd.into(),
                 access: FileSystemAccessMode::Read,
                 missing_path_behavior: None,
             },
             FileSystemSandboxEntry {
-                path: FileSystemPath::Path {
-                    path: managed_bundle_path,
-                },
+                path: managed_bundle_path.into(),
                 access: FileSystemAccessMode::Read,
                 missing_path_behavior: None,
             },
@@ -498,7 +494,7 @@ fn transform_for_direct_spawn_windows_materializes_inner_helper() {
                 missing_path_behavior: None,
             },
             FileSystemSandboxEntry {
-                path: FileSystemPath::Path { path: blocked },
+                path: blocked.into(),
                 access: FileSystemAccessMode::Deny,
                 missing_path_behavior: None,
             },

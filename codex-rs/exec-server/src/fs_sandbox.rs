@@ -233,9 +233,7 @@ fn add_helper_runtime_permissions(
         }
 
         file_system_policy.entries.push(FileSystemSandboxEntry::new(
-            FileSystemPath::Path {
-                path: helper_read_root.clone(),
-            },
+            helper_read_root.clone().into(),
             FileSystemAccessMode::Read,
         ));
     }
@@ -758,7 +756,7 @@ mod tests {
 
     fn path_entry(path: AbsolutePathBuf, access: FileSystemAccessMode) -> FileSystemSandboxEntry {
         FileSystemSandboxEntry {
-            path: FileSystemPath::Path { path },
+            path: path.into(),
             access,
             missing_path_behavior: None,
         }

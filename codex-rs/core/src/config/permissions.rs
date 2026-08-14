@@ -599,7 +599,7 @@ fn compile_filesystem_path(
     }
 
     let path = parse_absolute_path(path)?;
-    Ok(FileSystemPath::Path { path })
+    Ok(path.into())
 }
 
 fn compile_scoped_filesystem_path(
@@ -636,7 +636,7 @@ fn compile_scoped_filesystem_path(
     let subpath = parse_relative_subpath(subpath)?;
     let base = parse_absolute_path(path)?;
     let path = AbsolutePathBuf::resolve_path_against_base(&subpath, base.as_path());
-    Ok(FileSystemPath::Path { path })
+    Ok(path.into())
 }
 
 fn compile_scoped_filesystem_pattern(

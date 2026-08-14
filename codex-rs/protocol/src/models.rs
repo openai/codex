@@ -101,20 +101,18 @@ impl FileSystemPermissions {
     ) -> Self {
         let mut entries = Vec::new();
         if let Some(read) = read {
-            entries.extend(read.into_iter().map(|path| {
-                FileSystemSandboxEntry::new(
-                    FileSystemPath::Path { path },
-                    FileSystemAccessMode::Read,
-                )
-            }));
+            entries.extend(
+                read.into_iter().map(|path| {
+                    FileSystemSandboxEntry::new(path.into(), FileSystemAccessMode::Read)
+                }),
+            );
         }
         if let Some(write) = write {
-            entries.extend(write.into_iter().map(|path| {
-                FileSystemSandboxEntry::new(
-                    FileSystemPath::Path { path },
-                    FileSystemAccessMode::Write,
-                )
-            }));
+            entries.extend(
+                write.into_iter().map(|path| {
+                    FileSystemSandboxEntry::new(path.into(), FileSystemAccessMode::Write)
+                }),
+            );
         }
         Self {
             entries,
@@ -2828,7 +2826,7 @@ mod tests {
         .expect("absolute path");
         let file_system_permissions = FileSystemPermissions {
             entries: vec![FileSystemSandboxEntry {
-                path: FileSystemPath::Path { path },
+                path: path.into(),
                 access: FileSystemAccessMode::Read,
                 missing_path_behavior: None,
             }],

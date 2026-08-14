@@ -506,7 +506,7 @@ fn windows_elevated_allows_split_restricted_read_policies() {
     std::fs::create_dir_all(docs.as_path()).expect("create docs");
     let file_system_policy = FileSystemSandboxPolicy::restricted(vec![
         codex_protocol::permissions::FileSystemSandboxEntry {
-            path: codex_protocol::permissions::FileSystemPath::Path { path: docs },
+            path: docs.into(),
             access: codex_protocol::permissions::FileSystemAccessMode::Read,
             missing_path_behavior: None,
         },
@@ -543,10 +543,9 @@ fn windows_restricted_token_rejects_split_only_filesystem_policies() {
             missing_path_behavior: None,
         },
         codex_protocol::permissions::FileSystemSandboxEntry {
-            path: codex_protocol::permissions::FileSystemPath::Path {
-                path: codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&docs)
-                    .expect("absolute docs"),
-            },
+            path: codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&docs)
+                .expect("absolute docs")
+                .into(),
             access: codex_protocol::permissions::FileSystemAccessMode::Read,
             missing_path_behavior: None,
         },
@@ -584,10 +583,9 @@ fn windows_restricted_token_rejects_root_write_read_only_carveouts() {
             missing_path_behavior: None,
         },
         codex_protocol::permissions::FileSystemSandboxEntry {
-            path: codex_protocol::permissions::FileSystemPath::Path {
-                path: codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&docs)
-                    .expect("absolute docs"),
-            },
+            path: codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&docs)
+                .expect("absolute docs")
+                .into(),
             access: codex_protocol::permissions::FileSystemAccessMode::Read,
             missing_path_behavior: None,
         },
@@ -637,7 +635,7 @@ fn windows_restricted_token_supports_full_read_split_write_read_carveouts() {
             missing_path_behavior: None,
         },
         codex_protocol::permissions::FileSystemSandboxEntry {
-            path: codex_protocol::permissions::FileSystemPath::Path { path: docs.clone() },
+            path: docs.clone().into(),
             access: codex_protocol::permissions::FileSystemAccessMode::Read,
             missing_path_behavior: None,
         },
@@ -695,7 +693,7 @@ fn windows_restricted_token_rejects_unreadable_split_carveouts() {
             missing_path_behavior: None,
         },
         codex_protocol::permissions::FileSystemSandboxEntry {
-            path: codex_protocol::permissions::FileSystemPath::Path { path: blocked },
+            path: blocked.into(),
             access: codex_protocol::permissions::FileSystemAccessMode::Deny,
             missing_path_behavior: None,
         },
@@ -727,10 +725,9 @@ fn windows_elevated_supports_split_restricted_read_roots() {
     let expected_docs = dunce::canonicalize(&docs).expect("canonical docs");
     let file_system_policy = FileSystemSandboxPolicy::restricted(vec![
         codex_protocol::permissions::FileSystemSandboxEntry {
-            path: codex_protocol::permissions::FileSystemPath::Path {
-                path: codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&docs)
-                    .expect("absolute docs"),
-            },
+            path: codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&docs)
+                .expect("absolute docs")
+                .into(),
             access: codex_protocol::permissions::FileSystemAccessMode::Read,
             missing_path_behavior: None,
         },
@@ -781,10 +778,9 @@ fn windows_elevated_supports_split_write_read_carveouts() {
             missing_path_behavior: None,
         },
         codex_protocol::permissions::FileSystemSandboxEntry {
-            path: codex_protocol::permissions::FileSystemPath::Path {
-                path: codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&docs)
-                    .expect("absolute docs"),
-            },
+            path: codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&docs)
+                .expect("absolute docs")
+                .into(),
             access: codex_protocol::permissions::FileSystemAccessMode::Read,
             missing_path_behavior: None,
         },
@@ -884,10 +880,9 @@ fn windows_elevated_supports_unreadable_split_carveouts() {
             missing_path_behavior: None,
         },
         codex_protocol::permissions::FileSystemSandboxEntry {
-            path: codex_protocol::permissions::FileSystemPath::Path {
-                path: codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&blocked)
-                    .expect("absolute blocked"),
-            },
+            path: codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&blocked)
+                .expect("absolute blocked")
+                .into(),
             access: codex_protocol::permissions::FileSystemAccessMode::Deny,
             missing_path_behavior: None,
         },
@@ -1002,18 +997,16 @@ fn windows_elevated_rejects_reopened_writable_descendants() {
             missing_path_behavior: None,
         },
         codex_protocol::permissions::FileSystemSandboxEntry {
-            path: codex_protocol::permissions::FileSystemPath::Path {
-                path: codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&docs)
-                    .expect("absolute docs"),
-            },
+            path: codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&docs)
+                .expect("absolute docs")
+                .into(),
             access: codex_protocol::permissions::FileSystemAccessMode::Read,
             missing_path_behavior: None,
         },
         codex_protocol::permissions::FileSystemSandboxEntry {
-            path: codex_protocol::permissions::FileSystemPath::Path {
-                path: codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&nested)
-                    .expect("absolute nested"),
-            },
+            path: codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&nested)
+                .expect("absolute nested")
+                .into(),
             access: codex_protocol::permissions::FileSystemAccessMode::Write,
             missing_path_behavior: None,
         },
