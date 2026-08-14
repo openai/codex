@@ -1,5 +1,9 @@
 use super::*;
 use async_channel::bounded;
+use codex_extension_api::ExtensionFuture;
+use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::ThreadLifecycleContributor;
+use codex_extension_api::ThreadStartInput;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentStatus;
@@ -12,8 +16,22 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use tokio::sync::watch;
 use tokio::time::timeout;
+
+struct ThreadStartRecorder(Arc<AtomicUsize>);
+
+impl ThreadLifecycleContributor<Config> for ThreadStartRecorder {
+    fn on_thread_start<'a>(
+        &'a self,
+        _input: ThreadStartInput<'a, Config>,
+    ) -> ExtensionFuture<'a, ()> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Box::pin(std::future::ready(()))
+    }
+}
 
 #[tokio::test]
 async fn forward_events_filters_private_events_before_blocked_send_is_cancelled() {
@@ -196,6 +214,59 @@ async fn run_codex_thread_interactive_respects_pre_cancelled_spawn() {
         result,
         Err(err) if matches!(err.details(), CodexErrorDetails::TurnAborted)
     ));
+}
+
+#[tokio::test]
+async fn guardian_delegates_do_not_inherit_parent_extensions() {
+    let (mut parent_session, parent_ctx, _rx_events) =
+        crate::session::tests::make_session_and_context_with_rx().await;
+    let thread_starts = Arc::new(AtomicUsize::new(0));
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    extensions
+        .thread_lifecycle_contributor(Arc::new(ThreadStartRecorder(Arc::clone(&thread_starts))));
+    Arc::get_mut(&mut parent_session)
+        .expect("parent session should be uniquely owned")
+        .services
+        .extensions = Arc::new(extensions.build());
+
+    for (subagent_source, expected_thread_starts) in [
+        (
+            SubAgentSource::Other(crate::guardian::GUARDIAN_REVIEWER_NAME.to_string()),
+            0,
+        ),
+        (SubAgentSource::Review, 1),
+    ] {
+        let mut config = parent_ctx.config.as_ref().clone();
+        config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
+        let (session, io) = run_codex_thread_interactive(
+            config,
+            Arc::clone(&parent_session.services.auth_manager),
+            Arc::clone(&parent_session.services.models_manager),
+            Arc::clone(&parent_session),
+            Arc::clone(&parent_ctx),
+            parent_ctx.environments.clone(),
+            CancellationToken::new(),
+            subagent_source,
+            /*initial_history*/ None,
+            crate::session::GitEnrichmentPolicy::Fresh,
+            codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
+        )
+        .await
+        .expect("delegate session should start");
+
+        assert_eq!(
+            session
+                .services
+                .extensions
+                .thread_lifecycle_contributors()
+                .len(),
+            expected_thread_starts
+        );
+        assert_eq!(thread_starts.load(Ordering::SeqCst), expected_thread_starts);
+        io.shutdown_and_wait()
+            .await
+            .expect("delegate session should shut down");
+    }
 }
 
 #[tokio::test]

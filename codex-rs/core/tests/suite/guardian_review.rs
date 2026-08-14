@@ -9,9 +9,14 @@ use codex_core::SleepFuture;
 use codex_core::TimeFuture;
 use codex_core::TimeProvider;
 use codex_core::TurnInputRequest;
+use codex_core::config::Config;
 use codex_core::config::Constrained;
 use codex_core::config::CurrentTimeReminderConfig;
 use codex_core::sandboxing::SandboxPermissions;
+use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::ToolLifecycleContributor;
+use codex_extension_api::ToolLifecycleFuture;
+use codex_extension_api::ToolStartInput;
 use codex_features::CurrentTimeSource;
 use codex_features::Feature;
 use codex_history::RolloutItem;
@@ -69,6 +74,22 @@ const CURRENT_TIME_AT: i64 = 1_781_717_655;
 
 struct RecordingTimeProvider {
     thread_ids: Mutex<Vec<ThreadId>>,
+}
+
+#[derive(Default)]
+struct RecordingToolLifecycleContributor {
+    call_ids: Mutex<Vec<String>>,
+}
+
+impl ToolLifecycleContributor for RecordingToolLifecycleContributor {
+    fn on_tool_start<'a>(&'a self, input: ToolStartInput<'a>) -> ToolLifecycleFuture<'a> {
+        Box::pin(async move {
+            self.call_ids
+                .lock()
+                .expect("recorded tool call ids lock should not be poisoned")
+                .push(input.call_id.to_string());
+        })
+    }
 }
 
 impl TimeProvider for RecordingTimeProvider {
@@ -361,7 +382,11 @@ async fn guardian_session_is_reused_for_consecutive_tool_reviews_without_prewarm
     const SECRET: &str = "guardian-parent-policy-test-secret";
     let server = start_mock_server().await;
     let approval_policy = AskForApproval::OnRequest;
+    let lifecycle_recorder = Arc::new(RecordingToolLifecycleContributor::default());
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    extensions.tool_lifecycle_contributor(lifecycle_recorder.clone());
     let mut builder = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
         .with_config(move |config| {
             let secret_file = config.cwd.join("guardian-secret.txt");
             config.permissions.approval_policy = Constrained::allow_any(approval_policy);
@@ -534,6 +559,16 @@ async fn guardian_session_is_reused_for_consecutive_tool_reviews_without_prewarm
     );
     assert_eq!(fs::read_to_string(first_output_file)?, "first");
     assert_eq!(fs::read_to_string(second_output_file)?, "second");
+    assert_eq!(
+        *lifecycle_recorder
+            .call_ids
+            .lock()
+            .expect("recorded tool call ids lock should not be poisoned"),
+        vec![
+            "exec-call-first".to_string(),
+            "exec-call-second".to_string()
+        ]
+    );
 
     Ok(())
 }

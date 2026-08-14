@@ -75,6 +75,12 @@ pub(crate) async fn run_codex_thread_interactive(
         instructions: parent_session.user_instructions().await,
         warnings: Vec::new(),
     };
+    let session_source = SessionSource::SubAgent(subagent_source.clone());
+    let extensions = if crate::guardian::is_guardian_reviewer_source(&session_source) {
+        codex_extension_api::empty_extension_registry()
+    } else {
+        Arc::clone(&parent_session.services.extensions)
+    };
     let (session, io) = Box::pin(Session::spawn(SessionSpawnArgs {
         config,
         allow_provider_model_fallback: false,
@@ -90,11 +96,11 @@ pub(crate) async fn run_codex_thread_interactive(
         plugins_manager: Arc::clone(&parent_session.services.plugins_manager),
         mcp_manager: Arc::clone(&parent_session.services.mcp_manager),
         code_mode_session_provider: parent_session.services.code_mode_service.session_provider(),
-        extensions: Arc::clone(&parent_session.services.extensions),
+        extensions,
         conversation_history,
         requested_history_mode: None,
         fork_persistence: ForkPersistence::Copied,
-        session_source: SessionSource::SubAgent(subagent_source.clone()),
+        session_source,
         forked_from_thread_id,
         parent_thread_id: Some(parent_session.thread_id),
         thread_source: Some(ThreadSource::Subagent),
