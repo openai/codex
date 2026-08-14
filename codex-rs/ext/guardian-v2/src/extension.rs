@@ -2,20 +2,30 @@ use std::sync::Arc;
 use std::sync::Weak;
 
 use codex_core::ThreadManager;
+use codex_core::config::Config;
 use codex_extension_api::ExtensionEventSink;
+use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ExtensionWarning;
+use codex_extension_api::ThreadLifecycleContributor;
+use codex_extension_api::ThreadOriginator;
+use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ToolLifecycleContributor;
 use codex_extension_api::ToolLifecycleFuture;
 use codex_extension_api::ToolPayload;
 use codex_extension_api::ToolStartInput;
+use codex_features::Feature;
 use codex_history::RolloutItem;
+use codex_login::AgentIdentityAuthPolicy;
+use codex_login::AuthManager;
+use codex_model_provider::create_model_provider;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::security_risk::SecurityRiskScore;
 use serde_json::json;
 
 use crate::LunaSampler;
+use crate::LunaSamplerConfig;
 use crate::LunaSamplingRequest;
 use crate::transcript::TranscriptConfig;
 
@@ -26,14 +36,63 @@ Return an action_risk score from 0.0 (safe and authorized) to 1.0 (dangerous or 
 
 #[derive(Clone)]
 struct GuardianV2Extension {
-    sampler: Arc<LunaSampler>,
+    auth_manager: Arc<AuthManager>,
     event_sink: Arc<dyn ExtensionEventSink>,
     thread_manager: Weak<ThreadManager>,
 }
 
+impl ThreadLifecycleContributor<Config> for GuardianV2Extension {
+    fn on_thread_start<'a>(
+        &'a self,
+        input: ThreadStartInput<'a, Config>,
+    ) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            if !input.config.features.enabled(Feature::GuardianV2) {
+                return;
+            }
+
+            let thread_id = input.thread_store.level_id().to_string();
+            let sampler = LunaSampler::connect(LunaSamplerConfig {
+                provider: create_model_provider(
+                    input.config.model_provider.clone(),
+                    Some(Arc::clone(&self.auth_manager)),
+                ),
+                http_client_factory: input.config.http_client_factory(),
+                agent_identity_policy: if input.config.features.enabled(Feature::UseAgentIdentity) {
+                    AgentIdentityAuthPolicy::ChatGptAuth
+                } else {
+                    AgentIdentityAuthPolicy::JwtOnly
+                },
+                session_source: input.session_source.clone(),
+                session_id: input.session_store.level_id().to_string(),
+                thread_id: thread_id.clone(),
+                originator: input
+                    .thread_store
+                    .get::<ThreadOriginator>()
+                    .map(|originator| originator.0.clone()),
+                service_tier: input.config.service_tier.clone(),
+            })
+            .await;
+
+            match sampler {
+                Ok(sampler) => {
+                    input.thread_store.insert(sampler);
+                }
+                Err(error) => self.event_sink.emit_warning(ExtensionWarning {
+                    thread_id,
+                    turn_id: None,
+                    message: format!("Guardian V2 Luna initialization failed: {error}"),
+                }),
+            }
+        })
+    }
+}
+
 impl ToolLifecycleContributor for GuardianV2Extension {
     fn on_tool_start<'a>(&'a self, input: ToolStartInput<'a>) -> ToolLifecycleFuture<'a> {
-        let sampler = Arc::clone(&self.sampler);
+        let Some(sampler) = input.thread_store.get::<LunaSampler>() else {
+            return Box::pin(std::future::ready(()));
+        };
         let event_sink = Arc::clone(&self.event_sink);
         let thread_manager = self.thread_manager.clone();
         let thread_id = input.thread_store.level_id().to_owned();
@@ -154,17 +213,19 @@ impl ToolLifecycleContributor for GuardianV2Extension {
     }
 }
 
-/// Installs Guardian V2 tool classification over a caller-owned Luna sampler.
-pub fn install<C: Sync>(
-    registry: &mut ExtensionRegistryBuilder<C>,
-    sampler: Arc<LunaSampler>,
+/// Installs feature-gated Guardian V2 tool classification for each thread.
+pub fn install(
+    registry: &mut ExtensionRegistryBuilder<Config>,
+    auth_manager: Arc<AuthManager>,
     thread_manager: Weak<ThreadManager>,
 ) {
-    registry.tool_lifecycle_contributor(Arc::new(GuardianV2Extension {
-        sampler,
+    let extension = Arc::new(GuardianV2Extension {
+        auth_manager,
         event_sink: registry.event_sink(),
         thread_manager,
-    }));
+    });
+    registry.thread_lifecycle_contributor(extension.clone());
+    registry.tool_lifecycle_contributor(extension);
 }
 
 #[cfg(test)]

@@ -6,17 +6,15 @@ use codex_extension_api::ConversationHistorySnapshot;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ResponseItem;
+use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ToolCallSource;
 use codex_extension_api::ToolName;
 use codex_extension_api::ToolPayload;
 use codex_extension_api::ToolStartInput;
+use codex_features::Feature;
 use codex_history::RolloutItem;
-use codex_http_client::HttpClientFactory;
-use codex_http_client::OutboundProxyPolicy;
-use codex_login::AgentIdentityAuthPolicy;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
-use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -30,9 +28,6 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
 use serde_json::json;
-
-use crate::LunaSampler;
-use crate::LunaSamplerConfig;
 
 struct TestConversationHistory(Vec<ResponseItem>);
 
@@ -58,31 +53,31 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
         "http://{}/v1",
         server.uri().trim_start_matches("ws://")
     )));
-    let sampler = LunaSampler::connect(LunaSamplerConfig {
-        provider: create_model_provider(
-            provider_info,
-            Some(AuthManager::from_auth_for_testing(CodexAuth::from_api_key(
-                "test-api-key",
-            ))),
-        ),
-        http_client_factory: HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
-        agent_identity_policy: AgentIdentityAuthPolicy::JwtOnly,
-        session_source: SessionSource::Exec,
-        session_id: "session-1".to_owned(),
-        thread_id: thread_id.to_string(),
-        originator: None,
-        service_tier: None,
-    })
-    .await?;
-    let mut builder = ExtensionRegistryBuilder::<()>::new();
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test-api-key"));
+    let mut config = test.config.clone();
+    config.model_provider = provider_info;
+    config.features.enable(Feature::GuardianV2)?;
+    let mut builder = ExtensionRegistryBuilder::new();
     crate::install(
         &mut builder,
-        Arc::new(sampler),
+        auth_manager,
         Arc::downgrade(&test.thread_manager),
     );
     let registry = builder.build();
     let session_store = ExtensionData::new("session-1");
     let thread_store = test.codex.thread_extension_data();
+    registry.thread_lifecycle_contributors()[0]
+        .on_thread_start(ThreadStartInput {
+            config: &config,
+            session_source: &SessionSource::Exec,
+            persistent_thread_state_available: false,
+            environments: &[],
+            mcp_resource_client: None,
+            extension_metrics: None,
+            session_store: &session_store,
+            thread_store,
+        })
+        .await;
     let turn_store = ExtensionData::new("turn-1");
     let tool_name = ToolName::plain("read_file");
     let tool_payload = ToolPayload::Function {

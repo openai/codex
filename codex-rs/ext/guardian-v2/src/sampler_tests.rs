@@ -122,6 +122,12 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_structured_requ
     .await?;
 
     let handshake = server.single_handshake();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while server.connections().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
     assert!(server.single_connection().is_empty());
     assert_eq!(
         handshake.header("authorization"),
