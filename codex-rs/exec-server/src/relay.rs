@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::time::Duration;
 
 use codex_exec_server_protocol::JSONRPCMessage;
@@ -31,6 +33,7 @@ use crate::noise_relay::NOISE_RELAY_RESET_REASON;
 use crate::noise_relay::executor_stream::ClosedNoiseVirtualStream;
 use crate::noise_relay::executor_stream::NoiseVirtualStream;
 use crate::noise_relay::executor_stream::spawn_noise_virtual_stream;
+use crate::relay_proto::RelayAck;
 use crate::relay_proto::RelayData;
 use crate::relay_proto::RelayHandshake;
 use crate::relay_proto::RelayMessageFrame;
@@ -47,6 +50,7 @@ const MAX_ACTIVE_NOISE_RELAY_STREAMS: usize = 128;
 const MAX_FAILED_NOISE_HANDSHAKES: usize = 8;
 const MAX_HARNESS_KEY_AUTHORIZATION_BYTES: usize = 4096;
 const MAX_PENDING_HANDSHAKE_VALIDATIONS: usize = 32;
+const MAX_RECENT_RETIRED_NOISE_RELAY_STREAMS: usize = 1024;
 const HARNESS_KEY_VALIDATION_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -80,6 +84,17 @@ pub(crate) enum RelayFrameBodyKind {
     Handshake,
 }
 
+/// One coherent cumulative/selective acknowledgement snapshot.
+///
+/// Bit `i` acknowledges sequence `ack + 1 + i`. Reliable Noise endpoints
+/// pass this value as one unit so concurrent readers and writers cannot pair a
+/// newer cumulative frontier with stale selective bits.
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
+pub(crate) struct RelayAckState {
+    pub(crate) ack: u32,
+    pub(crate) ack_bits: u32,
+}
+
 impl RelayMessageFrame {
     pub(crate) fn data(stream_id: String, seq: u32, payload: Vec<u8>) -> Self {
         Self {
@@ -93,6 +108,41 @@ impl RelayMessageFrame {
                 segment_count: 1,
                 payload,
             })),
+        }
+    }
+
+    /// Build one reliable Noise data frame with the receiver's ack state.
+    ///
+    /// The legacy plaintext relay still uses [`Self::data`] and keeps its old
+    /// sequence behavior. Noise reliability owns its own sequence and ack
+    /// invariants, so keep that policy at the Noise call sites.
+    pub(crate) fn reliable_data(
+        stream_id: String,
+        ack_state: RelayAckState,
+        seq: u32,
+        payload: Vec<u8>,
+    ) -> Self {
+        let mut frame = Self::data(stream_id, seq, payload);
+        frame.ack = ack_state.ack;
+        frame.ack_bits = ack_state.ack_bits;
+        frame
+    }
+
+    /// Build an unsequenced acknowledgement for a reliable stream.
+    pub(crate) fn ack(stream_id: String, ack_state: RelayAckState) -> Self {
+        Self {
+            version: RELAY_MESSAGE_FRAME_VERSION,
+            stream_id,
+            ack: ack_state.ack,
+            ack_bits: ack_state.ack_bits,
+            body: Some(relay_message_frame::Body::AckFrame(RelayAck {})),
+        }
+    }
+
+    pub(crate) fn ack_state(&self) -> RelayAckState {
+        RelayAckState {
+            ack: self.ack,
+            ack_bits: self.ack_bits,
         }
     }
 
@@ -551,6 +601,11 @@ where
         }
     });
     let mut streams: HashMap<String, NoiseVirtualStream> = HashMap::new();
+    // Stream IDs are single-use by contract. Keep a bounded recent tombstone
+    // set so an accidental near-term reuse cannot receive ciphertext that an
+    // old writer still has queued in the shared physical channel.
+    let mut retired_stream_ids: HashSet<String> = HashSet::new();
+    let mut retired_stream_order: VecDeque<String> = VecDeque::new();
     let mut pending_handshakes: HashMap<String, PendingHandshake> = HashMap::new();
     let mut validation_tasks: JoinSet<HarnessKeyValidationResult> = JoinSet::new();
     let mut failed_handshakes = 0usize;
@@ -571,13 +626,18 @@ where
                 break;
             }
             Some(closed_stream) = closed_stream_rx.recv() => {
-                // A stream ID may have been reused before this writer exits.
-                // Remove only the instance that sent the notification.
+                // A delayed close can race another teardown path. Remove only
+                // the instance that sent the notification.
                 let is_current = streams
                     .get(&closed_stream.stream_id)
                     .is_some_and(|stream| stream.instance_id == closed_stream.instance_id);
                 if is_current {
                     streams.remove(&closed_stream.stream_id);
+                    retire_noise_stream_id(
+                        &mut retired_stream_ids,
+                        &mut retired_stream_order,
+                        closed_stream.stream_id,
+                    );
                 }
                 continue;
             }
@@ -723,10 +783,10 @@ where
         let stream_id = frame.stream_id.clone();
         match kind {
             RelayFrameBodyKind::Handshake => {
-                // Reject duplicate or busy streams before paying for a hybrid
-                // handshake. Malformed attempts that reach cryptography are
-                // covered by the connection-wide failure budget below.
-                if streams.contains_key(&stream_id) {
+                // Reject duplicate, retired, or busy streams before paying for
+                // a hybrid handshake. Malformed attempts that reach cryptography
+                // are covered by the connection-wide failure budget below.
+                if streams.contains_key(&stream_id) || retired_stream_ids.contains(&stream_id) {
                     send_reset(&physical_outgoing_tx, stream_id);
                     continue;
                 }
@@ -832,6 +892,7 @@ where
                 });
             }
             RelayFrameBodyKind::Data => {
+                let peer_ack = frame.ack_state();
                 // Removing pending state also makes any in-flight validation stale.
                 let Some(stream) = streams.get_mut(&stream_id) else {
                     let canceled_pending_handshake =
@@ -845,11 +906,27 @@ where
                     }
                     continue;
                 };
+                if let Err(error) = stream.process_peer_ack(peer_ack) {
+                    warn!("failed to process Noise relay peer ack: {error}");
+                    streams.remove(&stream_id);
+                    retire_noise_stream_id(
+                        &mut retired_stream_ids,
+                        &mut retired_stream_order,
+                        stream_id.clone(),
+                    );
+                    send_reset(&physical_outgoing_tx, stream_id);
+                    continue;
+                }
                 let data = match frame.into_data() {
                     Ok(data) => data,
                     Err(error) => {
                         warn!("dropping malformed Noise relay data frame: {error}");
                         streams.remove(&stream_id);
+                        retire_noise_stream_id(
+                            &mut retired_stream_ids,
+                            &mut retired_stream_order,
+                            stream_id.clone(),
+                        );
                         send_reset(&physical_outgoing_tx, stream_id);
                         continue;
                     }
@@ -857,19 +934,42 @@ where
                 if let Err(error) = stream.receive_data(data) {
                     warn!("failed to process Noise relay payload: {error}");
                     streams.remove(&stream_id);
+                    retire_noise_stream_id(
+                        &mut retired_stream_ids,
+                        &mut retired_stream_order,
+                        stream_id.clone(),
+                    );
                     send_reset(&physical_outgoing_tx, stream_id);
                 }
             }
             RelayFrameBodyKind::Reset => {
                 pending_handshakes.remove(&stream_id);
                 if let Some(stream) = streams.remove(&stream_id) {
+                    retire_noise_stream_id(
+                        &mut retired_stream_ids,
+                        &mut retired_stream_order,
+                        stream_id,
+                    );
                     // The reset reason is unauthenticated, so do not log it.
                     stream.disconnect(/*reason*/ None);
                 }
             }
             RelayFrameBodyKind::Ack
             | RelayFrameBodyKind::Resume
-            | RelayFrameBodyKind::Heartbeat => {}
+            | RelayFrameBodyKind::Heartbeat => {
+                if let Some(stream) = streams.get(&stream_id)
+                    && let Err(error) = stream.process_peer_ack(frame.ack_state())
+                {
+                    warn!("failed to process Noise relay peer ack: {error}");
+                    streams.remove(&stream_id);
+                    retire_noise_stream_id(
+                        &mut retired_stream_ids,
+                        &mut retired_stream_order,
+                        stream_id.clone(),
+                    );
+                    send_reset(&physical_outgoing_tx, stream_id);
+                }
+            }
         }
     }
 
@@ -904,6 +1004,22 @@ struct HarnessKeyValidationResult {
     stream_id: String,
     validation_id: u64,
     result: Result<(), ExecServerError>,
+}
+
+fn retire_noise_stream_id(
+    retired_stream_ids: &mut HashSet<String>,
+    retired_stream_order: &mut VecDeque<String>,
+    stream_id: String,
+) {
+    if !retired_stream_ids.insert(stream_id.clone()) {
+        return;
+    }
+    retired_stream_order.push_back(stream_id);
+    if retired_stream_order.len() > MAX_RECENT_RETIRED_NOISE_RELAY_STREAMS
+        && let Some(oldest_stream_id) = retired_stream_order.pop_front()
+    {
+        retired_stream_ids.remove(&oldest_stream_id);
+    }
 }
 
 /// Queue a best-effort reset without blocking the shared websocket loop.
