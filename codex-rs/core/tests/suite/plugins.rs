@@ -1134,6 +1134,13 @@ async fn explicit_plugin_mentions_use_apps_for_chatgpt_dual_surface_plugins(
         app_enabled,
         "plugin app guidance should match app enablement: {developer_messages:?}"
     );
+    assert_eq!(
+        developer_messages
+            .iter()
+            .any(|text| text.contains("if `tool_search` is available")),
+        app_enabled,
+        "plugin app search guidance should match app enablement: {developer_messages:?}"
+    );
     assert!(
         request
             .tool_by_name(SAMPLE_PLUGIN_MCP_NAMESPACE, "echo")

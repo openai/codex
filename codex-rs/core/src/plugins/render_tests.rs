@@ -40,6 +40,31 @@ fn explicit_plugin_instructions_use_manifest_namespace_for_skills() {
 
     assert!(rendered.contains("`acme.tools:`"));
     assert!(!rendered.contains("`Acme Developer Tools:`"));
+    assert!(!rendered.contains("tool_search"));
+}
+
+#[test]
+fn explicit_plugin_instructions_search_available_apps_before_fallback() {
+    let rendered = render_explicit_plugin_instructions(
+        &PluginCapabilitySummary {
+            config_name: "app-adobe@openai-curated-remote".to_string(),
+            display_name: "Adobe".to_string(),
+            ..PluginCapabilitySummary::default()
+        },
+        &[],
+        &["Adobe".to_string()],
+    )
+    .expect("app capability should render");
+
+    assert_eq!(
+        rendered,
+        "Capabilities from the `Adobe` plugin:\n\
+         - For the user request that explicitly selected this plugin, and only for that request, \
+         if `tool_search` is available and an app from this plugin may help, search for its \
+         tools before falling back to unrelated or built-in tools.\n\
+         - Apps from this plugin available in this session: `Adobe`.\n\
+         Use these plugin-associated capabilities to help solve the task."
+    );
 }
 
 #[test]
@@ -47,18 +72,26 @@ fn explicit_plugin_instructions_are_bounded() {
     let servers = (0..1_024)
         .map(|index| format!("server-{index}"))
         .collect::<Vec<_>>();
+    let apps = (0..1_024)
+        .map(|index| format!("app-{index}"))
+        .collect::<Vec<_>>();
 
     let rendered = render_explicit_plugin_instructions(
         &PluginCapabilitySummary {
             config_name: "sample@test".to_string(),
             display_name: "sample".to_string(),
+            has_skills: true,
             ..PluginCapabilitySummary::default()
         },
         &servers,
-        &[],
+        &apps,
     )
     .expect("MCP capability should render");
 
     assert!(rendered.len() <= MAX_EXPLICIT_PLUGIN_INSTRUCTIONS_BYTES);
+    assert!(rendered.contains("only for that request"));
+    assert!(rendered.contains("if `tool_search` is available"));
+    assert!(rendered.contains("Skills from this plugin"));
+    assert!(rendered.contains("`app-0`"));
     assert!(rendered.ends_with(TRUNCATED_PLUGIN_INSTRUCTIONS_SUFFIX));
 }

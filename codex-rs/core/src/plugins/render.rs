@@ -24,6 +24,17 @@ pub(crate) fn render_explicit_plugin_instructions(
         plugin.display_name
     )];
 
+    if !available_apps.is_empty() {
+        lines.push(
+            concat!(
+                "- For the user request that explicitly selected this plugin, and only for that ",
+                "request, if `tool_search` is available and an app from this plugin may help, ",
+                "search for its tools before falling back to unrelated or built-in tools."
+            )
+            .to_string(),
+        );
+    }
+
     if plugin.has_skills {
         let skill_namespace = plugin
             .plugin_namespace
@@ -34,23 +45,23 @@ pub(crate) fn render_explicit_plugin_instructions(
         ));
     }
 
-    if !available_mcp_servers.is_empty() {
-        lines.push(format!(
-            "- MCP servers from this plugin available in this session: {}.",
-            available_mcp_servers
-                .iter()
-                .map(|server| format!("`{server}`"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-    }
-
     if !available_apps.is_empty() {
         lines.push(format!(
             "- Apps from this plugin available in this session: {}.",
             available_apps
                 .iter()
                 .map(|app| format!("`{app}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+
+    if !available_mcp_servers.is_empty() {
+        lines.push(format!(
+            "- MCP servers from this plugin available in this session: {}.",
+            available_mcp_servers
+                .iter()
+                .map(|server| format!("`{server}`"))
                 .collect::<Vec<_>>()
                 .join(", ")
         ));
