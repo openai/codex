@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::VecDeque;
 
 use codex_extension_api::ResponseItem;
 use codex_protocol::models::ContentItem;
@@ -36,8 +37,12 @@ impl Default for TranscriptConfig {
 }
 
 impl TranscriptConfig {
-    pub(crate) fn build<'a>(&self, items: impl IntoIterator<Item = &'a ResponseItem>) -> String {
-        let mut transcript = String::new();
+    pub(crate) fn build<'a>(
+        &self,
+        items: impl IntoIterator<Item = &'a ResponseItem>,
+    ) -> Vec<String> {
+        let mut transcript = VecDeque::new();
+        let mut transcript_bytes = 0;
         let mut tool_names_by_call_id = HashMap::new();
         let mut entry_number = 0;
 
@@ -173,18 +178,30 @@ impl TranscriptConfig {
                 continue;
             }
             entry_number += 1;
-            transcript.push_str(&format!("[{entry_number}] {role}: {text}\n"));
+            let entry = format!("[{entry_number}] {role}: {text}\n");
+            transcript_bytes += entry.len();
+            transcript.push_back(entry);
 
-            if transcript.len() > MAX_TRANSCRIPT_BYTES {
-                let mut first_retained_byte = transcript.len() - MAX_TRANSCRIPT_BYTES;
-                while !transcript.is_char_boundary(first_retained_byte) {
-                    first_retained_byte += 1;
+            while transcript_bytes > MAX_TRANSCRIPT_BYTES {
+                let Some(first_entry) = transcript.front_mut() else {
+                    break;
+                };
+                let bytes_to_remove = transcript_bytes - MAX_TRANSCRIPT_BYTES;
+                if first_entry.len() <= bytes_to_remove {
+                    transcript_bytes -= first_entry.len();
+                    transcript.pop_front();
+                } else {
+                    let mut first_retained_byte = bytes_to_remove;
+                    while !first_entry.is_char_boundary(first_retained_byte) {
+                        first_retained_byte += 1;
+                    }
+                    first_entry.drain(..first_retained_byte);
+                    transcript_bytes -= first_retained_byte;
                 }
-                transcript.drain(..first_retained_byte);
             }
         }
 
-        transcript
+        transcript.into()
     }
 }
 

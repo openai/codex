@@ -62,13 +62,12 @@ fn transcript_keeps_conversation_and_configured_sources() {
     let transcript = TranscriptConfig::default().build(&items);
     assert_eq!(
         transcript,
-        concat!(
+        vec![
             "[1] user: Inspect the workspace.\n",
             "[2] tool exec_command call: {}\n",
             "[3] tool exec_command result: Workspace inspected.\n",
-            "[4] reasoning: Review the current files.\n",
-            "Plaintext reasoning.\n",
-        )
+            "[4] reasoning: Review the current files.\nPlaintext reasoning.\n",
+        ]
     );
 
     let output_and_reasoning = TranscriptConfig {
@@ -78,12 +77,11 @@ fn transcript_keeps_conversation_and_configured_sources() {
     let transcript = output_and_reasoning.build(&items);
     assert_eq!(
         transcript,
-        concat!(
+        vec![
             "[1] user: Inspect the workspace.\n",
             "[2] tool exec_command result: Workspace inspected.\n",
-            "[3] reasoning: Review the current files.\n",
-            "Plaintext reasoning.\n",
-        )
+            "[3] reasoning: Review the current files.\nPlaintext reasoning.\n",
+        ]
     );
 
     let calls_only = TranscriptConfig {
@@ -93,10 +91,10 @@ fn transcript_keeps_conversation_and_configured_sources() {
     let transcript = calls_only.build(&items);
     assert_eq!(
         transcript,
-        concat!(
+        vec![
             "[1] user: Inspect the workspace.\n",
             "[2] tool exec_command call: {}\n",
-        )
+        ]
     );
 }
 
@@ -125,8 +123,12 @@ fn transcript_retains_the_most_recent_bounded_content() {
 
     let transcript = TranscriptConfig::default().build(&items);
 
-    assert!(transcript.len() <= MAX_TRANSCRIPT_BYTES);
-    assert!(transcript.contains("latest response"));
+    assert!(transcript.iter().map(String::len).sum::<usize>() <= MAX_TRANSCRIPT_BYTES);
+    assert!(
+        transcript
+            .iter()
+            .any(|entry| entry.contains("latest response"))
+    );
 }
 
 #[test]
@@ -154,7 +156,10 @@ fn transcript_keeps_only_manual_approval_developer_messages() {
     ];
 
     let transcript = TranscriptConfig::default().build(&items);
-    assert_eq!(transcript, format!("[1] developer: {approval_text}\n"));
+    assert_eq!(
+        transcript,
+        vec![format!("[1] developer: {approval_text}\n")]
+    );
 }
 
 #[test]
@@ -224,10 +229,10 @@ fn transcript_omits_media_payloads_and_keeps_readable_content() {
     let transcript = TranscriptConfig::default().build(&items);
     assert_eq!(
         transcript,
-        concat!(
+        vec![
             "[1] user: Review this screenshot.\n",
             "[2] tool result: Screenshot captured.\n",
-        )
+        ]
     );
 }
 
@@ -280,11 +285,10 @@ fn transcript_omits_encrypted_messages_arguments_and_tool_outputs() {
     let transcript = TranscriptConfig::default().build(&items);
     assert_eq!(
         transcript,
-        concat!(
-            "[1] assistant: Agent message from worker:\n",
-            "The workspace is ready.\n",
+        vec![
+            "[1] assistant: Agent message from worker:\nThe workspace is ready.\n",
             "[2] tool exec_command call: {}\n",
             "[3] tool exec_command result: Command completed.\n",
-        )
+        ]
     );
 }

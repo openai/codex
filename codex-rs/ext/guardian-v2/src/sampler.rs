@@ -66,8 +66,8 @@ pub struct LunaSamplerConfig {
 pub struct LunaSamplingRequest {
     /// Trusted instructions describing the requested classification.
     pub instructions: String,
-    /// Untrusted input that the model should classify.
-    pub input: String,
+    /// Ordered untrusted input entries that the model should classify.
+    pub input: Vec<String>,
     /// Strict JSON schema constraining the model response.
     pub output_schema: Value,
     /// Reasoning budget explicitly selected for this request.
@@ -284,9 +284,11 @@ impl LunaSampler {
                 ResponseItem::Message {
                     id: None,
                     role: "user".to_owned(),
-                    content: vec![ContentItem::InputText {
-                        text: request.input,
-                    }],
+                    content: request
+                        .input
+                        .into_iter()
+                        .map(|text| ContentItem::InputText { text })
+                        .collect(),
                     phase: None,
                     internal_chat_message_metadata_passthrough: None,
                 },

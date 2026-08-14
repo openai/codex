@@ -127,14 +127,16 @@ impl ToolLifecycleContributor for GuardianV2Extension {
                     return;
                 }
             };
-            let classification_input = format!(
-                ">>> TRANSCRIPT START\n{transcript}>>> TRANSCRIPT END\n\n\
-                 The Codex agent has requested the following action:\n\
-                 >>> APPROVAL REQUEST START\n\
-                 Planned action JSON:\n\
-                 {planned_action}\n\
-                 >>> APPROVAL REQUEST END\n"
-            );
+            let mut classification_input = vec![">>> TRANSCRIPT START\n".to_owned()];
+            classification_input.extend(transcript);
+            classification_input.extend([
+                ">>> TRANSCRIPT END\n\n".to_owned(),
+                "The Codex agent has requested the following action:\n".to_owned(),
+                ">>> APPROVAL REQUEST START\n".to_owned(),
+                "Planned action JSON:\n".to_owned(),
+                format!("{planned_action}\n"),
+                ">>> APPROVAL REQUEST END\n".to_owned(),
+            ]);
             let result: Result<(), String> = async {
                 let output = sampler
                     .sample(LunaSamplingRequest {

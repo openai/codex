@@ -69,7 +69,7 @@ fn sampler_config(base_url: String) -> LunaSamplerConfig {
 fn sample_request(turn_id: &str) -> LunaSamplingRequest {
     LunaSamplingRequest {
         instructions: "Return a risk score.".to_owned(),
-        input: "The user requested a README summary.".to_owned(),
+        input: vec!["The user requested a README summary.".to_owned()],
         output_schema: json!({
             "type": "object",
             "properties": { "score": { "type": "number" } },
@@ -157,7 +157,10 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_structured_requ
     let first = sampler
         .sample(LunaSamplingRequest {
             instructions: "Return a risk score.".to_owned(),
-            input: "The user requested a README summary.".to_owned(),
+            input: vec![
+                "The user requested a README summary.".to_owned(),
+                "The assistant inspected README.md.".to_owned(),
+            ],
             output_schema: schema.clone(),
             reasoning_effort: ReasoningEffort::None,
             turn_id: "turn-1".to_owned(),
@@ -178,7 +181,7 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_structured_requ
     let second = sampler
         .sample(LunaSamplingRequest {
             instructions: "Return a risk score.".to_owned(),
-            input: "The user requested a source review.".to_owned(),
+            input: vec!["The user requested a source review.".to_owned()],
             output_schema: schema,
             reasoning_effort: ReasoningEffort::Medium,
             turn_id: "turn-2".to_owned(),
@@ -189,6 +192,13 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_structured_requ
     assert_eq!(second, r#"{"score":0.75}"#);
     let requests = server.single_connection();
     assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[0].body_json()["input"][2]["content"],
+        json!([
+            {"type": "input_text", "text": "The user requested a README summary."},
+            {"type": "input_text", "text": "The assistant inspected README.md."},
+        ])
+    );
     for (index, request) in requests.iter().enumerate() {
         let request = request.body_json();
         assert_eq!(request["type"], "response.create");
@@ -254,7 +264,7 @@ async fn sampler_returns_complete_json_before_terminal_response_events() -> Resu
         Duration::from_secs(2),
         sampler.sample(LunaSamplingRequest {
             instructions: "Return a risk score.".to_owned(),
-            input: "The user requested a README summary.".to_owned(),
+            input: vec!["The user requested a README summary.".to_owned()],
             output_schema: json!({
                 "type": "object",
                 "properties": { "score": { "type": "number" } },

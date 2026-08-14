@@ -162,24 +162,27 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
         json!({"type": "number", "minimum": 0.0, "maximum": 1.0})
     );
     assert_eq!(
-        request["input"][2]["content"][0]["text"],
-        concat!(
-            ">>> TRANSCRIPT START\n",
-            "[1] user: Inspect the repository guidelines.\n",
-            "[2] reasoning: Find the repository documentation.\n",
-            "[3] tool list_dir call: {\"path\":\".\"}\n",
-            "[4] tool list_dir result: README.md\n",
-            "[5] tool read_file call: {\"path\":\"README.md\"}\n",
-            ">>> TRANSCRIPT END\n\n",
-            "The Codex agent has requested the following action:\n",
-            ">>> APPROVAL REQUEST START\n",
-            "Planned action JSON:\n",
-            "{\n",
-            "  \"path\": \"README.md\",\n",
-            "  \"tool\": \"read_file\"\n",
-            "}\n",
-            ">>> APPROVAL REQUEST END\n",
-        )
+        request["input"][2]["content"],
+        json!([
+            {"type": "input_text", "text": ">>> TRANSCRIPT START\n"},
+            {"type": "input_text", "text": "[1] user: Inspect the repository guidelines.\n"},
+            {"type": "input_text", "text": "[2] reasoning: Find the repository documentation.\n"},
+            {"type": "input_text", "text": "[3] tool list_dir call: {\"path\":\".\"}\n"},
+            {"type": "input_text", "text": "[4] tool list_dir result: README.md\n"},
+            {"type": "input_text", "text": "[5] tool read_file call: {\"path\":\"README.md\"}\n"},
+            {"type": "input_text", "text": ">>> TRANSCRIPT END\n\n"},
+            {
+                "type": "input_text",
+                "text": "The Codex agent has requested the following action:\n"
+            },
+            {"type": "input_text", "text": ">>> APPROVAL REQUEST START\n"},
+            {"type": "input_text", "text": "Planned action JSON:\n"},
+            {
+                "type": "input_text",
+                "text": "{\n  \"path\": \"README.md\",\n  \"tool\": \"read_file\"\n}\n"
+            },
+            {"type": "input_text", "text": ">>> APPROVAL REQUEST END\n"},
+        ])
     );
     let score = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
