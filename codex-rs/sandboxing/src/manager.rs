@@ -11,6 +11,8 @@ use crate::policy_transforms::should_require_platform_sandbox;
 use crate::resolve_windows_elevated_filesystem_overrides;
 #[cfg(target_os = "windows")]
 use crate::resolve_windows_restricted_token_filesystem_overrides;
+#[cfg(target_os = "macos")]
+use crate::seatbelt::MacosSeatbeltProfile;
 #[cfg(target_os = "windows")]
 use crate::windows_sandbox_uses_elevated_backend;
 use codex_network_proxy::ManagedNetworkSandboxContext;
@@ -262,11 +264,22 @@ impl std::error::Error for SandboxTransformError {
 }
 
 #[derive(Default)]
-pub struct SandboxManager;
+pub struct SandboxManager {
+    #[cfg(target_os = "macos")]
+    seatbelt_profile: MacosSeatbeltProfile,
+}
 
 impl SandboxManager {
     pub fn new() -> Self {
-        Self
+        Self::default()
+    }
+
+    /// Creates a manager that applies the narrower runtime profile required by filesystem helpers.
+    pub fn for_file_system_helpers() -> Self {
+        Self {
+            #[cfg(target_os = "macos")]
+            seatbelt_profile: MacosSeatbeltProfile::FileSystemHelper,
+        }
     }
 
     pub fn select_initial(
@@ -347,23 +360,26 @@ impl SandboxManager {
             SandboxType::MacosSeatbelt => {
                 use crate::seatbelt::CreateSeatbeltCommandArgsParams;
                 use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
-                use crate::seatbelt::create_seatbelt_command_args;
+                use crate::seatbelt::create_seatbelt_command_args_with_profile;
 
                 let pending = pending_sandboxed_request?;
                 let (file_system_sandbox_policy, network_sandbox_policy) = pending
                     .effective_permission_profile
                     .to_runtime_permissions();
-                let mut args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
-                    command: os_argv_to_strings(argv),
-                    file_system_sandbox_policy: &file_system_sandbox_policy,
-                    network_sandbox_policy,
-                    sandbox_policy_cwd: pending.native_sandbox_policy_cwd.as_path(),
-                    enforce_managed_network,
-                    managed_network,
-                    environment_id,
-                    network,
-                    extra_allow_unix_sockets: &[],
-                })
+                let mut args = create_seatbelt_command_args_with_profile(
+                    CreateSeatbeltCommandArgsParams {
+                        command: os_argv_to_strings(argv),
+                        file_system_sandbox_policy: &file_system_sandbox_policy,
+                        network_sandbox_policy,
+                        sandbox_policy_cwd: pending.native_sandbox_policy_cwd.as_path(),
+                        enforce_managed_network,
+                        managed_network,
+                        environment_id,
+                        network,
+                        extra_allow_unix_sockets: &[],
+                    },
+                    self.seatbelt_profile,
+                )
                 .map_err(SandboxTransformError::EnvironmentNetworkProxy)?;
                 let mut full_command = Vec::with_capacity(1 + args.len());
                 full_command.push(MACOS_PATH_TO_SEATBELT_EXECUTABLE.to_string());

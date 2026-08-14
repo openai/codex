@@ -2,8 +2,14 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
+#[cfg(unix)]
+use codex_exec_server::ExecServerRuntimePaths;
+#[cfg(unix)]
+use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::FILE_READ_CHUNK_SIZE;
 use codex_exec_server::FileMetadata;
+#[cfg(unix)]
+use codex_exec_server::LocalFileSystem;
 use codex_exec_server::ReadDirectoryEntry;
 use codex_exec_server::RemoveOptions;
 use codex_exec_server::WalkEntry;
@@ -699,6 +705,90 @@ async fn file_system_sandboxed_metadata_and_read_allow_readable_root(
         .try_collect::<Vec<_>>()
         .await?;
     assert_eq!(chunks.concat(), b"sandboxed hello");
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sandboxed_file_operations_cannot_read_helper_siblings() -> Result<()> {
+    let helper_paths = crate::common::exec_server::test_codex_helper_paths()?;
+    let root = TempDir::new()?;
+    let runtime_dir = root.path().join("runtime");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir(&runtime_dir)?;
+    std::fs::create_dir(&workspace)?;
+
+    let helper = runtime_dir.join("codex-test-helper");
+    std::fs::hard_link(&helper_paths.codex_exe, &helper)
+        .or_else(|_| std::fs::copy(&helper_paths.codex_exe, &helper).map(|_| ()))?;
+    let linux_sandbox = if helper_paths.codex_linux_sandbox_exe.is_some() {
+        let alias = runtime_dir.join("codex-linux-sandbox");
+        std::fs::hard_link(&helper, &alias)
+            .or_else(|_| std::fs::copy(&helper, &alias).map(|_| ()))?;
+        Some(alias)
+    } else {
+        None
+    };
+    let file_system =
+        LocalFileSystem::with_runtime_paths(ExecServerRuntimePaths::new(helper, linux_sandbox)?);
+
+    let sibling = runtime_dir.join("credentials.json");
+    std::fs::write(&sibling, "secret")?;
+    let escaping_link = workspace.join("credentials-link");
+    std::os::unix::fs::symlink(&sibling, &escaping_link)?;
+    let sandbox = workspace_write_sandbox(workspace.clone());
+    let allowed_file = workspace.join("allowed.txt");
+    std::fs::write(&allowed_file, b"allowed")?;
+    let allowed_contents = file_system
+        .read_file(
+            &PathUri::from_host_native_path(&allowed_file)?,
+            Some(&sandbox),
+        )
+        .await?;
+    assert_eq!(allowed_contents, b"allowed");
+
+    #[cfg(target_os = "macos")]
+    assert!(
+        file_system
+            .read_directory(
+                &PathUri::from_host_native_path("/Applications")?,
+                Some(&sandbox)
+            )
+            .await
+            .is_err(),
+        "filesystem helpers should not inherit the normal process sandbox's /Applications access"
+    );
+
+    let sibling_uri = PathUri::from_host_native_path(&sibling)?;
+    let destination = PathUri::from_host_native_path(workspace.join("copied.json"))?;
+
+    for path in [sibling, escaping_link] {
+        let path = PathUri::from_host_native_path(path)?;
+        assert!(
+            file_system.read_file(&path, Some(&sandbox)).await.is_err(),
+            "sandboxed read unexpectedly accessed helper sibling {path}"
+        );
+        assert!(
+            file_system
+                .read_file_stream(&path, Some(&sandbox))
+                .await
+                .is_err(),
+            "sandboxed streaming unexpectedly accessed helper sibling {path}"
+        );
+    }
+    assert!(
+        file_system
+            .copy(
+                &sibling_uri,
+                &destination,
+                CopyOptions { recursive: false },
+                Some(&sandbox),
+            )
+            .await
+            .is_err(),
+        "sandboxed copy unexpectedly accessed helper sibling {sibling_uri}"
+    );
 
     Ok(())
 }

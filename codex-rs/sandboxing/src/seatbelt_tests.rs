@@ -1,11 +1,13 @@
 use super::CreateSeatbeltCommandArgsParams;
 use super::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
 use super::MACOS_SEATBELT_BASE_POLICY;
+use super::MacosSeatbeltProfile;
 use super::ProxyPolicyInputs;
 use super::UnixDomainSocketPolicy;
 use super::build_seatbelt_unreadable_glob_policy;
 use super::create_seatbelt_command_args;
 use super::create_seatbelt_command_args_for_legacy_policy;
+use super::create_seatbelt_command_args_with_profile;
 use super::dynamic_network_policy;
 use super::normalize_path_for_sandbox;
 use super::seatbelt_regex_for_unreadable_glob;
@@ -119,6 +121,80 @@ fn base_policy_allows_kmp_registration_shm_read_create_and_unlink() {
     assert!(
         MACOS_SEATBELT_BASE_POLICY.contains(expected),
         "base policy must allow only KMP registration shm read/create/unlink:\n{MACOS_SEATBELT_BASE_POLICY}"
+    );
+}
+
+#[test]
+fn filesystem_helper_platform_defaults_do_not_grant_applications_directory() {
+    let workspace = TempDir::new().expect("temp workspace");
+    let workspace_root = AbsolutePathBuf::from_absolute_path(workspace.path())
+        .expect("workspace path should be absolute");
+    let file_system_policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry::new(
+            FileSystemPath::Path {
+                path: workspace_root,
+            },
+            FileSystemAccessMode::Read,
+        ),
+        FileSystemSandboxEntry::new(
+            FileSystemPath::Special {
+                value: FileSystemSpecialPath::Minimal,
+            },
+            FileSystemAccessMode::Read,
+        ),
+    ]);
+
+    let list_directory = |path: &Path, profile: MacosSeatbeltProfile| {
+        let args = create_seatbelt_command_args_with_profile(
+            CreateSeatbeltCommandArgsParams {
+                command: vec!["/bin/ls".to_string(), path.display().to_string()],
+                file_system_sandbox_policy: &file_system_policy,
+                network_sandbox_policy: NetworkSandboxPolicy::Restricted,
+                sandbox_policy_cwd: workspace.path(),
+                enforce_managed_network: false,
+                managed_network: None,
+                environment_id: None,
+                network: None,
+                extra_allow_unix_sockets: &[],
+            },
+            profile,
+        )
+        .expect("build restricted seatbelt command");
+
+        Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
+            .args(args)
+            .current_dir(workspace.path())
+            .output()
+            .expect("run restricted seatbelt command")
+    };
+
+    let allowed = list_directory(workspace.path(), MacosSeatbeltProfile::FileSystemHelper);
+    let allowed_stderr = String::from_utf8_lossy(&allowed.stderr);
+    if !allowed.status.success()
+        && allowed_stderr.contains("sandbox-exec: sandbox_apply: Operation not permitted")
+    {
+        return;
+    }
+    assert!(
+        allowed.status.success(),
+        "the explicitly allowed workspace should remain readable: {allowed_stderr}"
+    );
+
+    let process_allowed = list_directory(Path::new("/Applications"), MacosSeatbeltProfile::Process);
+    let process_allowed_stderr = String::from_utf8_lossy(&process_allowed.stderr);
+    assert!(
+        process_allowed.status.success(),
+        "normal process sandboxes should preserve /Applications access: {process_allowed_stderr}"
+    );
+
+    let denied = list_directory(
+        Path::new("/Applications"),
+        MacosSeatbeltProfile::FileSystemHelper,
+    );
+    let denied_stderr = String::from_utf8_lossy(&denied.stderr);
+    assert!(
+        !denied.status.success() && denied_stderr.contains("Operation not permitted"),
+        "filesystem helper platform defaults should not grant /Applications: {denied_stderr}"
     );
 }
 
