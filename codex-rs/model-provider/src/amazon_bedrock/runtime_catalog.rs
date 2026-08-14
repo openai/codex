@@ -9,7 +9,7 @@ const ROUTING_VARIANTS: [(&str, &str, i32); 2] =
     [("global.", "Global", 0), ("us.", "US cross-region", 1)];
 
 pub(super) fn static_runtime_model_catalog() -> ModelsResponse {
-    let models = static_model_catalog()
+    let base_models = static_model_catalog()
         .models
         .into_iter()
         .filter(|model| {
@@ -20,19 +20,18 @@ pub(super) fn static_runtime_model_catalog() -> ModelsResponse {
                     | AMAZON_BEDROCK_GPT_5_6_LUNA_MODEL_ID
             )
         })
-        .flat_map(|model| {
-            ROUTING_VARIANTS
-                .into_iter()
-                .map(move |(prefix, routing_label, routing_priority)| {
-                    let mut variant = model.clone();
-                    variant.slug = format!("{prefix}{}", model.slug);
-                    variant.display_name = format!("{} ({routing_label})", model.display_name);
-                    variant.priority = model.priority * 2 + routing_priority;
-                    variant.supports_search_tool = false;
-                    variant
-                })
-        })
-        .collect();
+        .collect::<Vec<_>>();
+    let mut models = Vec::with_capacity(ROUTING_VARIANTS.len() * base_models.len());
+    for (prefix, routing_label, routing_priority) in ROUTING_VARIANTS {
+        for model in &base_models {
+            let mut variant = model.clone();
+            variant.slug = format!("{prefix}{}", model.slug);
+            variant.display_name = format!("{} ({routing_label})", model.display_name);
+            variant.priority = routing_priority * base_models.len() as i32 + model.priority;
+            variant.supports_search_tool = false;
+            models.push(variant);
+        }
+    }
     ModelsResponse { models }
 }
 
