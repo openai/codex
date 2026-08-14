@@ -32,6 +32,7 @@ fn make_skill(name: &str, path: &str) -> SkillMetadata {
         name: name.to_string(),
         description: format!("{name} skill"),
         short_description: None,
+        model: None,
         interface: None,
         dependencies: None,
         policy: None,

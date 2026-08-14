@@ -225,6 +225,7 @@ fn expected_skill(path: AbsolutePathBuf, name: &str, scope: SkillScope) -> Skill
         name: name.to_string(),
         description: format!("{name} description"),
         short_description: None,
+        model: None,
         interface: None,
         dependencies: None,
         policy: None,

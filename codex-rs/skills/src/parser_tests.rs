@@ -17,6 +17,7 @@ fn parses_repairs_and_sanitizes_frontmatter() {
             name: "deploy service".to_string(),
             description: "Build for AWS: ECS".to_string(),
             short_description: Some("Deploy safely".to_string()),
+            model: None,
         }
     );
 }
@@ -33,6 +34,7 @@ fn uses_default_name_and_requires_description() {
             name: "demo".to_string(),
             description: "Demo skill".to_string(),
             short_description: None,
+            model: None,
         }
     );
 
@@ -56,6 +58,7 @@ fn repairs_short_descriptions_containing_colons_and_apostrophes() {
             name: "short".to_string(),
             description: "Short skill".to_string(),
             short_description: Some("What's included: builds and tests".to_string()),
+            model: None,
         }
     );
 }
@@ -74,6 +77,7 @@ fn repairs_unrecognized_frontmatter_fields_that_need_quotes() {
             name: "unknown".to_string(),
             description: "Unknown fields".to_string(),
             short_description: None,
+            model: None,
         }
     );
 }
@@ -92,6 +96,7 @@ fn preserves_block_scalar_bodies_while_repairing_other_fields() {
             name: "block".to_string(),
             description: "Build for AWS: ECS".to_string(),
             short_description: None,
+            model: None,
         }
     );
 }
@@ -114,6 +119,7 @@ fn preserves_overlong_descriptions_and_short_descriptions() {
             name: "long".to_string(),
             description,
             short_description: Some(short_description),
+            model: None,
         }
     );
 }

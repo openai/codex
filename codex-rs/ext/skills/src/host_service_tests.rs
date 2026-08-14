@@ -324,6 +324,7 @@ async fn snapshot_for_config_preserves_host_precedence_for_symlinked_plugin_root
             name: "sample:search".to_string(),
             description: "shared skill".to_string(),
             short_description: None,
+            model: None,
             interface: None,
             dependencies: None,
             policy: None,

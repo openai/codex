@@ -72,6 +72,7 @@ impl ParsedEnvironmentSkill {
             name: base_name,
             description,
             short_description,
+            model: _,
         } = parse_skill_frontmatter_metadata(&contents, || default_skill_name(&skill.path))
             .map_err(|err| err.to_string())?;
         let (dependencies, policy) = match &skill.metadata {
@@ -240,6 +241,7 @@ pub fn load_environment_skills_from_discovery(
             name: base_name,
             description,
             short_description,
+            model: _,
         } = match parse_skill_frontmatter_metadata(&skill.instructions.contents, || {
             default_skill_name(&skill.instructions.path)
         }) {
