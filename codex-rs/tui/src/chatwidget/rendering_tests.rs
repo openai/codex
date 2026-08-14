@@ -76,6 +76,41 @@ fn contains_text(buffer: &Buffer, text: &str) -> bool {
 }
 
 #[tokio::test]
+async fn initial_session_header_starts_at_the_top_of_the_viewport() {
+    let (mut widget, _sender, _events, _operations) = make_chatwidget_manual_with_sender().await;
+    widget.transcript.active_cell =
+        Some(ChatWidget::placeholder_session_header_cell(&widget.config));
+
+    let frame = render_frame(&widget, /*width*/ 48);
+    let header = frame
+        .content
+        .chunks(usize::from(frame.area.width))
+        .take(/*n*/ 6)
+        .map(|row| {
+            row.iter()
+                .map(ratatui::buffer::Cell::symbol)
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .replace(crate::version::CODEX_CLI_VERSION, "<VERSION>");
+
+    let cwd = widget.config.cwd.as_path().display().to_string();
+    let normalized_cwd = format!("{:<width$}", "/tmp/project", width = cwd.len());
+
+    insta::assert_snapshot!(header.replace(&cwd, &normalized_cwd), @r"
+    ╭───────────────────────────────────────╮
+    │ >_ OpenAI Codex (v<VERSION>)              │
+    │                                       │
+    │ model:     loading   /model to change │
+    │ directory: /tmp/project               │
+    ╰───────────────────────────────────────╯
+    ");
+}
+
+#[tokio::test]
 async fn active_cell_layout_reuses_heights_without_freezing_animation() {
     let (widget, desired_height_calls, display_lines_calls) = widget_with_counting_cell(
         /*desired_height*/ 2, /*line_count*/ 2, /*stable_height*/ true,

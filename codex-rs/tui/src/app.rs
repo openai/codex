@@ -1181,6 +1181,7 @@ See the Codex keymap documentation for supported actions and examples."
 
         let mut listen_for_app_server_events = true;
         let mut waiting_for_initial_session_configured = wait_for_initial_session_configured;
+        let mut waiting_for_initial_session_header = true;
 
         #[cfg(not(debug_assertions))]
         let pre_loop_exit_reason = if let Some(latest_version) = upgrade_version {
@@ -1207,10 +1208,23 @@ See the Codex keymap documentation for supported actions and examples."
             Ok(exit_reason)
         } else {
             loop {
+                let initial_session_header_pending = waiting_for_initial_session_header
+                    && app.primary_session_configured.is_some()
+                    && !app_event_rx.is_empty();
                 let control = select! {
                     Some(event) = app_event_rx.recv() => {
+                        let is_initial_session_header = matches!(
+                            &event,
+                            AppEvent::InsertHistoryCell(cell)
+                                if cell.as_any().is::<history_cell::SessionInfoCell>()
+                        );
                         match Box::pin(app.handle_event(tui, &mut app_server, event)).await {
-                            Ok(control) => control,
+                            Ok(control) => {
+                                if is_initial_session_header {
+                                    waiting_for_initial_session_header = false;
+                                }
+                                control
+                            }
                             Err(err) => break Err(err),
                         }
                     }
@@ -1233,7 +1247,7 @@ See the Codex keymap documentation for supported actions and examples."
                         }
                         AppRunControl::Continue
                     }
-                    event = tui_events.next() => {
+                    event = tui_events.next(), if !initial_session_header_pending => {
                         if let Some(event) = event {
                             match app.handle_tui_event(tui, &mut app_server, event).await {
                                 Ok(control) => control,

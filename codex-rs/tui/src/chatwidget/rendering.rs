@@ -11,7 +11,12 @@ impl ChatWidget {
         let active_cell_renderable = match &self.transcript.active_cell {
             Some(cell) => RenderableItem::Owned(Box::new(TranscriptAreaRenderable {
                 child: cell.as_ref(),
-                top: 1,
+                // The initial header becomes the first history cell, which has no leading separator.
+                top: if cell.as_any().is::<history_cell::SessionHeaderHistoryCell>() {
+                    0
+                } else {
+                    1
+                },
                 right: active_cell_right_reserve,
                 // Externally backed transcript cells can also change viewport height without an
                 // active-cell revision. Spinner cells remain safe because their indicator width
