@@ -2064,17 +2064,12 @@ impl ThreadRequestProcessor {
                 "rollout path missing after reloading thread {thread_id}"
             ))
         })?;
-        log_listener_attach_result(
-            self.ensure_conversation_listener(
-                thread_id,
-                request_id.connection_id,
-                /*raw_events_enabled*/ false,
-            )
-            .await,
-            thread_id,
-            request_id.connection_id,
-            "thread",
-        );
+        // Revert keeps the existing thread state and subscriptions across the internal reload.
+        // Start the replacement listener from that state instead of depending on the requesting
+        // connection still being open.
+        let thread_state = self.thread_state_manager.thread_state(thread_id).await;
+        self.ensure_listener_task_running(thread_id, Arc::clone(&codex_thread), thread_state)
+            .await?;
         let mut thread = self
             .load_thread_from_resume_source_or_send_internal(
                 thread_id,
