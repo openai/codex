@@ -30,6 +30,7 @@ pub mod network_policy;
 pub mod num_format;
 pub mod openai_models;
 pub mod parse_command;
+mod permission_profile_snapshot;
 pub mod permissions;
 pub mod plan_tool;
 pub mod protocol;

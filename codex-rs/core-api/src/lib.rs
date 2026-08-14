@@ -110,6 +110,7 @@ pub use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
 pub use codex_protocol::dynamic_tools::DynamicToolSpec;
 pub use codex_protocol::error::Result as CodexResult;
 pub use codex_protocol::models::PermissionProfile;
+pub use codex_protocol::models::PermissionProfileSnapshot;
 pub use codex_protocol::openai_models::ModelPreset;
 pub use codex_protocol::protocol::AskForApproval;
 pub use codex_protocol::protocol::EnvironmentConfigState;

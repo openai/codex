@@ -106,6 +106,7 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::BaseInstructionsProvenance;
 use codex_protocol::models::PermissionProfile;
+pub use codex_protocol::models::PermissionProfileSnapshot;
 use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::openai_models::ModelMessages;
 use codex_protocol::openai_models::ModelsResponse;
@@ -179,7 +180,6 @@ use permission_profile_catalog::permission_profile_catalog_from_permissions;
 use permission_profile_catalog::permission_profile_is_allowed;
 use permission_profile_catalog::validate_permission_profile_for_deny_read;
 pub(crate) use permissions::is_builtin_permission_profile_name;
-pub use resolved_permission_profile::PermissionProfileSnapshot;
 pub(crate) use resolved_permission_profile::PermissionProfileState;
 
 const DEFAULT_IGNORE_LARGE_UNTRACKED_DIRS: i64 = 200;
@@ -361,10 +361,8 @@ impl Permissions {
         snapshot: PermissionProfileSnapshot,
     ) -> ConstraintResult<()> {
         let permission_profile = Constrained::allow_only(snapshot.permission_profile().clone());
-        self.permission_profile_state = PermissionProfileState::from_constrained_resolved(
-            permission_profile,
-            snapshot.into_resolved_permission_profile(),
-        )?;
+        self.permission_profile_state =
+            PermissionProfileState::from_constrained_snapshot(permission_profile, snapshot)?;
         Ok(())
     }
 
