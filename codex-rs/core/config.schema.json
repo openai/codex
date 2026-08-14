@@ -777,6 +777,9 @@
             "unavailable_dummy_tools": {
               "type": "boolean"
             },
+            "unbounded_connection_retries": {
+              "type": "boolean"
+            },
             "undo": {
               "type": "boolean"
             },
@@ -5432,6 +5435,9 @@
           "type": "boolean"
         },
         "unavailable_dummy_tools": {
+          "type": "boolean"
+        },
+        "unbounded_connection_retries": {
           "type": "boolean"
         },
         "undo": {
