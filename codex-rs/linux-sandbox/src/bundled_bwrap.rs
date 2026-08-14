@@ -40,8 +40,10 @@ impl BundledBwrapLauncher {
                 self.program.as_path().display()
             )
         });
-        verify_digest(&bwrap_file, expected_sha256(), self.program.as_path())
-            .unwrap_or_else(|err| panic!("{err}"));
+        if let Err(err) = verify_digest(&bwrap_file, expected_sha256(), self.program.as_path()) {
+            eprintln!("{err}");
+            std::process::exit(crate::BUNDLED_BWRAP_DIGEST_VERIFICATION_FAILURE_EXIT_CODE);
+        }
 
         make_files_inheritable(&preserved_files);
 

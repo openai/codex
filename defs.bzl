@@ -193,6 +193,7 @@ def codex_rust_crate(
         rustc_flags_extra = [],
         binary_rustc_flags_extra = {},
         rustc_env = {},
+        rustc_env_files = [],
         deps_extra = [],
         integration_compile_data_extra = [],
         integration_test_args = [],
@@ -234,6 +235,7 @@ def codex_rust_crate(
         binary_rustc_flags_extra: Mapping from binary names to extra rustc
             flags for those binary targets.
         rustc_env: Extra rustc_env entries to merge with defaults.
+        rustc_env_files: Generated compiler environment files for the library target.
         deps_extra: Extra normal deps beyond @crates resolution.
             Typically only needed when features add additional deps.
         integration_compile_data_extra: Extra compile_data for integration tests.
@@ -325,6 +327,7 @@ def codex_rust_crate(
             edition = crate_edition,
             rustc_flags = rustc_flags_extra,
             rustc_env = rustc_env,
+            rustc_env_files = rustc_env_files,
             visibility = ["//visibility:public"],
         )
 

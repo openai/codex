@@ -6,4 +6,8 @@ codex_rust_crate(
     extra_binaries = [
         "//codex-rs/bwrap:bwrap",
     ],
+    rustc_env_files = select({
+        "@platforms//os:linux": ["//codex-rs/bwrap:bwrap-sha256-env"],
+        "//conditions:default": [],
+    }),
 )

@@ -12,9 +12,27 @@ codex_rust_crate(
         "//conditions:default": [],
     }),
     rustc_flags_extra = select({
-        "@platforms//os:linux": ["--cfg=bwrap_available"],
+        "@platforms//os:linux": [
+            "--cfg=bwrap_available",
+            # TODO(anp) Extract bwrap symbols before stripping.
+            "-Cstrip=symbols",
+        ],
         "//conditions:default": [],
     }),
+)
+
+genrule(
+    name = "bwrap-sha256-env",
+    srcs = [":bwrap"],
+    outs = ["bwrap.sha256.env"],
+    cmd = " && ".join([
+        '$(execpath @bazel_tools//tools/build_defs/hash:sha256) $(execpath :bwrap) "$@"',
+        'digest=$$(<"$@")',
+        'printf "CODEX_BWRAP_SHA256=%s\\n" "$$digest" > "$@"',
+    ]),
+    target_compatible_with = ["@platforms//os:linux"],
+    tools = ["@bazel_tools//tools/build_defs/hash:sha256"],
+    visibility = ["//codex-rs/linux-sandbox:__pkg__"],
 )
 
 cc_library(

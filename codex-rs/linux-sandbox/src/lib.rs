@@ -22,6 +22,10 @@ mod proxy_lifecycle;
 #[cfg(target_os = "linux")]
 mod proxy_routing;
 
+/// Exit status returned when bundled bubblewrap fails digest verification.
+#[cfg(target_os = "linux")]
+pub const BUNDLED_BWRAP_DIGEST_VERIFICATION_FAILURE_EXIT_CODE: i32 = 8;
+
 #[cfg(target_os = "linux")]
 pub fn run_main() -> ! {
     linux_run_main::run_main();
