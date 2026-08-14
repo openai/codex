@@ -976,7 +976,8 @@ impl App {
                     ));
                     return Ok(AppRunControl::Continue);
                 }
-                Ok(crate::session_resume::ResolveCwdOutcome::Continue(Some(cwd))) => cwd,
+                Ok(crate::session_resume::ResolveCwdOutcome::Continue(Some(cwd)))
+                | Ok(crate::session_resume::ResolveCwdOutcome::ContinueAfterPrompt(cwd)) => cwd,
                 Ok(crate::session_resume::ResolveCwdOutcome::Continue(None)) => current_cwd.clone(),
                 Ok(crate::session_resume::ResolveCwdOutcome::Exit) => {
                     return Ok(AppRunControl::Exit(ExitReason::UserRequested));

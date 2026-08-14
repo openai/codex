@@ -34,6 +34,7 @@ pub use codex_app_server_client::RemoteAppServerEndpoint;
 use codex_app_server_protocol::Account as AppServerAccount;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ConfigWarningNotification;
+use codex_app_server_protocol::GetAccountResponse;
 use codex_app_server_protocol::Thread as AppServerThread;
 use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListParams;
@@ -1077,20 +1078,18 @@ async fn run_ratatui_app(
         !uses_remote_workspace && should_show_trust_screen(&initial_config);
     #[cfg(target_os = "windows")]
     let mut trust_decision_was_made = false;
-    let login_status = if workload_identity_selected {
-        LoginStatus::AuthMode(AuthMode::Chatgpt)
+    let startup_model_provider = initial_config.model_provider_id.clone();
+    let (login_status, mut startup_account) = if workload_identity_selected {
+        (LoginStatus::AuthMode(AuthMode::Chatgpt), None)
     } else if initial_config.model_provider.requires_openai_auth {
         let Some(active_app_server) = app_server.as_mut() else {
             unreachable!("app server should exist when auth is required");
         };
         let login_status = startup_draft
-            .run_until(
-                &mut tui,
-                get_login_status(active_app_server, &initial_config),
-            )
+            .run_until(&mut tui, get_login_status(active_app_server))
             .await;
         match login_status {
-            Ok(Ok(login_status)) => login_status,
+            Ok(Ok((login_status, account))) => (login_status, Some(account)),
             Ok(Err(err)) => {
                 shutdown_startup_session(app_server.take(), &mut terminal_restore_guard).await;
                 return Err(err);
@@ -1101,7 +1100,7 @@ async fn run_ratatui_app(
             }
         }
     } else {
-        LoginStatus::NotAuthenticated
+        (LoginStatus::NotAuthenticated, None)
     };
     let should_show_onboarding =
         should_show_onboarding(login_status, &initial_config, should_show_trust_screen_flag);
@@ -1111,6 +1110,8 @@ async fn run_ratatui_app(
             shutdown_startup_session(app_server.take(), &mut terminal_restore_guard).await;
             return Err(err.into());
         }
+        // Authentication can change while any interactive onboarding screen is open.
+        startup_account = None;
         let show_login_screen = should_show_login_screen(login_status, &initial_config);
         let onboarding_result = run_onboarding_app(
             OnboardingScreenArgs {
@@ -1434,6 +1435,11 @@ async fn run_ratatui_app(
     .await
     {
         Ok(ResolveCwdOutcome::Continue(cwd)) => cwd,
+        Ok(ResolveCwdOutcome::ContinueAfterPrompt(cwd)) => {
+            // Another daemon client can change authentication while this prompt is open.
+            startup_account = None;
+            Some(cwd)
+        }
         Ok(ResolveCwdOutcome::Exit) => {
             terminal_restore_guard.restore_silently();
             session_log::log_session_end();
@@ -1568,6 +1574,8 @@ async fn run_ratatui_app(
             .await
         {
             Ok(Ok(app_server)) => {
+                // A picker can replace the server; account reads belong to their original session.
+                startup_account = None;
                 AppServerSession::new(app_server, app_server_target.thread_params_mode())
                     .with_startup_config(&config)
                     .with_remote_cwd_override(remote_cwd_override.clone())
@@ -1595,11 +1603,19 @@ async fn run_ratatui_app(
     let bypass_hook_trust_for_startup_review = config.bypass_hook_trust && !is_persistent_resume;
     let hooks_request_handle = app_server.request_handle();
     let hooks_cwd = config.cwd.to_path_buf();
+    if config.model_provider_id != startup_model_provider {
+        startup_account = None;
+    }
     let startup_prefetch_started_at = Instant::now();
     let startup_prefetch = startup_draft
         .run_until(&mut tui, async {
             tokio::join!(
-                app_server.bootstrap(&config),
+                async {
+                    match startup_account {
+                        Some(account) => app_server.bootstrap_with_account(&config, account).await,
+                        None => app_server.bootstrap(&config).await,
+                    }
+                },
                 load_startup_hooks_review_entry(hooks_request_handle, hooks_cwd),
             )
         })
@@ -1737,24 +1753,17 @@ pub enum LoginStatus {
     NotAuthenticated,
 }
 
-/// Determines the user's authentication mode using a lightweight account read
-/// rather than a full `bootstrap`, avoiding the model-list fetch and
-/// rate-limit round-trip that `bootstrap` would trigger.
+/// Reads the account once to determine login status and preserve the response for bootstrap.
 async fn get_login_status(
     app_server: &mut AppServerSession,
-    config: &Config,
-) -> color_eyre::Result<LoginStatus> {
-    if !config.model_provider.requires_openai_auth {
-        return Ok(LoginStatus::NotAuthenticated);
-    }
-
+) -> color_eyre::Result<(LoginStatus, GetAccountResponse)> {
     let account = app_server.read_account().await?;
-    Ok(match account.account {
+    let login_status = match &account.account {
         Some(AppServerAccount::ApiKey {}) => LoginStatus::AuthMode(AuthMode::ApiKey),
         Some(AppServerAccount::Chatgpt { .. }) => LoginStatus::AuthMode(AuthMode::Chatgpt),
-        Some(AppServerAccount::AmazonBedrock { .. }) => LoginStatus::NotAuthenticated,
-        None => LoginStatus::NotAuthenticated,
-    })
+        Some(AppServerAccount::AmazonBedrock { .. }) | None => LoginStatus::NotAuthenticated,
+    };
+    Ok((login_status, account))
 }
 
 async fn load_config_or_exit(
@@ -2149,6 +2158,9 @@ mod tests {
             .await?
             {
                 ResolveCwdOutcome::Continue(cwd) => cwd,
+                ResolveCwdOutcome::ContinueAfterPrompt(_) => {
+                    panic!("configured cwd should not prompt during startup")
+                }
                 ResolveCwdOutcome::Exit => panic!("configured cwd should not exit startup"),
             };
             let final_config = ConfigBuilder::default()

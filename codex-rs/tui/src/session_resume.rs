@@ -51,6 +51,8 @@ struct RawRecord {
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ResolveCwdOutcome {
     Continue(Option<PathBuf>),
+    /// An interactive prompt was shown, so previously cached authentication may be stale.
+    ContinueAfterPrompt(PathBuf),
     Exit,
 }
 
@@ -149,7 +151,7 @@ pub(crate) async fn resolve_cwd_for_resume_or_fork(
         )
         .await?;
         return Ok(match selection_outcome {
-            CwdPromptOutcome::Selection(selection) => ResolveCwdOutcome::Continue(Some(
+            CwdPromptOutcome::Selection(selection) => ResolveCwdOutcome::ContinueAfterPrompt(
                 selection
                     .selected_cwd(
                         cwd_context.current_cwd,
@@ -157,7 +159,7 @@ pub(crate) async fn resolve_cwd_for_resume_or_fork(
                         cwd_context.remembered_current_cwd,
                     )
                     .to_path_buf(),
-            )),
+            ),
             CwdPromptOutcome::Exit => ResolveCwdOutcome::Exit,
         });
     }
@@ -516,6 +518,54 @@ mod tests {
 
             assert_eq!(outcome, ResolveCwdOutcome::Continue(Some(expected_cwd)));
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn matching_resume_cwd_skips_prompt_without_configured_mode() -> color_eyre::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let thread_id = ThreadId::new();
+        let rollout_path = temp_dir.path().join("rollout.jsonl");
+        let config = crate::legacy_core::config::ConfigBuilder::default()
+            .codex_home(temp_dir.path().to_path_buf())
+            .build()
+            .await?;
+        let current_cwd = config.cwd.to_path_buf();
+        write_rollout_lines(
+            &rollout_path,
+            &[rollout_line(
+                "t0",
+                "session_meta",
+                serde_json::json!({
+                    "id": thread_id,
+                    "cwd": current_cwd,
+                    "originator": "test",
+                    "cli_version": "test",
+                }),
+            )],
+        )?;
+        let mut tui = crate::tui::test_support::make_test_tui()?;
+
+        let outcome = resolve_cwd_for_resume_or_fork(
+            &mut tui,
+            &config,
+            /*state_db_ctx*/ None,
+            &SessionTarget {
+                path: Some(rollout_path),
+                thread_id,
+                history_mode: None,
+            },
+            CwdPromptAction::Resume,
+            ResumeCwdContext {
+                current_cwd: &current_cwd,
+                remembered_current_cwd: &current_cwd,
+                allow_remember_current: true,
+                mode: None,
+            },
+        )
+        .await?;
+
+        assert_eq!(outcome, ResolveCwdOutcome::Continue(Some(current_cwd)));
         Ok(())
     }
 
