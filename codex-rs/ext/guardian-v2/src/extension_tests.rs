@@ -25,6 +25,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::TruncationPolicy;
 use codex_protocol::security_risk::SecurityRiskScore;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
@@ -115,6 +116,7 @@ fn encrypted_parent_compaction_rejects_invalid_latest_item() {
 
 async fn sample_conversation_history(
     conversation_history: Vec<ResponseItem>,
+    arguments: &str,
 ) -> Result<(serde_json::Value, TestCodex, ExtensionRegistry<Config>)> {
     let thread_server = responses::start_mock_server().await;
     let test = test_codex().build_with_auto_env(&thread_server).await?;
@@ -159,7 +161,7 @@ async fn sample_conversation_history(
     let turn_store = ExtensionData::new("turn-1");
     let tool_name = ToolName::plain("read_file");
     let tool_payload = ToolPayload::Function {
-        arguments: r#"{"path":"README.md"}"#.to_owned(),
+        arguments: arguments.to_owned(),
     };
     let conversation_history = TestConversationHistory(conversation_history);
 
@@ -189,7 +191,7 @@ async fn sample_conversation_history(
 async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let (request, test, registry) = sample_conversation_history(vec![
+    let conversation_history = vec![
         ResponseItem::Message {
             id: None,
             role: "user".to_owned(),
@@ -232,8 +234,9 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
             call_id: "call-1".to_owned(),
             internal_chat_message_metadata_passthrough: None,
         },
-    ])
-    .await?;
+    ];
+    let (request, test, registry) =
+        sample_conversation_history(conversation_history, r#"{"path":"README.md"}"#).await?;
     let thread_id = test.session_configured.thread_id;
     let thread_store = test.codex.thread_extension_data();
     assert_eq!(request["model"], "gpt-5.6-luna");
@@ -368,7 +371,8 @@ async fn contributor_sends_compacted_conversation_history_to_luna() -> Result<()
         ]
     }));
 
-    let (request, _test, _registry) = sample_conversation_history(history).await?;
+    let (request, _test, _registry) =
+        sample_conversation_history(history, r#"{"path":"README.md"}"#).await?;
     let content = request["input"][2]["content"]
         .as_array()
         .expect("Luna request should contain separate transcript text items");
@@ -506,6 +510,154 @@ async fn contributor_reuses_the_latest_compatible_parent_compaction() -> Result<
         serde_json::to_value(latest_compaction)?
     );
     assert_eq!(request["input"][3]["role"], "user");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn contributor_bounds_oversized_actions_and_fairly_truncates_nested_fields() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let arguments = json!({
+        "attachments": [{
+            "content": "🦀\"\\\n".repeat(20_000),
+            "name": "financials.csv",
+        }],
+        "call_id": "untrusted-call",
+        "metadata": { "reason": "b".repeat(100_000) },
+        "path": "a".repeat(100_000),
+        "recipient": "finance@example.com",
+        "tool": "untrusted-tool",
+    })
+    .to_string();
+    let (request, _test, _registry) = sample_conversation_history(Vec::new(), &arguments).await?;
+    let content = request["input"][2]["content"]
+        .as_array()
+        .expect("Luna user content should contain separate text items");
+    let action_text = content[content.len() - 2]["text"]
+        .as_str()
+        .expect("the current action should be an input text item");
+    let action = serde_json::from_str::<serde_json::Value>(action_text)?;
+    let max_action_bytes = TruncationPolicy::Tokens(super::MAX_ACTION_TOKENS).byte_budget();
+    assert!(action_text.ends_with('\n'));
+    assert!(
+        action_text.len() <= max_action_bytes,
+        "the complete model-visible action must remain bounded"
+    );
+    assert!(
+        action_text.len() >= max_action_bytes * 9 / 10,
+        "water-filling should use the available action budget"
+    );
+    assert_eq!(action["tool"], "read_file");
+    assert_eq!(action["call_id"], "untrusted-call");
+    assert_eq!(action["recipient"], "finance@example.com");
+    assert_eq!(action["attachments"][0]["name"], "financials.csv");
+    assert!(action.get("arguments_preview").is_none());
+    assert!(action.get("truncated").is_none());
+    let retained_values = [
+        &action["path"],
+        &action["metadata"]["reason"],
+        &action["attachments"][0]["content"],
+    ]
+    .map(|value| {
+        value
+            .as_str()
+            .expect("action string field should remain present")
+    });
+    for text in retained_values {
+        assert!(text.contains("<truncated omitted_approx_tokens=\""));
+    }
+    let smallest_retained = retained_values.iter().map(|text| text.len()).min().unwrap();
+    let largest_retained = retained_values.iter().map(|text| text.len()).max().unwrap();
+    assert!(
+        largest_retained.saturating_sub(smallest_retained) <= 16,
+        "long nested strings should receive comparable shares of the action budget"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn guardian_action_bounds_structurally_oversized_arrays() -> Result<()> {
+    let action = super::GuardianAction {
+        tool_name: ToolName::plain("inspect_values"),
+        payload: ToolPayload::Function {
+            arguments: json!({
+                "call_id": "genuine-call",
+                "tool": "spoofed-tool",
+                "values": (0..6_000).collect::<Vec<_>>(),
+            })
+            .to_string(),
+        },
+    };
+
+    let rendered = action.render()?;
+    assert!(
+        rendered.len().saturating_add(1)
+            <= TruncationPolicy::Tokens(super::MAX_ACTION_TOKENS).byte_budget()
+    );
+    let action = serde_json::from_str::<serde_json::Value>(&rendered)?;
+    assert_eq!(
+        action,
+        json!({
+            "_guardian_omitted_fields": 1,
+            "call_id": "genuine-call",
+            "tool": "inspect_values",
+        })
+    );
+
+    Ok(())
+}
+
+#[test]
+fn guardian_action_bounds_structurally_oversized_object_keys() -> Result<()> {
+    let oversized_key = "oversized_key_".to_owned()
+        + &"k".repeat(TruncationPolicy::Tokens(super::MAX_ACTION_TOKENS).byte_budget());
+    let mut arguments = serde_json::Map::from_iter([
+        (
+            "_guardian_omitted_fields".to_owned(),
+            json!("actual-tool-argument"),
+        ),
+        ("call_id".to_owned(), json!("genuine-call")),
+        ("cmd".to_owned(), json!("remove-important-file")),
+        ("tool".to_owned(), json!("spoofed-tool")),
+        (oversized_key.clone(), json!(true)),
+    ]);
+    for index in 0..600 {
+        arguments.insert(format!("a_{index:04}_{}", "k".repeat(64)), json!(index));
+    }
+    let original_field_count = arguments.len();
+    let action = super::GuardianAction {
+        tool_name: ToolName::plain("inspect_fields"),
+        payload: ToolPayload::Function {
+            arguments: serde_json::Value::Object(arguments).to_string(),
+        },
+    };
+
+    let rendered = action.render()?;
+    assert!(
+        rendered.len().saturating_add(1)
+            <= TruncationPolicy::Tokens(super::MAX_ACTION_TOKENS).byte_budget()
+    );
+    let action = serde_json::from_str::<serde_json::Value>(&rendered)?;
+    let fields = action
+        .as_object()
+        .expect("the bounded action must remain a JSON object");
+    assert_eq!(fields.get("tool"), Some(&json!("inspect_fields")));
+    assert_eq!(fields.get("call_id"), Some(&json!("genuine-call")));
+    assert_eq!(fields.get("cmd"), Some(&json!("remove-important-file")));
+    assert_eq!(
+        fields.get("_guardian_omitted_fields"),
+        Some(&json!("actual-tool-argument"))
+    );
+    assert!(fields.len() < original_field_count);
+    assert!(!fields.contains_key(&oversized_key));
+    assert!(
+        fields
+            .get("_guardian_omitted_fields_")
+            .and_then(serde_json::Value::as_u64)
+            .is_some_and(|omitted| omitted > 0)
+    );
 
     Ok(())
 }
