@@ -500,7 +500,7 @@ pub(crate) fn mark_buffer_hyperlinks(
     lines: &[HyperlinkLine],
     scroll_rows: usize,
 ) {
-    if area.width == 0 {
+    if area.width == 0 || lines.iter().all(|line| line.hyperlinks.is_empty()) {
         return;
     }
     let mut logical_row = 0usize;
