@@ -1297,6 +1297,16 @@ async fn maybe_request_mcp_tool_approval(
     policy: McpToolApprovalPolicy,
 ) -> Option<ReviewDecision> {
     let turn_context = &step_context.turn;
+    let turn_state = sess
+        .active_turn
+        .lock()
+        .await
+        .as_ref()
+        .map(|active| Arc::clone(&active.turn_state));
+    let strict_auto_review = match turn_state {
+        Some(turn_state) => turn_state.lock().await.strict_auto_review_enabled(),
+        None => false,
+    };
     let approvals_reviewer = connectors::mcp_approvals_reviewer_from_layers(
         &config.config_layer_stack,
         config.approvals_reviewer,
@@ -1304,18 +1314,20 @@ async fn maybe_request_mcp_tool_approval(
         &invocation.server,
         metadata.connector_id.as_deref(),
     );
-    if mcp_permission_prompt_is_auto_approved(
-        config.approval_policy.value(),
-        &config.permission_profile,
-        McpPermissionPromptAutoApproveContext {
-            tool_approval_mode: Some(policy.mode),
-        },
-    ) {
+    if !strict_auto_review
+        && mcp_permission_prompt_is_auto_approved(
+            config.approval_policy.value(),
+            &config.permission_profile,
+            McpPermissionPromptAutoApproveContext {
+                tool_approval_mode: Some(policy.mode),
+            },
+        )
+    {
         return None;
     }
 
     let annotations = metadata.annotations.as_ref();
-    if !requires_mcp_tool_approval_for_mode(annotations, policy.mode) {
+    if !strict_auto_review && !requires_mcp_tool_approval_for_mode(annotations, policy.mode) {
         return None;
     }
 
@@ -1326,7 +1338,8 @@ async fn maybe_request_mcp_tool_approval(
     } else {
         None
     };
-    if let Some(key) = session_approval_key.as_ref()
+    if !strict_auto_review
+        && let Some(key) = session_approval_key.as_ref()
         && mcp_tool_approval_is_remembered(sess, key).await
     {
         return Some(ReviewDecision::Approved);
@@ -1364,7 +1377,7 @@ async fn maybe_request_mcp_tool_approval(
         review_context: GuardianReviewContext::from(step_context),
         call_id: call_id.to_string(),
         tool_name: invocation_tool_name.clone(),
-        strict_auto_review: false,
+        strict_auto_review,
         approval_reason: None,
         retry_reason: None,
         network_approval_context: None,

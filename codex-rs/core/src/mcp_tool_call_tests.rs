@@ -2628,7 +2628,7 @@ async fn permission_request_hook_runs_after_remembered_mcp_approval() {
 }
 
 #[tokio::test]
-async fn guardian_mode_mcp_denial_uses_captured_policy_and_returns_rationale_message() {
+async fn strict_auto_review_forces_guardian_for_mcp_policy_skip() {
     let server = start_mock_server().await;
     let guardian_request_log = mount_sse_once(
         &server,
@@ -2657,7 +2657,7 @@ async fn guardian_mode_mcp_denial_uses_captured_policy_and_returns_rationale_mes
         .expect("test setup should allow updating approval policy");
     let mut config = (*turn_context.config).clone();
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
-    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+    config.approvals_reviewer = ApprovalsReviewer::User;
     let config = Arc::new(config);
     let models_manager = models_manager_with_provider(
         config.codex_home.to_path_buf(),
@@ -2671,6 +2671,13 @@ async fn guardian_mode_mcp_denial_uses_captured_policy_and_returns_rationale_mes
         turn_context.auth_manager.clone(),
     );
 
+    let active_turn = ActiveTurn::default();
+    active_turn
+        .turn_state
+        .lock()
+        .await
+        .enable_strict_auto_review();
+    *session.active_turn.lock().await = Some(active_turn);
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
     let invocation = McpInvocation {
@@ -2707,7 +2714,7 @@ async fn guardian_mode_mcp_denial_uses_captured_policy_and_returns_rationale_mes
         &HookToolName::new("mcp__test__tool"),
         &metadata,
         &captured_mcp_config,
-        McpToolApprovalPolicy::for_server(AppToolApproval::Auto),
+        McpToolApprovalPolicy::for_server(AppToolApproval::Approve),
     )
     .await;
 
