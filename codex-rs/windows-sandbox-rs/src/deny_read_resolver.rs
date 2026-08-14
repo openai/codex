@@ -52,9 +52,21 @@ pub fn resolve_windows_deny_read_paths(
         return Ok(paths);
     };
 
-    for pattern in unreadable_globs {
+    let scan_plans = unreadable_globs
+        .iter()
+        .map(|pattern| {
+            let scan_plan = glob_scan_plan(pattern, file_system_sandbox_policy.glob_scan_max_depth);
+            if scan_plan.max_depth.is_none() && scan_plan.root.parent().is_none() {
+                return Err(format!(
+                    "unreadable glob `{pattern}` cannot be safely expanded from a filesystem root without `glob_scan_max_depth`; configure `glob_scan_max_depth` or use a non-root directory prefix"
+                ));
+            }
+            Ok(scan_plan)
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
+    for scan_plan in scan_plans {
         let mut seen_scan_dirs = HashSet::new();
-        let scan_plan = glob_scan_plan(&pattern, file_system_sandbox_policy.glob_scan_max_depth);
         collect_existing_glob_matches(
             &scan_plan.root,
             &matcher,
@@ -267,6 +279,35 @@ mod tests {
             glob_scan_plan("/tmp/work/*/*.env", Some(1)).max_depth,
             Some(1)
         );
+    }
+
+    #[test]
+    fn root_recursive_globs_without_depth_fail_before_expansion() {
+        let tmp = TempDir::new().expect("tempdir");
+        let cwd = AbsolutePathBuf::from_absolute_path(tmp.path()).expect("absolute cwd");
+        let root = cwd.as_path().ancestors().last().expect("filesystem root");
+        let pattern = root.join("**").join("*.env").display().to_string();
+        let policy =
+            FileSystemSandboxPolicy::restricted(vec![unreadable_glob_entry(pattern.clone())]);
+
+        assert_eq!(
+            resolve_windows_deny_read_paths(&policy, &cwd).expect_err("unbounded root glob"),
+            format!(
+                "unreadable glob `{pattern}` cannot be safely expanded from a filesystem root without `glob_scan_max_depth`; configure `glob_scan_max_depth` or use a non-root directory prefix"
+            )
+        );
+    }
+
+    #[test]
+    fn configured_depth_bounds_root_recursive_glob_scans() {
+        let tmp = TempDir::new().expect("tempdir");
+        let cwd = AbsolutePathBuf::from_absolute_path(tmp.path()).expect("absolute cwd");
+        let root = cwd.as_path().ancestors().last().expect("filesystem root");
+        let pattern = root.join("**").join("*.env").display().to_string();
+        let scan_plan = glob_scan_plan(&pattern, Some(2));
+
+        assert_eq!(scan_plan.root, root);
+        assert_eq!(scan_plan.max_depth, Some(2));
     }
 
     #[test]

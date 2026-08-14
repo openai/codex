@@ -45,10 +45,13 @@ pub(crate) use codex_sandboxing::is_likely_sandbox_denied;
 #[cfg(test)]
 use codex_sandboxing::permission_profile_supports_windows_restricted_token_sandbox;
 use codex_sandboxing::record_filesystem_sandbox_violation;
+#[cfg(test)]
 use codex_sandboxing::resolve_windows_elevated_filesystem_overrides;
+#[cfg(test)]
 use codex_sandboxing::resolve_windows_restricted_token_filesystem_overrides;
 #[cfg(test)]
 use codex_sandboxing::unsupported_windows_restricted_token_sandbox_reason;
+#[cfg(any(test, target_os = "windows"))]
 use codex_sandboxing::windows_sandbox_uses_elevated_backend;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
@@ -379,7 +382,7 @@ pub fn build_exec_request(
         expiration,
         capture_policy,
     };
-    let mut exec_req = manager
+    let request = manager
         .transform(SandboxTransformRequest {
             command,
             permissions: permission_profile,
@@ -393,38 +396,13 @@ pub fn build_exec_request(
             windows_sandbox_level,
             windows_sandbox_private_desktop,
         })
-        .map(|request| {
-            let windows_sandbox_workspace_roots = if windows_sandbox_workspace_roots.is_empty() {
-                vec![sandbox_cwd.clone()]
-            } else {
-                windows_sandbox_workspace_roots.to_vec()
-            };
-            ExecRequest::from_sandbox_exec_request(
-                request,
-                options,
-                windows_sandbox_workspace_roots,
-            )
-        })
         .map_err(CodexErr::from)?;
-    let use_windows_elevated_backend =
-        windows_sandbox_uses_elevated_backend(exec_req.windows_sandbox_level);
-    exec_req.windows_sandbox_filesystem_overrides = if use_windows_elevated_backend {
-        resolve_windows_elevated_filesystem_overrides(
-            exec_req.sandbox,
-            &exec_req.permission_profile,
-            sandbox_cwd,
-            use_windows_elevated_backend,
-        )
+    let windows_sandbox_workspace_roots = if windows_sandbox_workspace_roots.is_empty() {
+        vec![sandbox_cwd.clone()]
     } else {
-        resolve_windows_restricted_token_filesystem_overrides(
-            exec_req.sandbox,
-            &exec_req.permission_profile,
-            sandbox_cwd,
-            exec_req.windows_sandbox_level,
-        )
-    }
-    .map_err(CodexErr::UnsupportedOperation)?;
-    Ok(exec_req)
+        windows_sandbox_workspace_roots.to_vec()
+    };
+    ExecRequest::from_sandbox_exec_request(request, options, windows_sandbox_workspace_roots)
 }
 
 pub(crate) async fn execute_exec_request(

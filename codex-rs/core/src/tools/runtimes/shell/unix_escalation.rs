@@ -981,7 +981,7 @@ impl CoreShellCommandExecutor {
             exec_request,
             options,
             self.windows_sandbox_workspace_roots.clone(),
-        );
+        )?;
         if let Some(network) = exec_request.network.as_ref() {
             network
                 .apply_to_env_for_optional_environment(

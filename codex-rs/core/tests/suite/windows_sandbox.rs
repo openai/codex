@@ -4,6 +4,7 @@ use codex_core::exec::ExecParams;
 use codex_core::exec::process_exec_tool_call;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_core::windows_sandbox::sandbox_setup_is_complete;
+use codex_features::Feature;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::models::PermissionProfile;
@@ -14,7 +15,16 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use core_test_support::PathExt;
+use core_test_support::responses::ev_assistant_message;
+use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_function_call;
+use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_sse_sequence;
+use core_test_support::responses::sse;
+use core_test_support::test_codex::TestCodexHarness;
+use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use serial_test::serial;
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -381,5 +391,158 @@ async fn windows_elevated_enforces_deny_read_and_protects_setup_marker() -> anyh
         sandbox_setup_is_complete(codex_home.path()),
         "setup should remain ready after the tamper attempt"
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial(codex_home)]
+async fn windows_elevated_shell_and_unified_exec_enforce_managed_deny_reads() -> anyhow::Result<()>
+{
+    let codex_home =
+        codex_home_for_windows_sandbox_test("windows-elevated-tool-runtime-deny-read-codex-home")?;
+    let _codex_home_guard = EnvVarGuard::set("CODEX_HOME", codex_home.path().as_os_str());
+    stage_windows_sandbox_helpers()?;
+
+    let configured_codex_home = dunce::canonicalize(codex_home.path())?.abs();
+    let builder = test_codex()
+        .with_windows_cmd_shell()
+        .with_config(move |config| {
+            config.codex_home = configured_codex_home;
+            config.set_windows_elevated_sandbox_enabled(true);
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("test config should allow unified exec");
+
+            let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::Root,
+                    },
+                    access: FileSystemAccessMode::Read,
+                    missing_path_behavior: None,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+                    },
+                    access: FileSystemAccessMode::Write,
+                    missing_path_behavior: None,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::GlobPattern {
+                        pattern: "**/*.env".to_string(),
+                    },
+                    access: FileSystemAccessMode::Deny,
+                    missing_path_behavior: None,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Path {
+                        path: config.cwd.join("exact-secret.txt"),
+                    },
+                    access: FileSystemAccessMode::Deny,
+                    missing_path_behavior: None,
+                },
+            ]);
+            config
+                .permissions
+                .set_permission_profile(PermissionProfile::from_runtime_permissions(
+                    &file_system_sandbox_policy,
+                    NetworkSandboxPolicy::Restricted,
+                ))
+                .expect("set managed deny-read permission profile");
+        });
+    let harness = TestCodexHarness::with_builder(builder).await?;
+    harness
+        .write_file("secret.env", "glob secret should remain private\n")
+        .await?;
+    harness
+        .write_file("exact-secret.txt", "exact secret should remain private\n")
+        .await?;
+    harness.write_file("public.txt", "public ok\n").await?;
+
+    let command = concat!(
+        "(type secret.env 1>NUL 2>NUL && echo GLOB-READ || echo GLOB-DENIED) & ",
+        "(type exact-secret.txt 1>NUL 2>NUL && echo EXACT-READ || echo EXACT-DENIED) & ",
+        "type public.txt"
+    );
+    let shell_call_id = "windows-managed-deny-read-shell-command";
+    let unified_call_id = "windows-managed-deny-read-exec-command";
+    let shell_args = json!({
+        "command": command,
+        "timeout_ms": 30_000,
+        "login": false,
+    });
+    let unified_args = json!({
+        "cmd": command,
+        "yield_time_ms": 30_000,
+        "tty": false,
+        "login": false,
+    });
+    mount_sse_sequence(
+        harness.server(),
+        vec![
+            sse(vec![
+                ev_response_created("resp-windows-shell-deny-read"),
+                ev_function_call(
+                    shell_call_id,
+                    "shell_command",
+                    &serde_json::to_string(&shell_args)?,
+                ),
+                ev_completed("resp-windows-shell-deny-read"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-windows-unified-deny-read"),
+                ev_function_call(
+                    unified_call_id,
+                    "exec_command",
+                    &serde_json::to_string(&unified_args)?,
+                ),
+                ev_completed("resp-windows-unified-deny-read"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-windows-deny-read", "done"),
+                ev_completed("resp-windows-deny-read-complete"),
+            ]),
+        ],
+    )
+    .await;
+
+    let permission_profile = harness
+        .test()
+        .config
+        .permissions
+        .effective_permission_profile();
+    harness
+        .submit_with_permission_profile("read the sandbox fixtures", permission_profile)
+        .await?;
+
+    for (tool_name, call_id) in [
+        ("shell_command", shell_call_id),
+        ("exec_command", unified_call_id),
+    ] {
+        let output = harness.function_call_stdout(call_id).await;
+        assert!(
+            output.contains("GLOB-DENIED"),
+            "{tool_name} should reject glob-denied reads: {output:?}"
+        );
+        assert!(
+            output.contains("EXACT-DENIED"),
+            "{tool_name} should reject exact-path-denied reads: {output:?}"
+        );
+        assert!(
+            output.contains("public ok"),
+            "{tool_name} should preserve allowed reads: {output:?}"
+        );
+        assert!(
+            !output.contains("GLOB-READ") && !output.contains("glob secret"),
+            "{tool_name} leaked glob-denied file contents: {output:?}"
+        );
+        assert!(
+            !output.contains("EXACT-READ") && !output.contains("exact secret"),
+            "{tool_name} leaked exact-path-denied file contents: {output:?}"
+        );
+    }
+
     Ok(())
 }
