@@ -125,11 +125,6 @@ impl GrpcHostState {
             }))
             .map_err(|_| Status::internal("failed to publish the opened code-mode session"))?;
         let mut sessions = self.sessions.lock().unwrap_or_else(PoisonError::into_inner);
-        if sessions.len() >= MAX_IN_FLIGHT_REQUESTS {
-            return Err(Status::resource_exhausted(
-                "code-mode host has too many open sessions",
-            ));
-        }
         sessions.insert(id, Arc::clone(&session));
         drop(sessions);
 
