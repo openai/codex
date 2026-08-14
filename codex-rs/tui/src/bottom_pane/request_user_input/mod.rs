@@ -1363,7 +1363,15 @@ impl BottomPaneView for RequestUserInputOverlay {
                     (_, KeyCode::Backspace | KeyCode::Delete) => {
                         self.clear_selection();
                     }
-                    (_, KeyCode::Tab) if self.selected_option_index().is_some() => {
+                    (_, KeyCode::Tab) | (Some(ListAction::Accept), _) | (_, KeyCode::Enter)
+                        if self.selected_option_index().is_some()
+                            && (key_event.code == KeyCode::Tab
+                                || self.current_question().is_some_and(|question| {
+                                    Self::other_option_enabled_for_question(question)
+                                        && self.selected_option_index()
+                                            == question.options.as_ref().map(Vec::len)
+                                })) =>
+                    {
                         self.focus = Focus::Notes;
                         self.ensure_selected_for_notes();
                     }
@@ -3232,6 +3240,35 @@ mod tests {
         let answer = overlay.answers.first().expect("answer missing");
         assert_eq!(answer.options_state.selected_idx, Some(1));
         assert!(answer.answer_committed);
+    }
+
+    #[test]
+    fn tab_and_enter_open_notes_for_other_option() {
+        for key in [KeyCode::Tab, KeyCode::Enter] {
+            let (tx, mut rx) = test_sender();
+            let mut overlay = RequestUserInputOverlay::new(
+                request_event(
+                    "turn-1",
+                    vec![question_with_options_and_other("q1", "Pick one")],
+                ),
+                tx,
+                /*has_input_focus*/ true,
+                /*enhanced_keys_supported*/ false,
+                /*disable_paste_burst*/ false,
+            );
+            let other_idx = overlay.options_len().saturating_sub(1);
+            overlay
+                .current_answer_mut()
+                .expect("answer missing")
+                .options_state
+                .selected_idx = Some(other_idx);
+
+            overlay.handle_key_event(KeyEvent::from(key));
+
+            assert!(matches!(overlay.focus, Focus::Notes));
+            assert!(overlay.notes_ui_visible());
+            assert!(rx.try_recv().is_err());
+        }
     }
 
     #[test]
