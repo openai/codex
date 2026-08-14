@@ -5,12 +5,17 @@ use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
+use codex_protocol::protocol::TruncationPolicy;
 use pretty_assertions::assert_eq;
 
 use super::MANUAL_APPROVAL_DEVELOPER_PREFIX;
-use super::MAX_TRANSCRIPT_BYTES;
+use super::MAX_MESSAGE_ENTRY_TOKENS;
+use super::MAX_MESSAGE_TRANSCRIPT_TOKENS;
+use super::MAX_TOOL_ENTRY_TOKENS;
+use super::MAX_TOOL_TRANSCRIPT_TOKENS;
 use super::TranscriptConfig;
 use super::TranscriptSource;
+use super::truncate_entry;
 
 #[test]
 fn transcript_keeps_conversation_and_configured_sources() {
@@ -66,7 +71,6 @@ fn transcript_keeps_conversation_and_configured_sources() {
             "[1] user: Inspect the workspace.\n",
             "[2] tool exec_command call: {}\n",
             "[3] tool exec_command result: Workspace inspected.\n",
-            "[4] reasoning: Review the current files.\nPlaintext reasoning.\n",
         ]
     );
 
@@ -99,13 +103,19 @@ fn transcript_keeps_conversation_and_configured_sources() {
 }
 
 #[test]
-fn transcript_retains_the_most_recent_bounded_content() {
+fn transcript_truncates_oversized_entries_without_splitting_characters() {
+    let prefix = "start é";
+    let suffix = "é end";
+    let oversized_message = format!(
+        "{prefix}{}{suffix}",
+        "é".repeat(TruncationPolicy::Tokens(MAX_MESSAGE_ENTRY_TOKENS).byte_budget())
+    );
     let items = vec![
         ResponseItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
-                text: "é".repeat(MAX_TRANSCRIPT_BYTES),
+                text: oversized_message,
             }],
             phase: None,
             internal_chat_message_metadata_passthrough: None,
@@ -123,12 +133,227 @@ fn transcript_retains_the_most_recent_bounded_content() {
 
     let transcript = TranscriptConfig::default().build(&items);
 
-    assert!(transcript.iter().map(String::len).sum::<usize>() <= MAX_TRANSCRIPT_BYTES);
+    assert_eq!(transcript.len(), 2);
+    let user_entry = &transcript[0];
+    assert!(user_entry.starts_with(&format!("[1] user: {prefix}")));
+    assert!(user_entry.contains("<truncated omitted_approx_tokens=\""));
+    assert!(user_entry.ends_with(&format!("{suffix}\n")));
+    assert!(
+        user_entry.len()
+            <= TruncationPolicy::Tokens(MAX_MESSAGE_ENTRY_TOKENS).byte_budget()
+                + "[1] user: \n".len()
+    );
+    assert_eq!(transcript[1], "[2] assistant: latest response\n");
+}
+
+#[test]
+fn transcript_preserves_first_and_latest_user_messages_and_recent_history() {
+    let oversized_user_message = "authorization ".repeat(1_000);
+    let mut items = (0..8)
+        .map(|index| ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: format!("user turn {index}: {oversized_user_message}"),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        })
+        .collect::<Vec<_>>();
+    items.push(ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: "Most recent assistant context.".to_string(),
+        }],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    });
+
+    let transcript = TranscriptConfig::default().build(&items);
+
+    assert!(transcript[0].starts_with("[1] user: user turn 0:"));
     assert!(
         transcript
             .iter()
-            .any(|entry| entry.contains("latest response"))
+            .any(|entry| entry.starts_with("[8] user: user turn 7:"))
     );
+    assert!(
+        !transcript
+            .iter()
+            .any(|entry| entry.contains("user turn 1:"))
+    );
+    assert!(
+        transcript
+            .iter()
+            .any(|entry| entry.contains("user turn 6:"))
+    );
+    assert_eq!(
+        transcript.last().map(String::as_str),
+        Some("[9] assistant: Most recent assistant context.\n")
+    );
+    assert!(
+        transcript
+            .iter()
+            .map(|entry| TruncationPolicy::Bytes(entry.len()).token_budget())
+            .sum::<usize>()
+            <= MAX_MESSAGE_TRANSCRIPT_TOKENS
+    );
+}
+
+#[test]
+fn transcript_reserves_separate_budget_for_recent_tool_evidence() {
+    let mut items = (0..8)
+        .map(|index| ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: format!("user turn {index}: {}", "authorization ".repeat(1_000)),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        })
+        .collect::<Vec<_>>();
+    items.extend((0..12).map(|index| ResponseItem::FunctionCall {
+        id: None,
+        name: "exec_command".to_string(),
+        namespace: None,
+        arguments: format!("tool evidence {index}: {}", "signal ".repeat(1_000)),
+        encrypted_function_args: None,
+        call_id: format!("call-{index}"),
+        internal_chat_message_metadata_passthrough: None,
+    }));
+
+    let transcript = TranscriptConfig::default().build(&items);
+
+    assert!(transcript[0].contains("user turn 0:"));
+    assert!(
+        transcript
+            .iter()
+            .any(|entry| entry.contains("user turn 7:"))
+    );
+    assert!(
+        transcript.last().is_some_and(
+            |entry| entry.starts_with("[20] tool exec_command call: tool evidence 11:")
+        )
+    );
+    assert!(
+        !transcript
+            .iter()
+            .any(|entry| entry.contains("tool evidence 0:"))
+    );
+    let tool_entries = transcript
+        .iter()
+        .filter(|entry| entry.contains("tool exec_command call:"))
+        .collect::<Vec<_>>();
+    assert!(tool_entries.len() < 12);
+    assert!(tool_entries.iter().all(|entry| {
+        entry.len()
+            <= TruncationPolicy::Tokens(MAX_TOOL_ENTRY_TOKENS).byte_budget()
+                + "[20] tool exec_command call: \n".len()
+    }));
+    assert!(
+        tool_entries
+            .iter()
+            .map(|entry| TruncationPolicy::Bytes(entry.len()).token_budget())
+            .sum::<usize>()
+            <= MAX_TOOL_TRANSCRIPT_TOKENS
+    );
+}
+
+#[test]
+fn transcript_truncates_tool_results_using_standard_budget() {
+    let output = format!("first {} last", "evidence ".repeat(5_000));
+    let items = vec![
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "node_repl__run".to_owned(),
+            namespace: None,
+            arguments: "{}".to_owned(),
+            encrypted_function_args: None,
+            call_id: "call-1".to_owned(),
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::FunctionCallOutput {
+            id: None,
+            call_id: "call-1".to_owned(),
+            output: FunctionCallOutputPayload::from_text(output),
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ];
+
+    let transcript = TranscriptConfig::default().build(&items);
+    let result = transcript
+        .iter()
+        .find(|entry| entry.contains(" result: "))
+        .expect("the tool result should be retained");
+    let prefix = "[2] tool node_repl__run result: ";
+
+    assert!(result.starts_with(&format!("{prefix}first ")));
+    assert!(result.contains("<truncated omitted_approx_tokens=\""));
+    assert!(result.ends_with(" last\n"));
+    assert!(
+        result.len()
+            <= TruncationPolicy::Tokens(MAX_TOOL_ENTRY_TOKENS).byte_budget() + prefix.len() + 1
+    );
+}
+
+#[test]
+fn configured_reasoning_counts_against_message_budget() {
+    let mut items = (0..8)
+        .map(|index| ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: format!("user turn {index}: {}", "authorization ".repeat(1_000)),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        })
+        .collect::<Vec<_>>();
+    items.push(ResponseItem::Reasoning {
+        id: None,
+        summary: vec![ReasoningItemReasoningSummary::SummaryText {
+            text: "Recent reasoning evidence.".to_string(),
+        }],
+        content: None,
+        encrypted_content: None,
+        internal_chat_message_metadata_passthrough: None,
+    });
+
+    let transcript = TranscriptConfig {
+        sources: vec![TranscriptSource::Reasoning],
+    }
+    .build(&items);
+
+    assert!(transcript[0].contains("user turn 0:"));
+    assert!(
+        transcript
+            .iter()
+            .any(|entry| entry.contains("user turn 7:"))
+    );
+    assert_eq!(
+        transcript.last().map(String::as_str),
+        Some("[9] reasoning: Recent reasoning evidence.\n")
+    );
+    assert!(
+        transcript
+            .iter()
+            .map(|entry| TruncationPolicy::Bytes(entry.len()).token_budget())
+            .sum::<usize>()
+            <= MAX_MESSAGE_TRANSCRIPT_TOKENS
+    );
+}
+
+#[test]
+fn truncate_entry_preserves_prefix_suffix_and_utf8_boundaries() {
+    let text = format!("prefix é{}é suffix", "🦀".repeat(2_000));
+    let truncated = truncate_entry(&text, /*max_tokens*/ 200);
+
+    assert!(truncated.starts_with("prefix é"));
+    assert!(truncated.contains("<truncated omitted_approx_tokens=\""));
+    assert!(truncated.ends_with("é suffix"));
+    assert!(truncated.len() <= TruncationPolicy::Tokens(200).byte_budget());
 }
 
 #[test]
@@ -164,7 +389,8 @@ fn transcript_keeps_only_manual_approval_developer_messages() {
 
 #[test]
 fn transcript_omits_media_payloads_and_keeps_readable_content() {
-    let oversized_image = "A".repeat(MAX_TRANSCRIPT_BYTES + 1);
+    let oversized_image =
+        "A".repeat(TruncationPolicy::Tokens(MAX_MESSAGE_TRANSCRIPT_TOKENS).byte_budget() + 1);
     let items = vec![
         ResponseItem::Message {
             id: None,

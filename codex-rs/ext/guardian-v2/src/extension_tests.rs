@@ -25,6 +25,7 @@ use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::skip_if_no_network;
+use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -37,13 +38,11 @@ impl ConversationHistorySnapshot for TestConversationHistory {
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
+async fn sample_conversation_history(
+    conversation_history: Vec<ResponseItem>,
+) -> Result<(serde_json::Value, TestCodex)> {
     let thread_server = responses::start_mock_server().await;
     let test = test_codex().build_with_auto_env(&thread_server).await?;
-    let thread_id = test.session_configured.thread_id;
     let events = vec![
         ev_assistant_message("sample", r#"{"scores":{"action_risk":0.25}}"#),
         ev_completed("response-1"),
@@ -83,7 +82,35 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
     let tool_payload = ToolPayload::Function {
         arguments: r#"{"path":"README.md"}"#.to_owned(),
     };
-    let conversation_history = TestConversationHistory(vec![
+    let conversation_history = TestConversationHistory(conversation_history);
+
+    registry.tool_lifecycle_contributors()[0]
+        .on_tool_start(ToolStartInput {
+            session_store: &session_store,
+            thread_store,
+            turn_store: &turn_store,
+            turn_id: "turn-1",
+            call_id: "call-1",
+            tool_name: &tool_name,
+            payload: &tool_payload,
+            conversation_history: Arc::new(conversation_history),
+            source: ToolCallSource::Direct,
+        })
+        .await;
+
+    let request = tokio::time::timeout(
+        Duration::from_secs(5),
+        server.wait_for_request(/*connection_index*/ 1, /*request_index*/ 0),
+    )
+    .await?;
+    Ok((request.body_json(), test))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let (request, test) = sample_conversation_history(vec![
         ResponseItem::Message {
             id: None,
             role: "user".to_owned(),
@@ -126,28 +153,10 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
             call_id: "call-1".to_owned(),
             internal_chat_message_metadata_passthrough: None,
         },
-    ]);
-
-    registry.tool_lifecycle_contributors()[0]
-        .on_tool_start(ToolStartInput {
-            session_store: &session_store,
-            thread_store,
-            turn_store: &turn_store,
-            turn_id: "turn-1",
-            call_id: "call-1",
-            tool_name: &tool_name,
-            payload: &tool_payload,
-            conversation_history: Arc::new(conversation_history),
-            source: ToolCallSource::Direct,
-        })
-        .await;
-
-    let request = tokio::time::timeout(
-        Duration::from_secs(5),
-        server.wait_for_request(/*connection_index*/ 1, /*request_index*/ 0),
-    )
+    ])
     .await?;
-    let request = request.body_json();
+    let thread_id = test.session_configured.thread_id;
+    let thread_store = test.codex.thread_extension_data();
     assert_eq!(request["model"], "gpt-5.6-luna");
     assert_eq!(
         request["client_metadata"]["thread_id"],
@@ -166,10 +175,9 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
         json!([
             {"type": "input_text", "text": ">>> TRANSCRIPT START\n"},
             {"type": "input_text", "text": "[1] user: Inspect the repository guidelines.\n"},
-            {"type": "input_text", "text": "[2] reasoning: Find the repository documentation.\n"},
-            {"type": "input_text", "text": "[3] tool list_dir call: {\"path\":\".\"}\n"},
-            {"type": "input_text", "text": "[4] tool list_dir result: README.md\n"},
-            {"type": "input_text", "text": "[5] tool read_file call: {\"path\":\"README.md\"}\n"},
+            {"type": "input_text", "text": "[2] tool list_dir call: {\"path\":\".\"}\n"},
+            {"type": "input_text", "text": "[3] tool list_dir result: README.md\n"},
+            {"type": "input_text", "text": "[4] tool read_file call: {\"path\":\"README.md\"}\n"},
             {"type": "input_text", "text": ">>> TRANSCRIPT END\n\n"},
             {
                 "type": "input_text",
@@ -214,6 +222,82 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
         })
         .collect::<Vec<_>>();
     assert_eq!(persisted_scores, vec![score.as_ref().clone()]);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn contributor_sends_compacted_conversation_history_to_luna() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let mut history = (0..8)
+        .map(|index| ResponseItem::Message {
+            id: None,
+            role: "user".to_owned(),
+            content: vec![ContentItem::InputText {
+                text: format!("user turn {index}: {}", "authorization ".repeat(1_000)),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        })
+        .collect::<Vec<_>>();
+    history.extend((0..12).flat_map(|index| {
+        let call_id = format!("call-{index}");
+        [
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "exec_command".to_owned(),
+                namespace: None,
+                arguments: format!("tool evidence {index}: {}", "signal ".repeat(1_000)),
+                encrypted_function_args: None,
+                call_id: call_id.clone(),
+                internal_chat_message_metadata_passthrough: None,
+            },
+            ResponseItem::FunctionCallOutput {
+                id: None,
+                call_id,
+                output: FunctionCallOutputPayload::from_text(format!(
+                    "result evidence {index}: {}",
+                    "signal ".repeat(1_000)
+                )),
+                internal_chat_message_metadata_passthrough: None,
+            },
+        ]
+    }));
+
+    let (request, _test) = sample_conversation_history(history).await?;
+    let content = request["input"][2]["content"]
+        .as_array()
+        .expect("Luna request should contain separate transcript text items");
+    let entries = content
+        .iter()
+        .filter_map(|entry| entry["text"].as_str())
+        .collect::<Vec<_>>();
+
+    assert!(entries.iter().any(|entry| entry.contains("user turn 0:")));
+    assert!(entries.iter().any(|entry| entry.contains("user turn 7:")));
+    assert!(!entries.iter().any(|entry| entry.contains("user turn 1:")));
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry.contains("tool exec_command call: tool evidence 11:"))
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry.contains("tool exec_command result: result evidence 11:"))
+    );
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| entry.contains("tool evidence 0:"))
+    );
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| entry.contains("result evidence 0:"))
+    );
+    assert!(entries.iter().any(|entry| entry.contains("<truncated")));
 
     Ok(())
 }

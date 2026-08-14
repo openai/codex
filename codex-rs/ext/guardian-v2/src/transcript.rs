@@ -1,16 +1,32 @@
 use std::collections::HashMap;
-use std::collections::VecDeque;
 
 use codex_extension_api::ResponseItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::plaintext_agent_message_content;
+use codex_protocol::protocol::TruncationPolicy;
 
-// Provisional approximation of an 80k-token transcript budget.
-const MAX_TRANSCRIPT_BYTES: usize = 320 * 1024;
+pub(crate) const MAX_MESSAGE_ENTRY_TOKENS: usize = 2_000;
+const MAX_TOOL_ENTRY_TOKENS: usize = 1_000;
+const MAX_MESSAGE_TRANSCRIPT_TOKENS: usize = 10_000;
+const MAX_TOOL_TRANSCRIPT_TOKENS: usize = 10_000;
+const MAX_RECENT_NON_USER_ENTRIES: usize = 40;
 const MANUAL_APPROVAL_DEVELOPER_PREFIX: &str =
     "The user has manually approved a specific action that was previously `Rejected`.";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TranscriptEntryKind {
+    User,
+    Message,
+    Tool,
+}
+
+struct TranscriptEntry {
+    kind: TranscriptEntryKind,
+    text: String,
+    tokens: usize,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TranscriptSource {
@@ -27,11 +43,7 @@ pub(crate) struct TranscriptConfig {
 impl Default for TranscriptConfig {
     fn default() -> Self {
         Self {
-            sources: vec![
-                TranscriptSource::ToolCalls,
-                TranscriptSource::ToolOutputs,
-                TranscriptSource::Reasoning,
-            ],
+            sources: vec![TranscriptSource::ToolCalls, TranscriptSource::ToolOutputs],
         }
     }
 }
@@ -41,10 +53,8 @@ impl TranscriptConfig {
         &self,
         items: impl IntoIterator<Item = &'a ResponseItem>,
     ) -> Vec<String> {
-        let mut transcript = VecDeque::new();
-        let mut transcript_bytes = 0;
+        let mut entries = Vec::new();
         let mut tool_names_by_call_id = HashMap::new();
-        let mut entry_number = 0;
 
         for item in items {
             let (role, text) = match item {
@@ -177,32 +187,124 @@ impl TranscriptConfig {
             if text.trim().is_empty() {
                 continue;
             }
-            entry_number += 1;
-            let entry = format!("[{entry_number}] {role}: {text}\n");
-            transcript_bytes += entry.len();
-            transcript.push_back(entry);
 
-            while transcript_bytes > MAX_TRANSCRIPT_BYTES {
-                let Some(first_entry) = transcript.front_mut() else {
-                    break;
-                };
-                let bytes_to_remove = transcript_bytes - MAX_TRANSCRIPT_BYTES;
-                if first_entry.len() <= bytes_to_remove {
-                    transcript_bytes -= first_entry.len();
-                    transcript.pop_front();
-                } else {
-                    let mut first_retained_byte = bytes_to_remove;
-                    while !first_entry.is_char_boundary(first_retained_byte) {
-                        first_retained_byte += 1;
-                    }
-                    first_entry.drain(..first_retained_byte);
-                    transcript_bytes -= first_retained_byte;
+            let kind = match role.as_str() {
+                "user" => TranscriptEntryKind::User,
+                role if role.starts_with("tool ") => TranscriptEntryKind::Tool,
+                _ => TranscriptEntryKind::Message,
+            };
+            let token_cap = match kind {
+                TranscriptEntryKind::Tool => MAX_TOOL_ENTRY_TOKENS,
+                TranscriptEntryKind::User | TranscriptEntryKind::Message => {
+                    MAX_MESSAGE_ENTRY_TOKENS
                 }
+            };
+            let text = truncate_entry(&text, token_cap);
+            let entry_number = entries.len() + 1;
+            let text = format!("[{entry_number}] {role}: {text}\n");
+            let tokens = TruncationPolicy::Bytes(text.len()).token_budget();
+            entries.push(TranscriptEntry { kind, text, tokens });
+        }
+
+        let mut included = vec![false; entries.len()];
+        let mut message_tokens = 0;
+        let mut tool_tokens = 0;
+        let user_indices = entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| (entry.kind == TranscriptEntryKind::User).then_some(index))
+            .collect::<Vec<_>>();
+
+        if let Some(&first_user_index) = user_indices.first() {
+            included[first_user_index] = true;
+            message_tokens += entries[first_user_index].tokens;
+        }
+
+        if let Some(&latest_user_index) = user_indices.last()
+            && !included[latest_user_index]
+            && message_tokens + entries[latest_user_index].tokens <= MAX_MESSAGE_TRANSCRIPT_TOKENS
+        {
+            included[latest_user_index] = true;
+            message_tokens += entries[latest_user_index].tokens;
+        }
+
+        for &index in user_indices.iter().rev() {
+            if included[index]
+                || message_tokens + entries[index].tokens > MAX_MESSAGE_TRANSCRIPT_TOKENS
+            {
+                continue;
+            }
+
+            included[index] = true;
+            message_tokens += entries[index].tokens;
+        }
+
+        let mut retained_non_user_entries = 0;
+        for (index, entry) in entries.iter().enumerate().rev() {
+            if entry.kind == TranscriptEntryKind::User
+                || retained_non_user_entries >= MAX_RECENT_NON_USER_ENTRIES
+            {
+                continue;
+            }
+
+            let fits_budget = match entry.kind {
+                TranscriptEntryKind::Tool => {
+                    tool_tokens + entry.tokens <= MAX_TOOL_TRANSCRIPT_TOKENS
+                }
+                TranscriptEntryKind::Message => {
+                    message_tokens + entry.tokens <= MAX_MESSAGE_TRANSCRIPT_TOKENS
+                }
+                TranscriptEntryKind::User => unreachable!("user entries were selected separately"),
+            };
+            if !fits_budget {
+                continue;
+            }
+
+            included[index] = true;
+            retained_non_user_entries += 1;
+            match entry.kind {
+                TranscriptEntryKind::Tool => tool_tokens += entry.tokens,
+                TranscriptEntryKind::Message => message_tokens += entry.tokens,
+                TranscriptEntryKind::User => unreachable!("user entries were selected separately"),
             }
         }
 
-        transcript.into()
+        entries
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, entry)| included[index].then_some(entry.text))
+            .collect()
     }
+}
+
+pub(crate) fn truncate_entry(text: &str, max_tokens: usize) -> String {
+    let max_bytes = TruncationPolicy::Tokens(max_tokens).byte_budget();
+    if text.len() <= max_bytes {
+        return text.to_owned();
+    }
+
+    let omitted_tokens =
+        TruncationPolicy::Bytes(text.len().saturating_sub(max_bytes)).token_budget();
+    let marker = format!("<truncated omitted_approx_tokens=\"{omitted_tokens}\" />");
+    if max_bytes <= marker.len() {
+        return marker;
+    }
+
+    let available_bytes = max_bytes - marker.len();
+    let prefix_bytes = available_bytes / 2;
+    let suffix_bytes = available_bytes - prefix_bytes;
+
+    let mut prefix_end = prefix_bytes;
+    while !text.is_char_boundary(prefix_end) {
+        prefix_end -= 1;
+    }
+
+    let mut suffix_start = text.len() - suffix_bytes;
+    while !text.is_char_boundary(suffix_start) {
+        suffix_start += 1;
+    }
+
+    format!("{}{marker}{}", &text[..prefix_end], &text[suffix_start..])
 }
 
 #[cfg(test)]
