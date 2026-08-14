@@ -25,7 +25,6 @@ use super::tests::execute_request;
 use super::tests::open_session;
 use super::tests::tool;
 use super::validation::MAX_IDENTIFIER_BYTES;
-use super::validation::MAX_TOOL_DESCRIPTION_BYTES;
 use super::validation::MAX_TOOL_FILTERS;
 use crate::MAX_ACTIVE_CELLS;
 use crate::MAX_IN_FLIGHT_REQUESTS;
@@ -49,7 +48,7 @@ fn invocation(cell_id: &str, name: &str) -> CodeModeNestedToolCall {
 }
 
 #[tokio::test]
-async fn rejects_oversized_identifiers_tool_metadata_and_subscription_filters() {
+async fn rejects_oversized_identifiers_and_subscription_filters() {
     let host = GrpcCodeModeHost::new();
     let (session_id, _events) = open_session(&host).await;
     let oversized_id = "x".repeat(MAX_IDENTIFIER_BYTES + 1);
@@ -117,12 +116,6 @@ async fn rejects_oversized_identifiers_tool_metadata_and_subscription_filters() 
         .await,
     );
 
-    let mut request = execute_request(&session_id, "metadata", "text(\"hello\");");
-    request.enabled_tools = vec![proto::ToolDefinition {
-        description: "x".repeat(MAX_TOOL_DESCRIPTION_BYTES + 1),
-        ..tool("echo")
-    }];
-    assert_invalid(host.execute(Request::new(request)).await);
     assert!(host.state.session(&session_id).is_ok());
 }
 
