@@ -104,6 +104,8 @@ const PICKER_LIST_HORIZONTAL_INSET: u16 = 4;
 pub struct SessionTarget {
     pub path: Option<PathBuf>,
     pub thread_id: ThreadId,
+    /// History mode observed during selection, if the server provided one.
+    pub history_mode: Option<ThreadHistoryMode>,
 }
 
 impl SessionTarget {
@@ -150,8 +152,7 @@ impl SessionPickerAction {
         }
     }
 
-    fn selection(self, path: Option<PathBuf>, thread_id: ThreadId) -> SessionSelection {
-        let target_session = SessionTarget { path, thread_id };
+    fn selection(self, target_session: SessionTarget) -> SessionSelection {
         match self {
             SessionPickerAction::Resume => SessionSelection::Resume(target_session),
             SessionPickerAction::Fork => SessionSelection::Fork(target_session),
@@ -315,6 +316,7 @@ enum PageCursor {
 
 struct PickerPage {
     rows: Vec<Row>,
+    history_modes: HashMap<ThreadId, ThreadHistoryMode>,
     next_cursor: Option<PageCursor>,
     num_scanned_files: usize,
     reached_scan_cap: bool,
@@ -724,6 +726,7 @@ fn spawn_app_server_page_loader(
                         .map(|response| SessionTarget {
                             path: response.thread.path,
                             thread_id,
+                            history_mode: Some(response.thread.history_mode),
                         })
                         .map_err(std::io::Error::other);
                     let _ = bg_tx.send(BackgroundEvent::Unarchive { thread_id, result });
@@ -774,6 +777,7 @@ struct PickerState {
     pagination: PaginationState,
     all_rows: Vec<Row>,
     filtered_rows: Vec<Row>,
+    thread_history_modes: HashMap<ThreadId, ThreadHistoryMode>,
     seen_rows: HashSet<SeenRowKey>,
     selected: usize,
     scroll_top: usize,
@@ -858,13 +862,20 @@ async fn load_app_server_page(
         .await
         .map_err(std::io::Error::other)?;
     let num_scanned_files = response.data.len();
+    let (rows, history_modes): (Vec<_>, HashMap<_, _>) = response
+        .data
+        .into_iter()
+        .filter_map(|thread| {
+            let history_mode = thread.history_mode;
+            let row = row_from_app_server_thread(thread)?;
+            let thread_id = row.thread_id?;
+            Some((row, (thread_id, history_mode)))
+        })
+        .unzip();
 
     Ok(PickerPage {
-        rows: response
-            .data
-            .into_iter()
-            .filter_map(row_from_app_server_thread)
-            .collect(),
+        rows,
+        history_modes,
         next_cursor: response.next_cursor.map(PageCursor::AppServer),
         num_scanned_files,
         reached_scan_cap: false,
@@ -1101,6 +1112,7 @@ impl PickerState {
             pagination: PaginationState::new(),
             all_rows: Vec::new(),
             filtered_rows: Vec::new(),
+            thread_history_modes: HashMap::new(),
             seen_rows: HashSet::new(),
             selected: 0,
             scroll_top: 0,
@@ -1362,7 +1374,11 @@ impl PickerState {
                             self.request_unarchive(thread_id);
                             return Ok(None);
                         }
-                        return Ok(Some(self.action.selection(path, thread_id)));
+                        return Ok(Some(self.action.selection(SessionTarget {
+                            path,
+                            thread_id,
+                            history_mode: self.thread_history_modes.get(&thread_id).copied(),
+                        })));
                     }
                     self.inline_error = Some(match path {
                         Some(path) => {
@@ -1497,6 +1513,7 @@ impl PickerState {
         self.reset_pagination();
         self.all_rows.clear();
         self.filtered_rows.clear();
+        self.thread_history_modes.clear();
         self.seen_rows.clear();
         self.selected = 0;
         self.pending_page_down_target = None;
@@ -1629,12 +1646,14 @@ impl PickerState {
     fn ingest_page(&mut self, page: PickerPage) {
         let PickerPage {
             rows,
+            history_modes,
             next_cursor,
             num_scanned_files,
             reached_scan_cap,
         } = page;
         self.pagination
             .complete_page(next_cursor, num_scanned_files, reached_scan_cap);
+        self.thread_history_modes.extend(history_modes);
 
         for row in rows {
             if let Some(seen_key) = row.seen_key() {
@@ -3573,6 +3592,7 @@ mod tests {
     ) -> PickerPage {
         PickerPage {
             rows,
+            history_modes: HashMap::new(),
             next_cursor: next_cursor.map(|cursor| PageCursor::AppServer(cursor.to_string())),
             num_scanned_files,
             reached_scan_cap,
@@ -3843,12 +3863,12 @@ mod tests {
             "indexed metadata",
         );
         row.thread_id = Some(thread_id);
-        deliver_page(
-            &mut state,
-            &db_request,
-            ok_page(vec![row], /*next_cursor*/ None),
-        )
-        .await;
+        let mut listed_page = ok_page(vec![row], /*next_cursor*/ None)
+            .expect("indexed thread page should be available");
+        listed_page
+            .history_modes
+            .insert(thread_id, ThreadHistoryMode::Legacy);
+        deliver_page(&mut state, &db_request, Ok(listed_page)).await;
 
         let selection = state
             .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
@@ -3858,6 +3878,7 @@ mod tests {
             selection,
             Some(SessionSelection::Resume(SessionTarget {
                 thread_id: selected_thread_id,
+                history_mode: Some(ThreadHistoryMode::Legacy),
                 ..
             })) if selected_thread_id == thread_id
         ));
@@ -6342,6 +6363,7 @@ session_picker_view = "dense"
             Some(SessionSelection::Resume(SessionTarget {
                 path: None,
                 thread_id: selected_thread_id,
+                history_mode: None,
             })) => assert_eq!(selected_thread_id, thread_id),
             other => panic!("unexpected selection: {other:?}"),
         }

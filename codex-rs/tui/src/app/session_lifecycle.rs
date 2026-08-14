@@ -1011,6 +1011,9 @@ impl App {
             self.chat_widget.thread_name(),
             self.chat_widget.rollout_path().as_deref(),
         );
+        if let Some(history_mode) = target_session.history_mode {
+            app_server.remember_thread_history_mode(target_session.thread_id, history_mode);
+        }
         match app_server
             .resume_thread(
                 resume_config.clone(),

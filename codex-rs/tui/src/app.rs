@@ -946,6 +946,9 @@ impl App {
                 (chat_widget, None)
             }
             SessionSelection::Resume(target_session) => {
+                if let Some(history_mode) = target_session.history_mode {
+                    app_server.remember_thread_history_mode(target_session.thread_id, history_mode);
+                }
                 let model_settings = config_persistence::resume_model_settings_for_overrides(
                     &config,
                     &harness_overrides,

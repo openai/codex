@@ -511,10 +511,7 @@ pub(crate) async fn start_app_server_for_picker(
         environment_manager,
     )
     .await?;
-    Ok(AppServerSession::new(
-        app_server,
-        target.thread_params_mode(),
-    ))
+    Ok(AppServerSession::new(app_server, target.thread_params_mode()).with_startup_config(config))
 }
 
 #[cfg(test)]
@@ -601,6 +598,7 @@ fn session_target_from_app_server_thread(
         Ok(thread_id) => Some(resume_picker::SessionTarget {
             path: thread.path,
             thread_id,
+            history_mode: Some(thread.history_mode),
         }),
         Err(err) => {
             warn!(
@@ -1384,7 +1382,8 @@ async fn run_ratatui_app(
     )
     .await
     {
-        Ok(app_server) => AppServerSession::new(app_server, app_server_target.thread_params_mode()),
+        Ok(app_server) => AppServerSession::new(app_server, app_server_target.thread_params_mode())
+            .with_startup_config(&initial_config),
         Err(err) => {
             terminal_restore_guard.restore_silently();
             session_log::log_session_end();
@@ -1751,6 +1750,7 @@ async fn run_ratatui_app(
         {
             Ok(app_server) => {
                 AppServerSession::new(app_server, app_server_target.thread_params_mode())
+                    .with_startup_config(&config)
                     .with_remote_cwd_override(remote_cwd_override.clone())
             }
             Err(err) => {
@@ -2277,6 +2277,7 @@ mod tests {
             let target_session = resume_picker::SessionTarget {
                 path: Some(rollout_path),
                 thread_id,
+                history_mode: None,
             };
             let session_selection = match action {
                 CwdPromptAction::Resume => resume_picker::SessionSelection::Resume(target_session),
@@ -2364,6 +2365,7 @@ mod tests {
             &resume_picker::SessionSelection::Resume(resume_picker::SessionTarget {
                 path: None,
                 thread_id: ThreadId::new(),
+                history_mode: None,
             }),
             /*cwd_override*/ None,
             /*uses_remote_workspace*/ false,
@@ -2400,6 +2402,7 @@ mod tests {
             &resume_picker::SessionSelection::Resume(resume_picker::SessionTarget {
                 path: None,
                 thread_id: ThreadId::new(),
+                history_mode: None,
             }),
             /*cwd_override*/ None,
             /*uses_remote_workspace*/ false,
@@ -2441,6 +2444,7 @@ mod tests {
         let target = crate::resume_picker::SessionTarget {
             path: None,
             thread_id,
+            history_mode: None,
         };
 
         assert_eq!(target.display_label(), format!("thread {thread_id}"));

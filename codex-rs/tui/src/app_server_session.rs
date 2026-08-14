@@ -5,6 +5,7 @@
 
 mod fs;
 mod history;
+mod rollout_history;
 
 pub(crate) use history::HISTORY_ITEM_PAGE_LIMIT;
 pub(crate) use history::HISTORY_ITEM_SCAN_LIMIT;
@@ -265,6 +266,7 @@ pub(crate) struct AppServerSession {
     history_pagination: HashMap<ThreadId, history::ThreadHistoryPagination>,
     remote_cwd_override: Option<PathBuf>,
     thread_params_mode: ThreadParamsMode,
+    background_rollout_migration_enabled: bool,
     history_support: ThreadHistorySupport,
     thread_settings_update_supported: bool,
     default_model: Option<String>,
@@ -339,6 +341,7 @@ impl AppServerSession {
             history_pagination: HashMap::new(),
             remote_cwd_override: None,
             thread_params_mode,
+            background_rollout_migration_enabled: true,
             history_support: ThreadHistorySupport::Paginated,
             thread_settings_update_supported: true,
             default_model: None,
@@ -614,77 +617,6 @@ impl AppServerSession {
             self.history_support = ThreadHistorySupport::LegacyOnly;
         }
         started_thread_from_start_response(response, config, self.thread_params_mode()).await
-    }
-
-    pub(crate) async fn resume_thread(
-        &mut self,
-        config: Config,
-        thread_id: ThreadId,
-        model_settings: ResumeModelSettings,
-    ) -> Result<AppServerStartedThread> {
-        let request_id = self.next_request_id();
-        let session_config = if model_settings == ResumeModelSettings::RestoreFromThread {
-            config.clone()
-        } else {
-            self.session_config_with_effective_service_tier(&config)
-        };
-        let mut params = thread_resume_params_from_config(
-            session_config,
-            thread_id,
-            self.thread_params_mode(),
-            self.remote_cwd_override.as_deref(),
-            model_settings,
-        );
-        params.exclude_turns = self.history_support == ThreadHistorySupport::Paginated
-            && self
-                .history_pagination
-                .get(&thread_id)
-                .is_none_or(|state| state.history_mode == ThreadHistoryMode::Paginated);
-        let mut response: ThreadResumeResponse = match self
-            .client
-            .request_typed(ClientRequest::ThreadResume {
-                request_id,
-                params: params.clone(),
-            })
-            .await
-        {
-            Ok(response) => response,
-            Err(TypedRequestError::Server { source, .. })
-                if params.exclude_turns && is_history_pagination_unsupported(&source) =>
-            {
-                self.history_support = ThreadHistorySupport::LegacyOnly;
-                params.exclude_turns = false;
-                let request_id = self.next_request_id();
-                self.client
-                    .request_typed(ClientRequest::ThreadResume { request_id, params })
-                    .await
-                    .map_err(|err| {
-                        bootstrap_request_error("thread/resume failed during TUI bootstrap", err)
-                    })?
-            }
-            Err(err) => {
-                return Err(bootstrap_request_error(
-                    "thread/resume failed during TUI bootstrap",
-                    err,
-                ));
-            }
-        };
-        self.hydrate_initial_thread_history(
-            &mut response.thread,
-            response.turns_backwards_cursor.clone(),
-            response.items_backwards_cursor.clone(),
-            Some(&config),
-            HistoryHydrationScope::Initial,
-        )
-        .await?;
-        let fork_parent_title = self
-            .fork_parent_title_from_app_server(response.thread.forked_from_id.as_deref())
-            .await;
-        let mut started =
-            started_thread_from_resume_response(response, &config, self.thread_params_mode())
-                .await?;
-        started.session.fork_parent_title = fork_parent_title;
-        Ok(started)
     }
 
     pub(crate) async fn fork_thread(

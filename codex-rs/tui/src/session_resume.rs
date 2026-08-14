@@ -502,6 +502,7 @@ mod tests {
                 &SessionTarget {
                     path: Some(rollout_path.clone()),
                     thread_id,
+                    history_mode: None,
                 },
                 CwdPromptAction::Fork,
                 ResumeCwdContext {
@@ -535,6 +536,7 @@ mod tests {
             &SessionTarget {
                 path: None,
                 thread_id: ThreadId::new(),
+                history_mode: None,
             },
             CwdPromptAction::Resume,
             ResumeCwdContext {

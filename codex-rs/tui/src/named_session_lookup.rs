@@ -131,6 +131,7 @@ async fn lookup_legacy_index_target(
         return Ok(Some(SessionTarget {
             path: Some(path),
             thread_id: session_meta.meta.id,
+            history_mode: Some(thread.history_mode),
         }));
     }
     Ok(None)
