@@ -282,7 +282,14 @@ impl ResponsesWebsocketConnection {
                         .send(Ok(ResponseEvent::ServerReasoningIncluded(true)))
                         .await;
                 }
-                let mut guard = stream.lock().await;
+                let mut guard = tokio::select! {
+                    biased;
+                    _ = tx_event.closed() => return,
+                    guard = stream.lock() => guard,
+                };
+                if tx_event.is_closed() {
+                    return;
+                }
                 let result = {
                     let Some(ws_stream) = guard.as_mut() else {
                         let _ = tx_event
@@ -293,16 +300,21 @@ impl ResponsesWebsocketConnection {
                         return;
                     };
 
-                    run_websocket_response_stream(
-                        ws_stream,
-                        tx_event.clone(),
-                        request_text,
-                        idle_timeout,
-                        telemetry,
-                        turn_state.as_deref(),
-                        &timing_log_context,
-                    )
-                    .await
+                    tokio::select! {
+                        biased;
+                        result = run_websocket_response_stream(
+                            ws_stream,
+                            tx_event.clone(),
+                            request_text,
+                            idle_timeout,
+                            telemetry,
+                            turn_state.as_deref(),
+                            &timing_log_context,
+                        ) => result,
+                        _ = tx_event.closed() => Err(ApiError::Stream(
+                            "response event consumer dropped".to_string(),
+                        )),
+                    }
                 };
 
                 if let Err(err) = result {

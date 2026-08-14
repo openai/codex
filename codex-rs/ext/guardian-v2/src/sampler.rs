@@ -1,6 +1,9 @@
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -32,11 +35,12 @@ use serde_json::Value;
 use thiserror::Error;
 use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::Semaphore;
+use tokio::sync::oneshot;
 
 pub(crate) const MODEL: &str = "gpt-5.6-luna";
 const MAX_OUTPUT_BYTES: usize = 8 * 1024;
 const INITIAL_WEBSOCKET_CONNECTIONS: usize = 2;
-const MAX_WEBSOCKET_CONNECTIONS: usize = 8;
+const MAX_WEBSOCKET_CONNECTIONS: usize = 16;
 const MAX_WEBSOCKET_AGE: Duration = Duration::from_secs(55 * 60);
 const RESPONSES_WEBSOCKETS_BETA: &str = "responses_websockets=2026-02-06";
 const RESPONSES_LITE_METADATA_KEY: &str =
@@ -100,6 +104,9 @@ pub enum LunaSamplerError {
     /// The response exceeded the bounded output limit.
     #[error("Luna response exceeded the output limit")]
     OutputTooLarge,
+    /// A newer classification replaced this request when the pool was full.
+    #[error("Luna request was superseded by a newer classification")]
+    Superseded,
 }
 
 struct PooledConnection {
@@ -122,11 +129,17 @@ impl ConnectionLease {
     }
 }
 
+struct ActiveRequest {
+    supersede: oneshot::Sender<()>,
+    scored: Arc<AtomicBool>,
+}
+
 /// A bounded pool of authenticated Responses WebSockets dedicated to Luna sampling.
 pub struct LunaSampler {
     config: LunaSamplerConfig,
     idle_connections: Arc<Mutex<Vec<PooledConnection>>>,
     capacity: Arc<Semaphore>,
+    active_requests: Mutex<VecDeque<ActiveRequest>>,
 }
 
 impl LunaSampler {
@@ -136,6 +149,7 @@ impl LunaSampler {
             config,
             idle_connections: Arc::new(Mutex::new(Vec::with_capacity(MAX_WEBSOCKET_CONNECTIONS))),
             capacity: Arc::new(Semaphore::new(MAX_WEBSOCKET_CONNECTIONS)),
+            active_requests: Mutex::new(VecDeque::with_capacity(MAX_WEBSOCKET_CONNECTIONS)),
         };
         for index in 0..INITIAL_WEBSOCKET_CONNECTIONS {
             let connection = match sampler.open_connection().await {
@@ -332,9 +346,35 @@ impl LunaSampler {
             ),
             client_metadata: Some(metadata),
         };
-        let mut retried = false;
+        let (supersede, mut superseded) = oneshot::channel();
+        let scored = Arc::new(AtomicBool::new(false));
+        {
+            let mut active_requests = self
+                .active_requests
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            active_requests.retain(|request| !request.supersede.is_closed());
+            if active_requests.len() == MAX_WEBSOCKET_CONNECTIONS {
+                let oldest_scored = active_requests
+                    .iter()
+                    .position(|request| request.scored.load(Ordering::Relaxed))
+                    .unwrap_or(0);
+                if let Some(oldest) = active_requests.remove(oldest_scored) {
+                    let _ = oldest.supersede.send(());
+                }
+            }
+            active_requests.push_back(ActiveRequest {
+                supersede,
+                scored: Arc::clone(&scored),
+            });
+        }
+        let mut retries = 0;
         'retry: loop {
-            let lease = self.lease_connection().await?;
+            let lease = tokio::select! {
+                biased;
+                _ = &mut superseded => return Err(LunaSamplerError::Superseded),
+                lease = self.lease_connection() => lease?,
+            };
             let mut stream = lease
                 .connection
                 .connection
@@ -348,17 +388,27 @@ impl LunaSampler {
 
             let mut output = String::new();
             let mut deltas = String::new();
-            while let Some(event) = stream.rx_event.recv().await {
+            while let Some(event) = tokio::select! {
+                biased;
+                _ = &mut superseded => {
+                    return if scored.load(Ordering::Relaxed) && !output.is_empty() {
+                        Ok(output)
+                    } else {
+                        Err(LunaSamplerError::Superseded)
+                    };
+                }
+                event = stream.rx_event.recv() => event,
+            } {
                 let event = match event {
                     Ok(event) => event,
                     Err(error)
-                        if !retried
+                        if retries < INITIAL_WEBSOCKET_CONNECTIONS
                             && matches!(
                                 error,
                                 ApiError::Retryable { .. } | ApiError::Stream(_)
                             ) =>
                     {
-                        retried = true;
+                        retries += 1;
                         continue 'retry;
                     }
                     Err(error) => return Err(LunaSamplerError::Api(error)),
@@ -366,26 +416,6 @@ impl LunaSampler {
                 match event {
                     ResponseEvent::OutputTextDelta(delta) => {
                         deltas.push_str(&delta);
-                        if deltas.len() > MAX_OUTPUT_BYTES {
-                            return Err(LunaSamplerError::OutputTooLarge);
-                        }
-
-                        if serde_json::from_str::<serde_json::Map<String, Value>>(&deltas).is_ok() {
-                            let mut remaining_events = stream.rx_event;
-                            tokio::spawn(async move {
-                                while let Some(event) = remaining_events.recv().await {
-                                    match event {
-                                        Ok(ResponseEvent::Completed { .. }) => {
-                                            lease.reuse();
-                                            break;
-                                        }
-                                        Err(_) => break,
-                                        _ => {}
-                                    }
-                                }
-                            });
-                            return Ok(deltas);
-                        }
                     }
                     ResponseEvent::OutputItemDone(ResponseItem::Message {
                         role, content, ..
@@ -410,6 +440,33 @@ impl LunaSampler {
                 }
                 if output.len() > MAX_OUTPUT_BYTES || deltas.len() > MAX_OUTPUT_BYTES {
                     return Err(LunaSamplerError::OutputTooLarge);
+                }
+                if !output.is_empty() {
+                    if serde_json::from_str::<serde_json::Map<String, Value>>(&output).is_ok() {
+                        scored.store(true, Ordering::Relaxed);
+                    }
+                    continue;
+                }
+                if serde_json::from_str::<serde_json::Map<String, Value>>(&deltas).is_ok() {
+                    scored.store(true, Ordering::Relaxed);
+                    let mut remaining_events = stream.rx_event;
+                    tokio::spawn(async move {
+                        while let Some(event) = tokio::select! {
+                            biased;
+                            _ = &mut superseded => None,
+                            event = remaining_events.recv() => event,
+                        } {
+                            match event {
+                                Ok(ResponseEvent::Completed { .. }) => {
+                                    lease.reuse();
+                                    break;
+                                }
+                                Err(_) => break,
+                                _ => {}
+                            }
+                        }
+                    });
+                    return Ok(deltas);
                 }
             }
             return Err(LunaSamplerError::MissingOutput);

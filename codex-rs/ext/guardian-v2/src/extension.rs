@@ -34,6 +34,7 @@ use serde_json::json;
 
 use crate::LunaSampler;
 use crate::LunaSamplerConfig;
+use crate::LunaSamplerError;
 use crate::LunaSamplingRequest;
 use crate::sampler::MODEL;
 use crate::transcript::TranscriptConfig;
@@ -317,7 +318,7 @@ impl ToolLifecycleContributor for GuardianV2Extension {
                 ">>> APPROVAL REQUEST END\n".to_owned(),
             ]);
             let result: Result<(), String> = async {
-                let output = sampler
+                let output = match sampler
                     .sample(LunaSamplingRequest {
                         instructions: CLASSIFIER_INSTRUCTIONS.to_owned(),
                         input: classification_input,
@@ -346,7 +347,11 @@ impl ToolLifecycleContributor for GuardianV2Extension {
                         turn_id: turn_id.clone(),
                     })
                     .await
-                    .map_err(|error| error.to_string())?;
+                {
+                    Ok(output) => output,
+                    Err(LunaSamplerError::Superseded) => return Ok(()),
+                    Err(error) => return Err(error.to_string()),
+                };
                 let output: serde_json::Value =
                     serde_json::from_str(&output).map_err(|error| error.to_string())?;
                 let scores = output
