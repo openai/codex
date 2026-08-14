@@ -4,7 +4,6 @@ use std::time::Duration;
 
 use anyhow::Result;
 use codex_core::config::Config;
-use codex_extension_api::ApprovalRequirement;
 use codex_extension_api::ConversationHistorySnapshot;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistry;
@@ -24,6 +23,7 @@ use codex_protocol::ResponseItemId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ReasoningItemReasoningSummary;
+use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TruncationPolicy;
 use codex_protocol::security_risk::SecurityRiskScore;
@@ -143,8 +143,10 @@ async fn sample_conversation_history(
     let session_store = ExtensionData::new("session-1");
     let thread_store = test.codex.thread_extension_data();
     assert_eq!(
-        registry.approval_requirement(thread_store),
-        ApprovalRequirement::Default
+        registry
+            .approval_review(&session_store, thread_store, "review action")
+            .await,
+        None
     );
     registry.thread_lifecycle_contributors()[0]
         .on_thread_start(ThreadStartInput {
@@ -238,6 +240,7 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
     let (request, test, registry) =
         sample_conversation_history(conversation_history, r#"{"path":"README.md"}"#).await?;
     let thread_id = test.session_configured.thread_id;
+    let session_store = ExtensionData::new("session-1");
     let thread_store = test.codex.thread_extension_data();
     assert_eq!(request["model"], "gpt-5.6-luna");
     assert_eq!(
@@ -292,8 +295,10 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
     );
     assert!(score.sampled_at.is_some());
     assert_eq!(
-        registry.approval_requirement(thread_store),
-        ApprovalRequirement::RequireAutomaticReview
+        registry
+            .approval_review(&session_store, thread_store, "review action")
+            .await,
+        None
     );
     test.codex.ensure_rollout_materialized().await;
     test.codex.flush_rollout().await?;
@@ -315,18 +320,22 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
         sampled_at: None,
     });
     assert_eq!(
-        registry.approval_requirement(thread_store),
-        ApprovalRequirement::Default
+        registry
+            .approval_review(&session_store, thread_store, "review action")
+            .await,
+        Some(ReviewDecision::Approved)
     );
 
     let disabled_thread_store = ExtensionData::new("disabled-thread");
     disabled_thread_store.insert(SecurityRiskScore {
-        scores: BTreeMap::from([("action_risk".to_string(), 0.8)]),
+        scores: BTreeMap::from([("action_risk".to_string(), 0.25)]),
         sampled_at: None,
     });
     assert_eq!(
-        registry.approval_requirement(&disabled_thread_store),
-        ApprovalRequirement::Default
+        registry
+            .approval_review(&session_store, &disabled_thread_store, "review action")
+            .await,
+        None
     );
 
     Ok(())

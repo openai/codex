@@ -3,9 +3,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use codex_extension_api::ApprovalPolicyContributor;
-use codex_extension_api::ApprovalRequirement;
+use codex_extension_api::ApprovalReviewContributor;
 use codex_extension_api::ExtensionData;
+use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_features::Feature;
 use codex_login::CodexAuth;
@@ -25,6 +25,7 @@ use codex_protocol::openai_models::default_input_modalities;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
@@ -39,6 +40,7 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_sandbox;
+use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
@@ -54,22 +56,104 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
-struct AutomaticReviewRequested;
+struct ApprovedReviewContributor;
 
-struct ThreadApprovalPolicyContributor;
-
-impl ApprovalPolicyContributor for ThreadApprovalPolicyContributor {
-    fn approval_requirement(&self, thread_store: &ExtensionData) -> ApprovalRequirement {
-        if thread_store.get::<AutomaticReviewRequested>().is_some() {
-            ApprovalRequirement::RequireAutomaticReview
-        } else {
-            ApprovalRequirement::Default
-        }
+impl ApprovalReviewContributor for ApprovedReviewContributor {
+    fn contribute<'a>(
+        &'a self,
+        _session_store: &'a ExtensionData,
+        _thread_store: &'a ExtensionData,
+        prompt: &'a str,
+    ) -> ExtensionFuture<'a, Option<ReviewDecision>> {
+        Box::pin(async move {
+            assert!(prompt.contains("\"tool\":\"request_permissions\""));
+            Some(ReviewDecision::Approved)
+        })
     }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_model_override_uses_catalog_model_for_extension_strict_auto_review() -> Result<()> {
+async fn approval_review_contributor_skips_existing_guardian_model_call() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_wine_exec!(Ok(()), "request_permissions requires host-native paths");
+
+    let server = MockServer::start().await;
+    let permissions_call_id = "extension-approved-permissions";
+    let permissions_args = json!({
+        "reason": "grant low-risk network access",
+        "permissions": {
+            "network": {
+                "enabled": true,
+            },
+        },
+    });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-parent-1"),
+                ev_function_call(
+                    permissions_call_id,
+                    "request_permissions",
+                    &serde_json::to_string(&permissions_args)?,
+                ),
+                ev_completed("resp-parent-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-parent-2"),
+                ev_assistant_message("msg-parent", "done"),
+                ev_completed("resp-parent-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.approval_review_contributor(Arc::new(ApprovedReviewContributor));
+    let mut builder = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .with_config(|config| {
+            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+            config
+                .features
+                .enable(Feature::RequestPermissionsTool)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "request low-risk network access".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+
+    loop {
+        match wait_for_event(&test.codex, |_| true).await {
+            EventMsg::GuardianAssessment(event) => {
+                panic!("approved extension review should not start Guardian: {event:?}")
+            }
+            EventMsg::RequestPermissions(event) => {
+                panic!("approved extension review should not prompt the user: {event:?}")
+            }
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[1]
+            .function_call_output(permissions_call_id)
+            .to_string()
+            .contains("enabled")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_model_override_uses_catalog_model_for_strict_auto_review() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
 
@@ -136,10 +220,7 @@ async fn remote_model_override_uses_catalog_model_for_extension_strict_auto_revi
     )
     .await;
 
-    let mut extensions = ExtensionRegistryBuilder::new();
-    extensions.approval_policy_contributor(Arc::new(ThreadApprovalPolicyContributor));
     let mut builder = test_codex()
-        .with_extensions(Arc::new(extensions.build()))
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
             config.model = Some("gpt-5.4".to_string());
@@ -227,15 +308,12 @@ async fn remote_model_override_uses_catalog_model_for_extension_strict_auto_revi
     };
     assert_eq!(permissions_request.call_id, permissions_call_id);
     codex
-        .thread_extension_data()
-        .insert(AutomaticReviewRequested);
-    codex
         .submit(Op::RequestPermissionsResponse {
             id: permissions_request.call_id,
             response: RequestPermissionsResponse {
                 permissions: permissions_request.permissions,
                 scope: PermissionGrantScope::Turn,
-                strict_auto_review: false,
+                strict_auto_review: true,
             },
         })
         .await?;

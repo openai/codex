@@ -4,8 +4,7 @@ use std::time::SystemTime;
 
 use codex_core::ThreadManager;
 use codex_core::config::Config;
-use codex_extension_api::ApprovalPolicyContributor;
-use codex_extension_api::ApprovalRequirement;
+use codex_extension_api::ApprovalReviewContributor;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionFuture;
@@ -28,6 +27,7 @@ use codex_model_provider::create_model_provider;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::TruncationPolicy;
 use codex_protocol::security_risk::SecurityRiskScore;
 use serde_json::json;
@@ -198,7 +198,9 @@ impl ThreadLifecycleContributor<Config> for GuardianV2Extension {
         input: ThreadStartInput<'a, Config>,
     ) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
-            if !input.config.features.enabled(Feature::GuardianV2) {
+            if !input.config.features.enabled(Feature::GuardianV2)
+                || !input.config.features.enabled(Feature::GuardianApproval)
+            {
                 return;
             }
 
@@ -250,23 +252,22 @@ impl ThreadLifecycleContributor<Config> for GuardianV2Extension {
     }
 }
 
-impl ApprovalPolicyContributor for GuardianV2Extension {
-    fn approval_requirement(&self, thread_store: &ExtensionData) -> ApprovalRequirement {
-        if thread_store.get::<GuardianV2Enabled>().is_none() {
-            return ApprovalRequirement::Default;
-        }
+impl ApprovalReviewContributor for GuardianV2Extension {
+    fn contribute<'a>(
+        &'a self,
+        _session_store: &'a ExtensionData,
+        thread_store: &'a ExtensionData,
+        _prompt: &'a str,
+    ) -> ExtensionFuture<'a, Option<ReviewDecision>> {
+        Box::pin(async move {
+            thread_store.get::<GuardianV2Enabled>()?;
 
-        match thread_store.get::<SecurityRiskScore>() {
-            Some(score)
-                if score
-                    .scores
-                    .get("action_risk")
-                    .is_some_and(|score| *score >= ACTION_RISK_REVIEW_THRESHOLD) =>
-            {
-                ApprovalRequirement::RequireAutomaticReview
-            }
-            _ => ApprovalRequirement::Default,
-        }
+            thread_store
+                .get::<SecurityRiskScore>()
+                .and_then(|score| score.scores.get("action_risk").copied())
+                .filter(|score| *score < ACTION_RISK_REVIEW_THRESHOLD)
+                .map(|_| ReviewDecision::Approved)
+        })
     }
 }
 
@@ -442,7 +443,7 @@ pub fn install(
         thread_manager,
     });
     registry.thread_lifecycle_contributor(extension.clone());
-    registry.approval_policy_contributor(extension.clone());
+    registry.approval_review_contributor(extension.clone());
     registry.tool_lifecycle_contributor(extension);
 }
 

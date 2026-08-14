@@ -3,8 +3,6 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use codex_extension_api::ApprovalPolicyContributor;
-use codex_extension_api::ApprovalRequirement;
 use codex_extension_api::ApprovalReviewContributor;
 use codex_extension_api::ConfigContributor;
 use codex_extension_api::ContextContributor;
@@ -117,12 +115,6 @@ impl ToolContributor for AllContributors {
 
 impl ToolLifecycleContributor for AllContributors {}
 
-impl ApprovalPolicyContributor for AllContributors {
-    fn approval_requirement(&self, _thread_store: &ExtensionData) -> ApprovalRequirement {
-        ApprovalRequirement::RequireAutomaticReview
-    }
-}
-
 impl TurnItemContributor for AllContributors {
     fn contribute<'a>(
         &'a self,
@@ -165,7 +157,6 @@ async fn build_round_trips_every_contributor_category() {
     builder.tool_contributor(contributor.clone());
     builder.tool_lifecycle_contributor(contributor.clone());
     builder.turn_item_contributor(contributor.clone());
-    builder.approval_policy_contributor(contributor.clone());
     builder.approval_review_contributor(contributor);
     let registry = builder.build();
 
@@ -179,10 +170,6 @@ async fn build_round_trips_every_contributor_category() {
     assert_eq!(registry.tool_contributors().len(), 1);
     assert_eq!(registry.tool_lifecycle_contributors().len(), 1);
     assert_eq!(registry.turn_item_contributors().len(), 1);
-    assert_eq!(
-        registry.approval_requirement(&ExtensionData::new("thread")),
-        ApprovalRequirement::RequireAutomaticReview
-    );
     assert_eq!(
         registry
             .approval_review(

@@ -35,8 +35,6 @@ pub use codex_tools::TurnItemEmissionFuture;
 pub use codex_tools::TurnItemEmitter;
 pub use codex_tools::parse_tool_input_schema;
 pub use codex_tools::parse_tool_input_schema_without_compaction;
-pub use contributors::ApprovalPolicyContributor;
-pub use contributors::ApprovalRequirement;
 pub use contributors::ApprovalReviewContributor;
 pub use contributors::ConfigContributor;
 pub use contributors::ContextContributor;

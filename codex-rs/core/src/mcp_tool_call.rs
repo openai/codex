@@ -1306,7 +1306,7 @@ async fn maybe_request_mcp_tool_approval(
     let strict_auto_review = match turn_state {
         Some(turn_state) => turn_state.lock().await.strict_auto_review_enabled(),
         None => false,
-    } || sess.extension_strict_auto_review_enabled().await;
+    };
     let approvals_reviewer = connectors::mcp_approvals_reviewer_from_layers(
         &config.config_layer_stack,
         config.approvals_reviewer,

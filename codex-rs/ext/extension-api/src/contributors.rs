@@ -316,26 +316,6 @@ pub trait ToolLifecycleContributor: Send + Sync {
     }
 }
 
-/// Approval behavior requested by an extension for the current thread.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum ApprovalRequirement {
-    /// Preserve the host's configured approval behavior.
-    #[default]
-    Default,
-    /// Ask the host to require automatic review before an action executes.
-    RequireAutomaticReview,
-}
-
-/// Contributes thread-scoped approval requirements from extension-owned state.
-///
-/// Implementations should keep this callback cheap and must not perform I/O.
-/// The host remains responsible for enforcing managed policy and selecting the
-/// trusted reviewer that satisfies the requested requirement.
-pub trait ApprovalPolicyContributor: Send + Sync {
-    /// Returns the current approval requirement for the supplied thread.
-    fn approval_requirement(&self, thread_store: &ExtensionData) -> ApprovalRequirement;
-}
-
 /// Extension contribution that can claim rendered approval-review prompts.
 pub trait ApprovalReviewContributor: Send + Sync {
     fn contribute<'a>(

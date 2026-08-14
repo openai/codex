@@ -42,6 +42,7 @@ use super::GuardianAssessmentOutcome;
 use super::GuardianRejectionCircuitBreakerAction;
 use super::GuardianRejectionCircuitBreakerPolicy;
 use super::GuardianReviewContext;
+use super::approval_request::guardian_approval_request_to_json;
 use super::approval_request::guardian_assessment_action;
 use super::approval_request::guardian_request_target_item_id;
 use super::approval_request::guardian_request_turn_id;
@@ -299,9 +300,9 @@ pub(crate) async fn record_guardian_denial_for_test(
     record_guardian_denial(session, turn, turn_id).await;
 }
 
-/// This function always fails closed: timeouts, review-session failures, and
-/// parse failures all block execution, but timeouts are still surfaced to the
-/// caller as distinct from explicit guardian denials.
+/// Runs Guardian unless an installed extension explicitly claims the review.
+/// Guardian timeouts, review-session failures, and parse failures all block
+/// execution, with timeouts surfaced separately from explicit denials.
 async fn run_guardian_review(
     session: Arc<Session>,
     context: GuardianReviewContext,
@@ -311,6 +312,33 @@ async fn run_guardian_review(
     options: GuardianReviewOptions,
 ) -> ReviewDecision {
     let turn = Arc::clone(context.turn());
+    if !turn
+        .config
+        .config_layer_stack
+        .requirements()
+        .auto_review_required_for_model(&turn.model_info.slug)
+        && options
+            .external_cancel
+            .as_ref()
+            .is_none_or(|cancel| !cancel.is_cancelled())
+        && let Ok(action) = guardian_approval_request_to_json(&request)
+        && let Some(decision) = session
+            .services
+            .extensions
+            .approval_review(
+                &session.services.session_extension_data,
+                &session.services.thread_extension_data,
+                &action.to_string(),
+            )
+            .await
+    {
+        if decision == ReviewDecision::Approved {
+            record_guardian_non_denial(&session, guardian_request_turn_id(&request, &turn.sub_id))
+                .await;
+        }
+        return decision;
+    }
+
     let GuardianReviewOptions {
         plugin_attribution_override,
         approval_request_source,
