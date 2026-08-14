@@ -70,6 +70,7 @@ use rmcp::model::ElicitationCapability;
 use rmcp::model::Implementation;
 use rmcp::model::InitializeRequestParams;
 use rmcp::model::ProtocolVersion;
+use rmcp::model::ServerPeerInfo;
 use rmcp::model::Tool as RmcpTool;
 use tokio::time::Instant as TokioInstant;
 use tokio_util::sync::CancellationToken;
@@ -879,10 +880,12 @@ async fn start_server_task(
         mcp_initialize_request_params(client_elicitation_capability, client_mcp_extensions);
     let send_elicitation = elicitation_requests.make_sender(server_name.clone(), tx_event);
 
+    let started_at = Instant::now();
     let initialize_result = client
         .initialize(params, startup_timeout, send_elicitation)
-        .await
-        .map_err(StartupOutcomeError::from)?;
+        .await;
+    record_protocol_discovery_metrics(client.protocol_mode(), started_at, &initialize_result);
+    let initialize_result = initialize_result.map_err(StartupOutcomeError::from)?;
 
     let server_disables_tool_catalog_cache = initialize_result
         .capabilities
@@ -954,6 +957,33 @@ async fn start_server_task(
     };
 
     Ok(managed)
+}
+
+fn record_protocol_discovery_metrics(
+    mode: McpProtocolMode,
+    started_at: Instant,
+    result: &Result<ServerPeerInfo>,
+) {
+    let Some(metrics) = codex_otel::global() else {
+        return;
+    };
+
+    let mode = match mode {
+        McpProtocolMode::Legacy => "legacy",
+        McpProtocolMode::V20260728 => "auto",
+    };
+    let outcome = match result {
+        Ok(result) if result.protocol_version == ProtocolVersion::V_2026_07_28 => "modern",
+        Ok(_) => "legacy",
+        Err(_) => "failure",
+    };
+    let tags = [("mode", mode), ("outcome", outcome)];
+    let _ = metrics.counter("codex.mcp.protocol_discovery", /*inc*/ 1, &tags);
+    let _ = metrics.record_duration(
+        "codex.mcp.protocol_discovery.duration_ms",
+        started_at.elapsed(),
+        &tags,
+    );
 }
 
 fn mcp_initialize_request_params(
