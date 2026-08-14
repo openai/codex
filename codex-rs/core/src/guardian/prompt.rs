@@ -816,7 +816,7 @@ For anything else, use this JSON schema:
 }"#
 }
 
-pub(super) const BUNDLED_GUARDIAN_POLICY: &str = include_str!("policy.md");
+pub(crate) const BUNDLED_GUARDIAN_POLICY: &str = include_str!("policy.md");
 pub(super) const BUNDLED_GUARDIAN_POLICY_TEMPLATE: &str = include_str!("policy_template.md");
 const TENANT_POLICY_CONFIG_PLACEHOLDER: &str = "{{ tenant_policy_config }}";
 

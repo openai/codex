@@ -1,5 +1,6 @@
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
+use crate::guardian::BUNDLED_GUARDIAN_POLICY;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::unified_exec::DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS;
 use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
@@ -106,6 +107,7 @@ use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::BaseInstructionsProvenance;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
+use codex_protocol::openai_models::ModelMessages;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
@@ -1518,6 +1520,21 @@ impl ConfigBuilder {
 impl Config {
     pub fn sqlite_config(&self) -> &codex_state::SqliteConfig {
         &self.sqlite
+    }
+
+    /// Resolves the configured, reviewer-catalog, or bundled Guardian policy.
+    pub fn resolve_guardian_policy<'a>(
+        &'a self,
+        model_messages: Option<&'a ModelMessages>,
+    ) -> &'a str {
+        self.guardian_policy_config
+            .as_deref()
+            .or_else(|| {
+                model_messages
+                    .and_then(|messages| messages.auto_review.as_ref())
+                    .and_then(|messages| messages.policy.as_deref())
+            })
+            .unwrap_or(BUNDLED_GUARDIAN_POLICY)
     }
 
     pub(crate) fn multi_agent_version_override(&self) -> Option<MultiAgentVersion> {

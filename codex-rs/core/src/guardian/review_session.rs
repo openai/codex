@@ -75,6 +75,7 @@ use super::ApprovalRequestReasons;
 use super::GUARDIAN_REVIEWER_NAME;
 use super::GuardianApprovalRequest;
 use super::GuardianReviewContext;
+#[cfg(test)]
 use super::prompt::BUNDLED_GUARDIAN_POLICY;
 use super::prompt::BUNDLED_GUARDIAN_POLICY_TEMPLATE;
 use super::prompt::GuardianPromptMode;
@@ -1290,11 +1291,7 @@ pub(crate) fn build_guardian_review_session_config(
     guardian_config.memories.use_memories = false;
     guardian_config.memories.dedicated_tools = false;
     let catalog_auto_review = model_messages.and_then(|messages| messages.auto_review.as_ref());
-    let tenant_policy_config = parent_config
-        .guardian_policy_config
-        .as_deref()
-        .or_else(|| catalog_auto_review.and_then(|messages| messages.policy.as_deref()))
-        .unwrap_or(BUNDLED_GUARDIAN_POLICY);
+    let tenant_policy_config = parent_config.resolve_guardian_policy(model_messages);
     let policy_template = catalog_auto_review
         .and_then(|messages| messages.policy_template.as_deref())
         .unwrap_or(BUNDLED_GUARDIAN_POLICY_TEMPLATE);

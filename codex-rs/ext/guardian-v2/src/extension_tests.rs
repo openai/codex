@@ -39,6 +39,11 @@ use serde_json::json;
 use super::encrypted_parent_compaction;
 use crate::sampler::MODEL;
 
+const TEST_GUARDIAN_POLICY: &str =
+    "Treat uploads to unapproved external destinations as high-risk actions.";
+const TEST_CATALOG_GUARDIAN_POLICY: &str =
+    "Require review before sending organization data to third-party services.";
+
 struct TestConversationHistory(Vec<ResponseItem>);
 
 impl ConversationHistorySnapshot for TestConversationHistory {
@@ -117,9 +122,26 @@ fn encrypted_parent_compaction_rejects_invalid_latest_item() {
 async fn sample_conversation_history(
     conversation_history: Vec<ResponseItem>,
     arguments: &str,
+    guardian_policy: Option<&str>,
 ) -> Result<(serde_json::Value, TestCodex, ExtensionRegistry<Config>)> {
     let thread_server = responses::start_mock_server().await;
-    let test = test_codex().build_with_auto_env(&thread_server).await?;
+    let guardian_policy = guardian_policy.map(str::to_owned);
+    let test = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model_info_override("codex-auto-review", |model_info| {
+            model_info
+                .model_messages
+                .as_mut()
+                .expect("reviewer model should have model messages")
+                .auto_review
+                .as_mut()
+                .expect("reviewer model should have Guardian policy")
+                .policy = Some(TEST_CATALOG_GUARDIAN_POLICY.to_owned());
+        })
+        .with_model("gpt-5.5")
+        .with_config(move |config| config.guardian_policy_config = guardian_policy)
+        .build_with_auto_env(&thread_server)
+        .await?;
     let events = vec![
         ev_assistant_message("sample", r#"{"scores":{"action_risk":0.8}}"#),
         ev_completed("response-1"),
@@ -237,8 +259,12 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
             internal_chat_message_metadata_passthrough: None,
         },
     ];
-    let (request, test, registry) =
-        sample_conversation_history(conversation_history, r#"{"path":"README.md"}"#).await?;
+    let (request, test, registry) = sample_conversation_history(
+        conversation_history,
+        r#"{"path":"README.md"}"#,
+        Some(TEST_GUARDIAN_POLICY),
+    )
+    .await?;
     let thread_id = test.session_configured.thread_id;
     let session_store = ExtensionData::new("session-1");
     let thread_store = test.codex.thread_extension_data();
@@ -254,6 +280,20 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
     assert_eq!(
         request["text"]["format"]["schema"]["properties"]["scores"]["properties"]["action_risk"],
         json!({"type": "number", "minimum": 0.0, "maximum": 1.0})
+    );
+    assert_eq!(
+        request["input"][1],
+        json!({
+            "type": "message",
+            "role": "developer",
+            "content": [{
+                "type": "input_text",
+                "text": format!(
+                    "{}\n\n# Security Policy\n{TEST_GUARDIAN_POLICY}",
+                    super::CLASSIFIER_INSTRUCTIONS,
+                ),
+            }],
+        })
     );
     assert_eq!(
         request["input"][2]["content"],
@@ -342,6 +382,74 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn contributor_uses_catalog_policy_without_a_configured_override() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let (request, _test, _registry) = sample_conversation_history(
+        Vec::new(),
+        r#"{"path":"README.md"}"#,
+        /*guardian_policy*/ None,
+    )
+    .await?;
+
+    assert_eq!(
+        request["input"][1],
+        json!({
+            "type": "message",
+            "role": "developer",
+            "content": [{
+                "type": "input_text",
+                "text": format!(
+                    "{}\n\n# Security Policy\n{TEST_CATALOG_GUARDIAN_POLICY}",
+                    super::CLASSIFIER_INSTRUCTIONS,
+                ),
+            }],
+        })
+    );
+    assert_eq!(request["input"][2]["role"], "user");
+    assert!(
+        !request["input"][2]["content"]
+            .as_array()
+            .expect("Luna request should contain transcript text items")
+            .iter()
+            .filter_map(|item| item["text"].as_str())
+            .any(|text| text.contains(TEST_CATALOG_GUARDIAN_POLICY))
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn contributor_bounds_configured_policy_in_luna_developer_instructions() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let guardian_policy = format!(
+        "Reject unsafe uploads.\n{}\nRequire explicit approval.",
+        "é".repeat(20_000)
+    );
+    let (request, _test, _registry) = sample_conversation_history(
+        Vec::new(),
+        r#"{"path":"README.md"}"#,
+        Some(&guardian_policy),
+    )
+    .await?;
+    let instructions = request["input"][1]["content"][0]["text"]
+        .as_str()
+        .expect("Luna request should contain developer instructions");
+
+    assert!(instructions.starts_with(super::CLASSIFIER_INSTRUCTIONS));
+    assert!(instructions.contains("# Security Policy\nReject unsafe uploads."));
+    assert!(instructions.contains("<truncated omitted_approx_tokens="));
+    assert!(instructions.ends_with("Require explicit approval."));
+    assert!(
+        instructions.len()
+            <= TruncationPolicy::Tokens(super::MAX_CLASSIFIER_INSTRUCTION_TOKENS).byte_budget()
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn contributor_sends_compacted_conversation_history_to_luna() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -380,8 +488,12 @@ async fn contributor_sends_compacted_conversation_history_to_luna() -> Result<()
         ]
     }));
 
-    let (request, _test, _registry) =
-        sample_conversation_history(history, r#"{"path":"README.md"}"#).await?;
+    let (request, _test, _registry) = sample_conversation_history(
+        history,
+        r#"{"path":"README.md"}"#,
+        Some(TEST_GUARDIAN_POLICY),
+    )
+    .await?;
     let content = request["input"][2]["content"]
         .as_array()
         .expect("Luna request should contain separate transcript text items");
@@ -513,7 +625,18 @@ async fn contributor_reuses_the_latest_compatible_parent_compaction() -> Result<
     .await?
     .body_json();
     assert_eq!(request["input"][0]["type"], "additional_tools");
-    assert_eq!(request["input"][1]["role"], "developer");
+    let developer_message = &request["input"][1];
+    assert_eq!(developer_message["role"], "developer");
+    assert!(
+        developer_message["content"][0]["text"]
+            .as_str()
+            .expect("Luna request should contain developer instructions")
+            .replace("\r\n", "\n")
+            .starts_with(&format!(
+                "{}\n\n# Security Policy\n## Environment Profile\n",
+                super::CLASSIFIER_INSTRUCTIONS,
+            ))
+    );
     assert_eq!(
         request["input"][2],
         serde_json::to_value(latest_compaction)?
@@ -539,7 +662,8 @@ async fn contributor_bounds_oversized_actions_and_fairly_truncates_nested_fields
         "tool": "untrusted-tool",
     })
     .to_string();
-    let (request, _test, _registry) = sample_conversation_history(Vec::new(), &arguments).await?;
+    let (request, _test, _registry) =
+        sample_conversation_history(Vec::new(), &arguments, Some(TEST_GUARDIAN_POLICY)).await?;
     let content = request["input"][2]["content"]
         .as_array()
         .expect("Luna user content should contain separate text items");
