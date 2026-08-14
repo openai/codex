@@ -317,6 +317,7 @@ async fn run_guardian_review(
         .config_layer_stack
         .requirements()
         .auto_review_required_for_model(&turn.model_info.slug)
+        && reasons.retry.is_none()
         && options
             .external_cancel
             .as_ref()
