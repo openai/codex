@@ -534,7 +534,7 @@ async fn cached_mcp_startup_is_eager_for_root_and_lazy_for_subagents() -> anyhow
     );
     assert_definition(
         &unused_response,
-        &format!("Tools in the {NAMESPACE} namespace."),
+        &format!("Use the tools from {cached_process}."),
         &format!("Echo from {cached_process}."),
     );
     assert_eq!(
@@ -631,7 +631,7 @@ async fn cached_mcp_startup_is_eager_for_root_and_lazy_for_subagents() -> anyhow
     .context("cached MCP definitions should reach inference before initialization")?;
     assert_definition(
         &cached_response,
-        &format!("Tools in the {NAMESPACE} namespace."),
+        &format!("Use the tools from {cached_process}."),
         &format!("Echo from {cached_process}."),
     );
     let second_pid = wait_for_new_pid(fs.as_ref(), &pid_file, Some(&eager_pid)).await?;

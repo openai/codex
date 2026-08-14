@@ -161,8 +161,6 @@ impl McpToolCatalogCacheContext {
 
         let mut tools = tools.to_vec();
         for tool in &mut tools {
-            // Initialize instructions belong to one live connection and must not cross sessions.
-            tool.namespace_description = None;
             // Tool annotations affect approval and parallelism decisions, so only the live
             // connection may supply them.
             tool.tool.annotations = None;
