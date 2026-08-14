@@ -131,6 +131,10 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_structured_requ
         handshake.header("OpenAI-Beta"),
         Some("responses_websockets=2026-02-06".to_owned())
     );
+    assert_eq!(
+        handshake.header("x-openai-internal-codex-responses-lite"),
+        Some("true".to_owned())
+    );
     assert_eq!(handshake.header("session-id"), Some("session-1".to_owned()));
     assert_eq!(handshake.header("thread-id"), Some("thread-1".to_owned()));
     assert_eq!(
@@ -196,6 +200,7 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_structured_requ
         assert!(request.get("tools").is_none());
         let effort = if index == 0 { "none" } else { "medium" };
         assert_eq!(request["reasoning"]["effort"], effort);
+        assert_eq!(request["reasoning"]["context"], "all_turns");
         assert_eq!(
             request["client_metadata"]["turn_id"],
             format!("turn-{}", index + 1)

@@ -147,6 +147,7 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
     assert_eq!(request["client_metadata"]["thread_id"], "thread-1");
     assert_eq!(request["client_metadata"]["turn_id"], "turn-1");
     assert_eq!(request["reasoning"]["effort"], "low");
+    assert_eq!(request["reasoning"]["context"], "all_turns");
     assert_eq!(request["text"]["format"]["strict"], true);
     assert_eq!(
         request["text"]["format"]["schema"]["properties"]["scores"]["properties"]["action_risk"],

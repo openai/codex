@@ -6,6 +6,7 @@ use std::time::Instant;
 
 use codex_api::ApiError;
 use codex_api::Reasoning;
+use codex_api::ReasoningContext;
 use codex_api::ResponseEvent;
 use codex_api::ResponsesApiRequest;
 use codex_api::ResponsesWebsocketClient;
@@ -171,6 +172,10 @@ impl LunaSampler {
             "openai-beta",
             HeaderValue::from_static(RESPONSES_WEBSOCKETS_BETA),
         );
+        headers.insert(
+            "x-openai-internal-codex-responses-lite",
+            HeaderValue::from_static("true"),
+        );
         if let Some(originator) = self.config.originator.as_deref() {
             add_originator_header(&mut headers, originator);
         }
@@ -292,7 +297,7 @@ impl LunaSampler {
             reasoning: Some(Reasoning {
                 effort: Some(request.reasoning_effort),
                 summary: None,
-                context: None,
+                context: Some(ReasoningContext::AllTurns),
             }),
             store: false,
             stream: true,
