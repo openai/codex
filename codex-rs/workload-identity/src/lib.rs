@@ -13,12 +13,14 @@ use thiserror::Error;
 pub struct WorkloadIdentityConfig {
     pub(crate) assertion_file: PathBuf,
     pub(crate) federation_rule_id: String,
+    pub(crate) workload_identity_context: Option<String>,
 }
 
 impl WorkloadIdentityConfig {
     pub fn new(
         federation_rule_id: String,
         assertion_file: PathBuf,
+        workload_identity_context: Option<String>,
     ) -> Result<Self, WorkloadIdentityError> {
         let federation_rule_id = federation_rule_id.trim();
         if federation_rule_id.is_empty() {
@@ -30,6 +32,7 @@ impl WorkloadIdentityConfig {
         Ok(Self {
             assertion_file,
             federation_rule_id: federation_rule_id.to_string(),
+            workload_identity_context,
         })
     }
 }

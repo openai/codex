@@ -171,11 +171,17 @@ impl WorkloadIdentityExchange {
 
     async fn exchange_uncached(&self) -> Result<WorkloadIdentityToken, WorkloadIdentityError> {
         let assertion = read_assertion(&self.config.assertion_file).await?;
-        let body = url::form_urlencoded::Serializer::new(String::new())
-            .append_pair("grant_type", JWT_BEARER_GRANT_TYPE)
-            .append_pair("assertion", &assertion)
-            .append_pair("federation_rule_id", &self.config.federation_rule_id)
-            .finish();
+        let body = {
+            let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+            serializer
+                .append_pair("grant_type", JWT_BEARER_GRANT_TYPE)
+                .append_pair("assertion", &assertion)
+                .append_pair("federation_rule_id", &self.config.federation_rule_id);
+            if let Some(context) = &self.config.workload_identity_context {
+                serializer.append_pair("workload_identity_context", context);
+            }
+            serializer.finish()
+        };
         let response = self
             .client
             .post(self.token_url.as_str())

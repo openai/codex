@@ -32,7 +32,12 @@ fn assertion_file(assertion: &str) -> (TempDir, PathBuf) {
 
 fn make_exchange(path: PathBuf, server: &MockServer) -> WorkloadIdentityExchange {
     WorkloadIdentityExchange::new(
-        WorkloadIdentityConfig::new("idpm_rule_one".to_string(), path).expect("valid config"),
+        WorkloadIdentityConfig::new(
+            "idpm_rule_one".to_string(),
+            path,
+            /*workload_identity_context*/ None,
+        )
+        .expect("valid config"),
         Url::parse(&format!("{}/oauth/token", server.uri())).expect("valid token URL"),
         HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
     )
@@ -93,6 +98,50 @@ async fn exchange_sends_three_field_contract_and_caches_valid_response() {
                 "federation_rule_id".to_string(),
                 "idpm_rule_one".to_string()
             ),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn exchange_forwards_optional_workload_context_without_parsing() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .and(header("content-type", "application/x-www-form-urlencoded"))
+        .respond_with(success("sensitive-access-token", /*expires_in*/ 600))
+        .mount(&server)
+        .await;
+    let (_temp_dir, assertion_path) = assertion_file("assertion-one");
+    let context = "server-validates-this-raw-value";
+    let config = WorkloadIdentityConfig::new(
+        "idpm_rule_one".to_string(),
+        assertion_path,
+        /*workload_identity_context*/ Some(context.to_string()),
+    )
+    .expect("valid config");
+    let exchange = WorkloadIdentityExchange::new(
+        config,
+        Url::parse(&format!("{}/oauth/token", server.uri())).expect("valid token URL"),
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+    )
+    .expect("valid exchange");
+
+    exchange.resolve().await.expect("exchange");
+
+    let requests = server.received_requests().await.expect("requests");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        url::form_urlencoded::parse(&requests[0].body)
+            .into_owned()
+            .collect::<Vec<_>>(),
+        vec![
+            ("grant_type".to_string(), JWT_BEARER_GRANT_TYPE.to_string()),
+            ("assertion".to_string(), "assertion-one".to_string()),
+            (
+                "federation_rule_id".to_string(),
+                "idpm_rule_one".to_string()
+            ),
+            ("workload_identity_context".to_string(), context.to_string()),
         ]
     );
 }
@@ -264,13 +313,21 @@ async fn transient_proactive_refresh_failure_uses_still_valid_token() {
 #[test]
 fn configuration_requires_an_absolute_file_and_secure_token_url() {
     assert!(matches!(
-        WorkloadIdentityConfig::new("idpm_rule_one".to_string(), PathBuf::from("relative.jwt")),
+        WorkloadIdentityConfig::new(
+            "idpm_rule_one".to_string(),
+            PathBuf::from("relative.jwt"),
+            /*workload_identity_context*/ None,
+        ),
         Err(WorkloadIdentityError::AssertionFileMustBeAbsolute)
     ));
 
     let (_temp_dir, assertion_path) = assertion_file("assertion-one");
-    let config = WorkloadIdentityConfig::new("idpm_rule_one".to_string(), assertion_path)
-        .expect("valid config");
+    let config = WorkloadIdentityConfig::new(
+        "idpm_rule_one".to_string(),
+        assertion_path,
+        /*workload_identity_context*/ None,
+    )
+    .expect("valid config");
     assert!(matches!(
         WorkloadIdentityExchange::new(
             config,

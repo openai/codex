@@ -21,6 +21,7 @@ fn complete_environment() -> ProcessEnvironment {
     ProcessEnvironment {
         federation_rule_id: Some("rule-one".into()),
         identity_token_file: Some(std::env::temp_dir().join("identity-token").into_os_string()),
+        workload_identity_context: None,
     }
 }
 
@@ -46,6 +47,18 @@ fn markers_select_wif_and_partial_configuration_fails_closed() {
             "https://chatgpt.com/backend-api",
         )
         .expect("no markers")
+        .is_none()
+    );
+    assert!(
+        resolve_for_test(
+            ProcessEnvironment {
+                workload_identity_context: Some(r#"{"instance_id":"box-one"}"#.into()),
+                ..ProcessEnvironment::default()
+            },
+            /*chatgpt_login_allowed*/ true,
+            "https://chatgpt.com/backend-api",
+        )
+        .expect("context alone is not a WIF marker")
         .is_none()
     );
     for (environment, missing) in [
@@ -138,6 +151,24 @@ fn auth_policy_and_app_environment_are_enforced() {
     assert!(error.to_string().contains("app routing"));
 }
 
+#[test]
+fn workload_context_is_preserved_without_logging_its_value() {
+    let context = r#"{"instance_id":"box-one"}"#;
+    let config = resolve_for_test(
+        ProcessEnvironment {
+            workload_identity_context: Some(context.into()),
+            ..complete_environment()
+        },
+        /*chatgpt_login_allowed*/ true,
+        "https://chatgpt.com/backend-api",
+    )
+    .expect("valid configuration")
+    .expect("WIF selected");
+
+    assert_eq!(config.workload_identity_context.as_deref(), Some(context));
+    assert!(!format!("{config:?}").contains(context));
+}
+
 fn session_config(directory: &Path, server: &MockServer) -> WorkloadIdentitySessionConfig {
     let assertion_file = directory.join("identity-token");
     std::fs::write(&assertion_file, "assertion-one").expect("write assertion");
@@ -147,6 +178,7 @@ fn session_config(directory: &Path, server: &MockServer) -> WorkloadIdentitySess
         federation_rule_id: "rule-one".to_string(),
         http_client_factory: HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
         token_url: Url::parse(&format!("{}/oauth/token", server.uri())).expect("token URL"),
+        workload_identity_context: None,
     }
 }
 
@@ -196,7 +228,9 @@ async fn compatible_adapters_share_exchange() {
         .mount(&server)
         .await;
     let registry = WorkloadIdentitySessionRegistry::default();
-    let first_config = session_config(temp_dir.path(), &server);
+    let context = r#"{"instance_id":"box-one"}"#;
+    let mut first_config = session_config(temp_dir.path(), &server);
+    first_config.workload_identity_context = Some(context.into());
     let second_config = first_config.clone();
     let first = WorkloadIdentityExternalAuth::from_config_with_registry(first_config, &registry)
         .expect("first adapter");
@@ -218,6 +252,15 @@ async fn compatible_adapters_share_exchange() {
             .get_token()
             .expect("second token")
     );
+
+    let requests = server.received_requests().await.expect("requests");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        url::form_urlencoded::parse(&requests[0].body)
+            .find(|(name, _)| name == "workload_identity_context")
+            .map(|(_, value)| value.into_owned()),
+        Some(context.to_string())
+    );
 }
 
 #[tokio::test]
@@ -236,6 +279,8 @@ async fn incompatible_process_session_settings_are_rejected() {
     std::fs::write(&different_file.assertion_file, "assertion-two").expect("write assertion");
     let mut different_environment = base.clone();
     different_environment.environment = WorkloadIdentityEnvironment::Production;
+    let mut different_context = base.clone();
+    different_context.workload_identity_context = Some(r#"{"instance_id":"box-two"}"#.into());
     let mut different_route = base;
     different_route.http_client_factory =
         HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy);
@@ -248,7 +293,12 @@ async fn incompatible_process_session_settings_are_rejected() {
         &different_route_adapter.session
     ));
 
-    for config in [different_rule, different_file, different_environment] {
+    for config in [
+        different_rule,
+        different_file,
+        different_environment,
+        different_context,
+    ] {
         assert!(matches!(
             WorkloadIdentityExternalAuth::from_config_with_registry(config, &registry),
             Err(WorkloadIdentitySessionError::ConflictingConfiguration)

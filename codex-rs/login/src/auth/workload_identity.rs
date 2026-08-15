@@ -11,6 +11,7 @@ use codex_http_client::HttpClientFactory;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::shell_environment::OPENAI_FEDERATION_RULE_ID_ENV_VAR;
 use codex_protocol::shell_environment::OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR;
+use codex_protocol::shell_environment::OPENAI_WORKLOAD_IDENTITY_CONTEXT_ENV_VAR;
 use codex_workload_identity::WorkloadIdentityConfig;
 use codex_workload_identity::WorkloadIdentityError;
 use codex_workload_identity::WorkloadIdentityExchange;
@@ -51,13 +52,34 @@ impl WorkloadIdentityEnvironment {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct WorkloadIdentitySessionConfig {
     assertion_file: PathBuf,
     environment: WorkloadIdentityEnvironment,
     federation_rule_id: String,
     http_client_factory: HttpClientFactory,
     token_url: Url,
+    workload_identity_context: Option<String>,
+}
+
+impl std::fmt::Debug for WorkloadIdentitySessionConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("WorkloadIdentitySessionConfig")
+            .field("assertion_file", &self.assertion_file)
+            .field("environment", &self.environment)
+            .field("federation_rule_id", &self.federation_rule_id)
+            .field("http_client_factory", &self.http_client_factory)
+            .field("token_url", &self.token_url)
+            .field(
+                "workload_identity_context",
+                &self
+                    .workload_identity_context
+                    .as_ref()
+                    .map(|_| "[redacted]"),
+            )
+            .finish()
+    }
 }
 
 impl WorkloadIdentitySessionConfig {
@@ -67,15 +89,17 @@ impl WorkloadIdentitySessionConfig {
             environment: self.environment,
             federation_rule_id: self.federation_rule_id.trim().to_string(),
             token_url: self.token_url.to_string(),
+            workload_identity_context: self.workload_identity_context.clone(),
         }
     }
 
     fn into_exchange(self) -> Result<WorkloadIdentityExchange, WorkloadIdentityError> {
-        WorkloadIdentityExchange::new(
-            WorkloadIdentityConfig::new(self.federation_rule_id, self.assertion_file)?,
-            self.token_url,
-            self.http_client_factory,
-        )
+        let config = WorkloadIdentityConfig::new(
+            self.federation_rule_id,
+            self.assertion_file,
+            self.workload_identity_context,
+        )?;
+        WorkloadIdentityExchange::new(config, self.token_url, self.http_client_factory)
     }
 }
 
@@ -85,6 +109,7 @@ struct WorkloadIdentityFingerprint {
     environment: WorkloadIdentityEnvironment,
     federation_rule_id: String,
     token_url: String,
+    workload_identity_context: Option<String>,
 }
 
 #[derive(Debug, Error)]
@@ -130,6 +155,10 @@ fn resolve_config(
         environment.identity_token_file,
         OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR,
     )?;
+    let workload_identity_context = optional_unicode(
+        environment.workload_identity_context,
+        OPENAI_WORKLOAD_IDENTITY_CONTEXT_ENV_VAR,
+    )?;
     let auth_environment = classify_auth_environment(chatgpt_base_url)?;
 
     Ok(Some(WorkloadIdentitySessionConfig {
@@ -138,6 +167,7 @@ fn resolve_config(
         federation_rule_id,
         http_client_factory: auth_route_config.http_client_factory().clone(),
         token_url: auth_environment.token_url()?,
+        workload_identity_context,
     }))
 }
 
@@ -171,6 +201,19 @@ fn required_unicode(
         )));
     }
     Ok(value.to_string())
+}
+
+fn optional_unicode(
+    value: Option<OsString>,
+    variable: &'static str,
+) -> Result<Option<String>, WorkloadIdentitySessionError> {
+    value
+        .map(|value| {
+            value.into_string().map_err(|_| {
+                invalid_config(format!("workload identity variable {variable} is invalid"))
+            })
+        })
+        .transpose()
 }
 
 fn classify_auth_environment(
@@ -210,6 +253,7 @@ fn invalid_config(message: impl Into<String>) -> WorkloadIdentitySessionError {
 struct ProcessEnvironment {
     federation_rule_id: Option<OsString>,
     identity_token_file: Option<OsString>,
+    workload_identity_context: Option<OsString>,
 }
 
 impl ProcessEnvironment {
@@ -217,6 +261,7 @@ impl ProcessEnvironment {
         Self {
             federation_rule_id: std::env::var_os(OPENAI_FEDERATION_RULE_ID_ENV_VAR),
             identity_token_file: std::env::var_os(OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR),
+            workload_identity_context: std::env::var_os(OPENAI_WORKLOAD_IDENTITY_CONTEXT_ENV_VAR),
         }
     }
 
