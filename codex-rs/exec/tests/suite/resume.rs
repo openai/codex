@@ -133,12 +133,35 @@ async fn mount_exec_responses(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_falls_back_to_legacy_history_when_thread_store_cannot_paginate() -> anyhow::Result<()>
+{
+    skip_if_no_network!(Ok(()));
+
+    let test = test_codex_exec();
+    let server = MockServer::start().await;
+    let _response_mock = mount_exec_responses(&server, /*count*/ 1).await;
+    let store_id = Uuid::new_v4();
+
+    test.cmd_with_server(&server)
+        .arg("--skip-git-repo-check")
+        .arg("-c")
+        .arg(format!(
+            "experimental_thread_store={{type=\"in_memory\",id=\"{store_id}\"}}"
+        ))
+        .arg("continue without paginated history")
+        .assert()
+        .success();
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_resume_last_appends_to_existing_file() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let test = test_codex_exec();
     let server = MockServer::start().await;
-    let _response_mock = responses::mount_sse_sequence(
+    let response_mock = responses::mount_sse_sequence(
         &server,
         vec![
             responses::sse(vec![
@@ -168,6 +191,14 @@ async fn exec_resume_last_appends_to_existing_file() -> anyhow::Result<()> {
     let sessions_dir = test.home_path().join("sessions");
     let path = find_session_file_containing_marker(&sessions_dir, &marker)
         .expect("no session file found after first run");
+    let content = std::fs::read_to_string(&path)?;
+    let meta: Value = serde_json::from_str(
+        content
+            .lines()
+            .next()
+            .expect("rollout should contain session metadata"),
+    )?;
+    assert_eq!(meta["payload"]["history_mode"], "paginated");
 
     // 2) Second run: resume the most recent file with a new marker.
     let marker2 = format!("resume-last-2-{}", Uuid::new_v4());
@@ -190,8 +221,8 @@ async fn exec_resume_last_appends_to_existing_file() -> anyhow::Result<()> {
         stderr
             .matches("app-server event: thread/tokenUsage/updated")
             .count(),
-        1,
-        "resume should not replay restored token usage: {stderr}"
+        2,
+        "paginated resume should replay restored token usage before the new turn: {stderr}"
     );
 
     // Ensure the same file was updated and contains both markers.
@@ -204,6 +235,11 @@ async fn exec_resume_last_appends_to_existing_file() -> anyhow::Result<()> {
     let content = std::fs::read_to_string(&resumed_path)?;
     assert!(content.contains(&marker));
     assert!(content.contains(&marker2));
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2);
+    let resumed_request = requests[1].body_json().to_string();
+    assert!(resumed_request.contains(&marker));
+    assert!(resumed_request.contains(&marker2));
     Ok(())
 }
 
@@ -982,7 +1018,8 @@ async fn exec_fork_creates_distinct_threads_with_and_without_a_prompt() -> anyho
             .expect("fork rollout should contain session metadata"),
     )?;
     assert_eq!(fork_meta["payload"]["forked_from_id"], source_id);
-    assert!(fork_contents.contains(&source_marker));
+    assert_eq!(fork_meta["payload"]["history_base"]["thread_id"], source_id);
+    assert!(!fork_contents.contains(&source_marker));
     assert!(fork_contents.contains(&fork_marker));
     assert_eq!(std::fs::read_to_string(&source_path)?, original_source);
 
