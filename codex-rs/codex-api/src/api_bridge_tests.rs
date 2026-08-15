@@ -147,6 +147,39 @@ fn map_api_error_uses_cyber_policy_fallback_for_missing_message() {
 }
 
 #[test]
+fn map_api_error_maps_misalignment_policy_violation_from_400_body() {
+    assert_misalignment_policy_violation_from_http_body(http::StatusCode::BAD_REQUEST);
+}
+
+#[test]
+fn map_api_error_maps_misalignment_policy_violation_from_403_body() {
+    assert_misalignment_policy_violation_from_http_body(http::StatusCode::FORBIDDEN);
+}
+
+fn assert_misalignment_policy_violation_from_http_body(status: http::StatusCode) {
+    let body = serde_json::json!({
+        "error": {
+            "message": "This request violated the misalignment policy.",
+            "type": "invalid_request_error",
+            "code": "misalignment_policy_violation"
+        }
+    })
+    .to_string();
+    let err = map_api_error(ApiError::Transport(TransportError::Http {
+        status,
+        url: Some("http://example.com/v1/responses".to_string()),
+        headers: None,
+        body: Some(body),
+    }));
+
+    let CodexErrorDetails::MisalignmentPolicyViolation { message } = err.details() else {
+        panic!("expected CodexErrorDetails::MisalignmentPolicyViolation, got {err:?}");
+    };
+    assert_eq!(message, "This request violated the misalignment policy.");
+    assert!(!err.is_retryable());
+}
+
+#[test]
 fn map_api_error_keeps_unknown_400_errors_generic() {
     let body = serde_json::json!({
         "error": {

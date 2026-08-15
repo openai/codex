@@ -29,6 +29,8 @@ pub enum ApiError {
     InvalidRequest { message: String },
     #[error("cyber policy: {message}")]
     CyberPolicy { message: String },
+    #[error("misalignment policy violation: {message}")]
+    MisalignmentPolicyViolation { message: String },
     #[error("server overloaded")]
     ServerOverloaded,
 }

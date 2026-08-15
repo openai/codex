@@ -420,6 +420,15 @@ pub fn process_responses_event(
                     } else if is_cyber_policy_error(&error) {
                         let message = cyber_policy_message(error.message);
                         response_error = ApiError::CyberPolicy { message };
+                    } else if error.code.as_deref() == Some("misalignment_policy_violation") {
+                        let message = error
+                            .message
+                            .filter(|message| !message.trim().is_empty())
+                            .unwrap_or_else(|| {
+                                "This request was blocked due to a misalignment policy violation."
+                                    .to_string()
+                            });
+                        response_error = ApiError::MisalignmentPolicyViolation { message };
                     } else if matches!(error.code.as_deref(), Some("invalid_prompt" | "bio_policy"))
                     {
                         let message = error
@@ -1145,6 +1154,51 @@ mod tests {
                 );
             }
             other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn misalignment_policy_violation_error_is_fatal() {
+        let raw_error = r#"{"type":"response.failed","sequence_number":3,"response":{"id":"resp_fatal_misalignment","object":"response","status":"failed","error":{"type":"invalid_request_error","code":"misalignment_policy_violation","message":"This request violated the misalignment policy."}}}"#;
+
+        let sse = format!("event: response.failed\ndata: {raw_error}\n\n");
+        let events = collect_events(&[sse.as_bytes()]).await;
+
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Err(ApiError::MisalignmentPolicyViolation { message }) => {
+                assert_eq!(message, "This request violated the misalignment policy.");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn misalignment_policy_violation_uses_fallback_for_blank_message() {
+        for message in ["", "   "] {
+            let raw_error = serde_json::json!({
+                "type": "response.failed",
+                "response": {
+                    "id": "resp_fatal_misalignment",
+                    "status": "failed",
+                    "error": {
+                        "type": "invalid_request_error",
+                        "code": "misalignment_policy_violation",
+                        "message": message,
+                    },
+                },
+            });
+            let sse = format!("event: response.failed\ndata: {raw_error}\n\n");
+            let events = collect_events(&[sse.as_bytes()]).await;
+
+            assert_eq!(events.len(), 1);
+            match &events[0] {
+                Err(ApiError::MisalignmentPolicyViolation { message }) => assert_eq!(
+                    message,
+                    "This request was blocked due to a misalignment policy violation."
+                ),
+                other => panic!("unexpected event: {other:?}"),
+            }
         }
     }
 

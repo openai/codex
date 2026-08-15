@@ -48,6 +48,9 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
         ApiError::CyberPolicy { message } => {
             CodexErr::new(CodexErrorDetails::CyberPolicy { message })
         }
+        ApiError::MisalignmentPolicyViolation { message } => {
+            CodexErr::new(CodexErrorDetails::MisalignmentPolicyViolation { message })
+        }
         ApiError::Transport(transport) => match transport {
             TransportError::Http {
                 status,
@@ -68,6 +71,26 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
                     )
                 {
                     return CodexErr::ServerOverloaded;
+                }
+
+                if (status == http::StatusCode::BAD_REQUEST
+                    || status == http::StatusCode::FORBIDDEN)
+                    && let Ok(parsed) = serde_json::from_str::<Value>(&body_text)
+                    && let Some(error) = parsed.get("error")
+                    && error.get("code").and_then(Value::as_str)
+                        == Some(MISALIGNMENT_POLICY_VIOLATION_ERROR_CODE)
+                {
+                    let message = error
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .filter(|message| !message.trim().is_empty())
+                        .map(str::to_string)
+                        .unwrap_or_else(|| {
+                            MISALIGNMENT_POLICY_VIOLATION_FALLBACK_MESSAGE.to_string()
+                        });
+                    return CodexErr::new(CodexErrorDetails::MisalignmentPolicyViolation {
+                        message,
+                    });
                 }
 
                 if status == http::StatusCode::BAD_REQUEST {
@@ -167,6 +190,9 @@ const X_ERROR_JSON_HEADER: &str = "x-error-json";
 const CYBER_POLICY_ERROR_CODE: &str = "cyber_policy";
 const CYBER_POLICY_FALLBACK_MESSAGE: &str =
     "This request has been flagged for possible cybersecurity risk.";
+const MISALIGNMENT_POLICY_VIOLATION_ERROR_CODE: &str = "misalignment_policy_violation";
+const MISALIGNMENT_POLICY_VIOLATION_FALLBACK_MESSAGE: &str =
+    "This request was blocked due to a misalignment policy violation.";
 const CLOUDFLARE_BLOCKED_MESSAGE: &str =
     "Access blocked by Cloudflare. This usually happens when connecting from a restricted region";
 
