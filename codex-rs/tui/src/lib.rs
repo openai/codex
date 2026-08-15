@@ -1413,6 +1413,11 @@ async fn run_ratatui_app(
         resume_picker::SessionSelection::StartFresh
     };
 
+    if let Err(err) = startup_draft.update_session_selection(&mut tui, &session_selection) {
+        shutdown_startup_session(app_server.take(), &mut terminal_restore_guard).await;
+        return Err(err.into());
+    }
+
     if matches!(
         &session_selection,
         resume_picker::SessionSelection::Resume(_) | resume_picker::SessionSelection::Fork(_)

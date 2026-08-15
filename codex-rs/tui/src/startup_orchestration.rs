@@ -165,7 +165,14 @@ pub(super) async fn run_main_inner(
     } else {
         startup_draft::StartupDraftInitialScreen::Composer
     };
-    let mut startup_draft = startup_draft::StartupDraft::new(initial_screen)?;
+    let session_action = if cli.fork_picker || cli.fork_last || cli.fork_session_id.is_some() {
+        startup_draft::StartupDraftSessionAction::Fork
+    } else if cli.resume_picker || cli.resume_last || cli.resume_session_id.is_some() {
+        startup_draft::StartupDraftSessionAction::Resume
+    } else {
+        startup_draft::StartupDraftSessionAction::New
+    };
+    let mut startup_draft = startup_draft::StartupDraft::new(initial_screen, session_action)?;
 
     let default_daemon = if explicit_remote_endpoint.is_none() && reuse_implicit_local_daemon {
         startup_draft

@@ -202,6 +202,7 @@ async fn startup_typeahead_pty_child() {
     let signals = PathBuf::from(signals);
     let mut startup_draft = crate::startup_draft::StartupDraft::new(
         crate::startup_draft::StartupDraftInitialScreen::Composer,
+        crate::startup_draft::StartupDraftSessionAction::New,
     )
     .expect("initialize the real startup composer");
 

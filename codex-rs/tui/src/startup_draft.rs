@@ -15,6 +15,7 @@ use crossterm::event::KeyModifiers;
 use ratatui::layout::Size;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
+use ratatui::style::Stylize;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio_stream::Stream;
@@ -38,6 +39,7 @@ use crate::render::renderable::FlexRenderable;
 use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableExt;
 use crate::render::renderable::RenderableItem;
+use crate::resume_picker::SessionSelection;
 use crate::tui;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
@@ -53,6 +55,14 @@ pub(crate) enum StartupDraftInitialScreen {
     Composer,
     Onboarding,
     SessionPicker,
+}
+
+/// Describes the session being prepared behind the provisional composer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum StartupDraftSessionAction {
+    New,
+    Resume,
+    Fork,
 }
 
 /// Marks intentional startup cancellation so unrelated I/O interrupts remain errors.
@@ -82,12 +92,16 @@ pub(crate) struct StartupDraftPump {
     events: Pin<Box<dyn Stream<Item = TuiEvent> + Send>>,
     app_event_rx: UnboundedReceiver<AppEvent>,
     initial_screen: StartupDraftInitialScreen,
+    session_action: StartupDraftSessionAction,
     pending_paste_newline: Option<(Instant, String)>,
 }
 
 impl StartupDraft {
     /// Initialize the terminal without showing a composer before an expected session picker.
-    pub(crate) fn new(initial_screen: StartupDraftInitialScreen) -> io::Result<Self> {
+    pub(crate) fn new(
+        initial_screen: StartupDraftInitialScreen,
+        session_action: StartupDraftSessionAction,
+    ) -> io::Result<Self> {
         let mut initialized_terminal = tui::init()?;
         let terminal_restore_guard = TerminalRestoreGuard::new();
         initialized_terminal.terminal.clear()?;
@@ -113,6 +127,7 @@ impl StartupDraft {
                 events,
                 app_event_rx,
                 initial_screen,
+                session_action,
                 pending_paste_newline: None,
             },
         };
@@ -159,6 +174,27 @@ impl StartupDraftPump {
         if let Ok(keymap) = RuntimeKeymap::from_config(&config.tui_keymap) {
             self.bottom_pane.set_keymap_bindings(&keymap);
         }
+    }
+
+    /// Align the provisional loading message with the resolved session selection.
+    pub(crate) fn update_session_selection(
+        &mut self,
+        tui: &mut Tui,
+        session_selection: &SessionSelection,
+    ) -> io::Result<()> {
+        let session_action = match session_selection {
+            SessionSelection::StartFresh | SessionSelection::Exit => StartupDraftSessionAction::New,
+            SessionSelection::Resume(_) => StartupDraftSessionAction::Resume,
+            SessionSelection::Fork(_) => StartupDraftSessionAction::Fork,
+        };
+        if self.session_action == session_action {
+            return Ok(());
+        }
+        self.session_action = session_action;
+        if self.initial_screen == StartupDraftInitialScreen::Composer {
+            self.draw(tui, tui.terminal.last_known_screen_size)?;
+        }
+        Ok(())
     }
 
     /// Poll one existing startup future alongside the original terminal input stream.
@@ -336,7 +372,8 @@ impl StartupDraftPump {
                 .schedule_frame_in(ChatComposer::recommended_paste_flush_delay());
         }
         self.bottom_pane.pre_draw_tick();
-        let renderable = startup_draft_renderable(&self.header, &self.bottom_pane);
+        let renderable =
+            startup_draft_renderable(&self.header, &self.bottom_pane, self.session_action);
         let desired_height = renderable.desired_height(screen_size.width);
         tui.draw_with_resize_reflow(desired_height, screen_size, |frame| {
             let area = frame.area();
@@ -427,15 +464,30 @@ fn startup_session_header(config: Option<&Config>) -> Box<dyn HistoryCell> {
 fn startup_draft_renderable<'a>(
     header: &'a dyn Renderable,
     bottom_pane: &'a BottomPane,
+    session_action: StartupDraftSessionAction,
 ) -> RenderableItem<'a> {
     let mut renderable = FlexRenderable::new();
     renderable.push(/*flex*/ 1, RenderableItem::Borrowed(header));
+    let loading_message = match session_action {
+        StartupDraftSessionAction::New => None,
+        StartupDraftSessionAction::Resume => Some("  Resuming session…"),
+        StartupDraftSessionAction::Fork => Some("  Forking session…"),
+    };
+    if let Some(loading_message) = loading_message {
+        renderable.push(
+            /*flex*/ 0,
+            RenderableItem::Owned(Box::new(loading_message.dim())),
+        );
+    }
     renderable.push(
         /*flex*/ 0,
         bottom_pane
             .as_renderable_with_composer_right_reserve(/*composer_right_reserve*/ 0)
             .inset(Insets::tlbr(
-                /*top*/ 1, /*left*/ 0, /*bottom*/ 0, /*right*/ 0,
+                /*top*/ u16::from(loading_message.is_none()),
+                /*left*/ 0,
+                /*bottom*/ 0,
+                /*right*/ 0,
             )),
     );
     RenderableItem::Owned(Box::new(renderable))

@@ -2,20 +2,8 @@
 source: tui/src/startup_draft_tests.rs
 expression: "snapshots.join(\"\\n---\\n\")"
 ---
-empty (48 columns):
-╭───────────────────────────────────────╮
-│ >_ OpenAI Codex (v<VERSION>)              │
-│                                       │
-│ model:     loading   /model to change │
-│ directory: loading                    │
-╰───────────────────────────────────────╯
-
-
-› Ask Codex to do anything
-
-  ? for shortcuts
----
-resuming (48 columns):
+resume lookup fallback:
+before:
 ╭───────────────────────────────────────╮
 │ >_ OpenAI Codex (v<VERSION>)              │
 │                                       │
@@ -24,11 +12,24 @@ resuming (48 columns):
 ╰───────────────────────────────────────╯
   Resuming session…
 
-› Ask Codex to do anything
+› draft while loading
 
-  ? for shortcuts
+
+after:
+╭───────────────────────────────────────╮
+│ >_ OpenAI Codex (v<VERSION>)              │
+│                                       │
+│ model:     loading   /model to change │
+│ directory: loading                    │
+╰───────────────────────────────────────╯
+
+
+› draft while loading
+
+
 ---
-forking (48 columns):
+fork lookup fallback:
+before:
 ╭───────────────────────────────────────╮
 │ >_ OpenAI Codex (v<VERSION>)              │
 │                                       │
@@ -40,8 +41,7 @@ forking (48 columns):
 › draft while loading
 
 
----
-multiline (48 columns):
+after:
 ╭───────────────────────────────────────╮
 │ >_ OpenAI Codex (v<VERSION>)              │
 │                                       │
@@ -50,21 +50,38 @@ multiline (48 columns):
 ╰───────────────────────────────────────╯
 
 
-› first startup line
-  second startup line
+› draft while loading
 
 
 ---
-narrow (18 columns):
-╭────────────────╮
-│ >_ OpenAI Cod… │
-│                │
-│ model:     lo… │
-│ directory: …ng │
-╰────────────────╯
+resume picker cancellation:
+before:
+hidden while picker owns input
+after:
+╭───────────────────────────────────────╮
+│ >_ OpenAI Codex (v<VERSION>)              │
+│                                       │
+│ model:     loading   /model to change │
+│ directory: loading                    │
+╰───────────────────────────────────────╯
 
 
-› first startup
-  line
-  second startup
-  line
+› Ask Codex to do anything
+
+  ? for shortcuts
+---
+fork picker cancellation:
+before:
+hidden while picker owns input
+after:
+╭───────────────────────────────────────╮
+│ >_ OpenAI Codex (v<VERSION>)              │
+│                                       │
+│ model:     loading   /model to change │
+│ directory: loading                    │
+╰───────────────────────────────────────╯
+
+
+› Ask Codex to do anything
+
+  ? for shortcuts
