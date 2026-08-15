@@ -1,12 +1,13 @@
 ---
 source: cli/src/doctor/output.rs
-expression: "render_human_report(&sample_report(), detailed_no_color_unicode_options())"
+expression: "render_human_report(&report, detailed_no_color_unicode_options())"
 ---
 Codex Doctor v0.0.0
 
 Notes
    ⚠ terminal     narrow terminal
    ✗ auth         token expired - Run `codex login`.
+   ⚠ git          this worktree is not on a Windows Dev Drive - create a trusted Windows Dev Drive: https://learn.microsoft.com/en-us/windows/dev-drive/
 ─────────────────────────────────────────────────────────────
 
 Environment
@@ -19,6 +20,7 @@ Environment
       GIT_PAGER                delta
       GH_PAGER                 less
       LESS                     -FRX
+  ✓ disk         sufficient free disk space (42.0 GiB)
   ✓ runtime      running local build on darwin-arm64
   ✓ install      consistent
       managed by               npm: no · bun: no · pnpm: no · package root —
@@ -27,6 +29,7 @@ Environment
       selected git             /usr/bin/git
       version                  git version 2.54.0
       repo detected            true
+  ⚠ git          this worktree is not on a Windows Dev Drive — create a trusted Windows Dev Drive: https://learn.microsoft.com/en-us/windows/dev-drive/
   ⚠ terminal     narrow terminal
   ✓ title        default · project codex
       title source             default
@@ -50,7 +53,7 @@ Background Server
   ✓ app-server   background server is not running
 
 ─────────────────────────────────────────────────────────────
-12 ok · 2 notes · 1 warn · 1 fail failed
+13 ok · 3 notes · 2 warn · 1 fail failed
 
 --summary compact output           --all expand truncated lists
 --json redacted report

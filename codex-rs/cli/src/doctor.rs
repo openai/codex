@@ -67,6 +67,7 @@ use serde::Serialize;
 use supports_color::Stream;
 
 mod background;
+mod disk;
 mod git;
 mod output;
 mod progress;
@@ -75,6 +76,8 @@ mod system;
 mod thread_inventory;
 mod title;
 mod updates;
+#[cfg(target_os = "windows")]
+mod windows_dev_drive;
 
 use background::background_server_check;
 use git::git_check;
@@ -348,6 +351,23 @@ async fn build_report(
 
     progress.begin("config");
     let config_result = load_config(root_config_overrides, interactive, arg0_paths).await;
+    let cwd = config_result
+        .as_ref()
+        .map(|config| config.cwd.as_path().to_path_buf())
+        .unwrap_or_else(|_| {
+            let mut cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            if let Some(requested_cwd) = &interactive.cwd {
+                cwd.push(requested_cwd);
+            }
+            cwd
+        });
+    checks.push(run_sync_check("disk", progress.clone(), || {
+        disk::check(config_result.as_ref().ok(), &cwd)
+    }));
+    #[cfg(target_os = "windows")]
+    checks.push(run_sync_check("dev drive", progress.clone(), || {
+        windows_dev_drive::check(&cwd)
+    }));
     match &config_result {
         Ok(config) => {
             let auth_manager_result =
@@ -446,10 +466,6 @@ async fn build_report(
         }
         Err(err) => {
             let reachability_plan = default_reachability_plan();
-            let fallback_cwd = interactive
-                .cwd
-                .clone()
-                .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
             let (
                 config_check,
                 network_check,
@@ -476,7 +492,7 @@ async fn build_report(
                         terminal_check(command.no_color)
                     })
                 },
-                run_async_check("git", progress.clone(), git_check(fallback_cwd.as_path())),
+                run_async_check("git", progress.clone(), git_check(&cwd)),
                 async { run_sync_check("state", progress.clone(), fallback_state_check) },
                 run_async_check(
                     "provider reachability",

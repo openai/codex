@@ -26,7 +26,7 @@ const GROUPS: &[OutputGroup] = &[
     OutputGroup {
         title: "Environment",
         keys: &[
-            "system", "runtime", "install", "search", "git", "terminal", "title", "state",
+            "system", "disk", "runtime", "install", "search", "git", "terminal", "title", "state",
             "threads",
         ],
     },
@@ -1301,9 +1301,27 @@ Background Server
 
     #[test]
     fn render_human_report_snapshot_covers_environment_rows() {
+        let mut report = sample_report();
+        report.checks.push(DoctorCheck::new(
+            "system.disk",
+            "disk",
+            CheckStatus::Ok,
+            "sufficient free disk space (42.0 GiB)",
+        ));
+        report.checks.push(
+            DoctorCheck::new(
+                "git.worktree.dev_drive",
+                "git",
+                CheckStatus::Warning,
+                "this worktree is not on a Windows Dev Drive",
+            )
+            .remediation(
+                "create a trusted Windows Dev Drive: https://learn.microsoft.com/en-us/windows/dev-drive/",
+            ),
+        );
         insta::assert_snapshot!(
             "doctor_human_report_environment_rows",
-            render_human_report(&sample_report(), detailed_no_color_unicode_options())
+            render_human_report(&report, detailed_no_color_unicode_options())
         );
     }
 

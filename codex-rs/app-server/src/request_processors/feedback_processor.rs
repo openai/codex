@@ -241,13 +241,22 @@ impl FeedbackRequestProcessor {
         }
 
         let mut extra_attachments = Vec::new();
-        if include_logs
-            && let Some(doctor_report) =
-                super::feedback_doctor_report::doctor_feedback_report(&self.config).await
-        {
-            extra_attachments.push(doctor_report.attachment);
-            for (key, value) in doctor_report.tags {
-                upload_tags.entry(key).or_insert(value);
+        if include_logs {
+            let doctor_cwd = feedback_cwd(
+                &self.thread_manager,
+                self.state_db.as_ref(),
+                conversation_id,
+                self.config.cwd.as_path(),
+            )
+            .await;
+            if let Some(doctor_report) =
+                super::feedback_doctor_report::doctor_feedback_report(&self.config, &doctor_cwd)
+                    .await
+            {
+                extra_attachments.push(doctor_report.attachment);
+                for (key, value) in doctor_report.tags {
+                    upload_tags.entry(key).or_insert(value);
+                }
             }
         }
 
@@ -300,6 +309,33 @@ impl FeedbackRequestProcessor {
                 warn!("failed to resolve rollout path for thread_id={conversation_id}: {err}");
                 None
             })
+    }
+}
+
+async fn feedback_cwd(
+    thread_manager: &ThreadManager,
+    state_db: Option<&StateDbHandle>,
+    conversation_id: Option<ThreadId>,
+    fallback_cwd: &Path,
+) -> PathBuf {
+    let Some(conversation_id) = conversation_id else {
+        return fallback_cwd.to_path_buf();
+    };
+
+    if let Ok(conversation) = thread_manager.get_thread(conversation_id).await {
+        return conversation.config_snapshot().await.cwd().to_path_buf();
+    }
+
+    let Some(state_db) = state_db else {
+        return fallback_cwd.to_path_buf();
+    };
+    match state_db.get_thread(conversation_id).await {
+        Ok(Some(metadata)) => metadata.cwd,
+        Ok(None) => fallback_cwd.to_path_buf(),
+        Err(err) => {
+            warn!("failed to resolve cwd for feedback thread_id={conversation_id}: {err}");
+            fallback_cwd.to_path_buf()
+        }
     }
 }
 
@@ -434,7 +470,28 @@ mod tests {
     use super::*;
     use codex_protocol::protocol::TurnContextItem;
     use codex_rollout::RolloutLine;
+    use core_test_support::responses::start_mock_server;
+    use core_test_support::test_codex::test_codex;
     use pretty_assertions::assert_eq;
+
+    #[tokio::test]
+    async fn doctor_uses_loaded_feedback_thread_cwd() -> anyhow::Result<()> {
+        let server = start_mock_server().await;
+        let test = test_codex().build_with_auto_env(&server).await?;
+        let daemon_workspace = tempfile::tempdir()?;
+
+        let cwd = feedback_cwd(
+            &test.thread_manager,
+            /*state_db*/ None,
+            Some(test.session_configured.thread_id),
+            daemon_workspace.path(),
+        )
+        .await;
+
+        assert_eq!(cwd, test.cwd_path());
+        Ok(())
+    }
+
     #[test]
     fn feedback_tags_drop_unverified_client_prompt_tags() {
         let mut upload_tags = BTreeMap::from([

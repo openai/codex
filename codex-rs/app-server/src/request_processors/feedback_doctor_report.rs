@@ -8,6 +8,7 @@
 //! attaching exactly the same JSON a user could copy from the CLI.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -30,19 +31,22 @@ pub(crate) struct DoctorFeedbackReport {
     pub(crate) tags: BTreeMap<String, String>,
 }
 
-/// Runs `codex doctor --json` and returns a best-effort feedback attachment.
+/// Runs `codex --cd <workspace> doctor --json` and returns a best-effort
+/// feedback attachment.
 ///
 /// Failure to spawn Codex, finish before the timeout, or parse JSON means the
 /// feedback upload proceeds without the doctor report. Callers should merge the
 /// returned tags without overriding explicit client-provided tags.
-pub(crate) async fn doctor_feedback_report(config: &Config) -> Option<DoctorFeedbackReport> {
+pub(crate) async fn doctor_feedback_report(
+    config: &Config,
+    workspace: &Path,
+) -> Option<DoctorFeedbackReport> {
     let executable = config
         .codex_self_exe
         .clone()
         .or_else(|| std::env::current_exe().ok())?;
 
-    let mut command = Command::new(&executable);
-    command.arg("doctor").arg("--json");
+    let mut command = doctor_command(&executable, workspace, config.codex_home.as_path());
     command.stdin(Stdio::null());
     command.kill_on_drop(/*kill_on_drop*/ true);
     let output = match timeout(DOCTOR_FEEDBACK_REPORT_TIMEOUT, command.output()).await {
@@ -97,6 +101,18 @@ pub(crate) async fn doctor_feedback_report(config: &Config) -> Option<DoctorFeed
             buffer: pretty,
         },
     })
+}
+
+fn doctor_command(executable: &Path, cwd: &Path, codex_home: &Path) -> Command {
+    let mut command = Command::new(executable);
+    command
+        .arg("--cd")
+        .arg(cwd)
+        .arg("doctor")
+        .arg("--json")
+        .current_dir(codex_home)
+        .env("CODEX_HOME", codex_home);
+    command
 }
 
 fn doctor_report_tags(report: &Value) -> BTreeMap<String, String> {
@@ -178,6 +194,31 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use tempfile::tempdir;
+
+    #[test]
+    fn doctor_command_keeps_missing_workspace_out_of_process_cwd() {
+        let codex_home = tempdir().expect("codex home");
+        let workspace = codex_home.path().join("deleted-workspace");
+
+        let command = doctor_command(Path::new("codex"), &workspace, codex_home.path());
+        let command = command.as_std();
+
+        assert_eq!(command.get_current_dir(), Some(codex_home.path()));
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            [
+                "--cd".as_ref(),
+                workspace.as_os_str(),
+                "doctor".as_ref(),
+                "--json".as_ref()
+            ]
+        );
+        assert_eq!(
+            command.get_envs().collect::<Vec<_>>(),
+            [("CODEX_HOME".as_ref(), Some(codex_home.path().as_os_str()))]
+        );
+    }
 
     #[test]
     fn doctor_report_tags_summarize_status_counts() {
