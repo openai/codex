@@ -72,6 +72,11 @@ use std::sync::Mutex;
 use std::time::Duration;
 use tempfile::TempDir;
 use test_case::test_case;
+use wiremock::Mock;
+use wiremock::ResponseTemplate;
+use wiremock::http::Method;
+use wiremock::matchers::method;
+use wiremock::matchers::path_regex;
 
 const CURRENT_TIME_AT: i64 = 1_781_717_655;
 
@@ -110,6 +115,78 @@ impl TimeProvider for RecordingTimeProvider {
     fn sleep(&self, _thread_id: ThreadId, _duration: Duration) -> SleepFuture<'_> {
         Box::pin(async { Ok(()) })
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_session_inherits_parent_http_fallback() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_wine_exec!(
+        Ok(()),
+        "Guardian approval actions require host-native paths"
+    );
+
+    let server = start_mock_server().await;
+    Mock::given(method("GET"))
+        .and(path_regex(".*/responses$"))
+        .respond_with(ResponseTemplate::new(426))
+        .mount(&server)
+        .await;
+
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_function_call(
+                    "call",
+                    "exec_command",
+                    r#"{"cmd":"true","sandbox_permissions":"require_escalated","justification":"test"}"#,
+                ),
+                ev_completed("parent-tool"),
+            ]),
+            sse(vec![
+                ev_assistant_message("guardian", r#"{"outcome":"deny"}"#),
+                ev_completed("guardian-review"),
+            ]),
+            sse(vec![ev_completed("parent-complete")]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.model_provider.supports_websockets = true;
+        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        config.approvals_reviewer = ApprovalsReviewer::User;
+    });
+    let test = builder.build_with_auto_env(&server).await?;
+
+    test.codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "run a command".into(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+                ..Default::default()
+            }),
+        )
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = server.received_requests().await.unwrap_or_default();
+    let websocket_attempts = requests
+        .iter()
+        .filter(|request| request.method == Method::GET)
+        .count();
+    assert_eq!(websocket_attempts, 1);
+    assert!(responses.requests().iter().any(|request| {
+        request.body_json()["client_metadata"]["x-openai-subagent"].as_str() == Some("guardian")
+    }));
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
