@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used)]
 
+use anyhow::Context;
 use anyhow::Result;
 use codex_core::TurnInputRequest;
 use codex_core::config::Constrained;
@@ -17,6 +18,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::GranularApprovalConfig;
+use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ThreadSettingsOverrides;
@@ -29,12 +31,15 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_response_once_match;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
+use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_sandbox;
+use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
@@ -46,6 +51,7 @@ use serde_json::Value;
 use serde_json::json;
 use std::fs;
 use std::path::Path;
+use std::time::Duration;
 use test_case::test_case;
 
 fn absolute_path(path: &Path) -> AbsolutePathBuf {
@@ -488,6 +494,260 @@ async fn request_permissions_tool_is_auto_denied_when_granular_request_permissio
             scope: PermissionGrantScope::Turn,
             strict_auto_review: false,
         }
+    );
+
+    Ok(())
+}
+
+#[test_case("allow" ; "guardian approval grants the requested permissions")]
+#[test_case("deny" ; "guardian denial grants no permissions")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_permissions_auto_review_applies_guardian_decision(outcome: &str) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_wine_exec!(
+        Ok(()),
+        "request_permissions requires a cwd native to the Codex host"
+    );
+
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::OnRequest;
+    let mut builder = test_codex().with_config(move |config| {
+        config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+        config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+        config
+            .features
+            .enable(Feature::RequestPermissionsTool)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build_with_auto_env(&server).await?;
+
+    let requested_dir = test.workspace_path("guardian-requested-permissions");
+    fs::create_dir_all(&requested_dir)?;
+    let requested_permissions = requested_directory_write_permissions(&requested_dir);
+    let normalized_permissions = normalized_directory_write_permissions(&requested_dir)?;
+    let call_id = "guardian-request-permissions";
+    let reason = "Guardian should review access to the requested directory";
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-guardian-permissions-parent"),
+                request_permissions_tool_event(call_id, reason, &requested_permissions)?,
+                ev_completed("resp-guardian-permissions-parent"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-guardian-permissions-review"),
+                ev_assistant_message(
+                    "msg-guardian-permissions-review",
+                    &json!({
+                        "risk_level": "low",
+                        "user_authorization": "high",
+                        "outcome": outcome,
+                        "rationale": "Exercise the request_permissions Guardian decision.",
+                    })
+                    .to_string(),
+                ),
+                ev_completed("resp-guardian-permissions-review"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-guardian-permissions-followup"),
+                ev_assistant_message("msg-guardian-permissions-followup", "done"),
+                ev_completed("resp-guardian-permissions-followup"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "request Guardian-reviewed directory permissions".into(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                approval_policy: Some(approval_policy),
+                approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+                ..Default::default()
+            }),
+        )
+        .await?;
+
+    let event = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::RequestPermissions(_) | EventMsg::TurnComplete(_)
+        )
+    })
+    .await;
+    assert!(
+        matches!(event, EventMsg::TurnComplete(_)),
+        "Guardian-reviewed permissions should not prompt the user: {event:?}"
+    );
+
+    let requests = responses.requests();
+    let guardian_request = requests
+        .iter()
+        .find(|request| {
+            request.body_json()["client_metadata"]["x-openai-subagent"].as_str() == Some("guardian")
+        })
+        .context("expected Guardian review request")?;
+    assert!(guardian_request.body_contains_text(reason));
+    assert!(
+        guardian_request.body_contains_text(&requested_dir.canonicalize()?.display().to_string())
+    );
+
+    let output = requests
+        .iter()
+        .find_map(|request| request.function_call_output_text(call_id))
+        .context("expected request_permissions output")?;
+    let actual: RequestPermissionsResponse = serde_json::from_str(&output)?;
+    let expected_permissions = if outcome == "allow" {
+        normalized_permissions
+    } else {
+        RequestPermissionProfile::default()
+    };
+    assert_eq!(
+        actual,
+        RequestPermissionsResponse {
+            permissions: expected_permissions,
+            scope: PermissionGrantScope::Turn,
+            strict_auto_review: false,
+        }
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn interrupted_request_permissions_auto_review_aborts_guardian_review() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_wine_exec!(
+        Ok(()),
+        "request_permissions requires a cwd native to the Codex host"
+    );
+
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::OnRequest;
+    let mut builder = test_codex().with_config(move |config| {
+        config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+        config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+        config
+            .features
+            .enable(Feature::RequestPermissionsTool)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build_with_auto_env(&server).await?;
+
+    let requested_dir = test.workspace_path("guardian-interrupted-permissions");
+    fs::create_dir_all(&requested_dir)?;
+    let requested_permissions = requested_directory_write_permissions(&requested_dir);
+    let call_id = "guardian-request-permissions-interrupted";
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-guardian-interrupted-permissions-parent"),
+            request_permissions_tool_event(
+                call_id,
+                "Interrupt Guardian before it grants permissions",
+                &requested_permissions,
+            )?,
+            ev_completed("resp-guardian-interrupted-permissions-parent"),
+        ]),
+    )
+    .await;
+    let pending_guardian = mount_response_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            serde_json::from_slice::<Value>(&request.body)
+                .ok()
+                .and_then(|body| {
+                    body.pointer("/client_metadata/x-openai-subagent")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+                .as_deref()
+                == Some("guardian")
+        },
+        sse_response(sse(vec![
+            ev_response_created("resp-guardian-interrupted-permissions-review"),
+            ev_assistant_message(
+                "msg-guardian-interrupted-permissions-review",
+                r#"{"outcome":"allow"}"#,
+            ),
+            ev_completed("resp-guardian-interrupted-permissions-review"),
+        ]))
+        .set_delay(Duration::from_secs(30)),
+    )
+    .await;
+
+    test.codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "interrupt a Guardian-reviewed permissions request".into(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                approval_policy: Some(approval_policy),
+                approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+                ..Default::default()
+            }),
+        )
+        .await?;
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while pending_guardian.requests().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .context("timed out waiting for the request_permissions Guardian review")?;
+
+    test.codex.submit(Op::Interrupt).await?;
+    let mut saw_turn_aborted = false;
+    let mut saw_guardian_aborted = false;
+    while !saw_turn_aborted || !saw_guardian_aborted {
+        let event = tokio::time::timeout(Duration::from_secs(5), test.codex.next_event())
+            .await
+            .context("timed out waiting for parent and Guardian cancellation")?
+            .context("event stream ended while waiting for cancellation")?;
+        saw_turn_aborted |= matches!(&event.msg, EventMsg::TurnAborted(_));
+        saw_guardian_aborted |= matches!(
+            &event.msg,
+            EventMsg::GuardianAssessment(assessment)
+                if assessment.status == GuardianAssessmentStatus::Aborted
+        );
+        assert!(
+            !matches!(&event.msg, EventMsg::RequestPermissions(_)),
+            "interrupted Guardian review should not fall back to a user prompt"
+        );
+    }
+
+    let follow_up = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-parent-after-interrupted-permissions-review"),
+            ev_assistant_message("msg-parent-after-interrupted-permissions-review", "done"),
+            ev_completed("resp-parent-after-interrupted-permissions-review"),
+        ]),
+    )
+    .await;
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "verify interrupted permissions review left the next turn clean".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    wait_for_completion(&test).await;
+    let follow_up_request = follow_up.single_request();
+    assert!(follow_up_request.has_function_call(call_id));
+    let interrupted_output = follow_up_request
+        .function_call_output_text(call_id)
+        .context("expected the interrupted permissions request's tool output")?;
+    assert!(
+        interrupted_output.contains("aborted") || interrupted_output.contains("cancelled"),
+        "unexpected interrupted permissions output: {interrupted_output}"
     );
 
     Ok(())

@@ -9,6 +9,7 @@ use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request;
 use crate::guardian::review_approval_request_with_cancel;
 use crate::guardian::routes_approval_policy_to_guardian;
+use crate::guardian::spawn_approval_request_review;
 use crate::hook_runtime::run_permission_request_hooks;
 use crate::mcp_tool_call::request_mcp_tool_user_approval;
 use crate::sandboxing::SandboxPermissions;
@@ -39,6 +40,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::NetworkPolicyRuleAction;
 use codex_protocol::protocol::ReviewDecision;
+use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_tools::ToolName;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
@@ -139,6 +141,12 @@ pub(crate) enum ApprovalAction {
         command: Vec<String>,
         cwd: AbsolutePathBuf,
     },
+    RequestPermissions {
+        id: String,
+        turn_id: String,
+        reason: Option<String>,
+        permissions: RequestPermissionProfile,
+    },
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, serde::Serialize)]
@@ -189,6 +197,17 @@ impl ApprovalAction {
                 hook_command.clone(),
                 Some(format!("network-access {target}")),
             ),
+            Self::RequestPermissions {
+                reason,
+                permissions,
+                ..
+            } => PermissionRequestPayload {
+                tool_name: HookToolName::new("request_permissions"),
+                tool_input: serde_json::json!({
+                    "reason": reason,
+                    "permissions": permissions,
+                }),
+            },
         }
     }
 
@@ -226,7 +245,9 @@ impl ApprovalAction {
             })],
             #[cfg(unix)]
             Self::Execve { .. } => Vec::new(),
-            Self::McpToolCall { .. } | Self::NetworkAccess { .. } => Vec::new(),
+            Self::McpToolCall { .. }
+            | Self::NetworkAccess { .. }
+            | Self::RequestPermissions { .. } => Vec::new(),
             Self::ApplyPatch {
                 environment_id,
                 files,
@@ -358,6 +379,17 @@ impl ApprovalAction {
                 protocol,
                 port,
                 trigger,
+            },
+            Self::RequestPermissions {
+                id,
+                turn_id,
+                reason,
+                permissions,
+            } => crate::guardian::GuardianApprovalRequest::RequestPermissions {
+                id,
+                turn_id,
+                reason,
+                permissions,
             },
         })
     }
@@ -532,7 +564,10 @@ impl Session {
         };
 
         let decision = match reviewer {
-            ApprovalReviewer::Guardian => self.request_guardian_approval(action, ctx).await,
+            ApprovalReviewer::Guardian => {
+                self.request_guardian_approval(action, ctx, /*cancellation_token*/ None)
+                    .await
+            }
             ApprovalReviewer::User => self.request_user_approval(&action, ctx).await,
         };
         let source = match reviewer {
@@ -542,10 +577,11 @@ impl Session {
         ApprovalResolution { decision, source }
     }
 
-    async fn request_guardian_approval(
+    pub(crate) async fn request_guardian_approval(
         self: &Arc<Self>,
         action: ApprovalAction,
         ctx: &ApprovalContext,
+        cancellation_token: Option<CancellationToken>,
     ) -> ReviewDecision {
         let is_network_approval = matches!(&action, ApprovalAction::NetworkAccess { .. });
         let review_id = new_guardian_review_id();
@@ -559,7 +595,23 @@ impl Session {
             }
         };
 
-        if is_network_approval {
+        if let Some(cancellation_token) = cancellation_token {
+            let review = spawn_approval_request_review(
+                Arc::clone(self),
+                ctx.review_context.clone(),
+                review_id,
+                action,
+                ctx.retry_reason.clone(),
+                GuardianReviewOptions {
+                    plugin_attribution_override: None,
+                    approval_request_source: GuardianApprovalRequestSource::MainTurn,
+                    external_cancel: Some(cancellation_token.clone()),
+                },
+            );
+            review.await.unwrap_or_else(|_| {
+                ReviewDecision::denied("automatic approval review could not complete")
+            })
+        } else if is_network_approval {
             let review_cancel = CancellationToken::new();
             let review_cancel_guard = review_cancel.clone().drop_guard();
             let review_session = Arc::clone(self);
@@ -640,7 +692,9 @@ impl Session {
                     #[cfg(unix)]
                     ApprovalAction::Execve { .. } => unreachable!("matched command approval"),
                     ApprovalAction::ApplyPatch { .. } => unreachable!("matched command approval"),
-                    ApprovalAction::McpToolCall { .. } | ApprovalAction::NetworkAccess { .. } => {
+                    ApprovalAction::McpToolCall { .. }
+                    | ApprovalAction::NetworkAccess { .. }
+                    | ApprovalAction::RequestPermissions { .. } => {
                         unreachable!("matched command approval")
                     }
                 };
@@ -763,6 +817,9 @@ impl Session {
                     /*plugin_attribution_override*/ None,
                 )
                 .await
+            }
+            ApprovalAction::RequestPermissions { .. } => {
+                unreachable!("permission requests are routed directly to Guardian")
             }
         }
     }
