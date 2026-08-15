@@ -1514,6 +1514,7 @@ pub enum HookEventName {
 #[serde(rename_all = "snake_case")]
 pub enum HookHandlerType {
     Command,
+    McpTool,
     Prompt,
     Agent,
 }

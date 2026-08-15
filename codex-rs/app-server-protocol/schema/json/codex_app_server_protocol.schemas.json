@@ -11871,12 +11871,89 @@
       "HookHandlerType": {
         "enum": [
           "command",
+          "mcpTool",
           "prompt",
           "agent"
         ],
         "type": "string"
       },
       "HookMetadata": {
+        "oneOf": [
+          {
+            "properties": {
+              "async": {
+                "default": false,
+                "type": "boolean"
+              },
+              "command": {
+                "type": "string"
+              },
+              "handlerType": {
+                "enum": [
+                  "command"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "command",
+              "handlerType"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "handlerType": {
+                "enum": [
+                  "mcpTool"
+                ],
+                "type": "string"
+              },
+              "server": {
+                "type": "string"
+              },
+              "tool": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "handlerType",
+              "server",
+              "tool"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "handlerType": {
+                "enum": [
+                  "prompt"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "handlerType"
+            ],
+            "title": "PromptHookMetadata",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "handlerType": {
+                "enum": [
+                  "agent"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "handlerType"
+            ],
+            "title": "AgentHookMetadata",
+            "type": "object"
+          }
+        ],
         "properties": {
           "additionalContextLimit": {
             "description": "Configured `additionalContext` spill threshold. `null` uses 2,500 tokens; `0` disables spilling.",
@@ -11884,12 +11961,6 @@
             "minimum": 0.0,
             "type": [
               "integer",
-              "null"
-            ]
-          },
-          "command": {
-            "type": [
-              "string",
               "null"
             ]
           },
@@ -11905,17 +11976,6 @@
           },
           "eventName": {
             "$ref": "#/definitions/v2/HookEventName"
-          },
-          "executionMode": {
-            "allOf": [
-              {
-                "$ref": "#/definitions/v2/HookExecutionMode"
-              }
-            ],
-            "default": "sync"
-          },
-          "handlerType": {
-            "$ref": "#/definitions/v2/HookHandlerType"
           },
           "isManaged": {
             "type": "boolean"
@@ -11961,7 +12021,6 @@
           "displayOrder",
           "enabled",
           "eventName",
-          "handlerType",
           "isManaged",
           "key",
           "source",

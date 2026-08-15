@@ -16,6 +16,7 @@ use super::ConfiguredHandler;
 use super::ConfiguredHandlerKind;
 use super::HandlerRunResult;
 use super::command_runner::run_command;
+use super::mcp_runner::run_mcp_tool;
 use crate::events::common::matches_matcher;
 
 #[derive(Debug)]
@@ -123,14 +124,25 @@ pub(crate) async fn execute_handlers<T: 'static>(
                     )
                     .await
                 }
+                ConfiguredHandlerKind::McpTool {
+                    server,
+                    tool,
+                    input,
+                } => {
+                    let executor = engine.mcp_executor.as_deref()?;
+                    run_mcp_tool(executor, &handler, server, tool, input, &input_json).await
+                }
             };
-            (configured_order, parse(&handler, result, turn_id))
+            Some((configured_order, parse(&handler, result, turn_id)))
         });
     }
 
     let mut completed = Vec::new();
     let mut completion_order = 0;
-    while let Some((configured_order, mut parsed)) = pending.next().await {
+    while let Some(result) = pending.next().await {
+        let Some((configured_order, mut parsed)) = result else {
+            continue;
+        };
         parsed.completion_order = completion_order;
         completion_order += 1;
         completed.push((configured_order, parsed));
@@ -205,6 +217,7 @@ pub(crate) fn hook_execution_mode_label(mode: HookExecutionMode) -> &'static str
 pub(crate) fn hook_handler_type_label(handler_type: HookHandlerType) -> &'static str {
     match handler_type {
         HookHandlerType::Command => "command",
+        HookHandlerType::McpTool => "mcp_tool",
         HookHandlerType::Prompt => "prompt",
         HookHandlerType::Agent => "agent",
     }

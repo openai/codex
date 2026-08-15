@@ -8,8 +8,7 @@ use app_test_support::create_mock_responses_server_sequence_unchecked;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigEdit;
 use codex_app_server_protocol::HookEventName;
-use codex_app_server_protocol::HookExecutionMode;
-use codex_app_server_protocol::HookHandlerType;
+use codex_app_server_protocol::HookHandlerMetadata;
 use codex_app_server_protocol::HookMetadata;
 use codex_app_server_protocol::HookSource;
 use codex_app_server_protocol::HookTrustStatus;
@@ -51,7 +50,7 @@ fn command_hook_hash(
     matcher: Option<&str>,
     command: &str,
     timeout_sec: u64,
-    execution_mode: HookExecutionMode,
+    r#async: bool,
     status_message: Option<&str>,
     additional_context_limit: Option<usize>,
 ) -> String {
@@ -63,7 +62,7 @@ fn command_hook_hash(
                 command: command.to_string(),
                 command_windows: None,
                 timeout_sec: Some(timeout_sec),
-                r#async: execution_mode == HookExecutionMode::Async,
+                r#async,
                 status_message: status_message.map(ToOwned::to_owned),
                 additional_context_limit,
             }],
@@ -213,10 +212,11 @@ async fn hooks_list_shows_discovered_hook() -> Result<()> {
             hooks: vec![HookMetadata {
                 key: format!("{}:pre_tool_use:0:0", config_path.as_path().display()),
                 event_name: HookEventName::PreToolUse,
-                handler_type: HookHandlerType::Command,
-                execution_mode: HookExecutionMode::Async,
+                handler: HookHandlerMetadata::Command {
+                    command: "python3 /tmp/listed-hook.py".to_string(),
+                    r#async: true,
+                },
                 matcher: Some("Bash".to_string()),
-                command: Some("python3 /tmp/listed-hook.py".to_string()),
                 timeout_sec: 5,
                 status_message: Some("running listed hook".to_string()),
                 additional_context_limit: Some(4_096),
@@ -231,7 +231,7 @@ async fn hooks_list_shows_discovered_hook() -> Result<()> {
                     Some("Bash"),
                     "python3 /tmp/listed-hook.py",
                     /*timeout_sec*/ 5,
-                    HookExecutionMode::Async,
+                    /*async*/ true,
                     Some("running listed hook"),
                     /*additional_context_limit*/ Some(4_096),
                 ),
@@ -294,10 +294,11 @@ async fn hooks_list_shows_discovered_plugin_hook() -> Result<()> {
             hooks: vec![HookMetadata {
                 key: "demo@test:hooks/hooks.json:pre_tool_use:0:0".to_string(),
                 event_name: HookEventName::PreToolUse,
-                handler_type: HookHandlerType::Command,
-                execution_mode: HookExecutionMode::Sync,
+                handler: HookHandlerMetadata::Command {
+                    command: "echo plugin hook".to_string(),
+                    r#async: false,
+                },
                 matcher: Some("Bash".to_string()),
-                command: Some("echo plugin hook".to_string()),
                 timeout_sec: 7,
                 status_message: Some("running plugin hook".to_string()),
                 additional_context_limit: None,
@@ -312,7 +313,7 @@ async fn hooks_list_shows_discovered_plugin_hook() -> Result<()> {
                     Some("Bash"),
                     "echo plugin hook",
                     /*timeout_sec*/ 7,
-                    HookExecutionMode::Sync,
+                    /*async*/ false,
                     Some("running plugin hook"),
                     /*additional_context_limit*/ None,
                 ),
@@ -512,8 +513,11 @@ async fn plugin_upgrade_refreshes_hook_runtime_for_loaded_session() -> Result<()
         .find(|hook| hook.event_name == HookEventName::UserPromptSubmit)
         .expect("plugin should register a user-prompt hook");
     assert_eq!(
-        hook.command,
-        Some(format!("python3 {}", expected_hook_path.display()))
+        hook.handler,
+        HookHandlerMetadata::Command {
+            command: format!("python3 {}", expected_hook_path.display()),
+            r#async: false,
+        }
     );
     assert!(!hook.enabled);
 
@@ -691,8 +695,11 @@ source = "{}"
         .join("hooks/log_version.py")
         .canonicalize()?;
     assert_eq!(
-        data[0].hooks[0].command,
-        Some(format!("python3 {}", expected_hook_path.display()))
+        data[0].hooks[0].handler,
+        HookHandlerMetadata::Command {
+            command: format!("python3 {}", expected_hook_path.display()),
+            r#async: false,
+        }
     );
 
     let turn_id = mcp
@@ -713,6 +720,100 @@ source = "{}"
     )
     .await??;
     assert_eq!(std::fs::read_to_string(&hook_log_path)?, "2\n");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn hooks_list_shows_discovered_plugin_mcp_tool_hook() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    write_plugin_hook_config(
+        codex_home.path(),
+        r#"{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "security",
+            "tool": "inspect",
+            "input": {"path": "${tool_input.path}"},
+            "timeout": 9,
+            "statusMessage": "checking security policy"
+          }
+        ]
+      }
+    ]
+  }
+}"#,
+    )?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+
+    let request_id = mcp
+        .send_hooks_list_request(HooksListParams {
+            cwds: vec![cwd.path().to_path_buf()],
+        })
+        .await?;
+    let HooksListResponse { data } =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
+    let source_path = AbsolutePathBuf::from_absolute_path(std::fs::canonicalize(
+        codex_home
+            .path()
+            .join("plugins/cache/test/demo/local/hooks/hooks.json"),
+    )?)?;
+    let identity = NormalizedHookIdentity {
+        event_name: "pre_tool_use",
+        group: codex_config::MatcherGroup {
+            matcher: Some("Bash".to_string()),
+            hooks: vec![codex_config::HookHandlerConfig::McpTool {
+                server: "security".to_string(),
+                tool: "inspect".to_string(),
+                input: serde_json::from_value(serde_json::json!({
+                    "path": "${tool_input.path}",
+                }))?,
+                timeout_sec: Some(9),
+                status_message: Some("checking security policy".to_string()),
+            }],
+        },
+    };
+    let identity = codex_config::TomlValue::try_from(identity)?;
+
+    assert_eq!(
+        data,
+        vec![HooksListEntry {
+            cwd: cwd.path().to_path_buf(),
+            hooks: vec![HookMetadata {
+                key: "demo@test:hooks/hooks.json:pre_tool_use:0:0".to_string(),
+                event_name: HookEventName::PreToolUse,
+                handler: HookHandlerMetadata::McpTool {
+                    server: "security".to_string(),
+                    tool: "inspect".to_string(),
+                },
+                matcher: Some("Bash".to_string()),
+                timeout_sec: 9,
+                status_message: Some("checking security policy".to_string()),
+                additional_context_limit: None,
+                source_path,
+                source: HookSource::Plugin,
+                plugin_id: Some("demo@test".to_string()),
+                display_order: 0,
+                enabled: true,
+                is_managed: false,
+                current_hash: codex_config::version_for_toml(&identity),
+                trust_status: HookTrustStatus::Untrusted,
+            }],
+            warnings: Vec::new(),
+            errors: Vec::new(),
+        }]
+    );
 
     Ok(())
 }
@@ -884,10 +985,11 @@ timeout = 5
                         project_config_path.as_path().display()
                     ),
                     event_name: HookEventName::PreToolUse,
-                    handler_type: HookHandlerType::Command,
-                    execution_mode: HookExecutionMode::Sync,
+                    handler: HookHandlerMetadata::Command {
+                        command: "echo project hook".to_string(),
+                        r#async: false,
+                    },
                     matcher: Some("Bash".to_string()),
-                    command: Some("echo project hook".to_string()),
                     timeout_sec: 5,
                     status_message: None,
                     additional_context_limit: None,
@@ -902,7 +1004,7 @@ timeout = 5
                         Some("Bash"),
                         "echo project hook",
                         /*timeout_sec*/ 5,
-                        HookExecutionMode::Sync,
+                        /*async*/ false,
                         /*status_message*/ None,
                         /*additional_context_limit*/ None,
                     ),
@@ -951,8 +1053,20 @@ async fn hooks_list_uses_root_repo_hooks_for_linked_worktrees() -> Result<()> {
     let repo_config_path =
         AbsolutePathBuf::from_absolute_path(repo_root.join(".codex/config.toml"))?;
 
-    assert_eq!(repo_hook.command.as_deref(), Some("echo root hook"));
-    assert_eq!(worktree_hook.command.as_deref(), Some("echo root hook"));
+    assert_eq!(
+        repo_hook.handler,
+        HookHandlerMetadata::Command {
+            command: "echo root hook".to_string(),
+            r#async: false,
+        }
+    );
+    assert_eq!(
+        worktree_hook.handler,
+        HookHandlerMetadata::Command {
+            command: "echo root hook".to_string(),
+            r#async: false,
+        }
+    );
     assert_eq!(repo_hook.key, worktree_hook.key);
     assert_eq!(repo_hook.source_path, repo_config_path);
     assert_eq!(worktree_hook.source_path, repo_config_path);

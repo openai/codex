@@ -1,5 +1,6 @@
 use super::*;
 use codex_core::config::permission_profile_catalog;
+use codex_hooks::HookListEntryHandler;
 use futures::StreamExt;
 
 #[derive(Clone)]
@@ -66,24 +67,36 @@ fn skills_to_info(
 fn hooks_to_info(hooks: &[codex_hooks::HookListEntry]) -> Vec<HookMetadata> {
     hooks
         .iter()
-        .map(|hook| HookMetadata {
-            key: hook.key.clone(),
-            event_name: hook.event_name.into(),
-            handler_type: hook.handler_type.into(),
-            execution_mode: hook.execution_mode.into(),
-            matcher: hook.matcher.clone(),
-            command: hook.command.clone(),
-            timeout_sec: hook.timeout_sec,
-            status_message: hook.status_message.clone(),
-            additional_context_limit: hook.additional_context_limit,
-            source_path: hook.source_path.clone(),
-            source: hook.source.into(),
-            plugin_id: hook.plugin_id.clone(),
-            display_order: hook.display_order,
-            enabled: hook.enabled,
-            is_managed: hook.is_managed,
-            current_hash: hook.current_hash.clone(),
-            trust_status: hook.trust_status.into(),
+        .map(|hook| {
+            let handler = match &hook.handler {
+                HookListEntryHandler::Command { command, r#async } => {
+                    HookHandlerMetadata::Command {
+                        command: command.clone(),
+                        r#async: *r#async,
+                    }
+                }
+                HookListEntryHandler::McpTool { server, tool } => HookHandlerMetadata::McpTool {
+                    server: server.clone(),
+                    tool: tool.clone(),
+                },
+            };
+            HookMetadata {
+                key: hook.key.clone(),
+                event_name: hook.event_name.into(),
+                handler,
+                matcher: hook.matcher.clone(),
+                timeout_sec: hook.timeout_sec,
+                status_message: hook.status_message.clone(),
+                additional_context_limit: hook.additional_context_limit,
+                source_path: hook.source_path.clone(),
+                source: hook.source.into(),
+                plugin_id: hook.plugin_id.clone(),
+                display_order: hook.display_order,
+                enabled: hook.enabled,
+                is_managed: hook.is_managed,
+                current_hash: hook.current_hash.clone(),
+                trust_status: hook.trust_status.into(),
+            }
         })
         .collect()
 }

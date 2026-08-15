@@ -121,6 +121,7 @@ impl CommandHookRuntime {
                 ConfiguredHandlerKind::Command { command, env, .. } => {
                     run_command(&runtime, &handler, command, env, &input_json, &cwd).await
                 }
+                ConfiguredHandlerKind::McpTool { .. } => return,
             };
             let mut hook_result = parse(&handler, result, turn_id).completed;
             let mut entries = Vec::new();

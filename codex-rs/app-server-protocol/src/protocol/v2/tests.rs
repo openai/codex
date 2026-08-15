@@ -3397,6 +3397,45 @@ fn user_input_into_core_preserves_media_fields() {
 }
 
 #[test]
+fn hook_handler_metadata_only_exposes_async_for_commands() {
+    assert_eq!(
+        serde_json::to_value(HookHandlerMetadata::Command {
+            command: "echo hello".to_string(),
+            r#async: true,
+        })
+        .unwrap(),
+        json!({
+            "handlerType": "command",
+            "command": "echo hello",
+            "async": true,
+        }),
+    );
+    assert_eq!(
+        serde_json::from_value::<HookHandlerMetadata>(json!({
+            "handlerType": "command",
+            "command": "echo hello",
+        }))
+        .unwrap(),
+        HookHandlerMetadata::Command {
+            command: "echo hello".to_string(),
+            r#async: false,
+        },
+    );
+    assert_eq!(
+        serde_json::to_value(HookHandlerMetadata::McpTool {
+            server: "security".to_string(),
+            tool: "scan".to_string(),
+        })
+        .unwrap(),
+        json!({
+            "handlerType": "mcpTool",
+            "server": "security",
+            "tool": "scan",
+        }),
+    );
+}
+
+#[test]
 fn skills_list_params_serialization_uses_force_reload() {
     assert_eq!(
         serde_json::to_value(SkillsListParams {

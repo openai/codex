@@ -20,6 +20,7 @@ use crate::events::stop::StopOutcome;
 use crate::events::stop::StopRequest;
 use crate::events::user_prompt_submit::UserPromptSubmitOutcome;
 use crate::events::user_prompt_submit::UserPromptSubmitRequest;
+use crate::mcp::HookMcpExecutor;
 use crate::types::Hook;
 use crate::types::HookEvent;
 use crate::types::HookPayload;
@@ -29,6 +30,7 @@ use codex_config::ConfigLayerStack;
 use codex_plugin::PluginHookSource;
 use codex_protocol::ThreadId;
 use codex_protocol::shell_environment::scrub_non_inheritable_env_vars;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::process::Command;
 
@@ -42,6 +44,7 @@ pub struct HooksConfig {
     pub plugin_hook_load_warnings: Vec<String>,
     pub shell_program: Option<String>,
     pub shell_args: Vec<String>,
+    pub mcp_executor: Option<Arc<dyn HookMcpExecutor>>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -105,6 +108,7 @@ impl Hooks {
             config.plugin_hook_sources,
             config.plugin_hook_load_warnings,
             command_runtime,
+            config.mcp_executor,
         );
         Self {
             after_agent,

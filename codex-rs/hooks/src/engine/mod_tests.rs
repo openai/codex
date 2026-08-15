@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use codex_config::AbsolutePathBuf;
@@ -22,11 +24,14 @@ use codex_plugin::PluginHookSource;
 use codex_plugin::PluginId;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::HookEventName;
+use codex_protocol::protocol::HookHandlerType;
 use codex_protocol::protocol::HookOutputEntry;
 use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::HookTrustStatus;
+use futures::FutureExt;
+use futures::future::BoxFuture;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
 
@@ -35,7 +40,10 @@ use super::CommandHookRuntime;
 use super::CommandShell;
 use super::ConfiguredHandler;
 use super::ConfiguredHandlerKind;
+use super::HookListEntryHandler;
 use crate::events::pre_tool_use::PreToolUseRequest;
+use crate::mcp::HookMcpCall;
+use crate::mcp::HookMcpExecutor;
 
 fn cwd() -> AbsolutePathBuf {
     AbsolutePathBuf::current_dir().expect("current dir")
@@ -58,6 +66,7 @@ fn permission_request_timeout_only_counts_synchronous_handlers() {
             program: String::new(),
             args: Vec::new(),
         }),
+        /*mcp_executor*/ None,
     );
     let command = "echo synchronous permission hook";
     let synchronous_handler = ConfiguredHandler {
@@ -355,6 +364,84 @@ fn required_managed_hooks_reject_unsupported_handler_types() {
 }
 
 #[test]
+fn required_managed_mcp_hooks_reject_empty_targets() {
+    let temp = tempdir().expect("create temp dir");
+    let events = HookEventsToml {
+        pre_tool_use: vec![MatcherGroup {
+            matcher: Some("^Bash$".to_string()),
+            hooks: vec![HookHandlerConfig::McpTool {
+                server: "policy".to_string(),
+                tool: " ".to_string(),
+                input: Default::default(),
+                timeout_sec: None,
+                status_message: None,
+            }],
+        }],
+        ..Default::default()
+    };
+    let config_layer_stack = required_hooks_stack(
+        managed_hooks_for_current_platform(temp.path(), events),
+        RequirementSource::LegacyManagedConfigTomlFromMdm,
+    );
+
+    let error = crate::Hooks::new(
+        crate::HooksConfig {
+            feature_enabled: true,
+            config_layer_stack: Some(config_layer_stack),
+            ..Default::default()
+        },
+        ThreadId::new(),
+    )
+    .err()
+    .expect("invalid required managed MCP hook should reject startup");
+
+    assert!(
+        error
+            .to_string()
+            .contains("server and tool must not be empty")
+    );
+}
+
+#[test]
+fn required_managed_session_end_mcp_hooks_reject_startup() {
+    let temp = tempdir().expect("create temp dir");
+    let events = HookEventsToml {
+        session_end: vec![MatcherGroup {
+            matcher: None,
+            hooks: vec![HookHandlerConfig::McpTool {
+                server: "policy".to_string(),
+                tool: "check".to_string(),
+                input: Default::default(),
+                timeout_sec: None,
+                status_message: None,
+            }],
+        }],
+        ..Default::default()
+    };
+    let config_layer_stack = required_hooks_stack(
+        managed_hooks_for_current_platform(temp.path(), events),
+        RequirementSource::LegacyManagedConfigTomlFromMdm,
+    );
+
+    let error = crate::Hooks::new(
+        crate::HooksConfig {
+            feature_enabled: true,
+            config_layer_stack: Some(config_layer_stack),
+            ..Default::default()
+        },
+        ThreadId::new(),
+    )
+    .err()
+    .expect("required managed SessionEnd MCP hook should reject startup");
+
+    assert!(
+        error
+            .to_string()
+            .contains("SessionEnd MCP hooks are not supported")
+    );
+}
+
+#[test]
 fn required_managed_hooks_with_unknown_source_still_reject_discovery_failures() {
     let temp = tempdir().expect("create temp dir");
     let config_layer_stack = required_hooks_stack(
@@ -493,6 +580,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
             program: String::new(),
             args: Vec::new(),
         }),
+        /*mcp_executor*/ None,
     );
 
     assert!(engine.warnings().is_empty());
@@ -510,6 +598,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
         plugin_hook_load_warnings: Vec::new(),
         shell_program: None,
         shell_args: Vec::new(),
+        mcp_executor: None,
     });
     assert!(listed.hooks[0].is_managed);
     let cwd = cwd();
@@ -600,6 +689,7 @@ async fn requirements_managed_hooks_execute_windows_command_override() {
             program: String::new(),
             args: Vec::new(),
         }),
+        /*mcp_executor*/ None,
     );
 
     let outcome = engine
@@ -680,6 +770,7 @@ fn unknown_requirement_source_hooks_stay_managed() {
             program: String::new(),
             args: Vec::new(),
         }),
+        /*mcp_executor*/ None,
     );
 
     assert_eq!(engine.handlers.len(), 1);
@@ -763,6 +854,7 @@ fn user_disablement_filters_non_managed_hooks_but_not_managed_hooks() {
             program: String::new(),
             args: Vec::new(),
         }),
+        /*mcp_executor*/ None,
     );
 
     assert_eq!(engine.handlers.len(), 1);
@@ -829,6 +921,7 @@ fn user_disablement_does_not_filter_managed_layer_hooks() {
             program: String::new(),
             args: Vec::new(),
         }),
+        /*mcp_executor*/ None,
     );
 
     assert_eq!(engine.handlers.len(), 1);
@@ -991,6 +1084,7 @@ fn requirements_managed_hooks_load_when_managed_dir_is_missing() {
             program: String::new(),
             args: Vec::new(),
         }),
+        /*mcp_executor*/ None,
     );
 
     assert!(engine.warnings().is_empty());
@@ -1054,6 +1148,7 @@ fn allow_managed_hooks_only_false_keeps_unmanaged_hooks() {
             program: String::new(),
             args: Vec::new(),
         }),
+        /*mcp_executor*/ None,
     );
 
     assert!(engine.warnings().is_empty());
@@ -1067,8 +1162,11 @@ fn allow_managed_hooks_only_false_keeps_unmanaged_hooks() {
     assert_eq!(discovered.hook_entries.len(), 1);
     assert!(!discovered.hook_entries[0].is_managed);
     assert_eq!(
-        discovered.hook_entries[0].command.as_deref(),
-        Some("python3 /tmp/user-hook.py")
+        discovered.hook_entries[0].handler,
+        HookListEntryHandler::Command {
+            command: "python3 /tmp/user-hook.py".to_string(),
+            r#async: false,
+        }
     );
 }
 
@@ -1108,6 +1206,7 @@ fn allow_managed_hooks_only_in_config_toml_does_not_enable_policy() {
             program: String::new(),
             args: Vec::new(),
         }),
+        /*mcp_executor*/ None,
     );
 
     assert!(engine.warnings().is_empty());
@@ -1121,8 +1220,11 @@ fn allow_managed_hooks_only_in_config_toml_does_not_enable_policy() {
     assert_eq!(discovered.hook_entries.len(), 1);
     assert!(!discovered.hook_entries[0].is_managed);
     assert_eq!(
-        discovered.hook_entries[0].command.as_deref(),
-        Some("python3 /tmp/user-hook.py")
+        discovered.hook_entries[0].handler,
+        HookListEntryHandler::Command {
+            command: "python3 /tmp/user-hook.py".to_string(),
+            r#async: false,
+        }
     );
 }
 
@@ -1178,6 +1280,7 @@ fn allow_managed_hooks_only_skips_unmanaged_json_and_toml_hooks() {
             program: String::new(),
             args: Vec::new(),
         }),
+        /*mcp_executor*/ None,
     );
 
     assert!(engine.handlers.is_empty());
@@ -1217,6 +1320,7 @@ fn allow_managed_hooks_only_skips_unmanaged_plugin_hooks() {
             program: String::new(),
             args: Vec::new(),
         }),
+        /*mcp_executor*/ None,
     );
 
     assert!(engine.handlers.is_empty());
@@ -1289,6 +1393,7 @@ fn allow_managed_hooks_only_keeps_managed_requirement_and_config_layer_hooks() {
             program: String::new(),
             args: Vec::new(),
         }),
+        /*mcp_executor*/ None,
     );
 
     assert!(engine.warnings().is_empty());
@@ -1298,6 +1403,7 @@ fn allow_managed_hooks_only_keeps_managed_requirement_and_config_layer_hooks() {
             .iter()
             .map(|handler| match &handler.kind {
                 ConfiguredHandlerKind::Command { command, .. } => Some(command.as_str()),
+                ConfiguredHandlerKind::McpTool { .. } => None,
             })
             .collect::<Vec<_>>(),
         vec![
@@ -1401,6 +1507,7 @@ fn discovers_hooks_from_json_and_toml_in_the_same_layer() {
             program: String::new(),
             args: Vec::new(),
         }),
+        /*mcp_executor*/ None,
     );
 
     assert!(engine.warnings().iter().any(|warning| {
@@ -1496,6 +1603,7 @@ fn profile_user_layers_load_shared_hooks_json_once() {
             program: String::new(),
             args: Vec::new(),
         }),
+        /*mcp_executor*/ None,
     );
 
     assert!(engine.warnings().is_empty());
@@ -1570,6 +1678,7 @@ fn malformed_hooks_json_is_reported_as_startup_warning() {
             program: String::new(),
             args: Vec::new(),
         }),
+        /*mcp_executor*/ None,
     );
 
     assert!(engine.handlers.is_empty());
@@ -1642,6 +1751,7 @@ print(json.dumps({
             program: String::new(),
             args: Vec::new(),
         }),
+        /*mcp_executor*/ None,
     );
 
     let preview = engine.preview_pre_tool_use(&PreToolUseRequest {
@@ -1669,6 +1779,7 @@ print(json.dumps({
         plugin_hook_load_warnings: Vec::new(),
         shell_program: None,
         shell_args: Vec::new(),
+        mcp_executor: None,
     });
     assert_eq!(
         listed.hooks[0].plugin_id.as_deref(),
@@ -1762,6 +1873,7 @@ fn plugin_hook_sources_expand_plugin_placeholders() {
             program: String::new(),
             args: Vec::new(),
         }),
+        /*mcp_executor*/ None,
     );
 
     assert_eq!(
@@ -1806,7 +1918,143 @@ fn plugin_hook_load_warnings_are_startup_warnings() {
             program: String::new(),
             args: Vec::new(),
         }),
+        /*mcp_executor*/ None,
     );
 
     assert_eq!(engine.warnings(), &["failed plugin hook".to_string()]);
+}
+
+struct StaticMcpExecutor {
+    calls: Arc<Mutex<Vec<HookMcpCall>>>,
+    output: String,
+}
+
+impl HookMcpExecutor for StaticMcpExecutor {
+    fn execute(&self, call: HookMcpCall) -> BoxFuture<'_, anyhow::Result<String>> {
+        async move {
+            self.calls.lock().expect("lock MCP calls").push(call);
+            Ok(self.output.clone())
+        }
+        .boxed()
+    }
+}
+
+#[tokio::test]
+async fn mcp_tool_hooks_expand_event_input_and_apply_pre_tool_decisions() {
+    let temp = tempdir().expect("create temp dir");
+    let config_path =
+        AbsolutePathBuf::try_from(temp.path().join("config.toml")).expect("absolute config path");
+    fs::write(
+        temp.path().join("hooks.json"),
+        serde_json::json!({
+            "hooks": {
+                "PreToolUse": [{
+                    "matcher": "Bash",
+                    "hooks": [{
+                        "type": "mcp_tool",
+                        "server": "security",
+                        "tool": "scan",
+                        "input": { "command": "${tool_input.command}" },
+                        "timeout": 20,
+                    }],
+                }],
+            },
+        })
+        .to_string(),
+    )
+    .expect("write MCP hooks.json");
+    let config_layer_stack = ConfigLayerStack::new(
+        vec![ConfigLayerEntry::new(
+            ConfigLayerSource::User {
+                file: config_path,
+                profile: None,
+            },
+            TomlValue::Table(Default::default()),
+        )],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("config layer stack");
+
+    let unavailable = ClaudeHooksEngine::new(
+        /*enabled*/ true,
+        /*bypass_hook_trust*/ true,
+        Some(&config_layer_stack),
+        Vec::new(),
+        Vec::new(),
+        command_runtime(CommandShell {
+            program: String::new(),
+            args: Vec::new(),
+        }),
+        /*mcp_executor*/ None,
+    );
+    assert!(unavailable.handlers.is_empty());
+    assert_eq!(unavailable.warnings().len(), 1);
+    assert!(unavailable.warnings()[0].contains("MCP invocation is not available"));
+
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let executor = StaticMcpExecutor {
+        calls: Arc::clone(&calls),
+        output: serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": "blocked by MCP scanner",
+            },
+        })
+        .to_string(),
+    };
+    let engine = ClaudeHooksEngine::new(
+        /*enabled*/ true,
+        /*bypass_hook_trust*/ true,
+        Some(&config_layer_stack),
+        Vec::new(),
+        Vec::new(),
+        command_runtime(CommandShell {
+            program: String::new(),
+            args: Vec::new(),
+        }),
+        Some(Arc::new(executor)),
+    );
+    let outcome = engine
+        .run_pre_tool_use(PreToolUseRequest {
+            session_id: ThreadId::new(),
+            turn_id: "turn-1".to_string(),
+            subagent: None,
+            cwd: cwd(),
+            transcript_path: None,
+            model: "gpt-test".to_string(),
+            permission_mode: "default".to_string(),
+            tool_name: "Bash".to_string(),
+            matcher_aliases: Vec::new(),
+            tool_use_id: "tool-1".to_string(),
+            tool_input: serde_json::json!({ "command": "rm important.txt" }),
+        })
+        .await;
+
+    assert!(outcome.should_block);
+    assert_eq!(
+        outcome.block_reason.as_deref(),
+        Some("blocked by MCP scanner")
+    );
+    assert_eq!(
+        outcome.hook_events[0].run.handler_type,
+        HookHandlerType::McpTool
+    );
+    assert_eq!(
+        outcome.hook_events[0].run.execution_mode,
+        codex_protocol::protocol::HookExecutionMode::Sync
+    );
+    assert_eq!(
+        *calls.lock().expect("lock MCP calls"),
+        vec![HookMcpCall {
+            server: "security".to_string(),
+            tool: "scan".to_string(),
+            input: serde_json::from_value(serde_json::json!({
+                "command": "rm important.txt",
+            }))
+            .expect("object input"),
+            timeout: Duration::from_secs(20),
+        }]
+    );
 }

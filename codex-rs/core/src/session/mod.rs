@@ -4172,6 +4172,7 @@ async fn build_hooks_config(
         plugin_hook_load_warnings,
         shell_program: hook_shell_program,
         shell_args: hook_shell_argv,
+        mcp_executor: None,
     }
 }
 
