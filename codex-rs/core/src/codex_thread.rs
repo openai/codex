@@ -719,6 +719,15 @@ impl CodexThread {
         self.session.environment_ready(selection, config).await
     }
 
+    /// Fails this thread's pending environment without affecting other attached threads.
+    pub async fn environment_failed(
+        &self,
+        selection: &TurnEnvironmentSelection,
+        error: String,
+    ) -> CodexResult<()> {
+        self.session.environment_failed(selection, error).await
+    }
+
     /// Passively inspects the selected capability roots whose environments are ready now.
     pub fn inspect_selected_capability_roots(&self) -> SelectedCapabilityRootsStatus {
         self.session.inspect_selected_capability_roots()

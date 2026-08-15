@@ -10,6 +10,8 @@ pub enum EnvironmentConfigState {
     Pending,
     /// The owner supplied configuration for this environment attachment.
     Ready(EnvironmentConfig),
+    /// The owner could not supply configuration for this environment attachment.
+    Failed(String),
 }
 
 /// Resolved configuration for a thread/environment attachment.

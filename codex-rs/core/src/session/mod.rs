@@ -1588,6 +1588,9 @@ impl Session {
                 previous_permission_profile != updated_permission_profile;
             let mcp_inputs_changed =
                 self.mcp_inputs_differ(&state.session_configuration, &updated, &updates);
+            if mcp_inputs_changed {
+                self.mark_mcp_runtime_dirty();
+            }
             let environment_config = updated.turn_environment_config();
             if let Some(environments) = &updates.environments {
                 self.services
@@ -1601,9 +1604,6 @@ impl Session {
             state.session_configuration = updated;
             let new_config = notify_config_contributors
                 .then(|| self.build_effective_session_config(&state.session_configuration));
-            if mcp_inputs_changed {
-                self.mark_mcp_runtime_dirty();
-            }
             (
                 previous_config,
                 new_config,

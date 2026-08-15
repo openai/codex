@@ -1174,22 +1174,22 @@ async fn shared_executor_keeps_ready_capability_roots_scoped_to_each_attachment(
             selected_capability_roots: vec![root("duplicate"), root("duplicate")],
         }),
     ] {
-        let invalid_selection = TurnEnvironmentSelection {
+        let should_succeed = matches!(config, EnvironmentConfigState::Pending);
+        let selection_override = TurnEnvironmentSelection {
             config,
             ..selection.clone()
         };
-        assert!(
-            test.codex
-                .preview_thread_settings_overrides(CodexThreadSettingsOverrides {
-                    environments: Some(TurnEnvironmentSelections::new(
-                        test.config.cwd.clone(),
-                        vec![invalid_selection],
-                    )),
-                    ..Default::default()
-                })
-                .await
-                .is_err()
-        );
+        let preview = test
+            .codex
+            .preview_thread_settings_overrides(CodexThreadSettingsOverrides {
+                environments: Some(TurnEnvironmentSelections::new(
+                    test.config.cwd.clone(),
+                    vec![selection_override],
+                )),
+                ..Default::default()
+            })
+            .await;
+        assert_eq!(preview.is_ok(), should_succeed);
         assert_eq!(
             test.codex.environment_selections().await,
             vec![selection.clone()]
@@ -1330,6 +1330,202 @@ async fn shared_executor_keeps_ready_capability_roots_scoped_to_each_attachment(
         })
         .collect::<Result<Vec<_>>>()?;
     assert_eq!(login_shells, vec![false, true, false, true]);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pending_attachment_installs_configuration_before_waiting_turn_resumes() -> Result<()> {
+    const WAIT_CALL_ID: &str = "wait-for-owner-configuration";
+
+    let server = start_mock_server().await;
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.thread_lifecycle_contributor(Arc::new(WaitForEnvironmentTestExtension));
+    extensions.prompt_contributor(Arc::new(ReadyCapabilityRootsTestExtension));
+    let mut builder = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .with_config(|config| {
+            config.use_experimental_unified_exec_tool = true;
+            assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
+            assert!(config.features.enable(Feature::UnifiedExec).is_ok());
+            config
+                .permissions
+                .set_permission_profile(PermissionProfile::read_only())
+                .expect("thread permissions should be configurable");
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    let selection = test
+        .codex
+        .environment_selections()
+        .await
+        .into_iter()
+        .next()
+        .context("thread should select its executor environment")?;
+    let pending_selection = TurnEnvironmentSelection {
+        config: EnvironmentConfigState::Pending,
+        ..selection.clone()
+    };
+    let root = |id: &str| SelectedCapabilityRoot {
+        id: id.to_string(),
+        location: CapabilityRootLocation::Environment {
+            environment_id: selection.environment_id.clone(),
+            path: selection.cwd.clone(),
+        },
+    };
+    let owner_config = |id: &str, allow_login_shell: bool| EnvironmentConfig {
+        allow_login_shell,
+        permission_profile: PermissionProfileSnapshot::legacy(PermissionProfile::read_only()),
+        selected_capability_roots: vec![root(id)],
+    };
+    let start_pending_thread = || {
+        test.thread_manager.start_thread(StartThreadOptions {
+            environments: Some(vec![pending_selection.clone()]),
+            ..StartThreadOptions::new(test.config.clone())
+        })
+    };
+    let waiting = timeout(Duration::from_secs(5), start_pending_thread())
+        .await
+        .context("pending thread startup should not block")??;
+    let independent = start_pending_thread().await?;
+    let failed = start_pending_thread().await?;
+
+    submit_thread_settings(
+        &waiting.thread,
+        ThreadSettingsOverrides {
+            permission_profile: Some(PermissionProfile::workspace_write()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("pending-configuration-wait"),
+                ev_function_call(
+                    WAIT_CALL_ID,
+                    "wait_for_environment",
+                    &json!({ "environment_id": selection.environment_id }).to_string(),
+                ),
+                ev_completed("pending-configuration-wait"),
+            ]),
+            sse(vec![
+                ev_response_created("pending-configuration-ready"),
+                ev_assistant_message("pending-configuration-message", "done"),
+                ev_completed("pending-configuration-ready"),
+            ]),
+        ],
+    )
+    .await;
+    waiting
+        .thread
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "wait for environment configuration".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    wait_for_response_request_count(&response_mock, /*expected_count*/ 1).await;
+    let first_tool_names = tool_names(&response_mock.requests()[0].body_json());
+    assert!(first_tool_names.contains(&"wait_for_environment".to_string()));
+    assert!(!first_tool_names.contains(&"exec_command".to_string()));
+
+    independent
+        .thread
+        .environment_ready(
+            &pending_selection,
+            owner_config("independent-root", /*allow_login_shell*/ true),
+        )
+        .await?;
+    failed
+        .thread
+        .environment_failed(&pending_selection, "configuration unavailable".to_string())
+        .await?;
+    assert_eq!(
+        failed.thread.environment_selections().await,
+        vec![TurnEnvironmentSelection {
+            config: EnvironmentConfigState::Failed("configuration unavailable".to_string()),
+            ..pending_selection.clone()
+        }]
+    );
+    assert!(
+        waiting
+            .thread
+            .inspect_selected_capability_roots()
+            .ready_roots
+            .is_empty()
+    );
+
+    let waiting_config = owner_config("waiting-root", /*allow_login_shell*/ false);
+    let ready_selection = TurnEnvironmentSelection {
+        config: EnvironmentConfigState::Ready(waiting_config.clone()),
+        ..pending_selection.clone()
+    };
+    submit_thread_settings(
+        &waiting.thread,
+        ThreadSettingsOverrides {
+            environments: Some(TurnEnvironmentSelections::new(
+                test.config.cwd.clone(),
+                vec![ready_selection.clone()],
+            )),
+            ..Default::default()
+        },
+    )
+    .await?;
+    wait_for_response_request_count(&response_mock, /*expected_count*/ 2).await;
+    assert_eq!(
+        waiting.thread.environment_selections().await,
+        vec![ready_selection]
+    );
+
+    let ready_request = response_mock
+        .last_request()
+        .context("waiting turn should resume")?;
+    let (_, wait_succeeded) = ready_request
+        .function_call_output_content_and_success(WAIT_CALL_ID)
+        .context("wait_for_environment output should be model visible")?;
+    assert_ne!(wait_succeeded, Some(false));
+    let body = ready_request.body_json();
+    let exec_command = body["tools"]
+        .as_array()
+        .context("tools should be an array")?
+        .iter()
+        .find(|tool| tool["name"] == "exec_command")
+        .context("exec_command should become available")?;
+    assert!(
+        exec_command["parameters"]["properties"]
+            .get("login")
+            .is_none()
+    );
+    assert_eq!(
+        ready_request
+            .message_input_texts("user")
+            .into_iter()
+            .rfind(|text| text.contains("<ready_capability_roots>")),
+        Some("<ready_capability_roots>waiting-root</ready_capability_roots>".to_string())
+    );
+
+    let recovered_selection = TurnEnvironmentSelection {
+        config: EnvironmentConfigState::Ready(owner_config(
+            "recovered-root",
+            /*allow_login_shell*/ true,
+        )),
+        ..pending_selection
+    };
+    submit_thread_settings(
+        &failed.thread,
+        ThreadSettingsOverrides {
+            environments: Some(TurnEnvironmentSelections::new(
+                test.config.cwd.clone(),
+                vec![recovered_selection.clone()],
+            )),
+            ..Default::default()
+        },
+    )
+    .await?;
+    assert_eq!(
+        failed.thread.environment_selections().await,
+        vec![recovered_selection]
+    );
 
     Ok(())
 }

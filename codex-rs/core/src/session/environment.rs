@@ -19,12 +19,9 @@ pub(super) fn validate_environment_selections(
 ) -> CodexResult<()> {
     for selection in selections {
         match &selection.config {
-            EnvironmentConfigState::FromThread => {}
-            EnvironmentConfigState::Pending => {
-                return Err(CodexErr::InvalidRequest(
-                    "pending environment configuration is not supported yet".to_string(),
-                ));
-            }
+            EnvironmentConfigState::FromThread
+            | EnvironmentConfigState::Pending
+            | EnvironmentConfigState::Failed(_) => {}
             EnvironmentConfigState::Ready(config) => {
                 validate_environment_config(selection, config)?;
             }
@@ -74,14 +71,46 @@ impl Session {
         config: EnvironmentConfig,
     ) -> CodexResult<()> {
         validate_environment_config(selection, &config)?;
+        self.update_environment_configuration(selection, EnvironmentConfigState::Ready(config))
+            .await
+    }
 
-        // grab session lock so installation can't race w/ thread settings updates
-        let _state = self.state.lock().await;
-        self.services
-            .turn_environments
-            .environment_ready(selection, config)?;
-        // mark mcp runtime for refresh because available capabilities could've changed
+    pub(crate) async fn environment_failed(
+        &self,
+        selection: &TurnEnvironmentSelection,
+        error: String,
+    ) -> CodexResult<()> {
+        self.update_environment_configuration(selection, EnvironmentConfigState::Failed(error))
+            .await
+    }
+
+    async fn update_environment_configuration(
+        &self,
+        selection: &TurnEnvironmentSelection,
+        config: EnvironmentConfigState,
+    ) -> CodexResult<()> {
+        // Serialize owner callbacks with ordinary thread settings updates.
+        let state = self.state.lock().await;
+        let mut environments = self.services.turn_environments.selections();
+        let Some(environment) = environments.iter_mut().find(|environment| {
+            environment.environment_id == selection.environment_id
+                && environment.cwd == selection.cwd
+                && environment.workspace_roots == selection.workspace_roots
+        }) else {
+            return Err(CodexErr::InvalidRequest(format!(
+                "environment `{}` is not selected on this thread with the requested workspace",
+                selection.environment_id
+            )));
+        };
+
+        environment.config = config;
+
+        // Invalidate MCP before installed configuration can wake a waiting turn.
         self.mark_mcp_runtime_dirty();
+        self.services.turn_environments.update_selections(
+            &environments,
+            &state.session_configuration.turn_environment_config(),
+        );
         Ok(())
     }
 

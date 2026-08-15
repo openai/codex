@@ -693,6 +693,9 @@ impl Session {
                 Ok(next) => {
                     let mcp_inputs_changed =
                         self.mcp_inputs_differ(&state.session_configuration, &next, &updates);
+                    if mcp_inputs_changed {
+                        self.mark_mcp_runtime_dirty();
+                    }
                     let previous_permission_profile =
                         state.session_configuration.permission_profile();
                     let next_permission_profile = next.permission_profile();
@@ -711,9 +714,6 @@ impl Session {
                         self.services
                             .turn_environments
                             .update_thread_config(&environment_config);
-                    }
-                    if mcp_inputs_changed {
-                        self.mark_mcp_runtime_dirty();
                     }
                     state.session_configuration = next.clone();
                     let new_config = notify_config_contributors
