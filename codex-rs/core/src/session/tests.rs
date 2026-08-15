@@ -210,6 +210,13 @@ impl StepContext {
     pub(crate) fn for_test(turn: Arc<TurnContext>) -> Arc<Self> {
         let environments = turn.environments.clone();
         Arc::new(Self {
+            model_info: Arc::clone(&turn.model_info),
+            reasoning_effort: turn.reasoning_effort.clone(),
+            reasoning_summary: turn.reasoning_summary,
+            service_tier: turn.config.service_tier.clone(),
+            approval_policy: turn.approval_policy(),
+            approvals_reviewer: turn.config.approvals_reviewer,
+            session_telemetry: turn.session_telemetry.clone(),
             turn: Arc::clone(&turn),
             environments,
             selected_capability_roots: Vec::new(),
@@ -2746,8 +2753,8 @@ async fn recompute_token_usage_updates_model_context_window() {
         }));
     }
 
-    turn_context.model_info.context_window = Some(128_000);
-    turn_context.model_info.effective_context_window_percent = 100;
+    Arc::make_mut(&mut turn_context.model_info).context_window = Some(128_000);
+    Arc::make_mut(&mut turn_context.model_info).effective_context_window_percent = 100;
 
     session.recompute_token_usage(&turn_context).await;
 
@@ -4435,7 +4442,7 @@ async fn turn_context_with_model_updates_model_fields() {
 
     assert_eq!(updated.config.model.as_deref(), Some("gpt-5.4"));
     assert_eq!(updated.collaboration_mode().model(), "gpt-5.4");
-    assert_eq!(updated.model_info, expected_model_info);
+    assert_eq!(updated.model_info.as_ref(), &expected_model_info);
     assert_eq!(
         updated.reasoning_effort,
         Some(ReasoningEffortConfig::Medium)
@@ -9247,8 +9254,8 @@ async fn build_initial_context_includes_turn_context_fragments_from_extensions()
     let mut builder = codex_extension_api::ExtensionRegistryBuilder::new();
     builder.prompt_contributor(Arc::new(TurnContextExtensionTestContributor));
     session.services.extensions = Arc::new(builder.build());
-    turn_context.model_info.context_window = Some(100);
-    turn_context.model_info.effective_context_window_percent = 50;
+    Arc::make_mut(&mut turn_context.model_info).context_window = Some(100);
+    Arc::make_mut(&mut turn_context.model_info).effective_context_window_percent = 50;
     turn_context
         .extension_data
         .insert(TurnContextExtensionTestState {
@@ -9274,8 +9281,8 @@ async fn record_context_updates_includes_turn_context_fragments_on_steady_state_
     let mut builder = codex_extension_api::ExtensionRegistryBuilder::new();
     builder.prompt_contributor(Arc::new(TurnContextExtensionTestContributor));
     session.services.extensions = Arc::new(builder.build());
-    turn_context.model_info.context_window = Some(200);
-    turn_context.model_info.effective_context_window_percent = 25;
+    Arc::make_mut(&mut turn_context.model_info).context_window = Some(200);
+    Arc::make_mut(&mut turn_context.model_info).effective_context_window_percent = 25;
     turn_context
         .extension_data
         .insert(TurnContextExtensionTestState {

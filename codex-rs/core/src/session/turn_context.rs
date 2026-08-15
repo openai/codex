@@ -138,12 +138,18 @@ pub struct TurnContext {
     pub(crate) trace_id: Option<String>,
     pub(crate) realtime_active: bool,
     pub(crate) code_mode_available: bool,
+    /// Turn-scoped configuration. Read step-specific settings such as service tier and
+    /// approvals reviewer from the corresponding `StepContext` fields instead.
     pub config: Arc<Config>,
     pub(crate) auth_manager: Option<Arc<AuthManager>>,
-    pub(crate) model_info: ModelInfo,
+    /// Legacy turn model; step-scoped execution should use `StepContext::model_info`.
+    pub(crate) model_info: Arc<ModelInfo>,
+    /// Turn-wide telemetry; model-attributed step work should use `StepContext::session_telemetry`.
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) provider: SharedModelProvider,
+    /// Legacy turn effort; step-scoped execution should use `StepContext::reasoning_effort`.
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
+    /// Legacy turn summary; step-scoped execution should use `StepContext::reasoning_summary`.
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) session_source: SessionSource,
     pub(crate) history_mode: ThreadHistoryMode,
@@ -223,6 +229,8 @@ impl TurnContext {
             .await
     }
 
+    /// Approval policy admitted with the turn; step-scoped actions should use
+    /// `StepContext::approval_policy` instead.
     pub(crate) fn approval_policy(&self) -> AskForApproval {
         self.config.permissions.approval_policy.value()
     }
@@ -352,6 +360,7 @@ impl TurnContext {
                 config.http_client_factory(),
             )
             .await;
+        let model_info = Arc::new(model_info);
 
         Self {
             sub_id: self.sub_id.clone(),
@@ -360,7 +369,7 @@ impl TurnContext {
             code_mode_available: self.code_mode_available,
             config: Arc::new(config),
             auth_manager: self.auth_manager.clone(),
-            model_info: model_info.clone(),
+            model_info: Arc::clone(&model_info),
             session_telemetry: self
                 .session_telemetry
                 .clone()
@@ -643,7 +652,7 @@ impl Session {
             code_mode_available: true,
             config: per_turn_config,
             auth_manager,
-            model_info,
+            model_info: Arc::new(model_info),
             session_telemetry: session_telemetry_for_context,
             provider,
             reasoning_effort,

@@ -101,14 +101,9 @@ pub(crate) async fn build_prompt_input_from_session(
     let prompt_input = sess
         .clone_history()
         .await
-        .for_prompt(&turn_context.model_info.input_modalities);
+        .for_prompt(&step_context.model_info.input_modalities);
     let base_instructions = sess.get_base_instructions().await;
-    let prompt = build_prompt(
-        prompt_input,
-        step_context.tool_router.as_ref(),
-        turn_context.as_ref(),
-        base_instructions,
-    );
+    let prompt = build_prompt(prompt_input, step_context.as_ref(), base_instructions);
 
     Ok(prompt.input)
 }

@@ -138,7 +138,7 @@ pub(super) async fn spawn_review_thread(
         code_mode_available: parent_turn_context.code_mode_available,
         config: per_turn_config,
         auth_manager: auth_manager_for_context,
-        model_info: model_info.clone(),
+        model_info: Arc::new(model_info.clone()),
         session_telemetry: session_telemetry_for_context,
         provider: provider_for_context,
         reasoning_effort,

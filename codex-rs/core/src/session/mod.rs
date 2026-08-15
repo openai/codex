@@ -3196,6 +3196,13 @@ impl Session {
         .or_cancel(cancellation_token)
         .await??;
         Ok(Arc::new(StepContext {
+            model_info: Arc::clone(&turn_context.model_info),
+            reasoning_effort: turn_context.reasoning_effort.clone(),
+            reasoning_summary: turn_context.reasoning_summary,
+            service_tier: turn_context.config.service_tier.clone(),
+            approval_policy: turn_context.approval_policy(),
+            approvals_reviewer: turn_context.config.approvals_reviewer,
+            session_telemetry: turn_context.session_telemetry.clone(),
             turn: turn_context,
             environments,
             selected_capability_roots,

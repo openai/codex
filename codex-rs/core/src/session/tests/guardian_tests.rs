@@ -96,7 +96,7 @@ async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
     .await;
 
     let (mut session, mut turn_context_raw) = make_session_and_context().await;
-    turn_context_raw.model_info.node_repl_auto_review_required = true;
+    Arc::make_mut(&mut turn_context_raw.model_info).node_repl_auto_review_required = true;
     *session.active_turn.lock().await = Some(ActiveTurn::default());
     Arc::make_mut(&mut turn_context_raw.config)
         .permissions
