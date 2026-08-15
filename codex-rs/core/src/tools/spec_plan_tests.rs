@@ -699,7 +699,7 @@ async fn login_shell_parameter_follows_selected_environment() {
                 else {
                     panic!("primary environment should be ready");
                 };
-                environment.config.allow_login_shell = allow_login_shell;
+                environment.config_mut().allow_login_shell = allow_login_shell;
                 if guardian {
                     turn.session_source = codex_protocol::protocol::SessionSource::SubAgent(
                         codex_protocol::protocol::SubAgentSource::Other(
@@ -731,7 +731,7 @@ async fn login_shell_parameter_is_available_when_any_environment_allows_it() {
             let TurnEnvironmentState::Ready(environment) = environment else {
                 panic!("environment should be ready");
             };
-            environment.config.allow_login_shell = index == 1;
+            environment.config_mut().allow_login_shell = index == 1;
         }
     })
     .await;
@@ -908,8 +908,19 @@ async fn zsh_fork_unified_exec_keeps_shell_parameter_when_remote_environment_ava
                         environment_id: "remote".to_string(),
                         cwd: remote_cwd,
                         workspace_roots: Vec::new(),
-                        config: EnvironmentConfigState::FromThread,
+                        config: EnvironmentConfigState::Ready(
+                            codex_protocol::protocol::EnvironmentConfig {
+                                allow_login_shell: true,
+                                permission_profile: turn
+                                    .config
+                                    .permissions
+                                    .permission_profile_state()
+                                    .snapshot(),
+                                selected_capability_roots: Vec::new(),
+                            },
+                        ),
                     },
+                    crate::environment_selection::EnvironmentConfigOrigin::Thread,
                     Arc::new(
                         codex_exec_server::Environment::create_for_tests(Some(
                             "ws://127.0.0.1:1/remote-exec-server".to_string(),
@@ -917,15 +928,6 @@ async fn zsh_fork_unified_exec_keeps_shell_parameter_when_remote_environment_ava
                         .expect("remote test environment"),
                     ),
                     /*shell*/ None,
-                    codex_protocol::protocol::EnvironmentConfig {
-                        allow_login_shell: true,
-                        permission_profile: turn
-                            .config
-                            .permissions
-                            .permission_profile_state()
-                            .snapshot(),
-                        selected_capability_roots: Vec::new(),
-                    },
                 ),
             ));
     })

@@ -101,8 +101,10 @@ impl ShellCommandHandler {
             .shell
             .as_ref()
             .unwrap_or(session_shell.as_ref());
-        let use_login_shell =
-            Self::resolve_use_login_shell(params.login, turn_environment.config.allow_login_shell)?;
+        let use_login_shell = Self::resolve_use_login_shell(
+            params.login,
+            turn_environment.config().allow_login_shell,
+        )?;
         let command = Self::base_command(shell, &params.command, use_login_shell);
 
         let mut env = create_env(

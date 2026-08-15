@@ -349,7 +349,7 @@ async fn guardian_allows_shell_command_additional_permissions_requests_past_poli
     else {
         panic!("primary environment should be ready");
     };
-    environment.config.permission_profile =
+    environment.config_mut().permission_profile =
         config.permissions.permission_profile_state().snapshot();
     config.codex_linux_sandbox_exe = codex_linux_sandbox_exe_or_skip!();
     config
@@ -471,7 +471,7 @@ async fn strict_auto_review_turn_grant_forces_guardian_for_shell_command_policy_
     else {
         panic!("primary environment should be ready");
     };
-    environment.config.permission_profile =
+    environment.config_mut().permission_profile =
         config.permissions.permission_profile_state().snapshot();
     config.approvals_reviewer = ApprovalsReviewer::User;
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));

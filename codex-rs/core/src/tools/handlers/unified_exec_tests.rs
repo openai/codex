@@ -183,7 +183,7 @@ async fn exec_command_rejects_login_when_selected_environment_disallows_it() {
     else {
         panic!("primary environment should be ready");
     };
-    environment.config.allow_login_shell = false;
+    environment.config_mut().allow_login_shell = false;
 
     let turn = Arc::new(turn);
     let invocation = ToolInvocation {

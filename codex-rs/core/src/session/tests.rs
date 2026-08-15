@@ -7,6 +7,7 @@ use crate::config::ConfigOverrides;
 use crate::config::test_config;
 use crate::context::ContextualUserFragment;
 use crate::context::TurnAborted;
+use crate::environment_selection::EnvironmentConfigOrigin;
 use crate::environment_selection::ThreadEnvironments;
 use crate::environment_selection::TurnEnvironmentState;
 use crate::function_tool::FunctionCallError;
@@ -5450,7 +5451,7 @@ async fn permission_profile_updates_apply_to_next_turn_environment() {
             .environments
             .primary()
             .expect("active turn environment")
-            .config
+            .config()
             .clone();
         let profile_root = active_turn.config.cwd.join("profile-root");
         let active_profile = ActivePermissionProfile::read_only();
@@ -5485,14 +5486,14 @@ async fn permission_profile_updates_apply_to_next_turn_environment() {
                 vec![profile_root],
             );
 
-        assert_eq!(next_environment.config, expected_environment_config);
+        assert_eq!(next_environment.config(), &expected_environment_config);
         assert_eq!(
             active_turn
                 .environments
                 .primary()
                 .expect("active turn environment")
-                .config,
-            active_environment_config
+                .config(),
+            &active_environment_config
         );
     }
 }
@@ -6639,17 +6640,18 @@ async fn request_permissions_tool_resolves_relative_paths_against_selected_envir
         .primary()
         .expect("primary environment")
         .clone();
+    let current_environment_config = current_environment.config().clone();
     turn_context_mut.environments.environments[0] =
         TurnEnvironmentState::Ready(TurnEnvironment::new(
             TurnEnvironmentSelection {
                 environment_id: "remote".to_string(),
                 cwd: PathUri::from_abs_path(&environment_cwd),
                 workspace_roots: Vec::new(),
-                config: EnvironmentConfigState::FromThread,
+                config: EnvironmentConfigState::Ready(current_environment_config),
             },
+            current_environment.config_origin,
             current_environment.environment,
             current_environment.shell,
-            current_environment.config,
         ));
 
     let call_id = "call-1".to_string();
@@ -7237,6 +7239,7 @@ async fn primary_environment_uses_first_turn_environment() {
     #[allow(deprecated)]
     let second_cwd = turn_context.cwd.join("second");
     let second_cwd_uri = codex_utils_path_uri::PathUri::from_abs_path(&second_cwd);
+    let first_environment_config = first_environment.config().clone();
     turn_context
         .environments
         .environments
@@ -7245,11 +7248,11 @@ async fn primary_environment_uses_first_turn_environment() {
                 environment_id: "second".to_string(),
                 cwd: second_cwd_uri.clone(),
                 workspace_roots: Vec::new(),
-                config: EnvironmentConfigState::FromThread,
+                config: EnvironmentConfigState::Ready(first_environment_config),
             },
+            first_environment.config_origin,
             Arc::clone(&first_environment.environment),
             /*shell*/ None,
-            first_environment.config.clone(),
         )));
 
     assert_eq!(
@@ -8624,7 +8627,7 @@ async fn conflicting_ready_environment_root_ids_keep_first_location() {
             environment_id,
             ..
         } = &selected_root.location;
-        let mut environment_config = local_environment.config.clone();
+        let mut environment_config = local_environment.config().clone();
         environment_config.selected_capability_roots = vec![selected_root.clone()];
         turn_environments.push(TurnEnvironment::new(
             TurnEnvironmentSelection {
@@ -8633,12 +8636,12 @@ async fn conflicting_ready_environment_root_ids_keep_first_location() {
                 workspace_roots: local_environment.workspace_roots().to_vec(),
                 config: EnvironmentConfigState::Ready(environment_config.clone()),
             },
+            EnvironmentConfigOrigin::Owner,
             Arc::new(
                 codex_exec_server::Environment::create_for_tests(/*exec_server_url*/ None)
                     .expect("create test environment"),
             ),
             local_environment.shell.clone(),
-            environment_config,
         ));
     }
     let environments = TurnEnvironmentSnapshot {
@@ -8691,7 +8694,7 @@ async fn capability_discovery_uses_environment_permission_profile() {
         access: FileSystemAccessMode::Deny,
         missing_path_behavior: None,
     });
-    environment.config.permission_profile =
+    environment.config_mut().permission_profile =
         PermissionProfileSnapshot::legacy(PermissionProfile::from_runtime_permissions(
             &file_system_policy,
             NetworkSandboxPolicy::Restricted,
@@ -8888,17 +8891,18 @@ async fn record_context_updates_emits_environment_item_for_cwd_changes() {
         .primary()
         .expect("primary environment")
         .clone();
+    let environment_config = environment.config().clone();
     current_context.environments.environments[0] =
         TurnEnvironmentState::Ready(TurnEnvironment::new(
             TurnEnvironmentSelection {
                 environment_id: environment.selection.environment_id,
                 cwd: PathUri::from_abs_path(&cwd),
                 workspace_roots: Vec::new(),
-                config: EnvironmentConfigState::FromThread,
+                config: EnvironmentConfigState::Ready(environment_config),
             },
+            environment.config_origin,
             environment.environment,
             environment.shell,
-            environment.config,
         ));
 
     let update_items =
@@ -8927,7 +8931,7 @@ async fn record_context_updates_use_environment_permission_profile_and_workspace
         .primary()
         .expect("primary environment")
         .clone();
-    previous_environment.config.permission_profile =
+    previous_environment.config_mut().permission_profile =
         PermissionProfileSnapshot::legacy(PermissionProfile::Disabled);
     previous_context.environments.environments[0] =
         TurnEnvironmentState::Ready(previous_environment);
@@ -8945,7 +8949,7 @@ async fn record_context_updates_use_environment_permission_profile_and_workspace
         .clone();
     let cwd = environment.cwd().clone();
     let workspace_root = current_context.config.cwd.join("selected-workspace");
-    let mut environment_config = environment.config;
+    let mut environment_config = environment.config().clone();
     environment_config.permission_profile =
         PermissionProfileSnapshot::legacy(PermissionProfile::workspace_write());
     current_context.environments.environments[0] =
@@ -8954,11 +8958,11 @@ async fn record_context_updates_use_environment_permission_profile_and_workspace
                 environment_id: environment.selection.environment_id,
                 cwd,
                 workspace_roots: vec![PathUri::from_abs_path(&workspace_root)],
-                config: EnvironmentConfigState::FromThread,
+                config: EnvironmentConfigState::Ready(environment_config),
             },
+            environment.config_origin,
             environment.environment,
             environment.shell,
-            environment_config,
         ));
 
     let update_items =
@@ -9024,17 +9028,18 @@ async fn record_context_updates_omits_environment_item_when_disabled() {
         .primary()
         .expect("primary environment")
         .clone();
+    let environment_config = environment.config().clone();
     current_context.environments.environments[0] =
         TurnEnvironmentState::Ready(TurnEnvironment::new(
             TurnEnvironmentSelection {
                 environment_id: environment.selection.environment_id,
                 cwd: PathUri::from_abs_path(&test_path_buf("/new-repo").abs()),
                 workspace_roots: Vec::new(),
-                config: EnvironmentConfigState::FromThread,
+                config: EnvironmentConfigState::Ready(environment_config),
             },
+            environment.config_origin,
             environment.environment,
             environment.shell,
-            environment.config,
         ));
 
     let update_items =
@@ -9497,16 +9502,17 @@ async fn turn_context_item_stores_local_cwd() {
         .expect("primary environment")
         .clone();
     let cwd = PathUri::parse("file:///C:/windows").expect("Windows cwd URI");
+    let environment_config = environment.config().clone();
     turn_context.environments.environments[0] = TurnEnvironmentState::Ready(TurnEnvironment::new(
         TurnEnvironmentSelection {
             environment_id: "remote".to_string(),
             cwd,
             workspace_roots: Vec::new(),
-            config: EnvironmentConfigState::FromThread,
+            config: EnvironmentConfigState::Ready(environment_config),
         },
+        environment.config_origin,
         environment.environment,
         environment.shell,
-        environment.config,
     ));
 
     #[allow(deprecated)]

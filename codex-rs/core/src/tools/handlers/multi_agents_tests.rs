@@ -2298,7 +2298,7 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
     else {
         panic!("parent environment should be ready");
     };
-    environment.config.permission_profile =
+    environment.config_mut().permission_profile =
         PermissionProfileSnapshot::legacy(expected_permission_profile.clone());
     assert_ne!(
         role_config.permissions.effective_permission_profile(),
@@ -4572,7 +4572,7 @@ async fn build_agent_resume_config_clears_base_instructions() {
     else {
         panic!("parent environment should be ready");
     };
-    environment.config.permission_profile =
+    environment.config_mut().permission_profile =
         PermissionProfileSnapshot::legacy(environment_permission_profile.clone());
 
     let config =

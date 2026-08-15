@@ -628,7 +628,7 @@ async fn build_guardian_prompt_includes_parent_turn_denied_reads() -> anyhow::Re
     let TurnEnvironmentState::Ready(environment) = &mut turn.environments.environments[0] else {
         panic!("parent environment should be ready");
     };
-    environment.config.permission_profile =
+    environment.config_mut().permission_profile =
         PermissionProfileSnapshot::legacy(environment_permission_profile);
     environment.selection.workspace_roots = vec![
         PathUri::from_abs_path(&workspace_root),

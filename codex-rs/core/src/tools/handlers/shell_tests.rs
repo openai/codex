@@ -6,6 +6,7 @@ use codex_protocol::models::ShellCommandToolCallParams;
 use pretty_assertions::assert_eq;
 
 use crate::config::PermissionProfileSnapshot;
+use crate::environment_selection::EnvironmentConfigOrigin;
 use crate::exec_env::CODEX_PERMISSION_PROFILE_ENV_VAR;
 use crate::exec_env::create_env;
 use crate::exec_env::inject_permission_profile_env;
@@ -109,8 +110,16 @@ async fn shell_command_handler_to_exec_params_uses_selected_environment() {
             environment_id: "selected-environment".to_string(),
             cwd: PathUri::from_abs_path(&selected_cwd),
             workspace_roots: Vec::new(),
-            config: EnvironmentConfigState::FromThread,
+            config: EnvironmentConfigState::Ready(EnvironmentConfig {
+                allow_login_shell: true,
+                permission_profile: PermissionProfileSnapshot::active(
+                    permission_profile,
+                    active_permission_profile.clone(),
+                ),
+                selected_capability_roots: Vec::new(),
+            }),
         },
+        EnvironmentConfigOrigin::Thread,
         Arc::clone(
             &turn_context
                 .environments
@@ -119,14 +128,6 @@ async fn shell_command_handler_to_exec_params_uses_selected_environment() {
                 .environment,
         ),
         Some(selected_shell),
-        EnvironmentConfig {
-            allow_login_shell: true,
-            permission_profile: PermissionProfileSnapshot::active(
-                permission_profile,
-                active_permission_profile.clone(),
-            ),
-            selected_capability_roots: Vec::new(),
-        },
     );
     let mut expected_env = create_env(
         &turn_context.config.permissions.shell_environment_policy,
@@ -210,7 +211,7 @@ async fn shell_command_handler_defaults_to_non_login_when_disallowed() {
         .primary()
         .expect("primary environment")
         .clone();
-    turn_environment.config.allow_login_shell = false;
+    turn_environment.config_mut().allow_login_shell = false;
     let cwd = turn_environment
         .cwd()
         .to_abs_path()

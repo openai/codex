@@ -448,7 +448,7 @@ impl Session {
             .chain(
                 environments
                     .turn_environments()
-                    .flat_map(|environment| environment.config.selected_capability_roots.clone()),
+                    .flat_map(|environment| environment.config().selected_capability_roots.clone()),
             )
             .enumerate()
         {

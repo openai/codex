@@ -290,9 +290,9 @@ mod tests {
         selection.workspace_roots.clear();
         turn.environments.environments[0] = TurnEnvironmentState::Ready(TurnEnvironment::new(
             selection,
+            current.config_origin,
             current.environment,
             current.shell,
-            current.config,
         ));
     }
 
@@ -358,7 +358,7 @@ mod tests {
         else {
             panic!("primary environment should be ready");
         };
-        environment.config.permission_profile =
+        environment.config_mut().permission_profile =
             PermissionProfileSnapshot::legacy(PermissionProfile::read_only());
         let turn = Arc::new(turn);
 
@@ -430,7 +430,7 @@ mod tests {
         else {
             panic!("primary environment should be ready");
         };
-        environment.config.permission_profile =
+        environment.config_mut().permission_profile =
             PermissionProfileSnapshot::legacy(PermissionProfile::Disabled);
         let turn = Arc::new(turn);
 
@@ -467,7 +467,7 @@ mod tests {
         else {
             panic!("primary environment should be ready");
         };
-        environment.config.permission_profile =
+        environment.config_mut().permission_profile =
             PermissionProfileSnapshot::legacy(PermissionProfile::Disabled);
         let turn = Arc::new(turn);
 

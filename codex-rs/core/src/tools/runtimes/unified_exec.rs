@@ -514,6 +514,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecAttempt> for UnifiedExecRunt
 mod tests {
     use super::*;
     use crate::config::PermissionProfileSnapshot;
+    use crate::environment_selection::EnvironmentConfigOrigin;
     use crate::exec::DEFAULT_EXEC_COMMAND_TIMEOUT_MS;
     use crate::tools::sandboxing::ToolRuntime;
     use codex_exec_server::Environment;
@@ -536,17 +537,17 @@ mod tests {
                 environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
                 cwd,
                 workspace_roots: Vec::new(),
-                config: EnvironmentConfigState::FromThread,
+                config: EnvironmentConfigState::Ready(EnvironmentConfig {
+                    allow_login_shell: true,
+                    permission_profile: PermissionProfileSnapshot::legacy(
+                        PermissionProfile::read_only(),
+                    ),
+                    selected_capability_roots: Vec::new(),
+                }),
             },
+            EnvironmentConfigOrigin::Thread,
             Arc::new(Environment::default_for_tests()),
             /*shell*/ None,
-            EnvironmentConfig {
-                allow_login_shell: true,
-                permission_profile: PermissionProfileSnapshot::legacy(
-                    PermissionProfile::read_only(),
-                ),
-                selected_capability_roots: Vec::new(),
-            },
         )
     }
 

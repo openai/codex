@@ -954,7 +954,7 @@ fn tool_environment_mode(environments: &TurnEnvironmentSnapshot) -> ToolEnvironm
 fn any_environment_allows_login_shell(environments: &TurnEnvironmentSnapshot) -> bool {
     environments
         .turn_environments()
-        .any(|environment| environment.config.allow_login_shell)
+        .any(|environment| environment.config().allow_login_shell)
 }
 
 #[instrument(level = "trace", skip_all)]

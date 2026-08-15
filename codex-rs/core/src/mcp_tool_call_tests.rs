@@ -1,6 +1,7 @@
 use super::*;
 use crate::config::ConfigBuilder;
 use crate::config::ManagedFeatures;
+use crate::environment_selection::EnvironmentConfigOrigin;
 use crate::environment_selection::TurnEnvironmentState;
 use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
@@ -1112,19 +1113,19 @@ async fn mcp_sandbox_cwd_uses_matching_server_environment_uri() -> anyhow::Resul
                 environment_id: "remote".to_string(),
                 cwd: secondary_cwd.clone(),
                 workspace_roots: Vec::new(),
-                config: EnvironmentConfigState::FromThread,
+                config: EnvironmentConfigState::Ready(EnvironmentConfig {
+                    allow_login_shell: true,
+                    permission_profile: turn_context
+                        .config
+                        .permissions
+                        .permission_profile_state()
+                        .snapshot(),
+                    selected_capability_roots: Vec::new(),
+                }),
             },
+            EnvironmentConfigOrigin::Thread,
             environment,
             /*shell*/ None,
-            EnvironmentConfig {
-                allow_login_shell: true,
-                permission_profile: turn_context
-                    .config
-                    .permissions
-                    .permission_profile_state()
-                    .snapshot(),
-                selected_capability_roots: Vec::new(),
-            },
         )));
 
     let step_context = StepContext::for_test(Arc::new(turn_context));

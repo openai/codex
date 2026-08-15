@@ -437,8 +437,9 @@ async fn explicit_remote_shell_runs_in_remote_cwd() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn ready_environment_permissions_override_thread_permissions() -> Result<()> {
-    const CALL_ID: &str = "attachment-specific-permissions";
+async fn environment_permissions_follow_configuration_ownership() -> Result<()> {
+    const THREAD_CONFIG_CALL_ID: &str = "thread-config-permissions";
+    const OWNER_CONFIG_CALL_ID: &str = "owner-config-permissions";
     const FILE_NAME: &str = "attachment-read-only-marker.txt";
 
     skip_if_target_windows!(
@@ -459,13 +460,8 @@ async fn ready_environment_permissions_override_thread_permissions() -> Result<(
             .expect("thread should allow workspace writes");
     });
     let test = builder.build_with_auto_env(&server).await?;
-    let mut selection = test.executor_environment().selection().clone();
+    let selection = test.executor_environment().selection().clone();
     let marker = selection.cwd.join(FILE_NAME)?;
-    selection.config = EnvironmentConfigState::Ready(EnvironmentConfig {
-        allow_login_shell: test.config.permissions.allow_login_shell,
-        permission_profile: PermissionProfileSnapshot::legacy(PermissionProfile::read_only()),
-        selected_capability_roots: Vec::new(),
-    });
 
     let (shell, command) = match test_target_os() {
         TestTargetOs::Linux => (
@@ -499,7 +495,7 @@ async fn ready_environment_permissions_override_thread_permissions() -> Result<(
         vec![
             sse(vec![
                 ev_response_created("resp-1"),
-                ev_function_call(CALL_ID, "exec_command", &arguments),
+                ev_function_call(THREAD_CONFIG_CALL_ID, "exec_command", &arguments),
                 ev_completed("resp-1"),
             ]),
             sse(vec![
@@ -507,17 +503,77 @@ async fn ready_environment_permissions_override_thread_permissions() -> Result<(
                 ev_assistant_message("msg-1", "done"),
                 ev_completed("resp-2"),
             ]),
+            sse(vec![
+                ev_response_created("resp-3"),
+                ev_function_call(OWNER_CONFIG_CALL_ID, "exec_command", &arguments),
+                ev_completed("resp-3"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-4"),
+                ev_assistant_message("msg-2", "done"),
+                ev_completed("resp-4"),
+            ]),
         ],
     )
     .await;
 
-    test.submit_turn_with_environments("try to write a file", Some(vec![selection]))
+    submit_thread_settings(
+        &test.codex,
+        ThreadSettingsOverrides {
+            permission_profile: Some(PermissionProfile::read_only()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    test.submit_text_turn("try to write a file with thread-owned permissions")
         .await?;
 
     let output = response_mock
         .last_request()
         .context("model should receive the command output")?
-        .function_call_output_text(CALL_ID)
+        .function_call_output_text(THREAD_CONFIG_CALL_ID)
+        .context("shell tool result should be present")?;
+    assert!(
+        output.contains("WRITE_DENIED"),
+        "unexpected output: {output}"
+    );
+    assert!(!output.contains("WRITE_SUCCEEDED"));
+
+    submit_thread_settings(
+        &test.codex,
+        ThreadSettingsOverrides {
+            environments: Some(TurnEnvironmentSelections::new(
+                test.config.cwd.clone(),
+                vec![TurnEnvironmentSelection {
+                    config: EnvironmentConfigState::Ready(EnvironmentConfig {
+                        allow_login_shell: test.config.permissions.allow_login_shell,
+                        permission_profile: PermissionProfileSnapshot::legacy(
+                            PermissionProfile::read_only(),
+                        ),
+                        selected_capability_roots: Vec::new(),
+                    }),
+                    ..selection
+                }],
+            )),
+            ..Default::default()
+        },
+    )
+    .await?;
+    submit_thread_settings(
+        &test.codex,
+        ThreadSettingsOverrides {
+            permission_profile: Some(PermissionProfile::workspace_write()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    test.submit_text_turn("try to write a file with owner-provided permissions")
+        .await?;
+
+    let output = response_mock
+        .last_request()
+        .context("model should receive the command output")?
+        .function_call_output_text(OWNER_CONFIG_CALL_ID)
         .context("shell tool result should be present")?;
     assert!(
         output.contains("WRITE_DENIED"),

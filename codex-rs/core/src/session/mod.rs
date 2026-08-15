@@ -1596,7 +1596,7 @@ impl Session {
             } else if state.session_configuration.turn_environment_config() != environment_config {
                 self.services
                     .turn_environments
-                    .update_environment_configs(&environment_config);
+                    .update_thread_config(&environment_config);
             }
             state.session_configuration = updated;
             let new_config = notify_config_contributors

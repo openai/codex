@@ -367,7 +367,7 @@ mod tests {
             .primary()
             .expect("ready primary environment");
         let selection = environment.selection();
-        let environment_config = environment.config.clone();
+        let environment_config = environment.config().clone();
         let environments = crate::environment_selection::ThreadEnvironments::new(
             session.services.turn_environments.environment_manager(),
             crate::shell::default_user_shell(),

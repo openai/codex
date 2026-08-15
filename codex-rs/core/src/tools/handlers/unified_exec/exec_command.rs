@@ -233,7 +233,7 @@ impl ExecCommandHandler {
             &args,
             shell,
             &shell_mode,
-            turn_environment.config.allow_login_shell,
+            turn_environment.config().allow_login_shell,
         )
         .map_err(FunctionCallError::RespondToModel)?;
         let command = resolved_command.command;

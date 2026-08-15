@@ -1057,18 +1057,22 @@ async fn run_review_on_session(
         .permissions
         .permission_profile_state()
         .snapshot();
-    let mut parent_turn_environments = params.parent_context.environments().to_selections();
-    // FromThread inherits the Guardian profile below. Once Core normalizes FromThread
-    // to Ready(config), every selection will carry explicit config and this conditional can be
-    // removed.
-    for selection in &mut parent_turn_environments {
-        if let EnvironmentConfigState::Ready(config) = &mut selection.config {
+    // Guardian must receive read-only permissions for every inherited environment.
+    let parent_turn_environments = params
+        .parent_context
+        .environments()
+        .turn_environments()
+        .map(|environment| {
+            let mut selection = environment.selection();
+            let mut config = environment.config().clone();
             config.permission_profile =
                 PermissionProfileSnapshot::legacy(read_only_guardian_permission_profile(
                     config.permission_profile.permission_profile(),
                 ));
-        }
-    }
+            selection.config = EnvironmentConfigState::Ready(config);
+            selection
+        })
+        .collect();
     // TODO(anp): Migrate guardian review thread settings to a PathUri fallback cwd so foreign
     // parent environments do not fall back to the host-native config cwd.
     let parent_turn_legacy_fallback_cwd = params
