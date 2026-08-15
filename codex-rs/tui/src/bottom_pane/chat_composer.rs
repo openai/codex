@@ -144,7 +144,8 @@
 //! `KeyCode::Char` and `KeyCode::Enter` key events instead of a single paste event.
 //!
 //! To avoid misinterpreting these bursts as real typing (and to prevent transient UI effects like
-//! shortcut overlays toggling on a pasted `?`), we feed "plain" character events into
+//! shortcut overlays toggling on a pasted `?`), we feed text-producing character events (plain,
+//! Shift, or Windows AltGr) into
 //! [`PasteBurst`](super::paste_burst::PasteBurst), which buffers bursts and later flushes them
 //! through [`ChatComposer::handle_paste`].
 //!
@@ -3514,8 +3515,8 @@ impl ChatComposer {
     ///
     /// - Always flush any *due* paste burst first so buffered text does not lag behind unrelated
     ///   edits.
-    /// - Then handle the incoming key, intercepting only "plain" (no Ctrl/Alt) char input.
-    /// - For non-plain keys, flush via `flush_before_modified_input()` before applying the key;
+    /// - Then handle the incoming key, intercepting only text-producing character input.
+    /// - For non-text keys, flush via `flush_before_modified_input()` before applying the key;
     ///   otherwise `clear_window_after_non_char()` can leave buffered text waiting without a
     ///   timestamp to time out against.
     fn handle_input_basic(&mut self, input: KeyEvent) -> (InputResult, bool) {
@@ -3550,19 +3551,21 @@ impl ChatComposer {
             return (InputResult::None, true);
         }
 
-        // Intercept plain Char inputs to optionally accumulate into a burst buffer.
+        let has_non_text_modifier = has_ctrl_or_alt(input.modifiers)
+            || input
+                .modifiers
+                .intersects(KeyModifiers::SUPER | KeyModifiers::HYPER | KeyModifiers::META);
+
+        // Intercept text-producing Char inputs to optionally accumulate into a burst buffer.
         //
-        // This is intentionally limited to "plain" (no Ctrl/Alt) chars so shortcuts keep their
-        // normal semantics, and so we can aggressively flush/clear any burst state when non-char
-        // keys are pressed.
+        // This preserves plain, Shift, and Windows AltGr input while keeping shortcut modifiers
+        // out of the burst detector and flushing any in-flight text before a non-text key.
         if let KeyEvent {
             code: KeyCode::Char(ch),
-            modifiers,
             ..
         } = input
         {
-            let has_ctrl_or_alt = has_ctrl_or_alt(modifiers);
-            if !has_ctrl_or_alt
+            if !has_non_text_modifier
                 && !self.draft.disable_paste_burst
                 && self.draft.textarea.allows_paste_burst()
             {
@@ -3650,14 +3653,10 @@ impl ChatComposer {
             self.reconcile_deleted_elements(elements_before);
         }
 
-        // Update paste-burst heuristic for plain Char (no Ctrl/Alt) events.
-        let crossterm::event::KeyEvent {
-            code, modifiers, ..
-        } = input;
-        match code {
+        // Update the paste-burst heuristic for text, shortcut, and non-char events.
+        match input.code {
             KeyCode::Char(_) => {
-                let has_ctrl_or_alt = has_ctrl_or_alt(modifiers);
-                if has_ctrl_or_alt {
+                if has_non_text_modifier {
                     self.draft.paste_burst.clear_window_after_non_char();
                 }
             }
@@ -11903,6 +11902,148 @@ mod tests {
             Ok(event) => panic!("unexpected event: {event:?}"),
             Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {}
             Err(err) => panic!("unexpected channel state: {err:?}"),
+        }
+    }
+
+    #[test]
+    fn shortcut_modified_input_does_not_enter_paste_bursts() {
+        snapshot_composer_state(
+            "shortcut_modified_space_is_not_rendered",
+            /*enhanced_keys_supported*/ false,
+            |composer| {
+                let now = Instant::now();
+                for input in [
+                    KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+                    KeyEvent::new(KeyCode::Char(' '), KeyModifiers::SUPER),
+                    KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE),
+                ] {
+                    composer.handle_input_basic_with_time(input, now);
+                }
+
+                assert!(
+                    composer.handle_paste_burst_flush(
+                        now + PasteBurst::recommended_active_flush_delay()
+                    )
+                );
+            },
+        );
+
+        for modifiers in [
+            KeyModifiers::SUPER,
+            KeyModifiers::SHIFT | KeyModifiers::SUPER,
+            KeyModifiers::HYPER,
+            KeyModifiers::META,
+        ] {
+            let (mut composer, _rx) = new_test_composer();
+            let now = Instant::now();
+
+            composer
+                .handle_input_basic_with_time(KeyEvent::new(KeyCode::Char(' '), modifiers), now);
+
+            assert!(
+                !composer.is_in_paste_burst(),
+                "shortcut modifiers {modifiers:?} must not start a paste burst"
+            );
+            assert!(
+                !composer.handle_paste_burst_flush(now + PasteBurst::recommended_flush_delay())
+            );
+            assert_eq!(composer.draft.textarea.text(), "");
+        }
+    }
+
+    #[test]
+    fn plain_and_shift_spaces_insert_normally() {
+        for modifiers in [KeyModifiers::NONE, KeyModifiers::SHIFT] {
+            let (mut composer, _rx) = new_test_composer();
+            let now = Instant::now();
+
+            composer
+                .handle_input_basic_with_time(KeyEvent::new(KeyCode::Char(' '), modifiers), now);
+
+            assert!(composer.is_in_paste_burst());
+            assert_eq!(composer.draft.textarea.text(), "");
+            assert!(composer.handle_paste_burst_flush(now + PasteBurst::recommended_flush_delay()));
+            assert_eq!(composer.draft.textarea.text(), " ");
+            assert!(!composer.is_in_paste_burst());
+
+            let snapshot_name = if modifiers == KeyModifiers::NONE {
+                "plain_space_is_rendered"
+            } else {
+                "shift_space_is_rendered"
+            };
+            snapshot_composer_state(
+                snapshot_name,
+                /*enhanced_keys_supported*/ false,
+                |composer| {
+                    let now = Instant::now();
+                    for input in [
+                        KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+                        KeyEvent::new(KeyCode::Char(' '), modifiers),
+                        KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE),
+                    ] {
+                        composer.handle_input_basic_with_time(input, now);
+                    }
+
+                    assert!(composer.handle_paste_burst_flush(
+                        now + PasteBurst::recommended_active_flush_delay()
+                    ));
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn non_text_input_flushes_pending_paste_without_inserting_text() {
+        let (mut composer, _rx) = new_test_composer();
+        let now = Instant::now();
+
+        composer.handle_input_basic_with_time(
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+            now,
+        );
+        composer.handle_input_basic_with_time(
+            KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE),
+            now,
+        );
+
+        assert!(composer.is_in_paste_burst());
+        assert_eq!(composer.draft.textarea.text(), "");
+
+        composer.handle_input_basic_with_time(
+            KeyEvent::new(KeyCode::Char(' '), KeyModifiers::SUPER),
+            now,
+        );
+
+        assert_eq!(composer.draft.textarea.text(), "ab");
+        assert!(!composer.is_in_paste_burst());
+        assert!(!composer.handle_paste_burst_flush(now + PasteBurst::recommended_flush_delay()));
+    }
+
+    #[test]
+    fn platform_specific_altgr_input_remains_text() {
+        for modifiers in [
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+            KeyModifiers::SHIFT | KeyModifiers::CONTROL | KeyModifiers::ALT,
+        ] {
+            let (mut composer, _rx) = new_test_composer();
+            let now = Instant::now();
+
+            composer
+                .handle_input_basic_with_time(KeyEvent::new(KeyCode::Char('@'), modifiers), now);
+
+            if cfg!(windows) {
+                assert!(composer.is_in_paste_burst());
+                assert!(
+                    composer.handle_paste_burst_flush(now + PasteBurst::recommended_flush_delay())
+                );
+                assert_eq!(composer.draft.textarea.text(), "@");
+            } else {
+                assert!(!composer.is_in_paste_burst());
+                assert!(
+                    !composer.handle_paste_burst_flush(now + PasteBurst::recommended_flush_delay())
+                );
+                assert_eq!(composer.draft.textarea.text(), "");
+            }
         }
     }
 
