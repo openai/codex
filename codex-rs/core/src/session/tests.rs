@@ -8598,25 +8598,10 @@ async fn mcp_refresh_updates_plugin_auth_mode_before_checking_pending_state() {
     );
 }
 
-struct PendingNoiseConnectProvider;
-
-impl codex_exec_server::NoiseRendezvousConnectProvider for PendingNoiseConnectProvider {
-    fn connect_bundle(
-        &self,
-        _: codex_exec_server::NoiseChannelPublicKey,
-    ) -> futures::future::BoxFuture<
-        '_,
-        Result<codex_exec_server::NoiseRendezvousConnectBundle, codex_exec_server::ExecServerError>,
-    > {
-        Box::pin(futures::future::pending())
-    }
-}
-
 #[tokio::test]
 #[tracing_test::traced_test]
 async fn conflicting_ready_environment_root_ids_keep_first_location() {
     let (session, turn_context) = make_session_and_context().await;
-    let environment_manager = session.services.turn_environments.environment_manager();
     let selected_root =
         |environment_id: &str, path: &str| codex_protocol::capabilities::SelectedCapabilityRoot {
             id: "shared-root".to_string(),
@@ -8639,29 +8624,21 @@ async fn conflicting_ready_environment_root_ids_keep_first_location() {
             environment_id,
             ..
         } = &selected_root.location;
-        let provider = Arc::new(PendingNoiseConnectProvider);
-        let environment = environment_manager
-            .materialize_pending_noise_environment(environment_id.clone(), provider.clone())
-            .expect("materialize deferred environment");
-        environment_manager
-            .report_environment_provisioning_status(
-                environment_id.clone(),
-                Ok(codex_exec_server::EnvironmentReadyInfo {
-                    selected_capability_roots: vec![selected_root.clone()],
-                }),
-                provider,
-            )
-            .expect("report environment ready");
+        let mut environment_config = local_environment.config.clone();
+        environment_config.selected_capability_roots = vec![selected_root.clone()];
         turn_environments.push(TurnEnvironment::new(
             TurnEnvironmentSelection {
                 environment_id: environment_id.clone(),
                 cwd: local_environment.cwd().clone(),
                 workspace_roots: local_environment.workspace_roots().to_vec(),
-                config: EnvironmentConfigState::FromThread,
+                config: EnvironmentConfigState::Ready(environment_config.clone()),
             },
-            environment,
+            Arc::new(
+                codex_exec_server::Environment::create_for_tests(/*exec_server_url*/ None)
+                    .expect("create test environment"),
+            ),
             local_environment.shell.clone(),
-            local_environment.config.clone(),
+            environment_config,
         ));
     }
     let environments = TurnEnvironmentSnapshot {

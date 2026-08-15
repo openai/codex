@@ -1,9 +1,9 @@
 use super::*;
 use crate::config::PermissionProfileSnapshot;
-use crate::session::turn_context::TurnEnvironmentConfig;
 use crate::tools::approvals::ApprovalCacheKey;
 use codex_exec_server::Environment;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::EnvironmentConfig;
 use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_utils_path_uri::PathUri;
@@ -25,12 +25,12 @@ async fn approval_key_uses_path_uri_and_includes_environment_id() {
             },
             Arc::new(Environment::default_for_tests()),
             /*shell*/ None,
-            TurnEnvironmentConfig {
+            EnvironmentConfig {
                 allow_login_shell: true,
                 permission_profile: PermissionProfileSnapshot::legacy(
                     PermissionProfile::read_only(),
                 ),
-                selected_capability_roots: None,
+                selected_capability_roots: Vec::new(),
             },
         ),
         shell_type: None,

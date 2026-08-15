@@ -25,6 +25,7 @@ use codex_login::CodexAuth;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::PermissionProfileSnapshot;
 use codex_protocol::openai_models::MODEL_SPECIALTY_CYBER;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::permissions::FileSystemAccessMode;
@@ -33,6 +34,8 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EnvironmentConfig;
+use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
@@ -511,6 +514,19 @@ async fn guardian_session_is_reused_for_consecutive_tool_reviews_without_prewarm
         ],
     )
     .await;
+    let mut parent_environments = local_selections(test.config.cwd.clone());
+    let parent_environment_config = EnvironmentConfig {
+        allow_login_shell: test.config.permissions.allow_login_shell,
+        permission_profile: PermissionProfileSnapshot::legacy(
+            test.config.permissions.permission_profile().clone(),
+        ),
+        selected_capability_roots: Vec::new(),
+    };
+    parent_environments
+        .environments
+        .first_mut()
+        .expect("local environment selection")
+        .config = EnvironmentConfigState::Ready(parent_environment_config);
 
     test.codex
         .start_or_steer_turn(
@@ -519,7 +535,7 @@ async fn guardian_session_is_reused_for_consecutive_tool_reviews_without_prewarm
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(local_selections(test.config.cwd.clone())),
+                environments: Some(parent_environments),
                 approval_policy: Some(approval_policy),
                 approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
                 ..Default::default()

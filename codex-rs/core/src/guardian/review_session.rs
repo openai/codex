@@ -21,6 +21,7 @@ use codex_protocol::models::BaseInstructionsProvenance;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::PermissionProfileSnapshot;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::InputModality;
@@ -28,6 +29,7 @@ use codex_protocol::openai_models::ModelMessages;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -1050,8 +1052,23 @@ async fn run_review_on_session(
         .total_token_usage()
         .await
         .unwrap_or_default();
-    let guardian_permission_profile = params.spawn_config.permissions.permission_profile().clone();
-    let parent_turn_environments = params.parent_context.environments().to_selections();
+    let guardian_permission_snapshot = params
+        .spawn_config
+        .permissions
+        .permission_profile_state()
+        .snapshot();
+    let mut parent_turn_environments = params.parent_context.environments().to_selections();
+    // FromThread inherits the Guardian profile below. Once Core normalizes FromThread
+    // to Ready(config), every selection will carry explicit config and this conditional can be
+    // removed.
+    for selection in &mut parent_turn_environments {
+        if let EnvironmentConfigState::Ready(config) = &mut selection.config {
+            config.permission_profile =
+                PermissionProfileSnapshot::legacy(read_only_guardian_permission_profile(
+                    config.permission_profile.permission_profile(),
+                ));
+        }
+    }
     // TODO(anp): Migrate guardian review thread settings to a PathUri fallback cwd so foreign
     // parent environments do not fall back to the host-native config cwd.
     let parent_turn_legacy_fallback_cwd = params
@@ -1071,7 +1088,7 @@ async fn run_review_on_session(
                 )),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: None,
-                permission_profile: Some(guardian_permission_profile),
+                permission_profile: Some(guardian_permission_snapshot.permission_profile().clone()),
                 summary: Some(params.reasoning_summary),
                 personality: params.personality,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
@@ -1275,6 +1292,16 @@ fn event_matches_turn(event: &Event, expected_turn_id: &str) -> bool {
     }
 }
 
+fn read_only_guardian_permission_profile(
+    permission_profile: &PermissionProfile,
+) -> PermissionProfile {
+    permission_profile
+        .intersect_with_read_only()
+        .unwrap_or(PermissionProfile::External {
+            network: codex_protocol::permissions::NetworkSandboxPolicy::Restricted,
+        })
+}
+
 pub(crate) fn build_guardian_review_session_config(
     parent_config: &Config,
     live_network_config: Option<codex_network_proxy::NetworkProxyConfig>,
@@ -1303,13 +1330,8 @@ pub(crate) fn build_guardian_review_session_config(
     guardian_config.notify = None;
     guardian_config.developer_instructions = None;
     guardian_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
-    let guardian_permission_profile = parent_config
-        .permissions
-        .permission_profile()
-        .intersect_with_read_only()
-        .unwrap_or(PermissionProfile::External {
-            network: codex_protocol::permissions::NetworkSandboxPolicy::Restricted,
-        });
+    let guardian_permission_profile =
+        read_only_guardian_permission_profile(parent_config.permissions.permission_profile());
     guardian_config
         .permissions
         .set_permission_profile(guardian_permission_profile)

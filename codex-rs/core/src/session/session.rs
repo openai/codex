@@ -5,7 +5,6 @@ use crate::agents_md_manager::AgentsMdManager;
 use crate::config::ConstraintError;
 use crate::environment_selection::ThreadEnvironments;
 use crate::environment_selection::TurnEnvironmentSnapshot;
-use crate::session::turn_context::TurnEnvironmentConfig;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::state::ActiveTurn;
 use codex_extension_api::ExtensionDataInit;
@@ -20,6 +19,7 @@ use codex_protocol::config_types::ServiceTier;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSpecialPath;
+use codex_protocol::protocol::EnvironmentConfig;
 use codex_protocol::protocol::HookCompletedEvent;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::ThreadHistoryMode;
@@ -136,14 +136,14 @@ impl SessionConfiguration {
         &self.permission_profile_state
     }
 
-    pub(super) fn turn_environment_config(&self) -> TurnEnvironmentConfig {
-        TurnEnvironmentConfig {
+    pub(super) fn turn_environment_config(&self) -> EnvironmentConfig {
+        EnvironmentConfig {
             allow_login_shell: self
                 .original_config_do_not_use
                 .permissions
                 .allow_login_shell,
             permission_profile: self.permission_profile_state.snapshot(),
-            selected_capability_roots: None,
+            selected_capability_roots: Vec::new(),
         }
     }
 
@@ -1071,7 +1071,6 @@ impl Session {
             let turn_environments = Arc::new(ThreadEnvironments::new(
                 environment_manager,
                 default_shell.clone(),
-                // Temporary: preserve thread-level behavior until environments supply config.
                 session_configuration.turn_environment_config(),
                 shell_snapshot,
                 inherited_environments.unwrap_or_default(),

@@ -31,7 +31,6 @@ use tokio_util::task::AbortOnDropHandle;
 
 use crate::session::turn_context::ShellSnapshotTask;
 use crate::session::turn_context::TurnEnvironment;
-use crate::session::turn_context::TurnEnvironmentConfig;
 use crate::shell::Shell;
 use crate::shell_snapshot::ShellSnapshot;
 
@@ -67,7 +66,7 @@ struct ResolvedEnvironment {
 #[derive(Clone)]
 struct SelectedTurnEnvironment {
     selection: TurnEnvironmentSelection,
-    config: TurnEnvironmentConfig,
+    config: EnvironmentConfig,
     environment: Arc<Environment>,
     // Selection clones share one listener; the final handle drop aborts it.
     connection_events_task: Option<Arc<AbortOnDropHandle<()>>>,
@@ -77,7 +76,7 @@ struct SelectedTurnEnvironment {
 #[derive(Clone)]
 pub(crate) struct StartingTurnEnvironment {
     pub(crate) selection: TurnEnvironmentSelection,
-    config: TurnEnvironmentConfig,
+    config: EnvironmentConfig,
     resolution: TurnEnvironmentResolution,
 }
 
@@ -85,17 +84,11 @@ impl SelectedTurnEnvironment {
     fn apply_configuration(
         &mut self,
         selection_config: EnvironmentConfigState,
-        thread_config: &TurnEnvironmentConfig,
+        thread_config: &EnvironmentConfig,
     ) {
         self.config = match &selection_config {
             EnvironmentConfigState::FromThread => thread_config.clone(),
-            EnvironmentConfigState::Ready(config) => TurnEnvironmentConfig {
-                allow_login_shell: config.allow_login_shell,
-                // temp read from thread_config; will go away once perms on EnvironmentConfig,
-                // then we can just assign passed config directly
-                permission_profile: thread_config.permission_profile.clone(),
-                selected_capability_roots: Some(config.selected_capability_roots.clone()),
-            },
+            EnvironmentConfigState::Ready(config) => config.clone(),
             EnvironmentConfigState::Pending => {
                 unreachable!("pending environment configuration is not supported yet")
             }
@@ -133,7 +126,7 @@ impl ThreadEnvironments {
     pub(crate) fn new(
         environment_manager: Arc<EnvironmentManager>,
         local_shell: Shell,
-        thread_environment_config: TurnEnvironmentConfig,
+        thread_environment_config: EnvironmentConfig,
         shell_snapshot: ShellSnapshot,
         current: TurnEnvironmentSnapshot,
         non_blocking_snapshots: bool,
@@ -186,7 +179,7 @@ impl ThreadEnvironments {
     pub(crate) fn update_selections(
         &self,
         environments: &[TurnEnvironmentSelection],
-        thread_environment_config: &TurnEnvironmentConfig,
+        thread_environment_config: &EnvironmentConfig,
     ) {
         let previous = self.environments.load();
         let mut seen_environment_ids = HashSet::with_capacity(environments.len());
@@ -306,7 +299,7 @@ impl ThreadEnvironments {
             .unwrap_or_default()
     }
 
-    pub(crate) fn update_environment_configs(&self, config: &TurnEnvironmentConfig) {
+    pub(crate) fn update_environment_configs(&self, config: &EnvironmentConfig) {
         let environments = self
             .environments
             .load()
@@ -353,9 +346,8 @@ impl ThreadEnvironments {
         let environments = self.environments.load();
         let mut selected_capability_roots = thread_selected_capability_roots.to_vec();
         for environment in environments.iter() {
-            if let Some(roots) = &environment.config.selected_capability_roots {
-                selected_capability_roots.extend(roots.iter().cloned());
-            }
+            selected_capability_roots
+                .extend(environment.config.selected_capability_roots.iter().cloned());
         }
         let mut seen_root_ids = HashSet::with_capacity(selected_capability_roots.len());
         selected_capability_roots.retain(|root| seen_root_ids.insert(root.id.clone()));
@@ -706,11 +698,11 @@ mod tests {
 
     use super::*;
 
-    fn test_environment_config() -> TurnEnvironmentConfig {
-        TurnEnvironmentConfig {
+    fn test_environment_config() -> EnvironmentConfig {
+        EnvironmentConfig {
             allow_login_shell: true,
             permission_profile: PermissionProfileSnapshot::legacy(PermissionProfile::read_only()),
-            selected_capability_roots: None,
+            selected_capability_roots: Vec::new(),
         }
     }
 
@@ -874,14 +866,14 @@ url = "ws://127.0.0.1:8765"
             shell_type: crate::shell::ShellType::Zsh,
             shell_path: std::path::PathBuf::from("/configured/zsh"),
         };
-        let expected_config = TurnEnvironmentConfig {
+        let expected_config = EnvironmentConfig {
             allow_login_shell: false,
             permission_profile: PermissionProfileSnapshot::active_with_profile_workspace_roots(
                 PermissionProfile::read_only(),
                 ActivePermissionProfile::read_only(),
                 vec![cwd.join("profile-root")],
             ),
-            selected_capability_roots: None,
+            selected_capability_roots: Vec::new(),
         };
         let turn_environments = ThreadEnvironments::new(
             Arc::new(EnvironmentManager::default_for_tests()),
@@ -1075,14 +1067,14 @@ url = "ws://127.0.0.1:8765"
             .await,
         );
         let cwd = AbsolutePathBuf::current_dir().expect("cwd");
-        let expected_config = TurnEnvironmentConfig {
+        let expected_config = EnvironmentConfig {
             allow_login_shell: false,
             permission_profile: PermissionProfileSnapshot::active_with_profile_workspace_roots(
                 PermissionProfile::read_only(),
                 ActivePermissionProfile::read_only(),
                 vec![cwd.join("profile-root")],
             ),
-            selected_capability_roots: None,
+            selected_capability_roots: Vec::new(),
         };
         let cwd = PathUri::from_abs_path(&cwd);
         let remote = TurnEnvironmentSelection {
@@ -1244,7 +1236,7 @@ url = "ws://127.0.0.1:8765"
                 /*connect_timeout*/ None,
             )
             .expect("replacement environment");
-        let next_config = TurnEnvironmentConfig {
+        let next_config = EnvironmentConfig {
             allow_login_shell: false,
             ..test_environment_config()
         };
@@ -1394,14 +1386,14 @@ url = "ws://127.0.0.1:8765"
                 /*connect_timeout*/ None,
             )
             .expect("replacement environment");
-        let child_config = TurnEnvironmentConfig {
+        let child_config = EnvironmentConfig {
             allow_login_shell: false,
             permission_profile: PermissionProfileSnapshot::active_with_profile_workspace_roots(
                 PermissionProfile::read_only(),
                 ActivePermissionProfile::read_only(),
                 vec![cwd.join("child-profile-root")],
             ),
-            selected_capability_roots: None,
+            selected_capability_roots: Vec::new(),
         };
         let environments = ThreadEnvironments::new(
             manager,
@@ -1423,7 +1415,7 @@ url = "ws://127.0.0.1:8765"
     }
 
     #[tokio::test]
-    async fn installed_environment_config_is_inherited_and_reset_for_new_cwd() {
+    async fn owner_environment_config_is_inherited_and_reset_for_new_cwd() {
         let cwd = AbsolutePathBuf::current_dir().expect("cwd");
         let selection = TurnEnvironmentSelection {
             environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
@@ -1441,17 +1433,16 @@ url = "ws://127.0.0.1:8765"
         let manager = Arc::new(EnvironmentManager::default_for_tests());
         let parent =
             resolve_turn_environments(Arc::clone(&manager), std::slice::from_ref(&selection)).await;
+        let parent_owner_config = EnvironmentConfig {
+            allow_login_shell: false,
+            permission_profile: PermissionProfileSnapshot::legacy(PermissionProfile::read_only()),
+            selected_capability_roots: vec![root("parent-root")],
+        };
         parent
-            .environment_ready(
-                &selection,
-                EnvironmentConfig {
-                    allow_login_shell: false,
-                    selected_capability_roots: vec![root("parent-root")],
-                },
-            )
+            .environment_ready(&selection, parent_owner_config.clone())
             .expect("install environment config");
 
-        let child_thread_config = TurnEnvironmentConfig {
+        let child_thread_config = EnvironmentConfig {
             permission_profile: PermissionProfileSnapshot::legacy(
                 PermissionProfile::workspace_write(),
             ),
@@ -1468,14 +1459,12 @@ url = "ws://127.0.0.1:8765"
         let child_snapshot = child.snapshot().await;
         let child_environment = child_snapshot.primary().expect("child environment");
 
+        let cleared_parent_owner_config = EnvironmentConfig {
+            selected_capability_roots: Vec::new(),
+            ..parent_owner_config.clone()
+        };
         parent
-            .environment_ready(
-                &selection,
-                EnvironmentConfig {
-                    allow_login_shell: false,
-                    selected_capability_roots: Vec::new(),
-                },
-            )
+            .environment_ready(&selection, cleared_parent_owner_config.clone())
             .expect("clear parent roots");
         let cleared_snapshot = parent.snapshot().await;
         assert_eq!(
@@ -1483,20 +1472,9 @@ url = "ws://127.0.0.1:8765"
                 .primary()
                 .expect("environment with cleared roots")
                 .config,
-            TurnEnvironmentConfig {
-                allow_login_shell: false,
-                selected_capability_roots: Some(Vec::new()),
-                ..test_environment_config()
-            }
+            cleared_parent_owner_config
         );
-        assert_eq!(
-            child_environment.config,
-            TurnEnvironmentConfig {
-                allow_login_shell: false,
-                selected_capability_roots: Some(vec![root("parent-root")]),
-                ..child_thread_config
-            }
-        );
+        assert_eq!(child_environment.config, parent_owner_config);
 
         let changed_selection = TurnEnvironmentSelection {
             cwd: PathUri::from_abs_path(&cwd.join("changed")),

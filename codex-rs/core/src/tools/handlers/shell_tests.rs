@@ -14,7 +14,6 @@ use crate::sandboxing::SandboxPermissions;
 use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use crate::session::turn_context::TurnEnvironment;
-use crate::session::turn_context::TurnEnvironmentConfig;
 use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::tools::context::FunctionToolOutput;
@@ -25,6 +24,7 @@ use crate::tools::handlers::ShellCommandHandler;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::CoreToolRuntime;
 use crate::turn_diff_tracker::TurnDiffTracker;
+use codex_protocol::protocol::EnvironmentConfig;
 use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_shell_command::is_safe_command::is_known_safe_command;
@@ -119,13 +119,13 @@ async fn shell_command_handler_to_exec_params_uses_selected_environment() {
                 .environment,
         ),
         Some(selected_shell),
-        TurnEnvironmentConfig {
+        EnvironmentConfig {
             allow_login_shell: true,
             permission_profile: PermissionProfileSnapshot::active(
                 permission_profile,
                 active_permission_profile.clone(),
             ),
-            selected_capability_roots: None,
+            selected_capability_roots: Vec::new(),
         },
     );
     let mut expected_env = create_env(

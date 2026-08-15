@@ -1,4 +1,5 @@
 use crate::capabilities::SelectedCapabilityRoot;
+use crate::models::PermissionProfileSnapshot;
 
 /// Configuration supplied for a thread's selected environment.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -11,11 +12,13 @@ pub enum EnvironmentConfigState {
     Ready(EnvironmentConfig),
 }
 
-/// Resolved configuration supplied by the owner of a thread/environment attachment.
+/// Resolved configuration for a thread/environment attachment.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EnvironmentConfig {
     /// Whether shell tools may start login shells in this environment.
     pub allow_login_shell: bool,
+    /// Resolved permissions for this thread's environment attachment.
+    pub permission_profile: PermissionProfileSnapshot,
     /// Capability roots selected for this thread's environment attachment.
     pub selected_capability_roots: Vec<SelectedCapabilityRoot>,
 }

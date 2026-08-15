@@ -445,13 +445,11 @@ impl Session {
             .selected_capability_roots
             .iter()
             .cloned()
-            .chain(environments.turn_environments().flat_map(|environment| {
-                environment
-                    .config
-                    .selected_capability_roots
-                    .clone()
-                    .unwrap_or_else(|| environment.environment.selected_capability_roots())
-            }))
+            .chain(
+                environments
+                    .turn_environments()
+                    .flat_map(|environment| environment.config.selected_capability_roots.clone()),
+            )
             .enumerate()
         {
             if let Some(kept_location) = root_locations_by_id.get(&root.id) {

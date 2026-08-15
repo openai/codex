@@ -1,12 +1,12 @@
 use super::*;
 use crate::config::PermissionProfileSnapshot;
-use crate::session::turn_context::TurnEnvironmentConfig;
 use crate::tools::sandboxing::SandboxAttempt;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::EnvironmentConfig;
 use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::TurnEnvironmentSelection;
@@ -28,10 +28,10 @@ fn test_turn_environment(environment_id: &str) -> crate::session::turn_context::
         },
         std::sync::Arc::new(codex_exec_server::Environment::default_for_tests()),
         /*shell*/ None,
-        TurnEnvironmentConfig {
+        EnvironmentConfig {
             allow_login_shell: true,
             permission_profile: PermissionProfileSnapshot::legacy(PermissionProfile::read_only()),
-            selected_capability_roots: None,
+            selected_capability_roots: Vec::new(),
         },
     )
 }

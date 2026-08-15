@@ -917,14 +917,14 @@ async fn zsh_fork_unified_exec_keeps_shell_parameter_when_remote_environment_ava
                         .expect("remote test environment"),
                     ),
                     /*shell*/ None,
-                    crate::session::turn_context::TurnEnvironmentConfig {
+                    codex_protocol::protocol::EnvironmentConfig {
                         allow_login_shell: true,
                         permission_profile: turn
                             .config
                             .permissions
                             .permission_profile_state()
                             .snapshot(),
-                        selected_capability_roots: None,
+                        selected_capability_roots: Vec::new(),
                     },
                 ),
             ));

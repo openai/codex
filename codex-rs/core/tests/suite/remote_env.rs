@@ -46,6 +46,7 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::PermissionProfileSnapshot;
 use codex_protocol::models::SandboxPermissions;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -430,6 +431,105 @@ async fn explicit_remote_shell_runs_in_remote_cwd() -> Result<()> {
     assert!(
         output.is_some_and(|output| output.contains("Process exited with code 0")),
         "remote shell command should exit successfully",
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ready_environment_permissions_override_thread_permissions() -> Result<()> {
+    const CALL_ID: &str = "attachment-specific-permissions";
+    const FILE_NAME: &str = "attachment-read-only-marker.txt";
+
+    skip_if_target_windows!(
+        Ok(()),
+        "Windows sandbox enforcement is covered by the platform-specific suite"
+    );
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config.use_experimental_unified_exec_tool = true;
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
+        config
+            .permissions
+            .set_permission_profile(PermissionProfile::workspace_write())
+            .expect("thread should allow workspace writes");
+    });
+    let test = builder.build_with_auto_env(&server).await?;
+    let mut selection = test.executor_environment().selection().clone();
+    let marker = selection.cwd.join(FILE_NAME)?;
+    selection.config = EnvironmentConfigState::Ready(EnvironmentConfig {
+        allow_login_shell: test.config.permissions.allow_login_shell,
+        permission_profile: PermissionProfileSnapshot::legacy(PermissionProfile::read_only()),
+        selected_capability_roots: Vec::new(),
+    });
+
+    let (shell, command) = match test_target_os() {
+        TestTargetOs::Linux => (
+            "bash",
+            format!(
+                "if printf blocked > {FILE_NAME}; then echo WRITE_SUCCEEDED; else echo WRITE_DENIED; fi"
+            ),
+        ),
+        TestTargetOs::MacOs => (
+            "zsh",
+            format!(
+                "if printf blocked > {FILE_NAME}; then echo WRITE_SUCCEEDED; else echo WRITE_DENIED; fi"
+            ),
+        ),
+        TestTargetOs::Windows => (
+            "powershell",
+            format!(
+                "try {{ Set-Content -Path '{FILE_NAME}' -Value blocked -ErrorAction Stop; Write-Output WRITE_SUCCEEDED }} catch {{ Write-Output WRITE_DENIED }}"
+            ),
+        ),
+    };
+    let arguments = serde_json::to_string(&json!({
+        "cmd": command,
+        "shell": shell,
+        "login": false,
+        "yield_time_ms": 10_000,
+        "sandbox_permissions": SandboxPermissions::UseDefault,
+    }))?;
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(CALL_ID, "exec_command", &arguments),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.submit_turn_with_environments("try to write a file", Some(vec![selection]))
+        .await?;
+
+    let output = response_mock
+        .last_request()
+        .context("model should receive the command output")?
+        .function_call_output_text(CALL_ID)
+        .context("shell tool result should be present")?;
+    assert!(
+        output.contains("WRITE_DENIED"),
+        "unexpected output: {output}"
+    );
+    assert!(!output.contains("WRITE_SUCCEEDED"));
+    assert!(
+        test.fs()
+            .read_file_text(&marker, /*sandbox*/ None)
+            .await
+            .is_err(),
+        "read-only attachment unexpectedly wrote {FILE_NAME}"
     );
 
     Ok(())
@@ -1007,11 +1107,14 @@ async fn shared_executor_keeps_ready_capability_roots_scoped_to_each_attachment(
             path: selection.cwd.clone(),
         },
     };
+    let permission_profile =
+        PermissionProfileSnapshot::legacy(test.config.permissions.permission_profile().clone());
 
     for config in [
         EnvironmentConfigState::Pending,
         EnvironmentConfigState::Ready(EnvironmentConfig {
             allow_login_shell: false,
+            permission_profile: permission_profile.clone(),
             selected_capability_roots: vec![root("duplicate"), root("duplicate")],
         }),
     ] {
@@ -1045,6 +1148,7 @@ async fn shared_executor_keeps_ready_capability_roots_scoped_to_each_attachment(
             environments: Some(vec![TurnEnvironmentSelection {
                 config: EnvironmentConfigState::Ready(EnvironmentConfig {
                     allow_login_shell: true,
+                    permission_profile: permission_profile.clone(),
                     selected_capability_roots: vec![root("startup-root"), root("second-root")],
                 }),
                 ..selection.clone()
@@ -1062,6 +1166,7 @@ async fn shared_executor_keeps_ready_capability_roots_scoped_to_each_attachment(
                 vec![TurnEnvironmentSelection {
                     config: EnvironmentConfigState::Ready(EnvironmentConfig {
                         allow_login_shell: false,
+                        permission_profile: permission_profile.clone(),
                         selected_capability_roots: vec![root("first-root")],
                     }),
                     ..selection.clone()
@@ -1118,6 +1223,7 @@ async fn shared_executor_keeps_ready_capability_roots_scoped_to_each_attachment(
                     vec![TurnEnvironmentSelection {
                         config: EnvironmentConfigState::Ready(EnvironmentConfig {
                             allow_login_shell: false,
+                            permission_profile: permission_profile.clone(),
                             selected_capability_roots: vec![root("first-updated-root")],
                         }),
                         ..selection.clone()
@@ -1283,7 +1389,7 @@ async fn ready_before_selection_exposes_remote_tools_and_capability_context_afte
         .report_environment_provisioning_status(
             REMOTE_ENVIRONMENT_ID.to_string(),
             Ok(EnvironmentReadyInfo {
-                selected_capability_roots: vec![ready_root],
+                selected_capability_roots: Vec::new(),
             }),
             Arc::new(ReadyNoiseConnectProvider {
                 websocket_url: format!("{rendezvous_url}/relay?role=harness"),
@@ -1327,7 +1433,13 @@ async fn ready_before_selection_exposes_remote_tools_and_capability_context_afte
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
             cwd: PathUri::from_abs_path(&test.config.cwd),
             workspace_roots: vec![PathUri::from_abs_path(&test.config.cwd)],
-            config: EnvironmentConfigState::FromThread,
+            config: EnvironmentConfigState::Ready(EnvironmentConfig {
+                allow_login_shell: true,
+                permission_profile: PermissionProfileSnapshot::legacy(
+                    test.config.permissions.permission_profile().clone(),
+                ),
+                selected_capability_roots: vec![ready_root],
+            }),
         }]),
     )
     .await?;
