@@ -426,7 +426,7 @@ async fn repeated_early_data_during_validation_closes_the_physical_relay() -> Re
         )?;
         for frame in [
             RelayMessageFrame::handshake(stream_id.clone(), request),
-            RelayMessageFrame::data(stream_id, /*seq*/ 0, vec![0]),
+            RelayMessageFrame::data(stream_id, /*seq*/ 0, vec![0], /*trace*/ None),
         ] {
             harness_websocket
                 .send(Message::Binary(encode_relay_message_frame(&frame).into()))

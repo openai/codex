@@ -16,6 +16,9 @@ message RelayMessageFrame {
     RelayHeartbeat heartbeat = 9;
     RelayHandshake handshake = 10;
   }
+
+  optional string traceparent = 11;
+  optional string tracestate = 12;
 }
 
 message RelayData {

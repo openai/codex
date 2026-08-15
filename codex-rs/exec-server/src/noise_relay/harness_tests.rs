@@ -11,6 +11,7 @@ use anyhow::Result;
 use codex_exec_server_protocol::JSONRPCMessage;
 use codex_exec_server_protocol::JSONRPCRequest;
 use codex_exec_server_protocol::RequestId;
+use codex_protocol::protocol::W3cTraceContext;
 use futures::Sink;
 use futures::SinkExt;
 use futures::StreamExt;
@@ -30,6 +31,52 @@ use crate::noise_channel::PendingResponderHandshake;
 
 const ENVIRONMENT_ID: &str = "environment-1";
 const EXECUTOR_REGISTRATION_ID: &str = "registration-1";
+
+#[tokio::test(start_paused = true)]
+async fn first_encrypted_request_frame_exposes_only_its_trace_context() -> Result<()> {
+    let (connection, mut control, mut outbound_rx) = connected_controlled_harness().await?;
+    let traceparent = "00-00000000000000000000000000000001-0000000000000002-01";
+    let tracestate = "dd=s:1";
+
+    connection
+        .outgoing_tx
+        .send(JSONRPCMessage::Request(JSONRPCRequest {
+            id: RequestId::Integer(1),
+            method: "fs/getMetadata".to_string(),
+            params: Some(serde_json::json!({
+                "payload": "x".repeat(NOISE_RECORD_PLAINTEXT_LEN * 2),
+            })),
+            trace: Some(W3cTraceContext {
+                traceparent: Some(traceparent.to_string()),
+                tracestate: Some(tracestate.to_string()),
+            }),
+        }))
+        .await?;
+
+    control.wait_for_blocked_write(/*expected*/ 1).await?;
+    control.grant_writes(/*count*/ 1);
+    let first = read_outbound_frame(&mut outbound_rx).await?;
+    assert_eq!(
+        (first.traceparent.as_deref(), first.tracestate.as_deref()),
+        (Some(traceparent), Some(tracestate))
+    );
+    let first_payload = first.into_data()?.payload;
+    assert!(
+        !first_payload
+            .windows("fs/getMetadata".len())
+            .any(|window| window == b"fs/getMetadata")
+    );
+
+    control.wait_for_blocked_write(/*expected*/ 2).await?;
+    control.grant_writes(/*count*/ 1);
+    let second = read_outbound_frame(&mut outbound_rx).await?;
+    assert_eq!((second.traceparent, second.tracestate), (None, None));
+
+    for task in &connection.task_handles {
+        task.abort();
+    }
+    Ok(())
+}
 
 #[tokio::test(start_paused = true)]
 async fn fragmented_writes_yield_to_keepalive_and_queued_pong() -> Result<()> {
@@ -240,6 +287,15 @@ async fn application_event_delivery_is_bounded() -> Result<()> {
 async fn read_outbound_data(
     outbound_rx: &mut futures_mpsc::UnboundedReceiver<Message>,
 ) -> Result<RelayData> {
+    read_outbound_frame(outbound_rx)
+        .await?
+        .into_data()
+        .map_err(anyhow::Error::from)
+}
+
+async fn read_outbound_frame(
+    outbound_rx: &mut futures_mpsc::UnboundedReceiver<Message>,
+) -> Result<RelayMessageFrame> {
     let Message::Binary(payload) = timeout(Duration::from_secs(1), outbound_rx.next())
         .await?
         .context("harness closed before sending data")?
@@ -248,7 +304,7 @@ async fn read_outbound_data(
     };
     let frame = decode_relay_message_frame(payload.as_ref())?;
     assert_eq!(frame.validate()?, RelayFrameBodyKind::Data);
-    frame.into_data().map_err(anyhow::Error::from)
+    Ok(frame)
 }
 
 async fn connected_controlled_harness() -> Result<(

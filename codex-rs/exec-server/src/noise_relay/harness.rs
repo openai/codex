@@ -275,7 +275,7 @@ where
         // Keep one framed message as a cursor. Sending one Noise record per loop
         // creates a scheduling point for keepalive and inbound control frames
         // without splitting the WebSocket reader and writer.
-        let mut pending_outbound: Option<(Vec<u8>, usize)> = None;
+        let mut pending_outbound = None;
         let mut force_incoming = false;
         let mut frames_drained_after_pong_deadline = 0usize;
         'relay: loop {
@@ -344,13 +344,20 @@ where
                     let Some(message) = maybe_message else {
                         break;
                     };
-                    pending_outbound = Some(match frame_jsonrpc_message(&message) {
-                        Ok(framed) => (framed, 0),
+                    let framed = match frame_jsonrpc_message(&message) {
+                        Ok(framed) => framed,
                         Err(error) => {
                             warn!("failed to frame JSON-RPC payload for Noise relay: {error}");
                             break;
                         }
-                    });
+                    };
+                    let request_trace = match message {
+                        codex_exec_server_protocol::JSONRPCMessage::Request(request) => request.trace,
+                        codex_exec_server_protocol::JSONRPCMessage::Notification(_)
+                        | codex_exec_server_protocol::JSONRPCMessage::Response(_)
+                        | codex_exec_server_protocol::JSONRPCMessage::Error(_) => None,
+                    };
+                    pending_outbound = Some((framed, 0, request_trace));
                 }
                 _ = std::future::ready(()), if pending_outbound.is_some() && !force_incoming && !pong_deadline_expired => {
                     let seq = match take_next_sequence(&mut next_outbound_seq) {
@@ -360,8 +367,8 @@ where
                             break 'relay;
                         }
                     };
-                    let (ciphertext, next_offset, message_complete) = {
-                        let Some((framed, offset)) = pending_outbound.as_ref() else {
+                    let (ciphertext, next_offset, message_complete, request_trace) = {
+                        let Some((framed, offset, request_trace)) = pending_outbound.as_mut() else {
                             continue;
                         };
                         let next_offset = (*offset + NOISE_RECORD_PLAINTEXT_LEN).min(framed.len());
@@ -372,9 +379,15 @@ where
                                 break 'relay;
                             }
                         };
-                        (ciphertext, next_offset, next_offset == framed.len())
+                        (
+                            ciphertext,
+                            next_offset,
+                            next_offset == framed.len(),
+                            request_trace.take(),
+                        )
                     };
-                    let frame = RelayMessageFrame::data(stream_id.clone(), seq, ciphertext);
+                    let frame =
+                        RelayMessageFrame::data(stream_id.clone(), seq, ciphertext, request_trace);
                     // A Pong can arrive after the readiness check while this write owns the
                     // combined sink and stream. A single bounded record can therefore hit the
                     // deadline and disconnect with that Pong queued. Treat that as write
@@ -391,7 +404,7 @@ where
                     }
                     if message_complete {
                         pending_outbound = None;
-                    } else if let Some((_framed, offset)) = pending_outbound.as_mut() {
+                    } else if let Some((_framed, offset, _request_trace)) = pending_outbound.as_mut() {
                         *offset = next_offset;
                     }
                 }

@@ -59,6 +59,8 @@ identity plus endpoint-owned reliability metadata:
 ```text
 version
 stream_id
+traceparent       // optional W3C parent on the first frame of a traced request
+tracestate        // optional W3C vendor state paired with traceparent
 body              // handshake | data | ack_frame | resume | reset | heartbeat
 ack               // highest contiguous peer segment seq received
 ack_bits          // bitset for peer segment seqs after ack

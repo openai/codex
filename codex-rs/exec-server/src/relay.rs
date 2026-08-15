@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use codex_exec_server_protocol::JSONRPCMessage;
+use codex_protocol::protocol::W3cTraceContext;
 use futures::Sink;
 use futures::SinkExt;
 use futures::Stream;
@@ -81,18 +82,27 @@ pub(crate) enum RelayFrameBodyKind {
 }
 
 impl RelayMessageFrame {
-    pub(crate) fn data(stream_id: String, seq: u32, payload: Vec<u8>) -> Self {
+    pub(crate) fn data(
+        stream_id: String,
+        seq: u32,
+        payload: Vec<u8>,
+        trace: Option<W3cTraceContext>,
+    ) -> Self {
+        let (traceparent, tracestate) = trace
+            .map(|trace| (trace.traceparent, trace.tracestate))
+            .unwrap_or_default();
         Self {
             version: RELAY_MESSAGE_FRAME_VERSION,
             stream_id,
-            ack: 0,
-            ack_bits: 0,
+            traceparent,
+            tracestate,
             body: Some(relay_message_frame::Body::Data(RelayData {
                 seq,
                 segment_index: 0,
                 segment_count: 1,
                 payload,
             })),
+            ..Self::default()
         }
     }
 
@@ -100,11 +110,10 @@ impl RelayMessageFrame {
         Self {
             version: RELAY_MESSAGE_FRAME_VERSION,
             stream_id,
-            ack: 0,
-            ack_bits: 0,
             body: Some(relay_message_frame::Body::Resume(RelayResume {
                 next_seq: 0,
             })),
+            ..Self::default()
         }
     }
 
@@ -112,11 +121,10 @@ impl RelayMessageFrame {
         Self {
             version: RELAY_MESSAGE_FRAME_VERSION,
             stream_id,
-            ack: 0,
-            ack_bits: 0,
             body: Some(relay_message_frame::Body::Handshake(RelayHandshake {
                 payload,
             })),
+            ..Self::default()
         }
     }
 
@@ -124,9 +132,8 @@ impl RelayMessageFrame {
         Self {
             version: RELAY_MESSAGE_FRAME_VERSION,
             stream_id,
-            ack: 0,
-            ack_bits: 0,
             body: Some(relay_message_frame::Body::Reset(RelayReset { reason })),
+            ..Self::default()
         }
     }
 
@@ -313,7 +320,13 @@ where
                             break;
                         }
                     };
-                    let frame = RelayMessageFrame::data(stream_id.clone(), next_seq, payload);
+                    let trace = match message {
+                        JSONRPCMessage::Request(request) => request.trace,
+                        JSONRPCMessage::Notification(_)
+                        | JSONRPCMessage::Response(_)
+                        | JSONRPCMessage::Error(_) => None,
+                    };
+                    let frame = RelayMessageFrame::data(stream_id.clone(), next_seq, payload, trace);
                     next_seq = next_seq.wrapping_add(1);
                     if websocket
                         .send(Message::Binary(encode_relay_message_frame(&frame).into()))
@@ -961,6 +974,7 @@ mod tests {
                     stream_id,
                     /*seq*/ 0,
                     jsonrpc_payload(&message)?,
+                    /*trace*/ None,
                 ))
                 .into(),
             ))

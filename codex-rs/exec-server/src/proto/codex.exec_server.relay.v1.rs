@@ -11,6 +11,10 @@ pub struct RelayMessageFrame {
     pub ack_bits: u32,
     #[prost(oneof = "relay_message_frame::Body", tags = "5, 6, 7, 8, 9, 10")]
     pub body: ::core::option::Option<relay_message_frame::Body>,
+    #[prost(string, optional, tag = "11")]
+    pub traceparent: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "12")]
+    pub tracestate: ::core::option::Option<::prost::alloc::string::String>,
 }
 pub mod relay_message_frame {
     #[derive(Clone, PartialEq, ::prost::Oneof)]
