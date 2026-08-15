@@ -177,6 +177,7 @@ async fn policy_decisions_reject_forged_process_and_use_trusted_controller_metad
         .expect("audit log should be UTF-8");
         assert!(!output.contains("forged.example"));
         for expected in [
+            "codex_otel.log_only",
             "trusted-conversation",
             "trusted-account",
             "trusted-execution",
