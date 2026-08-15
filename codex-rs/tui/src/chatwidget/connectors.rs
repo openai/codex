@@ -2,6 +2,14 @@
 
 use super::*;
 use crate::app_event::ConnectorsSnapshot;
+use std::sync::atomic::AtomicU64;
+
+/// Prevents stale directory requests from matching a replacement widget for the same thread.
+static NEXT_CONNECTOR_SCOPE_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+/// Identifies one account-, workspace-, and thread-scoped connector state.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct ConnectorScopeGeneration(u64);
 
 #[derive(Debug, Clone, Default)]
 pub(super) enum ConnectorsCacheState {
@@ -18,6 +26,12 @@ pub(super) struct ConnectorsState {
     pub(super) partial_snapshot: Option<ConnectorsSnapshot>,
     pub(super) prefetch_in_flight: bool,
     pub(super) force_refetch_pending: bool,
+    /// Unowned notification retained only to decide whether an owned response needs revalidation.
+    pub(super) pending_notification: Option<Vec<AppInfo>>,
+    /// Prevents a recovery request from scheduling another retry if it also fails.
+    pub(super) notification_error_retry_in_flight: bool,
+    /// Process-unique identity for this widget's account, workspace, and thread.
+    pub(super) generation: ConnectorScopeGeneration,
 }
 
 impl ChatWidget {
@@ -29,10 +43,59 @@ impl ChatWidget {
         self.queue_connectors_refresh(/*force_refetch*/ false);
     }
 
+    /// Revalidate directory notifications without granting their unscoped contents to this thread.
+    pub(crate) fn refresh_connector_directory_after_notification(
+        &mut self,
+        connectors: Vec<AppInfo>,
+    ) {
+        if self.thread_id.is_none()
+            || !self.connectors_enabled()
+            || self
+                .connectors
+                .partial_snapshot
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.connectors == connectors)
+            || matches!(
+                &self.connectors.cache,
+                ConnectorsCacheState::Ready(snapshot) if snapshot.connectors == connectors
+            )
+        {
+            return;
+        }
+
+        if self.connectors.prefetch_in_flight {
+            self.connectors.pending_notification = Some(connectors);
+            return;
+        }
+
+        self.queue_connectors_refresh(/*force_refetch*/ false);
+    }
+
+    /// Identifies the active account, workspace, and thread across widget replacements.
+    pub(crate) fn connector_scope_generation(&self) -> ConnectorScopeGeneration {
+        self.connectors.generation
+    }
+
+    /// Revoke cached apps and pending requests before their account or workspace changes.
+    pub(crate) fn invalidate_connector_scope(&mut self) {
+        let generation = ConnectorScopeGeneration(
+            NEXT_CONNECTOR_SCOPE_GENERATION.fetch_add(1, Ordering::Relaxed),
+        );
+        self.connectors = ConnectorsState {
+            generation,
+            ..Default::default()
+        };
+        self.bottom_pane.set_connectors_snapshot(/*snapshot*/ None);
+        self.bottom_pane
+            .dismiss_view_by_id(CONNECTORS_SELECTION_VIEW_ID);
+    }
+
     fn queue_connectors_refresh(&mut self, force_refetch: bool) {
         if self.begin_connectors_refresh(force_refetch) {
-            self.app_event_tx
-                .send(AppEvent::FetchConnectorsList { force_refetch });
+            self.app_event_tx.send(AppEvent::FetchConnectorsList {
+                force_refetch,
+                generation: self.connectors.generation,
+            });
         }
     }
 
@@ -293,8 +356,23 @@ impl ChatWidget {
         is_final: bool,
     ) {
         let mut trigger_pending_force_refetch = false;
+        let mut trigger_pending_revalidation = false;
         if is_final {
             self.connectors.prefetch_in_flight = false;
+            let was_error_retry =
+                std::mem::take(&mut self.connectors.notification_error_retry_in_flight);
+            trigger_pending_revalidation =
+                self.connectors
+                    .pending_notification
+                    .take()
+                    .is_some_and(|connectors| match result.as_ref() {
+                        Ok(snapshot) => snapshot.connectors != connectors,
+                        Err(_) if !was_error_retry => {
+                            self.connectors.notification_error_retry_in_flight = true;
+                            true
+                        }
+                        Err(_) => false,
+                    });
             if self.connectors.force_refetch_pending {
                 self.connectors.force_refetch_pending = false;
                 trigger_pending_force_refetch = true;
@@ -344,8 +422,8 @@ impl ChatWidget {
             }
         }
 
-        if trigger_pending_force_refetch {
-            self.queue_connectors_refresh(/*force_refetch*/ true);
+        if trigger_pending_force_refetch || trigger_pending_revalidation {
+            self.queue_connectors_refresh(trigger_pending_force_refetch);
         }
     }
 

@@ -2261,6 +2261,48 @@ async fn apps_notification_update_excludes_inaccessible_apps_from_mentions() {
 }
 
 #[tokio::test]
+async fn account_changes_revoke_app_directory_and_restart_scoped_requests() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    set_chatgpt_auth(&mut chat);
+    chat.on_connectors_loaded(
+        Ok(ConnectorsSnapshot {
+            connectors: vec![
+                serde_json::from_str(
+                    r#"{"id":"old-account","name":"Old Account","isAccessible":true}"#,
+                )
+                .expect("valid app"),
+            ],
+        }),
+        /*is_final*/ true,
+    );
+    let generation = chat.connector_scope_generation();
+
+    chat.update_account_state(
+        /*status_account_display*/ None, /*plan_type*/ None,
+        /*has_chatgpt_account*/ true, /*has_codex_backend_auth*/ true,
+    );
+
+    assert_ne!(chat.connector_scope_generation(), generation);
+    assert!(chat.connectors_for_mentions().is_none());
+    assert!(chat.connectors.prefetch_in_flight);
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::FetchConnectorsList {
+            force_refetch: false,
+            generation
+        }) if generation == chat.connector_scope_generation()
+    );
+
+    let (mut replacement, _, _) = make_chatwidget_manual(/*model_override*/ None).await;
+    replacement.invalidate_connector_scope();
+    assert_ne!(
+        chat.connector_scope_generation(),
+        replacement.connector_scope_generation()
+    );
+}
+
+#[tokio::test]
 async fn apps_refresh_failure_keeps_existing_full_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
@@ -3796,4 +3838,32 @@ async fn reasoning_popup_escape_returns_to_model_popup() {
     let after_escape = render_bottom_popup(&chat, /*width*/ 80);
     assert!(after_escape.contains("Select Model"));
     assert!(!after_escape.contains("Select Reasoning Level"));
+}
+
+#[tokio::test]
+async fn account_change_dismisses_the_previous_app_directory_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    set_chatgpt_auth(&mut chat);
+    chat.on_connectors_loaded(
+        Ok(ConnectorsSnapshot {
+            connectors: vec![serde_json::from_str(
+                r#"{"id":"previous-account","name":"Previous Account App","isAccessible":true}"#,
+            )
+            .expect("valid app")],
+        }),
+        /*is_final*/ true,
+    );
+    chat.add_connectors_output();
+    let before = render_bottom_popup(&chat, /*width*/ 80);
+
+    chat.update_account_state(
+        /*status_account_display*/ None, /*plan_type*/ None,
+        /*has_chatgpt_account*/ true, /*has_codex_backend_auth*/ true,
+    );
+    let after = normalize_snapshot_paths(render_bottom_popup(&chat, /*width*/ 80));
+    assert_chatwidget_snapshot!(
+        "connector_scope_invalidation",
+        format!("Before account change:\n{before}\n\nAfter account change:\n{after}")
+    );
 }

@@ -1,0 +1,18 @@
+---
+source: tui/src/chatwidget/tests/popups_and_settings.rs
+expression: "format!(\"Before account change:\\n{before}\\n\\nAfter account change:\\n{after}\")"
+---
+Before account change:
+  Apps
+  Use $ to insert an installed app into your prompt.
+  Installed 1 of 1 available apps.
+
+  Type to search apps
+› Previous Account App  Installed. App link unavailable.
+
+  Press enter to confirm or esc to go back
+
+After account change:
+› Ask Codex to do anything
+
+  gpt-5.6-sol default · /tmp/project

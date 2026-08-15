@@ -216,6 +216,7 @@ impl ChatWidget {
     ) {
         // Account-update notifications are the identity boundary. The visible account fields can
         // be identical across two accounts, so always invalidate account-scoped requests and data.
+        self.invalidate_connector_scope();
         self.clear_pending_token_activity_refreshes();
         self.clear_pending_rate_limit_reset_requests();
         self.codex_rate_limit_reached_type = None;
@@ -243,6 +244,9 @@ impl ChatWidget {
         self.has_codex_backend_auth = has_codex_backend_auth;
         self.bottom_pane
             .set_connectors_enabled(self.connectors_enabled());
+        if self.thread_id.is_some() {
+            self.prefetch_connectors();
+        }
         self.bottom_pane
             .set_token_activity_command_enabled(has_codex_backend_auth);
         self.refresh_status_surfaces();
@@ -532,7 +536,9 @@ impl ChatWidget {
         self.sync_service_tier_commands();
         self.sync_personality_command_enabled();
         if cwd_changed {
+            self.invalidate_connector_scope();
             self.refresh_skills_for_current_cwd(/*force_reload*/ true);
+            self.prefetch_connectors();
         }
         self.refresh_plugin_mentions();
         self.request_redraw();

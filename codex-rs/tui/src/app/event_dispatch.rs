@@ -765,8 +765,13 @@ impl App {
             AppEvent::RefreshConnectors { force_refetch } => {
                 self.chat_widget.refresh_connectors(force_refetch);
             }
-            AppEvent::FetchConnectorsList { force_refetch } => {
-                self.fetch_connectors_list(app_server, force_refetch);
+            AppEvent::FetchConnectorsList {
+                force_refetch,
+                generation,
+            } => {
+                if generation == self.chat_widget.connector_scope_generation() {
+                    self.fetch_connectors_list(app_server, force_refetch);
+                }
             }
             AppEvent::PluginInstallAuthAdvance { refresh_connectors } => {
                 if refresh_connectors {
@@ -1285,8 +1290,19 @@ impl App {
             AppEvent::CommitPendingUsageOutputAfterStreamShutdown => {
                 self.insert_pending_usage_output_after_stream_shutdown(tui);
             }
-            AppEvent::ConnectorsLoaded { result, is_final } => {
-                self.chat_widget.on_connectors_loaded(result, is_final);
+            AppEvent::ConnectorsLoaded {
+                thread_id,
+                cwd,
+                generation,
+                result,
+                is_final,
+            } => {
+                if thread_id == self.current_displayed_thread_id()
+                    && cwd.as_path() == self.chat_widget.config_ref().cwd.as_path()
+                    && generation == self.chat_widget.connector_scope_generation()
+                {
+                    self.chat_widget.on_connectors_loaded(result, is_final);
+                }
             }
             AppEvent::UpdateReasoningEffort(effort) => {
                 self.on_update_reasoning_effort(effort.clone());

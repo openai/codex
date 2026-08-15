@@ -47,6 +47,7 @@ use crate::app_server_session::AppServerStartedThread;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
+use crate::chatwidget::ConnectorScopeGeneration;
 use crate::chatwidget::ThreadUsageOutcome;
 use crate::chatwidget::UserMessage;
 use crate::goal_files::GoalDraft;
@@ -495,6 +496,9 @@ pub(crate) enum AppEvent {
 
     /// Result of prefetching connectors.
     ConnectorsLoaded {
+        thread_id: Option<ThreadId>,
+        cwd: PathBuf,
+        generation: ConnectorScopeGeneration,
         result: Result<ConnectorsSnapshot, String>,
         is_final: bool,
     },
@@ -560,9 +564,10 @@ pub(crate) enum AppEvent {
         force_refetch: bool,
     },
 
-    /// Fetch app connector state from the app server after the widget accepts a refresh request.
+    /// Fetch apps only while the originating account, workspace, and thread remain current.
     FetchConnectorsList {
         force_refetch: bool,
+        generation: ConnectorScopeGeneration,
     },
 
     /// Fetch plugin marketplace state for the provided working directory.

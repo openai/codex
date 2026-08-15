@@ -4,6 +4,8 @@
 mod advanced_reasoning_tests;
 #[path = "tests/background_exit_tests.rs"]
 mod background_exit_tests;
+#[path = "tests/connector_policy.rs"]
+mod connector_policy;
 #[path = "tests/key_chords.rs"]
 mod key_chords;
 #[path = "tests/mcp_startup.rs"]
