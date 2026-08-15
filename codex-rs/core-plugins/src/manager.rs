@@ -2141,6 +2141,8 @@ impl PluginsManager {
             if should_spawn_marketplace_auto_upgrade {
                 let manager = Arc::clone(self);
                 let config = config.clone();
+                let on_effective_plugins_changed = on_effective_plugins_changed.clone();
+                let runtime = tokio::runtime::Handle::current();
                 if let Err(err) = std::thread::Builder::new()
                     .name("plugins-marketplace-auto-upgrade".to_string())
                     .spawn(move || {
@@ -2149,6 +2151,16 @@ impl PluginsManager {
                         );
                         match outcome {
                             Ok(outcome) => {
+                                if !outcome.upgraded_roots.is_empty()
+                                    && let Some(on_effective_plugins_changed) =
+                                        on_effective_plugins_changed
+                                {
+                                    runtime.spawn(async move {
+                                        on_effective_plugins_changed(
+                                            EffectivePluginsChange::default(),
+                                        );
+                                    });
+                                }
                                 for error in outcome.errors {
                                     warn!(
                                         marketplace = error.marketplace_name,

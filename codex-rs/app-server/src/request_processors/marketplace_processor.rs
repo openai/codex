@@ -87,6 +87,13 @@ impl MarketplaceRequestProcessor {
         .map_err(|err| internal_error(format!("failed to upgrade marketplaces: {err}")))?
         .map_err(invalid_request)?;
 
+        if !outcome.upgraded_roots.is_empty() {
+            self.thread_manager.plugins_manager().clear_cache();
+            self.thread_manager.skills_service().clear_cache();
+            self.thread_manager.invalidate_mcp_runtimes().await;
+            self.thread_manager.refresh_hook_runtimes().await;
+        }
+
         Ok(MarketplaceUpgradeResponse {
             selected_marketplaces: outcome.selected_marketplaces,
             upgraded_roots: outcome.upgraded_roots,

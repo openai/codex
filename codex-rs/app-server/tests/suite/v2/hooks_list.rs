@@ -17,12 +17,17 @@ use codex_app_server_protocol::HooksListEntry;
 use codex_app_server_protocol::HooksListParams;
 use codex_app_server_protocol::HooksListResponse;
 use codex_app_server_protocol::MergeStrategy;
+use codex_app_server_protocol::PluginInstallParams;
+use codex_app_server_protocol::PluginInstallResponse;
+use codex_app_server_protocol::ThreadArchiveParams;
+use codex_app_server_protocol::ThreadArchiveResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_core::config::set_project_trust_level;
+use codex_features::Feature;
 use codex_protocol::config_types::TrustLevel;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::skip_if_host_windows;
@@ -108,6 +113,51 @@ hooks = true
 [plugins."demo@test"]
 enabled = true
 "#,
+    )?;
+    Ok(())
+}
+
+fn write_versioned_plugin_hook(
+    plugin_root: &std::path::Path,
+    version: &str,
+    hook_log_path: &std::path::Path,
+) -> Result<()> {
+    std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
+    std::fs::create_dir_all(plugin_root.join("hooks"))?;
+    std::fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        format!(r#"{{"name":"demo","version":"{version}"}}"#),
+    )?;
+    std::fs::write(
+        plugin_root.join("hooks/hooks.json"),
+        r#"{
+  "hooks": {
+    "UserPromptSubmit": [{
+      "hooks": [{
+        "type": "command",
+        "command": "python3 ${PLUGIN_ROOT}/hooks/log_version.py"
+      }]
+    }],
+    "SessionEnd": [{
+      "hooks": [{
+        "type": "command",
+        "command": "python3 ${PLUGIN_ROOT}/hooks/log_version.py"
+      }]
+    }]
+  }
+}"#,
+    )?;
+    std::fs::write(
+        plugin_root.join("hooks/log_version.py"),
+        format!(
+            r#"from pathlib import Path
+import os
+
+with Path(r"{hook_log_path}").open("a", encoding="utf-8") as handle:
+    handle.write(Path(os.environ["PLUGIN_ROOT"]).name + "\n")
+"#,
+            hook_log_path = hook_log_path.display(),
+        ),
     )?;
     Ok(())
 }
@@ -272,6 +322,398 @@ async fn hooks_list_shows_discovered_plugin_hook() -> Result<()> {
             errors: Vec::new(),
         }]
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_upgrade_refreshes_hook_runtime_for_loaded_session() -> Result<()> {
+    skip_if_host_windows!(Ok(()));
+    skip_if_remote!(Ok(()), "command hooks use host-local script and log paths");
+
+    let responses = vec![
+        create_final_assistant_message_sse_response("Warmup")?,
+        create_final_assistant_message_sse_response("Version 1")?,
+        create_final_assistant_message_sse_response("Version 2")?,
+    ];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+    let codex_home = TempDir::new()?;
+    let marketplace = TempDir::new()?;
+    let plugin_source = marketplace.path().join("demo");
+    let hook_log_path = codex_home.path().join("plugin-hook-versions.log");
+
+    std::fs::create_dir_all(marketplace.path().join(".git"))?;
+    std::fs::create_dir_all(marketplace.path().join(".agents/plugins"))?;
+    std::fs::write(
+        marketplace.path().join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "test",
+  "plugins": [{
+    "name": "demo",
+    "source": { "source": "local", "path": "./demo" }
+  }]
+}"#,
+    )?;
+    write_versioned_plugin_hook(&plugin_source, "1", &hook_log_path)?;
+    MockResponsesConfig::new(&server.uri())
+        .enable_feature(Feature::Plugins)
+        .enable_feature(Feature::CodexHooks)
+        .write(codex_home.path())?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+    let marketplace_path =
+        AbsolutePathBuf::try_from(marketplace.path().join(".agents/plugins/marketplace.json"))?;
+    let install_id = mcp
+        .send_plugin_install_request(PluginInstallParams {
+            marketplace_path: Some(marketplace_path.clone()),
+            remote_marketplace_name: None,
+            install_attempt_id: None,
+            plugin_name: "demo".to_string(),
+        })
+        .await?;
+    let _: PluginInstallResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(install_id)).await??;
+
+    let hooks_list_id = mcp
+        .send_hooks_list_request(HooksListParams {
+            cwds: vec![codex_home.path().to_path_buf()],
+        })
+        .await?;
+    let HooksListResponse { data } =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(hooks_list_id)).await??;
+    let hook = data[0]
+        .hooks
+        .iter()
+        .find(|hook| hook.event_name == HookEventName::UserPromptSubmit)
+        .expect("plugin should register a user-prompt hook");
+    let trusted_hooks = data[0]
+        .hooks
+        .iter()
+        .map(|hook| {
+            (
+                hook.key.clone(),
+                serde_json::json!({ "trusted_hash": hook.current_hash }),
+            )
+        })
+        .collect::<serde_json::Map<String, serde_json::Value>>();
+    let trust_id = mcp
+        .send_config_batch_write_request(ConfigBatchWriteParams {
+            edits: vec![ConfigEdit {
+                key_path: "hooks.state".to_string(),
+                value: serde_json::Value::Object(trusted_hooks),
+                merge_strategy: MergeStrategy::Upsert,
+            }],
+            file_path: None,
+            expected_version: None,
+            reload_user_config: true,
+        })
+        .await?;
+    let _: codex_app_server_protocol::ConfigWriteResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(trust_id)).await??;
+
+    let thread_start_id = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let ThreadStartResponse { thread, .. } =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(thread_start_id)).await??;
+    let first_turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            client_user_message_id: None,
+            input: vec![V2UserInput::Text {
+                text: "run version 1".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let _: TurnStartResponse = timeout(DEFAULT_TIMEOUT, mcp.read_response(first_turn_id)).await??;
+    timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    assert_eq!(std::fs::read_to_string(&hook_log_path)?, "1\n");
+
+    let staged_write_id = mcp
+        .send_config_batch_write_request(ConfigBatchWriteParams {
+            edits: vec![ConfigEdit {
+                key_path: "hooks.state".to_string(),
+                value: serde_json::json!({
+                    hook.key.clone(): {
+                        "enabled": false,
+                    },
+                }),
+                merge_strategy: MergeStrategy::Upsert,
+            }],
+            file_path: None,
+            expected_version: None,
+            reload_user_config: false,
+        })
+        .await?;
+    let _: codex_app_server_protocol::ConfigWriteResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(staged_write_id)).await??;
+
+    std::fs::write(
+        plugin_source.join(".codex-plugin/plugin.json"),
+        r#"{"name":"demo","version":"2"}"#,
+    )?;
+    let install_id = mcp
+        .send_plugin_install_request(PluginInstallParams {
+            marketplace_path: Some(marketplace_path.clone()),
+            remote_marketplace_name: None,
+            install_attempt_id: None,
+            plugin_name: "demo".to_string(),
+        })
+        .await?;
+    let _: PluginInstallResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(install_id)).await??;
+    assert!(!codex_home.path().join("plugins/cache/test/demo/1").exists());
+
+    let second_turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            client_user_message_id: None,
+            input: vec![V2UserInput::Text {
+                text: "run version 2".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let _: TurnStartResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(second_turn_id)).await??;
+    timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    assert_eq!(std::fs::read_to_string(&hook_log_path)?, "1\n2\n");
+
+    let hooks_list_id = mcp
+        .send_hooks_list_request(HooksListParams {
+            cwds: vec![codex_home.path().to_path_buf()],
+        })
+        .await?;
+    let HooksListResponse { data } =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(hooks_list_id)).await??;
+    let expected_hook_path = codex_home
+        .path()
+        .join("plugins/cache/test/demo/2/hooks/log_version.py")
+        .canonicalize()?;
+    let hook = data[0]
+        .hooks
+        .iter()
+        .find(|hook| hook.event_name == HookEventName::UserPromptSubmit)
+        .expect("plugin should register a user-prompt hook");
+    assert_eq!(
+        hook.command,
+        Some(format!("python3 {}", expected_hook_path.display()))
+    );
+    assert!(!hook.enabled);
+
+    std::fs::write(
+        plugin_source.join(".codex-plugin/plugin.json"),
+        r#"{"name":"demo","version":"3"}"#,
+    )?;
+    let install_id = mcp
+        .send_plugin_install_request(PluginInstallParams {
+            marketplace_path: Some(marketplace_path),
+            remote_marketplace_name: None,
+            install_attempt_id: None,
+            plugin_name: "demo".to_string(),
+        })
+        .await?;
+    let _: PluginInstallResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(install_id)).await??;
+    assert!(!codex_home.path().join("plugins/cache/test/demo/2").exists());
+
+    let archive_id = mcp
+        .send_thread_archive_request(ThreadArchiveParams {
+            thread_id: thread.id,
+        })
+        .await?;
+    let _: ThreadArchiveResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(archive_id)).await??;
+    assert_eq!(std::fs::read_to_string(&hook_log_path)?, "1\n2\n3\n");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn automatic_marketplace_upgrade_refreshes_hook_runtime_for_loaded_session() -> Result<()> {
+    skip_if_host_windows!(Ok(()));
+    skip_if_remote!(Ok(()), "command hooks use host-local script and log paths");
+
+    let server = create_mock_responses_server_sequence_unchecked(vec![
+        create_final_assistant_message_sse_response("Version 2")?,
+    ])
+    .await;
+    let codex_home = TempDir::new()?;
+    let marketplace = TempDir::new()?;
+    let git_wrapper = TempDir::new()?;
+    let hook_log_path = codex_home.path().join("plugin-hook-versions.log");
+    let old_plugin_root = codex_home.path().join("plugins/cache/test/demo/1");
+    let new_plugin_root = codex_home.path().join("plugins/cache/test/demo/2");
+    let upgrade_gate = git_wrapper.path().join("allow-marketplace-upgrade");
+
+    std::fs::create_dir_all(marketplace.path().join(".agents/plugins"))?;
+    std::fs::write(
+        marketplace.path().join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "test",
+  "plugins": [{
+    "name": "demo",
+    "source": { "source": "local", "path": "./demo" }
+  }]
+}"#,
+    )?;
+    write_versioned_plugin_hook(&marketplace.path().join("demo"), "2", &hook_log_path)?;
+    write_versioned_plugin_hook(&old_plugin_root, "1", &hook_log_path)?;
+
+    for args in [
+        &["init"][..],
+        &["config", "user.email", "codex@example.com"],
+        &["config", "user.name", "Codex Tests"],
+        &["add", "."],
+        &["commit", "-m", "install marketplace plugin version 2"],
+    ] {
+        let output = std::process::Command::new("git")
+            .current_dir(marketplace.path())
+            .args(args)
+            .output()?;
+        anyhow::ensure!(
+            output.status.success(),
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let original_path =
+        std::env::var_os("PATH").ok_or_else(|| anyhow::anyhow!("PATH is required for git"))?;
+    let real_git = std::env::split_paths(&original_path)
+        .map(|directory| directory.join("git"))
+        .find(|path| path.is_file())
+        .ok_or_else(|| anyhow::anyhow!("git was not found on PATH"))?;
+    let wrapper_path = git_wrapper.path().join("git");
+    std::fs::write(
+        &wrapper_path,
+        format!(
+            r#"#!/bin/sh
+if [ "$3" = "ls-remote" ] && [ "$4" = "{marketplace}" ]; then
+    while [ ! -e "{upgrade_gate}" ]; do
+        sleep 0.01
+    done
+fi
+exec "{real_git}" "$@"
+"#,
+            marketplace = marketplace.path().display(),
+            upgrade_gate = upgrade_gate.display(),
+            real_git = real_git.display(),
+        ),
+    )?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut permissions = std::fs::metadata(&wrapper_path)?.permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&wrapper_path, permissions)?;
+    }
+    let path_with_wrapper = std::env::join_paths(
+        std::iter::once(git_wrapper.path().to_path_buf())
+            .chain(std::env::split_paths(&original_path)),
+    )?;
+    let path_with_wrapper = path_with_wrapper.to_string_lossy().into_owned();
+
+    MockResponsesConfig::new(&server.uri())
+        .enable_feature(Feature::Plugins)
+        .enable_feature(Feature::CodexHooks)
+        .with_root_config(&format!(
+            "chatgpt_base_url = \"{}/backend-api/\"",
+            server.uri()
+        ))
+        .with_extra_config(&format!(
+            r#"[plugins."demo@test"]
+enabled = true
+
+[marketplaces.test]
+source_type = "git"
+source = "{}"
+"#,
+            marketplace.path().display(),
+        ))
+        .write(codex_home.path())?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .with_plugin_startup_tasks()
+        .with_env_overrides(&[("PATH", Some(path_with_wrapper.as_str()))])
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+    let thread_start_id = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            config: Some(std::collections::HashMap::from([(
+                "bypass_hook_trust".to_string(),
+                serde_json::json!(true),
+            )])),
+            ..Default::default()
+        })
+        .await?;
+    let ThreadStartResponse { thread, .. } =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(thread_start_id)).await??;
+    assert!(old_plugin_root.exists());
+    assert!(!new_plugin_root.exists());
+
+    std::fs::write(&upgrade_gate, "ready")?;
+    timeout(DEFAULT_TIMEOUT, async {
+        while !new_plugin_root.exists() || old_plugin_root.exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+
+    let hooks_list_id = mcp
+        .send_hooks_list_request(HooksListParams {
+            cwds: vec![codex_home.path().to_path_buf()],
+        })
+        .await?;
+    let HooksListResponse { data } =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(hooks_list_id)).await??;
+    let expected_hook_path = new_plugin_root
+        .join("hooks/log_version.py")
+        .canonicalize()?;
+    assert_eq!(
+        data[0].hooks[0].command,
+        Some(format!("python3 {}", expected_hook_path.display()))
+    );
+
+    let turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            client_user_message_id: None,
+            input: vec![V2UserInput::Text {
+                text: "run version 2".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let _: TurnStartResponse = timeout(DEFAULT_TIMEOUT, mcp.read_response(turn_id)).await??;
+    timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    assert_eq!(std::fs::read_to_string(&hook_log_path)?, "2\n");
+
     Ok(())
 }
 
