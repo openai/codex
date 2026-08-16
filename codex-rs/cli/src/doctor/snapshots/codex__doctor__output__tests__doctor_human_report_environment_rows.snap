@@ -8,6 +8,7 @@ Notes
    ⚠ terminal     narrow terminal
    ✗ auth         token expired - Run `codex login`.
    ⚠ git          this worktree is not on a Windows Dev Drive - create a trusted Windows Dev Drive: https://learn.microsoft.com/en-us/windows/dev-drive/
+   ⚠ security     Microsoft Defender can interfere with Codex. Verify Codex exclusions.
 ─────────────────────────────────────────────────────────────
 
 Environment
@@ -21,6 +22,11 @@ Environment
       GH_PAGER                 less
       LESS                     -FRX
   ✓ disk         sufficient free disk space (42.0 GiB)
+  ⚠ security     Microsoft Defender can interfere with Codex. Verify Codex exclusions.
+      endpoint products        Microsoft Defender
+      exclusion targets        verified Codex app and required helpers
+    ▸ Codex exclusions         not verified (expected Codex application and helper exclusions)
+    → Microsoft Defender: Add a certificate or executable-path exclusion for Codex and its helpers. If Attack Surface Reduction blocks Codex, add a rule exclusion. If Controlled Folder Access blocks Codex, allow the app.
   ✓ runtime      running local build on darwin-arm64
   ✓ install      consistent
       managed by               npm: no · bun: no · pnpm: no · package root —
@@ -53,7 +59,7 @@ Background Server
   ✓ app-server   background server is not running
 
 ─────────────────────────────────────────────────────────────
-13 ok · 3 notes · 2 warn · 1 fail failed
+13 ok · 4 notes · 3 warn · 1 fail failed
 
 --summary compact output           --all expand truncated lists
 --json redacted report

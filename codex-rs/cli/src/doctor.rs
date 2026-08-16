@@ -72,6 +72,7 @@ mod git;
 mod output;
 mod progress;
 mod runtime;
+mod security;
 mod system;
 mod thread_inventory;
 mod title;
@@ -343,6 +344,7 @@ async fn build_report(
     let progress = doctor_progress(command.json);
     let mut checks = Vec::new();
     checks.push(run_sync_check("system", progress.clone(), system_check));
+    checks.push(run_async_check("endpoint protection", progress.clone(), security::check()).await);
     checks.push(run_sync_check("installation", progress.clone(), || {
         installation_check(!command.summary)
     }));

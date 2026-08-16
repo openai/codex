@@ -26,8 +26,8 @@ const GROUPS: &[OutputGroup] = &[
     OutputGroup {
         title: "Environment",
         keys: &[
-            "system", "disk", "runtime", "install", "search", "git", "terminal", "title", "state",
-            "threads",
+            "system", "disk", "security", "runtime", "install", "search", "git", "terminal",
+            "title", "state", "threads",
         ],
     },
     OutputGroup {
@@ -1319,6 +1319,16 @@ Background Server
                 "create a trusted Windows Dev Drive: https://learn.microsoft.com/en-us/windows/dev-drive/",
             ),
         );
+        let mut security = super::super::security::endpoint_check(
+            super::super::security::EndpointInspection::Complete(vec!["Microsoft Defender"]),
+        );
+        let targets = security
+            .details
+            .iter_mut()
+            .find(|detail| detail.starts_with("exclusion targets: "))
+            .expect("endpoint security check should include exclusion targets");
+        *targets = "exclusion targets: verified Codex app and required helpers".into();
+        report.checks.push(security);
         insta::assert_snapshot!(
             "doctor_human_report_environment_rows",
             render_human_report(&report, detailed_no_color_unicode_options())
