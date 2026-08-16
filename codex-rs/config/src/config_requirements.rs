@@ -17,12 +17,12 @@ use std::fmt;
 use std::path::PathBuf;
 use wildmatch::WildMatchPattern;
 
-use super::requirements_exec_policy::RequirementsExecPolicy;
 use super::requirements_exec_policy::RequirementsExecPolicyToml;
 use crate::Constrained;
 use crate::ConstraintError;
 use crate::ManagedAuthPolicy;
 use crate::ManagedHooksRequirementsToml;
+use crate::RequirementsExecPolicy;
 use crate::config_toml::ConfigToml;
 use crate::mcp_requirements::McpServerRequirement;
 use crate::mcp_types::AppToolApproval;

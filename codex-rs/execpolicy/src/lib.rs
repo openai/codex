@@ -22,6 +22,7 @@ pub use parser::PolicyParser;
 pub use policy::Evaluation;
 pub use policy::MatchOptions;
 pub use policy::Policy;
+pub use policy::RequirementsExecPolicy;
 pub use rule::NetworkRuleProtocol;
 pub use rule::PatternToken;
 pub use rule::PrefixPattern;
