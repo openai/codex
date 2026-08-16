@@ -5,6 +5,7 @@ use std::ptr;
 use std::time::Duration;
 use std::time::Instant;
 
+use super::MacosSystemProxyConfiguration;
 use super::RequestOrigin;
 use super::RouteFailureClass;
 use super::SystemProxyDecision;
@@ -100,6 +101,39 @@ pub(super) fn resolve(request_url: &str, origin: &RequestOrigin) -> SystemProxyD
     };
 
     proxy_array_decision(&proxies, &target_url, origin)
+}
+
+pub(super) fn configuration(request_url: &str) -> MacosSystemProxyConfiguration {
+    let Some(target_url) = cf_url(request_url) else {
+        return MacosSystemProxyConfiguration::Unavailable;
+    };
+    let Some(settings) = system_proxy_settings() else {
+        return MacosSystemProxyConfiguration::Unavailable;
+    };
+    let Some(proxies) = copy_proxies_for_url(&target_url, &settings) else {
+        return MacosSystemProxyConfiguration::Unavailable;
+    };
+
+    (&proxies)
+        .into_iter()
+        .find_map(|proxy| {
+            let proxy_type = cf_string_value(&proxy, unsafe { kCFProxyTypeKey })?;
+            if cf_string_equals(&proxy_type, unsafe { kCFProxyTypeAutoConfigurationURL })
+                || cf_string_equals(&proxy_type, unsafe {
+                    kCFProxyTypeAutoConfigurationJavaScript
+                })
+            {
+                Some(MacosSystemProxyConfiguration::Automatic)
+            } else if cf_string_equals(&proxy_type, unsafe { kCFProxyTypeHTTP })
+                || cf_string_equals(&proxy_type, unsafe { kCFProxyTypeHTTPS })
+            {
+                Some(MacosSystemProxyConfiguration::Manual)
+            } else {
+                cf_string_equals(&proxy_type, unsafe { kCFProxyTypeNone })
+                    .then_some(MacosSystemProxyConfiguration::Direct)
+            }
+        })
+        .unwrap_or(MacosSystemProxyConfiguration::Unavailable)
 }
 
 fn system_proxy_settings() -> Option<CFDictionary<CFString, CFType>> {

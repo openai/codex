@@ -65,6 +65,9 @@ fn spawn_http_listener(
                 }
             };
             stream
+                .set_nonblocking(false)
+                .expect("HTTP stream should become blocking");
+            stream
                 .set_read_timeout(Some(Duration::from_secs(10)))
                 .expect("HTTP stream should get a read timeout");
             requests.push(read_http_message(&mut stream));
@@ -183,6 +186,15 @@ fn reqwest_default_route_preserves_transport_proxy_behavior() {
     );
 
     assert_eq!(route, OutboundProxyRoute::TransportDefault);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_proxy_configuration_rejects_invalid_destination() {
+    assert_eq!(
+        macos_system_proxy_configuration("not a valid destination"),
+        MacosSystemProxyConfiguration::Unavailable
+    );
 }
 
 impl EnvSource for MapEnv {

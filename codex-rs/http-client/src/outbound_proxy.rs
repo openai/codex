@@ -103,6 +103,26 @@ pub enum OutboundProxyPolicy {
     RespectSystemProxy,
 }
 
+/// Privacy-safe macOS system proxy configuration for one outbound destination.
+#[cfg(target_os = "macos")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MacosSystemProxyConfiguration {
+    /// A PAC script or automatic proxy-discovery route applies to the destination.
+    Automatic,
+    /// An explicitly configured HTTP or HTTPS proxy applies.
+    Manual,
+    /// macOS selected a direct connection for the destination.
+    Direct,
+    /// The destination or system proxy settings could not be inspected.
+    Unavailable,
+}
+
+/// Inspects macOS proxy configuration without executing PAC scripts or exposing proxy URLs.
+#[cfg(target_os = "macos")]
+pub fn macos_system_proxy_configuration(request_url: &str) -> MacosSystemProxyConfiguration {
+    macos::configuration(request_url)
+}
+
 /// Resolved proxy route for a concrete outbound destination.
 ///
 /// `TransportDefault` preserves the underlying transport behavior only when system-proxy support

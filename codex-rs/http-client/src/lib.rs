@@ -34,11 +34,15 @@ pub use crate::error::TransportError;
 pub use crate::outbound_proxy::BuildRouteAwareHttpClientError;
 pub use crate::outbound_proxy::ClientRouteClass;
 pub use crate::outbound_proxy::HttpClientFactory;
+#[cfg(target_os = "macos")]
+pub use crate::outbound_proxy::MacosSystemProxyConfiguration;
 pub use crate::outbound_proxy::OutboundProxyPolicy;
 pub use crate::outbound_proxy::OutboundProxyRoute;
 pub use crate::outbound_proxy::RouteFailureClass;
 #[doc(hidden)]
 pub use crate::outbound_proxy::cache_system_proxy_route_for_test;
+#[cfg(target_os = "macos")]
+pub use crate::outbound_proxy::macos_system_proxy_configuration;
 pub use crate::request::EncodedJsonBody;
 pub use crate::request::PreparedRequestBody;
 pub use crate::request::Request;

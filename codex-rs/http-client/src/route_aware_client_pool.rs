@@ -25,6 +25,7 @@ use crate::HttpClientBuilder;
 use crate::HttpClientFactory;
 use crate::OutboundProxyPolicy;
 use crate::OutboundProxyRoute;
+use crate::RouteFailureClass;
 use crate::route_aware_redirect::MAX_REDIRECTS;
 use crate::route_aware_redirect::insert_referer;
 use crate::route_aware_redirect::is_redirect;
@@ -101,6 +102,52 @@ pub enum RouteAwareRequestError {
 }
 
 impl RouteAwareRequestError {
+    /// Classifies transport, proxy, and certificate failures without exposing request details.
+    pub fn failure_class(&self) -> Option<RouteFailureClass> {
+        if self.is_timeout() {
+            return Some(RouteFailureClass::ConnectTimeout);
+        }
+        if self.status() == Some(StatusCode::PROXY_AUTHENTICATION_REQUIRED) {
+            return Some(RouteFailureClass::ProxyAuthenticationRequired);
+        }
+        if let Self::Route(RouteAwareClientPoolError::Resolve(error)) = self
+            && let Some(source) = error.get_ref()
+            && source.is::<rustls::Error>()
+        {
+            return Some(RouteFailureClass::TlsError);
+        }
+
+        let mut source: Option<&(dyn std::error::Error + 'static)> = Some(self);
+        while let Some(error) = source {
+            if error.downcast_ref::<rustls::Error>().is_some()
+                || error.downcast_ref::<native_tls::Error>().is_some()
+            {
+                return Some(RouteFailureClass::TlsError);
+            }
+            if error.to_string() == "tunnel error: proxy authorization required" {
+                return Some(RouteFailureClass::ProxyAuthenticationRequired);
+            }
+            source = error.source();
+        }
+
+        match self {
+            Self::Route(RouteAwareClientPoolError::Build(
+                BuildRouteAwareHttpClientError::CustomCa(_),
+            )) => Some(RouteFailureClass::TlsError),
+            Self::Route(RouteAwareClientPoolError::Build(
+                BuildRouteAwareHttpClientError::InvalidProxyConfig { .. },
+            )) => Some(RouteFailureClass::InvalidProxyConfig),
+            Self::Route(RouteAwareClientPoolError::Resolve(_)) => {
+                Some(RouteFailureClass::ProxyResolutionUnavailable)
+            }
+            Self::Request(_)
+            | Self::Build(_)
+            | Self::UnsupportedRedirectScheme(_)
+            | Self::TooManyRedirects
+            | Self::Timeout => None,
+        }
+    }
+
     pub fn status(&self) -> Option<StatusCode> {
         match self {
             Self::Request(error) => error.status(),
