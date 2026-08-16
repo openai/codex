@@ -467,6 +467,56 @@ fn compile_permission_profile_workspace_roots_resolves_enabled_entries() -> std:
 }
 
 #[test]
+fn legacy_project_roots_restrictions_do_not_fail_open() -> std::io::Result<()> {
+    let permissions = toml::from_str::<PermissionsToml>(
+        r#"
+[read_deny.filesystem]
+":root" = "read"
+":project_roots" = "none"
+
+[write_deny.filesystem]
+":root" = "write"
+":project_roots" = "none"
+
+[write_read.filesystem]
+":root" = "write"
+
+[write_read.filesystem.":project_roots"]
+docs = "read"
+"#,
+    )
+    .expect("legacy project roots profiles should deserialize");
+    let cwd = TempDir::new()?;
+    let docs = cwd.path().join("docs");
+    let mut startup_warnings = Vec::new();
+
+    let (read_deny_policy, _) =
+        compile_permission_profile(&permissions, "read_deny", &mut startup_warnings)?;
+    assert_eq!(
+        read_deny_policy.resolve_access_with_cwd(cwd.path(), cwd.path()),
+        FileSystemAccessMode::Deny
+    );
+
+    let (write_deny_policy, _) =
+        compile_permission_profile(&permissions, "write_deny", &mut startup_warnings)?;
+    assert!(!write_deny_policy.has_full_disk_write_access());
+    assert_eq!(
+        write_deny_policy.resolve_access_with_cwd(cwd.path(), cwd.path()),
+        FileSystemAccessMode::Deny
+    );
+
+    let (write_read_policy, _) =
+        compile_permission_profile(&permissions, "write_read", &mut startup_warnings)?;
+    assert!(!write_read_policy.has_full_disk_write_access());
+    assert_eq!(
+        write_read_policy.resolve_access_with_cwd(&docs, cwd.path()),
+        FileSystemAccessMode::Read
+    );
+
+    Ok(())
+}
+
+#[test]
 fn read_write_glob_warnings_skip_supported_deny_read_globs_and_trailing_subpaths() {
     let filesystem = FilesystemPermissionsToml {
         glob_scan_max_depth: None,

@@ -779,7 +779,10 @@ fn parse_special_path(path: &str) -> Option<FileSystemSpecialPath> {
     match path {
         ":root" => Some(FileSystemSpecialPath::Root),
         ":minimal" => Some(FileSystemSpecialPath::Minimal),
-        ":workspace_roots" => Some(FileSystemSpecialPath::project_roots(/*subpath*/ None)),
+        // `:project_roots` shipped before the canonical rename; keep it as an alias.
+        ":project_roots" | ":workspace_roots" => {
+            Some(FileSystemSpecialPath::project_roots(/*subpath*/ None))
+        }
         ":tmpdir" => Some(FileSystemSpecialPath::Tmpdir),
         ":slash_tmp" => Some(FileSystemSpecialPath::SlashTmp),
         _ if path.starts_with(':') => {
