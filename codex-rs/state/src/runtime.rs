@@ -218,7 +218,7 @@ impl StateRuntime {
         let started = Instant::now();
         let thread_timestamp_millis_result: anyhow::Result<(Option<i64>, Option<i64>)> =
             sqlx::query_as(
-                "SELECT MAX(threads.updated_at_ms), MAX(threads.recency_at_ms) FROM threads",
+                "SELECT (SELECT MAX(updated_at_ms) FROM threads), (SELECT MAX(recency_at_ms) FROM threads)",
             )
             .fetch_one(pool.as_ref())
             .await
@@ -370,10 +370,12 @@ mod tests {
     use super::StateRuntime;
     use super::runtime_state_migrator;
     use super::sqlite_integrity_check;
+    use super::test_support::test_thread_metadata;
     use super::test_support::unique_temp_dir;
     use crate::DB_INIT_METRIC;
     use crate::DbTelemetry;
     use crate::migrations::STATE_MIGRATOR;
+    use codex_protocol::ThreadId;
     use codex_utils_absolute_path::test_support::PathExt;
     use pretty_assertions::assert_eq;
     use sqlx::SqlitePool;
@@ -382,6 +384,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::path::Path;
     use std::sync::Mutex;
+    use std::sync::atomic::Ordering;
 
     #[derive(Default)]
     struct TestTelemetry {
@@ -552,6 +555,54 @@ mod tests {
         .map(str::to_string)
         .collect::<BTreeSet<_>>();
         assert_eq!(phases, expected);
+
+        runtime.close().await;
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn init_restores_independent_thread_timestamp_maxima() {
+        let codex_home = unique_temp_dir();
+        let sqlite = crate::SqliteConfig::new_for_testing(codex_home.as_path().abs());
+        let runtime = StateRuntime::init(sqlite.clone(), "test-provider".to_string())
+            .await
+            .expect("state runtime should initialize");
+
+        for (thread_id, updated_at_ms, recency_at_ms) in [
+            ("00000000-0000-0000-0000-000000000101", 3_000, 1_000),
+            ("00000000-0000-0000-0000-000000000102", 1_000, 4_000),
+        ] {
+            let thread_id = ThreadId::from_string(thread_id).expect("valid thread id");
+            runtime
+                .upsert_thread(&test_thread_metadata(
+                    &codex_home,
+                    thread_id,
+                    codex_home.clone(),
+                ))
+                .await
+                .expect("thread should be stored");
+            sqlx::query("UPDATE threads SET updated_at_ms = ?, recency_at_ms = ? WHERE id = ?")
+                .bind(updated_at_ms)
+                .bind(recency_at_ms)
+                .bind(thread_id.to_string())
+                .execute(runtime.pool.as_ref())
+                .await
+                .expect("thread timestamps should be updated");
+        }
+
+        runtime.close().await;
+        drop(runtime);
+
+        let runtime = StateRuntime::init(sqlite, "test-provider".to_string())
+            .await
+            .expect("state runtime should restore thread timestamps");
+        assert_eq!(
+            (
+                runtime.thread_updated_at_millis.load(Ordering::Relaxed),
+                runtime.thread_recency_at_millis.load(Ordering::Relaxed),
+            ),
+            (3_000, 4_000)
+        );
 
         runtime.close().await;
         let _ = tokio::fs::remove_dir_all(codex_home).await;
