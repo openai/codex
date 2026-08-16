@@ -1217,10 +1217,8 @@ impl UnifiedExecProcessManager {
         context: &UnifiedExecContext,
     ) -> Result<(UnifiedExecAttempt, Option<DeferredNetworkApproval>), UnifiedExecError> {
         let turn = &context.step_context.turn;
-        let local_policy_env = create_env(
-            &turn.config.permissions.shell_environment_policy,
-            /*thread_id*/ None,
-        );
+        let shell_environment_policy = request.turn_environment.shell_environment_policy();
+        let local_policy_env = create_env(shell_environment_policy, /*thread_id*/ None);
         let mut env = local_policy_env.clone();
         env.insert(
             CODEX_THREAD_ID_ENV_VAR.to_string(),
@@ -1232,17 +1230,10 @@ impl UnifiedExecProcessManager {
         inject_permission_profile_env(&mut env, active_permission_profile.as_ref());
         let mut env = apply_unified_exec_env(env);
         strip_output_env(&mut env);
-        let mut explicit_env_overrides = turn
-            .config
-            .permissions
-            .shell_environment_policy
-            .r#set
-            .clone();
+        let mut explicit_env_overrides = shell_environment_policy.r#set.clone();
         strip_output_env(&mut explicit_env_overrides);
         let exec_server_env_config = ExecServerEnvConfig {
-            policy: exec_env_policy_from_shell_policy(
-                &turn.config.permissions.shell_environment_policy,
-            ),
+            policy: exec_env_policy_from_shell_policy(shell_environment_policy),
             local_policy_env,
         };
         let mut orchestrator = ToolOrchestrator::new();

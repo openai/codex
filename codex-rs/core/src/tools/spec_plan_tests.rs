@@ -916,6 +916,7 @@ async fn zsh_fork_unified_exec_keeps_shell_parameter_when_remote_environment_ava
                                     .permissions
                                     .permission_profile_state()
                                     .snapshot(),
+                                shell_environment_policy: Default::default(),
                                 selected_capability_roots: Vec::new(),
                             },
                         ),

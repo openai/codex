@@ -30,6 +30,7 @@ fn test_turn_environment(environment_id: &str) -> crate::session::turn_context::
                 permission_profile: PermissionProfileSnapshot::legacy(
                     PermissionProfile::read_only(),
                 ),
+                shell_environment_policy: Default::default(),
                 selected_capability_roots: Vec::new(),
             }),
         },

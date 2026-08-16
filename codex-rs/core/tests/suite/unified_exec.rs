@@ -1,3 +1,4 @@
+use codex_core::EnvironmentConfig;
 use codex_core::TurnInputRequest;
 use core_test_support::test_codex::local_selections;
 use std::collections::HashMap;
@@ -10,9 +11,13 @@ use anyhow::Result;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_features::Feature;
 use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::EnvironmentVariablePattern;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+use codex_protocol::config_types::ShellEnvironmentPolicy;
+use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::PermissionProfileSnapshot;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
@@ -293,6 +298,106 @@ async fn exec_command_hides_and_rejects_login_when_disabled() -> Result<()> {
         .expect("exec_command should be available");
     assert!(exec_tool["parameters"]["properties"].get("login").is_none());
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_command_uses_installed_environment_shell_policy_with_explicit_overrides() -> Result<()>
+{
+    skip_if_wine_exec!(
+        Ok(()),
+        "basic PowerShell execution through Wine exec is not passing yet"
+    );
+    skip_if_no_network!(Ok(()));
+
+    let builder = test_codex().with_model("gpt-5.4").with_config(|config| {
+        config.use_experimental_unified_exec_tool = true;
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
+        config.permissions.shell_environment_policy = ShellEnvironmentPolicy {
+            inherit: ShellEnvironmentPolicyInherit::None,
+            include_only: vec![EnvironmentVariablePattern::new_case_insensitive("DROP")],
+            r#set: HashMap::from([
+                ("KEEP".to_string(), "preserved".to_string()),
+                ("DROP".to_string(), "filtered".to_string()),
+            ]),
+            ..Default::default()
+        };
+    });
+    let harness = TestCodexHarness::with_auto_env_builder(builder).await?;
+    let selection = harness
+        .test()
+        .codex
+        .environment_selections()
+        .await
+        .into_iter()
+        .next()
+        .context("thread should select its executor environment")?;
+    harness
+        .test()
+        .codex
+        .environment_ready(
+            &selection,
+            EnvironmentConfig {
+                allow_login_shell: true,
+                permission_profile: PermissionProfileSnapshot::legacy(PermissionProfile::Disabled),
+                shell_environment_policy: ShellEnvironmentPolicy {
+                    inherit: ShellEnvironmentPolicyInherit::None,
+                    include_only: vec![EnvironmentVariablePattern::new_case_insensitive("KEEP")],
+                    r#set: harness
+                        .test()
+                        .config
+                        .permissions
+                        .shell_environment_policy
+                        .r#set
+                        .clone(),
+                    ..Default::default()
+                },
+                selected_capability_roots: Vec::new(),
+            },
+        )
+        .await?;
+
+    let call_id = "exec-command-environment-shell-policy";
+    let command = match core_test_support::test_target_os() {
+        core_test_support::TestTargetOs::Linux | core_test_support::TestTargetOs::MacOs => {
+            r#"printf '%s:%s:%s' "$KEEP" "${DROP:-missing}" "${OWNER_ONLY:-missing}""#
+        }
+        core_test_support::TestTargetOs::Windows => {
+            r#"if (Test-Path Env:DROP) { $drop = $env:DROP } else { $drop = 'missing' }; if (Test-Path Env:OWNER_ONLY) { $owner = $env:OWNER_ONLY } else { $owner = 'missing' }; Write-Output "${env:KEEP}:${drop}:${owner}""#
+        }
+    };
+    let arguments = json!({
+        "cmd": command,
+        "login": false,
+        "yield_time_ms": 5_000,
+    });
+    mount_sse_sequence(
+        harness.server(),
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(call_id, "exec_command", &serde_json::to_string(&arguments)?),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    harness
+        .submit_with_permission_profile(
+            "inspect the shell environment",
+            PermissionProfile::Disabled,
+        )
+        .await?;
+    let output = parse_unified_exec_output(&harness.function_call_stdout(call_id).await)?;
+    assert_eq!(output.output.trim(), "preserved:missing:missing");
     Ok(())
 }
 

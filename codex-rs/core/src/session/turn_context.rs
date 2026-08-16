@@ -12,6 +12,7 @@ use codex_file_system::FileSystemSandboxContext;
 use codex_model_provider::SharedModelProvider;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::openai_models::MODEL_SPECIALTY_CYBER;
 use codex_protocol::openai_models::ModelInfo;
@@ -64,6 +65,10 @@ impl TurnEnvironment {
             unreachable!("ready turn environments always carry resolved configuration")
         };
         config
+    }
+
+    pub(crate) fn shell_environment_policy(&self) -> &ShellEnvironmentPolicy {
+        &self.config().shell_environment_policy
     }
 
     #[cfg(test)]
@@ -712,12 +717,12 @@ impl Session {
                         previous_permission_profile != next_permission_profile;
                     let previous_config = notify_config_contributors
                         .then(|| self.build_effective_session_config(&state.session_configuration));
-                    let environment_config = next.turn_environment_config();
+                    let environment_config = next.inferred_environment_config();
                     if let Some(environments) = &updates.environments {
                         self.services
                             .turn_environments
                             .update_selections(&environments.environments, &environment_config);
-                    } else if state.session_configuration.turn_environment_config()
+                    } else if state.session_configuration.inferred_environment_config()
                         != environment_config
                     {
                         self.services

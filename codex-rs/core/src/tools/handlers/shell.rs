@@ -81,12 +81,7 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
 
     let fs = turn_environment.environment.get_filesystem();
 
-    let mut explicit_env_overrides = turn
-        .config
-        .permissions
-        .shell_environment_policy
-        .r#set
-        .clone();
+    let mut explicit_env_overrides = turn_environment.shell_environment_policy().r#set.clone();
     let mut env = exec_params.env.clone();
     strip_output_env(&mut env);
     strip_output_env(&mut explicit_env_overrides);

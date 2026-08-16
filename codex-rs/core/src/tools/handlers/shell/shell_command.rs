@@ -108,7 +108,7 @@ impl ShellCommandHandler {
         let command = Self::base_command(shell, &params.command, use_login_shell);
 
         let mut env = create_env(
-            &turn_context.config.permissions.shell_environment_policy,
+            turn_environment.shell_environment_policy(),
             Some(session.thread_id),
         );
         inject_session_id_env(&mut env, session.session_id());

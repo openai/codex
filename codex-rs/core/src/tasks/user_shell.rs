@@ -165,10 +165,8 @@ pub(crate) async fn execute_user_shell_command(
         return;
     };
     let shell_snapshot_location = turn_environment.shell_snapshot(&cwd);
-    let mut exec_env_map = create_env(
-        &turn_context.config.permissions.shell_environment_policy,
-        Some(session.thread_id),
-    );
+    let shell_environment_policy = turn_environment.shell_environment_policy();
+    let mut exec_env_map = create_env(shell_environment_policy, Some(session.thread_id));
     inject_session_id_env(&mut exec_env_map, session.session_id());
     inject_apply_patch_env(&mut exec_env_map, &turn_context.config.features);
     if exec_env_map.contains_key(PROXY_ACTIVE_ENV_KEY) {
@@ -178,11 +176,7 @@ pub(crate) async fn execute_user_shell_command(
         &display_command,
         environment_shell,
         shell_snapshot_location.as_ref(),
-        &turn_context
-            .config
-            .permissions
-            .shell_environment_policy
-            .r#set,
+        &shell_environment_policy.r#set,
         &mut exec_env_map,
     );
 

@@ -542,6 +542,7 @@ mod tests {
                     permission_profile: PermissionProfileSnapshot::legacy(
                         PermissionProfile::read_only(),
                     ),
+                    shell_environment_policy: Default::default(),
                     selected_capability_roots: Vec::new(),
                 }),
             },

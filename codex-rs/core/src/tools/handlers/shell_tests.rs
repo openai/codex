@@ -1,6 +1,10 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use codex_protocol::config_types::EnvironmentVariablePattern;
+use codex_protocol::config_types::ShellEnvironmentPolicy;
+use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::ShellCommandToolCallParams;
 use pretty_assertions::assert_eq;
@@ -82,7 +86,14 @@ fn assert_safe(shell: &Shell, command: &str) {
 async fn shell_command_handler_to_exec_params_uses_selected_environment() {
     let (session, mut turn_context) = make_session_and_context().await;
     let permission_profile = turn_context.config.permissions.permission_profile().clone();
-    Arc::make_mut(&mut turn_context.config)
+    let config = Arc::make_mut(&mut turn_context.config);
+    config.permissions.shell_environment_policy.r#set = HashMap::from([
+        ("KEEP".to_string(), "from-thread".to_string()),
+        ("DROP".to_string(), "from-thread".to_string()),
+    ]);
+    config.permissions.shell_environment_policy.include_only =
+        vec![EnvironmentVariablePattern::new_case_insensitive("DROP")];
+    config
         .permissions
         .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::active(
             permission_profile.clone(),
@@ -105,6 +116,17 @@ async fn shell_command_handler_to_exec_params_uses_selected_environment() {
     let selected_cwd = turn_context.config.cwd.join("selected-environment");
     let expected_cwd = selected_cwd.join("subdir");
     let active_permission_profile = ActivePermissionProfile::new("selected-profile");
+    let selected_shell_environment_policy = ShellEnvironmentPolicy {
+        inherit: ShellEnvironmentPolicyInherit::None,
+        include_only: vec![EnvironmentVariablePattern::new_case_insensitive("KEEP")],
+        r#set: turn_context
+            .config
+            .permissions
+            .shell_environment_policy
+            .r#set
+            .clone(),
+        ..Default::default()
+    };
     let selected_environment = TurnEnvironment::new(
         TurnEnvironmentSelection {
             environment_id: "selected-environment".to_string(),
@@ -116,6 +138,7 @@ async fn shell_command_handler_to_exec_params_uses_selected_environment() {
                     permission_profile,
                     active_permission_profile.clone(),
                 ),
+                shell_environment_policy: selected_shell_environment_policy.clone(),
                 selected_capability_roots: Vec::new(),
             }),
         },
@@ -129,10 +152,7 @@ async fn shell_command_handler_to_exec_params_uses_selected_environment() {
         ),
         Some(selected_shell),
     );
-    let mut expected_env = create_env(
-        &turn_context.config.permissions.shell_environment_policy,
-        Some(session.thread_id),
-    );
+    let mut expected_env = create_env(&selected_shell_environment_policy, Some(session.thread_id));
     inject_session_id_env(&mut expected_env, session.session_id());
     inject_permission_profile_env(&mut expected_env, Some(&active_permission_profile));
 

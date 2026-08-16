@@ -482,6 +482,7 @@ async fn root_reconciliation_reuses_pending_apps_startup() -> Result<()> {
                 permission_profile: PermissionProfileSnapshot::legacy(
                     test.config.permissions.permission_profile().clone(),
                 ),
+                shell_environment_policy: Default::default(),
                 selected_capability_roots: vec![SelectedCapabilityRoot {
                     id: "calendar-root".to_string(),
                     location: CapabilityRootLocation::Environment {

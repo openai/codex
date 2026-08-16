@@ -109,7 +109,7 @@ impl Session {
         self.mark_mcp_runtime_dirty();
         self.services.turn_environments.update_selections(
             &environments,
-            &state.session_configuration.turn_environment_config(),
+            &state.session_configuration.inferred_environment_config(),
         );
         Ok(())
     }
