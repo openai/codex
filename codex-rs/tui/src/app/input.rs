@@ -107,8 +107,19 @@ impl App {
         };
 
         let seed = self.chat_widget.composer_text_with_pending();
+        let config = self.chat_widget.config_ref();
+        let file_system_policy = config.permissions.file_system_sandbox_policy();
         let editor_result = tui
-            .with_restored(|| async { external_editor::run_editor(&seed, &editor_cmd).await })
+            .with_restored(|| async {
+                external_editor::run_editor(
+                    &seed,
+                    &editor_cmd,
+                    config.codex_home.as_path(),
+                    &file_system_policy,
+                    config.cwd.as_path(),
+                )
+                .await
+            })
             .await;
         self.reset_external_editor_state(tui);
 
