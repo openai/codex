@@ -138,7 +138,7 @@ impl ChatWidget {
                 || (self.bottom_pane.is_task_running()
                     && (self.mcp_startup_status.is_none()
                         || self.input_queue.user_turn_pending_start))))
-            || (cmd == SlashCommand::Resume
+            || (matches!(cmd, SlashCommand::Resume | SlashCommand::Cd)
                 && (self.input_queue.user_turn_pending_start
                     || self.turn_lifecycle.agent_turn_running))
             || (cmd == SlashCommand::Export && self.input_queue.suppress_queue_autosend)
@@ -430,7 +430,7 @@ impl ChatWidget {
                         None => "Failed to compute diff: workspace command runner unavailable"
                             .to_string(),
                     };
-                    tx.send(AppEvent::DiffResult(text));
+                    tx.send(AppEvent::DiffResult(cwd, text));
                 });
             }
             SlashCommand::Mention => {
@@ -460,6 +460,15 @@ impl ChatWidget {
                         /*refreshing_rate_limits*/ false, /*request_id*/ None,
                     );
                 }
+            }
+            SlashCommand::Cd => {
+                self.dispatch_command_with_args(SlashCommand::Cd, "~".to_string(), Vec::new());
+            }
+            SlashCommand::Pwd => {
+                self.add_info_message(
+                    format!("Current working directory: {}", self.config.cwd.display()),
+                    /*hint*/ None,
+                );
             }
             SlashCommand::Usage => {
                 if self.ensure_usage_command_available() {
@@ -693,6 +702,10 @@ impl ChatWidget {
                         PathBuf::from(trimmed),
                     ),
                 });
+            }
+            SlashCommand::Cd => self.request_working_directory_change(trimmed),
+            SlashCommand::Pwd => {
+                self.add_error_message("Usage: /pwd".to_string());
             }
             SlashCommand::Usage => {
                 if self.ensure_usage_command_available() {
@@ -1085,6 +1098,7 @@ impl ChatWidget {
         match cmd {
             SlashCommand::Ide
             | SlashCommand::Status
+            | SlashCommand::Pwd
             | SlashCommand::Usage
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
@@ -1102,6 +1116,10 @@ impl ChatWidget {
             | SlashCommand::App
             | SlashCommand::Rename
             | SlashCommand::TestApproval => QueueDrain::Continue,
+            SlashCommand::Cd => match self.thread_id {
+                Some(thread_id) if self.can_change_working_directory(thread_id) => QueueDrain::Stop,
+                _ => QueueDrain::Continue,
+            },
             SlashCommand::Feedback
             | SlashCommand::Export
             | SlashCommand::New

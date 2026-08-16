@@ -922,9 +922,9 @@ impl App {
         self.refresh_in_memory_config_from_disk_best_effort("resuming a thread")
             .await;
         let cwd_override = self
-            .harness_overrides
-            .cwd
+            .runtime_working_directory_override
             .as_deref()
+            .or(self.harness_overrides.cwd.as_deref())
             .or_else(|| app_server.remote_cwd_override());
         let resume_cwd_mode = crate::session_resume::effective_resume_cwd_mode(
             self.config.tui_resume_cwd,

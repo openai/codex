@@ -109,6 +109,8 @@ async fn start_recording_app_server_with_history(
     let proxy = tokio::spawn(async move {
         let (stream, _) = listener.accept().await?;
         let mut websocket = accept_async(stream).await?;
+        let mut inventories = usize::from(failed_thread_name == Some("background"));
+        let mut reject_detach = false;
         while let Some(frame) = websocket.next().await {
             let Message::Text(text) = frame? else {
                 continue;
@@ -187,6 +189,11 @@ async fn start_recording_app_server_with_history(
                             },
                         })
                     } else {
+                        let background = request.method == "thread/backgroundTerminals/list" && {
+                            inventories += usize::from(inventories > 0);
+                            matches!(inventories, 2 | 4)
+                        };
+                        let detach = request.method == "thread/unsubscribe";
                         let request = serde_json::from_value::<ClientRequest>(
                             serde_json::to_value(request)?,
                         )?;
@@ -202,7 +209,12 @@ async fn start_recording_app_server_with_history(
                             &request,
                             ClientRequest::ThreadSetName { params, .. }
                                 if failed_thread_name == Some(params.name.as_str())
-                        );
+                        ) || matches!(
+                            &request,
+                            ClientRequest::ThreadFork { params, .. }
+                                if params.cwd.as_deref().is_some_and(|cwd| cwd.ends_with("failure"))
+                                    && { reject_detach = true; true }
+                        ) || (detach && std::mem::take(&mut reject_detach));
                         if force_failure {
                             JSONRPCMessage::Error(JSONRPCError {
                                 id: request_id,
@@ -213,7 +225,12 @@ async fn start_recording_app_server_with_history(
                                 },
                             })
                         } else {
-                            match embedded.request(request).await? {
+                            let mut result = embedded.request(request).await?;
+                            if background {
+                                let terminal = r#"{"data":[{"itemId":"x","processId":"x","command":"x","cwd":"/"}],"nextCursor":null}"#;
+                                result = Ok(serde_json::from_str(terminal)?);
+                            }
+                            match result {
                                 Ok(result) => JSONRPCMessage::Response(JSONRPCResponse {
                                     id: request_id,
                                     result,
@@ -1309,6 +1326,254 @@ async fn cold_paginated_subagent_transcript_excludes_inherited_parent_history() 
     );
 
     app_server.shutdown().await?;
+    proxy.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn changing_directory_preserves_project_trust_permissions_history_and_hooks() -> Result<()> {
+    use codex_protocol::config_types::TrustLevel as T;
+    use serde_json::json;
+    use std::fs;
+
+    let (mut app, mut events, _op_rx) = make_test_app_with_channels().await;
+    let codex_home = tempdir()?;
+    app.config.codex_home = codex_home.path().to_path_buf().abs();
+    app.config.sqlite = SqliteConfig::new_for_testing(codex_home.path().abs());
+    app.harness_overrides.permission_profile = Some(PermissionProfile::workspace_write());
+    let names = ["root", "trusted", "unknown", "untrusted", "p", "failure"];
+    let [current, trusted, unknown, untrusted, mismatch, failed] =
+        names.map(|name| codex_home.path().join(name));
+    fs::create_dir_all(&current)?;
+    for directory in [&trusted, &unknown, &untrusted, &mismatch, &failed] {
+        fs::create_dir_all(directory.join(".codex"))?;
+        fs::write(directory.join(".codex/config.toml"), "")?;
+    }
+    let contents = "developer_instructions = \"destination policy\"\nmodel_reasoning_effort = \"high\"\napproval_policy = \"on-request\"\n[tui]\ntheme = \"dracula\"\n[tui.keymap.global]\nopen_transcript = \"f12\"";
+    fs::write(trusted.join(".codex/config.toml"), contents)?;
+    let agents = trusted.join("AGENTS.md");
+    fs::write(&agents, "Follow destination project instructions.")?;
+    let hooks = r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"x"}]}]}}"#;
+    fs::write(trusted.join(".codex/hooks.json"), hooks)?;
+    let contents = "default_permissions = \"dev\"\n[permissions.dev.filesystem]\n\":root\" = \"write\"\n[tui.keymap.global]\nopen_transcript = \"ctrl-l\"";
+    fs::write(mismatch.join(".codex/config.toml"), contents)?;
+    let requirements = codex_home.path().join("requirements.toml");
+    let rules = "allowed_approval_policies=[\"untrusted\"]\nallowed_sandbox_modes=[\"read-only\"]";
+    fs::write(&requirements, rules)?;
+    fs::create_dir_all(unknown.join(".git"))?;
+    for dir in [&trusted, &untrusted, &mismatch, &failed] {
+        let trust = [T::Trusted, T::Untrusted][usize::from(dir == &untrusted)];
+        crate::legacy_core::config::set_project_trust_level(codex_home.path(), dir, trust)
+            .map_err(|error| color_eyre::eyre::eyre!(error.to_string()))?;
+    }
+    app.config.cwd = current.clone().abs();
+    app.chat_widget
+        .handle_thread_session_quiet(test_thread_session(ThreadId::new(), current.clone()));
+    let (no_list, nick, role, runtime, background) = (None, None, None, None, Some("background"));
+    let (mut server, requests, proxy) =
+        start_recording_app_server(&app.config, no_list, background).await?;
+    let (rec, plain, req) = (recorded_params, crate::key_hint::plain, &requests);
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let (source, message, name) = (None, None, Some("Previous project".to_string()));
+    app.start_fresh_session_with_summary_hint(&mut tui, &mut server, source, message, name)
+        .await;
+    let original = app.chat_widget.thread_id().expect("original thread");
+    let rollout = app.chat_widget.rollout_path().expect("original rollout");
+    let json = r#"{"type":"message","role":"assistant","content":[{"type":"output_text","text":"saved history"}]}"#;
+    let item = serde_json::from_str(json)?;
+    server.thread_inject_items(original, vec![item]).await?;
+    let tracked = server.start_thread(&app.config).await?;
+    let (child, capacity) = (tracked.session.thread_id, THREAD_EVENT_CHANNEL_CAPACITY);
+    let channel = ThreadEventChannel::new_with_session(capacity, tracked.session, tracked.turns);
+    app.thread_event_channels.insert(child, channel);
+    app.agent_navigation
+        .upsert(child, nick, role, /*is_closed*/ false);
+    let store = app.thread_event_channels[&child].store.clone();
+    let config_path = codex_home.path().join("config.toml");
+    let original_user_config = fs::read_to_string(&config_path).ok();
+    let (local, url) = (app.environment_manager.clone(), Some("ws://[::1]".into()));
+    let remote = Arc::new(EnvironmentManager::create_for_tests(url, runtime).await);
+    let mut history = || {
+        std::iter::from_fn(|| events.try_recv().ok())
+            .filter_map(|event| match event {
+                AppEvent::InsertHistoryCell(cell) => Some(cell),
+                _ => None,
+            })
+            .map(|cell| lines_to_single_string(&cell.display_lines(/*width*/ 200)))
+            .collect::<Vec<_>>()
+    };
+    let change = |thread_id, path: &str| AppEvent::ChangeWorkingDirectory {
+        thread_id,
+        requested_cwd: path.into(),
+    };
+    for (path, kind, expected) in [
+        ("missing", "local", "Cannot access directory"),
+        ("../config.toml", "local", "Not a directory"),
+        (r"C:\bad", "workspace", "not supported for remote"),
+        ("~", "executor", "not supported for remote"),
+        ("../trusted", "stale", "requires an idle primary session"),
+        ("../trusted", "running", "another agent is running"),
+        ("../trusted", "active", "another agent is running"),
+        ("../trusted", "mcp", "inventory is still loading"),
+        ("../trusted", "approval", "approval policy override"),
+        ("../trusted", "profile", "permission profile override"),
+        ("../trusted", "reviewer", "reviewer"),
+        ("../p", "named", "different settings"),
+        ("../p", "keymap", "open_transcript"),
+        ("../unknown", "local", "This directory is not trusted"),
+        ("../trusted", "main", "background terminals"),
+        ("../trusted", "child", "background terminals"),
+    ] {
+        app.config.approvals_reviewer = ApprovalsReviewer::User;
+        if kind == "reviewer" {
+            app.config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+            fs::write(&requirements, "allowed_approvals_reviewers = [\"user\"]")?;
+        }
+        app.agent_navigation.set_running(child, kind == "running");
+        store.lock().await.active_turn_id = (kind == "active").then(|| "active".into());
+        app.loader_overrides.system_requirements_path =
+            matches!(kind, "approval" | "profile" | "reviewer").then_some(requirements.clone());
+        app.harness_overrides.permission_profile =
+            (kind != "named").then_some(PermissionProfile::workspace_write());
+        app.runtime_approval_policy_override =
+            (kind == "approval").then_some(AskForApproval::OnRequest);
+        let mut profile = RuntimePermissionProfileOverride::from_config(&app.config);
+        profile.active_permission_profile =
+            (kind == "named").then(|| ActivePermissionProfile::new("dev"));
+        app.runtime_permission_profile_override =
+            matches!(kind, "profile" | "reviewer" | "named").then_some(profile);
+        app.app_server_target = crate::AppServerTarget::Embedded;
+        if kind == "workspace" {
+            let endpoint = crate::resolve_remote_addr("ws://127.0.0.1:8765")?;
+            app.app_server_target = crate::AppServerTarget::Remote { endpoint };
+        }
+        app.environment_manager = [&local, &remote][usize::from(kind == "executor")].clone();
+        requests.lock().expect("request recorder lock").clear();
+        if kind == "mcp" {
+            let loading = history_cell::new_mcp_inventory_loading;
+            app.transcript_cells
+                .push(Arc::new(loading(/*animations_enabled*/ false)));
+        } else if kind == "child" {
+            app.thread_event_channels.remove(&child);
+        }
+        let thread_id = [original, ThreadId::new()][usize::from(kind == "stale")];
+        app.handle_event(&mut tui, &mut server, change(thread_id, path))
+            .await?;
+        assert_eq!(app.chat_widget.thread_id(), Some(original));
+        assert_eq!(app.config.cwd, current.clone().abs());
+        assert!(app.runtime_working_directory_override.is_none());
+        let count = requests.lock().expect("request recorder lock").len();
+        let checked = usize::from(kind == "main") + 2 * usize::from(kind == "child");
+        assert_eq!(count, checked, "{kind}");
+        let listed = recorded_params(&requests, "thread/backgroundTerminals/list");
+        let mut ids = listed.iter().zip([original, child]);
+        assert!(ids.all(|(p, id)| p["threadId"] == id.to_string()));
+        assert_eq!(fs::read_to_string(&config_path).ok(), original_user_config);
+        let output = history().join("");
+        if kind == "mcp" {
+            assert_snapshot!(output, @"■ MCP inventory is still loading.");
+        }
+        assert!(output.contains(expected), "{path}");
+        app.clear_committed_mcp_inventory_loading();
+    }
+    app.set_approvals_reviewer_in_app_and_widget(ApprovalsReviewer::AutoReview);
+    app.runtime_permission_profile_override =
+        Some(RuntimePermissionProfileOverride::from_config(&app.config));
+    for (path, expected) in [(&failed, 0), (&trusted, 2)] {
+        requests.lock().expect("request recorder lock").clear();
+        app.change_working_directory(&mut tui, &mut server, path.clone().abs())
+            .await;
+        assert_eq!(app.chat_widget.thread_id(), Some(original));
+        assert_eq!(app.config.cwd, current.clone().abs());
+        assert_eq!(rec(&requests, "thread/unsubscribe").len(), expected);
+        assert!(history().join("").contains("change"));
+    }
+    let removed = recorded_params(&requests, "thread/unsubscribe");
+    let archived = recorded_params(&requests, "thread/archive");
+    assert_eq!(removed[0]["threadId"], original.to_string());
+    assert_eq!(archived[0]["threadId"], removed[1]["threadId"]);
+    requests.lock().expect("request recorder lock").clear();
+    app.handle_event(&mut tui, &mut server, change(original, "../trusted"))
+        .await?;
+    let forked = app.chat_widget.thread_id().expect("forked thread");
+    assert_ne!(forked, original);
+    let forked_rollout = app.chat_widget.rollout_path().expect("forked rollout");
+    assert!(fs::read_to_string(&rollout)?.contains("saved history"));
+    let copied = fs::read_to_string(&forked_rollout)?;
+    let meta = codex_rollout::read_session_meta_line(&forked_rollout).await?;
+    let base = meta.meta.history_base;
+    assert!(copied.contains("saved history") || base.is_some_and(|h| h.thread_id == original));
+    assert_eq!(app.config.cwd, trusted.clone().abs());
+    let configured = app.primary_session_configured.as_ref().expect("session");
+    let source = codex_utils_path_uri::PathUri::from_abs_path(&agents.abs());
+    assert!(configured.instruction_source_paths.contains(&source));
+    let (cwd, result) = (current.clone(), Err("stale skills".into()));
+    let skills = AppEvent::SkillsListLoaded { cwd, result };
+    let (cwd, plugins) = (current.clone(), Some(vec![]));
+    let plugins = AppEvent::PluginMentionsLoaded { cwd, plugins };
+    let diff = AppEvent::DiffResult(current.clone(), "stale diff".to_string());
+    let branch = AppEvent::SyncThreadGitBranch {
+        thread_id: original,
+        branch: "stale".to_string(),
+        cwd: current.clone(),
+    };
+    for event in [diff, skills, plugins, branch] {
+        app.handle_event(&mut tui, &mut server, event).await?;
+    }
+    let path = trusted.to_str().expect("trusted path");
+    let output = history().join("").replace(path, "<PROJECT>");
+    let message = &output[output.rfind('•').expect("change")..];
+    assert_snapshot!(message, @"• Working directory changed to: <PROJECT>");
+    assert!(!output.contains("stale skills"));
+    assert!(app.overlay.is_none());
+    assert_eq!(app.keymap.app.open_transcript, vec![plain(KeyCode::F(12))]);
+    let anchor = app.runtime_working_directory_override.as_deref();
+    assert_eq!(anchor, Some(trusted.as_path()));
+    let effort = app.chat_widget.current_reasoning_effort();
+    assert_eq!(effort, Some(ReasoningEffortConfig::High));
+    let approval = app.config.permissions.approval_policy.value();
+    assert_eq!(approval, AskForApproval::OnRequest.to_core());
+    let forks = recorded_params(&requests, "thread/fork");
+    assert_eq!(forks.len(), 1);
+    let params = &forks[0];
+    assert_eq!(params["threadId"], serde_json::json!(original.to_string()));
+    assert_eq!(params["cwd"], serde_json::json!(trusted));
+    assert_eq!(params["approvalsReviewer"].as_str(), Some("auto_review"));
+    assert_eq!(params["developerInstructions"], "destination policy");
+    assert_eq!(params["deferGoalContinuation"], serde_json::json!(true));
+    assert_eq!(&params["runtimeWorkspaceRoots"], &json!([trusted]));
+    assert_eq!(rec(&requests, "hooks/list")[0]["cwds"], json!([trusted]));
+    for suffix in "start resume settings/update archive".split(' ') {
+        assert!(recorded_params(&requests, &format!("thread/{suffix}")).is_empty());
+    }
+    assert!(rec(req, "thread/metadata/update")[0]["threadId"] == params["threadId"]);
+    let removed = recorded_params(&requests, "thread/unsubscribe");
+    assert_eq!(removed.len(), 2);
+    let found = |id: ThreadId| removed.iter().any(|p| p["threadId"] == id.to_string());
+    assert!([original, child].into_iter().all(found));
+    let retained = server.thread_read(original, /*include_turns*/ false);
+    assert_eq!(retained.await?.cwd, current.abs().canonicalize()?);
+    assert_eq!(app.chat_widget.config_ref().cwd, trusted.clone().abs());
+    assert!(render_bottom_popup(&app.chat_widget, /*width*/ 80).contains("SessionStart"));
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    app.harness_overrides.bypass_hook_trust = Some(true);
+    requests.lock().expect("request recorder lock").clear();
+    app.change_working_directory(&mut tui, &mut server, trusted.abs())
+        .await;
+    assert!(app.config.bypass_hook_trust && !app.chat_widget.has_active_view());
+    assert!(recorded_params(&requests, "hooks/list").is_empty());
+    app.harness_overrides.bypass_hook_trust = None;
+    requests.lock().expect("request recorder lock").clear();
+    app.change_working_directory(&mut tui, &mut server, untrusted.clone().abs())
+        .await;
+    assert_eq!(app.config.active_project.trust_level, Some(T::Untrusted));
+    let approval = app.config.permissions.approval_policy.value();
+    assert_eq!(approval, AskForApproval::UnlessTrusted.to_core());
+    assert_eq!(rec(req, "thread/fork")[0]["approvalPolicy"], "untrusted");
+    let warning = "Project-local config, hooks, and exec policies are disabled";
+    assert!(history().iter().any(|line| line.contains(warning)));
+    server.shutdown().await?;
     proxy.await??;
     Ok(())
 }

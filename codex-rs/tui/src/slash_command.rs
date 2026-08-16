@@ -49,6 +49,9 @@ pub enum SlashCommand {
     Diff,
     Mention,
     Status,
+    Cd,
+    #[strum(to_string = "pwd", serialize = "cwd")]
+    Pwd,
     Usage,
     DebugConfig,
     Title,
@@ -105,6 +108,8 @@ impl SlashCommand {
             SlashCommand::Import => "import setup, this project, and recent chats from Claude Code",
             SlashCommand::Hooks => "view and manage lifecycle hooks",
             SlashCommand::Status => "show current session configuration and token usage",
+            SlashCommand::Cd => "change the current working directory",
+            SlashCommand::Pwd => "show the current working directory",
             SlashCommand::Usage => "view account usage or use a usage limit reset",
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
             SlashCommand::Title => "configure which items appear in the terminal title",
@@ -167,6 +172,8 @@ impl SlashCommand {
                 | SlashCommand::Mcp
                 | SlashCommand::Export
                 | SlashCommand::Raw
+                | SlashCommand::Cd
+                | SlashCommand::Pwd
                 | SlashCommand::Usage
                 | SlashCommand::Pets
                 | SlashCommand::Side
@@ -186,6 +193,7 @@ impl SlashCommand {
                 | SlashCommand::Diff
                 | SlashCommand::Mention
                 | SlashCommand::Status
+                | SlashCommand::Pwd
                 | SlashCommand::Usage
                 | SlashCommand::Ide
         )
@@ -210,6 +218,7 @@ impl SlashCommand {
             | SlashCommand::Import
             | SlashCommand::Review
             | SlashCommand::Plan
+            | SlashCommand::Cd
             | SlashCommand::Clear
             | SlashCommand::Logout
             | SlashCommand::MemoryDrop
@@ -226,6 +235,7 @@ impl SlashCommand {
             | SlashCommand::Skills
             | SlashCommand::Hooks
             | SlashCommand::Status
+            | SlashCommand::Pwd
             | SlashCommand::Usage
             | SlashCommand::DebugConfig
             | SlashCommand::Ps

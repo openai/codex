@@ -2636,6 +2636,109 @@ async fn slash_app_without_thread_id_shows_starting_error() {
 }
 
 #[tokio::test]
+async fn slash_pwd_and_cwd_alias_display_current_working_directory_from_composer() {
+    let mut output = Vec::new();
+    for (command, side) in [("/pwd", false), ("/cwd", true), ("/pwd x", false)] {
+        let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.set_side_conversation_active(side);
+        chat.bottom_pane.set_task_running(!side);
+        chat.bottom_pane
+            .set_composer_text(command.to_string(), Vec::new(), Vec::new());
+        chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+        assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+        let [cell]: [_; 1] = drain_insert_history(&mut rx).try_into().expect("one cell");
+        output.push(normalize_snapshot_paths(lines_to_single_string(&cell)));
+    }
+    insta::assert_snapshot!(output.join(""), @r"
+• Current working directory: /tmp/project
+• Current working directory: /tmp/project
+■ Usage: /pwd
+");
+}
+
+#[tokio::test]
+async fn slash_cd_changes_current_session_after_replay_and_defaults_to_home() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.thread_name = Some("Completed task".to_string());
+    chat.forked_from = Some(ThreadId::new());
+    let (status, duration, error) = (AppServerTurnStatus::Completed, None, None);
+    let turn = app_server_turn("turn-1", status, duration, error);
+    chat.replay_thread_turns(vec![turn], ReplayKind::ResumeInitialMessages);
+    drain_insert_history(&mut rx);
+    assert!(!chat.can_change_working_directory(ThreadId::new()));
+    let drain = chat.submit_queued_slash_prompt(UserMessage::from("/cd /tmp").into());
+    assert_eq!(drain, QueueDrain::Stop);
+    chat.bottom_pane
+        .set_composer_text("/cd".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    for expected in ["/tmp", "~"] {
+        assert_matches!(
+            rx.try_recv(),
+            Ok(AppEvent::ChangeWorkingDirectory { thread_id: actual, requested_cwd })
+                if actual == thread_id && requested_cwd == std::path::Path::new(expected)
+        );
+    }
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn rejected_queued_cd_drains_following_input() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    handle_turn_started(&mut chat, "turn-1");
+    queue_composer_text_with_tab(&mut chat, "/cd /tmp");
+    queue_composer_text_with_tab(&mut chat, "follow-up");
+    complete_turn_with_message(&mut chat, "turn-1", /*message*/ None);
+    assert_matches!(next_submit_op(&mut op_rx), Op::UserTurn { .. });
+    assert!(chat.input_queue.queued_user_messages.is_empty());
+    while let Ok(event) = rx.try_recv() {
+        assert!(!matches!(event, AppEvent::ChangeWorkingDirectory { .. }));
+    }
+}
+
+#[tokio::test]
+async fn slash_cd_rejects_pending_input_and_unsupported_session_ownership() {
+    let mut errors = Vec::new();
+    for state in "new active pending queued steer side owned ephemeral mcp exec".split(' ') {
+        let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.thread_id = (state != "new").then(ThreadId::new);
+        let (queued, steer) = (UserMessage::from("q").into(), pending_steer("s"));
+        match state {
+            "active" => chat.bottom_pane.set_task_running(/*running*/ true),
+            "pending" => chat.input_queue.user_turn_pending_start = true,
+            "queued" => chat.input_queue.queued_user_messages.push_back(queued),
+            "steer" => chat.input_queue.pending_steers.push_back(steer),
+            "side" => chat.set_side_conversation_active(/*active*/ true),
+            "owned" => chat.set_parent_owned_thread(),
+            "ephemeral" => chat.config.ephemeral = true,
+            "exec" => chat.track_unified_exec_process_begin("call", Some("process"), "sleep"),
+            "mcp" => {
+                let cell =
+                    history_cell::new_mcp_inventory_loading(/*animations_enabled*/ false);
+                chat.transcript.active_cell = Some(Box::new(cell));
+            }
+            _ => {}
+        }
+
+        chat.dispatch_command_with_args(SlashCommand::Cd, "/tmp".to_string(), Vec::new());
+
+        assert!(state != "mcp" || chat.transcript.active_cell.is_some());
+        assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+        let Ok(AppEvent::InsertHistoryCell(cell)) = rx.try_recv() else {
+            unreachable!("missing error for {state}");
+        };
+        errors.push(lines_to_single_string(&cell.display_lines(/*width*/ 200)));
+        assert!(rx.try_recv().is_err(), "{state}");
+    }
+    insta::assert_snapshot!(format!("{}{}", errors[0], errors[3]), @r"
+■ The session must start before you can change its working directory.
+■ Changing directories requires an idle primary session without queued input.
+");
+}
+
+#[tokio::test]
 async fn slash_rollout_displays_current_path() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let rollout_path = PathBuf::from("/tmp/codex-test-rollout.jsonl");

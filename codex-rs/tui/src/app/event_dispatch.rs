@@ -10,6 +10,7 @@ use crate::app_server_session::ForkGoalContinuation;
 use crate::config_update::format_config_error;
 use crate::external_agent_config_migration::flow::ExternalAgentConfigMigrationFlowOutcome;
 use crate::pager_overlay::TranscriptHistoryState;
+use crate::session_resume::cwds_differ;
 #[cfg(target_os = "windows")]
 use codex_config::types::WindowsSandboxModeToml;
 
@@ -23,12 +24,53 @@ impl App {
         event: AppEvent,
     ) -> Result<AppRunControl> {
         match event {
+            AppEvent::SkillsListLoaded { ref cwd, .. }
+            | AppEvent::PluginMentionsLoaded { ref cwd, .. }
+                if cwds_differ(cwd, self.config.cwd.as_path()) => {}
             AppEvent::NewSession { name } => {
                 self.start_fresh_session_with_summary_hint(
                     tui, app_server, /*session_start_source*/ None,
                     /*initial_user_message*/ None, name,
                 )
                 .await;
+            }
+            AppEvent::ChangeWorkingDirectory {
+                thread_id,
+                requested_cwd,
+            } => {
+                if self.primary_thread_id != Some(thread_id)
+                    || !self.chat_widget.can_change_working_directory(thread_id)
+                {
+                    self.chat_widget.add_error_message(
+                        "Changing directories requires an idle primary session without queued input."
+                            .to_string(),
+                    );
+                } else if crate::uses_remote_workspace_or_environment(
+                    &self.app_server_target,
+                    self.environment_manager.as_ref(),
+                ) {
+                    self.chat_widget.add_error_message(
+                        "Changing directories is not supported for remote workspaces or remote execution environments."
+                            .to_string(),
+                    );
+                } else {
+                    let cwd = AbsolutePathBuf::resolve_path_against_base(
+                        requested_cwd.as_path(),
+                        self.chat_widget.config_ref().cwd.as_path(),
+                    );
+                    match std::fs::metadata(cwd.as_path()) {
+                        Ok(metadata) if metadata.is_dir() => {
+                            self.change_working_directory(tui, app_server, cwd).await;
+                        }
+                        Ok(_) => self
+                            .chat_widget
+                            .add_error_message(format!("Not a directory: {}", cwd.display())),
+                        Err(error) => self.chat_widget.add_error_message(format!(
+                            "Cannot access directory {}: {error}",
+                            cwd.display()
+                        )),
+                    }
+                }
             }
             AppEvent::StartupThreadStarted { result } => {
                 self.handle_startup_thread_started(app_server, result)
@@ -657,7 +699,11 @@ impl App {
             AppEvent::AppendMessageHistoryEntry { thread_id, text } => {
                 self.append_message_history_entry(thread_id, text);
             }
-            AppEvent::SyncThreadGitBranch { thread_id, branch } => {
+            AppEvent::SyncThreadGitBranch {
+                thread_id,
+                branch,
+                cwd: _cwd,
+            } => {
                 if let Err(err) = app_server
                     .thread_metadata_update_branch(thread_id, branch)
                     .await
@@ -692,7 +738,10 @@ impl App {
                 self.enqueue_thread_history_entry_response(thread_id, event)
                     .await?;
             }
-            AppEvent::DiffResult(text) => {
+            AppEvent::DiffResult(cwd, text) => {
+                if cwds_differ(&cwd, self.chat_widget.config_ref().cwd.as_path()) {
+                    return Ok(AppRunControl::Continue);
+                }
                 // Clear the in-progress state in the bottom pane
                 self.chat_widget.on_diff_complete();
                 // Enter alternate screen using TUI helper and build pager lines
@@ -1028,7 +1077,7 @@ impl App {
             } => {
                 self.handle_mcp_inventory_result(result, detail, thread_id);
             }
-            AppEvent::SkillsListLoaded { result } => {
+            AppEvent::SkillsListLoaded { result, .. } => {
                 self.handle_skills_list_result(
                     result.map_err(|err| color_eyre::eyre::eyre!(err)),
                     "failed to load skills on startup",
@@ -1959,7 +2008,7 @@ impl App {
             AppEvent::RefreshPluginMentions => {
                 self.refresh_plugin_mentions(app_server);
             }
-            AppEvent::PluginMentionsLoaded { mut plugins } => {
+            AppEvent::PluginMentionsLoaded { mut plugins, .. } => {
                 if !self.config.features.enabled(Feature::Plugins) {
                     plugins = None;
                 }

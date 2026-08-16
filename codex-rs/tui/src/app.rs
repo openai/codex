@@ -234,6 +234,7 @@ mod thread_routing;
 mod thread_session_state;
 mod thread_settings;
 mod transcript_export;
+mod working_directory;
 
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
@@ -522,6 +523,8 @@ pub(crate) struct App {
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
     launch_cwd: PathBuf,
+    /// Resume anchor selected by `/cd`; ordinary resumes retain the immutable launch cwd.
+    runtime_working_directory_override: Option<PathBuf>,
     pub(crate) state_db: Option<StateDbHandle>,
     cli_kv_overrides: Vec<(String, TomlValue)>,
     harness_overrides: ConfigOverrides,

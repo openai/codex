@@ -232,10 +232,10 @@ impl App {
         let app_event_tx = self.app_event_tx.clone();
         let cwd = self.config.cwd.to_path_buf();
         tokio::spawn(async move {
-            let result = fetch_skills_list(request_handle, cwd)
+            let result = fetch_skills_list(request_handle, cwd.clone())
                 .await
                 .map_err(|err| format!("{err:#}"));
-            app_event_tx.send(AppEvent::SkillsListLoaded { result });
+            app_event_tx.send(AppEvent::SkillsListLoaded { cwd, result });
         });
     }
 
@@ -565,14 +565,15 @@ impl App {
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
         if !self.config.features.enabled(Feature::Plugins) {
-            app_event_tx.send(AppEvent::PluginMentionsLoaded { plugins: None });
+            app_event_tx.send(AppEvent::PluginMentionsLoaded { cwd, plugins: None });
             return;
         }
 
         tokio::spawn(async move {
-            match fetch_plugin_mentions(request_handle, cwd).await {
+            match fetch_plugin_mentions(request_handle, cwd.clone()).await {
                 Ok(plugins) => {
                     app_event_tx.send(AppEvent::PluginMentionsLoaded {
+                        cwd,
                         plugins: Some(plugins),
                     });
                 }

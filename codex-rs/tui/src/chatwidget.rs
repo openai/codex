@@ -438,6 +438,7 @@ mod turn_runtime;
 use self::turn_lifecycle::TurnLifecycleState;
 mod usage;
 mod user_messages;
+mod working_directory;
 use self::user_messages::PendingSteer;
 use self::user_messages::PendingSteerCompareKey;
 use self::user_messages::QueueDrain;

@@ -396,6 +396,7 @@ See the Codex keymap documentation for supported actions and examples."
             workspace_command_runner: Some(workspace_command_runner),
             config,
             launch_cwd,
+            runtime_working_directory_override: None,
             state_db,
             cli_kv_overrides,
             harness_overrides,
