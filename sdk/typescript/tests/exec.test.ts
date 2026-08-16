@@ -7,6 +7,8 @@ import { PassThrough } from "node:stream";
 
 import { describe, expect, it } from "@jest/globals";
 
+import type { CodexConfigObject } from "../src/codexOptions";
+
 jest.mock("node:child_process", () => {
   const actual = jest.requireActual<typeof import("node:child_process")>("node:child_process");
   return { ...actual, spawn: jest.fn() };
@@ -95,6 +97,142 @@ describe("CodexExec", () => {
     expect(resumeIndex).toBeGreaterThan(-1);
     expect(imageIndex).toBeGreaterThan(-1);
     expect(resumeIndex).toBeLessThan(imageIndex);
+  });
+
+  const configOverrideCases: {
+    name: string;
+    config?: CodexConfigObject;
+    configOverrides?: string[];
+    expectedOverrides: string[];
+  }[] = [
+    {
+      name: "ordinary and dotted structured keys without changing their meaning",
+      config: {
+        model_providers: { "mock.name": "Mock provider" },
+        "features.shell_snapshot": false,
+        features: { plugins: false },
+        sandbox_workspace_write: { network_access: true },
+      },
+      expectedOverrides: [
+        'model_providers.mock.name="Mock provider"',
+        "features.shell_snapshot=false",
+        "features.plugins=false",
+        "sandbox_workspace_write.network_access=true",
+      ],
+    },
+    {
+      name: "raw inline filesystem permissions without altering literal map keys",
+      configOverrides: [
+        'permissions.worker.filesystem={glob_scan_max_depth=4,":root"="read",":workspace_roots"="read","/repo/.env"="deny","/repo/**/*.pem"="deny","/repo/with spaces/.env"="deny","C:\\\\repo\\\\secret.env"="deny"}',
+      ],
+      expectedOverrides: [
+        'permissions.worker.filesystem={glob_scan_max_depth=4,":root"="read",":workspace_roots"="read","/repo/.env"="deny","/repo/**/*.pem"="deny","/repo/with spaces/.env"="deny","C:\\\\repo\\\\secret.env"="deny"}',
+      ],
+    },
+    {
+      name: "raw profile names containing periods and spaces",
+      configOverrides: [
+        'permissions={"scan.profile with spaces"={filesystem={":root"="read","/repo/.env"="deny"}}}',
+      ],
+      expectedOverrides: [
+        'permissions={"scan.profile with spaces"={filesystem={":root"="read","/repo/.env"="deny"}}}',
+      ],
+    },
+    {
+      name: "structured overrides before ordered raw overrides and duplicates",
+      config: { approval_policy: "never", features: { plugins: false } },
+      configOverrides: ['approval_policy="on-failure"', 'approval_policy="on-request"'],
+      expectedOverrides: [
+        'approval_policy="never"',
+        "features.plugins=false",
+        'approval_policy="on-failure"',
+        'approval_policy="on-request"',
+      ],
+    },
+    {
+      name: "an empty raw override list without changing structured configuration",
+      config: { retry_budget: 3 },
+      configOverrides: [],
+      expectedOverrides: ["retry_budget=3"],
+    },
+  ];
+
+  it.each(configOverrideCases)(
+    "passes $name to the Codex CLI",
+    async ({ config, configOverrides, expectedOverrides }) => {
+      const { CodexExec } = await import("../src/exec");
+      spawnMock.mockClear();
+      const child = new FakeChildProcess();
+      spawnMock.mockReturnValue(child as unknown as child_process.ChildProcess);
+
+      setImmediate(() => {
+        child.stdout.end();
+        child.stderr.end();
+        child.emit("exit", 0, null);
+      });
+
+      const exec = new CodexExec("codex", undefined, config, configOverrides);
+      for await (const _ of exec.run({ input: "hi" })) {
+        // no-op
+      }
+
+      const commandArgs = spawnMock.mock.calls[0]?.[1] as string[] | undefined;
+      expect(commandArgs).toEqual([
+        "exec",
+        "--experimental-json",
+        ...expectedOverrides.flatMap((override) => ["--config", override]),
+      ]);
+    },
+  );
+
+  it("lets SDK-managed and thread settings override raw configuration when resuming", async () => {
+    const { CodexExec } = await import("../src/exec");
+    spawnMock.mockClear();
+    const child = new FakeChildProcess();
+    spawnMock.mockReturnValue(child as unknown as child_process.ChildProcess);
+
+    setImmediate(() => {
+      child.stdout.end();
+      child.stderr.end();
+      child.emit("exit", 0, null);
+    });
+
+    const exec = new CodexExec("codex", undefined, { approval_policy: "never" }, [
+      'approval_policy="on-failure"',
+      'openai_base_url="https://raw.example.test"',
+      "sandbox_workspace_write={network_access=true}",
+    ]);
+    for await (const _ of exec.run({
+      input: "resume with overrides",
+      threadId: "thread-id",
+      baseUrl: "https://managed.example.test",
+      approvalPolicy: "on-request",
+      networkAccessEnabled: false,
+    })) {
+      // no-op
+    }
+
+    const commandArgs = spawnMock.mock.calls[0]?.[1] as string[] | undefined;
+    expect(commandArgs).toEqual([
+      "exec",
+      "--experimental-json",
+      "--config",
+      'approval_policy="never"',
+      "--config",
+      'approval_policy="on-failure"',
+      "--config",
+      'openai_base_url="https://raw.example.test"',
+      "--config",
+      "sandbox_workspace_write={network_access=true}",
+      "--config",
+      'openai_base_url="https://managed.example.test"',
+      "--config",
+      "sandbox_workspace_write.network_access=false",
+      "--config",
+      'approval_policy="on-request"',
+      "resume",
+      "thread-id",
+    ]);
   });
 
   it("allows overriding the env passed to the Codex CLI", async () => {

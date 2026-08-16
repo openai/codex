@@ -65,11 +65,13 @@ export class CodexExec {
   private pathDirs: string[];
   private envOverride?: Record<string, string>;
   private configOverrides?: CodexConfigObject;
+  private rawConfigOverrides?: string[];
 
   constructor(
     executablePath: string | null = null,
     env?: Record<string, string>,
     configOverrides?: CodexConfigObject,
+    rawConfigOverrides?: string[],
   ) {
     if (executablePath) {
       this.executablePath = executablePath;
@@ -81,6 +83,7 @@ export class CodexExec {
     }
     this.envOverride = env;
     this.configOverrides = configOverrides;
+    this.rawConfigOverrides = rawConfigOverrides;
   }
 
   async *run(args: CodexExecArgs): AsyncGenerator<string> {
@@ -88,6 +91,12 @@ export class CodexExec {
 
     if (this.configOverrides) {
       for (const override of serializeConfigOverrides(this.configOverrides)) {
+        commandArgs.push("--config", override);
+      }
+    }
+
+    if (this.rawConfigOverrides) {
+      for (const override of this.rawConfigOverrides) {
         commandArgs.push("--config", override);
       }
     }

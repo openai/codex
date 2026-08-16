@@ -15,6 +15,11 @@ export type CodexOptions = {
    */
   config?: CodexConfigObject;
   /**
+   * Raw `--config key=value` overrides to pass unchanged to the Codex CLI after
+   * structured configuration and before SDK-managed or thread-specific overrides.
+   */
+  configOverrides?: string[];
+  /**
    * Environment variables passed to the Codex CLI process. When provided, the SDK
    * will not inherit variables from `process.env`.
    */

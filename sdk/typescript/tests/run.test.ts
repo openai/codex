@@ -487,6 +487,47 @@ describe("Codex", () => {
     }
   });
 
+  it("passes raw permission maps unchanged while preserving override precedence", async () => {
+    const { url, close } = await startResponsesTestProxy({
+      statusCode: 200,
+      responseBodies: [
+        sse(
+          responseStarted("response_1"),
+          assistantMessage("Raw config overrides applied", "item_1"),
+          responseCompleted("response_1"),
+        ),
+      ],
+    });
+
+    const deniedPath = path.join(os.tmpdir(), "codex-sdk-config.env");
+    const permissionOverride = `permissions.sdk_test.filesystem={":root"="read",${JSON.stringify(deniedPath)}="deny"}`;
+    const { args: spawnArgs, restore } = codexExecSpy();
+    const { client, cleanup } = createTestClient({
+      baseUrl: url,
+      apiKey: "test",
+      config: { approval_policy: "never", default_permissions: "sdk_test" },
+      configOverrides: [permissionOverride, 'approval_policy="on-failure"'],
+    });
+
+    try {
+      const thread = client.startThread({ approvalPolicy: "on-request" });
+      await thread.run("apply raw config overrides");
+
+      const commandArgs = spawnArgs[0];
+      expectPair(commandArgs, ["--config", permissionOverride]);
+      expectPair(commandArgs, ["--config", 'default_permissions="sdk_test"']);
+      expect(collectConfigValues(commandArgs, "approval_policy")).toEqual([
+        'approval_policy="never"',
+        'approval_policy="on-failure"',
+        'approval_policy="on-request"',
+      ]);
+    } finally {
+      cleanup();
+      restore();
+      await close();
+    }
+  });
+
   it("passes additionalDirectories as repeated flags", async () => {
     const { url, close } = await startResponsesTestProxy({
       statusCode: 200,

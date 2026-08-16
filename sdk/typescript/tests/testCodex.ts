@@ -11,6 +11,7 @@ type CreateTestClientOptions = {
   apiKey?: string;
   baseUrl?: string;
   config?: CodexConfigObject;
+  configOverrides?: string[];
   env?: Record<string, string>;
   inheritEnv?: boolean;
 };
@@ -47,6 +48,7 @@ export function createTestClient(options: CreateTestClientOptions = {}): TestCli
       baseUrl: options.baseUrl,
       apiKey: options.apiKey,
       config: mergeTestConfig(options.baseUrl, options.config),
+      configOverrides: options.configOverrides,
       env,
     }),
   };
