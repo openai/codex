@@ -3,6 +3,7 @@ mod client_tracker;
 mod clients;
 mod desired_state;
 mod enroll;
+mod host_device;
 mod protocol;
 mod segment;
 mod server_api;

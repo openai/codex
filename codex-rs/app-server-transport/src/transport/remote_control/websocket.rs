@@ -27,6 +27,8 @@ use crate::transport::remote_control::enroll::format_headers;
 use crate::transport::remote_control::enroll::load_persisted_remote_control_enrollment;
 use crate::transport::remote_control::enroll::preview_remote_control_response_body;
 use crate::transport::remote_control::enroll::update_persisted_remote_control_enrollment;
+use crate::transport::remote_control::host_device::REMOTE_CONTROL_HOST_DEVICE_KIND_HEADER;
+use crate::transport::remote_control::host_device::host_device_kind;
 use crate::transport::remote_control::server_api::enroll_remote_control_server;
 use crate::transport::remote_control::server_api::refresh_remote_control_server;
 use axum::http::HeaderValue;
@@ -1250,7 +1252,7 @@ fn set_remote_control_header(
     Ok(())
 }
 
-fn build_remote_control_websocket_request(
+async fn build_remote_control_websocket_request(
     websocket_url: &str,
     enrollment: &RemoteControlEnrollment,
     installation_id: &str,
@@ -1290,6 +1292,13 @@ fn build_remote_control_websocket_request(
         REMOTE_CONTROL_INSTALLATION_ID_HEADER,
         installation_id,
     )?;
+    if let Some(host_device_kind) = host_device_kind().await {
+        set_remote_control_header(
+            headers,
+            REMOTE_CONTROL_HOST_DEVICE_KIND_HEADER,
+            host_device_kind,
+        )?;
+    }
     if let Some(subscribe_cursor) = subscribe_cursor {
         set_remote_control_header(
             headers,
@@ -1345,7 +1354,8 @@ pub(super) async fn connect_remote_control_websocket(
         &enrollment,
         connect_options.installation_id,
         connect_options.subscribe_cursor,
-    )?;
+    )
+    .await?;
 
     let websocket_connect_result = tokio::time::timeout(
         REMOTE_CONTROL_WEBSOCKET_CONNECT_TIMEOUT,

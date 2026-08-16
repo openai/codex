@@ -46,6 +46,7 @@ time = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
     "macros",
+    "process",
     "rt-multi-thread",
 ] }
 tokio-tungstenite = { workspace = true }
