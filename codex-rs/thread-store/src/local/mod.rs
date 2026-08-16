@@ -7,6 +7,7 @@ mod live_writer;
 mod model_context;
 mod move_thread_to_section;
 mod paginated_fork;
+mod pending_thread_metadata;
 mod read_thread;
 mod revert_thread;
 mod rollout_migration;
@@ -22,6 +23,9 @@ mod unarchive_thread;
 mod update_thread_metadata;
 mod writer_lock;
 
+#[cfg(test)]
+#[path = "pending_thread_metadata_tests.rs"]
+mod pending_thread_metadata_tests;
 #[cfg(test)]
 mod test_support;
 
@@ -71,6 +75,7 @@ use crate::StoredThread;
 use crate::StoredThreadHistory;
 use crate::StoredThreadSection;
 use crate::StoredThreadSectionsPage;
+use crate::ThreadMetadataPatch;
 use crate::ThreadOccurrenceSearchPage;
 use crate::ThreadPage;
 use crate::ThreadSearchPage;
@@ -107,6 +112,7 @@ pub use rollout_migration::RolloutMigrationStatus;
 pub struct LocalThreadStore {
     pub(super) config: LocalThreadStoreConfig,
     live_recorders: Arc<Mutex<HashMap<ThreadId, LiveRecorderEntry>>>,
+    pending_thread_metadata: pending_thread_metadata::PendingThreadMetadataRegistry,
     live_writer_locks: Arc<LiveWriterLocks>,
     writer_lock_coordinator: Arc<WriterLockCoordinator>,
     state_db: Option<StateDbHandle>,
@@ -218,6 +224,8 @@ impl LocalThreadStore {
         Self {
             config,
             live_recorders: Arc::new(Mutex::new(HashMap::new())),
+            pending_thread_metadata:
+                pending_thread_metadata::PendingThreadMetadataRegistry::default(),
             live_writer_locks: Arc::new(LiveWriterLocks::default()),
             writer_lock_coordinator,
             state_db,
@@ -399,6 +407,33 @@ impl ThreadStore for LocalThreadStore {
 
     fn create_thread(&self, params: CreateThreadParams) -> ThreadStoreFuture<'_, ()> {
         Box::pin(async move { live_writer::create_thread(self, params).await })
+    }
+
+    fn stage_pending_thread_metadata(
+        &self,
+        thread_id: ThreadId,
+        patch: ThreadMetadataPatch,
+    ) -> ThreadStoreFuture<'_, ()> {
+        Box::pin(async move {
+            if self.state_db.is_none() {
+                return Err(ThreadStoreError::InvalidRequest {
+                    message: "pending thread metadata requires a state db".to_string(),
+                });
+            }
+            if patch.rollout_path.is_some() {
+                return Err(ThreadStoreError::InvalidRequest {
+                    message: "pending thread metadata cannot set rollout_path".to_string(),
+                });
+            }
+            self.pending_thread_metadata.stage(thread_id, patch).await
+        })
+    }
+
+    fn remove_pending_thread_metadata(&self, thread_id: ThreadId) -> ThreadStoreFuture<'_, ()> {
+        Box::pin(async move {
+            self.pending_thread_metadata.remove(thread_id).await;
+            Ok(())
+        })
     }
 
     fn resume_thread(&self, params: ResumeThreadParams) -> ThreadStoreFuture<'_, ()> {

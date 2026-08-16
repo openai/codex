@@ -33,6 +33,7 @@ use crate::StoredThread;
 use crate::StoredThreadHistory;
 use crate::StoredThreadSection;
 use crate::StoredThreadSectionsPage;
+use crate::ThreadMetadataPatch;
 use crate::ThreadOccurrenceSearchPage;
 use crate::ThreadPage;
 use crate::ThreadSearchPage;
@@ -68,6 +69,31 @@ pub trait ThreadStore: Any + Send + Sync {
 
     /// Creates a new live thread.
     fn create_thread(&self, params: CreateThreadParams) -> ThreadStoreFuture<'_, ()>;
+
+    /// Stages host-owned metadata for a thread ID reserved before Core starts the thread.
+    ///
+    /// The entry remains in memory until the first successful metadata update for that thread.
+    /// Callers must remove it if startup fails before the store opens a live thread.
+    fn stage_pending_thread_metadata(
+        &self,
+        _thread_id: ThreadId,
+        _patch: ThreadMetadataPatch,
+    ) -> ThreadStoreFuture<'_, ()> {
+        Box::pin(async {
+            Err(ThreadStoreError::Unsupported {
+                operation: "stage_pending_thread_metadata",
+            })
+        })
+    }
+
+    /// Removes host-owned metadata staged for a reserved thread ID.
+    fn remove_pending_thread_metadata(&self, _thread_id: ThreadId) -> ThreadStoreFuture<'_, ()> {
+        Box::pin(async {
+            Err(ThreadStoreError::Unsupported {
+                operation: "remove_pending_thread_metadata",
+            })
+        })
+    }
 
     /// Reopens an existing thread for live appends.
     fn resume_thread(&self, params: ResumeThreadParams) -> ThreadStoreFuture<'_, ()>;

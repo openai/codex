@@ -58,6 +58,7 @@ use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::user_input::UserInput;
+use codex_thread_store::ThreadStore;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use futures::future::BoxFuture;
@@ -671,7 +672,7 @@ impl TestCodexBuilder {
             Arc::clone(&self.extensions),
             user_instructions_provider,
             /*analytics_events_client*/ None,
-            thread_store,
+            Arc::clone(&thread_store),
             codex_core::local_agent_graph_store_from_state_db(state_db.as_ref()),
             installation_id,
             /*attestation_provider*/ None,
@@ -755,6 +756,7 @@ impl TestCodexBuilder {
             codex: new_conversation.thread,
             session_configured: new_conversation.session_configured,
             thread_manager,
+            thread_store,
             _test_env: test_env,
         })
     }
@@ -845,6 +847,7 @@ pub struct TestCodex {
     pub session_configured: SessionConfiguredEvent,
     pub config: Config,
     pub thread_manager: Arc<ThreadManager>,
+    pub thread_store: Arc<dyn ThreadStore>,
     _test_env: TestEnv,
 }
 
