@@ -177,6 +177,9 @@ impl Renderable for ColumnRenderable<'_> {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         let mut y = area.y;
         for child in &self.children {
+            if y >= area.bottom() {
+                break;
+            }
             let child_area = Rect::new(area.x, y, area.width, child.desired_height(area.width))
                 .intersection(area);
             if !child_area.is_empty() {
