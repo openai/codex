@@ -63,7 +63,7 @@ pub(crate) struct RuntimeKeymap {
     pub(crate) chords: Arc<RuntimeChordKeymap>,
     pub(crate) chat: ChatKeymap,
     pub(crate) composer: ComposerKeymap,
-    pub(crate) editor: EditorKeymap,
+    pub(crate) editor: Arc<EditorKeymap>,
     pub(crate) vim_normal: VimNormalKeymap,
     pub(crate) vim_operator: VimOperatorKeymap,
     pub(crate) vim_text_object: VimTextObjectKeymap,
@@ -625,7 +625,7 @@ impl RuntimeKeymap {
             history_search_next: resolve_local!(keymap, defaults, composer, history_search_next),
         };
 
-        let editor = EditorKeymap {
+        let editor = Arc::new(EditorKeymap {
             insert_newline: resolve_local!(keymap, defaults, editor, insert_newline),
             move_left: resolve_local!(keymap, defaults, editor, move_left),
             move_right: resolve_local!(keymap, defaults, editor, move_right),
@@ -643,7 +643,7 @@ impl RuntimeKeymap {
             kill_whole_line: resolve_local!(keymap, defaults, editor, kill_whole_line),
             kill_line_end: resolve_local!(keymap, defaults, editor, kill_line_end),
             yank: resolve_local!(keymap, defaults, editor, yank),
-        };
+        });
 
         let mut vim_normal = VimNormalKeymap {
             enter_insert: resolve_local!(keymap, defaults, vim_normal, enter_insert),
@@ -1127,7 +1127,7 @@ impl RuntimeKeymap {
                 history_search_previous: default_bindings![ctrl(KeyCode::Char('r'))],
                 history_search_next: default_bindings![ctrl(KeyCode::Char('s'))],
             },
-            editor: EditorKeymap {
+            editor: Arc::new(EditorKeymap {
                 insert_newline: default_bindings![
                     ctrl(KeyCode::Char('j')),
                     ctrl(KeyCode::Char('m')),
@@ -1187,7 +1187,7 @@ impl RuntimeKeymap {
                 kill_whole_line: default_bindings![],
                 kill_line_end: default_bindings![ctrl(KeyCode::Char('k'))],
                 yank: default_bindings![ctrl(KeyCode::Char('y'))],
-            },
+            }),
             vim_normal: VimNormalKeymap {
                 enter_insert: default_bindings![plain(KeyCode::Char('i')), plain(KeyCode::Insert)],
                 append_after_cursor: default_bindings![plain(KeyCode::Char('a'))],

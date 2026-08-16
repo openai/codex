@@ -8,6 +8,7 @@ use super::RuntimeKeymap;
 use crate::key_hint::KeyBinding;
 use codex_config::types::KeybindingsSpec;
 use codex_config::types::TuiKeymap;
+use std::sync::Arc;
 
 /// Config context in which a keymap action is active.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -94,6 +95,15 @@ pub(super) struct RuntimeActionBinding<'a> {
     pub(super) bindings: &'a [KeyBinding],
 }
 
+macro_rules! runtime_group_mut {
+    ($runtime_keymap:expr, editor) => {
+        Arc::make_mut(&mut $runtime_keymap.editor)
+    };
+    ($runtime_keymap:expr, $group:ident) => {
+        &mut $runtime_keymap.$group
+    };
+}
+
 macro_rules! define_runtime_action_bindings {
     ($($context:literal => $context_id:ident, $group:ident, $config_group:ident [$($action:ident),+ $(,)?]),+ $(,)?) => {
         /// Resolve a config context/action pair to its runtime identity.
@@ -176,7 +186,7 @@ macro_rules! define_runtime_action_bindings {
                 $(
                     $(
                         ($context, stringify!($action)) => {
-                            runtime_keymap.$group.$action.push(binding);
+                            runtime_group_mut!(runtime_keymap, $group).$action.push(binding);
                             true
                         }
                     )+

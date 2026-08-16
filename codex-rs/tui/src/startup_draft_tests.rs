@@ -5,6 +5,7 @@ use crossterm::event::KeyModifiers;
 use pretty_assertions::assert_eq;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use std::sync::Arc;
 use tokio::sync::mpsc::unbounded_channel;
 
 use super::StartupDraftInitialScreen;
@@ -483,10 +484,11 @@ fn startup_draft_allows_local_editor_shortcuts_without_startup_actions() {
     assert_eq!(pump.bottom_pane.composer_text(), "first ");
 
     let mut keymap = crate::keymap::RuntimeKeymap::defaults();
-    keymap.editor.move_line_start = vec![crate::key_hint::ctrl(KeyCode::Char('z'))];
-    keymap.editor.move_line_end = vec![crate::key_hint::ctrl(KeyCode::Char('v'))];
-    keymap.editor.move_left = vec![crate::key_hint::ctrl(KeyCode::Char('s'))];
-    keymap.editor.insert_newline = vec![crate::key_hint::plain(KeyCode::Enter)];
+    let editor = Arc::make_mut(&mut keymap.editor);
+    editor.move_line_start = vec![crate::key_hint::ctrl(KeyCode::Char('z'))];
+    editor.move_line_end = vec![crate::key_hint::ctrl(KeyCode::Char('v'))];
+    editor.move_left = vec![crate::key_hint::ctrl(KeyCode::Char('s'))];
+    editor.insert_newline = vec![crate::key_hint::plain(KeyCode::Enter)];
     keymap.composer.submit = vec![crate::key_hint::ctrl(KeyCode::Char('s'))];
     pump.bottom_pane.set_keymap_bindings(&keymap);
     handle_startup_draft_key(
