@@ -653,17 +653,7 @@ impl App {
 
         let should_send = {
             let mut guard = store.lock().await;
-            guard
-                .buffer
-                .push_back(ThreadBufferedEvent::FeedbackSubmission(event.clone()));
-            if guard.buffer.len() > guard.capacity
-                && let Some(removed) = guard.buffer.pop_front()
-                && let ThreadBufferedEvent::Request(request) = &removed
-            {
-                guard
-                    .pending_interactive_replay
-                    .note_evicted_server_request(request.as_ref());
-            }
+            guard.push_buffered_event(ThreadBufferedEvent::FeedbackSubmission(event.clone()));
             guard.active
         };
 

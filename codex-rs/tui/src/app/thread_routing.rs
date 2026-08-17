@@ -982,13 +982,14 @@ impl App {
             let channel = self.ensure_thread_channel(thread_id);
             (channel.sender.clone(), Arc::clone(&channel.store))
         };
-        let (notification, pending_status, turn_stopped) = {
+        let (notification, previous_pending_status, pending_status, turn_stopped) = {
             let mut guard = store.lock().await;
             if guard.session.is_none()
                 && let Some(session) = inferred_session
             {
                 guard.session = Some(session);
             }
+            let previous_pending_status = guard.side_parent_pending_status();
             let turn_stopped = match &notification {
                 ServerNotification::TurnCompleted(notification) => {
                     guard.active_turn_id() == Some(notification.turn.id.as_str())
@@ -1005,6 +1006,7 @@ impl App {
             };
             (
                 notification,
+                previous_pending_status,
                 guard.side_parent_pending_status(),
                 turn_stopped,
             )
@@ -1034,6 +1036,8 @@ impl App {
             self.set_side_parent_status(thread_id, Some(status));
         } else if let Some(change) = notification_status_change {
             self.apply_side_parent_status_change(thread_id, change);
+        } else if previous_pending_status.is_some() {
+            self.clear_side_parent_action_status(thread_id);
         }
         self.refresh_pending_thread_approvals().await;
         Ok(())
@@ -1184,17 +1188,7 @@ impl App {
             // retaining another deep copy for thread replay only accumulates already-delivered
             // history data. Inactive responses still need the buffer because they are not sent.
             if !should_send || !matches!(&event, HistoryLookupResponse::Batch { .. }) {
-                guard
-                    .buffer
-                    .push_back(ThreadBufferedEvent::HistoryEntryResponse(event.clone()));
-                if guard.buffer.len() > guard.capacity
-                    && let Some(removed) = guard.buffer.pop_front()
-                    && let ThreadBufferedEvent::Request(request) = &removed
-                {
-                    guard
-                        .pending_interactive_replay
-                        .note_evicted_server_request(request.as_ref());
-                }
+                guard.push_buffered_event(ThreadBufferedEvent::HistoryEntryResponse(event.clone()));
             }
             should_send
         };

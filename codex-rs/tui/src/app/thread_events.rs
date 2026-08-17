@@ -49,6 +49,7 @@ pub(super) struct ThreadEventStore {
     pub(super) input_state: Option<ThreadInputState>,
     pub(super) capacity: usize,
     pub(super) active: bool,
+    pub(super) buffered_agent_message_delta_bytes: usize,
 }
 
 impl ThreadEventStore {
@@ -76,6 +77,7 @@ impl ThreadEventStore {
             input_state: None,
             capacity,
             active: false,
+            buffered_agent_message_delta_bytes: 0,
         }
     }
 
@@ -98,6 +100,7 @@ impl ThreadEventStore {
 
     pub(super) fn rebase_buffer_after_session_refresh(&mut self) {
         self.buffer.retain(Self::event_survives_session_refresh);
+        self.buffered_agent_message_delta_bytes = 0;
     }
 
     pub(super) fn set_turns(&mut self, turns: Vec<Turn>) {
@@ -160,31 +163,13 @@ impl ThreadEventStore {
             return;
         }
 
-        self.buffer
-            .push_back(ThreadBufferedEvent::Notification(Box::new(
-                notification.into_owned(),
-            )));
-        if self.buffer.len() > self.capacity
-            && let Some(removed) = self.buffer.pop_front()
-            && let ThreadBufferedEvent::Request(request) = &removed
-        {
-            self.pending_interactive_replay
-                .note_evicted_server_request(request.as_ref());
-        }
+        self.push_replay_notification(notification);
     }
 
     pub(super) fn push_request(&mut self, request: ServerRequest) {
         self.pending_interactive_replay
             .note_server_request(&request);
-        self.buffer
-            .push_back(ThreadBufferedEvent::Request(Box::new(request)));
-        if self.buffer.len() > self.capacity
-            && let Some(removed) = self.buffer.pop_front()
-            && let ThreadBufferedEvent::Request(request) = &removed
-        {
-            self.pending_interactive_replay
-                .note_evicted_server_request(request.as_ref());
-        }
+        self.push_buffered_event(ThreadBufferedEvent::Request(Box::new(request)));
     }
 
     pub(super) fn pending_replay_requests(&self) -> Vec<ServerRequest> {

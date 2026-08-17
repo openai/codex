@@ -744,6 +744,81 @@ async fn active_history_batch_is_delivered_without_replay_buffering() -> Result<
 }
 
 #[tokio::test]
+async fn replay_thread_snapshot_renders_only_retained_agent_message_deltas() {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let thread_id = ThreadId::new();
+    let session = test_thread_session(thread_id, test_path_buf("/tmp/project"));
+    app.thread_event_channels.insert(
+        thread_id,
+        ThreadEventChannel::new_with_session(
+            THREAD_EVENT_CHANNEL_CAPACITY,
+            session.clone(),
+            Vec::new(),
+        ),
+    );
+    app.activate_thread_channel(thread_id).await;
+    app.chat_widget.handle_thread_session(session);
+
+    {
+        let channel = app
+            .thread_event_channels
+            .get(&thread_id)
+            .expect("thread channel should exist");
+        let mut store = channel.store.lock().await;
+        for chunk in 0..65 {
+            let marker = format!("chunk {chunk:02}");
+            let text = format!("{marker}\n{}\n", "x".repeat(4096 - marker.len() - 2));
+            store.push_notification(agent_message_delta_notification(
+                thread_id,
+                "turn-budget",
+                "item-budget",
+                &text,
+            ));
+        }
+    }
+
+    app.store_active_thread_receiver().await;
+    let (_receiver, snapshot) = app
+        .activate_thread_for_replay(thread_id)
+        .await
+        .expect("detached thread should reactivate for replay");
+    app.replay_thread_snapshot(snapshot, /*resume_restored_queue*/ false);
+
+    let mut rendered = Vec::new();
+    loop {
+        app.chat_widget.on_commit_tick();
+        let mut inserted = false;
+        while let Ok(event) = app_event_rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                rendered.push(lines_to_single_string(&cell.display_lines(/*width*/ 80)));
+                inserted = true;
+            }
+        }
+        if !inserted {
+            break;
+        }
+    }
+    if let Some(lines) = app.chat_widget.active_cell_transcript_lines(/*width*/ 80) {
+        rendered.push(lines_to_single_string(&lines));
+    }
+    let markers = rendered
+        .iter()
+        .flat_map(|text| text.lines())
+        .filter_map(|line| line.split_once("chunk "))
+        .map(|(_, marker)| format!("chunk {}", marker.trim()))
+        .collect::<Vec<_>>();
+
+    assert_eq!(markers.len(), 64);
+    assert_snapshot!(
+        format!("{}\n{}", markers.first().expect("first marker"), markers.last().expect("last marker")),
+        @r"
+        chunk 01
+        chunk 64
+        "
+    );
+}
+
+#[tokio::test]
 async fn replay_thread_snapshot_restores_draft_and_queued_input() {
     let mut app = make_test_app().await;
     let thread_id = ThreadId::new();
@@ -4109,6 +4184,114 @@ async fn side_parent_status_prioritizes_input_over_approval() -> Result<()> {
             .get(&side_thread_id)
             .and_then(|state| state.parent_status),
         None
+    );
+
+    app.enqueue_thread_request(
+        parent_thread_id,
+        request_user_input_request(parent_thread_id, "turn-eviction", "input-eviction"),
+    )
+    .await?;
+    let chunk = "x".repeat(4 * 1024);
+    app.enqueue_thread_notification(
+        parent_thread_id,
+        agent_message_delta_notification(
+            parent_thread_id,
+            "turn-eviction",
+            "item-eviction",
+            &chunk,
+        ),
+    )
+    .await?;
+    app.enqueue_thread_request(
+        parent_thread_id,
+        exec_approval_request(
+            parent_thread_id,
+            "turn-eviction",
+            "approval-eviction",
+            /*approval_id*/ None,
+        ),
+    )
+    .await?;
+
+    let side_footer = |app: &App| {
+        render_bottom_popup(&app.chat_widget, /*width*/ 120)
+            .lines()
+            .find_map(|line| {
+                line.find("Side from main thread")
+                    .map(|start| line[start..].trim().to_string())
+            })
+            .expect("side conversation footer should be rendered")
+    };
+    assert_eq!(
+        app.side_threads
+            .get(&side_thread_id)
+            .and_then(|state| state.parent_status),
+        Some(SideParentStatus::NeedsInput)
+    );
+    let input_footer = side_footer(&app);
+
+    for _ in 0..64 {
+        app.enqueue_thread_notification(
+            parent_thread_id,
+            agent_message_delta_notification(
+                parent_thread_id,
+                "turn-eviction",
+                "item-eviction",
+                &chunk,
+            ),
+        )
+        .await?;
+    }
+    assert_eq!(
+        app.side_threads
+            .get(&side_thread_id)
+            .and_then(|state| state.parent_status),
+        Some(SideParentStatus::NeedsApproval)
+    );
+    let approval_footer = side_footer(&app);
+    assert!(
+        app.thread_event_channels
+            .get(&parent_thread_id)
+            .expect("parent thread channel should exist")
+            .store
+            .lock()
+            .await
+            .has_pending_thread_approvals()
+    );
+
+    app.enqueue_thread_notification(
+        parent_thread_id,
+        agent_message_delta_notification(
+            parent_thread_id,
+            "turn-eviction",
+            "item-eviction",
+            &chunk,
+        ),
+    )
+    .await?;
+    assert_eq!(
+        app.side_threads
+            .get(&side_thread_id)
+            .and_then(|state| state.parent_status),
+        None
+    );
+    let cleared_footer = side_footer(&app);
+    assert!(
+        !app.thread_event_channels
+            .get(&parent_thread_id)
+            .expect("parent thread channel should exist")
+            .store
+            .lock()
+            .await
+            .has_pending_thread_approvals()
+    );
+    assert_snapshot!(
+        format!("{input_footer}\n{approval_footer}\n{cleared_footer}"),
+        @r"
+        Side from main thread · main needs input · ctrl + / to switch · ctrl + c to close
+        Side from main thread · main needs approval · ctrl + / to switch · ctrl + c to close
+        Side from main thread · ctrl + / to switch · ctrl + c to close
+        "
     );
 
     Ok(())
