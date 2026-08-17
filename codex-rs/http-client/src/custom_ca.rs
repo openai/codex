@@ -293,10 +293,10 @@ fn build_rustls_client_config(
 /// [`ConfiguredCaBundle::load_certificates`], preserves the caller's chosen `reqwest` builder
 /// configuration, forces rustls when a custom CA is configured, and finally registers each parsed
 /// certificate with that builder.
-fn build_reqwest_client_with_env(
+fn build_reqwest_client_with_env<B: ReqwestClientBuilder>(
     env_source: &dyn EnvSource,
-    mut builder: reqwest::ClientBuilder,
-) -> Result<reqwest::Client, BuildCustomCaTransportError> {
+    mut builder: B,
+) -> Result<B::Client, BuildCustomCaTransportError> {
     if let Some(bundle) = env_source.configured_ca_bundle() {
         ensure_rustls_crypto_provider();
         info!(
@@ -364,6 +364,47 @@ fn build_reqwest_client_with_env(
                 source,
             ))
         }
+    }
+}
+
+/// Shares custom-root loading between reqwest's async and blocking builders.
+trait ReqwestClientBuilder: Sized {
+    type Client;
+
+    fn use_rustls_tls(self) -> Self;
+    fn add_root_certificate(self, certificate: reqwest::Certificate) -> Self;
+    fn build(self) -> Result<Self::Client, reqwest::Error>;
+}
+
+impl ReqwestClientBuilder for reqwest::ClientBuilder {
+    type Client = reqwest::Client;
+
+    fn use_rustls_tls(self) -> Self {
+        reqwest::ClientBuilder::use_rustls_tls(self)
+    }
+
+    fn add_root_certificate(self, certificate: reqwest::Certificate) -> Self {
+        reqwest::ClientBuilder::add_root_certificate(self, certificate)
+    }
+
+    fn build(self) -> Result<Self::Client, reqwest::Error> {
+        reqwest::ClientBuilder::build(self)
+    }
+}
+
+impl ReqwestClientBuilder for reqwest::blocking::ClientBuilder {
+    type Client = reqwest::blocking::Client;
+
+    fn use_rustls_tls(self) -> Self {
+        reqwest::blocking::ClientBuilder::use_rustls_tls(self)
+    }
+
+    fn add_root_certificate(self, certificate: reqwest::Certificate) -> Self {
+        reqwest::blocking::ClientBuilder::add_root_certificate(self, certificate)
+    }
+
+    fn build(self) -> Result<Self::Client, reqwest::Error> {
+        reqwest::blocking::ClientBuilder::build(self)
     }
 }
 
@@ -724,6 +765,7 @@ mod tests {
     use super::CODEX_CA_CERT_ENV;
     use super::EnvSource;
     use super::SSL_CERT_FILE_ENV;
+    use super::build_reqwest_client_with_env;
     use super::maybe_build_rustls_client_config_with_env;
 
     const TEST_CERT: &str = include_str!("../tests/fixtures/test-ca.pem");
@@ -815,6 +857,33 @@ mod tests {
         assert!(matches!(
             error,
             BuildCustomCaTransportError::InvalidCaFile { .. }
+        ));
+    }
+
+    #[test]
+    fn blocking_client_uses_custom_ca_bundle_when_configured() {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let cert_path = write_cert_file(&temp_dir, "ca.pem", TEST_CERT);
+        let env = map_env(&[(CODEX_CA_CERT_ENV, cert_path.to_string_lossy().as_ref())]);
+
+        let client =
+            build_reqwest_client_with_env(&env, reqwest::blocking::Client::builder().no_proxy());
+
+        assert!(client.is_ok());
+    }
+
+    #[test]
+    fn blocking_client_rejects_invalid_custom_ca_bundle() {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let cert_path = write_cert_file(&temp_dir, "empty.pem", "");
+        let env = map_env(&[(CODEX_CA_CERT_ENV, cert_path.to_string_lossy().as_ref())]);
+
+        let result =
+            build_reqwest_client_with_env(&env, reqwest::blocking::Client::builder().no_proxy());
+
+        assert!(matches!(
+            result,
+            Err(BuildCustomCaTransportError::InvalidCaFile { .. })
         ));
     }
 }
