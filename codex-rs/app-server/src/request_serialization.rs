@@ -8,8 +8,10 @@ use std::sync::Arc;
 use codex_app_server_protocol::ClientRequestSerializationScope;
 use codex_diagnostics::Gauge;
 use codex_diagnostics::GaugeGuard;
-use futures::future::join_all;
+use futures::stream::FuturesUnordered;
+use futures::stream::StreamExt;
 use tokio::sync::Mutex;
+use tokio::sync::Notify;
 use tracing::Instrument;
 
 use crate::connection_rpc_gate::ConnectionRpcGate;
@@ -145,9 +147,14 @@ struct QueuedSerializedRequest {
     _diagnostics_guard: GaugeGuard,
 }
 
+struct RequestSerializationQueue {
+    requests: VecDeque<QueuedSerializedRequest>,
+    changed: Arc<Notify>,
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct RequestSerializationQueues {
-    inner: Arc<Mutex<HashMap<RequestSerializationQueueKey, VecDeque<QueuedSerializedRequest>>>>,
+    inner: Arc<Mutex<HashMap<RequestSerializationQueueKey, RequestSerializationQueue>>>,
 }
 
 impl RequestSerializationQueues {
@@ -181,12 +188,17 @@ impl RequestSerializationQueues {
             let mut queues = self.inner.lock().await;
             match queues.get_mut(&key) {
                 Some(queue) => {
-                    queue.push_back(request);
+                    queue.requests.push_back(request);
+                    queue.changed.notify_one();
                     false
                 }
                 None => {
-                    let mut queue = VecDeque::new();
-                    queue.push_back(request);
+                    let mut requests = VecDeque::new();
+                    requests.push_back(request);
+                    let queue = RequestSerializationQueue {
+                        requests,
+                        changed: Arc::new(Notify::new()),
+                    };
                     queues.insert(key.clone(), queue);
                     true
                 }
@@ -202,26 +214,26 @@ impl RequestSerializationQueues {
 
     async fn drain(self, key: RequestSerializationQueueKey) {
         loop {
-            let requests = {
+            let (requests, changed) = {
                 let mut queues = self.inner.lock().await;
                 let Some(queue) = queues.get_mut(&key) else {
                     return;
                 };
-                match queue.pop_front() {
+                match queue.requests.pop_front() {
                     Some(request) => {
                         let access = request.access;
                         let mut requests = vec![request];
                         if access == RequestSerializationAccess::SharedRead {
-                            while queue.front().is_some_and(|request| {
+                            while queue.requests.front().is_some_and(|request| {
                                 request.access == RequestSerializationAccess::SharedRead
                             }) {
-                                let Some(request) = queue.pop_front() else {
+                                let Some(request) = queue.requests.pop_front() else {
                                     break;
                                 };
                                 requests.push(request);
                             }
                         }
-                        requests
+                        (requests, Arc::clone(&queue.changed))
                     }
                     None => {
                         queues.remove(&key);
@@ -230,7 +242,49 @@ impl RequestSerializationQueues {
                 }
             };
 
-            join_all(requests.into_iter().map(|request| request.request.run())).await;
+            if requests[0].access == RequestSerializationAccess::Exclusive {
+                for request in requests {
+                    request.request.run().await;
+                }
+                continue;
+            }
+
+            let mut running_reads = requests
+                .into_iter()
+                .map(|request| request.request.run())
+                .collect::<FuturesUnordered<_>>();
+
+            loop {
+                tokio::select! {
+                    Some(()) = running_reads.next() => {
+                        if running_reads.is_empty() {
+                            break;
+                        }
+                    }
+                    () = changed.notified() => {
+                        let requests = {
+                            let mut queues = self.inner.lock().await;
+                            let Some(queue) = queues.get_mut(&key) else {
+                                return;
+                            };
+                            let mut requests = Vec::new();
+                            while queue.requests.front().is_some_and(|request| {
+                                request.access == RequestSerializationAccess::SharedRead
+                            }) {
+                                let Some(request) = queue.requests.pop_front() else {
+                                    break;
+                                };
+                                requests.push(request);
+                            }
+                            requests
+                        };
+
+                        for request in requests {
+                            running_reads.push(request.request.run());
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -238,6 +292,10 @@ impl RequestSerializationQueues {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_app_server_protocol::ClientRequest;
+    use codex_app_server_protocol::ConfigBatchWriteParams;
+    use codex_app_server_protocol::HooksListParams;
+    use codex_app_server_protocol::RequestId;
     use pretty_assertions::assert_eq;
     use std::sync::Arc;
     use tokio::sync::broadcast;
@@ -539,9 +597,129 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn exclusive_write_waits_for_running_shared_reads() {
+    async fn later_shared_read_joins_running_shared_read() {
         let queues = RequestSerializationQueues::default();
         let key = RequestSerializationQueueKey::Global("test");
+        let (first_started_tx, first_started_rx) = oneshot::channel::<()>();
+        let (first_release_tx, first_release_rx) = oneshot::channel::<()>();
+        let (later_started_tx, later_started_rx) = oneshot::channel::<()>();
+
+        queues
+            .enqueue(
+                key.clone(),
+                RequestSerializationAccess::SharedRead,
+                QueuedInitializedRequest::new(gate(), async move {
+                    first_started_tx.send(()).expect("receiver should be open");
+                    let _ = first_release_rx.await;
+                }),
+            )
+            .await;
+        timeout(queue_drain_timeout(), first_started_rx)
+            .await
+            .expect("first read should start")
+            .expect("sender should be open");
+
+        queues
+            .enqueue(
+                key,
+                RequestSerializationAccess::SharedRead,
+                QueuedInitializedRequest::new(gate(), async move {
+                    later_started_tx.send(()).expect("receiver should be open");
+                }),
+            )
+            .await;
+
+        timeout(queue_drain_timeout(), later_started_rx)
+            .await
+            .expect("later read should join the running read")
+            .expect("sender should be open");
+        first_release_tx
+            .send(())
+            .expect("first read should still be waiting");
+    }
+
+    #[tokio::test]
+    async fn later_shared_read_waits_behind_writer_queued_during_running_read() {
+        let queues = RequestSerializationQueues::default();
+        let key = RequestSerializationQueueKey::Global("test");
+        let (first_read_started_tx, first_read_started_rx) = oneshot::channel::<()>();
+        let (first_read_release_tx, first_read_release_rx) = oneshot::channel::<()>();
+        let (write_started_tx, write_started_rx) = oneshot::channel::<()>();
+        let (write_release_tx, write_release_rx) = oneshot::channel::<()>();
+        let (later_read_started_tx, later_read_started_rx) = oneshot::channel::<()>();
+
+        queues
+            .enqueue(
+                key.clone(),
+                RequestSerializationAccess::SharedRead,
+                QueuedInitializedRequest::new(gate(), async move {
+                    first_read_started_tx
+                        .send(())
+                        .expect("receiver should be open");
+                    let _ = first_read_release_rx.await;
+                }),
+            )
+            .await;
+        timeout(queue_drain_timeout(), first_read_started_rx)
+            .await
+            .expect("first read should start")
+            .expect("sender should be open");
+
+        queues
+            .enqueue(
+                key.clone(),
+                RequestSerializationAccess::Exclusive,
+                QueuedInitializedRequest::new(gate(), async move {
+                    write_started_tx.send(()).expect("receiver should be open");
+                    let _ = write_release_rx.await;
+                }),
+            )
+            .await;
+        queues
+            .enqueue(
+                key,
+                RequestSerializationAccess::SharedRead,
+                QueuedInitializedRequest::new(gate(), async move {
+                    later_read_started_tx
+                        .send(())
+                        .expect("receiver should be open");
+                }),
+            )
+            .await;
+
+        let mut write_started_rx = Box::pin(write_started_rx);
+        timeout(shutdown_wait_timeout(), &mut write_started_rx)
+            .await
+            .expect_err("write should wait for the running read");
+        let mut later_read_started_rx = Box::pin(later_read_started_rx);
+        timeout(shutdown_wait_timeout(), &mut later_read_started_rx)
+            .await
+            .expect_err("later read should wait behind the queued write");
+
+        first_read_release_tx
+            .send(())
+            .expect("first read should still be waiting");
+        timeout(queue_drain_timeout(), &mut write_started_rx)
+            .await
+            .expect("write should start after the running read finishes")
+            .expect("sender should be open");
+        timeout(shutdown_wait_timeout(), &mut later_read_started_rx)
+            .await
+            .expect_err("later read should wait for the running write");
+
+        write_release_tx
+            .send(())
+            .expect("write should still be waiting");
+        timeout(queue_drain_timeout(), &mut later_read_started_rx)
+            .await
+            .expect("later read should start after the write finishes")
+            .expect("sender should be open");
+    }
+
+    #[tokio::test]
+    async fn startup_config_reads_run_concurrently_and_exclude_writes() {
+        let queues = RequestSerializationQueues::default();
+        let key = RequestSerializationQueueKey::Global("config");
         let (blocker_started_tx, blocker_started_rx) = oneshot::channel::<()>();
         let (blocker_release_tx, blocker_release_rx) = oneshot::channel::<()>();
         let (read_started_tx, mut read_started_rx) = mpsc::unbounded_channel();
@@ -565,13 +743,34 @@ mod tests {
             .expect("blocker should start")
             .expect("sender should be open");
 
-        for value in [FIRST_REQUEST_VALUE, SECOND_REQUEST_VALUE] {
+        for (value, request) in [
+            (
+                FIRST_REQUEST_VALUE,
+                ClientRequest::HooksList {
+                    request_id: RequestId::Integer(i64::from(FIRST_REQUEST_VALUE)),
+                    params: HooksListParams { cwds: Vec::new() },
+                },
+            ),
+            (
+                SECOND_REQUEST_VALUE,
+                ClientRequest::ConfigRequirementsRead {
+                    request_id: RequestId::Integer(i64::from(SECOND_REQUEST_VALUE)),
+                    params: None,
+                },
+            ),
+        ] {
             let read_started_tx = read_started_tx.clone();
             let mut read_release_rx = read_release_tx.subscribe();
+            let (request_key, access) = RequestSerializationQueueKey::from_scope(
+                ConnectionId(0),
+                request
+                    .serialization_scope()
+                    .expect("startup config reads should be serialized"),
+            );
             queues
                 .enqueue(
-                    key.clone(),
-                    RequestSerializationAccess::SharedRead,
+                    request_key,
+                    access,
                     QueuedInitializedRequest::new(gate(), async move {
                         read_started_tx
                             .send(value)
@@ -581,10 +780,26 @@ mod tests {
                 )
                 .await;
         }
+
+        let config_write = ClientRequest::ConfigBatchWrite {
+            request_id: RequestId::Integer(i64::from(THIRD_REQUEST_VALUE)),
+            params: ConfigBatchWriteParams {
+                edits: Vec::new(),
+                file_path: None,
+                expected_version: None,
+                reload_user_config: false,
+            },
+        };
+        let (write_key, write_access) = RequestSerializationQueueKey::from_scope(
+            ConnectionId(0),
+            config_write
+                .serialization_scope()
+                .expect("config writes should be serialized"),
+        );
         queues
             .enqueue(
-                key.clone(),
-                RequestSerializationAccess::Exclusive,
+                write_key,
+                write_access,
                 QueuedInitializedRequest::new(gate(), async move {
                     write_started_tx.send(()).expect("receiver should be open");
                 }),

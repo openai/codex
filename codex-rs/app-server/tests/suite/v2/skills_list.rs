@@ -9,10 +9,15 @@ use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::write_chatgpt_auth;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigEdit;
+use codex_app_server_protocol::ConfigReadParams;
+use codex_app_server_protocol::ConfigReadResponse;
+use codex_app_server_protocol::ConfigRequirementsReadResponse;
 use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetParams;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetResponse;
 use codex_app_server_protocol::MergeStrategy;
+use codex_app_server_protocol::PermissionProfileListParams;
+use codex_app_server_protocol::PermissionProfileListResponse;
 use codex_app_server_protocol::PluginListParams;
 use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::SkillScope;
@@ -655,6 +660,61 @@ async fn skills_list_loads_remote_installed_plugin_skills_from_cache() -> Result
         expected_skill_path
     );
     assert_eq!(skill.enabled, true);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_reads_complete_alongside_skills_list_request() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_managed_config()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+
+    let skills_request_id = mcp
+        .send_skills_list_request(SkillsListParams {
+            cwds: vec![cwd.path().to_path_buf()],
+            force_reload: true,
+        })
+        .await?;
+
+    let config_request_id = mcp
+        .send_config_read_request(ConfigReadParams {
+            include_layers: false,
+            cwd: None,
+        })
+        .await?;
+    let requirements_request_id = mcp.send_config_requirements_read_request().await?;
+    let permission_profiles_request_id = mcp
+        .send_permission_profile_list_request(PermissionProfileListParams {
+            cursor: None,
+            limit: None,
+            cwd: None,
+        })
+        .await?;
+
+    let (config, requirements, permission_profiles) = timeout(Duration::from_secs(5), async {
+        let config: ConfigReadResponse = mcp.read_response(config_request_id).await?;
+        let requirements: ConfigRequirementsReadResponse =
+            mcp.read_response(requirements_request_id).await?;
+        let permission_profiles: PermissionProfileListResponse =
+            mcp.read_response(permission_profiles_request_id).await?;
+        anyhow::Ok((config, requirements, permission_profiles))
+    })
+    .await??;
+    assert!(config.layers.is_none());
+    assert_eq!(
+        requirements,
+        ConfigRequirementsReadResponse { requirements: None }
+    );
+    assert!(!permission_profiles.data.is_empty());
+
+    let SkillsListResponse { data } =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(skills_request_id)).await??;
+    assert_eq!(data.len(), 1);
+
     Ok(())
 }
 
