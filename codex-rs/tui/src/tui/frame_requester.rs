@@ -118,7 +118,7 @@ impl FrameScheduler {
                 _ = &mut deadline => {
                     if next_deadline.is_some() {
                         next_deadline = None;
-                        self.rate_limiter.mark_emitted(target);
+                        self.rate_limiter.mark_emitted(Instant::now());
                         let _ = self.draw_tx.send(());
                     }
                 }
@@ -273,6 +273,39 @@ mod tests {
             .await
             .expect("timed out waiting for second draw");
         assert!(second.is_ok(), "broadcast closed unexpectedly");
+    }
+
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn test_late_draw_still_limits_the_next_frame() {
+        let (draw_tx, mut draw_rx) = broadcast::channel(16);
+        let requester = FrameRequester::new(draw_tx);
+        let delayed_deadline = Instant::now() - MIN_FRAME_INTERVAL.saturating_mul(2);
+        requester
+            .frame_schedule_tx
+            .send(delayed_deadline)
+            .expect("scheduler should accept the overdue draw");
+
+        draw_rx
+            .recv()
+            .timeout(Duration::from_millis(50))
+            .await
+            .expect("timed out waiting for overdue draw")
+            .expect("broadcast closed unexpectedly");
+
+        requester.schedule_frame();
+        draw_rx
+            .recv()
+            .timeout(Duration::from_millis(1))
+            .await
+            .expect_err("a late draw must not trigger a redraw burst");
+
+        time::advance(MIN_FRAME_INTERVAL).await;
+        draw_rx
+            .recv()
+            .timeout(Duration::from_millis(50))
+            .await
+            .expect("timed out waiting for rate-limited draw")
+            .expect("broadcast closed unexpectedly");
     }
 
     #[tokio::test(flavor = "current_thread", start_paused = true)]
