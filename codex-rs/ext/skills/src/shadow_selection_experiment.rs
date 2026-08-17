@@ -21,6 +21,8 @@ use crate::dynamic_skill_selector::CharacterRoutingCardSkillSelector;
 use crate::dynamic_skill_selector::CheapSkillSelection;
 use crate::dynamic_skill_selector::CheapSkillSelector;
 use crate::dynamic_skill_selector::FieldedBm25SkillSelector;
+use crate::dynamic_skill_selector::LruPlusCharacterRoutingSkillSelector;
+use crate::dynamic_skill_selector::LruPlusLexicalCharacterRoutingSkillSelector;
 use crate::dynamic_skill_selector::LruPlusLexicalSkillSelector;
 use crate::dynamic_skill_selector::LruSkillSelector;
 use crate::dynamic_skill_selector::MultiQueryLexicalSkillSelector;
@@ -122,7 +124,15 @@ impl ShadowSelectionExperiment {
         let routing_selector = CharacterRoutingCardSkillSelector::new(catalog, host_snapshot);
         let lru_selector = LruSkillSelector::new(recent_skill_ids);
         let lru_plus_lexical_selector = LruPlusLexicalSkillSelector::new(lru_selector.clone());
-        let mut ranked_selections = Vec::with_capacity(self.selectors.len() + 3);
+        let lru_plus_character_selector = LruPlusCharacterRoutingSkillSelector::new(
+            lru_selector.clone(),
+            routing_selector.clone(),
+        );
+        let lru_plus_lexical_character_selector = LruPlusLexicalCharacterRoutingSkillSelector::new(
+            lru_selector.clone(),
+            routing_selector.clone(),
+        );
+        let mut ranked_selections = Vec::with_capacity(self.selectors.len() + 5);
 
         for selector in self
             .selectors
@@ -132,6 +142,8 @@ impl ShadowSelectionExperiment {
                 &routing_selector as &dyn CheapSkillSelector,
                 &lru_selector as &dyn CheapSkillSelector,
                 &lru_plus_lexical_selector as &dyn CheapSkillSelector,
+                &lru_plus_character_selector as &dyn CheapSkillSelector,
+                &lru_plus_lexical_character_selector as &dyn CheapSkillSelector,
             ])
         {
             let start = Instant::now();

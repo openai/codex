@@ -948,7 +948,13 @@ async fn shadow_lru_selector_recovers_a_skill_invoked_on_an_earlier_turn() -> Te
                     .find(|attribute| attribute.key.as_str() == "method")?
                     .value
                     .as_str();
-                if method != "lru_v1" && method != "lru_plus_lexical_v1" {
+                if !matches!(
+                    method.as_ref(),
+                    "lru_v1"
+                        | "lru_plus_lexical_v1"
+                        | "lru_plus_character_routing_v1"
+                        | "lru_plus_lexical_character_routing_v1"
+                ) {
                     return None;
                 }
                 let hit = point
@@ -966,6 +972,16 @@ async fn shadow_lru_selector_recovers_a_skill_invoked_on_an_earlier_turn() -> Te
 
     assert_eq!(
         vec![
+            (
+                "lru_plus_character_routing_v1".to_string(),
+                "true".to_string(),
+                2,
+            ),
+            (
+                "lru_plus_lexical_character_routing_v1".to_string(),
+                "true".to_string(),
+                2,
+            ),
             ("lru_plus_lexical_v1".to_string(), "true".to_string(), 2),
             ("lru_v1".to_string(), "false".to_string(), 1),
             ("lru_v1".to_string(), "true".to_string(), 1),
