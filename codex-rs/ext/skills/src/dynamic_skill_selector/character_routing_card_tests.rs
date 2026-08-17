@@ -24,7 +24,6 @@ fn host_interface_metadata_makes_unlisted_workflow_discoverable() {
         name: "content-tools".to_string(),
         description: "Prepare visual content.".to_string(),
         short_description: None,
-        model: None,
         interface: Some(SkillInterface {
             display_name: Some("Visual Assets".to_string()),
             short_description: Some("Create illustrated assets.".to_string()),

@@ -1,4 +1,3 @@
-use crate::SkillModel;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -10,8 +9,6 @@ pub struct SkillMetadata {
     pub name: String,
     pub description: String,
     pub short_description: Option<String>,
-    /// Optional model requested by this skill's frontmatter.
-    pub model: Option<SkillModel>,
     pub interface: Option<SkillInterface>,
     pub dependencies: Option<SkillDependencies>,
     pub policy: Option<SkillPolicy>,

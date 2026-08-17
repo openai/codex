@@ -187,7 +187,6 @@ fn load_test_skill_root(root: &PluginSkillRoot) -> LoadedSkillRoot {
                         name: format!("{}:{}", root.plugin_namespace, parsed.name),
                         description: parsed.description,
                         short_description: parsed.short_description,
-                        model: parsed.model,
                         interface: None,
                         dependencies: None,
                         policy: None,

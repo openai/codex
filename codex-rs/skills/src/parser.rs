@@ -1,4 +1,3 @@
-use crate::SkillModel;
 use serde::Deserialize;
 use thiserror::Error;
 
@@ -10,8 +9,6 @@ struct SkillFrontmatter {
     name: Option<String>,
     #[serde(default)]
     description: Option<String>,
-    #[serde(default)]
-    model: Option<serde_yaml::Value>,
     #[serde(default)]
     metadata: SkillFrontmatterMetadata,
 }
@@ -28,7 +25,6 @@ pub struct ParsedSkillFrontmatter {
     pub name: String,
     pub description: String,
     pub short_description: Option<String>,
-    pub model: Option<SkillModel>,
 }
 
 /// Error produced while parsing or validating `SKILL.md` metadata.
@@ -92,13 +88,6 @@ pub fn parse_skill_frontmatter_metadata(
         name,
         description,
         short_description,
-        model: parsed.model.and_then(|model| {
-            serde_yaml::from_value(model)
-                .inspect_err(|error| {
-                    tracing::warn!(%error, "ignoring invalid skill model annotation");
-                })
-                .ok()
-        }),
     })
 }
 
