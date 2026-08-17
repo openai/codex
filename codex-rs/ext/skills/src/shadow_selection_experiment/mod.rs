@@ -1,5 +1,9 @@
 // This shadow-selection experiment is temporary and should be removed after evaluation.
 
+mod task_context;
+
+pub(crate) use task_context::ShadowTaskContext;
+
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -10,6 +14,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::HostSkillsSnapshot;
+use codex_extension_api::TurnInputContext;
 use codex_otel::MetricsClient;
 use codex_protocol::user_input::UserInput;
 
@@ -64,14 +69,16 @@ impl ShadowSelectionExperiment {
 
     pub(crate) fn run(
         &self,
-        inputs: &[UserInput],
+        input: &TurnInputContext,
         catalog: &SkillCatalog,
         explicitly_selected: &[SkillCatalogEntry],
         host_snapshot: Option<&HostSkillsSnapshot>,
         recent_skill_invocations: Arc<RecentSkillInvocations>,
+        task_context: Arc<ShadowTaskContext>,
     ) -> ShadowSelectionTurnState {
-        let query = build_shadow_query(inputs);
+        let query = build_shadow_query(&input.user_input);
         let query_script = query_script_tag(&query.text);
+        let task_snapshot = task_context.begin_turn(&input.turn_id, &query, &input.user_input);
         let explicitly_selected_skill_resources = explicitly_selected
             .iter()
             .map(|entry| normalize_skill_resource(entry.main_prompt.as_str()))
@@ -132,9 +139,19 @@ impl ShadowSelectionExperiment {
             lru_selector.clone(),
             routing_selector.clone(),
         );
-        let mut ranked_selections = Vec::with_capacity(self.selectors.len() + 5);
+        let task_selector = LruPlusLexicalCharacterRoutingSkillSelector::new(
+            LruSkillSelector::new(
+                task_snapshot
+                    .recent_skills
+                    .iter()
+                    .filter_map(|resource| eligible_skill_ids_by_resource.get(resource).copied())
+                    .collect(),
+            ),
+            routing_selector.clone(),
+        );
+        let mut ranked_selections = Vec::with_capacity(self.selectors.len() + 6);
 
-        for selector in self
+        for (method, selector, query) in self
             .selectors
             .iter()
             .map(std::convert::AsRef::as_ref)
@@ -145,14 +162,21 @@ impl ShadowSelectionExperiment {
                 &lru_plus_character_selector as &dyn CheapSkillSelector,
                 &lru_plus_lexical_character_selector as &dyn CheapSkillSelector,
             ])
+            .map(|selector| (selector.method(), selector, &query))
+            .chain([(
+                "task_context_fusion_v1",
+                &task_selector as &dyn CheapSkillSelector,
+                &task_snapshot.query,
+            )])
         {
+            let query_script = query_script_tag(&query.text);
             let start = Instant::now();
             let selection =
                 selector.select(&query.text, &documents, /*limit*/ MAX_SHADOW_RESULTS);
             let duration = start.elapsed();
             let selected_ids = sanitize_selected_ids(&selection, &eligible_ids);
             self.record_metrics(ShadowSelectionObservation {
-                method: selector.method(),
+                method,
                 selection: &selection,
                 query_truncated_before_selection: query.truncated,
                 query_script,
@@ -161,14 +185,14 @@ impl ShadowSelectionExperiment {
                 duration,
             });
             ranked_selections.push(RankedSelection {
-                method: selector.method(),
+                method,
                 skill_resources: selected_ids
                     .iter()
                     .map(|id| normalize_skill_resource(catalog.entries[*id].main_prompt.as_str()))
                     .collect(),
             });
             tracing::debug!(
-                method = selector.method(),
+                method,
                 catalog_entries = documents.len(),
                 selected_entries = selected_ids.len(),
                 query_terms = selection.query_term_count,
@@ -179,12 +203,29 @@ impl ShadowSelectionExperiment {
             );
         }
 
+        // Explicit intent is a relevance signal even if the subsequent prompt read fails.
+        // Keep it out of the implicit-only controls and freeze predictions before recording it.
+        for entry in explicitly_selected.iter().filter(|entry| {
+            entry.is_model_visible()
+                && matches!(
+                    &entry.authority.kind,
+                    SkillSourceKind::Host | SkillSourceKind::Orchestrator
+                )
+        }) {
+            task_context.record(
+                &input.turn_id,
+                normalize_skill_resource(entry.main_prompt.as_str()),
+            );
+        }
+
         ShadowSelectionTurnState {
             ranked_selections,
+            turn_id: input.turn_id.clone(),
             query_script,
             eligible_skill_resources,
             seen_skill_resources: Mutex::new(HashSet::new()),
             recent_skill_invocations,
+            task_context,
         }
     }
 
@@ -204,6 +245,9 @@ impl ShadowSelectionExperiment {
         state
             .recent_skill_invocations
             .record(skill_resource.clone());
+        state
+            .task_context
+            .record(&state.turn_id, skill_resource.clone());
         let Some(metrics_client) = self.metrics_client.as_ref() else {
             return;
         };
@@ -274,10 +318,12 @@ impl ShadowSelectionExperiment {
 
 pub(crate) struct ShadowSelectionTurnState {
     ranked_selections: Vec<RankedSelection>,
+    turn_id: String,
     query_script: &'static str,
     eligible_skill_resources: HashSet<String>,
     seen_skill_resources: Mutex<HashSet<String>>,
     recent_skill_invocations: Arc<RecentSkillInvocations>,
+    task_context: Arc<ShadowTaskContext>,
 }
 
 #[derive(Default)]
@@ -435,6 +481,7 @@ fn is_cjk(character: char) -> bool {
     )
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct ShadowQuery {
     text: String,
     truncated: bool,
@@ -479,5 +526,5 @@ fn push_bounded(destination: &mut String, value: &str) -> bool {
 }
 
 #[cfg(test)]
-#[path = "shadow_selection_experiment_tests.rs"]
+#[path = "experiment_tests.rs"]
 mod tests;

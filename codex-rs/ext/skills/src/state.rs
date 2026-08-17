@@ -23,6 +23,7 @@ use crate::provider::SkillListQuery;
 use crate::provider::SkillReadRequest;
 use crate::shadow_selection_experiment::RecentSkillInvocations;
 use crate::shadow_selection_experiment::ShadowSelectionTurnState;
+use crate::shadow_selection_experiment::ShadowTaskContext;
 use crate::sources::SkillProviders;
 
 const MAX_CACHED_ORCHESTRATOR_RESOURCES: usize = 100;
@@ -41,6 +42,7 @@ pub(crate) struct SkillsThreadState {
     orchestrator_cache: Mutex<Option<Arc<OrchestratorGenerationCache>>>,
     shadow_selection_turn: Mutex<Option<ShadowSelectionTurn>>,
     pub(crate) recent_skill_invocations: Arc<RecentSkillInvocations>,
+    pub(crate) shadow_task_context: Arc<ShadowTaskContext>,
 }
 
 impl SkillsThreadState {
@@ -53,6 +55,7 @@ impl SkillsThreadState {
             orchestrator_cache: Mutex::new(None),
             shadow_selection_turn: Mutex::new(None),
             recent_skill_invocations: Arc::new(RecentSkillInvocations::default()),
+            shadow_task_context: Arc::new(ShadowTaskContext::default()),
         }
     }
 

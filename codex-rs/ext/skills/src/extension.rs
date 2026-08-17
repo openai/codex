@@ -395,11 +395,12 @@ where
                 let shadow_selected_entries =
                     collect_explicit_skill_mentions(&input.user_input, &shadow_catalog);
                 Some(self.shadow_selection.run(
-                    &input.user_input,
+                    &input,
                     &shadow_catalog,
                     &shadow_selected_entries,
                     host_snapshot.as_deref(),
                     Arc::clone(&thread_state.recent_skill_invocations),
+                    Arc::clone(&thread_state.shadow_task_context),
                 ))
             } else {
                 None
