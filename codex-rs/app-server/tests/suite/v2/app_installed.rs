@@ -14,7 +14,6 @@ use app_test_support::write_chatgpt_auth;
 use axum::Json;
 use axum::Router;
 use axum::extract::State;
-use axum::http::StatusCode;
 use axum::routing::get;
 use codex_app_server_protocol::AppsInstalledParams;
 use codex_app_server_protocol::AppsInstalledResponse;
@@ -52,7 +51,6 @@ async fn installed_apps_force_refresh_only_refreshes_tools_snapshot() -> Result<
     let initially_empty = send_installed_request(&mut app_server, /*force_refresh*/ false).await?;
     assert_eq!(initially_empty, AppsInstalledResponse { apps: Vec::new() });
     assert_eq!(fixture.list_tools_calls(), 0);
-    assert_eq!(fixture.workspace_settings_calls(), 1);
 
     let refreshed = send_installed_request(&mut app_server, /*force_refresh*/ true).await?;
     assert_eq!(
@@ -79,12 +77,10 @@ async fn installed_apps_force_refresh_only_refreshes_tools_snapshot() -> Result<
         ]
     );
     assert_eq!(fixture.list_tools_calls(), 1);
-    assert_eq!(fixture.workspace_settings_calls(), 1);
 
     let cached = send_installed_request(&mut app_server, /*force_refresh*/ false).await?;
     assert_eq!(cached, refreshed);
     assert_eq!(fixture.list_tools_calls(), 1);
-    assert_eq!(fixture.workspace_settings_calls(), 1);
 
     fixture.set_tools(Vec::new());
     let empty = send_installed_request(&mut app_server, /*force_refresh*/ true).await?;
@@ -94,64 +90,7 @@ async fn installed_apps_force_refresh_only_refreshes_tools_snapshot() -> Result<
     let cached_empty = send_installed_request(&mut app_server, /*force_refresh*/ false).await?;
     assert_eq!(cached_empty, empty);
     assert_eq!(fixture.list_tools_calls(), 2);
-    assert_eq!(fixture.workspace_settings_calls(), 1);
     assert_eq!(fixture.directory_calls(), 0);
-    Ok(())
-}
-
-#[tokio::test]
-async fn installed_apps_workspace_policy_retains_identities_as_disabled() -> Result<()> {
-    let fixture = InstalledAppsFixture::start().await?;
-    let codex_home = configured_codex_home(fixture.base_url())?;
-    let committed = {
-        let mut app_server = start_app_server(codex_home.path()).await?;
-        send_installed_request(&mut app_server, /*force_refresh*/ true).await?
-    };
-    let mut expected_disabled = committed;
-    for app in &mut expected_disabled.apps {
-        app.enabled = false;
-        app.callable = false;
-    }
-
-    fixture.set_workspace_plugins_enabled(/*enabled*/ false);
-    let mut app_server = start_app_server(codex_home.path()).await?;
-    let cold_cached = send_installed_request(&mut app_server, /*force_refresh*/ false).await?;
-    assert_eq!(cold_cached, expected_disabled);
-    assert_eq!(fixture.workspace_settings_calls(), 2);
-    let workspace_settings_calls = fixture.workspace_settings_calls();
-
-    let blocked = send_installed_request(&mut app_server, /*force_refresh*/ true).await?;
-    assert_eq!(blocked, expected_disabled);
-    assert_eq!(fixture.list_tools_calls(), 1);
-    assert_eq!(fixture.workspace_settings_calls(), workspace_settings_calls);
-    Ok(())
-}
-
-#[tokio::test]
-async fn installed_apps_workspace_policy_failure_does_not_block_force_refresh() -> Result<()> {
-    let fixture = InstalledAppsFixture::start().await?;
-    fixture
-        .state
-        .fail_workspace_settings
-        .store(true, Ordering::SeqCst);
-    fixture.set_tools(vec![connector_tool("alpha", "Alpha Tool Name")?]);
-    let codex_home = configured_codex_home(fixture.base_url())?;
-    let mut app_server = start_app_server(codex_home.path()).await?;
-
-    let refreshed = send_installed_request(&mut app_server, /*force_refresh*/ true).await?;
-    assert_eq!(
-        refreshed,
-        AppsInstalledResponse {
-            apps: vec![InstalledApp {
-                id: "alpha".to_string(),
-                runtime_name: Some("Alpha Tool Name".to_string()),
-                enabled: true,
-                callable: true,
-            }],
-        }
-    );
-    assert_eq!(fixture.workspace_settings_calls(), 1);
-    assert_eq!(fixture.list_tools_calls(), 1);
     Ok(())
 }
 
@@ -179,7 +118,6 @@ async fn installed_apps_global_disable_retains_tool_derived_identities() -> Resu
     let force_refresh = send_installed_request(&mut app_server, /*force_refresh*/ true).await?;
     assert_eq!(force_refresh, cached);
     assert_eq!(fixture.list_tools_calls(), 1);
-    assert_eq!(fixture.workspace_settings_calls(), 1);
 
     Ok(())
 }
@@ -345,9 +283,6 @@ struct InstalledAppsServerState {
     tools: Mutex<Vec<Tool>>,
     list_tools_calls: AtomicUsize,
     directory_calls: AtomicUsize,
-    workspace_settings_calls: AtomicUsize,
-    workspace_plugins_enabled: AtomicBool,
-    fail_workspace_settings: AtomicBool,
     fail_next: AtomicBool,
 }
 
@@ -382,9 +317,6 @@ impl InstalledAppsFixture {
             ]),
             list_tools_calls: AtomicUsize::new(0),
             directory_calls: AtomicUsize::new(0),
-            workspace_settings_calls: AtomicUsize::new(0),
-            workspace_plugins_enabled: AtomicBool::new(true),
-            fail_workspace_settings: AtomicBool::new(false),
             fail_next: AtomicBool::new(false),
         });
         let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -407,7 +339,6 @@ impl InstalledAppsFixture {
                 "/connectors/directory/list_workspace",
                 get(list_directory_apps),
             )
-            .route("/accounts/account-123/settings", get(workspace_settings))
             .nest_service("/api/codex/ps/mcp", mcp_service)
             .with_state(Arc::clone(&state));
         let handle = tokio::spawn(async move {
@@ -440,16 +371,6 @@ impl InstalledAppsFixture {
         self.state.directory_calls.load(Ordering::SeqCst)
     }
 
-    fn workspace_settings_calls(&self) -> usize {
-        self.state.workspace_settings_calls.load(Ordering::SeqCst)
-    }
-
-    fn set_workspace_plugins_enabled(&self, enabled: bool) {
-        self.state
-            .workspace_plugins_enabled
-            .store(enabled, Ordering::SeqCst);
-    }
-
     fn fail_next_list_tools(&self) {
         self.state.fail_next.store(true, Ordering::SeqCst);
     }
@@ -466,24 +387,4 @@ async fn list_directory_apps(
 ) -> Json<serde_json::Value> {
     state.directory_calls.fetch_add(1, Ordering::SeqCst);
     Json(json!({ "apps": [], "next_token": null }))
-}
-
-async fn workspace_settings(
-    State(state): State<Arc<InstalledAppsServerState>>,
-) -> (StatusCode, Json<serde_json::Value>) {
-    state
-        .workspace_settings_calls
-        .fetch_add(1, Ordering::SeqCst);
-    let enabled = state.workspace_plugins_enabled.load(Ordering::SeqCst);
-    let status = if state.fail_workspace_settings.load(Ordering::SeqCst) {
-        StatusCode::INTERNAL_SERVER_ERROR
-    } else {
-        StatusCode::OK
-    };
-    (
-        status,
-        Json(json!({
-            "beta_settings": { "enable_plugins": enabled }
-        })),
-    )
 }

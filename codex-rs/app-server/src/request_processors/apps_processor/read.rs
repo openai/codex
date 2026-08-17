@@ -31,9 +31,6 @@ impl AppsRequestProcessor {
         if !config
             .features
             .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::uses_codex_backend))
-            || !self
-                .workspace_codex_plugins_enabled(&config, auth.as_ref())
-                .await
         {
             let response = AppsReadResponse {
                 apps: Vec::new(),

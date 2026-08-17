@@ -66,7 +66,6 @@ use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::experimental_required_message;
 use codex_arg0::Arg0DispatchPaths;
-use codex_chatgpt::workspace_settings;
 use codex_code_mode::CodeModeSessionProvider;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
@@ -372,8 +371,6 @@ impl MessageProcessor {
         let thread_watch_manager =
             crate::thread_status::ThreadWatchManager::new_with_outgoing(outgoing.clone());
         let thread_list_state_permit = Arc::new(Semaphore::new(/*permits*/ 1));
-        let workspace_settings_cache =
-            Arc::new(workspace_settings::WorkspaceSettingsCache::default());
         let app_list_shutdown_token = CancellationToken::new();
         let request_serialization_queues = RequestSerializationQueues::default();
         let config_processor = ConfigRequestProcessor::new(
@@ -402,17 +399,14 @@ impl MessageProcessor {
             Arc::clone(&thread_manager),
             outgoing.clone(),
             config_manager.clone(),
-            Arc::clone(&workspace_settings_cache),
             app_list_shutdown_token,
         );
         let catalog_processor = CatalogRequestProcessor::new(
             outgoing.clone(),
             Arc::clone(&skills_watcher),
-            auth_manager.clone(),
             Arc::clone(&thread_manager),
             Arc::clone(&config),
             config_manager.clone(),
-            Arc::clone(&workspace_settings_cache),
         );
         let command_exec_processor = CommandExecRequestProcessor::new(
             arg0_paths.clone(),
@@ -458,7 +452,6 @@ impl MessageProcessor {
             outgoing.clone(),
             analytics_events_client.clone(),
             config_manager.clone(),
-            workspace_settings_cache,
             on_effective_plugins_changed,
         );
         let remote_control_processor = RemoteControlRequestProcessor::new(remote_control_handle);

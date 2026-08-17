@@ -49,13 +49,6 @@ impl PluginRequestProcessor {
         let plugin_sharing_enabled = config.features.enabled(Feature::PluginSharing);
 
         let auth = self.auth_manager.auth().await;
-        if !self
-            .workspace_codex_plugins_enabled(&config, auth.as_ref())
-            .await
-        {
-            return Ok(empty_response());
-        }
-
         let auth_mode = auth.as_ref().map(CodexAuth::api_auth_mode);
         self.thread_manager
             .plugins_manager()

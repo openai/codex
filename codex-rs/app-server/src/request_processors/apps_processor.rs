@@ -12,7 +12,6 @@ pub(crate) struct AppsRequestProcessor {
     thread_manager: Arc<ThreadManager>,
     outgoing: Arc<OutgoingMessageSender>,
     config_manager: ConfigManager,
-    workspace_settings_cache: Arc<workspace_settings::WorkspaceSettingsCache>,
     shutdown_token: CancellationToken,
     _shutdown_drop_guard: DropGuard,
 }
@@ -23,7 +22,6 @@ impl AppsRequestProcessor {
         thread_manager: Arc<ThreadManager>,
         outgoing: Arc<OutgoingMessageSender>,
         config_manager: ConfigManager,
-        workspace_settings_cache: Arc<workspace_settings::WorkspaceSettingsCache>,
         shutdown_token: CancellationToken,
     ) -> Self {
         let shutdown_drop_guard = shutdown_token.clone().drop_guard();
@@ -32,7 +30,6 @@ impl AppsRequestProcessor {
             thread_manager,
             outgoing,
             config_manager,
-            workspace_settings_cache,
             shutdown_token,
             _shutdown_drop_guard: shutdown_drop_guard,
         }
@@ -77,18 +74,6 @@ impl AppsRequestProcessor {
         if !config
             .features
             .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::uses_codex_backend))
-        {
-            let response = AppsListResponse {
-                data: Vec::new(),
-                next_cursor: None,
-            };
-            record_legacy_apps_installed_duration(installed_start, reload);
-            return Ok(Some(response));
-        }
-
-        if !self
-            .workspace_codex_plugins_enabled(&config, auth.as_ref())
-            .await
         {
             let response = AppsListResponse {
                 data: Vec::new(),
@@ -379,28 +364,6 @@ impl AppsRequestProcessor {
             .load_latest_config_for_thread(thread_config.as_ref())
             .await
             .map_err(|err| internal_error(format!("failed to reload config: {err}")))
-    }
-
-    async fn workspace_codex_plugins_enabled(
-        &self,
-        config: &Config,
-        auth: Option<&CodexAuth>,
-    ) -> bool {
-        match workspace_settings::codex_plugins_enabled_for_workspace(
-            config,
-            auth,
-            Some(&self.workspace_settings_cache),
-        )
-        .await
-        {
-            Ok(enabled) => enabled,
-            Err(err) => {
-                warn!(
-                    "failed to fetch workspace Codex plugins setting; allowing Codex plugins: {err:#}"
-                );
-                true
-            }
-        }
     }
 }
 
