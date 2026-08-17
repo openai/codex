@@ -1072,10 +1072,36 @@ async fn run_ratatui_app(
             }
         }
     }
+    let remote_project_trust =
+        if uses_remote_workspace && let Some(remote_cwd) = remote_cwd_override.as_deref() {
+            match startup_draft
+                .run_until(
+                    &mut tui,
+                    config_update::read_remote_project_trust(
+                        app_server_session.request_handle(),
+                        remote_cwd,
+                    ),
+                )
+                .await
+            {
+                Ok(Ok(remote_project_trust)) => remote_project_trust,
+                Ok(Err(err)) => {
+                    shutdown_startup_session(Some(app_server_session), &mut terminal_restore_guard)
+                        .await;
+                    return Err(err);
+                }
+                Err(err) => {
+                    shutdown_startup_session(Some(app_server_session), &mut terminal_restore_guard)
+                        .await;
+                    return Err(err.into());
+                }
+            }
+        } else {
+            None
+        };
     let mut app_server = Some(app_server_session);
-
-    let should_show_trust_screen_flag =
-        !uses_remote_workspace && should_show_trust_screen(&initial_config);
+    let should_show_trust_screen_flag = remote_project_trust.is_some()
+        || (!uses_remote_workspace && should_show_trust_screen(&initial_config));
     #[cfg(target_os = "windows")]
     let mut trust_decision_was_made = false;
     let startup_model_provider = initial_config.model_provider_id.clone();
@@ -1117,6 +1143,7 @@ async fn run_ratatui_app(
             OnboardingScreenArgs {
                 show_login_screen,
                 show_trust_screen: should_show_trust_screen_flag,
+                remote_project_trust,
                 login_status,
                 app_server_request_handle: app_server
                     .as_ref()
@@ -1151,7 +1178,8 @@ async fn run_ratatui_app(
         }
         #[cfg(target_os = "windows")]
         {
-            trust_decision_was_made = onboarding_result.directory_trust_persisted;
+            trust_decision_was_made =
+                !uses_remote_workspace && onboarding_result.directory_trust_persisted;
         }
         let reloaded_config = startup_draft
             .run_until(&mut tui, async {
@@ -1168,8 +1196,8 @@ async fn run_ratatui_app(
 
                 // Reload config when persisted trust or auth changes alter the current process.
                 Ok::<_, std::io::Error>(
-                    if onboarding_result.directory_trust_persisted
-                        || (show_login_screen && !uses_remote_workspace)
+                    if !uses_remote_workspace
+                        && (onboarding_result.directory_trust_persisted || show_login_screen)
                     {
                         load_config_or_exit(
                             cli_kv_overrides.clone(),

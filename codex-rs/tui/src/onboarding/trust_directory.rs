@@ -127,7 +127,7 @@ impl WidgetRef for &TrustDirectoryWidget {
 
 impl KeyboardHandler for TrustDirectoryWidget {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
-        if key_event.kind == KeyEventKind::Release {
+        if key_event.kind != KeyEventKind::Press {
             return;
         }
 
@@ -222,6 +222,11 @@ mod tests {
         widget.handle_key_event(release);
         assert_eq!(widget.selection, None);
 
+        let repeat =
+            KeyEvent::new_with_kind(KeyCode::Enter, KeyModifiers::NONE, KeyEventKind::Repeat);
+        widget.handle_key_event(repeat);
+        assert_eq!(widget.selection, None);
+
         let press = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
         widget.handle_key_event(press);
         assert!(widget.should_quit);
@@ -238,6 +243,31 @@ mod tests {
             .expect("draw");
 
         insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn renders_snapshot_for_remote_git_subdirectory() {
+        let widget = TrustDirectoryWidget {
+            cwd: PathBuf::from("/srv/remote/project/nested"),
+            trust_target: PathBuf::from("/srv/remote/project"),
+            ..widget(/*error*/ None)
+        };
+
+        let mut terminal =
+            Terminal::new(VT100Backend::new(/*width*/ 70, /*height*/ 18)).expect("terminal");
+        terminal
+            .draw(|f| (&widget).render_ref(f.area(), f.buffer_mut()))
+            .expect("draw");
+
+        insta::assert_snapshot!(
+            terminal
+                .backend()
+                .to_string()
+                .lines()
+                .map(str::trim_end)
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
     }
 
     #[test]

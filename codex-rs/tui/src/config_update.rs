@@ -11,21 +11,32 @@ use codex_app_server_protocol::ConfigEdit;
 use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigReadResponse;
 use codex_app_server_protocol::ConfigWriteResponse;
+use codex_app_server_protocol::EnvironmentInfoParams;
+use codex_app_server_protocol::EnvironmentInfoResponse;
 use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SkillsConfigWriteParams;
 use codex_app_server_protocol::SkillsConfigWriteResponse;
 use codex_config::loader::project_trust_key;
+use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_features::FEATURES;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::TrustLevel;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::LegacyAppPathString;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use serde_json::Value as JsonValue;
 use std::fmt::Display;
 use std::path::Path;
+use std::path::PathBuf;
 use uuid::Uuid;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RemoteProjectTrust {
+    pub cwd: PathBuf,
+    pub trust_target: PathBuf,
+}
 
 pub(crate) fn replace_config_value(key_path: impl Into<String>, value: JsonValue) -> ConfigEdit {
     ConfigEdit {
@@ -185,6 +196,116 @@ pub(crate) async fn read_effective_config(
         })
         .await
         .wrap_err("config/read failed in TUI")
+}
+
+pub(crate) async fn read_remote_project_trust(
+    request_handle: AppServerRequestHandle,
+    cwd: &Path,
+) -> Result<Option<RemoteProjectTrust>> {
+    let cwd_string = cwd.to_string_lossy().into_owned();
+    let cwd = match LegacyAppPathString::from_string(cwd_string.clone()).to_inferred_path_uri() {
+        Some(cwd) => cwd,
+        None => {
+            let request_id = RequestId::String(format!("tui-environment-info-{}", Uuid::new_v4()));
+            let environment: EnvironmentInfoResponse = request_handle
+                .request_typed(ClientRequest::EnvironmentInfo {
+                    request_id,
+                    params: EnvironmentInfoParams {
+                        environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
+                    },
+                })
+                .await
+                .wrap_err("environment/info failed while resolving remote project trust")?;
+            environment
+                .cwd
+                .ok_or_else(|| color_eyre::eyre::eyre!("remote app server did not provide a cwd"))?
+                .join(&cwd_string)
+                .wrap_err("failed to resolve the remote project directory")?
+        }
+    };
+    let cwd_uri = cwd;
+    let cwd = cwd_uri.inferred_native_path_string();
+    let request_id = RequestId::String(format!("tui-project-trust-read-{}", Uuid::new_v4()));
+    let response: JsonValue = request_handle
+        .request_typed(ClientRequest::ConfigRead {
+            request_id,
+            params: ConfigReadParams {
+                include_layers: true,
+                cwd: Some(cwd.clone()),
+            },
+        })
+        .await
+        .wrap_err("config/read failed while checking remote project trust")?;
+    let project_layers = response
+        .get("layers")
+        .and_then(JsonValue::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|layer| layer["name"]["type"] == "project")
+        .collect::<Vec<_>>();
+    let disabled_project = project_layers.iter().rev().find(|layer| {
+        layer
+            .get("disabledReason")
+            .and_then(JsonValue::as_str)
+            .is_some()
+    });
+    let disabled_reason = disabled_project
+        .and_then(|layer| layer.get("disabledReason"))
+        .and_then(JsonValue::as_str);
+    let trust_target = disabled_reason
+        .and_then(|reason| reason.split_once(", add "))
+        .and_then(|(_, reason)| reason.rsplit_once(" as a trusted project in "))
+        .map(|(trust_target, _)| trust_target)
+        .or_else(|| {
+            disabled_project
+                .and_then(|layer| layer["name"]["dotCodexFolder"].as_str())
+                .and_then(|path| {
+                    path.strip_suffix("/.codex")
+                        .or_else(|| path.strip_suffix("\\.codex"))
+                })
+        })
+        .unwrap_or(&cwd);
+    let projects = response["config"]["projects"].as_object();
+    let has_trust_decision = projects
+        .and_then(|projects| projects.get(trust_target))
+        .and_then(|project| project.get("trust_level"))
+        .and_then(JsonValue::as_str)
+        .is_some_and(|level| matches!(level, "trusted" | "untrusted"));
+    let explicitly_untrusted = disabled_reason.is_some_and(|reason| {
+        projects.into_iter().flatten().any(|(path, project)| {
+            project.get("trust_level").and_then(JsonValue::as_str) == Some("untrusted")
+                && reason
+                    .strip_prefix(path)
+                    .is_some_and(|suffix| suffix.starts_with(" is marked as untrusted"))
+        })
+    });
+    if has_trust_decision
+        || explicitly_untrusted
+        || (disabled_project.is_none()
+            && project_layers
+                .iter()
+                .any(|layer| layer.get("disabledReason").is_none()))
+    {
+        return Ok(None);
+    }
+
+    if project_layers.is_empty()
+        && projects.into_iter().flatten().any(|(path, project)| {
+            project.get("trust_level").and_then(JsonValue::as_str) == Some("untrusted")
+                && LegacyAppPathString::from_string(path.clone())
+                    .to_inferred_path_uri()
+                    .is_some_and(|project_uri| cwd_uri.starts_with(&project_uri))
+        })
+    {
+        return Err(color_eyre::eyre::eyre!(
+            "remote project directory is inside an explicitly untrusted project; pass the repository root explicitly with --cd"
+        ));
+    }
+
+    Ok(Some(RemoteProjectTrust {
+        cwd: PathBuf::from(&cwd),
+        trust_target: PathBuf::from(trust_target),
+    }))
 }
 
 pub(crate) async fn write_skill_enabled(

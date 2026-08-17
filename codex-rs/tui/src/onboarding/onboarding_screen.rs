@@ -12,6 +12,9 @@
 
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_client::AppServerRequestHandle;
+use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::ConfigBatchWriteParams;
+use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_exec_server::LOCAL_FS;
 use codex_git_utils::resolve_root_git_project_for_trust;
@@ -32,7 +35,9 @@ use codex_protocol::config_types::ForcedLoginMethod;
 
 use crate::LoginStatus;
 use crate::app_server_session::AppServerSession;
+use crate::config_update::RemoteProjectTrust;
 use crate::config_update::format_config_error;
+use crate::config_update::replace_config_value;
 use crate::config_update::write_trusted_project;
 use crate::key_hint::KeyBindingListExt;
 use crate::legacy_core::config::Config;
@@ -47,8 +52,10 @@ use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
 use color_eyre::eyre::Result;
+use color_eyre::eyre::WrapErr;
 use std::sync::Arc;
 use std::sync::RwLock;
+use uuid::Uuid;
 
 #[allow(clippy::large_enum_variant)]
 enum Step {
@@ -76,12 +83,14 @@ pub(crate) trait StepStateProvider {
 pub(crate) struct OnboardingScreen {
     request_frame: FrameRequester,
     steps: Vec<Step>,
+    remote_trust_key: Option<String>,
     is_done: bool,
     should_exit: bool,
 }
 
 pub(crate) struct OnboardingScreenArgs {
     pub show_trust_screen: bool,
+    pub remote_project_trust: Option<RemoteProjectTrust>,
     pub show_login_screen: bool,
     pub login_status: LoginStatus,
     pub app_server_request_handle: Option<AppServerRequestHandle>,
@@ -105,12 +114,16 @@ impl OnboardingScreen {
     pub(crate) async fn new(tui: &mut Tui, args: OnboardingScreenArgs) -> Self {
         let OnboardingScreenArgs {
             show_trust_screen,
+            remote_project_trust,
             show_login_screen,
             login_status,
             app_server_request_handle,
             config,
         } = args;
         let cwd = config.cwd.to_path_buf();
+        let remote_trust_key = remote_project_trust
+            .as_ref()
+            .map(|project| project.trust_target.to_string_lossy().into_owned());
         let auth_config = config.auth_config();
         let mut steps: Vec<Step> = Vec::new();
         steps.push(Step::Welcome(WelcomeWidget::new(
@@ -142,16 +155,23 @@ impl OnboardingScreen {
             }
         }
         #[cfg(target_os = "windows")]
-        let show_windows_create_sandbox_hint =
-            crate::windows_sandbox::level_from_config(&config) == WindowsSandboxLevel::Disabled;
+        let show_windows_create_sandbox_hint = remote_project_trust.is_none()
+            && crate::windows_sandbox::level_from_config(&config) == WindowsSandboxLevel::Disabled;
         #[cfg(not(target_os = "windows"))]
         let show_windows_create_sandbox_hint = false;
         let highlighted = TrustDirectorySelection::Trust;
         if show_trust_screen {
-            let trust_target = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &config.cwd)
-                .await
-                .map(Into::into)
-                .unwrap_or_else(|| cwd.clone());
+            let (cwd, trust_target) = match remote_project_trust {
+                Some(RemoteProjectTrust { cwd, trust_target }) => (cwd, trust_target),
+                None => {
+                    let trust_target =
+                        resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &config.cwd)
+                            .await
+                            .map(Into::into)
+                            .unwrap_or_else(|| cwd.clone());
+                    (cwd, trust_target)
+                }
+            };
             steps.push(Step::TrustDirectory(TrustDirectoryWidget {
                 cwd,
                 trust_target,
@@ -165,6 +185,7 @@ impl OnboardingScreen {
         Self {
             request_frame: tui.frame_requester(),
             steps,
+            remote_trust_key,
             is_done: false,
             should_exit: false,
         }
@@ -304,6 +325,8 @@ impl KeyboardHandler for OnboardingScreen {
                 self.cancel_auth_if_active();
                 // If the user cancels the auth menu, exit the app rather than
                 // leave the user at a prompt in an unauthed state.
+                self.should_exit = true;
+            } else if self.is_trust_step_active() {
                 self.should_exit = true;
             }
             self.is_done = true;
@@ -635,11 +658,36 @@ async fn persist_selected_trust(
         return false;
     };
 
-    let result = match request_handle {
-        Some(request_handle) => write_trusted_project(request_handle, &trust_target)
+    let result = match (
+        request_handle,
+        onboarding_screen.remote_trust_key.as_deref(),
+    ) {
+        (Some(request_handle), Some(project_key)) => {
+            let project_key = project_key.replace('\\', "\\\\").replace('"', "\\\"");
+            request_handle
+                .request_typed::<serde_json::Value>(ClientRequest::ConfigBatchWrite {
+                    request_id: RequestId::String(format!(
+                        "tui-project-trust-write-{}",
+                        Uuid::new_v4()
+                    )),
+                    params: ConfigBatchWriteParams {
+                        edits: vec![replace_config_value(
+                            format!("projects.\"{project_key}\".trust_level"),
+                            serde_json::json!("trusted"),
+                        )],
+                        file_path: None,
+                        expected_version: None,
+                        reload_user_config: true,
+                    },
+                })
+                .await
+                .map(|_| ())
+                .wrap_err("config/batchWrite failed while persisting remote project trust")
+        }
+        (Some(request_handle), None) => write_trusted_project(request_handle, &trust_target)
             .await
             .map(|_| ()),
-        None => Err(color_eyre::eyre::eyre!("app server unavailable")),
+        (None, _) => Err(color_eyre::eyre::eyre!("app server unavailable")),
     };
 
     match result {
@@ -742,6 +790,7 @@ mod tests {
                 highlighted: TrustDirectorySelection::Trust,
                 error: None,
             })],
+            remote_trust_key: None,
             is_done: false,
             should_exit: false,
         };
@@ -787,6 +836,8 @@ mod tests {
             panic!("trust step should remain present");
         };
         assert_eq!(widget.highlighted, TrustDirectorySelection::Quit);
+        onboarding_screen.handle_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
+        assert!(onboarding_screen.should_exit());
     }
 
     #[tokio::test]
@@ -802,6 +853,7 @@ mod tests {
                 highlighted: TrustDirectorySelection::Trust,
                 error: None,
             })],
+            remote_trust_key: None,
             is_done: false,
             should_exit: false,
         };
