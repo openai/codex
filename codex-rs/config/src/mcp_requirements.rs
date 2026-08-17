@@ -1,131 +1,57 @@
+use crate::McpServerIdentity;
+use crate::McpServerRequirement;
+use crate::McpServerValueMatcher;
 use crate::mcp_types::McpServerConfig;
 use crate::mcp_types::McpServerTransportConfig;
 use regex_lite::Regex;
-use serde::Deserialize;
 
-#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
-#[serde(untagged)]
-pub enum McpServerIdentity {
-    Command { command: String },
-    Url { url: String },
+fn compile_full_regex(expression: &str) -> Result<Regex, String> {
+    Regex::new(&format!(r"\A(?:{expression})\z")).map_err(|err| {
+        format!("regex `{expression}` cannot be used for full-value matching: {err}")
+    })
 }
 
-/// String matching operations available to managed MCP server matchers.
-#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
-#[serde(tag = "match", rename_all = "snake_case", deny_unknown_fields)]
-pub enum McpServerValueMatcher {
-    Exact { value: String },
-    Prefix { value: String },
-    Regex { expression: String },
+fn validate_value_matcher(matcher: &McpServerValueMatcher) -> Result<(), String> {
+    let McpServerValueMatcher::Regex { expression } = matcher else {
+        return Ok(());
+    };
+
+    Regex::new(expression).map_err(|err| format!("invalid regex `{expression}`: {err}"))?;
+    compile_full_regex(expression).map(|_| ())
 }
 
-impl McpServerValueMatcher {
-    fn compile_full_regex(expression: &str) -> Result<Regex, String> {
-        Regex::new(&format!(r"\A(?:{expression})\z")).map_err(|err| {
-            format!("regex `{expression}` cannot be used for full-value matching: {err}")
-        })
-    }
-
-    fn validate(&self) -> Result<(), String> {
-        let Self::Regex { expression } = self else {
-            return Ok(());
-        };
-
-        Regex::new(expression).map_err(|err| format!("invalid regex `{expression}`: {err}"))?;
-        Self::compile_full_regex(expression).map(|_| ())
-    }
-
-    fn matches(&self, candidate: &str) -> bool {
-        match self {
-            Self::Exact { value } => candidate == value,
-            Self::Prefix { value } => candidate.starts_with(value),
-            Self::Regex { expression } => Self::compile_full_regex(expression)
-                .ok()
-                .is_some_and(|regex| regex.is_match(candidate)),
-        }
+fn matches_value(matcher: &McpServerValueMatcher, candidate: &str) -> bool {
+    match matcher {
+        McpServerValueMatcher::Exact { value } => candidate == value,
+        McpServerValueMatcher::Prefix { value } => candidate.starts_with(value),
+        McpServerValueMatcher::Regex { expression } => compile_full_regex(expression)
+            .ok()
+            .is_some_and(|regex| regex.is_match(candidate)),
     }
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct McpServerCommandMatcher {
-    pub executable: String,
-    pub args: Vec<McpServerValueMatcher>,
-}
-
-#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-struct RawMcpServerCommandIdentity {
-    command: McpServerCommandMatcher,
-}
-
-#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-struct RawMcpServerUrlIdentity {
-    url: McpServerValueMatcher,
-}
-
-/// A requirement for one named MCP server.
-///
-/// The `Identity` variant preserves the released exact-match contract. The
-/// command and URL variants are the normalized matcher-based forms accepted
-/// under the `identity` key.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum McpServerRequirement {
-    Identity { identity: McpServerIdentity },
-    Command(McpServerCommandMatcher),
-    Url(McpServerValueMatcher),
-}
-
-#[derive(Deserialize)]
-struct RawMcpServerRequirement {
-    identity: RawMcpServerIdentity,
-}
-
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum RawMcpServerIdentity {
-    Exact(McpServerIdentity),
-    Command(RawMcpServerCommandIdentity),
-    Url(RawMcpServerUrlIdentity),
-}
-
-impl<'de> Deserialize<'de> for McpServerRequirement {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let RawMcpServerRequirement { identity } =
-            RawMcpServerRequirement::deserialize(deserializer)?;
-        match identity {
-            RawMcpServerIdentity::Exact(identity) => Ok(Self::Identity { identity }),
-            RawMcpServerIdentity::Command(matcher) => Ok(Self::Command(matcher.command)),
-            RawMcpServerIdentity::Url(matcher) => Ok(Self::Url(matcher.url)),
-        }
-    }
-}
-
-impl McpServerRequirement {
-    pub(crate) fn validate(&self) -> Result<(), String> {
-        match self {
-            Self::Identity { .. } => Ok(()),
-            Self::Command(matcher) => {
-                for (index, arg) in matcher.args.iter().enumerate() {
-                    arg.validate().map_err(|err| {
-                        format!("invalid argument matcher at index {index}: {err}")
-                    })?;
-                }
-                Ok(())
+pub(crate) fn validate_mcp_server_requirement(
+    requirement: &McpServerRequirement,
+) -> Result<(), String> {
+    match requirement {
+        McpServerRequirement::Identity { .. } => Ok(()),
+        McpServerRequirement::Command(matcher) => {
+            for (index, arg) in matcher.args.iter().enumerate() {
+                validate_value_matcher(arg)
+                    .map_err(|err| format!("invalid argument matcher at index {index}: {err}"))?;
             }
-            Self::Url(matcher) => matcher.validate(),
+            Ok(())
         }
+        McpServerRequirement::Url(matcher) => validate_value_matcher(matcher),
     }
+}
 
-    pub fn matches(&self, server: &McpServerConfig) -> bool {
+impl McpServerConfig {
+    pub fn matches_requirement(&self, requirement: &McpServerRequirement) -> bool {
         // HTTP requirements intentionally authorize the complete server configuration by URL.
-        match (self, &server.transport) {
+        match (requirement, &self.transport) {
             (
-                Self::Identity {
+                McpServerRequirement::Identity {
                     identity:
                         McpServerIdentity::Command {
                             command: want_command,
@@ -137,23 +63,27 @@ impl McpServerRequirement {
                 },
             ) => got_command == want_command,
             (
-                Self::Identity {
+                McpServerRequirement::Identity {
                     identity: McpServerIdentity::Url { url: want_url },
                 },
                 McpServerTransportConfig::StreamableHttp { url: got_url, .. },
             ) => got_url == want_url,
-            (Self::Command(matcher), McpServerTransportConfig::Stdio { command, args, .. }) => {
+            (
+                McpServerRequirement::Command(matcher),
+                McpServerTransportConfig::Stdio { command, args, .. },
+            ) => {
                 matcher.executable == *command
                     && matcher.args.len() == args.len()
                     && matcher
                         .args
                         .iter()
                         .zip(args)
-                        .all(|(matcher, arg)| matcher.matches(arg))
+                        .all(|(matcher, arg)| matches_value(matcher, arg))
             }
-            (Self::Url(matcher), McpServerTransportConfig::StreamableHttp { url, .. }) => {
-                matcher.matches(url)
-            }
+            (
+                McpServerRequirement::Url(matcher),
+                McpServerTransportConfig::StreamableHttp { url, .. },
+            ) => matches_value(matcher, url),
             _ => false,
         }
     }

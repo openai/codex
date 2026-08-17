@@ -2018,7 +2018,7 @@ fn filter_mcp_servers_by_requirements(
         let allowed = allowlist
             .value
             .get(name)
-            .is_some_and(|requirement| requirement.matches(server));
+            .is_some_and(|requirement| server.matches_requirement(requirement));
         if allowed {
             server.disabled_reason = None;
         } else {
@@ -2054,7 +2054,7 @@ fn filter_plugin_mcp_servers_by_requirements(
     for (name, server) in mcp_servers.iter_mut() {
         let allowed = plugin_mcp_requirements
             .and_then(|mcp_requirements| mcp_requirements.get(name))
-            .is_some_and(|requirement| requirement.matches(server));
+            .is_some_and(|requirement| server.matches_requirement(requirement));
         if allowed {
             server.disabled_reason = None;
         } else {

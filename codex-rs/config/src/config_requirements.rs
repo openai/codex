@@ -23,9 +23,11 @@ use crate::Constrained;
 use crate::ConstraintError;
 use crate::ManagedAuthPolicy;
 use crate::ManagedHooksRequirementsToml;
+use crate::McpServerRequirement;
+use crate::PluginRequirementsToml;
 use crate::RequirementsExecPolicy;
 use crate::config_toml::ConfigToml;
-use crate::mcp_requirements::McpServerRequirement;
+use crate::mcp_requirements::validate_mcp_server_requirement;
 use crate::mcp_types::AppToolApproval;
 use crate::permissions_toml::PermissionProfileToml;
 use crate::types::FeedbackConfigToml;
@@ -287,11 +289,6 @@ impl ConfigRequirements {
 }
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
-pub struct PluginRequirementsToml {
-    pub mcp_servers: Option<BTreeMap<String, McpServerRequirement>>,
-}
-
-#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct MarketplaceRequirementsToml {
     pub restrict_to_allowed_sources: Option<bool>,
@@ -324,12 +321,6 @@ pub enum MarketplaceAllowedSourceKind {
     Git,
     HostPattern,
     Local,
-}
-
-impl PluginRequirementsToml {
-    pub fn is_empty(&self) -> bool {
-        self.mcp_servers.as_ref().is_none_or(BTreeMap::is_empty)
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
@@ -1516,15 +1507,15 @@ fn validate_mcp_server_requirements(
     plugin_name: Option<&str>,
 ) -> Result<(), ConstraintError> {
     for (server_name, requirement) in requirements {
-        requirement
-            .validate()
-            .map_err(|reason| ConstraintError::McpServerRequirementParse {
+        validate_mcp_server_requirement(requirement).map_err(|reason| {
+            ConstraintError::McpServerRequirementParse {
                 server_name: plugin_name
                     .map(|plugin_name| format!("{plugin_name}/{server_name}"))
                     .unwrap_or_else(|| server_name.clone()),
                 requirement_source: source.clone(),
                 reason,
-            })?;
+            }
+        })?;
     }
     Ok(())
 }
