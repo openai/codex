@@ -11,6 +11,9 @@ use pretty_assertions::assert_eq;
 use std::path::Path;
 use std::path::PathBuf;
 
+#[path = "code_fence_render_tests.rs"]
+mod code_fence_tests;
+
 fn test_cwd() -> PathBuf {
     std::env::temp_dir()
 }

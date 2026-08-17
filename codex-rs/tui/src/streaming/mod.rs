@@ -17,6 +17,7 @@ use std::time::Instant;
 use crate::markdown_stream::MarkdownStreamCollector;
 use crate::terminal_hyperlinks::HyperlinkLine;
 pub(crate) mod chunking;
+mod code_fence;
 pub(crate) mod commit_tick;
 pub(crate) mod controller;
 mod render;
