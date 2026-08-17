@@ -469,6 +469,7 @@ mod tests {
     use codex_model_provider_info::ModelProviderAwsAuthInfo;
     use codex_model_provider_info::WireApi;
     use codex_model_provider_info::create_oss_provider_with_base_url;
+    use codex_models_manager::ModelsManagerConfig;
     use codex_models_manager::manager::RefreshStrategy;
     use codex_protocol::account::PlanType;
     use codex_protocol::config_types::ModelProviderAuthInfo;
@@ -854,6 +855,21 @@ mod tests {
             )
             .await;
         assert_eq!(uncached_catalog, catalog);
+        let model_info = manager
+            .get_model_info(
+                "openai.gpt-5.6-sol",
+                &ModelsManagerConfig {
+                    model_context_window: Some(1_000_000),
+                    ..Default::default()
+                },
+            )
+            .await;
+        let mut expected_model_info = manager
+            .get_model_info("openai.gpt-5.6-sol", &ModelsManagerConfig::default())
+            .await;
+        expected_model_info.context_window = Some(872_000);
+        assert_eq!(model_info, expected_model_info);
+
         let models = catalog
             .models
             .iter()
