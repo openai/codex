@@ -380,7 +380,7 @@ where
                                             &mut websocket,
                                             &mut keepalive,
                                             &incoming_tx,
-                                            JsonRpcConnectionEvent::Message(message),
+                                            JsonRpcConnectionEvent::message(message),
                                         )
                                         .await
                                         {
@@ -979,10 +979,12 @@ mod tests {
                 .into(),
             ))
             .await?;
-        assert!(matches!(
-            timeout(Duration::from_secs(1), connection.incoming_rx.recv()).await?,
-            Some(JsonRpcConnectionEvent::Message(actual)) if actual == message
-        ));
+        let Some(JsonRpcConnectionEvent::QueuedRequest { request, .. }) =
+            timeout(Duration::from_secs(1), connection.incoming_rx.recv()).await?
+        else {
+            anyhow::bail!("expected a queued JSON-RPC request");
+        };
+        assert_eq!(JSONRPCMessage::Request(request), message);
 
         drop(connection);
         Ok(())

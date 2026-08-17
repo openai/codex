@@ -4,10 +4,12 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use std::time::Instant;
 
 use axum::extract::ws::Message as AxumWebSocketMessage;
 use axum::extract::ws::WebSocket as AxumWebSocket;
 use codex_exec_server_protocol::JSONRPCMessage;
+use codex_exec_server_protocol::JSONRPCRequest;
 use futures::Sink;
 use futures::SinkExt;
 use futures::Stream;
@@ -43,8 +45,48 @@ pub(crate) const WEBSOCKET_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30
 #[derive(Debug)]
 pub(crate) enum JsonRpcConnectionEvent {
     Message(JSONRPCMessage),
-    MalformedMessage { reason: String },
-    Disconnected { reason: Option<String> },
+    QueuedRequest {
+        request: JSONRPCRequest,
+        request_span: tracing::Span,
+        queued_at: Instant,
+    },
+    MalformedMessage {
+        reason: String,
+    },
+    Disconnected {
+        reason: Option<String>,
+    },
+}
+
+impl JsonRpcConnectionEvent {
+    pub(crate) fn message(message: JSONRPCMessage) -> Self {
+        let JSONRPCMessage::Request(request) = message else {
+            return Self::Message(message);
+        };
+
+        let queued_at = Instant::now();
+        let request_span = tracing::info_span!(
+            "codex.exec_server.request",
+            otel.kind = "server",
+            otel.name = "unknown",
+            method = request.method.as_str(),
+            result = tracing::field::Empty,
+        );
+        if let Some(trace) = &request.trace
+            && !codex_otel::set_parent_from_w3c_trace_context(&request_span, trace)
+        {
+            warn!(
+                method = request.method.as_str(),
+                "ignoring invalid inbound exec-server trace carrier"
+            );
+        }
+
+        Self::QueuedRequest {
+            request,
+            request_span,
+            queued_at,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -327,7 +369,7 @@ impl JsonRpcConnection {
                         match serde_json::from_str::<JSONRPCMessage>(&line) {
                             Ok(message) => {
                                 if incoming_tx_for_reader
-                                    .send(JsonRpcConnectionEvent::Message(message))
+                                    .send(JsonRpcConnectionEvent::message(message))
                                     .await
                                     .is_err()
                                 {
@@ -462,7 +504,7 @@ impl JsonRpcConnection {
                             Some(Ok(message)) => match message.parse_jsonrpc_frame() {
                                 Ok(JsonRpcWebSocketFrame::Message(message)) => {
                                     if incoming_tx
-                                        .send(JsonRpcConnectionEvent::Message(message))
+                                        .send(JsonRpcConnectionEvent::message(message))
                                         .await
                                         .is_err()
                                     {
@@ -698,7 +740,9 @@ mod tests {
                 .await?
                 .expect("stdio connection should report the message");
             match event {
-                JsonRpcConnectionEvent::Message(actual) => assert_eq!(actual, message),
+                JsonRpcConnectionEvent::QueuedRequest { request, .. } => {
+                    assert_eq!(JSONRPCMessage::Request(request), message)
+                }
                 event => anyhow::bail!("expected JSON-RPC message, got {event:?}"),
             }
 
@@ -806,10 +850,12 @@ mod tests {
         server_websocket
             .send(Message::Binary(serde_json::to_vec(&message)?.into()))
             .await?;
-        assert!(matches!(
-            timeout(Duration::from_secs(1), connection.incoming_rx.recv()).await?,
-            Some(JsonRpcConnectionEvent::Message(actual)) if actual == message
-        ));
+        let Some(JsonRpcConnectionEvent::QueuedRequest { request, .. }) =
+            timeout(Duration::from_secs(1), connection.incoming_rx.recv()).await?
+        else {
+            anyhow::bail!("expected a queued JSON-RPC request");
+        };
+        assert_eq!(JSONRPCMessage::Request(request), message);
 
         drop(connection);
         Ok(())

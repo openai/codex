@@ -598,7 +598,7 @@ async fn receive_data(
         for message in decoder.push(&plaintext)? {
             send_incoming_event(
                 incoming_tx,
-                JsonRpcConnectionEvent::Message(message),
+                JsonRpcConnectionEvent::message(message),
                 delivery_deadline,
             )
             .await?;

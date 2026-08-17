@@ -170,11 +170,18 @@ impl RequestDispatcher {
         RequestTaskResult::Completed
     }
 
-    pub(super) async fn dispatch_request(&mut self, request: JSONRPCRequest) -> RequestTaskResult {
+    pub(super) async fn dispatch_request(
+        &mut self,
+        request: JSONRPCRequest,
+        request_span: tracing::Span,
+        queued_at: Instant,
+    ) -> RequestTaskResult {
         let started_at = Instant::now();
         let Some((method, route)) = self.router.request_route(request.method.as_str()) else {
             let method = "unknown";
-            let span = request_span(method, &request);
+            self.telemetry
+                .request_queue_completed(method, queued_at.elapsed());
+            request_span.record("otel.name", method);
             if self
                 .outgoing_tx
                 .send(RpcServerOutboundMessage::Error {
@@ -187,27 +194,33 @@ impl RequestDispatcher {
                 .await
                 .is_err()
             {
-                span.record("result", "disconnected");
+                request_span.record("result", "disconnected");
                 self.telemetry
                     .request_completed(method, "disconnected", started_at.elapsed());
                 return RequestTaskResult::ConnectionClosed;
             }
-            span.record("result", "error");
+            request_span.record("result", "error");
             self.telemetry
                 .request_completed(method, "error", started_at.elapsed());
             return RequestTaskResult::Completed;
         };
 
-        let task_span = request_span(method, &request);
+        request_span.record("otel.name", method);
+        let route_setup_started_at = Instant::now();
         let route = route(Arc::clone(&self.handler), request);
+        let route_setup_duration = route_setup_started_at.elapsed();
         let outgoing_tx = self.outgoing_tx.clone();
         let mut disconnected_rx = self.disconnected_rx.clone();
         let telemetry = self.telemetry.clone();
         let task = async move {
+            telemetry.request_queue_completed(
+                method,
+                queued_at.elapsed().saturating_sub(route_setup_duration),
+            );
             let message = tokio::select! {
-                message = route.instrument(task_span.clone()) => message,
+                message = route.instrument(request_span.clone()) => message,
                 _ = disconnected_rx.changed() => {
-                    task_span.record("result", "disconnected");
+                    request_span.record("result", "disconnected");
                     telemetry.request_completed(method, "disconnected", started_at.elapsed());
                     return RequestTaskResult::ConnectionClosed;
                 }
@@ -221,11 +234,11 @@ impl RequestDispatcher {
                 None => true,
             };
             if !response_sent {
-                task_span.record("result", "disconnected");
+                request_span.record("result", "disconnected");
                 telemetry.request_completed(method, "disconnected", started_at.elapsed());
                 return RequestTaskResult::ConnectionClosed;
             }
-            task_span.record("result", result);
+            request_span.record("result", result);
             telemetry.request_completed(method, result, started_at.elapsed());
             RequestTaskResult::Completed
         };
@@ -324,23 +337,6 @@ struct RequestLanes {
 pub(super) enum RequestTaskResult {
     Completed,
     ConnectionClosed,
-}
-
-fn request_span(span_name: &str, request: &JSONRPCRequest) -> tracing::Span {
-    let method = request.method.as_str();
-    let span = tracing::info_span!(
-        "codex.exec_server.request",
-        otel.kind = "server",
-        otel.name = span_name,
-        method,
-        result = tracing::field::Empty,
-    );
-    if let Some(trace) = &request.trace
-        && !codex_otel::set_parent_from_w3c_trace_context(&span, trace)
-    {
-        warn!(method, "ignoring invalid inbound exec-server trace carrier");
-    }
-    span
 }
 
 fn request_result(message: &Option<RpcServerOutboundMessage>) -> &'static str {

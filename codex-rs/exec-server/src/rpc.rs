@@ -68,9 +68,14 @@ enum RpcCallTimeout {
 
 #[derive(Debug)]
 pub(crate) enum RpcClientEvent {
-    Request(JSONRPCRequest),
+    Request {
+        request: JSONRPCRequest,
+        request_span: tracing::Span,
+    },
     Notification(JSONRPCNotification),
-    Disconnected { reason: Option<String> },
+    Disconnected {
+        reason: Option<String>,
+    },
 }
 
 pub(crate) enum RpcInboundRequestAdmissionError {
@@ -338,6 +343,22 @@ impl RpcClient {
                             handle_server_message(&pending_for_reader, &event_tx, message).await
                         {
                             let _ = err;
+                            break None;
+                        }
+                    }
+                    JsonRpcConnectionEvent::QueuedRequest {
+                        request,
+                        request_span,
+                        ..
+                    } => {
+                        if event_tx
+                            .send(RpcClientEvent::Request {
+                                request,
+                                request_span,
+                            })
+                            .await
+                            .is_err()
+                        {
                             break None;
                         }
                     }
@@ -775,7 +796,10 @@ async fn handle_server_message(
         }
         JSONRPCMessage::Request(request) => {
             event_tx
-                .send(RpcClientEvent::Request(request))
+                .send(RpcClientEvent::Request {
+                    request,
+                    request_span: tracing::Span::none(),
+                })
                 .await
                 .map_err(|_| "RPC client event receiver closed".to_string())?;
         }
@@ -804,6 +828,7 @@ mod tests {
 
     use codex_exec_server_protocol::JSONRPCMessage;
     use codex_exec_server_protocol::JSONRPCNotification;
+    use codex_exec_server_protocol::JSONRPCRequest;
     use codex_exec_server_protocol::JSONRPCResponse;
     use codex_exec_server_protocol::RequestId;
     use opentelemetry::trace::TracerProvider as _;
@@ -824,6 +849,7 @@ mod tests {
     use super::RESERVED_OUTBOUND_CONTROL_MESSAGES;
     use super::RpcCallError;
     use super::RpcClient;
+    use super::RpcClientEvent;
     use super::RpcNotificationSender;
     use crate::connection::JsonRpcConnection;
     use crate::connection::JsonRpcConnectionEvent;
@@ -877,6 +903,79 @@ mod tests {
         if let Err(err) = writer.write_all(format!("{encoded}\n").as_bytes()).await {
             panic!("failed to write JSON-RPC line: {err}");
         }
+    }
+
+    #[tokio::test]
+    async fn inbound_request_span_stays_open_until_event_consumption() {
+        let span_exporter = InMemorySpanExporter::default();
+        let tracer_provider = SdkTracerProvider::builder()
+            .with_simple_exporter(span_exporter.clone())
+            .build();
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_opentelemetry::layer()
+                .with_tracer(tracer_provider.tracer("exec-server-test"))
+                .with_filter(filter_fn(codex_otel::OtelProvider::trace_export_filter)),
+        );
+        let _subscriber = tracing::subscriber::set_default(subscriber);
+        tracing::callsite::rebuild_interest_cache();
+
+        let (outgoing_tx, _outgoing_rx) = tokio::sync::mpsc::channel(/*buffer*/ 1);
+        let (incoming_tx, incoming_rx) = tokio::sync::mpsc::channel(/*buffer*/ 1);
+        let (_disconnected_tx, disconnected_rx) = tokio::sync::watch::channel(/*init*/ false);
+        let connection = JsonRpcConnection {
+            outgoing_tx,
+            incoming_rx,
+            disconnected_rx,
+            task_handles: Vec::new(),
+            transport: JsonRpcTransport::Plain,
+        };
+        let (_client, mut events_rx) = RpcClient::new(connection);
+
+        incoming_tx
+            .send(JsonRpcConnectionEvent::message(JSONRPCMessage::Request(
+                JSONRPCRequest {
+                    id: RequestId::Integer(1),
+                    method: "test/callback".to_string(),
+                    params: None,
+                    trace: None,
+                },
+            )))
+            .await
+            .expect("queue inbound client request");
+        timeout(Duration::from_secs(1), async {
+            while events_rx.is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("inbound request should enter the client event queue");
+        assert!(
+            span_exporter
+                .get_finished_spans()
+                .expect("request span export")
+                .is_empty(),
+            "the request span must remain open until the client consumes the event"
+        );
+
+        let Some(RpcClientEvent::Request {
+            request,
+            request_span,
+        }) = events_rx.recv().await
+        else {
+            panic!("expected an inbound client request");
+        };
+        assert_eq!(request.method, "test/callback");
+        request_span.record("otel.name", "test/callback");
+        drop(request_span);
+
+        tracer_provider.force_flush().expect("flush traces");
+        let spans = span_exporter.get_finished_spans().expect("span export");
+        assert!(
+            spans
+                .iter()
+                .any(|span| span.name.as_ref() == "test/callback"),
+            "the request span should cover the complete event queue wait"
+        );
     }
 
     #[tokio::test]

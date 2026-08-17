@@ -77,7 +77,7 @@ impl NoiseVirtualStream {
             };
             for message in self.inbound_decoder.push(&plaintext)? {
                 self.incoming_tx
-                    .try_send(JsonRpcConnectionEvent::Message(message))
+                    .try_send(JsonRpcConnectionEvent::message(message))
                     .map_err(|_| {
                         ExecServerError::Protocol(
                             "Noise virtual stream inbound queue is full or closed".to_string(),

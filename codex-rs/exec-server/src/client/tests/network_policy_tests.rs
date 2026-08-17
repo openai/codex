@@ -14,12 +14,16 @@ use codex_network_proxy::NetworkPolicyDecider;
 use codex_network_proxy::NetworkPolicyRequest;
 use codex_network_proxy::NetworkProxyAuditMetadata;
 use codex_utils_path_uri::PathUri;
+use opentelemetry::trace::TracerProvider as _;
+use opentelemetry_sdk::trace::InMemorySpanExporter;
+use opentelemetry_sdk::trace::SdkTracerProvider;
 use pretty_assertions::assert_eq;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
 use tracing::instrument::WithSubscriber;
+use tracing_subscriber::filter::filter_fn;
 use tracing_subscriber::prelude::*;
 
 use super::super::LazyRemoteExecServerClient;
@@ -308,6 +312,18 @@ async fn abandoned_process_start_unregisters_and_cleans_up() {
 
 #[tokio::test]
 async fn policy_requests_use_process_decider_and_cancel_on_unregister() {
+    let span_exporter = InMemorySpanExporter::default();
+    let tracer_provider = SdkTracerProvider::builder()
+        .with_simple_exporter(span_exporter.clone())
+        .build();
+    let subscriber = tracing_subscriber::registry().with(
+        tracing_opentelemetry::layer()
+            .with_tracer(tracer_provider.tracer("exec-server-test"))
+            .with_filter(filter_fn(codex_otel::OtelProvider::trace_export_filter)),
+    );
+    let _subscriber = tracing::subscriber::set_default(subscriber);
+    tracing::callsite::rebuild_interest_cache();
+
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("listener should bind");
@@ -428,6 +444,13 @@ async fn policy_requests_use_process_decider_and_cancel_on_unregister() {
         let started_tx = started_tx.clone();
         let dropped_tx = dropped_tx.clone();
         async move {
+            assert_eq!(
+                tracing::Span::current()
+                    .metadata()
+                    .map(tracing::Metadata::name),
+                Some("codex.exec_server.request"),
+                "network policy decisions must run inside the inbound request span"
+            );
             match request.host.as_str() {
                 "allowed.example" => NetworkDecision::Allow,
                 "denied.example" => NetworkDecision::deny("blocked"),
@@ -478,4 +501,40 @@ async fn policy_requests_use_process_decider_and_cancel_on_unregister() {
         .await
         .expect("policy routing should finish")
         .expect("server task should finish");
+
+    tracer_provider.force_flush().expect("flush traces");
+    let spans = span_exporter.get_finished_spans().expect("span export");
+    let policy_spans = spans
+        .iter()
+        .filter(|span| span.name.as_ref() == NETWORK_POLICY_REQUEST_METHOD)
+        .collect::<Vec<_>>();
+    assert!(
+        !policy_spans.is_empty(),
+        "network policy requests should export server spans"
+    );
+    let outcomes = policy_spans
+        .iter()
+        .map(|span| {
+            span.attributes
+                .iter()
+                .find(|attribute| attribute.key.as_str() == "result")
+                .map(|attribute| attribute.value.as_str().into_owned())
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        outcomes.iter().all(Option::is_some),
+        "completed, rejected, and cancelled policy requests must all record an outcome"
+    );
+    assert!(
+        outcomes
+            .iter()
+            .any(|outcome| outcome.as_deref() == Some("success")),
+        "completed and capacity-rejected requests should record successful responses"
+    );
+    assert!(
+        outcomes
+            .iter()
+            .any(|outcome| outcome.as_deref() == Some("disconnected")),
+        "cancelled requests should record disconnection"
+    );
 }

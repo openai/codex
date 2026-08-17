@@ -16,6 +16,7 @@ use tokio::time::sleep;
 use tokio::time::timeout;
 use tokio::time::timeout_at;
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 use tracing::debug;
 
 use super::ConnectionStatus;
@@ -62,6 +63,23 @@ const SESSION_RECOVERY_RETRY_INTERVAL: Duration = Duration::from_millis(100);
 const REGISTRY_RECOVERY_INITIAL_RETRY_INTERVAL: Duration = Duration::from_millis(500);
 const REGISTRY_RECOVERY_MAX_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 const NETWORK_POLICY_DENIAL_REASON: &str = "not_allowed";
+
+struct ClientRequestOutcome {
+    span: tracing::Span,
+    result: &'static str,
+}
+
+impl ClientRequestOutcome {
+    fn complete(&mut self, result: &'static str) {
+        self.result = result;
+    }
+}
+
+impl Drop for ClientRequestOutcome {
+    fn drop(&mut self) {
+        self.span.record("result", self.result);
+    }
+}
 
 impl SessionState {
     fn last_published_seq(&self) -> u64 {
@@ -563,7 +581,14 @@ impl ExecServerClient {
                     return;
                 };
                 match event {
-                    RpcClientEvent::Request(request) => {
+                    RpcClientEvent::Request {
+                        request,
+                        request_span,
+                    } => {
+                        let mut request_outcome = ClientRequestOutcome {
+                            span: request_span,
+                            result: "disconnected",
+                        };
                         if request.method != NETWORK_POLICY_REQUEST_METHOD {
                             let error = method_not_found(format!(
                                 "exec-server client does not implement `{}` yet",
@@ -576,8 +601,12 @@ impl ExecServerClient {
                                 );
                                 return;
                             }
+                            request_outcome.complete("error");
                             continue;
                         }
+                        request_outcome
+                            .span
+                            .record("otel.name", NETWORK_POLICY_REQUEST_METHOD);
 
                         let request_guard = match rpc_client
                             .admit_inbound_request(&request.id, &rpc_inbound_request_slots)
@@ -612,6 +641,7 @@ impl ExecServerClient {
                                     );
                                     return;
                                 }
+                                request_outcome.complete("success");
                                 continue;
                             }
                         };
@@ -630,6 +660,7 @@ impl ExecServerClient {
                                         );
                                         return;
                                     }
+                                    request_outcome.complete("error");
                                     continue;
                                 }
                             };
@@ -677,7 +708,8 @@ impl ExecServerClient {
                         let inner = Arc::downgrade(&inner);
                         let rpc_client = Arc::downgrade(&rpc_client);
                         let connection_cancelled = connection_cancelled.clone();
-                        tokio::spawn(async move {
+                        let task_span = request_outcome.span.clone();
+                        let task = async move {
                             let _request_guard = request_guard;
                             let decision = match (controller, policy_request, process_cancelled) {
                                 (Some(controller), Some(request), Some(process_cancelled)) => {
@@ -747,8 +779,11 @@ impl ExecServerClient {
                                     ?error,
                                     "failed to send network policy decision to exec-server"
                                 );
+                            } else {
+                                request_outcome.complete("success");
                             }
-                        });
+                        };
+                        tokio::spawn(task.instrument(task_span));
                     }
                     RpcClientEvent::Notification(notification) => {
                         if let Err(error) = handle_server_notification(&inner, notification).await {

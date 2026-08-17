@@ -14,6 +14,9 @@ const REQUESTS_TOTAL_METRIC: &str = "exec_server_requests_total";
 const REQUESTS_TOTAL_DESCRIPTION: &str = "Total number of exec-server requests.";
 const REQUEST_DURATION_METRIC: &str = "exec_server_request_duration_seconds";
 const REQUEST_DURATION_DESCRIPTION: &str = "Duration of exec-server requests in seconds.";
+const REQUEST_QUEUE_DURATION_METRIC: &str = "exec_server_request_queue_duration_seconds";
+const REQUEST_QUEUE_DURATION_DESCRIPTION: &str =
+    "Time exec-server requests spend queued before execution in seconds.";
 const PROCESSES_ACTIVE_METRIC: &str = "exec_server_processes_active";
 const PROCESSES_ACTIVE_DESCRIPTION: &str = "Number of active exec-server processes.";
 const PROCESSES_FINISHED_TOTAL_METRIC: &str = "exec_server_processes_finished_total";
@@ -141,6 +144,17 @@ impl ExecServerTelemetry {
                 REQUEST_DURATION_DESCRIPTION,
                 duration,
                 &tags,
+            );
+        });
+    }
+
+    pub(crate) fn request_queue_completed(&self, method: &'static str, duration: Duration) {
+        self.with_inner(|inner| {
+            inner.duration(
+                REQUEST_QUEUE_DURATION_METRIC,
+                REQUEST_QUEUE_DURATION_DESCRIPTION,
+                duration,
+                &[("method", method)],
             );
         });
     }
