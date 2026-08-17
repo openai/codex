@@ -74,6 +74,8 @@ pub struct LunaSamplingRequest {
     pub instructions: String,
     /// Ordered untrusted input entries that the model should classify.
     pub input: Vec<String>,
+    /// Optional bounded screenshots accompanying the transcript.
+    pub images: Vec<ContentItem>,
     /// Opaque parent compaction to reuse only for compatible model configurations.
     pub parent_compaction: Option<ResponseItem>,
     /// Current parent model's encrypted-compaction compatibility hash.
@@ -317,6 +319,12 @@ impl LunaSampler {
                 .input
                 .into_iter()
                 .map(|text| ContentItem::InputText { text })
+                .chain(request.images.into_iter().map(|mut image| {
+                    if let ContentItem::InputImage { detail, .. } = &mut image {
+                        *detail = None;
+                    }
+                    image
+                }))
                 .collect(),
             phase: None,
             internal_chat_message_metadata_passthrough: None,

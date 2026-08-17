@@ -1,8 +1,11 @@
 use std::collections::HashMap;
+use std::collections::VecDeque;
 
 use codex_extension_api::ResponseItem;
 pub(crate) use codex_features::GuardianV2TranscriptSource as TranscriptSource;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::plaintext_agent_message_content;
@@ -13,6 +16,8 @@ pub(crate) const MAX_TOOL_ENTRY_TOKENS: usize = 1_000;
 pub(crate) const MAX_MESSAGE_TRANSCRIPT_TOKENS: usize = 10_000;
 pub(crate) const MAX_TOOL_TRANSCRIPT_TOKENS: usize = 10_000;
 pub(crate) const MAX_RECENT_NON_USER_ENTRIES: usize = 40;
+const MAX_TRANSCRIPT_IMAGES: usize = 4;
+const MAX_TRANSCRIPT_IMAGE_BYTES: usize = 8 * 1024 * 1024;
 const MANUAL_APPROVAL_DEVELOPER_PREFIX: &str =
     "The user has manually approved a specific action that was previously `Rejected`.";
 
@@ -32,6 +37,7 @@ struct TranscriptEntry {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TranscriptConfig {
     pub(crate) sources: Vec<TranscriptSource>,
+    pub(crate) include_images: bool,
     pub(crate) max_message_entry_tokens: usize,
     pub(crate) max_tool_entry_tokens: usize,
     pub(crate) max_message_transcript_tokens: usize,
@@ -43,6 +49,7 @@ impl Default for TranscriptConfig {
     fn default() -> Self {
         Self {
             sources: vec![TranscriptSource::ToolCalls, TranscriptSource::ToolOutputs],
+            include_images: false,
             max_message_entry_tokens: MAX_MESSAGE_ENTRY_TOKENS,
             max_tool_entry_tokens: MAX_TOOL_ENTRY_TOKENS,
             max_message_transcript_tokens: MAX_MESSAGE_TRANSCRIPT_TOKENS,
@@ -53,6 +60,67 @@ impl Default for TranscriptConfig {
 }
 
 impl TranscriptConfig {
+    pub(crate) fn images<'a>(
+        &self,
+        items: impl IntoIterator<Item = &'a ResponseItem>,
+    ) -> Vec<ContentItem> {
+        if !self.include_images {
+            return Vec::new();
+        }
+
+        let mut images = VecDeque::new();
+        let mut image_bytes = 0usize;
+        let mut include_image = |image_url: &str, detail: Option<ImageDetail>| {
+            if image_url.len() > MAX_TRANSCRIPT_IMAGE_BYTES {
+                return;
+            }
+            while images.len() >= MAX_TRANSCRIPT_IMAGES
+                || image_bytes + image_url.len() > MAX_TRANSCRIPT_IMAGE_BYTES
+            {
+                let Some(ContentItem::InputImage { image_url, .. }) = images.pop_front() else {
+                    break;
+                };
+                image_bytes -= image_url.len();
+            }
+            image_bytes += image_url.len();
+            images.push_back(ContentItem::InputImage {
+                image_url: image_url.to_owned(),
+                detail,
+            });
+        };
+
+        for item in items {
+            match item {
+                ResponseItem::Message { role, content, .. }
+                    if matches!(role.as_str(), "user" | "assistant") =>
+                {
+                    for item in content {
+                        if let ContentItem::InputImage { image_url, detail } = item {
+                            include_image(image_url, *detail);
+                        }
+                    }
+                }
+                ResponseItem::FunctionCallOutput { output, .. }
+                | ResponseItem::CustomToolCallOutput { output, .. }
+                    if self.sources.contains(&TranscriptSource::ToolOutputs) =>
+                {
+                    if let Some(content) = output.content_items() {
+                        for item in content {
+                            if let FunctionCallOutputContentItem::InputImage { image_url, detail } =
+                                item
+                            {
+                                include_image(image_url, *detail);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        images.into_iter().collect()
+    }
+
     pub(crate) fn build<'a>(
         &self,
         items: impl IntoIterator<Item = &'a ResponseItem>,

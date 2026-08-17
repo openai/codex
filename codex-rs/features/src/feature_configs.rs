@@ -88,6 +88,9 @@ pub enum GuardianV2TranscriptSource {
 pub struct GuardianV2TranscriptConfigToml {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sources: Option<Vec<GuardianV2TranscriptSource>>,
+    /// Include recent screenshots from messages and configured tool outputs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_images: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 100, max = 100000))]
     pub max_message_entry_tokens: Option<usize>,

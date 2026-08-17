@@ -21,7 +21,9 @@ use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::ResponseItemId;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ImageDetail;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::protocol::ReviewDecision;
@@ -454,6 +456,76 @@ max_recent_non_user_entries = 8
             .approval_review(&session_store, thread_store, "review action")
             .await,
         Some(ReviewDecision::Approved)
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn contributor_includes_configured_transcript_images() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let history = vec![
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_owned(),
+            content: vec![
+                ContentItem::InputText {
+                    text: "Review what is shown on screen.".to_owned(),
+                },
+                ContentItem::InputImage {
+                    image_url: "data:image/png;base64,user-screenshot".to_owned(),
+                    detail: Some(ImageDetail::High),
+                },
+            ],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::FunctionCallOutput {
+            id: None,
+            call_id: "previous-call".to_owned(),
+            output: FunctionCallOutputPayload::from_content_items(vec![
+                FunctionCallOutputContentItem::InputText {
+                    text: "Screenshot captured.".to_owned(),
+                },
+                FunctionCallOutputContentItem::InputImage {
+                    image_url: "data:image/png;base64,tool-screenshot".to_owned(),
+                    detail: Some(ImageDetail::Low),
+                },
+            ]),
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ];
+    let configuration = r#"
+[features.guardianv2]
+enabled = true
+
+[features.guardianv2.transcript]
+include_images = true
+"#;
+    let (request, _test, _registry) = sample_configured_conversation_history(
+        history,
+        r#"{"path":"README.md"}"#,
+        Some(TEST_GUARDIAN_POLICY),
+        configuration,
+    )
+    .await?;
+    let content = request["input"][2]["content"]
+        .as_array()
+        .expect("Luna user content should be an array");
+
+    assert_eq!(
+        content[content.len() - 2..],
+        [
+            json!({
+                "type": "input_image",
+                "image_url": "data:image/png;base64,user-screenshot",
+            }),
+            json!({
+                "type": "input_image",
+                "image_url": "data:image/png;base64,tool-screenshot",
+            }),
+        ]
     );
 
     Ok(())

@@ -350,6 +350,9 @@ impl ToolLifecycleContributor for GuardianV2Extension {
             let transcript = guardian_config
                 .transcript
                 .build(conversation_history.items());
+            let images = guardian_config
+                .transcript
+                .images(conversation_history.items());
             drop(conversation_history);
             let planned_action = match action.render(guardian_config.max_action_tokens) {
                 Ok(planned_action) => planned_action,
@@ -418,6 +421,7 @@ impl ToolLifecycleContributor for GuardianV2Extension {
                     .sample(LunaSamplingRequest {
                         instructions,
                         input: classification_input,
+                        images,
                         parent_compaction,
                         parent_compaction_hash,
                         output_schema: json!({

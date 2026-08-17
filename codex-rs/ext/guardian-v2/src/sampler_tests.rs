@@ -75,6 +75,7 @@ fn sample_request(turn_id: &str) -> LunaSamplingRequest {
     LunaSamplingRequest {
         instructions: "Return a risk score.".to_owned(),
         input: vec!["The user requested a README summary.".to_owned()],
+        images: Vec::new(),
         parent_compaction: None,
         parent_compaction_hash: None,
         output_schema: json!({
@@ -169,6 +170,7 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_structured_requ
                 "The user requested a README summary.".to_owned(),
                 "The assistant inspected README.md.".to_owned(),
             ],
+            images: Vec::new(),
             parent_compaction: None,
             parent_compaction_hash: None,
             output_schema: schema.clone(),
@@ -192,6 +194,7 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_structured_requ
         .sample(LunaSamplingRequest {
             instructions: "Return a risk score.".to_owned(),
             input: vec!["The user requested a source review.".to_owned()],
+            images: Vec::new(),
             parent_compaction: None,
             parent_compaction_hash: None,
             output_schema: schema,
@@ -342,6 +345,7 @@ async fn sampler_returns_complete_json_before_terminal_response_events() -> Resu
         sampler.sample(LunaSamplingRequest {
             instructions: "Return a risk score.".to_owned(),
             input: vec!["The user requested a README summary.".to_owned()],
+            images: Vec::new(),
             parent_compaction: None,
             parent_compaction_hash: None,
             output_schema: json!({

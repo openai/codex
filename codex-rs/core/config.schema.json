@@ -1276,6 +1276,10 @@
       "additionalProperties": false,
       "description": "Bounds and optional sources for the Guardian v2 conversation transcript.",
       "properties": {
+        "include_images": {
+          "description": "Include recent screenshots from messages and configured tool outputs.",
+          "type": "boolean"
+        },
         "max_message_entry_tokens": {
           "format": "uint",
           "maximum": 100000.0,

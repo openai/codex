@@ -144,6 +144,9 @@ impl GuardianV2Config {
                     .unwrap_or_else(|| {
                         vec![TranscriptSource::ToolCalls, TranscriptSource::ToolOutputs]
                     }),
+                include_images: transcript_config
+                    .and_then(|transcript| transcript.include_images)
+                    .unwrap_or(false),
                 max_message_entry_tokens,
                 max_tool_entry_tokens,
                 max_message_transcript_tokens,

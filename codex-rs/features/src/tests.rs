@@ -143,6 +143,7 @@ max_parent_compaction_tokens = 384
 
 [guardianv2.transcript]
 sources = ["tool_outputs", "reasoning"]
+include_images = true
 max_message_entry_tokens = 128
 max_tool_entry_tokens = 128
 max_message_transcript_tokens = 512
@@ -167,6 +168,7 @@ max_recent_non_user_entries = 12
                     crate::GuardianV2TranscriptSource::ToolOutputs,
                     crate::GuardianV2TranscriptSource::Reasoning,
                 ]),
+                include_images: Some(true),
                 max_message_entry_tokens: Some(128),
                 max_tool_entry_tokens: Some(128),
                 max_message_transcript_tokens: Some(512),
