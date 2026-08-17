@@ -121,6 +121,7 @@ mod skills_watcher;
 mod thread_state;
 mod thread_status;
 mod transport;
+mod turn_cost_worker;
 
 pub use crate::code_mode_host::AppServerCodeModeHostArgs;
 pub use crate::code_mode_host::CodeModeHostTransport;

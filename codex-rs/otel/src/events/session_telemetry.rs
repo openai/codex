@@ -260,6 +260,25 @@ impl SessionTelemetry {
         );
     }
 
+    pub fn record_turn_cost(
+        &self,
+        turn_id: &str,
+        estimated_usd: &str,
+        interrupted: bool,
+        speed: Option<&str>,
+        reasoning_effort: Option<&str>,
+    ) {
+        log_event!(
+            self,
+            event.name = "codex.turn_cost",
+            turn.id = turn_id,
+            usage.estimated_usd = estimated_usd,
+            turn.interrupted = interrupted,
+            speed = speed,
+            reasoning_effort = reasoning_effort,
+        );
+    }
+
     /// Records the moment a plugin or connector install elicitation is dispatched.
     pub fn record_plugin_install_elicitation_sent(
         &self,
