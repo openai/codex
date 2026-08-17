@@ -16,6 +16,13 @@ use crate::render::RectExt as _;
 pub trait Renderable {
     fn render(&self, area: Rect, buf: &mut Buffer);
     fn desired_height(&self, width: u16) -> u16;
+    /// Renders visible rows after `scroll_offset` when direct scrolling is supported.
+    ///
+    /// Implementations returning `false` must leave `buf` unchanged so callers can use their
+    /// existing full-height rendering fallback. Supporting wrappers must forward this method.
+    fn render_scrolled(&self, _area: Rect, _buf: &mut Buffer, _scroll_offset: u16) -> bool {
+        false
+    }
     fn cursor_pos(&self, _area: Rect) -> Option<(u16, u16)> {
         None
     }
@@ -41,6 +48,13 @@ impl<'a> Renderable for RenderableItem<'a> {
         match self {
             RenderableItem::Owned(child) => child.desired_height(width),
             RenderableItem::Borrowed(child) => child.desired_height(width),
+        }
+    }
+
+    fn render_scrolled(&self, area: Rect, buf: &mut Buffer, scroll_offset: u16) -> bool {
+        match self {
+            RenderableItem::Owned(child) => child.render_scrolled(area, buf, scroll_offset),
+            RenderableItem::Borrowed(child) => child.render_scrolled(area, buf, scroll_offset),
         }
     }
 
@@ -479,6 +493,46 @@ impl<'a> Renderable for InsetRenderable<'a> {
             + self.insets.top
             + self.insets.bottom
     }
+
+    /// Preserve clipped inset padding while forwarding only visible child rows.
+    fn render_scrolled(&self, area: Rect, buf: &mut Buffer, scroll_offset: u16) -> bool {
+        let top_padding = self.insets.top.saturating_sub(scroll_offset);
+        let child_width = area
+            .width
+            .saturating_sub(self.insets.left.saturating_add(self.insets.right));
+        if child_width == 0 || top_padding >= area.height {
+            return true;
+        }
+
+        let child_offset = scroll_offset.saturating_sub(self.insets.top);
+        // The fallback applies bottom padding to its clipped scratch buffer, even mid-scroll.
+        let child_height = self
+            .child
+            .desired_height(child_width)
+            .saturating_sub(child_offset)
+            .min(
+                area.height
+                    .saturating_sub(top_padding)
+                    .saturating_sub(self.insets.bottom),
+            );
+        if child_height == 0 {
+            return true;
+        }
+
+        let child_area = Rect::new(
+            area.x.saturating_add(self.insets.left),
+            area.y.saturating_add(top_padding),
+            child_width,
+            child_height,
+        );
+        if child_offset == 0 {
+            self.child.render(child_area, buf);
+            true
+        } else {
+            self.child.render_scrolled(child_area, buf, child_offset)
+        }
+    }
+
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         self.child.cursor_pos(area.inset(self.insets))
     }
