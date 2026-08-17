@@ -35,6 +35,10 @@ const GROUPS: &[OutputGroup] = &[
         keys: &["config", "auth", "mcp", "sandbox"],
     },
     OutputGroup {
+        title: "Desktop App",
+        keys: &["desktop"],
+    },
+    OutputGroup {
         title: "Updates",
         keys: &["updates"],
     },
@@ -1329,6 +1333,23 @@ Background Server
             .expect("endpoint security check should include exclusion targets");
         *targets = "exclusion targets: verified Codex app and required helpers".into();
         report.checks.push(security);
+        report.checks.extend([
+            DoctorCheck::new(
+                "desktop.app.version",
+                "desktop",
+                CheckStatus::Ok,
+                "the desktop application is installed",
+            )
+            .detail("version: 1.2.3")
+            .detail("running: true")
+            .detail("log directory: $HOME/Library/Logs/com.openai.codex"),
+            DoctorCheck::new(
+                "desktop.app_server.handshake",
+                "desktop",
+                CheckStatus::Ok,
+                "the desktop app-server initialized successfully",
+            ),
+        ]);
         insta::assert_snapshot!(
             "doctor_human_report_environment_rows",
             render_human_report(&report, detailed_no_color_unicode_options())

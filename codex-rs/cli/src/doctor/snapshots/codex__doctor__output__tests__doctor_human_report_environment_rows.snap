@@ -47,6 +47,13 @@ Configuration
   ✗ auth         token expired — Run `codex login`.
       OPENAI_API_KEY           present
 
+Desktop App
+  ✓ desktop      the desktop application is installed
+      version                  1.2.3
+      running                  true
+      log directory            $HOME/Library/Logs/com.openai.codex
+  ✓ desktop      the desktop app-server initialized successfully
+
 Updates
   ✓ updates      update configuration is locally consistent
 
@@ -59,7 +66,7 @@ Background Server
   ✓ app-server   background server is not running
 
 ─────────────────────────────────────────────────────────────
-13 ok · 4 notes · 3 warn · 1 fail failed
+15 ok · 4 notes · 3 warn · 1 fail failed
 
 --summary compact output           --all expand truncated lists
 --json redacted report

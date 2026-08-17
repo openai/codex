@@ -104,7 +104,9 @@ which = { workspace = true }
 codex_windows_sandbox = { package = "codex-windows-sandbox", path = "../windows-sandbox-rs" }
 windows-sys = { version = "0.52", features = [
     "Win32_Foundation",
+    "Win32_Storage_Packaging_Appx",
     "Win32_System_Console",
+    "Win32_System_Threading",
 ] }
 
 [dev-dependencies]
