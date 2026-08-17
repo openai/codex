@@ -118,11 +118,13 @@ fn replacing_soft_wrapped_history_counts_physical_terminal_rows() {
         /*height*/ 2,
     ));
     let previous_lines = plain_hyperlink_lines(vec![Line::from("old-long-line-spanning-two-rows")]);
+    let screen_size = terminal.last_known_screen_size;
     crate::insert_history::insert_history_hyperlink_lines_with_mode_and_wrap_policy(
         &mut terminal,
         &previous_lines,
         InsertHistoryMode::Standard,
         HistoryLineWrapPolicy::Terminal,
+        screen_size,
     )
     .expect("insert soft-wrapped history");
     let replacement = plain_hyperlink_lines(vec![Line::from("new billing")]);

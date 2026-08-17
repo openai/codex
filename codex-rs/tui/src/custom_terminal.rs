@@ -1011,6 +1011,12 @@ mod tests {
             terminal.draw_with_size(screen_size, |_| {}).expect("draw");
         }
 
+        terminal.set_viewport_area(Rect::new(
+            /*x*/ 0, /*y*/ 23, /*width*/ 80, /*height*/ 1,
+        ));
+        crate::insert_history::insert_history_lines(&mut terminal, vec![Line::from("history")])
+            .expect("insert history");
+
         assert_eq!(terminal.backend().size_call_count.get(), 1);
     }
 

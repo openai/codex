@@ -932,6 +932,7 @@ impl Tui {
         terminal: &mut Terminal,
         pending_history_lines: &mut Vec<PendingHistoryLines>,
         is_zellij: bool,
+        screen_size: Size,
     ) -> Result<()> {
         if pending_history_lines.is_empty() {
             return Ok(());
@@ -948,6 +949,7 @@ impl Tui {
                 &batch.lines,
                 mode,
                 batch.wrap_policy,
+                screen_size,
             )?;
         }
         pending_history_lines.clear();
@@ -1006,6 +1008,7 @@ impl Tui {
                 terminal,
                 &mut self.pending_history_lines,
                 self.is_zellij,
+                screen_size,
             )?;
 
             // Update the y position for suspending so Ctrl-Z can place the cursor correctly.
@@ -1121,6 +1124,7 @@ impl Tui {
                 terminal,
                 &mut self.pending_history_lines,
                 self.is_zellij,
+                screen_size,
             )?;
 
             if needs_full_repaint || history_can_overlap_viewport {

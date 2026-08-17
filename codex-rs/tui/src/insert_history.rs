@@ -94,11 +94,13 @@ pub(crate) fn insert_history_lines_with_mode_and_wrap_policy<B>(
 where
     B: Backend<Error = io::Error> + Write,
 {
+    let screen_size = terminal.last_known_screen_size;
     insert_history_hyperlink_lines_with_mode_and_wrap_policy(
         terminal,
         &plain_hyperlink_lines(lines.iter().map(line_to_static).collect()),
         mode,
         wrap_policy,
+        screen_size,
     )
 }
 
@@ -107,12 +109,11 @@ pub(crate) fn insert_history_hyperlink_lines_with_mode_and_wrap_policy<B>(
     lines: &[HyperlinkLine],
     mode: InsertHistoryMode,
     wrap_policy: HistoryLineWrapPolicy,
+    screen_size: Size,
 ) -> io::Result<()>
 where
     B: Backend<Error = io::Error> + Write,
 {
-    let screen_size = terminal.backend().size().unwrap_or(Size::new(0, 0));
-
     let mut area = terminal.viewport_area;
     let mut should_update_area = false;
     let last_cursor_pos = terminal.last_known_cursor_pos;
@@ -832,11 +833,13 @@ mod tests {
             .map(|line| line.style(ratatui::style::Style::default().bg(Color::Blue)))
             .collect::<Vec<_>>();
 
+        let screen_size = term.last_known_screen_size;
         insert_history_hyperlink_lines_with_mode_and_wrap_policy(
             &mut term,
             &lines,
             InsertHistoryMode::Standard,
             HistoryLineWrapPolicy::PreWrap,
+            screen_size,
         )
         .expect("insert wrapped user message");
 
