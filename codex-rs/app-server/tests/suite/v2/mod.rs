@@ -33,6 +33,7 @@ mod external_agent_config;
 mod external_agent_import_sync;
 mod fs;
 mod git_attribution;
+mod guardian_v2;
 mod hooks_list;
 mod host_skills;
 mod imagegen_extension;
