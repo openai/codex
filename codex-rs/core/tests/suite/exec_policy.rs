@@ -573,6 +573,7 @@ async fn environment_command_restrictions_override_saved_prefix_approvals() -> R
                 permission_profile: PermissionProfileSnapshot::legacy(PermissionProfile::Disabled),
                 shell_environment_policy: Default::default(),
                 exec_policy: Some(RequirementsExecPolicy::new(invalid_policy)),
+                network_policy: None,
                 selected_capability_roots: Vec::new(),
             },
         )
@@ -594,6 +595,7 @@ async fn environment_command_restrictions_override_saved_prefix_approvals() -> R
                 permission_profile: PermissionProfileSnapshot::legacy(PermissionProfile::Disabled),
                 shell_environment_policy: Default::default(),
                 exec_policy: Some(RequirementsExecPolicy::new(environment_policy)),
+                network_policy: None,
                 selected_capability_roots: Vec::new(),
             },
         )
@@ -696,6 +698,7 @@ async fn environment_command_policy_changes_invalidate_session_approvals() -> Re
                         ),
                         shell_environment_policy: Default::default(),
                         exec_policy: Some(RequirementsExecPolicy::new(policy)),
+                        network_policy: None,
                         selected_capability_roots: Vec::new(),
                     },
                 )

@@ -4,6 +4,7 @@ use codex_network_proxy::BlockedRequestObserver;
 use codex_network_proxy::ConfigReloader;
 use codex_network_proxy::ConfigReloaderFuture;
 use codex_network_proxy::ConfigState;
+use codex_network_proxy::EnvironmentNetworkPolicy;
 use codex_network_proxy::NetworkDecision;
 use codex_network_proxy::NetworkPolicyDecider;
 use codex_network_proxy::NetworkProxy;
@@ -171,6 +172,11 @@ impl NetworkProxySpec {
             self.requirements.clone(),
             permission_profile,
         )
+    }
+
+    /// Returns the effective traffic policy without exposing controller-owned proxy settings.
+    pub fn environment_policy(&self) -> EnvironmentNetworkPolicy {
+        EnvironmentNetworkPolicy::from_config(&self.config, self.hard_deny_allowlist_misses)
     }
 
     pub(crate) fn with_exec_policy_network_rules(

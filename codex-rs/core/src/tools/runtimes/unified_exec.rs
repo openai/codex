@@ -544,6 +544,7 @@ mod tests {
                     ),
                     shell_environment_policy: Default::default(),
                     exec_policy: None,
+                    network_policy: None,
                     selected_capability_roots: Vec::new(),
                 }),
             },

@@ -918,6 +918,7 @@ async fn zsh_fork_unified_exec_keeps_shell_parameter_when_remote_environment_ava
                                     .snapshot(),
                                 shell_environment_policy: Default::default(),
                                 exec_policy: None,
+                                network_policy: None,
                                 selected_capability_roots: Vec::new(),
                             },
                         ),

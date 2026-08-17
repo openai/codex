@@ -356,6 +356,7 @@ async fn exec_command_uses_installed_environment_shell_policy_with_explicit_over
                     ..Default::default()
                 },
                 exec_policy: None,
+                network_policy: None,
                 selected_capability_roots: Vec::new(),
             },
         )

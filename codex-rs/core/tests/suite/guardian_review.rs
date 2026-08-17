@@ -599,6 +599,7 @@ async fn guardian_session_is_reused_for_consecutive_tool_reviews_without_prewarm
         ),
         shell_environment_policy: Default::default(),
         exec_policy: None,
+        network_policy: None,
         selected_capability_roots: Vec::new(),
     };
     parent_environments

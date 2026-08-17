@@ -788,6 +788,7 @@ mod tests {
             permission_profile: PermissionProfileSnapshot::legacy(PermissionProfile::read_only()),
             shell_environment_policy: Default::default(),
             exec_policy: None,
+            network_policy: None,
             selected_capability_roots: Vec::new(),
         }
     }
@@ -961,6 +962,7 @@ url = "ws://127.0.0.1:8765"
             ),
             shell_environment_policy: Default::default(),
             exec_policy: None,
+            network_policy: None,
             selected_capability_roots: Vec::new(),
         };
         let turn_environments = ThreadEnvironments::new(
@@ -1164,6 +1166,7 @@ url = "ws://127.0.0.1:8765"
             ),
             shell_environment_policy: Default::default(),
             exec_policy: None,
+            network_policy: None,
             selected_capability_roots: Vec::new(),
         };
         let cwd = PathUri::from_abs_path(&cwd);
@@ -1499,6 +1502,7 @@ url = "ws://127.0.0.1:8765"
             ),
             shell_environment_policy: Default::default(),
             exec_policy: None,
+            network_policy: None,
             selected_capability_roots: Vec::new(),
         };
         let environments = ThreadEnvironments::new(
@@ -1544,6 +1548,7 @@ url = "ws://127.0.0.1:8765"
             permission_profile: PermissionProfileSnapshot::legacy(PermissionProfile::read_only()),
             shell_environment_policy: Default::default(),
             exec_policy: None,
+            network_policy: None,
             selected_capability_roots: vec![root("parent-root")],
         };
         let mut owner_selection = selection.clone();

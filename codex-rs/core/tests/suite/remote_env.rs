@@ -6,6 +6,7 @@ use codex_api::AuthProvider;
 use codex_config::types::ApprovalsReviewer;
 use codex_core::CodexThreadSettingsOverrides;
 use codex_core::EnvironmentConfig;
+use codex_core::EnvironmentNetworkPolicy;
 use codex_core::StartThreadOptions;
 use codex_core::TurnInputRequest;
 use codex_core::WaitForEnvironmentToolConfig;
@@ -39,6 +40,7 @@ use codex_history::RolloutItem;
 use codex_history::RolloutLine;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
+use codex_network_proxy::NetworkProxyConfig;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::CollaborationMode;
@@ -552,6 +554,7 @@ async fn environment_permissions_follow_configuration_ownership() -> Result<()> 
                         ),
                         shell_environment_policy: Default::default(),
                         exec_policy: None,
+                        network_policy: None,
                         selected_capability_roots: Vec::new(),
                     }),
                     ..selection
@@ -1175,6 +1178,7 @@ async fn shared_executor_keeps_ready_capability_roots_scoped_to_each_attachment(
             permission_profile: permission_profile.clone(),
             shell_environment_policy: Default::default(),
             exec_policy: None,
+            network_policy: None,
             selected_capability_roots: vec![root("duplicate"), root("duplicate")],
         }),
     ] {
@@ -1211,6 +1215,7 @@ async fn shared_executor_keeps_ready_capability_roots_scoped_to_each_attachment(
                     permission_profile: permission_profile.clone(),
                     shell_environment_policy: Default::default(),
                     exec_policy: None,
+                    network_policy: None,
                     selected_capability_roots: vec![root("startup-root"), root("second-root")],
                 }),
                 ..selection.clone()
@@ -1231,6 +1236,7 @@ async fn shared_executor_keeps_ready_capability_roots_scoped_to_each_attachment(
                         permission_profile: permission_profile.clone(),
                         shell_environment_policy: Default::default(),
                         exec_policy: None,
+                        network_policy: None,
                         selected_capability_roots: vec![root("first-root")],
                     }),
                     ..selection.clone()
@@ -1290,6 +1296,7 @@ async fn shared_executor_keeps_ready_capability_roots_scoped_to_each_attachment(
                             permission_profile: permission_profile.clone(),
                             shell_environment_policy: Default::default(),
                             exec_policy: None,
+                            network_policy: None,
                             selected_capability_roots: vec![root("first-updated-root")],
                         }),
                         ..selection.clone()
@@ -1345,6 +1352,55 @@ async fn shared_executor_keeps_ready_capability_roots_scoped_to_each_attachment(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn owner_network_policy_is_rejected_until_runtime_enforcement_exists() -> Result<()> {
+    let server = start_mock_server().await;
+    let test = test_codex().build_with_auto_env(&server).await?;
+    let selections = test.codex.environment_selections().await;
+    let selection = selections
+        .first()
+        .context("thread should select its executor environment")?;
+    let owner_config = EnvironmentConfig {
+        allow_login_shell: test.config.permissions.allow_login_shell,
+        permission_profile: PermissionProfileSnapshot::legacy(
+            test.config.permissions.permission_profile().clone(),
+        ),
+        shell_environment_policy: test.config.permissions.shell_environment_policy.clone(),
+        exec_policy: None,
+        network_policy: Some(EnvironmentNetworkPolicy::from_config(
+            &NetworkProxyConfig::default(),
+            /*managed_allowed_domains_only*/ true,
+        )),
+        selected_capability_roots: Vec::new(),
+    };
+    let preview_error = test
+        .codex
+        .preview_thread_settings_overrides(CodexThreadSettingsOverrides {
+            environments: Some(TurnEnvironmentSelections::new(
+                test.config.cwd.clone(),
+                vec![TurnEnvironmentSelection {
+                    config: EnvironmentConfigState::Ready(owner_config.clone()),
+                    ..selection.clone()
+                }],
+            )),
+            ..Default::default()
+        })
+        .await
+        .err()
+        .context("preview must not accept an unenforced policy")?;
+    let ready_error = test
+        .codex
+        .environment_ready(selection, owner_config)
+        .await
+        .expect_err("readiness must not accept an unenforced policy");
+
+    for error in [preview_error.to_string(), ready_error.to_string()] {
+        assert!(error.contains("attachment-owned network policy is not supported yet"));
+    }
+    assert_eq!(test.codex.environment_selections().await, selections);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pending_attachment_installs_configuration_before_waiting_turn_resumes() -> Result<()> {
     const WAIT_CALL_ID: &str = "wait-for-owner-configuration";
 
@@ -1387,6 +1443,7 @@ async fn pending_attachment_installs_configuration_before_waiting_turn_resumes()
         permission_profile: PermissionProfileSnapshot::legacy(PermissionProfile::read_only()),
         shell_environment_policy: Default::default(),
         exec_policy: None,
+        network_policy: None,
         selected_capability_roots: vec![root(id)],
     };
     let start_pending_thread = || {
@@ -1704,6 +1761,7 @@ async fn ready_before_selection_exposes_remote_tools_and_capability_context_afte
                 ),
                 shell_environment_policy: Default::default(),
                 exec_policy: None,
+                network_policy: None,
                 selected_capability_roots: vec![ready_root],
             }),
         }]),

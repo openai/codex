@@ -484,6 +484,7 @@ async fn root_reconciliation_reuses_pending_apps_startup() -> Result<()> {
                 ),
                 shell_environment_policy: Default::default(),
                 exec_policy: None,
+                network_policy: None,
                 selected_capability_roots: vec![SelectedCapabilityRoot {
                     id: "calendar-root".to_string(),
                     location: CapabilityRootLocation::Environment {
