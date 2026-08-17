@@ -445,6 +445,7 @@ impl App {
                             app_server
                                 .start_thread_with_session_start_source(
                                     &config, /*session_start_source*/ None,
+                                    /*remote_cwd_override*/ None,
                                 )
                                 .await
                         }
@@ -2319,6 +2320,33 @@ impl App {
             }
             AppEvent::AgentsOverviewThreadsLoaded { request_id, result } => {
                 self.apply_agents_overview_thread_refresh(app_server, request_id, result);
+            }
+            AppEvent::SelectAgentsOverviewThread { thread_id } => {
+                match self
+                    .select_agents_overview_thread(tui, app_server, thread_id)
+                    .await?
+                {
+                    AppRunControl::Continue => {}
+                    AppRunControl::Exit(reason) => return Ok(AppRunControl::Exit(reason)),
+                }
+            }
+            AppEvent::DispatchAgentsOverviewTask { prompt, cwd } => {
+                self.dispatch_agents_overview_task(app_server, prompt, cwd)
+                    .await;
+            }
+            AppEvent::RenameAgentsOverviewThread { thread_id, name } => {
+                if let Err(error) = app_server.thread_set_name(thread_id, name.clone()).await {
+                    if let Ok(mut state) = self.agents_overview.view_state.lock() {
+                        state.input = name;
+                        state.renaming = true;
+                    }
+                    self.chat_widget
+                        .add_error_message(format!("Failed to rename task: {error}"));
+                }
+            }
+            AppEvent::StopAgentsOverviewThread { thread_id } => {
+                self.stop_agents_overview_thread(app_server, thread_id)
+                    .await;
             }
             AppEvent::OpenAgentPicker => {
                 self.open_agent_picker(app_server).await;

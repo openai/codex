@@ -602,21 +602,24 @@ impl AppServerSession {
 
     #[cfg(test)]
     pub(crate) async fn start_thread(&mut self, config: &Config) -> Result<AppServerStartedThread> {
-        self.start_thread_with_session_start_source(config, /*session_start_source*/ None)
-            .await
+        self.start_thread_with_session_start_source(
+            config, /*session_start_source*/ None, /*remote_cwd_override*/ None,
+        )
+        .await
     }
 
     pub(crate) async fn start_thread_with_session_start_source(
         &mut self,
         config: &Config,
         session_start_source: Option<ThreadStartSource>,
+        remote_cwd_override: Option<&std::path::Path>,
     ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
         let session_config = self.session_config_with_effective_service_tier(config);
         let mut params = thread_start_params_from_config(
             &session_config,
             self.thread_params_mode(),
-            self.remote_cwd_override.as_deref(),
+            remote_cwd_override.or(self.remote_cwd_override.as_deref()),
             session_start_source,
         );
         if self.history_support == ThreadHistorySupport::LegacyOnly {

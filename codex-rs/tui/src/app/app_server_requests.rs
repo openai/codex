@@ -355,12 +355,12 @@ impl PendingAppServerRequests {
                 .mcp_requests
                 .values()
                 .any(|pending_request_id| pending_request_id == request_id),
+            ServerRequest::ChatgptAuthTokensRefresh { .. } => true,
             ServerRequest::DynamicToolCall { .. }
-            | ServerRequest::ChatgptAuthTokensRefresh { .. }
             | ServerRequest::AttestationGenerate { .. }
             | ServerRequest::CurrentTimeRead { .. }
             | ServerRequest::ApplyPatchApproval { .. }
-            | ServerRequest::ExecCommandApproval { .. } => true,
+            | ServerRequest::ExecCommandApproval { .. } => false,
         }
     }
 
@@ -721,18 +721,20 @@ mod tests {
     #[test]
     fn rejects_dynamic_tool_calls_as_unsupported() {
         let mut pending = PendingAppServerRequests::default();
+        let request = ServerRequest::DynamicToolCall {
+            request_id: AppServerRequestId::Integer(99),
+            params: codex_app_server_protocol::DynamicToolCallParams {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                call_id: "tool-1".to_string(),
+                namespace: None,
+                tool: "tool".to_string(),
+                arguments: json!({}),
+            },
+        };
+        assert!(!pending.contains_server_request(&request));
         let unsupported = pending
-            .note_server_request(&ServerRequest::DynamicToolCall {
-                request_id: AppServerRequestId::Integer(99),
-                params: codex_app_server_protocol::DynamicToolCallParams {
-                    thread_id: "thread-1".to_string(),
-                    turn_id: "turn-1".to_string(),
-                    call_id: "tool-1".to_string(),
-                    namespace: None,
-                    tool: "tool".to_string(),
-                    arguments: json!({}),
-                },
-            })
+            .note_server_request(&request)
             .expect("dynamic tool calls should be rejected");
 
         assert_eq!(unsupported.request_id, AppServerRequestId::Integer(99));

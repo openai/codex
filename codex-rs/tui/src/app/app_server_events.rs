@@ -87,6 +87,21 @@ impl App {
         app_server_client: &AppServerSession,
         notification: ServerNotification,
     ) {
+        if let ServerNotification::ThreadStarted(started) = &notification
+            && let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id, ..
+            }) = &started.thread.source
+            && self
+                .agents_overview
+                .dispatched_requests
+                .contains_key(parent_thread_id)
+            && let Ok(thread_id) = codex_protocol::ThreadId::from_string(&started.thread.id)
+        {
+            self.agents_overview
+                .dispatched_requests
+                .entry(thread_id)
+                .or_default();
+        }
         if matches!(
             &notification,
             ServerNotification::ThreadStarted(_)
@@ -105,6 +120,9 @@ impl App {
                     !matches!(event, ThreadBufferedEvent::Request(request)
                         if request.id() == &notification.request_id)
                 });
+                for requests in self.agents_overview.dispatched_requests.values_mut() {
+                    requests.retain(|request| request.id() != &notification.request_id);
+                }
                 if let Some(request) = self
                     .pending_app_server_requests
                     .resolve_notification(&notification.request_id)
@@ -289,9 +307,32 @@ impl App {
                 .push_back(ThreadBufferedEvent::Request(Box::new(request)));
             return;
         }
+        let unsupported_request = matches!(
+            &request,
+            ServerRequest::DynamicToolCall { .. }
+                | ServerRequest::AttestationGenerate { .. }
+                | ServerRequest::CurrentTimeRead { .. }
+                | ServerRequest::ApplyPatchApproval { .. }
+                | ServerRequest::ExecCommandApproval { .. }
+        );
+        if self
+            .pending_app_server_requests
+            .contains_server_request(&request)
+        {
+            return;
+        }
+        if let Some(thread_id) = thread_id
+            && self.primary_thread_id != Some(thread_id)
+            && !unsupported_request
+            && let Some(requests) = self.agents_overview.dispatched_requests.get_mut(&thread_id)
+        {
+            requests.push(request);
+            return;
+        }
         if thread_id.is_some()
             && self.primary_thread_id.is_none()
             && !self.pending_startup_thread_start
+            && !unsupported_request
         {
             return;
         }
@@ -301,6 +342,7 @@ impl App {
             && !self.thread_event_channels.contains_key(&thread_id)
             && self.agent_navigation.get(&thread_id).is_none()
             && !self.side_threads.contains_key(&thread_id)
+            && !unsupported_request
         {
             let thread = app_server_client
                 .request_handle()
@@ -312,18 +354,30 @@ impl App {
                     },
                 })
                 .await;
-            if !matches!(
-                thread,
-                Ok(ThreadReadResponse { thread })
-                    if matches!(thread.source,
-                        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                            parent_thread_id,
-                            ..
-                        }) if self.primary_thread_id == Some(parent_thread_id)
-                            || self.thread_event_channels.contains_key(&parent_thread_id)
-                            || self.agent_navigation.get(&parent_thread_id).is_some()
-                    )
-            ) {
+            let Ok(ThreadReadResponse { thread }) = thread else {
+                return;
+            };
+            let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id, ..
+            }) = thread.source
+            else {
+                return;
+            };
+            if self.primary_thread_id != Some(parent_thread_id)
+                && !self.thread_event_channels.contains_key(&parent_thread_id)
+                && self.agent_navigation.get(&parent_thread_id).is_none()
+            {
+                if self
+                    .agents_overview
+                    .dispatched_requests
+                    .contains_key(&parent_thread_id)
+                {
+                    self.agents_overview
+                        .dispatched_requests
+                        .entry(thread_id)
+                        .or_default()
+                        .push(request);
+                }
                 return;
             }
         }

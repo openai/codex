@@ -529,6 +529,9 @@ impl App {
             &mut snapshot,
         )
         .await;
+        if snapshot.input_state.is_none() {
+            snapshot.input_state = self.agents_overview.input_states.remove(&thread_id);
+        }
         let blocks_direct_input = self.agent_navigation.is_parent_owned(thread_id);
 
         self.active_thread_id = Some(thread_id);
@@ -728,7 +731,11 @@ impl App {
         }
         self.config = config.clone();
         match app_server
-            .start_thread_with_session_start_source(&config, session_start_source)
+            .start_thread_with_session_start_source(
+                &config,
+                session_start_source,
+                /*remote_cwd_override*/ None,
+            )
             .await
         {
             Ok(mut started) => {
@@ -1091,6 +1098,8 @@ impl App {
                 {
                     Ok(()) => {
                         self.backfill_loaded_subagent_threads(app_server).await;
+                        self.replay_agents_overview_requests(app_server, resumed_thread_id)
+                            .await;
                         if let Some(summary) = summary {
                             let mut lines: Vec<Line<'static>> = Vec::new();
                             if let Some(usage_line) = summary.usage_line {
