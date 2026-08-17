@@ -407,6 +407,7 @@ async fn authorization_manager_for(
             OutboundProxyPolicy::ReqwestDefault,
         ))),
         HeaderMap::new(),
+        &tokens.url,
     ));
     let mut state =
         OAuthState::new_with_oauth_http_client(tokens.url.clone(), oauth_http_client).await?;

@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use codex_exec_server::RouteAwareHttpClient;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
@@ -15,12 +17,15 @@ use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::Request;
 use wiremock::ResponseTemplate;
+use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 use super::McpOAuthClientRegistration;
 use super::start_authorization;
 use crate::oauth_http_client::OAuthHttpClientAdapter;
+use crate::utils::MCP_USER_AGENT;
+use crate::utils::build_default_headers;
 
 const CALLBACK_ID: &str = "abc123ABC_-x";
 
@@ -103,6 +108,7 @@ async fn authorization(
                 OutboundProxyPolicy::ReqwestDefault,
             ))),
             HeaderMap::new(),
+            &format!("{}/mcp", server.uri()),
         )),
         &["read"],
         redirect_uri,
@@ -199,6 +205,141 @@ async fn registration_selection_preserves_dcr_capabilities_and_exact_redirects()
         assert_eq!(registration["redirect_uris"], json!([expected_redirect]));
     }
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn resource_headers_follow_same_origin_registration_redirect_and_sdk_auth_wins() -> Result<()>
+{
+    const RESOURCE_AUTHORIZATION: &str = "Bearer resource-only-secret";
+    const RESOURCE_API_KEY: &str = "resource-api-key-secret";
+    // These dummy OAuth credentials exist only in this test's local mock server.
+    const DUMMY_CLIENT_ID: &str = "dummy-test-client-id";
+    const DUMMY_CLIENT_SECRET: &str = "dummy-test-client-secret";
+    let sdk_authorization = format!(
+        "Basic {}",
+        STANDARD.encode(format!("{DUMMY_CLIENT_ID}:{DUMMY_CLIENT_SECRET}"))
+    );
+
+    let server = MockServer::start().await;
+    let authorization_server = MockServer::start().await;
+    let resource_url = format!("{}/mcp", server.uri());
+    let resource_metadata_url = format!("{}/resource-metadata", server.uri());
+    let redirect_uri = format!("http://127.0.0.1:43123/callback/{CALLBACK_ID}");
+
+    Mock::given(method("GET"))
+        .and(path("/mcp"))
+        .and(header("authorization", RESOURCE_AUTHORIZATION))
+        .and(header("x-api-key", RESOURCE_API_KEY))
+        .respond_with(ResponseTemplate::new(401).insert_header(
+            "www-authenticate",
+            format!("Bearer resource_metadata=\"{resource_metadata_url}\""),
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/resource-metadata"))
+        .and(header("authorization", RESOURCE_AUTHORIZATION))
+        .and(header("x-api-key", RESOURCE_API_KEY))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "resource": resource_url,
+            "authorization_servers": [authorization_server.uri()],
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/.well-known/oauth-authorization-server"))
+        .and(header("user-agent", MCP_USER_AGENT))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "issuer": authorization_server.uri(),
+            "authorization_endpoint": format!("{}/authorize", authorization_server.uri()),
+            "token_endpoint": format!("{}/token", server.uri()),
+            "registration_endpoint": format!("{}/register", server.uri()),
+            "token_endpoint_auth_methods_supported": ["client_secret_basic"],
+            "code_challenge_methods_supported": ["S256"],
+        })))
+        .expect(1)
+        .mount(&authorization_server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/register"))
+        .and(header("authorization", RESOURCE_AUTHORIZATION))
+        .and(header("x-api-key", RESOURCE_API_KEY))
+        .and(header("content-type", "application/json"))
+        .respond_with(ResponseTemplate::new(307).insert_header("location", "/register/"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/register/"))
+        .and(header("authorization", RESOURCE_AUTHORIZATION))
+        .and(header("x-api-key", RESOURCE_API_KEY))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "client_id": DUMMY_CLIENT_ID,
+            "client_secret": DUMMY_CLIENT_SECRET,
+            "redirect_uris": [redirect_uri],
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .and(header("authorization", sdk_authorization))
+        .and(header("x-api-key", RESOURCE_API_KEY))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "test-access-token",
+            "token_type": "Bearer",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let default_headers = build_default_headers(
+        Some(HashMap::from([
+            (
+                "Authorization".to_string(),
+                RESOURCE_AUTHORIZATION.to_string(),
+            ),
+            ("X-Api-Key".to_string(), RESOURCE_API_KEY.to_string()),
+        ])),
+        /*env_http_headers*/ None,
+    )?;
+    let mut state = start_authorization(
+        &resource_url,
+        Arc::new(OAuthHttpClientAdapter::new(
+            Arc::new(RouteAwareHttpClient::new(HttpClientFactory::new(
+                OutboundProxyPolicy::ReqwestDefault,
+            ))),
+            default_headers,
+            &resource_url,
+        )),
+        &[],
+        &redirect_uri,
+        CALLBACK_ID,
+        McpOAuthClientRegistration::Dcr,
+    )
+    .await?;
+    let csrf_state = Url::parse(&state.get_authorization_url().await?)?
+        .query_pairs()
+        .find(|(name, _)| name == "state")
+        .expect("authorization request should contain a CSRF state")
+        .1
+        .into_owned();
+    state
+        .handle_callback_with_issuer("valid-authorization-code", &csrf_state, None)
+        .await?;
+
+    let authorization_requests = authorization_server
+        .received_requests()
+        .await
+        .expect("authorization server should record requests");
+    assert_eq!(authorization_requests.len(), 1);
+    assert_eq!(authorization_requests[0].headers.get("authorization"), None);
+    assert_eq!(authorization_requests[0].headers.get("x-api-key"), None);
+    server.verify().await;
+    authorization_server.verify().await;
     Ok(())
 }
 

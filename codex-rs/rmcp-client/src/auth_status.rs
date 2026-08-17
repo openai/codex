@@ -225,17 +225,19 @@ async fn discover_streamable_http_oauth_with_headers_and_http_client(
         OAuthDiscoveryTimeout::Requested => OAuthHttpClientAdapter::new_with_redirect_mode(
             http_client,
             default_headers,
+            url,
             has_configured_headers,
             redirect_mode,
-        ),
+        )?,
         OAuthDiscoveryTimeout::Capped(max_timeout) => {
             OAuthHttpClientAdapter::new_with_max_timeout_and_redirect_mode(
                 http_client,
                 default_headers,
+                url,
                 max_timeout,
                 has_configured_headers,
                 redirect_mode,
-            )
+            )?
         }
     };
     let mut authorization_manager =

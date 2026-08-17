@@ -1,5 +1,6 @@
 mod streamable_http_test_support;
 
+use std::collections::HashMap;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -44,8 +45,12 @@ const SERVER_NAME: &str = "test-streamable-http-oauth-startup";
 const EXPIRED_ACCESS_TOKEN: &str = "expired-access-token";
 const REFRESH_TOKEN: &str = "valid-refresh-token";
 const REFRESHED_ACCESS_TOKEN: &str = "refreshed-access-token";
+const RESOURCE_API_KEY: &str = "resource-api-key-secret";
+const RESOURCE_USER_AGENT: &str = "resource-only-user-agent";
+const MCP_USER_AGENT: &str = concat!("codex-mcp-client/", env!("CARGO_PKG_VERSION"));
 const CHILD_SERVER_URL_ENV: &str = "MCP_TEST_OAUTH_STARTUP_SERVER_URL";
 const CHILD_HELPER_COMMAND_ENV: &str = "MCP_TEST_OAUTH_STARTUP_HELPER_COMMAND";
+const CHILD_RESOURCE_API_KEY_ENV: &str = "MCP_TEST_OAUTH_STARTUP_RESOURCE_API_KEY";
 const UNREFRESHABLE_SERVER_URL: &str = "https://unrefreshable.example/mcp";
 const UNEXPIRED_SERVER_URL: &str = "https://unexpired.example/mcp";
 const REFRESHABLE_SERVER_URL: &str = "https://refreshable.example/mcp";
@@ -62,15 +67,14 @@ async fn refreshes_oauth_with_gateway_headers_helper() -> anyhow::Result<()> {
 
 async fn assert_expired_token_refresh(with_headers_helper: bool) -> anyhow::Result<()> {
     let server = MockServer::start().await;
+    let authorization_server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/.well-known/oauth-authorization-server/mcp"))
-        .and(header(
-            "user-agent",
-            concat!("codex-mcp-client/", env!("CARGO_PKG_VERSION")),
-        ))
+        .and(header("user-agent", RESOURCE_USER_AGENT))
+        .and(header("x-api-key", RESOURCE_API_KEY))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "authorization_endpoint": format!("{}/oauth/authorize", server.uri()),
-            "token_endpoint": format!("{}/oauth/token", server.uri()),
+            "authorization_endpoint": format!("{}/oauth/authorize", authorization_server.uri()),
+            "token_endpoint": format!("{}/oauth/token", authorization_server.uri()),
             "scopes_supported": [""],
         })))
         .expect(1)
@@ -78,10 +82,7 @@ async fn assert_expired_token_refresh(with_headers_helper: bool) -> anyhow::Resu
         .await;
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
-        .and(header(
-            "user-agent",
-            concat!("codex-mcp-client/", env!("CARGO_PKG_VERSION")),
-        ))
+        .and(header("user-agent", MCP_USER_AGENT))
         .and(body_string_contains("grant_type=refresh_token"))
         .and(body_string_contains(format!(
             "refresh_token={REFRESH_TOKEN}"
@@ -93,14 +94,12 @@ async fn assert_expired_token_refresh(with_headers_helper: bool) -> anyhow::Resu
             "refresh_token": REFRESH_TOKEN,
         })))
         .expect(1)
-        .mount(&server)
+        .mount(&authorization_server)
         .await;
     Mock::given(method("POST"))
         .and(path("/mcp"))
-        .and(header(
-            "user-agent",
-            concat!("codex-mcp-client/", env!("CARGO_PKG_VERSION")),
-        ))
+        .and(header("user-agent", RESOURCE_USER_AGENT))
+        .and(header("x-api-key", RESOURCE_API_KEY))
         .and(header(
             "authorization",
             format!("Bearer {REFRESHED_ACCESS_TOKEN}"),
@@ -148,6 +147,7 @@ async fn assert_expired_token_refresh(with_headers_helper: bool) -> anyhow::Resu
         .args(["oauth_startup_child", "--exact", "--ignored", "--nocapture"])
         .env("CODEX_HOME", codex_home.path())
         .env(CHILD_SERVER_URL_ENV, server_url)
+        .env(CHILD_RESOURCE_API_KEY_ENV, RESOURCE_API_KEY)
         .env("MCP_TEST_AMBIENT_SECRET", "must-not-reach-helper");
     if with_headers_helper {
         command.env(
@@ -169,7 +169,25 @@ async fn assert_expired_token_refresh(with_headers_helper: bool) -> anyhow::Resu
                 .is_some_and(|value| value == "Bearer gateway-token")
         }));
     }
+    let authorization_requests = authorization_server
+        .received_requests()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("authorization server should record requests"))?;
+    assert_eq!(authorization_requests.len(), 1);
+    assert_eq!(authorization_requests[0].headers.get("x-api-key"), None);
+    assert_eq!(
+        authorization_requests[0].headers.get("proxy-authorization"),
+        None
+    );
+    assert_eq!(
+        authorization_requests[0]
+            .headers
+            .get("user-agent")
+            .map(http::HeaderValue::as_bytes),
+        Some(MCP_USER_AGENT.as_bytes())
+    );
     server.verify().await;
+    authorization_server.verify().await;
     Ok(())
 }
 
@@ -383,8 +401,14 @@ async fn oauth_startup_child() -> anyhow::Result<()> {
         SERVER_NAME,
         &server_url,
         /*bearer_token*/ None,
-        /*http_headers*/ None,
-        /*env_http_headers*/ None,
+        Some(HashMap::from([(
+            "User-Agent".to_string(),
+            RESOURCE_USER_AGENT.to_string(),
+        )])),
+        Some(HashMap::from([(
+            "X-Api-Key".to_string(),
+            CHILD_RESOURCE_API_KEY_ENV.to_string(),
+        )])),
         OAuthCredentialsStoreMode::File,
         AuthKeyringBackendKind::default(),
         http_client,

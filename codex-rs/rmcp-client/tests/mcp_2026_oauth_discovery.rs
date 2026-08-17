@@ -20,6 +20,8 @@ use wiremock::matchers::path;
 
 const RESOURCE_AUTHORIZATION: &str = "Bearer resource-only-secret";
 const RESOURCE_API_KEY: &str = "resource-api-key-secret";
+const RESOURCE_USER_AGENT: &str = "resource-only-user-agent";
+const MCP_USER_AGENT: &str = concat!("codex-mcp-client/", env!("CARGO_PKG_VERSION"));
 
 type DiscoveryResult = anyhow::Result<Option<StreamableHttpOAuthDiscovery>>;
 
@@ -37,6 +39,7 @@ fn resource_headers() -> Option<HashMap<String, String>> {
             RESOURCE_AUTHORIZATION.to_string(),
         ),
         ("X-Api-Key".to_string(), RESOURCE_API_KEY.to_string()),
+        ("User-Agent".to_string(), RESOURCE_USER_AGENT.to_string()),
     ]))
 }
 
@@ -52,6 +55,7 @@ async fn discover_legacy_oauth_without_starting_an_mcp_session(
         .and(path("/mcp"))
         .and(header("authorization", RESOURCE_AUTHORIZATION))
         .and(header("x-api-key", RESOURCE_API_KEY))
+        .and(header("user-agent", RESOURCE_USER_AGENT))
         .respond_with(ResponseTemplate::new(401).insert_header(
             "www-authenticate",
             format!("Bearer resource_metadata=\"{resource_metadata_url}\""),
@@ -71,6 +75,7 @@ async fn discover_legacy_oauth_without_starting_an_mcp_session(
         .and(path("/resource-metadata"))
         .and(header("authorization", RESOURCE_AUTHORIZATION))
         .and(header("x-api-key", RESOURCE_API_KEY))
+        .and(header("user-agent", RESOURCE_USER_AGENT))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "resource": resource_url,
             "authorization_servers": [authorization_server.uri()],
@@ -112,7 +117,7 @@ async fn discover_legacy_oauth_without_starting_an_mcp_session(
         StreamableHttpRedirectMode::Legacy,
     )
     .await;
-    let routed_discovery = discover_streamable_http_oauth(
+    let plugin_discovery = discover_streamable_http_oauth(
         &resource_url,
         resource_headers(),
         /*env_http_headers*/ None,
@@ -120,13 +125,30 @@ async fn discover_legacy_oauth_without_starting_an_mcp_session(
             OutboundProxyPolicy::ReqwestDefault,
         ))),
         OAuthDiscoveryTimeout::LOCAL,
-        StreamableHttpRedirectMode::Legacy,
+        StreamableHttpRedirectMode::AgentPluginV1,
     )
     .await;
 
     resource_server.verify().await;
     authorization_server.verify().await;
-    Ok((local_discovery, routed_discovery))
+    for request in authorization_server
+        .received_requests()
+        .await
+        .ok_or_else(|| {
+            anyhow::anyhow!("authorization-server request recording should be enabled")
+        })?
+    {
+        assert_eq!(request.headers.get("authorization"), None);
+        assert_eq!(request.headers.get("x-api-key"), None);
+        assert_eq!(
+            request
+                .headers
+                .get("user-agent")
+                .map(wiremock::http::HeaderValue::as_bytes),
+            Some(MCP_USER_AGENT.as_bytes())
+        );
+    }
+    Ok((local_discovery, plugin_discovery))
 }
 
 #[tokio::test]
