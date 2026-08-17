@@ -252,7 +252,6 @@ deny = [
         "opentelemetry-http",
         "opentelemetry-otlp",
         "rmcp",
-        "sentry",
         "webrtc-sys-build",
     ], reason = "new direct reqwest dependencies must use codex-http-client; temporary wrappers track migration debt" },
 ]

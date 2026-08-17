@@ -8,10 +8,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::time::Duration;
 
-use anyhow::Result;
-use anyhow::anyhow;
 use codex_login::AuthEnvTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
@@ -25,9 +22,11 @@ use tracing_subscriber::fmt::writer::MakeWriter;
 use tracing_subscriber::registry::LookupSpan;
 
 pub(crate) mod feedback_diagnostics;
+mod upload;
 pub use feedback_diagnostics::FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME;
 pub use feedback_diagnostics::FeedbackDiagnostic;
 pub use feedback_diagnostics::FeedbackDiagnostics;
+pub use upload::PreparedFeedbackUpload;
 
 /// Filename used for the redacted `codex doctor --json` feedback attachment.
 pub const DOCTOR_REPORT_ATTACHMENT_FILENAME: &str = "codex-doctor-report.json";
@@ -417,78 +416,6 @@ impl FeedbackSnapshot {
         }
 
         self.feedback_diagnostics.attachment_text()
-    }
-
-    /// Upload feedback to Sentry with optional attachments.
-    pub fn upload_feedback(&self, options: FeedbackUploadOptions<'_>) -> Result<()> {
-        use std::str::FromStr;
-        use std::sync::Arc;
-
-        use sentry::Client;
-        use sentry::ClientOptions;
-        use sentry::protocol::Envelope;
-        use sentry::protocol::EnvelopeItem;
-        use sentry::protocol::Event;
-        use sentry::protocol::Level;
-        use sentry::transports::DefaultTransportFactory;
-        use sentry::types::Dsn;
-
-        // Build Sentry client
-        let client = Client::from_config(ClientOptions {
-            dsn: Some(Dsn::from_str(SENTRY_DSN).map_err(|e| anyhow!("invalid DSN: {e}"))?),
-            transport: Some(Arc::new(DefaultTransportFactory {})),
-            ..Default::default()
-        });
-
-        let tags = self.upload_tags(
-            options.classification,
-            options.reason,
-            options.tags,
-            options.session_source.as_ref(),
-        );
-
-        let level = match options.classification {
-            "bug" | "bad_result" | "safety_check" => Level::Error,
-            _ => Level::Info,
-        };
-
-        let mut envelope = Envelope::new();
-        let title = format!(
-            "[{}]: Codex session {}",
-            display_classification(options.classification),
-            self.thread_id
-        );
-
-        let mut event = Event {
-            level,
-            message: Some(title.clone()),
-            tags,
-            ..Default::default()
-        };
-        if let Some(r) = options.reason {
-            use sentry::protocol::Exception;
-            use sentry::protocol::Values;
-
-            event.exception = Values::from(vec![Exception {
-                ty: title,
-                value: Some(r.to_string()),
-                ..Default::default()
-            }]);
-        }
-        envelope.add_item(EnvelopeItem::Event(event));
-
-        for attachment in self.feedback_attachments(
-            options.include_logs,
-            options.extra_attachments,
-            options.extra_attachment_paths,
-            options.logs_override,
-        ) {
-            envelope.add_item(EnvelopeItem::Attachment(attachment));
-        }
-
-        client.send_envelope(envelope);
-        client.flush(Some(Duration::from_secs(UPLOAD_TIMEOUT_SECS)));
-        Ok(())
     }
 
     fn upload_tags(

@@ -9,16 +9,20 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+codex-http-client = { workspace = true }
 codex-login = { workspace = true }
 codex-protocol = { workspace = true }
 mime_guess = { workspace = true }
-sentry = { version = "0.46" }
+sentry = { version = "0.46", default-features = false }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 log = { workspace = true }
 pretty_assertions = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }
+wiremock = { workspace = true }
 
 [lib]
 doctest = false

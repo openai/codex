@@ -262,9 +262,9 @@ impl FeedbackRequestProcessor {
 
         let session_source = self.thread_manager.session_source();
 
-        let upload_result = tokio::task::spawn_blocking(move || {
+        let prepared_upload = tokio::task::spawn_blocking(move || {
             let tags = (!upload_tags.is_empty()).then_some(&upload_tags);
-            snapshot.upload_feedback(FeedbackUploadOptions {
+            snapshot.prepare_feedback_upload(FeedbackUploadOptions {
                 classification: &classification,
                 reason: reason.as_deref(),
                 tags,
@@ -277,7 +277,7 @@ impl FeedbackRequestProcessor {
         })
         .await;
 
-        let upload_result = match upload_result {
+        let prepared_upload = match prepared_upload {
             Ok(result) => result,
             Err(join_err) => {
                 return Err(internal_error(format!(
@@ -286,7 +286,11 @@ impl FeedbackRequestProcessor {
             }
         };
 
-        upload_result.map_err(|err| internal_error(format!("failed to upload feedback: {err}")))?;
+        prepared_upload
+            .map_err(|err| internal_error(format!("failed to prepare feedback: {err}")))?
+            .send(&self.config.http_client_factory())
+            .await
+            .map_err(|err| internal_error(format!("failed to upload feedback: {err}")))?;
         Ok(FeedbackUploadResponse { thread_id })
     }
 
