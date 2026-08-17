@@ -31,6 +31,8 @@ use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
 use windows_sys::Win32::Storage::FileSystem::OPEN_EXISTING;
 use windows_sys::Win32::Storage::FileSystem::ReadFile;
+use windows_sys::Win32::Storage::FileSystem::SECURITY_IDENTIFICATION;
+use windows_sys::Win32::Storage::FileSystem::SECURITY_SQOS_PRESENT;
 use windows_sys::Win32::Storage::FileSystem::WriteFile;
 use windows_sys::Win32::System::IO::CancelIoEx;
 use windows_sys::Win32::System::IO::GetOverlappedResult;
@@ -67,7 +69,10 @@ impl WindowsPipeStream {
                 FILE_SHARE_READ | FILE_SHARE_WRITE,
                 ptr::null(),
                 OPEN_EXISTING,
-                FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED,
+                FILE_ATTRIBUTE_NORMAL
+                    | FILE_FLAG_OVERLAPPED
+                    | SECURITY_SQOS_PRESENT
+                    | SECURITY_IDENTIFICATION,
                 NULL_HANDLE,
             )
         };
@@ -337,3 +342,7 @@ fn remaining_timeout_ms(deadline: Instant) -> u32 {
 fn timeout_io_error() -> io::Error {
     io::Error::new(io::ErrorKind::TimedOut, "timed out waiting for IDE context")
 }
+
+#[cfg(test)]
+#[path = "windows_pipe_tests.rs"]
+mod tests;
