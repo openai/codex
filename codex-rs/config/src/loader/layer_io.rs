@@ -37,6 +37,8 @@ pub(super) struct LoadedConfigLayers {
     pub managed_config: Option<MangedConfigFromFile>,
     /// If present, data read from managed preferences (macOS only).
     pub managed_config_from_mdm: Option<ManagedConfigFromMdm>,
+    /// User-facing warnings discovered while loading managed configuration.
+    pub startup_warnings: Vec<String>,
 }
 
 pub(super) async fn load_config_layers_internal(
@@ -58,21 +60,54 @@ pub(super) async fn load_config_layers_internal(
         ..
     } = overrides;
 
+    #[cfg(windows)]
+    let ignore_default_managed_config = managed_config_path.is_none();
+    #[cfg(not(windows))]
+    let ignore_default_managed_config = false;
+
     let managed_config_path = AbsolutePathBuf::from_absolute_path(
         managed_config_path.unwrap_or_else(|| managed_config_default_path(codex_home)),
     )?;
 
-    let managed_config = read_config_from_path(
-        fs,
-        &managed_config_path,
-        /*log_missing_as_info*/ false,
-        strict_config,
-    )
-    .await?
-    .map(|loaded| MangedConfigFromFile {
-        managed_config: loaded,
-        file: managed_config_path.clone(),
-    });
+    #[cfg(windows)]
+    let startup_warnings = if ignore_default_managed_config {
+        let path_uri = PathUri::from_abs_path(&managed_config_path);
+        match fs.get_metadata(&path_uri, /*sandbox*/ None).await {
+            Ok(_) => vec![format!(
+                "Ignoring deprecated managed config file at {}; CODEX_HOME/managed_config.toml is no longer supported on Windows. Use %ProgramData%\\OpenAI\\Codex\\requirements.toml for enforced settings or config.toml for defaults.",
+                managed_config_path.as_path().display()
+            )],
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Vec::new(),
+            Err(err) => {
+                tracing::debug!(
+                    error = %err,
+                    path = %managed_config_path.as_path().display(),
+                    "Failed to check deprecated managed config file"
+                );
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    #[cfg(not(windows))]
+    let startup_warnings = Vec::new();
+
+    let managed_config = if ignore_default_managed_config {
+        None
+    } else {
+        read_config_from_path(
+            fs,
+            &managed_config_path,
+            /*log_missing_as_info*/ false,
+            strict_config,
+        )
+        .await?
+        .map(|loaded| MangedConfigFromFile {
+            managed_config: loaded,
+            file: managed_config_path.clone(),
+        })
+    };
 
     #[cfg(target_os = "macos")]
     let managed_preferences = load_managed_admin_config_layer(
@@ -89,6 +124,7 @@ pub(super) async fn load_config_layers_internal(
     Ok(LoadedConfigLayers {
         managed_config,
         managed_config_from_mdm: managed_preferences,
+        startup_warnings,
     })
 }
 
@@ -168,7 +204,9 @@ fn validate_config_toml_strictly(
     Ok(())
 }
 
-/// Return the default managed config path.
+/// Return the legacy managed config path.
+///
+/// On Windows, the default path is only checked so callers can warn that it is ignored.
 pub(super) fn managed_config_default_path(codex_home: &Path) -> PathBuf {
     #[cfg(unix)]
     {

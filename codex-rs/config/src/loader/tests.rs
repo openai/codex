@@ -221,6 +221,82 @@ async fn missing_packaged_defaults_file_returns_an_error() {
     );
 }
 
+#[cfg(windows)]
+#[tokio::test]
+async fn default_windows_managed_config_is_ignored_with_warning() {
+    let tmp = tempdir().expect("tempdir");
+    let codex_home = tmp.path().join("codex-home");
+    std::fs::create_dir_all(&codex_home).expect("create codex home");
+    let managed_config_path = codex_home.join("managed_config.toml");
+    std::fs::write(
+        &managed_config_path,
+        r#"
+model = "legacy-model"
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+"#,
+    )
+    .expect("write default legacy managed config");
+    std::fs::write(codex_home.join(CONFIG_TOML_FILE), r#"model = "user-model""#)
+        .expect("write user config");
+
+    let mut overrides = LoaderOverrides::without_managed_config_for_tests();
+    overrides.managed_config_path = None;
+    overrides.system_config_path = Some(tmp.path().join("system-config.toml"));
+    overrides.system_requirements_path = Some(tmp.path().join("requirements.toml"));
+    let stack = load_config_layers_state(
+        &TestFileSystem,
+        &codex_home,
+        /*cwd*/ None,
+        &[],
+        overrides,
+        &crate::NoopThreadConfigLoader,
+    )
+    .await
+    .expect("load config layers");
+
+    assert_eq!(
+        stack.effective_config().get("model"),
+        Some(&TomlValue::String("user-model".to_string()))
+    );
+    assert_eq!(stack.requirements_toml().allowed_approval_policies, None);
+    assert_eq!(stack.requirements_toml().allowed_sandbox_modes, None);
+    assert!(stack.all_layers_low_to_high().all(|layer| !matches!(
+        &layer.name,
+        ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. }
+    )));
+    let expected_warnings = vec![format!(
+        "Ignoring deprecated managed config file at {}; CODEX_HOME/managed_config.toml is no longer supported on Windows. Use %ProgramData%\\OpenAI\\Codex\\requirements.toml for enforced settings or config.toml for defaults.",
+        managed_config_path.display()
+    )];
+    assert_eq!(stack.startup_warnings(), Some(expected_warnings.as_slice()));
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_local_managed_configuration_ignores_legacy_file_but_detects_requirements() {
+    let tmp = tempdir().expect("tempdir");
+    let codex_home = tmp.path().join("codex-home");
+    std::fs::create_dir_all(&codex_home).expect("create codex home");
+    std::fs::write(codex_home.join("managed_config.toml"), "")
+        .expect("write default legacy managed config");
+    let system_requirements_path = tmp.path().join("requirements.toml");
+
+    let legacy_only = has_local_managed_configuration_with_system_requirements_path(
+        &codex_home,
+        &system_requirements_path,
+    )
+    .expect("check legacy-only managed configuration");
+    std::fs::write(&system_requirements_path, "").expect("write system requirements");
+    let with_system_requirements = has_local_managed_configuration_with_system_requirements_path(
+        &codex_home,
+        &system_requirements_path,
+    )
+    .expect("check system managed configuration");
+
+    assert_eq!((legacy_only, with_system_requirements), (false, true));
+}
+
 #[tokio::test]
 async fn profile_v2_rejects_matching_legacy_profile_in_base_user_config() {
     let tmp = tempdir().expect("tempdir");
