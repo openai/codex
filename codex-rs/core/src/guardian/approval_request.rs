@@ -7,6 +7,7 @@ use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -83,7 +84,7 @@ pub(crate) struct GuardianNetworkAccessTrigger {
     pub(crate) call_id: String,
     pub(crate) tool_name: String,
     pub(crate) command: Vec<String>,
-    pub(crate) cwd: AbsolutePathBuf,
+    pub(crate) cwd: PathUri,
     pub(crate) sandbox_permissions: crate::sandboxing::SandboxPermissions,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) additional_permissions: Option<AdditionalPermissionProfile>,
@@ -330,14 +331,20 @@ pub(crate) fn guardian_approval_request_to_json(
             protocol,
             port,
             trigger,
-        } => serialize_guardian_action(NetworkAccessApprovalAction {
-            tool: "network_access",
-            target,
-            host,
-            protocol: *protocol,
-            port: *port,
-            trigger: trigger.as_ref(),
-        }),
+        } => {
+            let mut value = serialize_guardian_action(NetworkAccessApprovalAction {
+                tool: "network_access",
+                target,
+                host,
+                protocol: *protocol,
+                port: *port,
+                trigger: trigger.as_ref(),
+            })?;
+            if let Some(trigger) = trigger {
+                value["trigger"]["cwd"] = trigger.cwd.inferred_native_path_string().into();
+            }
+            Ok(value)
+        }
         GuardianApprovalRequest::McpToolCall {
             id: _,
             server,

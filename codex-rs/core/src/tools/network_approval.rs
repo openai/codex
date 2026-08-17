@@ -699,8 +699,11 @@ impl NetworkApprovalService {
         let command = owner_call
             .as_ref()
             .map_or_else(|| prompt_command.join(" "), |call| call.command.clone());
-        let cwd = if let Some(owner_call) = owner_call.as_ref() {
-            owner_call.trigger.cwd.clone()
+        let cwd = if let Some(cwd) = owner_call
+            .as_ref()
+            .and_then(|owner_call| owner_call.trigger.cwd.to_abs_path().ok())
+        {
+            cwd
         } else {
             turn_context
                 .environments

@@ -1207,7 +1207,7 @@ async fn build_guardian_prompt_items_keeps_other_requests_generic() -> anyhow::R
 
 #[test]
 fn guardian_approval_request_to_json_renders_network_access_trigger() -> serde_json::Result<()> {
-    let cwd = test_path_buf("/repo").abs();
+    let cwd = PathUri::parse("file:///C:/repo").expect("valid Windows path URI");
     let action = GuardianApprovalRequest::NetworkAccess {
         id: "network-1".to_string(),
         turn_id: "turn-1".to_string(),
@@ -1219,7 +1219,7 @@ fn guardian_approval_request_to_json_renders_network_access_trigger() -> serde_j
             call_id: "call-1".to_string(),
             tool_name: "shell".to_string(),
             command: vec!["curl".to_string(), "https://example.com".to_string()],
-            cwd: cwd.clone(),
+            cwd,
             sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
             additional_permissions: None,
             justification: Some("Fetch the release metadata.".to_string()),
@@ -1239,7 +1239,7 @@ fn guardian_approval_request_to_json_renders_network_access_trigger() -> serde_j
                 "callId": "call-1",
                 "toolName": "shell",
                 "command": ["curl", "https://example.com"],
-                "cwd": cwd.to_string_lossy().to_string(),
+                "cwd": "C:\\repo",
                 "sandboxPermissions": "use_default",
                 "justification": "Fetch the release metadata.",
             },
@@ -1253,7 +1253,7 @@ fn guardian_approval_request_to_json_renders_network_access_trigger() -> serde_j
 async fn build_guardian_prompt_items_explains_network_access_review_scope() -> anyhow::Result<()> {
     let (session, turn) = guardian_test_session_and_turn_with_base_url("http://localhost").await;
     seed_guardian_parent_history(&session, &turn).await;
-    let cwd = test_path_buf("/repo").abs();
+    let cwd = PathUri::from_abs_path(&test_path_buf("/repo").abs());
 
     let prompt = build_guardian_prompt_items(
         session.as_ref(),
@@ -1382,7 +1382,7 @@ fn guardian_request_target_item_id_omits_network_access_trigger_call_id() {
             call_id: "call-1".to_string(),
             tool_name: "shell".to_string(),
             command: vec!["curl".to_string(), "https://example.com".to_string()],
-            cwd: test_path_buf("/repo").abs(),
+            cwd: PathUri::from_abs_path(&test_path_buf("/repo").abs()),
             sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
             additional_permissions: None,
             justification: None,

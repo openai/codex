@@ -4,6 +4,7 @@ use codex_network_proxy::BlockedRequestArgs;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
 use core_test_support::test_path_buf;
 use futures::poll;
@@ -481,7 +482,7 @@ async fn register_call_with_default_shell_trigger(
                 call_id: "call-1".to_string(),
                 tool_name: "shell_command".to_string(),
                 command: vec!["curl".to_string(), "https://example.com".to_string()],
-                cwd: test_path_buf("/tmp").abs(),
+                cwd: PathUri::from_abs_path(&test_path_buf("/tmp").abs()),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 additional_permissions: None,
                 justification: None,
@@ -503,7 +504,7 @@ async fn active_call_preserves_triggering_command_context() {
         call_id: "call-1".to_string(),
         tool_name: "shell_command".to_string(),
         command: vec!["curl".to_string(), "https://example.com".to_string()],
-        cwd: test_path_buf("/repo").abs(),
+        cwd: PathUri::parse("file:///C:/repo").expect("valid Windows path URI"),
         sandbox_permissions: SandboxPermissions::UseDefault,
         additional_permissions: None,
         justification: Some("fetch release metadata".to_string()),
