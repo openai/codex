@@ -929,6 +929,41 @@ async fn live_app_server_command_output_delta_transcript_snapshot() {
 }
 
 #[tokio::test]
+async fn live_app_server_sub_agent_activity_renders_once() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let activity = AppServerThreadItem::SubAgentActivity {
+        id: "activity-1".to_string(),
+        kind: codex_app_server_protocol::SubAgentActivityKind::Interacted,
+        agent_thread_id: ThreadId::new().to_string(),
+        agent_path: "/root/researcher".to_string(),
+    };
+
+    chat.handle_server_notification(
+        ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            started_at_ms: 0,
+            item: activity.clone(),
+        }),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            completed_at_ms: 0,
+            item: activity,
+        }),
+        /*replay_kind*/ None,
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1);
+    let rendered = lines_to_single_string(&cells[0]);
+    assert_chatwidget_snapshot!("app_server_sub_agent_activity_renders_once", rendered);
+}
+
+#[tokio::test]
 async fn live_app_server_collab_wait_items_render_history() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let sender_thread_id =
