@@ -1,5 +1,12 @@
 //! Built-in pet catalog ported from the Codex App avatar catalog.
 
+#[cfg(test)]
+use std::fs;
+#[cfg(test)]
+use std::io::Cursor;
+#[cfg(test)]
+use std::sync::LazyLock;
+
 pub(super) const DEFAULT_FRAME_WIDTH: u32 = 192;
 pub(super) const DEFAULT_FRAME_HEIGHT: u32 = 208;
 pub(super) const DEFAULT_FRAME_COLUMNS: u32 = 8;
@@ -72,6 +79,13 @@ pub(super) fn builtin_pet(id: &str) -> Option<BuiltinPet> {
 
 #[cfg(test)]
 pub(super) fn write_test_spritesheet(path: &std::path::Path) {
-    let image = image::RgbaImage::new(SPRITESHEET_WIDTH, SPRITESHEET_HEIGHT);
-    image.save(path).unwrap();
+    static TEST_SPRITESHEET: LazyLock<Vec<u8>> = LazyLock::new(|| {
+        let image = image::RgbaImage::new(SPRITESHEET_WIDTH, SPRITESHEET_HEIGHT);
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageRgba8(image)
+            .write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::WebP)
+            .unwrap();
+        bytes
+    });
+    fs::write(path, TEST_SPRITESHEET.as_slice()).unwrap();
 }
