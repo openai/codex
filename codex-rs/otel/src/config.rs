@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use codex_http_client::HttpClientFactory;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
@@ -56,6 +57,7 @@ pub struct OtelSettings {
     pub exporter: OtelExporter,
     pub trace_exporter: OtelExporter,
     pub metrics_exporter: OtelExporter,
+    pub http_client_factory: HttpClientFactory,
     pub runtime_metrics: bool,
     pub span_attributes: BTreeMap<String, String>,
     pub tracestate: BTreeMap<String, BTreeMap<String, String>>,
@@ -116,4 +118,5 @@ mod tests {
             OtelExporter::None
         ));
     }
+
 }

@@ -15,6 +15,7 @@ metrics (when enabled), then attach its layers to your `tracing_subscriber`
 registry:
 
 ```rust
+use codex_http_client::{HttpClientFactory, OutboundProxyPolicy};
 use codex_otel::config::OtelExporter;
 use codex_otel::config::OtelHttpProtocol;
 use codex_otel::config::OtelSettings;
@@ -39,6 +40,8 @@ let settings = OtelSettings {
         tls: None,
     },
     metrics_exporter: OtelExporter::None,
+    http_client_factory: HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy),
+    runtime_metrics: false,
     span_attributes: std::collections::BTreeMap::new(),
     tracestate: std::collections::BTreeMap::new(),
 };
@@ -109,6 +112,7 @@ to Statsig using Codex-internal defaults.
 Statsig ingestion (OTLP/HTTP JSON) example:
 
 ```rust
+use codex_http_client::{HttpClientFactory, OutboundProxyPolicy};
 use codex_otel::config::{OtelExporter, OtelHttpProtocol};
 
 let metrics = MetricsClient::new(MetricsConfig::otlp(
@@ -124,6 +128,7 @@ let metrics = MetricsClient::new(MetricsConfig::otlp(
         protocol: OtelHttpProtocol::Json,
         tls: None,
     },
+    HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy),
 ))?;
 
 metrics.counter("codex.session_started", 1, &[("source", "tui")])?;

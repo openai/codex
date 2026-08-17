@@ -6,6 +6,7 @@ use crate::metrics::MetricsClient;
 use crate::metrics::MetricsConfig;
 use crate::targets::is_log_export_target;
 use crate::targets::is_trace_safe_target;
+use codex_http_client::HttpClientFactory;
 use gethostname::gethostname;
 use opentelemetry::Context;
 use opentelemetry::KeyValue;
@@ -222,6 +223,7 @@ impl OtelProvider {
                 settings.service_name.clone(),
                 settings.service_version.clone(),
                 settings.metrics_exporter.clone(),
+                settings.http_client_factory.clone(),
             );
             if settings.runtime_metrics {
                 config = config.with_runtime_reader();
@@ -232,7 +234,13 @@ impl OtelProvider {
         let log_resource = make_resource(settings, ResourceKind::Logs);
         let trace_resource = make_resource(settings, ResourceKind::Traces);
         let logger = log_enabled
-            .then(|| build_logger(&log_resource, &settings.exporter))
+            .then(|| {
+                build_logger(
+                    &log_resource,
+                    &settings.exporter,
+                    &settings.http_client_factory,
+                )
+            })
             .transpose()?;
 
         let tracer_provider = trace_enabled
@@ -241,6 +249,7 @@ impl OtelProvider {
                     &trace_resource,
                     &settings.trace_exporter,
                     settings.span_attributes.clone(),
+                    &settings.http_client_factory,
                 )
             })
             .transpose()?;
@@ -427,6 +436,7 @@ impl SpanProcessor for SpanAttributesProcessor {
 fn build_logger(
     resource: &Resource,
     exporter: &OtelExporter,
+    http_client_factory: &HttpClientFactory,
 ) -> Result<SdkLoggerProvider, Box<dyn Error>> {
     let mut builder = SdkLoggerProvider::builder().with_resource(resource.clone());
 
@@ -473,16 +483,19 @@ fn build_logger(
                 OtelHttpProtocol::Json => Protocol::HttpJson,
             };
 
-            let mut exporter_builder = LogExporter::builder()
+            let client = crate::otlp::build_http_client(
+                http_client_factory,
+                &endpoint,
+                tls.as_ref(),
+                OTEL_EXPORTER_OTLP_LOGS_TIMEOUT,
+            )?;
+
+            let exporter_builder = LogExporter::builder()
                 .with_http()
                 .with_endpoint(endpoint)
                 .with_protocol(protocol)
-                .with_headers(headers);
-
-            if let Some(tls) = tls.as_ref() {
-                let client = crate::otlp::build_http_client(tls, OTEL_EXPORTER_OTLP_LOGS_TIMEOUT)?;
-                exporter_builder = exporter_builder.with_http_client(client);
-            }
+                .with_headers(headers)
+                .with_http_client(client);
 
             let exporter = exporter_builder.build()?;
 
@@ -497,6 +510,7 @@ fn build_tracer_provider(
     resource: &Resource,
     exporter: &OtelExporter,
     span_attributes: BTreeMap<String, String>,
+    http_client_factory: &HttpClientFactory,
 ) -> Result<SdkTracerProvider, Box<dyn Error>> {
     let span_exporter = match crate::config::resolve_exporter(exporter) {
         OtelExporter::None => return Ok(tracer_provider_builder(resource, span_attributes).build()),
@@ -540,17 +554,17 @@ fn build_tracer_provider(
                     OtelHttpProtocol::Json => Protocol::HttpJson,
                 };
 
-                let mut exporter_builder = SpanExporter::builder()
-                    .with_http()
-                    .with_endpoint(endpoint)
-                    .with_protocol(protocol)
-                    .with_headers(headers);
-
                 let client = crate::otlp::build_async_http_client(
                     tls.as_ref(),
                     OTEL_EXPORTER_OTLP_TRACES_TIMEOUT,
                 )?;
-                exporter_builder = exporter_builder.with_http_client(client);
+
+                let exporter_builder = SpanExporter::builder()
+                    .with_http()
+                    .with_endpoint(endpoint)
+                    .with_protocol(protocol)
+                    .with_headers(headers)
+                    .with_http_client(client);
 
                 let processor =
                     TokioBatchSpanProcessor::builder(exporter_builder.build()?, runtime::Tokio)
@@ -566,17 +580,19 @@ fn build_tracer_provider(
                 OtelHttpProtocol::Json => Protocol::HttpJson,
             };
 
-            let mut exporter_builder = SpanExporter::builder()
+            let client = crate::otlp::build_http_client(
+                http_client_factory,
+                &endpoint,
+                tls.as_ref(),
+                OTEL_EXPORTER_OTLP_TRACES_TIMEOUT,
+            )?;
+
+            let exporter_builder = SpanExporter::builder()
                 .with_http()
                 .with_endpoint(endpoint)
                 .with_protocol(protocol)
-                .with_headers(headers);
-
-            if let Some(tls) = tls.as_ref() {
-                let client =
-                    crate::otlp::build_http_client(tls, OTEL_EXPORTER_OTLP_TRACES_TIMEOUT)?;
-                exporter_builder = exporter_builder.with_http_client(client);
-            }
+                .with_headers(headers)
+                .with_http_client(client);
 
             exporter_builder.build()?
         }
@@ -596,6 +612,7 @@ mod shutdown_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_http_client::OutboundProxyPolicy;
     use crate::metrics::API_CALL_COUNT_METRIC;
     use crate::metrics::API_CALL_DURATION_METRIC;
     use crate::metrics::MetricsExporter;
@@ -717,6 +734,7 @@ mod tests {
             "codex-cli",
             env!("CARGO_PKG_VERSION"),
             OtelExporter::Statsig,
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
         );
         config.exporter = MetricsExporter::InMemory(exporter.clone());
         let metrics = MetricsClient::new(config)?;
@@ -768,6 +786,7 @@ mod tests {
             exporter: OtelExporter::None,
             trace_exporter: OtelExporter::None,
             metrics_exporter: OtelExporter::None,
+            http_client_factory: HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
             runtime_metrics: false,
             span_attributes: BTreeMap::new(),
             tracestate: BTreeMap::new(),

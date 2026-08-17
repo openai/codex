@@ -1,6 +1,8 @@
 use crate::install_wfp_filters_for_account;
 use crate::setup_error::sanitize_setup_metric_tag_value;
 use anyhow::Result;
+use codex_http_client::HttpClientFactory;
+use codex_http_client::OutboundProxyPolicy;
 use codex_otel::OtelExporter;
 use codex_otel::OtelProvider;
 use codex_otel::OtelSettings;
@@ -54,6 +56,7 @@ fn build_wfp_metrics_provider(
         exporter: OtelExporter::None,
         trace_exporter: OtelExporter::None,
         metrics_exporter: OtelExporter::Statsig,
+        http_client_factory: HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
         runtime_metrics: false,
         span_attributes: BTreeMap::new(),
         tracestate: BTreeMap::new(),

@@ -10,6 +10,7 @@ use crate::metrics::names::TOOL_CALL_DURATION_METRIC;
 use crate::metrics::names::TURN_TOKEN_USAGE_METRIC;
 use crate::metrics::validation::validate_tag_key;
 use crate::metrics::validation::validate_tag_value;
+use codex_http_client::HttpClientFactory;
 use opentelemetry_sdk::metrics::InMemoryMetricExporter;
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -32,7 +33,10 @@ const STATSIG_DISABLED_METRICS: &[&str] = &[
 
 #[derive(Clone, Debug)]
 pub enum MetricsExporter {
-    Otlp(OtelExporter),
+    Otlp {
+        exporter: OtelExporter,
+        http_client_factory: HttpClientFactory,
+    },
     InMemory(InMemoryMetricExporter),
 }
 
@@ -54,6 +58,7 @@ impl MetricsConfig {
         service_name: impl Into<String>,
         service_version: impl Into<String>,
         exporter: OtelExporter,
+        http_client_factory: HttpClientFactory,
     ) -> Self {
         let statsig_disabled_metrics = if matches!(exporter, OtelExporter::Statsig) {
             STATSIG_DISABLED_METRICS
@@ -64,7 +69,10 @@ impl MetricsConfig {
             environment: environment.into(),
             service_name: service_name.into(),
             service_version: service_version.into(),
-            exporter: MetricsExporter::Otlp(exporter),
+            exporter: MetricsExporter::Otlp {
+                exporter,
+                http_client_factory,
+            },
             export_interval: None,
             runtime_reader: false,
             statsig_disabled_metrics,

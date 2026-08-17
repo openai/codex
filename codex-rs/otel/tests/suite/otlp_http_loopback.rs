@@ -1,3 +1,6 @@
+use codex_http_client::HttpClientFactory;
+use codex_http_client::OutboundProxyPolicy;
+use codex_http_client::cache_system_proxy_route_for_test;
 use codex_otel::MetricsClient;
 use codex_otel::MetricsConfig;
 use codex_otel::OtelExporter;
@@ -140,6 +143,45 @@ fn write_http_response(stream: &mut TcpStream, status: &str) -> std::io::Result<
 }
 
 #[test]
+fn otlp_http_metrics_exporter_uses_configured_system_proxy() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("proxy should bind");
+    let address = listener.local_addr().expect("proxy should have address");
+    let endpoint = "http://otel-metrics-system-proxy.test/v1/metrics";
+    cache_system_proxy_route_for_test(endpoint, format!("http://{address}"));
+
+    let proxy = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("proxy should receive export");
+        let request = read_http_request(&mut stream).expect("proxy should read export");
+        write_http_response(&mut stream, "202 Accepted").expect("proxy should respond");
+        request
+    });
+
+    let metrics = MetricsClient::new(MetricsConfig::otlp(
+        "test",
+        "codex-cli",
+        env!("CARGO_PKG_VERSION"),
+        OtelExporter::OtlpHttp {
+            endpoint: endpoint.to_string(),
+            headers: HashMap::new(),
+            protocol: OtelHttpProtocol::Json,
+            tls: None,
+        },
+        HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy),
+    ))?;
+    metrics.counter("codex.proxy_test", /*inc*/ 1, &[])?;
+    metrics.shutdown()?;
+
+    let (path, _, body) = proxy.join().expect("proxy should complete");
+    assert_eq!(path, endpoint);
+    assert!(
+        String::from_utf8_lossy(&body).contains("codex.proxy_test"),
+        "proxied request should contain the exported metric"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn otlp_http_exporter_sends_metrics_to_collector() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let addr = listener.local_addr().expect("local_addr");
@@ -183,6 +225,7 @@ fn otlp_http_exporter_sends_metrics_to_collector() -> Result<()> {
             protocol: OtelHttpProtocol::Json,
             tls: None,
         },
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
     ))?;
 
     metrics.counter("codex.turns", /*inc*/ 1, &[("source", "test")])?;
@@ -356,6 +399,7 @@ fn otlp_http_exporter_sends_logs_to_collector()
         },
         trace_exporter: OtelExporter::None,
         metrics_exporter: OtelExporter::None,
+        http_client_factory: HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
         runtime_metrics: false,
         span_attributes: BTreeMap::new(),
         tracestate: BTreeMap::new(),
@@ -415,6 +459,7 @@ fn otel_provider_rejects_header_unsafe_configured_tracestate() {
             tls: None,
         },
         metrics_exporter: OtelExporter::None,
+        http_client_factory: HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
         runtime_metrics: false,
         span_attributes: BTreeMap::new(),
         tracestate: BTreeMap::from([(
@@ -480,6 +525,7 @@ fn otlp_http_exporter_sends_traces_to_collector()
             tls: None,
         },
         metrics_exporter: OtelExporter::None,
+        http_client_factory: HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
         runtime_metrics: false,
         span_attributes: BTreeMap::from([(
             "test.configured_attribute".to_string(),
@@ -625,6 +671,7 @@ async fn otlp_http_exporter_sends_traces_to_collector_with_bounded_shutdown_in_t
             tls: None,
         },
         metrics_exporter: OtelExporter::None,
+        http_client_factory: HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
         runtime_metrics: false,
         span_attributes: BTreeMap::new(),
         tracestate: BTreeMap::new(),
@@ -718,6 +765,7 @@ fn otlp_http_exporter_times_out_when_collector_stalls_during_bounded_shutdown() 
                 tls: None,
             },
             metrics_exporter: OtelExporter::None,
+            http_client_factory: HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
             runtime_metrics: false,
             span_attributes: BTreeMap::new(),
             tracestate: BTreeMap::new(),
@@ -817,6 +865,7 @@ fn otlp_http_exporter_sends_traces_to_collector_in_current_thread_tokio_runtime(
                     tls: None,
                 },
                 metrics_exporter: OtelExporter::None,
+                http_client_factory: HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
                 runtime_metrics: false,
                 span_attributes: BTreeMap::new(),
                 tracestate: BTreeMap::new(),

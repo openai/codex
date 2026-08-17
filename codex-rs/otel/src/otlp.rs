@@ -1,4 +1,7 @@
 use crate::config::OtelTlsConfig;
+use codex_http_client::HttpClientFactory;
+use codex_http_client::TelemetryClientTlsConfig;
+use codex_http_client::TelemetryHttpClient;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use http::Uri;
 use opentelemetry_otlp::OTEL_EXPORTER_OTLP_TIMEOUT;
@@ -67,27 +70,39 @@ pub(crate) fn build_grpc_tls_config(
     Ok(config)
 }
 
-/// Build a blocking HTTP client with TLS configuration for OTLP HTTP exporters.
+/// Build a policy-aware blocking HTTP client for OTLP HTTP exporters.
 ///
-/// We use `reqwest::blocking::Client` because OTEL exporters run on dedicated
-/// OS threads that are not necessarily backed by tokio.
+/// OTEL exporters run on dedicated OS threads that are not necessarily backed
+/// by Tokio, so logs and metrics require a blocking-compatible transport.
 pub(crate) fn build_http_client(
-    tls: &OtelTlsConfig,
+    http_client_factory: &HttpClientFactory,
+    endpoint: &str,
+    tls: Option<&OtelTlsConfig>,
     timeout_var: &str,
-) -> Result<reqwest::blocking::Client, Box<dyn Error>> {
+) -> Result<impl TelemetryHttpClient + 'static + use<>, Box<dyn Error>> {
+    let tls = telemetry_tls_config(tls);
+    let timeout = resolve_otlp_timeout(timeout_var);
     if current_tokio_runtime_is_multi_thread() {
-        tokio::task::block_in_place(|| build_http_client_inner(tls, timeout_var))
+        tokio::task::block_in_place(|| {
+            http_client_factory
+                .build_blocking_telemetry_client(endpoint, timeout, &tls)
+                .map_err(|error| Box::new(error) as Box<dyn Error>)
+        })
     } else if tokio::runtime::Handle::try_current().is_ok() {
-        let tls = tls.clone();
-        let timeout_var = timeout_var.to_string();
+        let http_client_factory = http_client_factory.clone();
+        let endpoint = endpoint.to_owned();
         std::thread::spawn(move || {
-            build_http_client_inner(&tls, &timeout_var).map_err(|err| err.to_string())
+            http_client_factory
+                .build_blocking_telemetry_client(&endpoint, timeout, &tls)
+                .map_err(|error| error.to_string())
         })
         .join()
         .map_err(|_| config_error("failed to join OTLP blocking HTTP client builder thread"))?
         .map_err(config_error)
     } else {
-        build_http_client_inner(tls, timeout_var)
+        http_client_factory
+            .build_blocking_telemetry_client(endpoint, timeout, &tls)
+            .map_err(|error| Box::new(error) as Box<dyn Error>)
     }
 }
 
@@ -96,53 +111,6 @@ pub(crate) fn current_tokio_runtime_is_multi_thread() -> bool {
         Ok(handle) => handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread,
         Err(_) => false,
     }
-}
-
-fn build_http_client_inner(
-    tls: &OtelTlsConfig,
-    timeout_var: &str,
-) -> Result<reqwest::blocking::Client, Box<dyn Error>> {
-    let mut builder =
-        reqwest::blocking::Client::builder().timeout(resolve_otlp_timeout(timeout_var));
-
-    if let Some(path) = tls.ca_certificate.as_ref() {
-        let (pem, location) = read_bytes(path)?;
-        let certificate = ReqwestCertificate::from_pem(pem.as_slice()).map_err(|error| {
-            config_error(format!(
-                "failed to parse certificate {}: {error}",
-                location.display()
-            ))
-        })?;
-        builder = builder
-            .tls_built_in_root_certs(false)
-            .add_root_certificate(certificate);
-    }
-
-    match (&tls.client_certificate, &tls.client_private_key) {
-        (Some(cert_path), Some(key_path)) => {
-            let (mut cert_pem, cert_location) = read_bytes(cert_path)?;
-            let (key_pem, key_location) = read_bytes(key_path)?;
-            cert_pem.extend_from_slice(key_pem.as_slice());
-            let identity = ReqwestIdentity::from_pem(cert_pem.as_slice()).map_err(|error| {
-                config_error(format!(
-                    "failed to parse client identity using {} and {}: {error}",
-                    cert_location.display(),
-                    key_location.display()
-                ))
-            })?;
-            builder = builder.identity(identity).https_only(true);
-        }
-        (Some(_), None) | (None, Some(_)) => {
-            return Err(config_error(
-                "client_certificate and client_private_key must both be provided for mTLS",
-            ));
-        }
-        (None, None) => {}
-    }
-
-    builder
-        .build()
-        .map_err(|error| Box::new(error) as Box<dyn Error>)
 }
 
 pub(crate) fn build_async_http_client(
@@ -193,6 +161,27 @@ pub(crate) fn build_async_http_client(
         .map_err(|error| Box::new(error) as Box<dyn Error>)
 }
 
+fn telemetry_tls_config(tls: Option<&OtelTlsConfig>) -> TelemetryClientTlsConfig {
+    let Some(tls) = tls else {
+        return TelemetryClientTlsConfig::default();
+    };
+
+    TelemetryClientTlsConfig {
+        ca_certificate: tls
+            .ca_certificate
+            .as_ref()
+            .map(codex_utils_absolute_path::AbsolutePathBuf::to_path_buf),
+        client_certificate: tls
+            .client_certificate
+            .as_ref()
+            .map(codex_utils_absolute_path::AbsolutePathBuf::to_path_buf),
+        client_private_key: tls
+            .client_private_key
+            .as_ref()
+            .map(codex_utils_absolute_path::AbsolutePathBuf::to_path_buf),
+    }
+}
+
 pub(crate) fn resolve_otlp_timeout(signal_var: &str) -> Duration {
     if let Some(timeout) = read_timeout_env(signal_var) {
         return timeout;
@@ -229,6 +218,7 @@ fn config_error(message: impl Into<String>) -> Box<dyn Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_http_client::OutboundProxyPolicy;
     use pretty_assertions::assert_eq;
     use tokio::runtime::Builder;
 
@@ -264,7 +254,12 @@ mod tests {
             .expect("current-thread runtime");
 
         let client = runtime.block_on(async {
-            build_http_client(&OtelTlsConfig::default(), OTEL_EXPORTER_OTLP_TIMEOUT)
+            build_http_client(
+                &HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+                "http://localhost:4318/v1/traces",
+                Some(&OtelTlsConfig::default()),
+                OTEL_EXPORTER_OTLP_TIMEOUT,
+            )
         });
 
         assert!(client.is_ok());

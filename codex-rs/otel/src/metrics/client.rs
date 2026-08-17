@@ -349,8 +349,12 @@ impl MetricsClient {
             MetricsExporter::InMemory(exporter) => {
                 build_provider(resource, exporter, export_interval, runtime_reader.clone())
             }
-            MetricsExporter::Otlp(exporter) => {
-                let exporter = build_otlp_metric_exporter(exporter, Temporality::Delta)?;
+            MetricsExporter::Otlp {
+                exporter,
+                http_client_factory,
+            } => {
+                let exporter =
+                    build_otlp_metric_exporter(exporter, Temporality::Delta, &http_client_factory)?;
                 build_provider(resource, exporter, export_interval, runtime_reader.clone())
             }
         };
@@ -555,12 +559,14 @@ where
 fn build_otlp_metric_exporter(
     exporter: OtelExporter,
     temporality: Temporality,
+    http_client_factory: &codex_http_client::HttpClientFactory,
 ) -> Result<opentelemetry_otlp::MetricExporter> {
     match exporter {
         OtelExporter::None => Err(MetricsError::ExporterDisabled),
         OtelExporter::Statsig => build_otlp_metric_exporter(
             crate::config::resolve_exporter(&OtelExporter::Statsig),
             temporality,
+            http_client_factory,
         ),
         OtelExporter::OtlpGrpc {
             endpoint,
@@ -605,21 +611,23 @@ fn build_otlp_metric_exporter(
                 OtelHttpProtocol::Json => Protocol::HttpJson,
             };
 
-            let mut exporter_builder = opentelemetry_otlp::MetricExporter::builder()
+            let client = crate::otlp::build_http_client(
+                http_client_factory,
+                &endpoint,
+                tls.as_ref(),
+                OTEL_EXPORTER_OTLP_METRICS_TIMEOUT,
+            )
+            .map_err(|err| MetricsError::InvalidConfig {
+                message: err.to_string(),
+            })?;
+
+            let exporter_builder = opentelemetry_otlp::MetricExporter::builder()
                 .with_http()
                 .with_endpoint(endpoint)
                 .with_temporality(temporality)
                 .with_protocol(protocol)
-                .with_headers(headers);
-
-            if let Some(tls) = tls.as_ref() {
-                let client =
-                    crate::otlp::build_http_client(tls, OTEL_EXPORTER_OTLP_METRICS_TIMEOUT)
-                        .map_err(|err| MetricsError::InvalidConfig {
-                            message: err.to_string(),
-                        })?;
-                exporter_builder = exporter_builder.with_http_client(client);
-            }
+                .with_headers(headers)
+                .with_http_client(client);
 
             exporter_builder
                 .build()
