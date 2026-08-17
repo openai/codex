@@ -80,6 +80,7 @@ impl ChatWidget {
         if active_cell_is_empty {
             self.active_hook_cell = None;
         }
+        self.flush_completed_command_activity();
         self.bump_active_cell_revision();
         self.transcript.needs_final_message_separator = true;
         self.app_event_tx

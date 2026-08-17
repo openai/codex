@@ -24,12 +24,10 @@ impl ChatWidget {
     fn submit_shell_command(&mut self, command: &str) -> QueueDrain {
         let cmd = command.trim();
         if cmd.is_empty() {
-            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                history_cell::new_info_event(
-                    USER_SHELL_COMMAND_HELP_TITLE.to_string(),
-                    Some(USER_SHELL_COMMAND_HELP_HINT.to_string()),
-                ),
-            )));
+            self.add_to_history(history_cell::new_info_event(
+                USER_SHELL_COMMAND_HELP_TITLE.to_string(),
+                Some(USER_SHELL_COMMAND_HELP_HINT.to_string()),
+            ));
             QueueDrain::Continue
         } else {
             self.submit_op(AppCommand::run_user_shell_command(cmd.to_string()));

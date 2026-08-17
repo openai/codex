@@ -144,6 +144,7 @@ impl ChatWidget {
             self.request_pending_usage_output_insertion_after_stream_shutdown();
         }
         self.flush_unified_exec_wait_streak();
+        self.flush_completed_command_activity();
         if !from_replay {
             self.collect_runtime_metrics_delta();
             let runtime_metrics =
