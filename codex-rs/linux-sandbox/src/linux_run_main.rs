@@ -40,6 +40,7 @@ static PENDING_FORWARDED_SIGNAL: AtomicI32 = AtomicI32::new(0);
 
 const FORWARDED_SIGNALS: &[libc::c_int] =
     &[libc::SIGHUP, libc::SIGINT, libc::SIGQUIT, libc::SIGTERM];
+const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
 const SYNTHETIC_MOUNT_MARKER_SYNTHETIC: &[u8] = b"synthetic\n";
 const SYNTHETIC_MOUNT_MARKER_EXISTING: &[u8] = b"existing\n";
 const PROTECTED_CREATE_MARKER: &[u8] = b"protected-create\n";
@@ -180,6 +181,30 @@ pub fn run_main() -> ! {
     // Inner stage: apply seccomp/no_new_privs after bubblewrap has already
     // established the filesystem view.
     if apply_seccomp_then_exec {
+        let mut capability_header = [LINUX_CAPABILITY_VERSION_3, 0];
+        let mut capability_sets = [[0_u32; 3]; 2];
+        // SAFETY: capability ABI version 3 uses a [version, pid] header and
+        // two [effective, permitted, inheritable] capability-set entries.
+        let result = unsafe {
+            libc::syscall(
+                libc::SYS_capget,
+                capability_header.as_mut_ptr(),
+                capability_sets.as_mut_ptr(),
+            )
+        };
+        if result < 0 {
+            panic!(
+                "failed to verify Linux sandbox capabilities: {}",
+                std::io::Error::last_os_error()
+            );
+        }
+        if capability_sets
+            .into_iter()
+            .any(|[effective, permitted, _]| effective != 0 || permitted != 0)
+        {
+            panic!("Linux sandbox retained effective or permitted capabilities");
+        }
+
         if allow_network_for_proxy {
             let spec = proxy_route_spec
                 .as_deref()

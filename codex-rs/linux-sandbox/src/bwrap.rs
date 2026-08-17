@@ -290,6 +290,8 @@ fn create_bwrap_flags_full_filesystem(command: Vec<String>, options: BwrapOption
         args.push("--proc".to_string());
         args.push("/proc".to_string());
     }
+    args.push("--cap-drop".to_string());
+    args.push("ALL".to_string());
     args.push("--".to_string());
     args.extend(command);
     BwrapArgs {
@@ -345,6 +347,8 @@ fn create_bwrap_flags(
         args.push("--chdir".to_string());
         args.push(path_to_string(normalized_command_cwd.as_path()));
     }
+    args.push("--cap-drop".to_string());
+    args.push("ALL".to_string());
     args.push("--".to_string());
     args.extend(command);
     Ok(BwrapArgs {
@@ -1421,6 +1425,8 @@ mod tests {
                 "--unshare-net".to_string(),
                 "--proc".to_string(),
                 "/proc".to_string(),
+                "--cap-drop".to_string(),
+                "ALL".to_string(),
                 "--".to_string(),
                 "/bin/true".to_string(),
             ]

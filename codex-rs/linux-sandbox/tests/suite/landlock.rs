@@ -418,6 +418,80 @@ async fn test_no_new_privs_is_enabled() {
 }
 
 #[tokio::test]
+async fn sandboxed_command_has_no_effective_or_permitted_capabilities() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
+        return;
+    }
+
+    let output = run_cmd_output(
+        &[
+            "bash",
+            "-lc",
+            "awk '$1 == \"CapPrm:\" || $1 == \"CapEff:\" { print $1, $2 }' /proc/self/status",
+        ],
+        &[],
+        LONG_TIMEOUT_MS,
+    )
+    .await;
+
+    assert_eq!(
+        output.stdout.text,
+        "CapPrm: 0000000000000000\nCapEff: 0000000000000000\n"
+    );
+}
+
+#[tokio::test]
+async fn sandbox_inner_stage_rejects_retained_capabilities() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
+        return;
+    }
+
+    let user_namespace_probe = match std::process::Command::new("unshare")
+        .args(["--user", "--map-root-user", "--", "/bin/true"])
+        .output()
+    {
+        Ok(output) => output,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!("skipping capability test: unshare is unavailable");
+            return;
+        }
+        Err(err) => panic!("failed to probe unprivileged user namespaces: {err}"),
+    };
+    if !user_namespace_probe.status.success() {
+        eprintln!("skipping capability test: unprivileged user namespaces are unavailable");
+        return;
+    }
+
+    let permission_profile = serde_json::to_string(&PermissionProfile::read_only())
+        .expect("read-only permission profile should serialize");
+    let output = std::process::Command::new("unshare")
+        .args(["--user", "--map-root-user", "--"])
+        .arg(codex_linux_sandbox_exe())
+        .args(["--sandbox-policy-cwd", "/", "--permission-profile"])
+        .arg(permission_profile)
+        .args([
+            "--apply-seccomp-then-exec",
+            "--",
+            "/bin/sh",
+            "-c",
+            "printf command-ran",
+        ])
+        .output()
+        .expect("capability-bearing sandbox helper should execute");
+
+    assert!(!output.status.success());
+    assert_eq!(output.stdout, Vec::<u8>::new());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("Linux sandbox retained effective or permitted capabilities"),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[tokio::test]
 #[should_panic(expected = "Sandbox(Timeout")]
 async fn test_timeout() {
     run_cmd(&["sleep", "2"], &[], /*timeout_ms*/ 50).await;

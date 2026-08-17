@@ -83,6 +83,8 @@ fn inserts_bwrap_argv0_before_command_separator() {
             "--unshare-pid".to_string(),
             "--proc".to_string(),
             "/proc".to_string(),
+            "--cap-drop".to_string(),
+            "ALL".to_string(),
             "--argv0".to_string(),
             "codex-linux-sandbox".to_string(),
             "--".to_string(),
