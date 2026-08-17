@@ -3116,6 +3116,8 @@ impl Config {
         let ConfigRequirements {
             allowed_login_methods: _,
             allowed_chatgpt_workspaces: _,
+            cli_auth_credentials_store,
+            chatgpt_base_url: _,
             sqlite_home: _,
             log_dir: _,
             model_catalog_json: _,
@@ -4015,10 +4017,13 @@ impl Config {
             include_environment_context,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
-            cli_auth_credentials_store_mode: resolve_cli_auth_credentials_store_mode(
-                cfg.cli_auth_credentials_store.unwrap_or_default(),
-                env!("CARGO_PKG_VERSION"),
-            ),
+            cli_auth_credentials_store_mode: match cli_auth_credentials_store {
+                Some(required) => required.value,
+                None => resolve_cli_auth_credentials_store_mode(
+                    cfg.cli_auth_credentials_store.unwrap_or_default(),
+                    env!("CARGO_PKG_VERSION"),
+                ),
+            },
             mcp_servers,
             non_prefixed_mcp_tool_servers,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"

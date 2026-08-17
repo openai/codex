@@ -8,6 +8,7 @@ use codex_app_server_protocol::ApprovalsReviewer;
 use codex_app_server_protocol::AppsConfig;
 use codex_app_server_protocol::AppsDefaultConfig;
 use codex_app_server_protocol::AskForApproval;
+use codex_app_server_protocol::CliAuthCredentialsStoreMode;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigEdit;
 use codex_app_server_protocol::ConfigLayerSource;
@@ -45,6 +46,104 @@ fn write_config(codex_home: &TempDir, contents: &str) -> Result<()> {
         codex_home.path().join("config.toml"),
         contents,
     )?)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn managed_auth_settings_are_exposed_enforced_and_read_only() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_config(
+        &codex_home,
+        r#"cli_auth_credentials_store = "file"
+chatgpt_base_url = "https://user.example/backend-api/"
+"#,
+    )?;
+    std::fs::write(
+        codex_home.path().join("requirements.toml"),
+        r#"cli_auth_credentials_store = "ephemeral"
+chatgpt_base_url = "https://managed.example/backend-api/"
+"#,
+    )?;
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+
+    let requirements_id = app_server.send_config_requirements_read_request().await?;
+    let requirements: ConfigRequirementsReadResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app_server.read_response(requirements_id),
+    )
+    .await??;
+    let requirements = requirements.requirements.expect("managed requirements");
+    assert_eq!(
+        (
+            requirements.cli_auth_credentials_store,
+            requirements.chatgpt_base_url.as_deref(),
+        ),
+        (
+            Some(CliAuthCredentialsStoreMode::Ephemeral),
+            Some("https://managed.example/backend-api/"),
+        ),
+    );
+
+    let config_id = app_server
+        .send_config_read_request(ConfigReadParams {
+            include_layers: false,
+            cwd: None,
+        })
+        .await?;
+    let config: ConfigReadResponse =
+        timeout(DEFAULT_READ_TIMEOUT, app_server.read_response(config_id)).await??;
+    assert_eq!(
+        (
+            config.config.additional.get("cli_auth_credentials_store"),
+            config.config.additional.get("chatgpt_base_url"),
+        ),
+        (
+            Some(&json!("ephemeral")),
+            Some(&json!("https://managed.example/backend-api/")),
+        ),
+    );
+
+    for (field, value) in [
+        ("cli_auth_credentials_store", json!("file")),
+        (
+            "chatgpt_base_url",
+            json!("https://user.example/backend-api/"),
+        ),
+    ] {
+        let write_id = app_server
+            .send_config_value_write_request(ConfigValueWriteParams {
+                file_path: None,
+                key_path: field.to_string(),
+                value,
+                merge_strategy: MergeStrategy::Replace,
+                expected_version: None,
+            })
+            .await?;
+        let error: JSONRPCError = timeout(
+            DEFAULT_READ_TIMEOUT,
+            app_server.read_stream_until_error_message(RequestId::Integer(write_id)),
+        )
+        .await??;
+        assert_eq!(
+            error
+                .error
+                .data
+                .as_ref()
+                .and_then(|data| data.get("config_write_error_code"))
+                .and_then(serde_json::Value::as_str),
+            Some("configRequirementReadonly"),
+        );
+    }
+
+    assert_eq!(
+        std::fs::read_to_string(codex_home.path().join("config.toml"))?,
+        "cli_auth_credentials_store = \"file\"\nchatgpt_base_url = \"https://user.example/backend-api/\"\n",
+    );
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

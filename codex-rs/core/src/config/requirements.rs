@@ -28,6 +28,8 @@ pub(super) fn apply_to_config(
         };
     }
 
+    apply_exact!(cli_auth_credentials_store);
+    apply_exact!(chatgpt_base_url);
     apply_exact!(sqlite_home);
     apply_exact!(log_dir);
     apply_exact!(model_catalog_json);

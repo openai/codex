@@ -193,6 +193,54 @@ model_provider = "system-provider"
 }
 
 #[tokio::test]
+async fn ignoring_login_requirements_preserves_local_auth_backend_requirements() {
+    let tmp = tempdir().expect("tempdir");
+    let requirements_path = tmp.path().join("requirements.toml");
+    std::fs::write(
+        &requirements_path,
+        r#"allowed_login_methods = ["chatgpt"]
+allowed_chatgpt_workspaces = ["managed-workspace"]
+cli_auth_credentials_store = "keyring"
+chatgpt_base_url = "https://managed.example/backend-api/"
+"#,
+    )
+    .expect("write local authentication requirements");
+
+    let mut overrides = LoaderOverrides::without_managed_config_for_tests();
+    overrides.system_requirements_path = Some(requirements_path);
+    overrides.ignore_login_requirements = true;
+
+    let stack = load_config_layers_state(
+        &TestFileSystem,
+        tmp.path(),
+        /*cwd*/ None,
+        &[],
+        overrides,
+        &crate::NoopThreadConfigLoader,
+    )
+    .await
+    .expect("load configuration with remote login exemptions");
+
+    let requirements = stack.requirements();
+    assert_eq!(requirements.allowed_login_methods, None);
+    assert_eq!(requirements.allowed_chatgpt_workspaces, None);
+    assert_eq!(
+        requirements
+            .cli_auth_credentials_store
+            .as_ref()
+            .map(|required| required.value),
+        Some(crate::types::AuthCredentialsStoreMode::Keyring)
+    );
+    assert_eq!(
+        requirements
+            .chatgpt_base_url
+            .as_ref()
+            .map(|required| required.value.as_str()),
+        Some("https://managed.example/backend-api/")
+    );
+}
+
+#[tokio::test]
 async fn missing_packaged_defaults_file_returns_an_error() {
     let tmp = tempdir().expect("tempdir");
     let packaged_defaults_path =

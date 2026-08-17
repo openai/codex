@@ -51,6 +51,7 @@ export type { CapabilityRootLocation } from "./CapabilityRootLocation";
 export type { ChatgptAuthTokensRefreshParams } from "./ChatgptAuthTokensRefreshParams";
 export type { ChatgptAuthTokensRefreshReason } from "./ChatgptAuthTokensRefreshReason";
 export type { ChatgptAuthTokensRefreshResponse } from "./ChatgptAuthTokensRefreshResponse";
+export type { CliAuthCredentialsStoreMode } from "./CliAuthCredentialsStoreMode";
 export type { CodexErrorInfo } from "./CodexErrorInfo";
 export type { CollabAgentState } from "./CollabAgentState";
 export type { CollabAgentStatus } from "./CollabAgentStatus";

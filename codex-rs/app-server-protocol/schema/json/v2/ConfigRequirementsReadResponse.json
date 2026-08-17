@@ -93,6 +93,15 @@
       },
       "type": "object"
     },
+    "CliAuthCredentialsStoreMode": {
+      "enum": [
+        "file",
+        "keyring",
+        "auto",
+        "ephemeral"
+      ],
+      "type": "string"
+    },
     "ComputerUseRequirements": {
       "properties": {
         "allowLockedComputerUse": {
@@ -195,10 +204,26 @@
             }
           ]
         },
+        "chatgptBaseUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "checkForUpdateOnStartup": {
           "type": [
             "boolean",
             "null"
+          ]
+        },
+        "cliAuthCredentialsStore": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CliAuthCredentialsStoreMode"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "computerUse": {

@@ -5736,6 +5736,53 @@ async fn config_resolves_explicit_keyring_auth_store_mode() -> std::io::Result<(
 }
 
 #[tokio::test]
+async fn config_applies_managed_auth_store_and_chatgpt_base_url() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let managed_store = AuthCredentialsStoreMode::Keyring;
+    let managed_url = "https://managed.example/backend-api/";
+    let requirements = codex_config::ConfigRequirements {
+        cli_auth_credentials_store: Some(Sourced::new(managed_store, RequirementSource::Unknown)),
+        chatgpt_base_url: Some(Sourced::new(
+            managed_url.to_string(),
+            RequirementSource::Unknown,
+        )),
+        ..Default::default()
+    };
+    let config_layer_stack = ConfigLayerStack::new(
+        Vec::new(),
+        requirements,
+        codex_config::ConfigRequirementsToml::default(),
+    )?;
+
+    let config = Config::load_config_with_layer_stack(
+        LOCAL_FS.as_ref(),
+        ConfigToml {
+            cli_auth_credentials_store: Some(AuthCredentialsStoreMode::File),
+            chatgpt_base_url: Some("https://user.example/backend-api/".to_string()),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(codex_home.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+        config_layer_stack,
+    )
+    .await?;
+
+    assert_eq!(config.cli_auth_credentials_store_mode, managed_store);
+    assert_eq!(config.chatgpt_base_url, managed_url);
+    assert!(config.startup_warnings.iter().any(|warning| {
+        warning.contains("Configured value for `cli_auth_credentials_store` is overridden")
+    }));
+    assert!(config.startup_warnings.iter().any(|warning| {
+        warning.contains("Configured value for `chatgpt_base_url` is overridden")
+    }));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn config_resolves_default_oauth_store_mode() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cfg = ConfigToml::default();
@@ -9487,6 +9534,8 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
     let requirements_toml = codex_config::ConfigRequirementsToml {
         allowed_login_methods: None,
         allowed_chatgpt_workspaces: None,
+        cli_auth_credentials_store: None,
+        chatgpt_base_url: None,
         sqlite_home: None,
         log_dir: None,
         model_catalog_json: None,

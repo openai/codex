@@ -9,6 +9,7 @@ use crate::outgoing_message::OutgoingMessageSender;
 use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::AutoReviewRequirements;
 use codex_app_server_protocol::BrowserUseRequirements;
+use codex_app_server_protocol::CliAuthCredentialsStoreMode;
 use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::ComputerUseRequirements;
 use codex_app_server_protocol::ConfigBatchWriteParams;
@@ -352,6 +353,23 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
         .and_then(|windows| windows.sandbox_private_desktop);
 
     ConfigRequirements {
+        cli_auth_credentials_store: requirements.cli_auth_credentials_store.map(
+            |mode| match mode {
+                codex_config::types::AuthCredentialsStoreMode::File => {
+                    CliAuthCredentialsStoreMode::File
+                }
+                codex_config::types::AuthCredentialsStoreMode::Keyring => {
+                    CliAuthCredentialsStoreMode::Keyring
+                }
+                codex_config::types::AuthCredentialsStoreMode::Auto => {
+                    CliAuthCredentialsStoreMode::Auto
+                }
+                codex_config::types::AuthCredentialsStoreMode::Ephemeral => {
+                    CliAuthCredentialsStoreMode::Ephemeral
+                }
+            },
+        ),
+        chatgpt_base_url: requirements.chatgpt_base_url,
         allowed_approval_policies: requirements.allowed_approval_policies.map(|policies| {
             policies
                 .into_iter()

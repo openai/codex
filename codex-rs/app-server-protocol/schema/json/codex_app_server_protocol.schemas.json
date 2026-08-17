@@ -7603,6 +7603,15 @@
           }
         ]
       },
+      "CliAuthCredentialsStoreMode": {
+        "enum": [
+          "file",
+          "keyring",
+          "auto",
+          "ephemeral"
+        ],
+        "type": "string"
+      },
       "CodexErrorInfo": {
         "description": "This translation layer make sure that we expose codex error code in camel case.\n\nWhen an upstream HTTP status is available (for example, from the Responses API or a provider), it is forwarded in `httpStatusCode` on the relevant `codexErrorInfo` variant.",
         "oneOf": [
@@ -8962,10 +8971,26 @@
               }
             ]
           },
+          "chatgptBaseUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "checkForUpdateOnStartup": {
             "type": [
               "boolean",
               "null"
+            ]
+          },
+          "cliAuthCredentialsStore": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/CliAuthCredentialsStoreMode"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "computerUse": {
