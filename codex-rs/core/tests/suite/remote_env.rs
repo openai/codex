@@ -417,8 +417,8 @@ async fn explicit_remote_shell_runs_in_remote_cwd() -> Result<()> {
         "run the remote shell in the remote cwd",
         Some(vec![TurnEnvironmentSelection {
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-            cwd: PathUri::from_abs_path(&test.config.cwd),
-            workspace_roots: vec![PathUri::from_abs_path(&test.config.cwd)],
+            cwd: test.executor_environment().selection().cwd.clone(),
+            workspace_roots: vec![test.executor_environment().selection().cwd.clone()],
             config: EnvironmentConfigState::FromThread,
         }]),
     )
@@ -2483,7 +2483,7 @@ fn read_only_sandbox(readable_root: PathBuf) -> FileSystemSandboxContext {
     FileSystemSandboxContext::from_permission_profile(PermissionProfile::from_runtime_permissions(
         &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Path {
-                path: readable_root,
+                path: readable_root.into(),
             },
             access: FileSystemAccessMode::Read,
             missing_path_behavior: None,
@@ -2497,7 +2497,7 @@ fn workspace_write_sandbox(writable_root: PathBuf) -> FileSystemSandboxContext {
     FileSystemSandboxContext::from_permission_profile(PermissionProfile::from_runtime_permissions(
         &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Path {
-                path: writable_root,
+                path: writable_root.into(),
             },
             access: FileSystemAccessMode::Write,
             missing_path_behavior: None,

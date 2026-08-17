@@ -117,7 +117,7 @@ async fn extension_tool_receives_turn_environment_sandbox() -> Result<()> {
         .entries
         .push(FileSystemSandboxEntry {
             path: FileSystemPath::Path {
-                path: denied_path.clone(),
+                path: denied_path.clone().into(),
             },
             access: FileSystemAccessMode::Deny,
             missing_path_behavior: None,
@@ -202,7 +202,9 @@ async fn extension_tool_uses_granted_turn_permissions_without_host_local_persist
     std::fs::write(&image_path, TINY_PNG_BYTES)?;
     let requested_permissions = RequestPermissionProfile {
         file_system: Some(FileSystemPermissions::from_read_write_roots(
-            Some(vec![image_dir.path().canonicalize()?.try_into()?]),
+            Some(vec![AbsolutePathBuf::try_from(
+                image_dir.path().canonicalize()?,
+            )?]),
             Some(Vec::new()),
         )),
         ..RequestPermissionProfile::default()

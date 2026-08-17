@@ -141,13 +141,13 @@ fn summarizes_managed_workspace_write_permission_profile() {
     let profile = PermissionProfile::from_runtime_permissions(
         &FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
-                path: FileSystemPath::Path { path: cwd.clone() },
+                path: cwd.clone().into(),
                 access: FileSystemAccessMode::Write,
                 missing_path_behavior: None,
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::Path {
-                    path: cache_root.clone(),
+                    path: cache_root.clone().into(),
                 },
                 access: FileSystemAccessMode::Write,
                 missing_path_behavior: None,

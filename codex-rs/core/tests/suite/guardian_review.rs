@@ -29,7 +29,6 @@ use codex_protocol::models::PermissionProfileSnapshot;
 use codex_protocol::openai_models::MODEL_SPECIALTY_CYBER;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::permissions::FileSystemAccessMode;
-use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
@@ -477,7 +476,7 @@ async fn guardian_session_is_reused_for_consecutive_tool_reviews_without_prewarm
                 /*exclude_slash_tmp*/ true,
             );
             file_system_policy.entries.push(FileSystemSandboxEntry::new(
-                FileSystemPath::Path { path: secret_file },
+                secret_file.into(),
                 FileSystemAccessMode::Deny,
             ));
             config

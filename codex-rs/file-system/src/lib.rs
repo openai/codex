@@ -135,9 +135,7 @@ pub enum ExecFileSystemPath {
 impl From<FileSystemPath> for ExecFileSystemPath {
     fn from(value: FileSystemPath) -> Self {
         match value {
-            FileSystemPath::Path { path } => Self::Path {
-                path: PathUri::from_abs_path(&path),
-            },
+            FileSystemPath::Path { path } => Self::Path { path },
             FileSystemPath::GlobPattern { pattern } => Self::GlobPattern { pattern },
             FileSystemPath::Special { value } => Self::Special { value },
         }
@@ -149,9 +147,10 @@ impl TryFrom<ExecFileSystemPath> for FileSystemPath {
 
     fn try_from(value: ExecFileSystemPath) -> Result<Self, Self::Error> {
         Ok(match value {
-            ExecFileSystemPath::Path { path } => Self::Path {
-                path: path.to_abs_path()?,
-            },
+            ExecFileSystemPath::Path { path } => {
+                path.to_abs_path()?;
+                Self::Path { path }
+            }
             ExecFileSystemPath::GlobPattern { pattern } => Self::GlobPattern { pattern },
             ExecFileSystemPath::Special { value } => Self::Special { value },
         })

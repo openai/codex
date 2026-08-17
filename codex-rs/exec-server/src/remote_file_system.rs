@@ -452,7 +452,7 @@ mod tests {
     fn remote_sandbox_context_drops_unused_cwd() {
         let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Path {
-                path: absolute_test_path("remote-root"),
+                path: absolute_test_path("remote-root").into(),
             },
             access: FileSystemAccessMode::Read,
             missing_path_behavior: None,

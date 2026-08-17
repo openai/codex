@@ -16,6 +16,7 @@ use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::openai_models::MODEL_SPECIALTY_CYBER;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::permissions::RawFileSystemSandboxPolicy;
 use codex_protocol::protocol::EnvironmentConfig;
 use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::ErrorEvent;
@@ -444,7 +445,7 @@ impl TurnContext {
         }
     }
 
-    fn non_legacy_file_system_sandbox_policy(&self) -> Option<FileSystemSandboxPolicy> {
+    fn non_legacy_file_system_sandbox_policy(&self) -> Option<RawFileSystemSandboxPolicy> {
         // Omit the derived split filesystem policy when it is equivalent to
         // the legacy sandbox policy. This keeps turn-context payloads stable
         // while both fields exist; once callers consume only the split policy,
@@ -456,8 +457,11 @@ impl TurnContext {
                 &self.cwd,
             );
         let file_system_sandbox_policy = self.file_system_sandbox_policy();
+        // `permission_profile` below is authoritative and serializes the same
+        // runtime entries, so this compatibility field may omit an unrenderable policy.
         (file_system_sandbox_policy != legacy_file_system_sandbox_policy)
-            .then_some(file_system_sandbox_policy)
+            .then(|| file_system_sandbox_policy.try_into().ok())
+            .flatten()
     }
 
     pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {

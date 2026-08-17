@@ -59,6 +59,7 @@ use core_test_support::skip_if_target_windows;
 use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::TestCodexHarness;
+use core_test_support::test_codex::executor_path_uri;
 use core_test_support::test_codex::local;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
@@ -145,7 +146,7 @@ fn workspace_write_with_read_only_root(read_only_root: AbsolutePathBuf) -> Permi
     let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry {
             path: FileSystemPath::Path {
-                path: read_only_root,
+                path: read_only_root.into(),
             },
             access: FileSystemAccessMode::Read,
             missing_path_behavior: None,
@@ -169,7 +170,7 @@ fn workspace_write_with_unreadable_path(unreadable_path: AbsolutePathBuf) -> Per
     let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry {
             path: FileSystemPath::Path {
-                path: unreadable_path,
+                path: unreadable_path.into(),
             },
             access: FileSystemAccessMode::Deny,
             missing_path_behavior: None,
@@ -2102,7 +2103,7 @@ async fn apply_patch_clears_aggregated_diff_after_inexact_delta() -> Result<()> 
 
     let harness = apply_patch_harness_with(|builder| {
         builder.with_workspace_setup(|cwd, fs| async move {
-            let binary_path_uri = PathUri::from_host_native_path(cwd.join("binary.dat"))?;
+            let binary_path_uri = executor_path_uri(cwd.join("binary.dat"))?;
             fs.write_file(
                 &binary_path_uri,
                 vec![0xff, 0xfe, 0xfd],

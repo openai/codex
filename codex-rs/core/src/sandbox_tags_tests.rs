@@ -146,7 +146,7 @@ fn profile_policy_tag_reports_closest_legacy_mode() {
             glob_scan_max_depth: None,
             entries: vec![FileSystemSandboxEntry {
                 path: FileSystemPath::Path {
-                    path: writable_root,
+                    path: writable_root.into(),
                 },
                 access: FileSystemAccessMode::Write,
                 missing_path_behavior: None,

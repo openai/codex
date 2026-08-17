@@ -839,6 +839,52 @@ fn additional_file_system_permissions_preserves_canonical_entries() {
             .expect("API paths should convert to native paths"),
         core_permissions
     );
+
+    for path in [r"C:\workspace\read-only", r"\\server\share\read-only"] {
+        let path = LegacyAppPathString::from_string(path);
+        let core_permissions = CoreFileSystemPermissions::from_read_write_path_uris(
+            Some(vec![
+                PathUri::try_from(path.clone()).expect("valid foreign permission path"),
+            ]),
+            /*write*/ None,
+        );
+        let permissions = AdditionalFileSystemPermissions::from(core_permissions.clone());
+        assert_eq!(permissions.read, Some(vec![path]));
+        assert_eq!(permissions.entries.as_ref().map(Vec::len), Some(1));
+        assert_eq!(
+            CoreFileSystemPermissions::try_from(permissions)
+                .expect("foreign API paths should round-trip"),
+            core_permissions
+        );
+    }
+    #[cfg(windows)]
+    for path in ["//server/share/read-only", r"/\server/share/read-only"] {
+        let path = LegacyAppPathString::from_string(path);
+        let core_permissions =
+            CoreFileSystemPermissions::try_from(AdditionalFileSystemPermissions {
+                read: Some(vec![path.clone()]),
+                write: None,
+                glob_scan_max_depth: None,
+                entries: None,
+            })
+            .expect("native slash UNC permission path");
+        let permissions = AdditionalFileSystemPermissions::from(core_permissions);
+        assert_eq!(
+            permissions.read,
+            Some(vec![LegacyAppPathString::from_string(
+                r"\\server\share\read-only"
+            )])
+        );
+    }
+    assert!(
+        CoreFileSystemPermissions::try_from(AdditionalFileSystemPermissions {
+            read: Some(vec![LegacyAppPathString::from_string(r"\\localhost\share")]),
+            write: None,
+            glob_scan_max_depth: None,
+            entries: None,
+        })
+        .is_ok()
+    );
 }
 
 #[test]

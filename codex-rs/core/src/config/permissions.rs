@@ -243,7 +243,7 @@ fn insert_filesystem_permission_toml(
     match entry.path {
         FileSystemPath::Path { path } => {
             entries.insert(
-                path.into_path_buf().to_string_lossy().into_owned(),
+                path.inferred_native_path_string(),
                 FilesystemPermissionToml::Access(entry.access),
             );
         }

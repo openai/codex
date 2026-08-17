@@ -69,7 +69,7 @@ mod tests {
                     },
                     FileSystemSandboxEntry {
                         path: FileSystemPath::Path {
-                            path: extra_root.clone(),
+                            path: extra_root.clone().into(),
                         },
                         access: FileSystemAccessMode::Write,
                         missing_path_behavior: None,

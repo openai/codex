@@ -300,14 +300,18 @@ fn shell_request_escalation_execution_is_explicit() {
     let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry {
             path: FileSystemPath::Path {
-                path: AbsolutePathBuf::from_absolute_path("/tmp/original/output").unwrap(),
+                path: AbsolutePathBuf::from_absolute_path("/tmp/original/output")
+                    .unwrap()
+                    .into(),
             },
             access: FileSystemAccessMode::Write,
             missing_path_behavior: None,
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Path {
-                path: AbsolutePathBuf::from_absolute_path("/tmp/secret").unwrap(),
+                path: AbsolutePathBuf::from_absolute_path("/tmp/secret")
+                    .unwrap()
+                    .into(),
             },
             access: FileSystemAccessMode::Deny,
             missing_path_behavior: None,

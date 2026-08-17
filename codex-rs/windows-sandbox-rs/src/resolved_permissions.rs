@@ -333,28 +333,28 @@ mod tests {
             FileSystemSandboxPolicy::restricted(vec![
                 FileSystemSandboxEntry {
                     path: FileSystemPath::Path {
-                        path: first.clone(),
+                        path: first.clone().into(),
                     },
                     access: FileSystemAccessMode::Write,
                     missing_path_behavior: None,
                 },
                 FileSystemSandboxEntry {
                     path: FileSystemPath::Path {
-                        path: second.clone(),
+                        path: second.clone().into(),
                     },
                     access: FileSystemAccessMode::Write,
                     missing_path_behavior: None,
                 },
                 FileSystemSandboxEntry {
                     path: FileSystemPath::Path {
-                        path: first.join(".git"),
+                        path: first.join(".git").into(),
                     },
                     access: FileSystemAccessMode::Deny,
                     missing_path_behavior: None,
                 },
                 FileSystemSandboxEntry {
                     path: FileSystemPath::Path {
-                        path: second.join(".git"),
+                        path: second.join(".git").into(),
                     },
                     access: FileSystemAccessMode::Deny,
                     missing_path_behavior: None,

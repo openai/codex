@@ -191,7 +191,7 @@ fn builds_permissions_from_profile() {
     let permission_profile = PermissionProfile::from_runtime_permissions(
         &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Path {
-                path: writable_root.clone(),
+                path: writable_root.clone().into(),
             },
             access: FileSystemAccessMode::Write,
             missing_path_behavior: None,
@@ -235,7 +235,7 @@ fn builds_permissions_from_profile_with_denied_reads() {
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::Path {
-                    path: denied_root.clone(),
+                    path: denied_root.clone().into(),
                 },
                 access: FileSystemAccessMode::Deny,
                 missing_path_behavior: None,

@@ -106,7 +106,8 @@ impl PathUri {
     /// Paths without a valid URI representation are replaced by
     /// `file:///%00/bad/path/<base64>`, where `<base64>` is the URL-safe, unpadded
     /// encoding of the original path (Unix bytes or Windows UTF-16LE). This
-    /// includes paths containing nulls and, on Windows, unsupported prefix
+    /// includes paths containing nulls, paths whose URI spelling would imply a
+    /// different convention, and, on Windows, unsupported prefix
     /// kinds such as device and generic verbatim namespaces, non-Unicode path
     /// or UNC components, and UNC server names that are not valid URL hosts.
     /// The encoded null reserves a URI namespace that cannot collide with a
@@ -114,6 +115,8 @@ impl PathUri {
     pub fn from_abs_path(path: &AbsolutePathBuf) -> Self {
         if let Ok(url) = Url::from_file_path(path.as_path())
             && let Ok(uri) = Self::try_from(url)
+            && uri.0.host_str() != Some("")
+            && uri.infer_path_convention() == Some(PathConvention::native())
         {
             return uri;
         }
@@ -135,15 +138,24 @@ impl PathUri {
         Self::from_opaque_path_bytes(&path_bytes)
     }
 
-    /// Parses an absolute native path using the specified path convention.
+    /// Parses an absolute native path using the specified path convention,
+    /// falling back to an opaque URI when its ordinary URI spelling would
+    /// imply a different convention.
     pub(crate) fn from_absolute_native_path(
         path: &str,
         convention: PathConvention,
     ) -> Option<Self> {
-        match convention {
+        let uri = match convention {
             PathConvention::Posix => parse_posix_path(path),
             PathConvention::Windows => parse_windows_path(path),
+        }?;
+        if uri.0.host_str() != Some("") && uri.infer_path_convention() == Some(convention) {
+            return Some(uri);
         }
+        Some(match convention {
+            PathConvention::Posix => Self::from_opaque_path_bytes(path.as_bytes()),
+            PathConvention::Windows => windows_opaque_path_uri(path),
+        })
     }
 
     fn from_opaque_path_bytes(path_bytes: &[u8]) -> Self {

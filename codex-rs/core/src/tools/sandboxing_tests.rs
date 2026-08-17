@@ -234,7 +234,7 @@ fn windows_sandbox_env_preserves_denied_reads_or_rejects_unsupported_backend() {
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Path {
-                path: denied_path.clone(),
+                path: denied_path.clone().into(),
             },
             access: FileSystemAccessMode::Deny,
             missing_path_behavior: None,

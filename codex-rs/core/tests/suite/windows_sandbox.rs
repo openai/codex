@@ -162,7 +162,7 @@ async fn windows_restricted_token_rejects_exact_and_glob_deny_read_policy() -> a
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Path {
-                path: future_secret,
+                path: future_secret.into(),
             },
             access: FileSystemAccessMode::Deny,
             missing_path_behavior: None,
@@ -303,7 +303,7 @@ async fn windows_elevated_enforces_deny_read_and_protects_setup_marker() -> anyh
             missing_path_behavior: None,
         },
         FileSystemSandboxEntry {
-            path: FileSystemPath::Path { path: exact_secret },
+            path: exact_secret.into(),
             access: FileSystemAccessMode::Deny,
             missing_path_behavior: None,
         },
@@ -438,7 +438,7 @@ async fn windows_elevated_shell_and_unified_exec_enforce_managed_deny_reads() ->
                 },
                 FileSystemSandboxEntry {
                     path: FileSystemPath::Path {
-                        path: config.cwd.join("exact-secret.txt"),
+                        path: config.cwd.join("exact-secret.txt").into(),
                     },
                     access: FileSystemAccessMode::Deny,
                     missing_path_behavior: None,

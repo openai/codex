@@ -82,8 +82,8 @@ const RENDER_CASES: &[RenderCase] = &[
     ),
     RenderCase::round_trips("file:///etc", PathConvention::Posix, "/etc"),
     RenderCase::round_trips("file:///tmp/", PathConvention::Posix, "/tmp/"),
-    RenderCase::round_trips("file:///C:/Project", PathConvention::Posix, "/C:/Project"),
-    RenderCase::round_trips("file:///C:", PathConvention::Posix, "/C:"),
+    RenderCase::renders_lossily("file:///C:/Project", PathConvention::Posix, "/C:/Project"),
+    RenderCase::renders_lossily("file:///C:", PathConvention::Posix, "/C:"),
     RenderCase::round_trips("file:///tmp/%E2%98%83", PathConvention::Posix, "/tmp/☃"),
     RenderCase::round_trips("file:///tmp/a%5Cb", PathConvention::Posix, "/tmp/a\\b"),
     RenderCase::round_trips(
@@ -463,6 +463,19 @@ fn converts_absolute_api_paths_using_the_inferred_convention() {
             PathUri::try_from(path.clone()),
             path.to_path_uri(convention)
         );
+    }
+}
+
+#[test]
+fn ambiguous_absolute_api_paths_preserve_their_inferred_convention() {
+    for (raw_path, convention) in [
+        ("/C:/secret", PathConvention::Posix),
+        (r"\\localhost\share", PathConvention::Windows),
+    ] {
+        let path = LegacyAppPathString::from_string(raw_path);
+        let uri = PathUri::try_from(path.clone()).expect("absolute API path should convert");
+        assert_eq!(uri.infer_path_convention(), Some(convention));
+        assert_eq!(LegacyAppPathString::from(uri), path);
     }
 }
 

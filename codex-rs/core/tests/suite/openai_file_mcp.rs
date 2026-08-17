@@ -8,7 +8,6 @@ use anyhow::Result;
 use codex_core::config::Config;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
-use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
@@ -38,6 +37,7 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_sandbox;
 use core_test_support::skip_if_target_windows;
 use core_test_support::test_codex::TestCodex;
+use core_test_support::test_codex::executor_path_uri;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -58,7 +58,7 @@ fn restrict_apps_upload_reads(config: &mut Config, denied_file_name: &str) {
             .expect("denied file path should be absolute");
     let mut file_system_policy = FileSystemSandboxPolicy::read_only();
     file_system_policy.entries.push(FileSystemSandboxEntry::new(
-        FileSystemPath::Path { path: denied_path },
+        denied_path.into(),
         FileSystemAccessMode::Deny,
     ));
     config
@@ -232,7 +232,7 @@ async fn codex_apps_file_params_omit_fields_absent_from_tool_schema() -> Result<
 
     let mut builder = apps_enabled_builder(apps_server.chatgpt_base_url.clone())
         .with_workspace_setup(|cwd, fs| async move {
-            let report_path = PathUri::from_abs_path(&cwd.join("report.txt"));
+            let report_path = executor_path_uri(cwd.join("report.txt"))?;
             fs.write_file(
                 &report_path,
                 vec![b'x'; STREAMED_FILE_SIZE],
@@ -487,7 +487,7 @@ default_tools_approval_mode = "approve"
                 .expect("Library approval configuration should be valid");
         })
         .with_workspace_setup(|cwd, fs| async move {
-            let report_path = PathUri::from_abs_path(&cwd.join("report.pdf"));
+            let report_path = executor_path_uri(cwd.join("report.pdf"))?;
             fs.write_file(&report_path, b"%PDF-1.4".to_vec(), /*sandbox*/ None)
                 .await?;
             Ok(())

@@ -132,7 +132,7 @@ fn filesystem_helper_platform_defaults_do_not_grant_applications_directory() {
     let file_system_policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry::new(
             FileSystemPath::Path {
-                path: workspace_root,
+                path: workspace_root.into(),
             },
             FileSystemAccessMode::Read,
         ),
@@ -272,7 +272,7 @@ fn explicit_unreadable_paths_are_excluded_from_full_disk_read_and_write_access()
             missing_path_behavior: None,
         },
         FileSystemSandboxEntry {
-            path: FileSystemPath::Path { path: unreadable },
+            path: unreadable.into(),
             access: FileSystemAccessMode::Deny,
             missing_path_behavior: None,
         },
@@ -375,12 +375,12 @@ fn explicit_unreadable_paths_are_excluded_from_readable_roots() {
     let unreadable = absolute_path("/tmp/codex-readable/private");
     let file_system_policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry {
-            path: FileSystemPath::Path { path: root },
+            path: root.into(),
             access: FileSystemAccessMode::Read,
             missing_path_behavior: None,
         },
         FileSystemSandboxEntry {
-            path: FileSystemPath::Path { path: unreadable },
+            path: unreadable.into(),
             access: FileSystemAccessMode::Deny,
             missing_path_behavior: None,
         },

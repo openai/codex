@@ -44,7 +44,7 @@ fn app_server_workspace_write_profile(extra_root: AbsolutePathBuf) -> Permission
                     missing_path_behavior: None,
                 },
                 FileSystemSandboxEntry {
-                    path: FileSystemPath::Path { path: extra_root },
+                    path: extra_root.into(),
                     access: FileSystemAccessMode::Write,
                     missing_path_behavior: None,
                 },
@@ -368,7 +368,7 @@ async fn preset_matching_does_not_treat_non_cwd_writable_profile_as_read_only() 
                 },
                 FileSystemSandboxEntry {
                     path: FileSystemPath::Path {
-                        path: test_path_buf("/tmp/writable").abs(),
+                        path: test_path_buf("/tmp/writable").abs().into(),
                     },
                     access: FileSystemAccessMode::Write,
                     missing_path_behavior: None,

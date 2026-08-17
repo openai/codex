@@ -224,7 +224,7 @@ fn split_only_filesystem_policy_requires_direct_runtime_enforcement() {
             missing_path_behavior: None,
         },
         codex_protocol::permissions::FileSystemSandboxEntry {
-            path: codex_protocol::permissions::FileSystemPath::Path { path: docs },
+            path: docs.into(),
             access: codex_protocol::permissions::FileSystemAccessMode::Read,
             missing_path_behavior: None,
         },
@@ -250,7 +250,7 @@ fn root_write_read_only_carveout_requires_direct_runtime_enforcement() {
             missing_path_behavior: None,
         },
         codex_protocol::permissions::FileSystemSandboxEntry {
-            path: codex_protocol::permissions::FileSystemPath::Path { path: docs },
+            path: docs.into(),
             access: codex_protocol::permissions::FileSystemAccessMode::Read,
             missing_path_behavior: None,
         },
@@ -573,7 +573,7 @@ fn resolve_permission_profile_preserves_direct_runtime_profile() {
             missing_path_behavior: None,
         },
         codex_protocol::permissions::FileSystemSandboxEntry {
-            path: codex_protocol::permissions::FileSystemPath::Path { path: docs },
+            path: docs.into(),
             access: codex_protocol::permissions::FileSystemAccessMode::Write,
             missing_path_behavior: None,
         },
@@ -629,7 +629,7 @@ fn legacy_landlock_rejects_split_only_filesystem_policies() {
             missing_path_behavior: None,
         },
         codex_protocol::permissions::FileSystemSandboxEntry {
-            path: codex_protocol::permissions::FileSystemPath::Path { path: docs },
+            path: docs.into(),
             access: codex_protocol::permissions::FileSystemAccessMode::Write,
             missing_path_behavior: None,
         },

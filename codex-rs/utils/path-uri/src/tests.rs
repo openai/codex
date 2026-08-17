@@ -480,6 +480,15 @@ fn file_uri_round_trips_windows_unc_paths() {
 
     assert_eq!(uri.encoded_path(), "/share/src/main.rs");
     assert_eq!(uri.to_abs_path().expect("UNC URI should convert"), path);
+
+    let localhost = AbsolutePathBuf::from_absolute_path_checked(r"\\localhost\share\src")
+        .expect("absolute localhost UNC path");
+    let uri = PathUri::from_abs_path(&localhost);
+    assert!(uri.to_string().starts_with(BAD_PATH_URI_PREFIX));
+    assert_eq!(
+        uri.to_abs_path().expect("opaque URI should convert"),
+        localhost
+    );
 }
 
 #[test]

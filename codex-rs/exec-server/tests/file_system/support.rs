@@ -85,7 +85,7 @@ pub(crate) fn read_only_sandbox(readable_root: std::path::PathBuf) -> FileSystem
     let readable_root = absolute_path(readable_root);
     sandbox_context(vec![FileSystemSandboxEntry {
         path: FileSystemPath::Path {
-            path: readable_root,
+            path: readable_root.into(),
         },
         access: FileSystemAccessMode::Read,
         missing_path_behavior: None,
@@ -98,7 +98,7 @@ pub(crate) fn workspace_write_sandbox(
     let writable_root = absolute_path(writable_root);
     sandbox_context(vec![FileSystemSandboxEntry {
         path: FileSystemPath::Path {
-            path: writable_root,
+            path: writable_root.into(),
         },
         access: FileSystemAccessMode::Write,
         missing_path_behavior: None,

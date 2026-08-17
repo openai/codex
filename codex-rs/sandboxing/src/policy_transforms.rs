@@ -36,9 +36,12 @@ pub fn normalize_additional_permissions(
                 }
                 let path = match entry.path {
                     FileSystemPath::Path { path } => FileSystemPath::Path {
-                        path: canonicalize_preserving_symlinks(path.as_path())
+                        path: path
+                            .to_abs_path()
                             .ok()
+                            .and_then(|path| canonicalize_preserving_symlinks(path.as_path()).ok())
                             .and_then(|path| AbsolutePathBuf::from_absolute_path(path).ok())
+                            .map(Into::into)
                             .unwrap_or(path),
                     },
                     FileSystemPath::GlobPattern { pattern } => {
@@ -381,7 +384,7 @@ fn materialize_cwd_dependent_entry(
 
 fn resolve_permission_path(path: &FileSystemPath, cwd: &Path) -> Option<AbsolutePathBuf> {
     match path {
-        FileSystemPath::Path { path } => Some(path.clone()),
+        FileSystemPath::Path { path } => path.to_abs_path().ok(),
         FileSystemPath::GlobPattern { .. } => None,
         FileSystemPath::Special { value } => match value {
             FileSystemSpecialPath::Root => {

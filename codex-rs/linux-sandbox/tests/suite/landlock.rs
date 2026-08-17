@@ -805,21 +805,26 @@ async fn sandbox_blocks_explicit_split_policy_carveouts_under_bwrap() {
         FileSystemSandboxEntry {
             path: FileSystemPath::Path {
                 path: AbsolutePathBuf::try_from(sandbox_helper_dir.as_path())
-                    .expect("absolute helper dir"),
+                    .expect("absolute helper dir")
+                    .into(),
             },
             access: FileSystemAccessMode::Read,
             missing_path_behavior: None,
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Path {
-                path: AbsolutePathBuf::try_from(tmpdir.path()).expect("absolute tempdir"),
+                path: AbsolutePathBuf::try_from(tmpdir.path())
+                    .expect("absolute tempdir")
+                    .into(),
             },
             access: FileSystemAccessMode::Write,
             missing_path_behavior: None,
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Path {
-                path: AbsolutePathBuf::try_from(blocked.as_path()).expect("absolute blocked dir"),
+                path: AbsolutePathBuf::try_from(blocked.as_path())
+                    .expect("absolute blocked dir")
+                    .into(),
             },
             access: FileSystemAccessMode::Deny,
             missing_path_behavior: None,
@@ -877,28 +882,35 @@ async fn sandbox_reenables_writable_subpaths_under_unreadable_parents() {
         FileSystemSandboxEntry {
             path: FileSystemPath::Path {
                 path: AbsolutePathBuf::try_from(sandbox_helper_dir.as_path())
-                    .expect("absolute helper dir"),
+                    .expect("absolute helper dir")
+                    .into(),
             },
             access: FileSystemAccessMode::Read,
             missing_path_behavior: None,
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Path {
-                path: AbsolutePathBuf::try_from(tmpdir.path()).expect("absolute tempdir"),
+                path: AbsolutePathBuf::try_from(tmpdir.path())
+                    .expect("absolute tempdir")
+                    .into(),
             },
             access: FileSystemAccessMode::Write,
             missing_path_behavior: None,
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Path {
-                path: AbsolutePathBuf::try_from(blocked.as_path()).expect("absolute blocked dir"),
+                path: AbsolutePathBuf::try_from(blocked.as_path())
+                    .expect("absolute blocked dir")
+                    .into(),
             },
             access: FileSystemAccessMode::Deny,
             missing_path_behavior: None,
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Path {
-                path: AbsolutePathBuf::try_from(allowed.as_path()).expect("absolute allowed dir"),
+                path: AbsolutePathBuf::try_from(allowed.as_path())
+                    .expect("absolute allowed dir")
+                    .into(),
             },
             access: FileSystemAccessMode::Write,
             missing_path_behavior: None,
@@ -952,7 +964,9 @@ async fn sandbox_blocks_root_read_carveouts_under_bwrap() {
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Path {
-                path: AbsolutePathBuf::try_from(blocked.as_path()).expect("absolute blocked dir"),
+                path: AbsolutePathBuf::try_from(blocked.as_path())
+                    .expect("absolute blocked dir")
+                    .into(),
             },
             access: FileSystemAccessMode::Deny,
             missing_path_behavior: None,
