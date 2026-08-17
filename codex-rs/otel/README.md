@@ -43,7 +43,7 @@ let settings = OtelSettings {
     tracestate: std::collections::BTreeMap::new(),
 };
 
-if let Some(provider) = OtelProvider::from(&settings)? {
+if let Some(provider) = OtelProvider::try_new(&settings)? {
     let registry = tracing_subscriber::registry()
         .with(provider.logger_layer())
         .with(provider.tracing_layer());

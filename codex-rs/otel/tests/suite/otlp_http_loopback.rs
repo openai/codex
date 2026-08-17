@@ -343,7 +343,7 @@ fn otlp_http_exporter_sends_logs_to_collector()
         let _ = tx.send(captured);
     });
 
-    let otel = OtelProvider::from(&OtelSettings {
+    let otel = OtelProvider::try_new(&OtelSettings {
         environment: "test".to_string(),
         service_name: "codex-cli".to_string(),
         service_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -402,7 +402,7 @@ fn otlp_http_exporter_sends_logs_to_collector()
 
 #[test]
 fn otel_provider_rejects_header_unsafe_configured_tracestate() {
-    let result = OtelProvider::from(&OtelSettings {
+    let result = OtelProvider::try_new(&OtelSettings {
         environment: "test".to_string(),
         service_name: "codex-cli".to_string(),
         service_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -467,7 +467,7 @@ fn otlp_http_exporter_sends_traces_to_collector()
         let _ = tx.send(captured);
     });
 
-    let otel = OtelProvider::from(&OtelSettings {
+    let otel = OtelProvider::try_new(&OtelSettings {
         environment: "test".to_string(),
         service_name: "codex-cli".to_string(),
         service_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -612,7 +612,7 @@ async fn otlp_http_exporter_sends_traces_to_collector_with_bounded_shutdown_in_t
         let _ = tx.send(captured);
     });
 
-    let otel = OtelProvider::from(&OtelSettings {
+    let otel = OtelProvider::try_new(&OtelSettings {
         environment: "test".to_string(),
         service_name: "codex-cli".to_string(),
         service_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -705,7 +705,7 @@ fn otlp_http_exporter_times_out_when_collector_stalls_during_bounded_shutdown() 
         .build()
         .expect("build tokio runtime");
     let (result, elapsed) = runtime.block_on(async move {
-        let otel = OtelProvider::from(&OtelSettings {
+        let otel = OtelProvider::try_new(&OtelSettings {
             environment: "test".to_string(),
             service_name: "codex-cli".to_string(),
             service_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -804,7 +804,7 @@ fn otlp_http_exporter_sends_traces_to_collector_in_current_thread_tokio_runtime(
             .expect("current-thread runtime");
 
         let result = runtime.block_on(async move {
-            let otel = OtelProvider::from(&OtelSettings {
+            let otel = OtelProvider::try_new(&OtelSettings {
                 environment: "test".to_string(),
                 service_name: "codex-cli".to_string(),
                 service_version: env!("CARGO_PKG_VERSION").to_string(),

@@ -80,7 +80,7 @@ pub fn build_provider(
     let service_name = service_name_override.unwrap_or(originator.value.as_str());
     let runtime_metrics = config.features.enabled(Feature::RuntimeMetrics);
 
-    OtelProvider::from(&OtelSettings {
+    OtelProvider::try_new(&OtelSettings {
         service_name: service_name.to_string(),
         service_version: service_version.to_string(),
         codex_home: config.codex_home.to_path_buf(),

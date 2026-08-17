@@ -44,6 +44,7 @@ use std::io;
 use std::mem::ManuallyDrop;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::sync::mpsc;
 use std::time::Duration;
 use tracing::debug;
 use tracing_subscriber::Layer;
@@ -64,11 +65,17 @@ pub struct OtelProvider {
     pub tracer: Option<Tracer>,
     pub metrics: Option<MetricsClient>,
     shutdown_started: AtomicBool,
+    shutdown_worker: Option<mpsc::SyncSender<ShutdownWorker>>,
 }
 
 struct ShutdownWorker {
     provider: ManuallyDrop<OtelProvider>,
     completed_tx: tokio::sync::oneshot::Sender<()>,
+}
+
+struct ShutdownWorkerStartup {
+    worker_rx: mpsc::Receiver<ShutdownWorker>,
+    ready_tx: mpsc::SyncSender<()>,
 }
 
 #[derive(Debug)]
@@ -102,37 +109,74 @@ impl OtelProvider {
         }
     }
 
-    /// Shuts down exporters on a detached thread within an external time budget.
-    pub async fn shutdown_with_timeout(self, timeout: Duration) -> io::Result<()> {
-        self.shutdown_with_timeout_and_spawner(timeout, |worker| {
+    /// Starts the detached shutdown worker before shutdown-time resource pressure.
+    fn prepare_shutdown_worker(&mut self) -> io::Result<()> {
+        self.prepare_shutdown_worker_with_spawner(|startup| {
             std::thread::Builder::new()
                 .name("codex-otel-shutdown".to_string())
                 .spawn(move || {
+                    if startup.ready_tx.send(()).is_err() {
+                        return;
+                    }
+                    let Ok(worker) = startup.worker_rx.recv() else {
+                        return;
+                    };
                     let provider = ManuallyDrop::into_inner(worker.provider);
                     provider.shutdown();
                     drop(provider);
                     let _ = worker.completed_tx.send(());
                 })
         })
-        .await
     }
 
-    async fn shutdown_with_timeout_and_spawner<F>(
-        self,
-        timeout: Duration,
-        spawn: F,
-    ) -> io::Result<()>
+    fn prepare_shutdown_worker_with_spawner<F>(&mut self, spawn: F) -> io::Result<()>
     where
-        F: FnOnce(ShutdownWorker) -> io::Result<std::thread::JoinHandle<()>>,
+        F: FnOnce(ShutdownWorkerStartup) -> io::Result<std::thread::JoinHandle<()>>,
     {
+        if self.shutdown_worker.is_some() {
+            return Ok(());
+        }
+
+        let (worker_tx, worker_rx) = mpsc::sync_channel(/*bound*/ 1);
+        let (ready_tx, ready_rx) = mpsc::sync_channel(/*bound*/ 1);
+        let startup = ShutdownWorkerStartup {
+            worker_rx,
+            ready_tx,
+        };
+        let _shutdown_worker = spawn(startup)?;
+        ready_rx.recv().map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "telemetry shutdown worker stopped before initializing",
+            )
+        })?;
+        self.shutdown_worker = Some(worker_tx);
+        Ok(())
+    }
+
+    /// Shuts down exporters on a prepared detached thread within a time budget.
+    pub async fn shutdown_with_timeout(mut self, timeout: Duration) -> io::Result<()> {
+        let Some(worker_tx) = self.shutdown_worker.take() else {
+            // Best-effort shutdown must not run a potentially blocking destructor
+            // when its worker could not be prepared.
+            let _provider = ManuallyDrop::new(self);
+            return Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "telemetry shutdown worker was not initialized",
+            ));
+        };
+
         let (completed_tx, completed_rx) = tokio::sync::oneshot::channel();
-        // A failed spawn drops its closure on the caller. Keep the provider
-        // from synchronously running its potentially blocking destructor.
         let worker = ShutdownWorker {
             provider: ManuallyDrop::new(self),
             completed_tx,
         };
-        let _shutdown_worker = spawn(worker)?;
+        worker_tx.send(worker).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "telemetry shutdown worker stopped before receiving the provider",
+            )
+        })?;
 
         match tokio::time::timeout(timeout, completed_rx).await {
             Ok(Ok(())) => Ok(()),
@@ -147,7 +191,7 @@ impl OtelProvider {
         }
     }
 
-    pub fn from(settings: &OtelSettings) -> Result<Option<Self>, Box<dyn Error>> {
+    pub fn try_new(settings: &OtelSettings) -> Result<Option<Self>, Box<dyn Error>> {
         let log_enabled = !matches!(settings.exporter, OtelExporter::None);
         let trace_enabled = !matches!(settings.trace_exporter, OtelExporter::None);
         let metric_exporter = crate::config::resolve_exporter(&settings.metrics_exporter);
@@ -170,7 +214,7 @@ impl OtelProvider {
         }
         crate::trace_context::validate_tracestate_entries(&settings.tracestate)?;
 
-        let mut metrics = if matches!(metric_exporter, OtelExporter::None) {
+        let metrics = if matches!(metric_exporter, OtelExporter::None) {
             None
         } else {
             let mut config = MetricsConfig::otlp(
@@ -205,12 +249,22 @@ impl OtelProvider {
             .as_ref()
             .map(|provider| provider.tracer(settings.service_name.clone()));
 
+        let mut provider = Self {
+            logger,
+            tracer_provider,
+            tracer,
+            metrics,
+            shutdown_started: AtomicBool::default(),
+            shutdown_worker: None,
+        };
+        provider.prepare_shutdown_worker()?;
+
         crate::trace_context::set_tracestate_entries(settings.tracestate.clone())?;
-        if let Some(provider) = tracer_provider.clone() {
-            global::set_tracer_provider(provider);
+        if let Some(tracer_provider) = provider.tracer_provider.clone() {
+            global::set_tracer_provider(tracer_provider);
             global::set_text_map_propagator(TraceContextPropagator::new());
         }
-        if let Some(metrics) = metrics.as_mut() {
+        if let Some(metrics) = provider.metrics.as_mut() {
             *metrics = crate::metrics::install_global(metrics.clone());
             if matches!(settings.metrics_exporter, OtelExporter::Statsig) {
                 crate::metrics::install_global_statsig_settings(StatsigMetricsSettings {
@@ -218,13 +272,7 @@ impl OtelProvider {
                 });
             }
         }
-        Ok(Some(Self {
-            logger,
-            tracer_provider,
-            tracer,
-            metrics,
-            shutdown_started: AtomicBool::default(),
-        }))
+        Ok(Some(provider))
     }
 
     pub fn logger_layer<S>(&self) -> Option<impl Layer<S> + Send + Sync>
