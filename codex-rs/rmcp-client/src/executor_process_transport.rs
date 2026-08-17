@@ -45,8 +45,6 @@ use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
-use crate::incoming_jsonrpc::deserialize_incoming_jsonrpc_message;
-
 static PROCESS_COUNTER: AtomicUsize = AtomicUsize::new(1);
 // Tool results can make valid MCP responses large, so keep the protocol
 // ceiling well above ordinary messages while still bounding hostile input.
@@ -452,7 +450,7 @@ impl ExecutorProcessTransport {
                 None => return None,
             };
             let line = Self::trim_trailing_carriage_return(line);
-            match deserialize_incoming_jsonrpc_message(&line) {
+            match serde_json::from_slice(&line) {
                 Ok(message) => return Some(message),
                 Err(error) => {
                     debug!(

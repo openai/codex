@@ -6,7 +6,6 @@ mod http_client_adapter;
 mod http_client_redirect;
 mod http_headers;
 mod in_process_transport;
-mod incoming_jsonrpc;
 mod local_stdio_transport;
 mod logging_client_handler;
 mod oauth;

@@ -20,6 +20,7 @@ use rmcp::model::Implementation;
 use rmcp::model::InitializeRequestParams;
 use rmcp::model::ProtocolVersion;
 use rmcp::model::ReadResourceRequestParams;
+use rmcp::model::ServerResult;
 use rmcp::model::UrlElicitationCapability;
 use serde_json::Value;
 use serde_json::json;
@@ -168,6 +169,50 @@ async fn create_client(
         )
         .await?;
     Ok(client)
+}
+
+#[tokio::test]
+async fn modern_sse_input_required_preserves_response_metadata() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    let expected_result = json!({
+        "resultType": "input_required",
+        "requestState": OPAQUE_STATE,
+        "_meta": {"responseContext": "preserved"},
+    });
+    let result = expected_result.clone();
+
+    Mock::given(method("POST"))
+        .and(path("/mcp"))
+        .respond_with(move |request: &Request| {
+            let body: Value = request.body_json().expect("valid JSON-RPC request");
+            match body["method"].as_str() {
+                Some("server/discover") => discover_response(&body),
+                Some("tools/call") => sse_result_response(&body, result.clone()),
+                other => panic!("unexpected MRTR request: {other:?}"),
+            }
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let client = create_client(&server, Arc::new(Mutex::new(Vec::new()))).await?;
+    let result = client
+        .send_custom_request_with_timeout(
+            "tools/call",
+            Some(json!({"name": "confirm", "arguments": {}})),
+            Some(Duration::from_secs(5)),
+        )
+        .await?;
+    let ServerResult::InputRequiredResult(result) = result else {
+        anyhow::bail!("SSE response must remain an input_required result");
+    };
+
+    assert_eq!(serde_json::to_value(result)?, expected_result);
+
+    client.shutdown().await;
+    server.verify().await;
+
+    Ok(())
 }
 
 #[tokio::test]

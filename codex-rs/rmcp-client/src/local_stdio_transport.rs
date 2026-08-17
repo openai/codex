@@ -23,8 +23,6 @@ use tokio::sync::Mutex;
 use tracing::debug;
 use tracing::warn;
 
-use crate::incoming_jsonrpc::deserialize_incoming_jsonrpc_message;
-
 /// Match the existing executor stdio transport and the production MCP limit.
 pub(crate) const MAX_MCP_STDIO_LINE_BYTES: usize = 8 * 1024 * 1024;
 
@@ -118,7 +116,7 @@ impl LocalStdioTransport {
     fn decode_pending_message(&mut self) -> Option<RxJsonRpcMessage<RoleClient>> {
         let line = std::mem::take(&mut self.pending_line);
         let line = line.strip_suffix(b"\r").unwrap_or(&line);
-        match deserialize_incoming_jsonrpc_message(line) {
+        match serde_json::from_slice(line) {
             Ok(message) => Some(message),
             Err(error) => {
                 debug!(
