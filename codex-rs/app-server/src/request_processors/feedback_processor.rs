@@ -468,11 +468,11 @@ fn windows_sandbox_log_attachment(_codex_home: &Path) -> Option<FeedbackAttachme
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::http::HeaderMap;
     use codex_protocol::protocol::TurnContextItem;
     use codex_rollout::RolloutLine;
     use core_test_support::responses::start_mock_server;
     use core_test_support::test_codex::test_codex;
+    use http::HeaderMap;
     use pretty_assertions::assert_eq;
 
     #[tokio::test]
