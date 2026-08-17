@@ -1,9 +1,14 @@
 use anyhow::Result;
 use app_test_support::TestAppServer;
 use app_test_support::write_mock_responses_config_toml_with_chatgpt_base_url;
+use codex_app_server::INVALID_PARAMS_ERROR_CODE;
+use codex_app_server_protocol::ActivePermissionProfile;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SandboxPolicy;
+use codex_app_server_protocol::ThreadLoadedListParams;
+use codex_app_server_protocol::ThreadLoadedListResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -19,6 +24,127 @@ use tokio::time::timeout;
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 const REMOTE_IMAGE_URL_ERROR: &str =
     "remote image URLs are not supported; use an inline data URL instead";
+
+#[tokio::test]
+async fn legacy_permission_profile_requests_fail_closed() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+    let legacy_permission_profile = json!({
+        "network": { "enabled": false },
+        "fileSystem": {
+            "entries": [{
+                "path": {
+                    "type": "special",
+                    "value": { "kind": "root" }
+                },
+                "access": "read"
+            }]
+        }
+    });
+    let requests = [
+        (
+            "thread/start",
+            json!({
+                "permissionProfile": legacy_permission_profile.clone()
+            }),
+        ),
+        (
+            "thread/resume",
+            json!({
+                "threadId": "missing-thread",
+                "permissions": ":read-only",
+                "permissionProfile": legacy_permission_profile.clone()
+            }),
+        ),
+        (
+            "thread/fork",
+            json!({
+                "threadId": "missing-thread",
+                "permissionProfile": legacy_permission_profile.clone()
+            }),
+        ),
+        (
+            "turn/start",
+            json!({
+                "threadId": "missing-thread",
+                "input": [],
+                "permissionProfile": legacy_permission_profile
+            }),
+        ),
+    ];
+
+    for (method, params) in requests {
+        let request_id = mcp.send_raw_request(method, Some(params)).await?;
+        let actual: JSONRPCError = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+        )
+        .await??;
+        let expected = JSONRPCError {
+            id: RequestId::Integer(request_id),
+            error: JSONRPCErrorError {
+                code: INVALID_PARAMS_ERROR_CODE,
+                data: None,
+                message: format!(
+                    "`permissionProfile` is no longer supported for `{method}`; use `permissions` with a named profile id instead"
+                ),
+            },
+        };
+        assert_eq!(actual, expected, "unexpected response for {method}");
+    }
+
+    let request_id = mcp
+        .send_thread_loaded_list_request(ThreadLoadedListParams::default())
+        .await?;
+    let actual: ThreadLoadedListResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
+    assert_eq!(
+        actual,
+        ThreadLoadedListResponse {
+            data: Vec::new(),
+            next_cursor: None,
+        }
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_keeps_unknown_field_compatibility_with_named_permissions() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+
+    let request_id = mcp
+        .send_raw_request(
+            "thread/start",
+            Some(json!({
+                "permissions": ":read-only",
+                "futureField": { "ignored": true }
+            })),
+        )
+        .await?;
+    let actual: ThreadStartResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
+
+    assert_eq!(
+        actual.sandbox,
+        SandboxPolicy::ReadOnly {
+            network_access: false,
+        }
+    );
+    assert_eq!(
+        actual.active_permission_profile,
+        Some(ActivePermissionProfile::read_only())
+    );
+
+    Ok(())
+}
 
 #[tokio::test]
 async fn request_handlers_reject_remote_image_urls() -> Result<()> {

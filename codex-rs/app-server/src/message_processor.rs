@@ -8,6 +8,7 @@ use crate::attestation::app_server_attestation_provider;
 use crate::config_manager::ConfigManager;
 use crate::connection_rpc_gate::ConnectionRpcGate;
 use crate::current_time::app_server_time_provider;
+use crate::error_code::invalid_params;
 use crate::error_code::invalid_request;
 use crate::extensions::ThreadExtensionDependencies;
 use crate::extensions::app_server_extension_event_sink;
@@ -97,8 +98,34 @@ use crate::models_refresh_worker::ModelsRefreshWorker;
 const CONNECTION_RPC_DRAIN_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 30);
 
 fn deserialize_client_request(request: JSONRPCRequest) -> Result<ClientRequest, JSONRPCErrorError> {
+    reject_obsolete_request_fields(&request)?;
+
     ClientRequest::try_from(request)
         .map_err(|err| invalid_request(format!("Invalid request: {err}")))
+}
+
+fn reject_obsolete_request_fields(request: &JSONRPCRequest) -> Result<(), JSONRPCErrorError> {
+    reject_removed_permission_profile(request)?;
+    Ok(())
+}
+
+fn reject_removed_permission_profile(request: &JSONRPCRequest) -> Result<(), JSONRPCErrorError> {
+    if matches!(
+        request.method.as_str(),
+        "thread/start" | "thread/resume" | "thread/fork" | "turn/start"
+    ) && request
+        .params
+        .as_ref()
+        .and_then(serde_json::Value::as_object)
+        .is_some_and(|params| params.contains_key("permissionProfile"))
+    {
+        let method = request.method.as_str();
+        return Err(invalid_params(format!(
+            "`permissionProfile` is no longer supported for `{method}`; use `permissions` with a named profile id instead"
+        )));
+    }
+
+    Ok(())
 }
 
 pub(crate) struct MessageProcessor {
