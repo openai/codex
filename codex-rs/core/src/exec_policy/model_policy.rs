@@ -2,6 +2,7 @@ use super::ExecPolicyManager;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Policy;
 use codex_execpolicy::PrefixRule;
+use codex_execpolicy::RequirementsExecPolicy;
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -11,6 +12,18 @@ pub(crate) enum AllowPrefixRules {
 }
 
 impl ExecPolicyManager {
+    pub(crate) fn current_for_environment(
+        &self,
+        environment_policy: Option<&RequirementsExecPolicy>,
+        allow_prefix_rules: AllowPrefixRules,
+    ) -> Arc<Policy> {
+        let policy = self.current_for_prefix_rules(allow_prefix_rules);
+        match environment_policy {
+            Some(environment_policy) => Arc::new(policy.merge_overlay(environment_policy.as_ref())),
+            None => policy,
+        }
+    }
+
     pub(crate) fn current_for_prefix_rules(
         &self,
         allow_prefix_rules: AllowPrefixRules,

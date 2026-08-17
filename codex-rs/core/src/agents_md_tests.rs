@@ -345,6 +345,7 @@ fn resolved_local_environments<const N: usize>(
                                 PermissionProfile::read_only(),
                             ),
                             shell_environment_policy: Default::default(),
+                            exec_policy: None,
                             selected_capability_roots: Vec::new(),
                         }),
                     },

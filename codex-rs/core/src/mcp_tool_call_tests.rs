@@ -1121,6 +1121,7 @@ async fn mcp_sandbox_cwd_uses_matching_server_environment_uri() -> anyhow::Resul
                         .permission_profile_state()
                         .snapshot(),
                     shell_environment_policy: Default::default(),
+                    exec_policy: None,
                     selected_capability_roots: Vec::new(),
                 }),
             },

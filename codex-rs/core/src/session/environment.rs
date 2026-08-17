@@ -39,6 +39,15 @@ fn validate_environment_config(
             "environment readiness contains more than {MAX_SELECTED_CAPABILITY_ROOTS} selected capability roots"
         )));
     }
+    if config
+        .exec_policy
+        .as_ref()
+        .is_some_and(|policy| !policy.as_ref().get_allowed_prefixes().is_empty())
+    {
+        return Err(CodexErr::InvalidRequest(
+            "environment command policy cannot contain allow rules".to_string(),
+        ));
+    }
 
     let mut root_ids = HashSet::with_capacity(config.selected_capability_roots.len());
     for root in &config.selected_capability_roots {

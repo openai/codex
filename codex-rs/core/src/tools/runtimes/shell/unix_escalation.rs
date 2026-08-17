@@ -183,7 +183,10 @@ pub(super) async fn try_run_zsh_fork(
         ctx.session
             .services
             .exec_policy
-            .current_for_prefix_rules(ctx.step_context.turn.allow_prefix_rules())
+            .current_for_environment(
+                req.turn_environment.config().exec_policy.as_ref(),
+                ctx.step_context.turn.allow_prefix_rules(),
+            )
             .as_ref()
             .clone(),
     ));
@@ -297,7 +300,10 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         ctx.session
             .services
             .exec_policy
-            .current_for_prefix_rules(ctx.step_context.turn.allow_prefix_rules())
+            .current_for_environment(
+                req.turn_environment.config().exec_policy.as_ref(),
+                ctx.step_context.turn.allow_prefix_rules(),
+            )
             .as_ref()
             .clone(),
     ));

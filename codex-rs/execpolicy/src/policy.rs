@@ -41,11 +41,22 @@ impl RequirementsExecPolicy {
     pub fn new(policy: Policy) -> Self {
         Self { policy }
     }
+
+    pub fn fingerprint(&self) -> Vec<String> {
+        let mut entries = Vec::new();
+        for (program, rules) in self.policy.rules().iter_all() {
+            for rule in rules {
+                entries.push(format!("{program}:{rule:?}"));
+            }
+        }
+        entries.sort();
+        entries
+    }
 }
 
 impl PartialEq for RequirementsExecPolicy {
     fn eq(&self, other: &Self) -> bool {
-        policy_fingerprint(&self.policy) == policy_fingerprint(&other.policy)
+        self.fingerprint() == other.fingerprint()
     }
 }
 
@@ -55,17 +66,6 @@ impl AsRef<Policy> for RequirementsExecPolicy {
     fn as_ref(&self) -> &Policy {
         &self.policy
     }
-}
-
-fn policy_fingerprint(policy: &Policy) -> Vec<String> {
-    let mut entries = Vec::new();
-    for (program, rules) in policy.rules().iter_all() {
-        for rule in rules {
-            entries.push(format!("{program}:{rule:?}"));
-        }
-    }
-    entries.sort();
-    entries
 }
 
 impl Policy {

@@ -15,6 +15,7 @@ use codex_execpolicy::MatchOptions;
 use codex_execpolicy::NetworkRuleProtocol;
 use codex_execpolicy::Policy;
 use codex_execpolicy::PolicyParser;
+use codex_execpolicy::RequirementsExecPolicy;
 use codex_execpolicy::RuleMatch;
 use codex_execpolicy::blocking_append_allow_prefix_rule;
 use codex_execpolicy::blocking_append_network_rule;
@@ -282,6 +283,7 @@ pub(crate) struct ExecApprovalRequest<'a> {
     pub(crate) command: &'a [String],
     pub(crate) approval_policy: AskForApproval,
     pub(crate) permission_profile: PermissionProfile,
+    pub(crate) environment_policy: Option<&'a RequirementsExecPolicy>,
     pub(crate) windows_sandbox_level: WindowsSandboxLevel,
     pub(crate) sandbox_permissions: SandboxPermissions,
     pub(crate) prefix_rule: Option<Vec<String>>,
@@ -317,12 +319,13 @@ impl ExecPolicyManager {
             command,
             approval_policy,
             permission_profile,
+            environment_policy,
             windows_sandbox_level,
             sandbox_permissions,
             prefix_rule,
             allow_prefix_rules,
         } = req;
-        let exec_policy = self.current_for_prefix_rules(allow_prefix_rules);
+        let exec_policy = self.current_for_environment(environment_policy, allow_prefix_rules);
         let ExecPolicyCommands {
             commands,
             used_complex_parsing,

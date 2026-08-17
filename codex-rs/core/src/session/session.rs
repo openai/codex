@@ -144,6 +144,7 @@ impl SessionConfiguration {
             allow_login_shell: self.allow_login_shell,
             permission_profile: self.permission_profile_state.snapshot(),
             shell_environment_policy: self.shell_environment_policy.clone(),
+            exec_policy: None,
             selected_capability_roots: Vec::new(),
         }
     }

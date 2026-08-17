@@ -551,6 +551,7 @@ async fn environment_permissions_follow_configuration_ownership() -> Result<()> 
                             PermissionProfile::read_only(),
                         ),
                         shell_environment_policy: Default::default(),
+                        exec_policy: None,
                         selected_capability_roots: Vec::new(),
                     }),
                     ..selection
@@ -1173,6 +1174,7 @@ async fn shared_executor_keeps_ready_capability_roots_scoped_to_each_attachment(
             allow_login_shell: false,
             permission_profile: permission_profile.clone(),
             shell_environment_policy: Default::default(),
+            exec_policy: None,
             selected_capability_roots: vec![root("duplicate"), root("duplicate")],
         }),
     ] {
@@ -1208,6 +1210,7 @@ async fn shared_executor_keeps_ready_capability_roots_scoped_to_each_attachment(
                     allow_login_shell: true,
                     permission_profile: permission_profile.clone(),
                     shell_environment_policy: Default::default(),
+                    exec_policy: None,
                     selected_capability_roots: vec![root("startup-root"), root("second-root")],
                 }),
                 ..selection.clone()
@@ -1227,6 +1230,7 @@ async fn shared_executor_keeps_ready_capability_roots_scoped_to_each_attachment(
                         allow_login_shell: false,
                         permission_profile: permission_profile.clone(),
                         shell_environment_policy: Default::default(),
+                        exec_policy: None,
                         selected_capability_roots: vec![root("first-root")],
                     }),
                     ..selection.clone()
@@ -1285,6 +1289,7 @@ async fn shared_executor_keeps_ready_capability_roots_scoped_to_each_attachment(
                             allow_login_shell: false,
                             permission_profile: permission_profile.clone(),
                             shell_environment_policy: Default::default(),
+                            exec_policy: None,
                             selected_capability_roots: vec![root("first-updated-root")],
                         }),
                         ..selection.clone()
@@ -1381,6 +1386,7 @@ async fn pending_attachment_installs_configuration_before_waiting_turn_resumes()
         allow_login_shell,
         permission_profile: PermissionProfileSnapshot::legacy(PermissionProfile::read_only()),
         shell_environment_policy: Default::default(),
+        exec_policy: None,
         selected_capability_roots: vec![root(id)],
     };
     let start_pending_thread = || {
@@ -1697,6 +1703,7 @@ async fn ready_before_selection_exposes_remote_tools_and_capability_context_afte
                     test.config.permissions.permission_profile().clone(),
                 ),
                 shell_environment_policy: Default::default(),
+                exec_policy: None,
                 selected_capability_roots: vec![ready_root],
             }),
         }]),

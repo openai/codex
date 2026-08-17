@@ -7,6 +7,7 @@ use codex_execpolicy::Decision;
 use codex_execpolicy::MatchOptions;
 use codex_execpolicy::Policy;
 use codex_execpolicy::PolicyParser;
+use codex_execpolicy::RequirementsExecPolicy;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
@@ -86,6 +87,35 @@ fn cyber_policy_filters_allow_prefixes_but_preserves_restrictive_and_network_rul
     );
 }
 
+#[test]
+fn environment_restrictions_apply_after_model_prefix_filtering() {
+    let (thread_policy, _) = policy_with_broad_allow_prefix();
+    let manager = ExecPolicyManager::new(thread_policy);
+    let mut environment_policy = Policy::empty();
+    environment_policy
+        .add_prefix_rule(
+            &["cargo".to_string(), "install".to_string()],
+            Decision::Forbidden,
+        )
+        .expect("add environment restriction");
+    let environment_policy = RequirementsExecPolicy::new(environment_policy);
+    let command = vec!["cargo".to_string(), "install".to_string()];
+
+    for allow_prefix_rules in [
+        AllowPrefixRules::Honor,
+        AllowPrefixRules::IgnoreForCyberModel,
+    ] {
+        let policy = manager.current_for_environment(Some(&environment_policy), allow_prefix_rules);
+        assert_eq!(
+            policy.check(&command, &|_| Decision::Allow).decision,
+            Decision::Forbidden,
+        );
+        if allow_prefix_rules == AllowPrefixRules::IgnoreForCyberModel {
+            assert!(policy.get_allowed_prefixes().is_empty());
+        }
+    }
+}
+
 #[tokio::test]
 async fn cyber_policy_requires_approval_for_broad_wrapped_and_resolved_prefixes() {
     let (policy, program_path) = policy_with_broad_allow_prefix();
@@ -110,6 +140,7 @@ async fn cyber_policy_requires_approval_for_broad_wrapped_and_resolved_prefixes(
                 command: &command,
                 approval_policy: AskForApproval::OnRequest,
                 permission_profile: PermissionProfile::read_only(),
+                environment_policy: None,
                 windows_sandbox_level: WindowsSandboxLevel::Disabled,
                 sandbox_permissions: SandboxPermissions::RequireEscalated,
                 prefix_rule: Some(vec!["cargo".to_string(), "install".to_string()]),
@@ -142,6 +173,7 @@ async fn cyber_policy_keeps_heuristically_safe_commands_inside_the_sandbox() {
             command: &command,
             approval_policy: AskForApproval::OnRequest,
             permission_profile: PermissionProfile::read_only(),
+            environment_policy: None,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: SandboxPermissions::UseDefault,
             prefix_rule: None,
@@ -161,6 +193,7 @@ async fn cyber_policy_keeps_heuristically_safe_commands_inside_the_sandbox() {
             command: &command,
             approval_policy: AskForApproval::OnRequest,
             permission_profile: PermissionProfile::read_only(),
+            environment_policy: None,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: SandboxPermissions::UseDefault,
             prefix_rule: None,

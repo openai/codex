@@ -139,6 +139,7 @@ async fn shell_command_handler_to_exec_params_uses_selected_environment() {
                     active_permission_profile.clone(),
                 ),
                 shell_environment_policy: selected_shell_environment_policy.clone(),
+                exec_policy: None,
                 selected_capability_roots: Vec::new(),
             }),
         },

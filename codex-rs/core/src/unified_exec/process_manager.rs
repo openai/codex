@@ -1246,6 +1246,7 @@ impl UnifiedExecProcessManager {
                 command: &request.command,
                 approval_policy: turn.approval_policy(),
                 permission_profile: request.turn_environment.permission_profile().clone(),
+                environment_policy: request.turn_environment.config().exec_policy.as_ref(),
                 windows_sandbox_level: turn.windows_sandbox_level,
                 sandbox_permissions: if request.additional_permissions_preapproved {
                     crate::sandboxing::SandboxPermissions::UseDefault
