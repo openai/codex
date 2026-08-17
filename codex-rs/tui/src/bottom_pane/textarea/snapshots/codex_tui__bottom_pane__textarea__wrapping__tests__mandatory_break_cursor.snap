@@ -1,0 +1,9 @@
+---
+source: tui/src/bottom_pane/textarea/wrapping_tests.rs
+expression: "format!(\"before: {before:?}\\nafter: {after:?}\\n{}\",\nterminal.backend()).replace(separator, \"\\\\u{2028}\")"
+---
+before: Some((0, 1))
+after: (7, Some((1, 1)))
+"abad"
+"\u{2028}nex"
+"t   "

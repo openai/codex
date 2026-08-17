@@ -1,0 +1,30 @@
+---
+source: tui/src/bottom_pane/textarea/wrapping_tests.rs
+expression: "snapshots.join(\"\\n\\n\")"
+---
+full line
+text: "abad"
+cursor: (0, 1)
+"abad"
+"    "
+
+
+trailing spaces
+text: "abad   "
+cursor: (3, 1)
+"abad"
+"    "
+
+
+following word
+text: "abad   x"
+cursor: (1, 1)
+"abad"
+"x   "
+
+
+delete following word
+text: "abad   "
+cursor: (3, 1)
+"abad"
+"    "

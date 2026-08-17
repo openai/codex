@@ -2,9 +2,8 @@
 source: tui/src/bottom_pane/textarea.rs
 expression: "format!(\"cursor: {:?}\\n{}\", t.cursor_pos(area), terminal.backend())"
 ---
-cursor: Some((2, 4))
+cursor: Some((2, 3))
 "abad"
-" abc"
-"de  "
-"xy  "
+"abcd"
+"e xy"
 "zz  "

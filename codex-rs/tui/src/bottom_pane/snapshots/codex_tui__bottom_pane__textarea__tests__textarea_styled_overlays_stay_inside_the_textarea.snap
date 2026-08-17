@@ -3,12 +3,12 @@ source: tui/src/bottom_pane/textarea.rs
 expression: "snapshots.join(\"\\n\\n\")"
 ---
 element
-"    KEEP"
-" nex    "
-"t       "
+"abadKEEP"
+"next    "
+"        "
 
 
 highlight
-"    KEEP"
-" nex    "
-"t       "
+"abadKEEP"
+"next    "
+"        "

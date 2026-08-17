@@ -1,0 +1,8 @@
+---
+source: tui/src/bottom_pane/textarea/wrapping_tests.rs
+expression: "format!(\"cursors: {cursors:?}\\nscroll: {}\\ncursor: {scrolled_cursor:?}\\n{}\",\nstate.scroll, terminal.backend())"
+---
+cursors: [Some((0, 0)), Some((1, 0)), Some((2, 0)), Some((3, 0)), Some((0, 1)), Some((0, 1)), Some((1, 1))]
+scroll: 1
+cursor: Some((0, 0))
+"a   "

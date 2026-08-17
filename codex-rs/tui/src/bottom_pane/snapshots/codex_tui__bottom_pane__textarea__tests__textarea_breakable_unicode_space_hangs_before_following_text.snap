@@ -2,7 +2,7 @@
 source: tui/src/bottom_pane/textarea.rs
 expression: "format!(\"cursor: {:?}\\n{}\", t.cursor_pos(area), terminal.backend())"
 ---
-cursor: Some((3, 2))
+cursor: Some((1, 2))
 "abad"
-"　ab" Hidden by multi-width symbols: [(1, " ")]
-"cde "
+"abcd"
+"e   "

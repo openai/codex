@@ -1,0 +1,23 @@
+---
+source: tui/src/bottom_pane/textarea/wrapping_tests.rs
+expression: "format!(\"{}\\n\\n{}\", cursors.join(\"\\n\"), layouts.join(\"\\n\"))"
+---
+up at width 10: (10, Some((0, 1)))
+resize to width 4: (10, Some((2, 2)))
+down to abcd: (14, Some((3, 3)))
+down to xyz: (20, Some((3, 4)))
+up to abcd: (14, Some((3, 3)))
+up to ij: (10, Some((2, 2)))
+restore width 10: (20, Some((9, 2)))
+
+width 4
+"abcd"
+"efgh"
+"ij  "
+"abcd"
+"xyz "
+
+width 10
+"abcdefghij"
+"          "
+"abcd  xyz "
