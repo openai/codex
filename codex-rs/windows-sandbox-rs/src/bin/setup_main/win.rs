@@ -1,4 +1,5 @@
 mod firewall;
+mod no_reparse_dir;
 mod read_acl_mutex;
 
 use anyhow::Context;
@@ -36,6 +37,7 @@ use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::ffi::c_void;
 use std::io::Write;
+use std::os::windows::io::AsRawHandle;
 use std::os::windows::process::CommandExt;
 use std::path::Path;
 use std::path::PathBuf;
@@ -52,6 +54,7 @@ use windows_sys::Win32::Security::Authorization::GRANT_ACCESS;
 use windows_sys::Win32::Security::Authorization::SE_FILE_OBJECT;
 use windows_sys::Win32::Security::Authorization::SetEntriesInAclW;
 use windows_sys::Win32::Security::Authorization::SetNamedSecurityInfoW;
+use windows_sys::Win32::Security::Authorization::SetSecurityInfo;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_IS_SID;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_W;
 use windows_sys::Win32::Security::CONTAINER_INHERIT_ACE;
@@ -69,6 +72,7 @@ const WRITE_ROOT_ALLOW_MASK: u32 =
 
 mod sandbox_users;
 mod setup_runtime_bin;
+use no_reparse_dir::open_or_create_no_reparse;
 use read_acl_mutex::acquire_read_acl_mutex;
 use read_acl_mutex::read_acl_mutex_exists;
 use sandbox_users::commit_setup_marker;
@@ -297,9 +301,17 @@ fn lock_sandbox_dir(
     sandbox_group_access_mode: i32,
     sandbox_group_mask: u32,
     real_user_mask: u32,
-    _log: &mut dyn Write,
+    setup_mode: SetupMode,
 ) -> Result<()> {
-    std::fs::create_dir_all(dir)?;
+    // ProvisionOnly accepts another user's CODEX_HOME; keep its ACL mutation
+    // bound to a no-reparse handle without changing full setup behavior.
+    let directory = match setup_mode {
+        SetupMode::Full | SetupMode::ReadAclsOnly => {
+            std::fs::create_dir_all(dir)?;
+            None
+        }
+        SetupMode::ProvisionOnly => Some(open_or_create_no_reparse(dir)?),
+    };
     let system_sid = resolve_sid("SYSTEM")?;
     let admins_sid = resolve_sid("Administrators")?;
     let real_sid = resolve_sid(real_user)?;
@@ -360,20 +372,37 @@ fn lock_sandbox_dir(
                 "SetEntriesInAclW sandbox dir failed: {set}",
             ));
         }
-        let path_w = to_wide(dir.as_os_str());
-        let res = SetNamedSecurityInfoW(
-            path_w.as_ptr() as *mut u16,
-            SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            new_dacl,
-            std::ptr::null_mut(),
-        );
+        let (res, api) = match directory.as_ref() {
+            Some(directory) => (
+                SetSecurityInfo(
+                    directory.as_raw_handle() as _,
+                    SE_FILE_OBJECT,
+                    DACL_SECURITY_INFORMATION,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    new_dacl,
+                    std::ptr::null_mut(),
+                ),
+                "SetSecurityInfo",
+            ),
+            None => {
+                let path_w = to_wide(dir.as_os_str());
+                (
+                    SetNamedSecurityInfoW(
+                        path_w.as_ptr() as *mut u16,
+                        SE_FILE_OBJECT,
+                        DACL_SECURITY_INFORMATION,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        new_dacl,
+                        std::ptr::null_mut(),
+                    ),
+                    "SetNamedSecurityInfoW",
+                )
+            }
+        };
         if res != 0 {
-            return Err(anyhow::anyhow!(
-                "SetNamedSecurityInfoW sandbox dir failed: {res}",
-            ));
+            return Err(anyhow::anyhow!("{api} sandbox dir failed: {res}"));
         }
         if !new_dacl.is_null() {
             LocalFree(new_dacl as HLOCAL);
@@ -631,11 +660,7 @@ fn configure_offline_sandbox_network(
     Ok(())
 }
 
-fn lock_persistent_sandbox_dirs(
-    payload: &Payload,
-    sandbox_group_sid: &[u8],
-    log: &mut dyn Write,
-) -> Result<()> {
+fn lock_persistent_sandbox_dirs(payload: &Payload, sandbox_group_sid: &[u8]) -> Result<()> {
     lock_sandbox_dir(
         &sandbox_dir(&payload.codex_home),
         &payload.real_user,
@@ -643,7 +668,7 @@ fn lock_persistent_sandbox_dirs(
         GRANT_ACCESS,
         FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
         FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE,
-        log,
+        payload.mode,
     )
     .map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
@@ -661,7 +686,7 @@ fn lock_persistent_sandbox_dirs(
         DENY_ACCESS,
         FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
         FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE,
-        log,
+        payload.mode,
     )
     .map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
@@ -679,11 +704,7 @@ fn lock_persistent_sandbox_dirs(
     Ok(())
 }
 
-fn lock_sandbox_bin_dir(
-    payload: &Payload,
-    sandbox_group_sid: &[u8],
-    log: &mut dyn Write,
-) -> Result<()> {
+fn lock_sandbox_bin_dir(payload: &Payload, sandbox_group_sid: &[u8]) -> Result<()> {
     lock_sandbox_dir(
         &sandbox_bin_dir(&payload.codex_home),
         &payload.real_user,
@@ -691,7 +712,7 @@ fn lock_sandbox_bin_dir(
         GRANT_ACCESS,
         FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
         FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
-        log,
+        payload.mode,
     )
     .map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
@@ -726,8 +747,8 @@ fn run_provision_only(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) ->
 
     configure_offline_sandbox_network(payload, &offline_sid_str, log)?;
 
-    lock_sandbox_bin_dir(payload, &sandbox_group_sid, log)?;
-    lock_persistent_sandbox_dirs(payload, &sandbox_group_sid, log)?;
+    lock_sandbox_bin_dir(payload, &sandbox_group_sid)?;
+    lock_persistent_sandbox_dirs(payload, &sandbox_group_sid)?;
     log_note("setup provisioning binary completed", Some(sbx_dir));
     Ok(())
 }
@@ -982,7 +1003,7 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
         }
     }
 
-    lock_sandbox_bin_dir(payload, &sandbox_group_sid, log)?;
+    lock_sandbox_bin_dir(payload, &sandbox_group_sid)?;
 
     if refresh_only {
         log_line(
@@ -995,7 +1016,7 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
         )?;
     }
     if !refresh_only {
-        lock_persistent_sandbox_dirs(payload, &sandbox_group_sid, log)?;
+        lock_persistent_sandbox_dirs(payload, &sandbox_group_sid)?;
     }
 
     unsafe {

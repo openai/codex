@@ -1078,6 +1078,24 @@ pub fn run_elevated_provisioning_setup(
     real_user: &str,
     settings: crate::WindowsSandboxProvisioningSettings,
 ) -> Result<()> {
+    if !codex_home.is_absolute()
+        || !matches!(
+            codex_home.components().next(),
+            Some(std::path::Component::Prefix(prefix))
+                if matches!(
+                    prefix.kind(),
+                    std::path::Prefix::Disk(_) | std::path::Prefix::VerbatimDisk(_)
+                )
+        )
+    {
+        return Err(failure(
+            SetupErrorCode::OrchestratorSandboxDirCreateFailed,
+            format!(
+                "sandbox provisioning CODEX_HOME must be an absolute local disk path: {}",
+                codex_home.display()
+            ),
+        ));
+    }
     let sbx_dir = sandbox_dir(codex_home);
     std::fs::create_dir_all(&sbx_dir).map_err(|err| {
         failure(
