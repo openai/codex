@@ -2,4 +2,4 @@
 
 This crate pertains to first party ChatGPT APIs and products such as Codex agent.
 
-This crate should be primarily built and maintained by OpenAI employees. Please reach out to a maintainer before making an external contribution.
+This crate is built and maintained by OpenAI employees. External code contributions are not accepted; please report bugs and request features in the [Codex issue tracker](https://github.com/openai/codex/issues).
