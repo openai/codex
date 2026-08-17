@@ -884,7 +884,12 @@ async fn start_server_task(
     let initialize_result = client
         .initialize(params, startup_timeout, send_elicitation)
         .await;
-    record_protocol_discovery_metrics(client.protocol_mode(), started_at, &initialize_result);
+    record_protocol_discovery_metrics(
+        client.protocol_mode(),
+        is_codex_apps_mcp_server,
+        started_at,
+        &initialize_result,
+    );
     let initialize_result = initialize_result.map_err(StartupOutcomeError::from)?;
 
     let server_disables_tool_catalog_cache = initialize_result
@@ -961,6 +966,7 @@ async fn start_server_task(
 
 fn record_protocol_discovery_metrics(
     mode: McpProtocolMode,
+    is_codex_apps_mcp_server: bool,
     started_at: Instant,
     result: &Result<ServerPeerInfo>,
 ) {
@@ -977,7 +983,10 @@ fn record_protocol_discovery_metrics(
         Ok(_) => "legacy",
         Err(_) => "failure",
     };
-    let tags = [("mode", mode), ("outcome", outcome)];
+    let mut tags = vec![("mode", mode), ("outcome", outcome)];
+    if is_codex_apps_mcp_server {
+        tags.push(("server_kind", "openai_codex_apps"));
+    }
     let _ = metrics.counter("codex.mcp.protocol_discovery", /*inc*/ 1, &tags);
     let _ = metrics.record_duration(
         "codex.mcp.protocol_discovery.duration_ms",
