@@ -2446,18 +2446,11 @@ mod tests {
     fn large_update_diff_skips_highlighting() {
         // Build a patch large enough to exceed MAX_HIGHLIGHT_LINES (10_000).
         // Without the pre-check this would attempt 10k+ parser initializations.
-        let line_count = 10_500;
-        let original: String = (0..line_count).map(|i| format!("line {i}\n")).collect();
-        let modified: String = (0..line_count)
-            .map(|i| {
-                if i % 2 == 0 {
-                    format!("line {i} changed\n")
-                } else {
-                    format!("line {i}\n")
-                }
-            })
-            .collect();
-        let patch = diffy::create_patch(&original, &modified).to_string();
+        let line_count = 10_001;
+        let patch = format!(
+            "--- a/huge.rs\n+++ b/huge.rs\n@@ -0,0 +1,{line_count} @@\n{}",
+            "+let value = 1;\n".repeat(line_count)
+        );
 
         let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
         changes.insert(
