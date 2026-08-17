@@ -35,7 +35,7 @@ impl AppServerSession {
                     recursive: Some(true),
                 },
             },
-            json!({ "path": path.as_str(), "recursive": true }),
+            || json!({ "path": path.as_str(), "recursive": true }),
         )
         .await
         .map(drop)
@@ -57,7 +57,7 @@ impl AppServerSession {
                     data_base64: data_base64.clone(),
                 },
             },
-            json!({ "path": path.as_str(), "dataBase64": data_base64 }),
+            || json!({ "path": path.as_str(), "dataBase64": data_base64 }),
         )
         .await
         .map(drop)
@@ -72,7 +72,7 @@ impl AppServerSession {
                     request_id,
                     params: FsReadFileParams { path },
                 },
-                json!({ "path": path.as_str() }),
+                || json!({ "path": path.as_str() }),
             )
             .await?;
         STANDARD
@@ -92,7 +92,7 @@ impl AppServerSession {
                     force: None,
                 },
             },
-            json!({ "path": path.as_str() }),
+            || json!({ "path": path.as_str() }),
         )
         .await
         .map(drop)
@@ -103,7 +103,7 @@ impl AppServerSession {
         method: &str,
         path: &AppServerPath,
         local_request: impl FnOnce(RequestId, AbsolutePathBuf) -> ClientRequest,
-        remote_params: serde_json::Value,
+        remote_params: impl FnOnce() -> serde_json::Value,
     ) -> Result<T> {
         let request_id = self.next_request_id();
         match self.request_handle() {
@@ -112,7 +112,7 @@ impl AppServerSession {
                     .request_json_rpc(JSONRPCRequest {
                         id: request_id,
                         method: method.to_string(),
-                        params: Some(remote_params),
+                        params: Some(remote_params()),
                         trace: None,
                     })
                     .await
