@@ -21,6 +21,10 @@ fn non_inheritable_environment_is_removed_after_policy_overrides() {
             "OPENAI_WORKLOAD_IDENTITY_CONTEXT".to_string(),
             r#"{"instance_id":"box-one"}"#.to_string(),
         ),
+        (
+            "codex_exec_server_noise_auth_token".to_string(),
+            "inherited-noise-token".to_string(),
+        ),
     ];
     let policy = ShellEnvironmentPolicy {
         inherit: ShellEnvironmentPolicyInherit::All,
@@ -30,6 +34,10 @@ fn non_inheritable_environment_is_removed_after_policy_overrides() {
             (
                 "OpenAI_Identity_Token_File".to_string(),
                 "/run/identity-token".to_string(),
+            ),
+            (
+                "Codex_Exec_Server_Noise_Auth_Token".to_string(),
+                "configured-noise-token".to_string(),
             ),
         ]),
         ..Default::default()
@@ -52,6 +60,10 @@ fn command_scrubber_removes_names_from_real_child_environment() {
                 "OpenAI_Workload_Identity_Context",
                 r#"{"instance_id":"box-one"}"#,
             )
+            .env(
+                "Codex_Exec_Server_Noise_Auth_Token",
+                "inherited-noise-token",
+            )
             .output()
             .expect("run inherited-environment test process");
         assert!(
@@ -66,6 +78,10 @@ fn command_scrubber_removes_names_from_real_child_environment() {
     let mut command = environment_command();
     command
         .env("openai_identity_token_file", "/run/identity-token")
+        .env(
+            CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR,
+            "configured-noise-token",
+        )
         .env("SAFE", "value");
     scrub_non_inheritable_env_vars(&mut command);
     let output = command.output().expect("read child environment");

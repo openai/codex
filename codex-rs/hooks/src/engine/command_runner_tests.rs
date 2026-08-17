@@ -12,6 +12,7 @@ use codex_protocol::protocol::HookOutputEntry;
 use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookSource;
+use codex_protocol::shell_environment::CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -110,6 +111,48 @@ async fn fast_exiting_hook_preserves_stdout_when_stdin_is_not_consumed() {
 
     assert_eq!(result.exit_code, Some(0), "stderr: {}", result.stderr);
     assert_eq!(result.stdout.trim(), "hook-ran");
+    assert_eq!(result.error, None);
+}
+
+#[tokio::test]
+async fn command_hook_does_not_expose_configured_noise_auth_token() {
+    let temp = tempdir().expect("create temp dir");
+    let source_path = AbsolutePathBuf::try_from(temp.path().join("hooks.json"))
+        .expect("absolute hook configuration path");
+    let command = if cfg!(windows) { "set" } else { "env" };
+    let env = HashMap::from([
+        (
+            CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR.to_ascii_lowercase(),
+            "configured-noise-token".to_string(),
+        ),
+        ("CODEX_HOOK_SAFE_ENV".to_string(), "visible".to_string()),
+    ]);
+    let handler = ConfiguredHandler {
+        event_name: HookEventName::SessionStart,
+        matcher: None,
+        timeout_sec: 10,
+        status_message: None,
+        additional_context_limit: Default::default(),
+        source_path,
+        source: HookSource::User,
+        display_order: 0,
+        kind: ConfiguredHandlerKind::Command {
+            command: command.to_string(),
+            r#async: false,
+            env: env.clone(),
+        },
+    };
+    let (runtime, _result_receiver) = runtime();
+
+    let result = run_command(&runtime, &handler, command, &env, "{}", temp.path()).await;
+
+    assert_eq!(result.exit_code, Some(0), "stderr: {}", result.stderr);
+    assert!(result.stdout.contains("CODEX_HOOK_SAFE_ENV=visible"));
+    assert!(!result.stdout.lines().any(|line| {
+        line.split_once('=').is_some_and(|(name, _)| {
+            name.eq_ignore_ascii_case(CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR)
+        })
+    }));
     assert_eq!(result.error, None);
 }
 
