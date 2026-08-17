@@ -5,7 +5,7 @@ use codex_app_server_protocol::AppListUpdatedNotification;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
-async fn connector_directory_results_ignore_stale_thread_workspace_and_account() -> Result<()> {
+async fn installed_connector_mentions_ignore_stale_thread_workspace_and_account() -> Result<()> {
     let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
     app.chat_widget
         .set_feature_enabled(Feature::Apps, /*enabled*/ true);
@@ -44,12 +44,11 @@ async fn connector_directory_results_ignore_stale_thread_workspace_and_account()
         app.handle_event(
             &mut tui,
             &mut app_server,
-            AppEvent::ConnectorsLoaded {
+            AppEvent::InstalledConnectorMentionsLoaded {
                 thread_id: candidate_thread,
                 cwd: candidate_cwd,
                 generation: candidate_generation,
                 result: Ok(snapshot.clone()),
-                is_final: true,
             },
         )
         .await?;
@@ -100,7 +99,8 @@ async fn queued_connector_fetches_are_bound_to_their_original_account() -> Resul
 }
 
 #[tokio::test]
-async fn unscoped_app_list_notifications_only_revalidate_the_current_directory() -> Result<()> {
+async fn app_list_notifications_revalidate_installed_mentions_and_the_current_directory()
+-> Result<()> {
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
     let thread_id = ThreadId::new();
     let cwd = app.chat_widget.config_ref().cwd.to_path_buf();
@@ -117,6 +117,10 @@ async fn unscoped_app_list_notifications_only_revalidate_the_current_directory()
     };
     app.chat_widget
         .on_connectors_loaded(Ok(scoped_snapshot.clone()), /*is_final*/ true);
+    app.chat_widget.on_connector_mentions_loaded(
+        app.chat_widget.connector_scope_generation(),
+        Ok(scoped_snapshot.clone()),
+    );
     app.chat_widget.insert_str("$");
     while app_event_rx.try_recv().is_ok() {}
 
@@ -138,18 +142,65 @@ async fn unscoped_app_list_notifications_only_revalidate_the_current_directory()
         )
         .await;
 
-        let refresh_requested = matches!(
-            app_event_rx.try_recv(),
-            Ok(AppEvent::FetchConnectorsList {
-                force_refetch: false,
-                ..
-            })
+        if should_refresh {
+            assert!(matches!(
+                app_event_rx.try_recv(),
+                Ok(AppEvent::FetchInstalledConnectorMentions {
+                    force_refresh: true,
+                    ..
+                })
+            ));
+        }
+        assert_eq!(
+            matches!(
+                app_event_rx.try_recv(),
+                Ok(AppEvent::FetchConnectorsList {
+                    force_refetch: false,
+                    ..
+                })
+            ),
+            should_refresh
         );
-        assert_eq!(refresh_requested, should_refresh);
         let popup = render_bottom_popup(&app.chat_widget, /*width*/ 80);
         assert!(popup.contains("Scoped App"));
         assert!(!popup.contains("Old Workspace"));
     }
+
+    let generation = app.chat_widget.connector_scope_generation();
+    app.chat_widget.on_connector_mentions_loaded(
+        generation,
+        Ok(ConnectorsSnapshot {
+            connectors: vec![serde_json::from_str(
+                r#"{"id":"old-workspace","name":"Old Workspace","isAccessible":true}"#,
+            )?],
+        }),
+    );
+    assert!(render_bottom_popup(&app.chat_widget, /*width*/ 80).contains("Old Workspace"));
+    assert!(app_event_rx.try_recv().is_err());
+
+    // Revocations refresh mentions even if discovery already has this notification.
+    let revoked_notification = ServerNotification::AppListUpdated(AppListUpdatedNotification {
+        data: vec![serde_json::from_str(
+            r#"{"id":"scoped-app","name":"Scoped App","isAccessible":true}"#,
+        )?],
+    });
+    app.handle_app_server_event(
+        &app_server,
+        AppServerEvent::ServerNotification(Box::new(revoked_notification)),
+    )
+    .await;
+    assert!(matches!(
+        app_event_rx.try_recv(),
+        Ok(AppEvent::FetchInstalledConnectorMentions {
+            force_refresh: true,
+            generation: requested_generation,
+        }) if requested_generation == generation
+    ));
+    assert!(app_event_rx.try_recv().is_err());
+    assert!(render_bottom_popup(&app.chat_widget, /*width*/ 80).contains("Old Workspace"));
+    app.chat_widget
+        .on_connector_mentions_loaded(generation, Ok(scoped_snapshot.clone()));
+    assert!(!render_bottom_popup(&app.chat_widget, /*width*/ 80).contains("Old Workspace"));
 
     let ready_app = r#"{"id":"newly-ready","name":"Newly Ready","isAccessible":true}"#;
     let ready_notification = ServerNotification::AppListUpdated(AppListUpdatedNotification {
@@ -160,11 +211,17 @@ async fn unscoped_app_list_notifications_only_revalidate_the_current_directory()
         AppServerEvent::ServerNotification(Box::new(ready_notification.clone())),
     )
     .await;
+    assert!(matches!(
+        app_event_rx.try_recv(),
+        Ok(AppEvent::FetchInstalledConnectorMentions {
+            force_refresh: true,
+            ..
+        })
+    ));
     assert!(app_event_rx.try_recv().is_err());
     assert!(!render_bottom_popup(&app.chat_widget, /*width*/ 80).contains("Newly Ready"));
 
     let mut tui = crate::tui::test_support::make_test_tui()?;
-    let generation = app.chat_widget.connector_scope_generation();
     for should_retry in [true, false, true, false] {
         app.handle_event(
             &mut tui,

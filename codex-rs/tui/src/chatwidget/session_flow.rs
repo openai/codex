@@ -148,9 +148,7 @@ impl ChatWidget {
         }
         self.transcript.saw_copy_source_this_turn = false;
         self.refresh_skills_for_current_cwd(/*force_reload*/ true);
-        if self.connectors_enabled() {
-            self.prefetch_connectors();
-        }
+        self.refresh_connector_mentions(/*force_refresh*/ false);
         self.submit_initial_user_message_if_pending();
         if display == SessionConfiguredDisplay::Normal
             && let Some(forked_from_id) = forked_from_id

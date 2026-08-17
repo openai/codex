@@ -510,6 +510,14 @@ pub(crate) enum AppEvent {
         is_final: bool,
     },
 
+    /// Thread-scoped installed applications that may actually be mentioned.
+    InstalledConnectorMentionsLoaded {
+        thread_id: Option<ThreadId>,
+        cwd: PathBuf,
+        generation: ConnectorScopeGeneration,
+        result: Result<ConnectorsSnapshot, String>,
+    },
+
     /// Result of computing a `/diff` command.
     DiffResult(PathBuf, String),
 
@@ -574,6 +582,12 @@ pub(crate) enum AppEvent {
     /// Fetch apps only while the originating account, workspace, and thread remain current.
     FetchConnectorsList {
         force_refetch: bool,
+        generation: ConnectorScopeGeneration,
+    },
+
+    /// Refresh callable installed applications without loading the app directory.
+    FetchInstalledConnectorMentions {
+        force_refresh: bool,
         generation: ConnectorScopeGeneration,
     },
 

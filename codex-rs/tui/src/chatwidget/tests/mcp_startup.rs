@@ -70,6 +70,28 @@ async fn mcp_startup_ignores_status_for_other_thread() {
 }
 
 #[tokio::test]
+async fn mcp_apps_readiness_retries_an_in_flight_installed_mention_lookup() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    set_chatgpt_auth(&mut chat);
+    chat.set_feature_enabled(Feature::Apps, /*enabled*/ true);
+
+    chat.refresh_connector_mentions(/*force_refresh*/ false);
+    chat.on_mcp_server_status_updated(McpServerStatusUpdatedNotification {
+        thread_id: None,
+        name: "codex_apps".to_string(),
+        status: McpServerStartupState::Ready,
+        error: None,
+        failure_reason: None,
+    });
+
+    assert_eq!(chat.connectors.mention_refresh_pending, Some(false));
+    let snapshot = crate::app_event::ConnectorsSnapshot { connectors: vec![] };
+    chat.on_connector_mentions_loaded(chat.connector_scope_generation(), Ok(snapshot));
+    assert!(chat.connectors.mention_refresh_in_flight);
+}
+
+#[tokio::test]
 async fn mcp_startup_dedupes_same_round_duplicate_failure_warning() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.show_welcome_banner = false;

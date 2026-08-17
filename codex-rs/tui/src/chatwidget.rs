@@ -334,6 +334,7 @@ use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 mod command_lifecycle;
+mod connector_mentions;
 mod connectors;
 mod constructor;
 pub(crate) use self::connectors::ConnectorScopeGeneration;

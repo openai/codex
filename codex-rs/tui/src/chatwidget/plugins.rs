@@ -953,11 +953,21 @@ impl ChatWidget {
     }
 
     fn plugin_install_auth_app_is_installed(&self, app_id: &str) -> bool {
-        self.connectors_for_mentions().is_some_and(|connectors| {
-            connectors
+        if !self.connectors_enabled() {
+            return false;
+        }
+
+        let connectors = &self.connectors;
+        connectors.installed_app_ids.contains(app_id)
+            || connectors
+                .partial_snapshot
                 .iter()
+                .chain(match &connectors.cache {
+                    super::connectors::ConnectorsCacheState::Ready(snapshot) => Some(snapshot),
+                    _ => None,
+                })
+                .flat_map(|snapshot| &snapshot.connectors)
                 .any(|connector| connector.id == app_id && connector.is_accessible)
-        })
     }
 
     fn finish_plugin_install_auth_flow(&mut self, abandoned: bool) {

@@ -2087,7 +2087,8 @@ async fn plugins_popup_search_no_matches_and_backspace_restores_results() {
 
 #[tokio::test]
 async fn apps_popup_stays_loading_until_final_snapshot_updates() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
     set_chatgpt_auth(&mut chat);
     chat.config
         .features
@@ -2123,6 +2124,14 @@ async fn apps_popup_stays_loading_until_final_snapshot_updates() {
     assert!(
         chat.connectors.prefetch_in_flight,
         "expected /apps to trigger a forced connectors refresh"
+    );
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::FetchConnectorsList { force_refetch, .. }) if force_refetch
+    );
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::FetchInstalledConnectorMentions { force_refresh, .. }) if force_refresh
     );
 
     let before = render_bottom_popup(&chat, /*width*/ 80);
@@ -2187,7 +2196,8 @@ async fn apps_popup_stays_loading_until_final_snapshot_updates() {
 
 #[tokio::test]
 async fn apps_notification_update_excludes_inaccessible_apps_from_mentions() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
     set_chatgpt_auth(&mut chat);
     chat.config
         .features
@@ -2230,7 +2240,7 @@ async fn apps_notification_update_excludes_inaccessible_apps_from_mentions() {
                     app_metadata: None,
                     labels: None,
                     install_url: Some("https://example.test/arabica".to_string()),
-                    is_accessible: false,
+                    is_accessible: true,
                     is_enabled: true,
                     plugin_display_names: Vec::new(),
                 },
@@ -2239,44 +2249,116 @@ async fn apps_notification_update_excludes_inaccessible_apps_from_mentions() {
         /*is_final*/ false,
     );
 
-    assert_matches!(
-        &chat.connectors.partial_snapshot,
-        Some(snapshot)
-            if snapshot
-                .connectors
-                .iter()
-                .find(|connector| connector.id == "arabica_uae")
-                .is_some_and(|connector| !connector.is_accessible)
+    assert!(chat.connectors_for_mentions().is_none());
+
+    let mut installed = chat
+        .connectors
+        .partial_snapshot
+        .as_ref()
+        .expect("directory notification should remain available to /apps")
+        .connectors
+        .clone();
+    installed[1].is_enabled = false;
+    chat.on_connector_mentions_loaded(
+        chat.connector_scope_generation(),
+        Ok(ConnectorsSnapshot {
+            connectors: installed,
+        }),
     );
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert!(
         popup.contains("Google Drive"),
-        "expected accessible apps to appear in the mention popup, got:\n{popup}"
+        "expected callable installed apps to appear in the mention popup, got:\n{popup}"
     );
     assert!(
         !popup.contains("% Arabica UAE"),
-        "did not expect an inaccessible directory app in the mention popup, got:\n{popup}"
+        "directory accessibility must not make an app callable, got:\n{popup}"
     );
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    chat.insert_str("$arabica-uae ");
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_matches!(
+        next_submit_op(&mut op_rx),
+        Op::UserTurn { items, .. }
+            if matches!(items.as_slice(), [
+                UserInput::Text { .. },
+                UserInput::Mention { name, path },
+            ] if name == "Google Drive" && path == "app://google_drive")
+    );
+
+    chat.connectors.partial_snapshot = None;
+    assert_matches!(&chat.connectors.cache, ConnectorsCacheState::Uninitialized);
+    for (app_id, app_name) in [
+        ("arabica_uae", "% Arabica UAE"),
+        ("google_drive", "Google Drive"),
+    ] {
+        chat.on_plugin_install_loaded(
+            chat.config.cwd.to_path_buf(),
+            crate::app_event::PluginLocation::Remote {
+                marketplace_name: "marketplace".to_string(),
+            },
+            "plugin".to_string(),
+            "Plugin".to_string(),
+            Ok(serde_json::from_value(serde_json::json!({
+                "authPolicy": "ON_INSTALL",
+                "appsNeedingAuth": [{ "id": app_id, "name": app_name }],
+            }))
+            .expect("valid plugin installation response")),
+        );
+        let auth_popup = render_bottom_popup(&chat, /*width*/ 80);
+        assert!(auth_popup.contains("Already installed") && auth_popup.contains("Continue"));
+        if app_id == "arabica_uae" {
+            let snapshot = normalize_snapshot_paths(format!(
+                "{popup}\n\n--- plugin authentication ---\n{auth_popup}"
+            ));
+            assert_chatwidget_snapshot!("apps_mentions_only_callable_installed", snapshot);
+        }
+    }
 }
 
 #[tokio::test]
-async fn account_changes_revoke_app_directory_and_restart_scoped_requests() {
+async fn apps_installed_mentions_revoke_access_and_reject_stale_account_results() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());
     set_chatgpt_auth(&mut chat);
-    chat.on_connectors_loaded(
-        Ok(ConnectorsSnapshot {
-            connectors: vec![
-                serde_json::from_str(
-                    r#"{"id":"old-account","name":"Old Account","isAccessible":true}"#,
-                )
-                .expect("valid app"),
-            ],
-        }),
-        /*is_final*/ true,
-    );
+    chat.set_feature_enabled(Feature::Apps, /*enabled*/ true);
     let generation = chat.connector_scope_generation();
+    let connector_id = "account-app";
+    let connector =
+        serde_json::from_str(r#"{"id":"account-app","name":"Account app","isAccessible":true}"#)
+            .expect("valid installed app");
+    let snapshot = ConnectorsSnapshot {
+        connectors: vec![connector],
+    };
+    chat.on_connector_mentions_loaded(generation, Ok(snapshot.clone()));
+    assert!(chat.connectors.installed_app_ids.contains(connector_id));
+
+    chat.refresh_connector_mentions(/*force_refresh*/ false);
+    rx.try_recv().expect("pre-disable mention refresh");
+    chat.update_connector_enabled(connector_id, /*enabled*/ false);
+    chat.on_connector_mentions_loaded(generation, Ok(snapshot.clone()));
+    assert_eq!(chat.connectors_for_mentions(), Some([].as_slice()));
+    rx.try_recv().expect("post-disable mention refresh");
+    chat.on_connector_mentions_loaded(generation, Ok(snapshot.clone()));
+    assert_eq!(
+        chat.connectors_for_mentions(),
+        Some(snapshot.connectors.as_slice())
+    );
+
+    chat.on_connectors_loaded(Ok(snapshot.clone()), /*is_final*/ true);
+    for enabled in [false, true] {
+        chat.update_connector_enabled(connector_id, enabled);
+        assert_eq!(chat.connectors_for_mentions(), Some([].as_slice()));
+        assert_matches!(
+            rx.try_recv(),
+            Ok(AppEvent::FetchInstalledConnectorMentions { force_refresh, .. })
+                if force_refresh == enabled
+        );
+        let mut refreshed = snapshot.clone();
+        refreshed.connectors[0].is_enabled = enabled;
+        chat.on_connector_mentions_loaded(generation, Ok(refreshed));
+    }
 
     chat.update_account_state(
         /*status_account_display*/ None, /*plan_type*/ None,
@@ -2284,15 +2366,14 @@ async fn account_changes_revoke_app_directory_and_restart_scoped_requests() {
     );
 
     assert_ne!(chat.connector_scope_generation(), generation);
+    assert_matches!(&chat.connectors.cache, ConnectorsCacheState::Uninitialized);
     assert!(chat.connectors_for_mentions().is_none());
-    assert!(chat.connectors.prefetch_in_flight);
-    assert_matches!(
-        rx.try_recv(),
-        Ok(AppEvent::FetchConnectorsList {
-            force_refetch: false,
-            generation
-        }) if generation == chat.connector_scope_generation()
-    );
+    assert!(chat.connectors.mention_refresh_in_flight);
+
+    chat.on_connector_mentions_loaded(generation, Ok(snapshot));
+    assert!(chat.connectors_for_mentions().is_none());
+    assert!(chat.connectors.mention_refresh_in_flight);
+    assert!(chat.connectors.installed_app_ids.is_empty());
 
     let (mut replacement, _, _) = make_chatwidget_manual(/*model_override*/ None).await;
     replacement.invalidate_connector_scope();

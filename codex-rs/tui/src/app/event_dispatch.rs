@@ -822,6 +822,14 @@ impl App {
                     self.fetch_connectors_list(app_server, force_refetch);
                 }
             }
+            AppEvent::FetchInstalledConnectorMentions {
+                force_refresh,
+                generation,
+            } => {
+                if generation == self.chat_widget.connector_scope_generation() {
+                    self.fetch_installed_connector_mentions(app_server, force_refresh, generation);
+                }
+            }
             AppEvent::PluginInstallAuthAdvance { refresh_connectors } => {
                 if refresh_connectors {
                     self.chat_widget.refresh_connectors(/*force_refetch*/ true);
@@ -1351,6 +1359,20 @@ impl App {
                     && generation == self.chat_widget.connector_scope_generation()
                 {
                     self.chat_widget.on_connectors_loaded(result, is_final);
+                }
+            }
+            AppEvent::InstalledConnectorMentionsLoaded {
+                thread_id,
+                cwd,
+                generation,
+                result,
+            } => {
+                if thread_id == self.current_displayed_thread_id()
+                    && cwd.as_path() == self.chat_widget.config_ref().cwd.as_path()
+                    && generation == self.chat_widget.connector_scope_generation()
+                {
+                    self.chat_widget
+                        .on_connector_mentions_loaded(generation, result);
                 }
             }
             AppEvent::UpdateReasoningEffort(effort) => {
@@ -2719,6 +2741,8 @@ impl App {
     fn refresh_plugin_mentions_after_config_write(&mut self) {
         self.chat_widget.refresh_plugin_mentions();
         self.chat_widget.submit_op(AppCommand::reload_user_config());
+        self.chat_widget
+            .refresh_connector_mentions(/*force_refresh*/ true);
     }
 
     async fn apply_keymap_clear(&mut self, context: String, action: String) {

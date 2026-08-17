@@ -262,10 +262,13 @@ impl ChatWidget {
                 .starts_with(MCP_STARTUP_MULTI_HEADER_PREFIX)
     }
 
+    /// Update startup state and retry installed-app discovery when its MCP server becomes ready.
     pub(super) fn on_mcp_server_status_updated(
         &mut self,
         notification: McpServerStatusUpdatedNotification,
     ) {
+        let refresh_connector_mentions = notification.name == "codex_apps"
+            && notification.status == McpServerStartupState::Ready;
         let status = match notification.status {
             McpServerStartupState::Starting => McpStartupStatus::Starting,
             McpServerStartupState::Ready => McpStartupStatus::Ready,
@@ -281,5 +284,8 @@ impl ChatWidget {
             status,
             /*complete_when_settled*/ true,
         );
+        if refresh_connector_mentions {
+            self.refresh_connector_mentions(/*force_refresh*/ false);
+        }
     }
 }

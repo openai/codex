@@ -1,0 +1,22 @@
+---
+source: tui/src/chatwidget/tests/popups_and_settings.rs
+expression: snapshot
+---
+› $
+
+  Google Drive  [App] Connected files
+
+  Press enter to insert or esc to close
+
+--- plugin authentication ---
+  Plugins
+  Plugin plugin installed.
+  App setup 1/1: % Arabica UAE
+  Already installed in this session.
+
+     ChatGPT apps link unavailable  This app did not provide an install/manage
+                                    URL.
+› 1. Continue                       Advance to the next app.
+  2. Skip remaining app setup       Stop this follow-up flow for this plugin.
+
+  Press esc to close.

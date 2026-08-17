@@ -344,21 +344,17 @@ async fn thread_settings_updated_updates_visible_state_without_transcript() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
     set_chatgpt_auth(&mut chat);
     set_fast_mode_test_catalog(&mut chat);
+    chat.set_feature_enabled(Feature::Apps, /*enabled*/ true);
     let thread_id = ThreadId::new();
     let mut session = configured_thread_session(thread_id);
     session.cwd = test_path_buf("/tmp/original-workspace").abs();
     chat.handle_thread_session(session);
-    let generation = chat.connector_scope_generation();
-    chat.on_connectors_loaded(
-        Ok(crate::app_event::ConnectorsSnapshot {
-            connectors: vec![
-                serde_json::from_str(r#"{"id":"old","name":"Old","isAccessible":true}"#)
-                    .expect("valid app"),
-            ],
-        }),
-        /*is_final*/ true,
-    );
-    chat.prefetch_connectors();
+    let previous_generation = chat.connector_scope_generation();
+    let old_app = serde_json::from_str(r#"{"id":"old","name":"Old","isAccessible":true}"#)
+        .expect("valid app");
+    chat.connectors.mention_snapshot = Some(crate::app_event::ConnectorsSnapshot {
+        connectors: vec![old_app],
+    });
     let _ = drain_insert_history(&mut rx);
 
     chat.handle_server_notification(
@@ -366,9 +362,9 @@ async fn thread_settings_updated_updates_visible_state_without_transcript() {
         /*replay_kind*/ None,
     );
 
-    assert_ne!(chat.connector_scope_generation(), generation);
+    assert_ne!(chat.connector_scope_generation(), previous_generation);
     assert!(chat.connectors_for_mentions().is_none());
-    assert!(chat.connectors.prefetch_in_flight);
+    assert!(chat.connectors.mention_refresh_in_flight);
     assert_eq!(chat.current_model(), "gpt-5.4");
     assert_eq!(
         chat.current_reasoning_effort(),

@@ -4,7 +4,7 @@ use super::*;
 use crate::app_event::ConnectorsSnapshot;
 use std::sync::atomic::AtomicU64;
 
-/// Prevents stale directory requests from matching a replacement widget for the same thread.
+/// Prevents stale requests from matching a replacement widget for the same thread.
 static NEXT_CONNECTOR_SCOPE_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 /// Identifies one account-, workspace-, and thread-scoped connector state.
@@ -22,6 +22,7 @@ pub(super) enum ConnectorsCacheState {
 
 #[derive(Debug, Default)]
 pub(super) struct ConnectorsState {
+    /// Discovery-only catalog; its entries are not authorized composer mentions.
     pub(super) cache: ConnectorsCacheState,
     pub(super) partial_snapshot: Option<ConnectorsSnapshot>,
     pub(super) prefetch_in_flight: bool,
@@ -30,31 +31,54 @@ pub(super) struct ConnectorsState {
     pub(super) pending_notification: Option<Vec<AppInfo>>,
     /// Prevents a recovery request from scheduling another retry if it also fails.
     pub(super) notification_error_retry_in_flight: bool,
+    /// Installed apps that are callable in the current thread and account.
+    pub(super) mention_snapshot: Option<ConnectorsSnapshot>,
+    /// Installed identities include disabled apps omitted from composer mentions.
+    pub(super) installed_app_ids: HashSet<String>,
+    /// Suppress repeated notifications while their installed-app refresh is in flight.
+    pub(super) notified_installed_app_ids: Option<HashSet<String>>,
+    pub(super) mention_refresh_in_flight: bool,
+    /// `Some(false)` retains a cache-only retry when MCP readiness races another lookup.
+    pub(super) mention_refresh_pending: Option<bool>,
+    /// Revocations override only installed-app requests that were already in flight.
+    pub(super) locally_disabled: HashSet<String>,
     /// Process-unique identity for this widget's account, workspace, and thread.
     pub(super) generation: ConnectorScopeGeneration,
 }
 
 impl ChatWidget {
+    /// Refresh both discovery data and the independently authorized mention catalog.
     pub(crate) fn refresh_connectors(&mut self, force_refetch: bool) {
         self.queue_connectors_refresh(force_refetch);
+        self.refresh_connector_mentions(force_refetch);
     }
 
-    pub(super) fn prefetch_connectors(&mut self) {
-        self.queue_connectors_refresh(/*force_refetch*/ false);
-    }
-
-    /// Revalidate directory notifications without granting their unscoped contents to this thread.
+    /// Revalidate app notifications without granting their unscoped contents to this thread.
     pub(crate) fn refresh_connector_directory_after_notification(
         &mut self,
         connectors: Vec<AppInfo>,
     ) {
-        if self.thread_id.is_none()
-            || !self.connectors_enabled()
-            || self
-                .connectors
-                .partial_snapshot
-                .as_ref()
-                .is_some_and(|snapshot| snapshot.connectors == connectors)
+        if self.thread_id.is_none() || !self.connectors_enabled() {
+            return;
+        }
+
+        let installed_app_ids = connectors
+            .iter()
+            .filter(|connector| connector.is_accessible)
+            .map(|connector| connector.id.clone())
+            .collect::<HashSet<_>>();
+        if installed_app_ids != self.connectors.installed_app_ids
+            && self.connectors.notified_installed_app_ids.as_ref() != Some(&installed_app_ids)
+        {
+            self.connectors.notified_installed_app_ids = Some(installed_app_ids);
+            self.refresh_connector_mentions(/*force_refresh*/ true);
+        }
+
+        if self
+            .connectors
+            .partial_snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.connectors == connectors)
             || matches!(
                 &self.connectors.cache,
                 ConnectorsCacheState::Ready(snapshot) if snapshot.connectors == connectors
@@ -76,7 +100,7 @@ impl ChatWidget {
         self.connectors.generation
     }
 
-    /// Revoke cached apps and pending requests before their account or workspace changes.
+    /// Revoke cached app data and pending work before its account or thread changes.
     pub(crate) fn invalidate_connector_scope(&mut self) {
         let generation = ConnectorScopeGeneration(
             NEXT_CONNECTOR_SCOPE_GENERATION.fetch_add(1, Ordering::Relaxed),
@@ -121,19 +145,16 @@ impl ChatWidget {
         self.config.features.enabled(Feature::Apps) && self.has_chatgpt_account
     }
 
+    /// Return only authorized installed apps, never entries from the discovery directory.
     pub(super) fn connectors_for_mentions(&self) -> Option<&[AppInfo]> {
         if !self.connectors_enabled() {
             return None;
         }
 
-        if let Some(snapshot) = &self.connectors.partial_snapshot {
-            return Some(snapshot.connectors.as_slice());
-        }
-
-        match &self.connectors.cache {
-            ConnectorsCacheState::Ready(snapshot) => Some(snapshot.connectors.as_slice()),
-            _ => None,
-        }
+        self.connectors
+            .mention_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.connectors.as_slice())
     }
 
     pub(crate) fn add_connectors_output(&mut self) {
@@ -149,6 +170,7 @@ impl ChatWidget {
         let should_force_refetch = !self.connectors.prefetch_in_flight
             || matches!(connectors_cache, ConnectorsCacheState::Ready(_));
         self.queue_connectors_refresh(should_force_refetch);
+        self.refresh_connector_mentions(/*force_refresh*/ true);
 
         match connectors_cache {
             ConnectorsCacheState::Ready(snapshot) => {
@@ -350,6 +372,7 @@ impl ChatWidget {
             .map(str::to_string)
     }
 
+    /// Update the `/apps` discovery catalog without changing composer authorization.
     pub(crate) fn on_connectors_loaded(
         &mut self,
         result: Result<ConnectorsSnapshot, String>,
@@ -396,28 +419,23 @@ impl ChatWidget {
                 if is_final {
                     self.connectors.partial_snapshot = None;
                     self.refresh_connectors_popup_if_open(&snapshot.connectors);
-                    self.connectors.cache = ConnectorsCacheState::Ready(snapshot.clone());
+                    self.connectors.cache = ConnectorsCacheState::Ready(snapshot);
                 } else {
-                    self.connectors.partial_snapshot = Some(snapshot.clone());
+                    self.connectors.partial_snapshot = Some(snapshot);
                 }
-                self.bottom_pane.set_connectors_snapshot(Some(snapshot));
             }
             Err(err) => {
                 let partial_snapshot = self.connectors.partial_snapshot.take();
-                if let ConnectorsCacheState::Ready(snapshot) = &self.connectors.cache {
+                if matches!(self.connectors.cache, ConnectorsCacheState::Ready(_)) {
                     warn!("failed to refresh apps list; retaining current apps snapshot: {err}");
-                    self.bottom_pane
-                        .set_connectors_snapshot(Some(snapshot.clone()));
                 } else if let Some(snapshot) = partial_snapshot {
                     warn!(
                         "failed to load full apps list; falling back to installed apps snapshot: {err}"
                     );
                     self.refresh_connectors_popup_if_open(&snapshot.connectors);
-                    self.connectors.cache = ConnectorsCacheState::Ready(snapshot.clone());
-                    self.bottom_pane.set_connectors_snapshot(Some(snapshot));
+                    self.connectors.cache = ConnectorsCacheState::Ready(snapshot);
                 } else {
                     self.connectors.cache = ConnectorsCacheState::Failed(err);
-                    self.bottom_pane.set_connectors_snapshot(/*snapshot*/ None);
                 }
             }
         }
@@ -427,26 +445,34 @@ impl ChatWidget {
         }
     }
 
+    /// Revoke disabled apps immediately and revalidate permissions before enabling them.
     pub(crate) fn update_connector_enabled(&mut self, connector_id: &str, enabled: bool) {
-        let ConnectorsCacheState::Ready(mut snapshot) = self.connectors.cache.clone() else {
-            return;
-        };
-
-        let mut changed = false;
-        for connector in &mut snapshot.connectors {
-            if connector.id == connector_id {
-                changed = connector.is_enabled != enabled;
-                connector.is_enabled = enabled;
-                break;
-            }
+        if let ConnectorsCacheState::Ready(mut snapshot) = self.connectors.cache.clone()
+            && let Some(connector) = snapshot
+                .connectors
+                .iter_mut()
+                .find(|connector| connector.id == connector_id)
+            && connector.is_enabled != enabled
+        {
+            connector.is_enabled = enabled;
+            self.refresh_connectors_popup_if_open(&snapshot.connectors);
+            self.connectors.cache = ConnectorsCacheState::Ready(snapshot);
         }
 
-        if !changed {
-            return;
+        if enabled {
+            self.connectors.locally_disabled.remove(connector_id);
+        } else {
+            self.connectors
+                .locally_disabled
+                .insert(connector_id.to_string());
         }
-
-        self.refresh_connectors_popup_if_open(&snapshot.connectors);
-        self.connectors.cache = ConnectorsCacheState::Ready(snapshot.clone());
-        self.bottom_pane.set_connectors_snapshot(Some(snapshot));
+        if !enabled && let Some(mentions) = self.connectors.mention_snapshot.as_mut() {
+            mentions
+                .connectors
+                .retain(|connector| connector.id != connector_id);
+            self.bottom_pane
+                .set_connectors_snapshot(Some(mentions.clone()));
+        }
+        self.refresh_connector_mentions(/*force_refresh*/ enabled);
     }
 }
