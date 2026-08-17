@@ -1123,6 +1123,21 @@ async fn paginated_workflows_never_request_full_thread_history() -> Result<()> {
     assert!(!recorded_params(&requests, "thread/items/list").is_empty());
 
     let previous_read_count = paginated_reads.len();
+    let preview = crate::resume_picker::load_transcript_preview(
+        &mut app_server,
+        legacy_thread_id,
+        Some(&app.config),
+    )
+    .await?;
+    assert!(!preview.is_empty());
+    let preview_reads = recorded_params(&requests, "thread/read");
+    let preview_include_turns = preview_reads[previous_read_count..]
+        .iter()
+        .map(|params| params["includeTurns"].as_bool().unwrap_or(false))
+        .collect::<Vec<_>>();
+    assert_eq!(preview_include_turns, vec![false]);
+
+    let previous_read_count = preview_reads.len();
     crate::thread_transcript::load_session_transcript(
         &mut app_server,
         legacy_thread_id,

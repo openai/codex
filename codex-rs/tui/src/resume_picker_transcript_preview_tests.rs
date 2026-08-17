@@ -14,6 +14,10 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput;
+use codex_protocol::protocol::AgentMessageEvent;
+use codex_protocol::protocol::ThreadRolledBackEvent;
+use codex_protocol::protocol::UserMessageEvent;
+use codex_rollout::CompactedItem;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
@@ -23,6 +27,225 @@ fn preview_line(speaker: TranscriptPreviewSpeaker, text: &str) -> TranscriptPrev
         speaker,
         text: text.to_string(),
     }
+}
+
+fn rollout_user_message(text: &str) -> RolloutItem {
+    RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+        message: text.to_string(),
+        ..Default::default()
+    }))
+}
+
+fn rollout_agent_message(text: &str) -> RolloutItem {
+    RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
+        message: text.to_string(),
+        phase: None,
+        memory_citation: None,
+    }))
+}
+
+fn write_preview_rollout(path: &Path, items: Vec<RolloutItem>) {
+    let contents = items
+        .into_iter()
+        .map(|item| {
+            serde_json::to_string(&RolloutLine {
+                timestamp: String::from("2026-07-19T12:00:00Z"),
+                ordinal: None,
+                item,
+            })
+            .expect("serialize rollout line")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(path, format!("{contents}\n")).expect("write rollout");
+}
+
+#[test]
+fn legacy_transcript_preview_scans_tail_across_compaction() {
+    let temp_dir = tempdir().expect("tempdir");
+    let path = temp_dir.path().join("rollout.jsonl");
+    write_preview_rollout(
+        &path,
+        vec![
+            rollout_user_message("older user"),
+            rollout_agent_message("older assistant"),
+            RolloutItem::Compacted(CompactedItem {
+                message: String::from("summary that is not transcript text"),
+                replacement_history: None,
+                window_number: None,
+                first_window_id: None,
+                previous_window_id: None,
+                window_id: None,
+            }),
+            rollout_user_message("recent user"),
+            rollout_agent_message("commentary one\ncommentary two"),
+            rollout_agent_message("final one\n\n final two "),
+        ],
+    );
+
+    let mut lines = scan_legacy_transcript_preview(
+        &path,
+        temp_dir.path(),
+        /*inline_visualization_context*/ None,
+    )
+    .expect("scan rollout")
+    .expect("bounded tail");
+    lines.reverse();
+
+    assert_eq!(
+        lines,
+        vec![
+            preview_line(TranscriptPreviewSpeaker::Assistant, "older assistant"),
+            preview_line(TranscriptPreviewSpeaker::User, "recent user"),
+            preview_line(TranscriptPreviewSpeaker::Assistant, "commentary one"),
+            preview_line(TranscriptPreviewSpeaker::Assistant, "commentary two"),
+            preview_line(TranscriptPreviewSpeaker::Assistant, "final one"),
+            preview_line(TranscriptPreviewSpeaker::Assistant, "final two"),
+        ]
+    );
+}
+
+#[test]
+fn legacy_transcript_preview_falls_back_when_rollback_is_in_the_tail() {
+    let temp_dir = tempdir().expect("tempdir");
+    let path = temp_dir.path().join("rollout.jsonl");
+    write_preview_rollout(
+        &path,
+        vec![
+            rollout_user_message("rolled back user"),
+            rollout_agent_message("rolled back assistant"),
+            RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+                num_turns: 1,
+            })),
+            rollout_user_message("recent user"),
+            rollout_agent_message("recent assistant"),
+        ],
+    );
+
+    let lines = scan_legacy_transcript_preview(
+        &path,
+        temp_dir.path(),
+        /*inline_visualization_context*/ None,
+    )
+    .expect("scan rollout");
+
+    assert_eq!(lines, None);
+}
+
+#[test]
+fn legacy_transcript_preview_stops_before_rollback_outside_the_tail() {
+    let temp_dir = tempdir().expect("tempdir");
+    let path = temp_dir.path().join("rollout.jsonl");
+    write_preview_rollout(
+        &path,
+        vec![
+            rollout_user_message("rolled back user"),
+            RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+                num_turns: 1,
+            })),
+            rollout_user_message("recent user"),
+            rollout_agent_message("one\ntwo\nthree\nfour\nfive\nsix"),
+        ],
+    );
+
+    let mut lines = scan_legacy_transcript_preview(
+        &path,
+        temp_dir.path(),
+        /*inline_visualization_context*/ None,
+    )
+    .expect("scan rollout")
+    .expect("bounded tail");
+    lines.reverse();
+
+    assert_eq!(
+        lines,
+        vec![
+            preview_line(TranscriptPreviewSpeaker::Assistant, "one"),
+            preview_line(TranscriptPreviewSpeaker::Assistant, "two"),
+            preview_line(TranscriptPreviewSpeaker::Assistant, "three"),
+            preview_line(TranscriptPreviewSpeaker::Assistant, "four"),
+            preview_line(TranscriptPreviewSpeaker::Assistant, "five"),
+            preview_line(TranscriptPreviewSpeaker::Assistant, "six"),
+        ]
+    );
+}
+
+#[test]
+fn legacy_transcript_preview_falls_back_for_oversized_visible_record() {
+    let temp_dir = tempdir().expect("tempdir");
+    let path = temp_dir.path().join("rollout.jsonl");
+    write_preview_rollout(
+        &path,
+        vec![rollout_agent_message(
+            &"x".repeat(MAX_LEGACY_TRANSCRIPT_PREVIEW_SCAN_BYTES),
+        )],
+    );
+
+    let lines = scan_legacy_transcript_preview(
+        &path,
+        temp_dir.path(),
+        /*inline_visualization_context*/ None,
+    )
+    .expect("scan rollout");
+
+    assert_eq!(lines, None);
+}
+
+#[test]
+fn legacy_transcript_preview_falls_back_for_oversized_hidden_record() {
+    let temp_dir = tempdir().expect("tempdir");
+    let path = temp_dir.path().join("rollout.jsonl");
+    write_preview_rollout(
+        &path,
+        vec![
+            rollout_user_message("older user"),
+            RolloutItem::Compacted(CompactedItem {
+                message: "x".repeat(MAX_LEGACY_TRANSCRIPT_PREVIEW_SCAN_BYTES),
+                replacement_history: None,
+                window_number: None,
+                first_window_id: None,
+                previous_window_id: None,
+                window_id: None,
+            }),
+            rollout_agent_message("recent assistant"),
+        ],
+    );
+
+    let lines = scan_legacy_transcript_preview(
+        &path,
+        temp_dir.path(),
+        /*inline_visualization_context*/ None,
+    )
+    .expect("scan rollout");
+
+    assert_eq!(lines, None);
+}
+
+#[test]
+fn legacy_transcript_preview_falls_back_when_scan_budget_is_exhausted() {
+    let temp_dir = tempdir().expect("tempdir");
+    let path = temp_dir.path().join("rollout.jsonl");
+    let compacted = RolloutItem::Compacted(CompactedItem {
+        message: "x".repeat(MAX_LEGACY_TRANSCRIPT_PREVIEW_SCAN_BYTES / 8),
+        replacement_history: None,
+        window_number: None,
+        first_window_id: None,
+        previous_window_id: None,
+        window_id: None,
+    });
+    let mut items = vec![rollout_user_message("older user")];
+    items.extend(std::iter::repeat_n(compacted, 9));
+    items.push(rollout_agent_message("recent assistant"));
+    write_preview_rollout(&path, items);
+
+    let lines = scan_legacy_transcript_preview(
+        &path,
+        temp_dir.path(),
+        /*inline_visualization_context*/ None,
+    )
+    .expect("scan rollout");
+
+    assert_eq!(lines, None);
 }
 
 #[test]
