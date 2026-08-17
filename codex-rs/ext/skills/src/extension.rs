@@ -228,7 +228,7 @@ where
                 &catalog,
                 include_usage,
                 SkillCatalogRenderPolicy::ExtensionCompatible,
-                skill_metadata_budget(/*context_window*/ None),
+                skill_metadata_budget(/*context_window*/ None, config.max_context_tokens),
             );
             if let Some(message) = rendered.warning_message {
                 self.emit_warning(thread_store.level_id(), /*turn_id*/ None, message);
@@ -420,7 +420,8 @@ where
                 let context_window = model_info
                     .as_deref()
                     .and_then(ModelInfo::resolved_context_window);
-                let metadata_budget = skill_metadata_budget(context_window);
+                let metadata_budget =
+                    skill_metadata_budget(context_window, config.max_context_tokens);
                 let rendered = render_catalog(
                     extension_metrics.as_deref(),
                     CatalogSurface::TurnInput,

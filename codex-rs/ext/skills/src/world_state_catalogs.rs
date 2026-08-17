@@ -107,6 +107,7 @@ impl<'a> CatalogContext<'a> {
         let context_window = model_info
             .as_deref()
             .and_then(ModelInfo::resolved_context_window);
+        let metadata_budget = skill_metadata_budget(context_window, config.max_context_tokens);
         let emitted_warnings = input
             .turn_store
             .get_or_init(EmittedCatalogBudgetWarnings::default);
@@ -127,7 +128,7 @@ impl<'a> CatalogContext<'a> {
             input,
             thread_state,
             config,
-            metadata_budget: skill_metadata_budget(context_window),
+            metadata_budget,
             include_usage,
             warning_emitter,
         })

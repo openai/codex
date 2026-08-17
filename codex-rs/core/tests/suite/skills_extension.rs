@@ -258,6 +258,7 @@ fn catalog_extensions(
     install_with_providers(&mut extensions, providers, |config: &Config| {
         SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,
+            max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             orchestrator_skills_enabled: false,
             shadow_selection_enabled: false,
@@ -534,6 +535,7 @@ async fn capability_sections_render_in_order_with_host_repo_and_plugin_skills() 
     let mut extensions = ExtensionRegistryBuilder::<Config>::new();
     install(&mut extensions, |config: &Config| SkillsExtensionConfig {
         include_instructions: config.include_skill_instructions,
+        max_context_tokens: config.skill_max_context_tokens,
         bundled_skills_enabled: config.bundled_skills_enabled(),
         orchestrator_skills_enabled: config.orchestrator_skills_enabled,
         shadow_selection_enabled: config.features.enabled(Feature::SkillSearch),
@@ -960,6 +962,7 @@ async fn explicit_only_orchestrator_skill_is_hidden_but_can_be_invoked() -> Resu
             .with_orchestrator_provider(Arc::new(OrchestratorSkillProvider::new())),
         |config: &Config| SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,
+            max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             orchestrator_skills_enabled: true,
             shadow_selection_enabled: false,
@@ -1120,6 +1123,7 @@ async fn production_turn_aliases_discovered_singleton_orchestrator_root() -> Res
             .with_orchestrator_provider(Arc::new(OrchestratorSkillProvider::new())),
         |config: &Config| SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,
+            max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             orchestrator_skills_enabled: true,
             shadow_selection_enabled: false,
@@ -1412,6 +1416,7 @@ async fn production_turn_aliases_combined_skill_catalogs_under_shared_budget() -
             .with_host_provider(Arc::new(HostSkillProvider::new())),
         |config: &Config| SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,
+            max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             orchestrator_skills_enabled: true,
             shadow_selection_enabled: false,
@@ -1512,6 +1517,7 @@ async fn production_turn_scales_extension_catalog_from_resolved_model_window() -
             )),
             |config: &Config| SkillsExtensionConfig {
                 include_instructions: config.include_skill_instructions,
+                max_context_tokens: config.skill_max_context_tokens,
                 bundled_skills_enabled: false,
                 orchestrator_skills_enabled: false,
                 shadow_selection_enabled: false,
@@ -1615,6 +1621,52 @@ async fn production_turn_shares_catalog_budget_across_host_and_executor_sections
     assert_shortened_descriptions(&host_lines, &HOST_CATALOG);
     assert_shortened_descriptions(&executor_lines, &EXECUTOR_CATALOG);
     assert!(metadata_cost(&combined_lines) <= 240);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn production_turn_uses_configured_skill_catalog_token_budget() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let response = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let codex_home = Arc::new(TempDir::new()?);
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        "[skills]\nmax_context_tokens = 800\n",
+    )?;
+    write_host_skills(codex_home.path(), &HOST_CATALOG)?;
+    let (extensions, _event_rx) = catalog_extensions(
+        executor_catalog(&EXECUTOR_CATALOG),
+        /*include_host_provider*/ true,
+    );
+    let mut builder = test_codex()
+        .with_home(codex_home)
+        .with_extensions(extensions)
+        .with_model_info_override("gpt-5.5", |model_info| {
+            model_info.context_window = Some(SHORTENING_CONTEXT_WINDOW);
+            model_info.max_context_window = None;
+        })
+        .with_config(configure_catalog_test);
+    let test = builder.build_with_auto_env(&server).await?;
+
+    test.submit_turn("Inspect the available skills.").await?;
+    let request = response.single_request();
+    let developer_texts = request.message_input_texts("developer");
+    let host_lines = skill_lines(catalog_text(&developer_texts, "host"), "host");
+    let executor_lines = skill_lines(catalog_text(&developer_texts, "exec"), "exec");
+    let combined_lines = host_lines
+        .iter()
+        .chain(executor_lines.iter())
+        .copied()
+        .collect::<Vec<_>>();
+
+    assert_full_descriptions(&host_lines, &HOST_CATALOG);
+    assert_full_descriptions(&executor_lines, &EXECUTOR_CATALOG);
+    assert!(metadata_cost(&combined_lines) <= 800);
 
     Ok(())
 }
@@ -1785,6 +1837,7 @@ async fn production_turn_uses_provider_host_catalog_and_core_snapshot_injection(
         })),
         |config: &Config| SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,
+            max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             orchestrator_skills_enabled: false,
             shadow_selection_enabled: false,
@@ -1885,6 +1938,7 @@ async fn production_turn_suppresses_only_the_superseded_host_skill_prompt() -> R
         )),
         |config: &Config| SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,
+            max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             orchestrator_skills_enabled: false,
             shadow_selection_enabled: false,
@@ -2133,6 +2187,7 @@ async fn production_turn_keeps_orchestrator_world_state_incremental_across_turns
             .with_orchestrator_provider(Arc::new(CatalogSkillProvider { catalog })),
         |config: &Config| SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,
+            max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             orchestrator_skills_enabled: config.orchestrator_skills_enabled,
             shadow_selection_enabled: false,
@@ -2398,6 +2453,7 @@ async fn production_turn_fairly_shortens_extension_catalog_descriptions() -> Res
         )),
         |config: &Config| SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,
+            max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             orchestrator_skills_enabled: false,
             shadow_selection_enabled: false,

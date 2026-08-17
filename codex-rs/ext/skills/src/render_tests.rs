@@ -194,16 +194,26 @@ fn description_selection_follows_render_policy() {
 #[test]
 fn catalog_budget_uses_context_percentage_or_character_fallback() {
     assert_eq!(
-        skill_metadata_budget(Some(100_000)),
+        skill_metadata_budget(Some(100_000), /*max_context_tokens*/ None),
         SkillMetadataBudget::Tokens(2_000)
     );
     assert_eq!(
-        skill_metadata_budget(Some(400_000)),
+        skill_metadata_budget(Some(400_000), /*max_context_tokens*/ None),
         SkillMetadataBudget::Tokens(8_000)
     );
     assert_eq!(
-        skill_metadata_budget(/*context_window*/ None),
+        skill_metadata_budget(
+            /*context_window*/ None, /*max_context_tokens*/ None
+        ),
         SkillMetadataBudget::Characters(8_000)
+    );
+    assert_eq!(
+        skill_metadata_budget(Some(100_000), NonZeroUsize::new(5_000)),
+        SkillMetadataBudget::Tokens(5_000)
+    );
+    assert_eq!(
+        skill_metadata_budget(/*context_window*/ None, NonZeroUsize::new(50_000)),
+        SkillMetadataBudget::Tokens(10_000)
     );
 }
 

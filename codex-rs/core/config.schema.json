@@ -3231,6 +3231,12 @@
         "include_instructions": {
           "description": "Whether turns receive the automatic skills instructions block.",
           "type": "boolean"
+        },
+        "max_context_tokens": {
+          "description": "Maximum tokens used by the available-skills catalog. Defaults to 2% of the model context window and is capped at 10,000 tokens when set.",
+          "format": "uint",
+          "minimum": 1.0,
+          "type": "integer"
         }
       },
       "type": "object"

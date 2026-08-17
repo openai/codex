@@ -358,6 +358,7 @@ fn parses_bundled_skills_config() {
         r#"
 [skills]
 include_instructions = false
+max_context_tokens = 1200
 
 [skills.bundled]
 enabled = false
@@ -370,9 +371,12 @@ enabled = false
         Some(SkillsConfig {
             bundled: Some(BundledSkillsConfig { enabled: false }),
             include_instructions: Some(false),
+            max_context_tokens: std::num::NonZeroUsize::new(1_200),
             config: Vec::new(),
         })
     );
+
+    assert!(toml::from_str::<ConfigToml>("[skills]\nmax_context_tokens = 0\n").is_err());
 }
 
 #[test]

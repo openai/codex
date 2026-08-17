@@ -130,6 +130,7 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io::ErrorKind;
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -648,6 +649,9 @@ pub struct Config {
 
     /// Whether to inject the `<skills_instructions>` developer block.
     pub include_skill_instructions: bool,
+
+    /// Optional token budget override for the available-skills catalog.
+    pub skill_max_context_tokens: Option<NonZeroUsize>,
 
     /// Whether orchestrator-owned skills are exposed to the model.
     pub orchestrator_skills_enabled: bool,
@@ -3797,6 +3801,10 @@ impl Config {
             .as_ref()
             .and_then(|skills| skills.include_instructions)
             .unwrap_or(true);
+        let skill_max_context_tokens = cfg
+            .skills
+            .as_ref()
+            .and_then(|skills| skills.max_context_tokens);
         let include_environment_context = cfg.include_environment_context.unwrap_or(true);
         let guardian_policy_config =
             guardian_policy_config_from_requirements(config_layer_stack.requirements_toml())
@@ -4001,6 +4009,7 @@ impl Config {
             include_apps_instructions,
             include_collaboration_mode_instructions,
             include_skill_instructions,
+            skill_max_context_tokens,
             orchestrator_skills_enabled,
             orchestrator_mcp_enabled,
             include_environment_context,

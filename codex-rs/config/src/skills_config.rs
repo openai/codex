@@ -1,6 +1,7 @@
 //! Skill-related configuration types shared across crates.
 
 use std::collections::HashSet;
+use std::num::NonZeroUsize;
 
 use crate::ConfigLayerSource;
 use crate::ConfigLayerStack;
@@ -35,6 +36,11 @@ pub struct SkillsConfig {
     /// Whether turns receive the automatic skills instructions block.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include_instructions: Option<bool>,
+
+    /// Maximum tokens used by the available-skills catalog. Defaults to 2% of
+    /// the model context window and is capped at 10,000 tokens when set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_context_tokens: Option<NonZeroUsize>,
 
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub config: Vec<SkillConfig>,
