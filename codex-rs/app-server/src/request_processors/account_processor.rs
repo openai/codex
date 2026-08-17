@@ -1410,6 +1410,7 @@ fn workspace_messages_feature_disabled(err: &BackendRequestError) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::StatusCode;
     use codex_backend_client::TokenUsageProfileDailyBucket;
     use codex_backend_client::TokenUsageProfileStats;
     use pretty_assertions::assert_eq;
@@ -1483,9 +1484,9 @@ mod tests {
     #[test]
     fn workspace_messages_feature_disabled_only_for_not_found() {
         let cases = [
-            (reqwest::StatusCode::NOT_FOUND, true),
-            (reqwest::StatusCode::UNAUTHORIZED, false),
-            (reqwest::StatusCode::FORBIDDEN, false),
+            (StatusCode::NOT_FOUND, true),
+            (StatusCode::UNAUTHORIZED, false),
+            (StatusCode::FORBIDDEN, false),
         ];
 
         for (status, expected) in cases {

@@ -468,6 +468,7 @@ fn windows_sandbox_log_attachment(_codex_home: &Path) -> Option<FeedbackAttachme
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::HeaderMap;
     use codex_protocol::protocol::TurnContextItem;
     use codex_rollout::RolloutLine;
     use core_test_support::responses::start_mock_server;
@@ -783,9 +784,7 @@ mod tests {
     #[test]
     fn tool_cache_feedback_attachments_include_directory_cache_without_account_id() {
         let codex_home = tempfile::tempdir().expect("create tempdir");
-        let auth = CodexAuth::Headers(codex_login::AuthHeaders::new(
-            reqwest::header::HeaderMap::new(),
-        ));
+        let auth = CodexAuth::Headers(codex_login::AuthHeaders::new(HeaderMap::new()));
         let directory_cache_context = ConnectorDirectoryCacheContext::new(
             codex_home.path().to_path_buf(),
             ConnectorDirectoryCacheKey::new(

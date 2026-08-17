@@ -2056,7 +2056,6 @@ dependencies = [
  "opentelemetry",
  "opentelemetry_sdk",
  "pretty_assertions",
- "reqwest 0.12.28",
  "rmcp",
  "serde",
  "serde_json",
