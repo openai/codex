@@ -8,7 +8,10 @@ use std::time::Instant;
 use ratatui::style::Stylize;
 use ratatui::text::Span;
 
-use crate::shimmer::shimmer_spans;
+#[path = "shimmer.rs"]
+mod shimmer;
+
+use shimmer::shimmer_spans;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MotionMode {
@@ -77,10 +80,6 @@ fn animated_activity_indicator(start_time: Option<Instant>) -> Span<'static> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-    use std::path::Path;
-    use std::path::PathBuf;
-
     use pretty_assertions::assert_eq;
 
     use super::*;
@@ -115,70 +114,5 @@ mod tests {
             shimmer_text("", MotionMode::Reduced),
             Vec::<Span<'static>>::new()
         );
-    }
-
-    #[test]
-    fn animation_primitives_are_only_used_by_motion_module() {
-        let direct_spinner = regex_lite::Regex::new(r"(^|[^A-Za-z0-9_])spinner\s*\(").unwrap();
-        let direct_shimmer =
-            regex_lite::Regex::new(r"(^|[^A-Za-z0-9_])shimmer_spans\s*\(").unwrap();
-        let lib_rs = codex_utils_cargo_bin::find_resource!("src/lib.rs")
-            .expect("failed to locate TUI source");
-        let src_dir = lib_rs.parent().expect("lib.rs should have a parent");
-
-        let mut source_files = Vec::new();
-        collect_rust_files(src_dir, &mut source_files).expect("failed to collect TUI source files");
-
-        let mut violations = Vec::new();
-        for path in source_files {
-            let relative_path = path
-                .strip_prefix(src_dir)
-                .expect("source file should be under src")
-                .to_string_lossy()
-                .replace('\\', "/");
-            if animation_primitive_allowlisted_path(&relative_path) {
-                continue;
-            }
-
-            let contents = fs::read_to_string(&path)
-                .unwrap_or_else(|err| panic!("failed to read {relative_path}: {err}"));
-            for (line_number, line) in contents.lines().enumerate() {
-                let code = line.split_once("//").map_or(line, |(code, _)| code);
-                if direct_spinner.is_match(code) {
-                    violations.push(format!(
-                        "{relative_path}:{} contains a direct `spinner(...)` call; use crate::motion instead",
-                        line_number + 1
-                    ));
-                }
-                if direct_shimmer.is_match(code) {
-                    violations.push(format!(
-                        "{relative_path}:{} contains a direct `shimmer_spans(...)` call; use crate::motion instead",
-                        line_number + 1
-                    ));
-                }
-            }
-        }
-
-        assert!(
-            violations.is_empty(),
-            "direct animation primitive usage found:\n{}",
-            violations.join("\n")
-        );
-    }
-
-    fn collect_rust_files(dir: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
-        for entry in fs::read_dir(dir)? {
-            let path = entry?.path();
-            if path.is_dir() {
-                collect_rust_files(&path, files)?;
-            } else if path.extension().is_some_and(|ext| ext == "rs") {
-                files.push(path);
-            }
-        }
-        Ok(())
-    }
-
-    fn animation_primitive_allowlisted_path(relative_path: &str) -> bool {
-        matches!(relative_path, "motion.rs" | "shimmer.rs")
     }
 }

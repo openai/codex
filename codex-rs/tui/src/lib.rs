@@ -170,7 +170,6 @@ mod session_archive_commands;
 mod session_log;
 mod session_resume;
 mod session_state;
-mod shimmer;
 mod skills_helpers;
 mod slash_command;
 mod startup_draft;

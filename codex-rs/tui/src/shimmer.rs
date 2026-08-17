@@ -18,7 +18,7 @@ fn elapsed_since_start() -> Duration {
     start.elapsed()
 }
 
-pub(crate) fn shimmer_spans(text: &str) -> Vec<Span<'static>> {
+pub(super) fn shimmer_spans(text: &str) -> Vec<Span<'static>> {
     let chars: Vec<char> = text.chars().collect();
     if chars.is_empty() {
         return Vec::new();
