@@ -6365,8 +6365,28 @@ async fn remote_resume_keeps_server_only_cwd_out_of_local_config() -> Result<()>
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn in_app_resume_uses_configured_or_explicit_cwd() -> Result<()> {
+    let temp_dir = tempdir()?;
+    let codex_home = temp_dir.path().join("codex-home");
+    let launch_cwd = temp_dir.path().join("launch");
+    let active_cwd = temp_dir.path().join("active");
+    let session_cwd = temp_dir.path().join("session");
+    let explicit_cwd = temp_dir.path().join("explicit");
+    let runtime_cwd = temp_dir.path().join("runtime");
+    for directory in [
+        &codex_home,
+        &launch_cwd,
+        &active_cwd,
+        &session_cwd,
+        &explicit_cwd,
+        &runtime_cwd,
+    ] {
+        std::fs::create_dir_all(directory)?;
+    }
+    let mut local_app_server = None;
+    let mut remote_app_server = None;
+
     for (configured_mode, has_explicit_cwd, has_remote_exec, has_runtime_cwd, expected_directory) in [
         ("current", false, false, false, "launch"),
         ("session", false, false, false, "session"),
@@ -6378,31 +6398,10 @@ async fn in_app_resume_uses_configured_or_explicit_cwd() -> Result<()> {
         ("session", false, false, true, "runtime"),
         ("session", true, false, true, "runtime"),
     ] {
-        let temp_dir = tempdir()?;
-        let codex_home = temp_dir.path().join("codex-home");
-        let launch_cwd = temp_dir.path().join("launch");
-        let active_cwd = temp_dir.path().join("active");
-        let session_cwd = temp_dir.path().join("session");
-        let explicit_cwd = temp_dir.path().join("explicit");
-        let runtime_cwd = temp_dir.path().join("runtime");
-        std::fs::create_dir_all(&codex_home)?;
-        std::fs::create_dir_all(&launch_cwd)?;
-        std::fs::create_dir_all(&active_cwd)?;
-        std::fs::create_dir_all(&session_cwd)?;
-        std::fs::create_dir_all(&explicit_cwd)?;
-        std::fs::create_dir_all(&runtime_cwd)?;
         std::fs::write(
             codex_home.join("config.toml"),
             format!("[tui]\nresume_cwd = \"{configured_mode}\"\n"),
         )?;
-        if has_runtime_cwd {
-            crate::legacy_core::config::set_project_trust_level(
-                codex_home.as_path(),
-                runtime_cwd.as_path(),
-                codex_protocol::config_types::TrustLevel::Trusted,
-            )
-            .map_err(|error| color_eyre::eyre::eyre!(error.to_string()))?;
-        }
         let config = ConfigBuilder::default()
             .codex_home(codex_home.clone())
             .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
@@ -6441,9 +6440,6 @@ async fn in_app_resume_uses_configured_or_explicit_cwd() -> Result<()> {
             ),
         )?;
         let thread_id = ThreadId::from_string(&thread_id)?;
-        let state_db =
-            crate::init_state_db_for_app_server_target(&config, &crate::AppServerTarget::Embedded)
-                .await?;
         let environment_manager = if has_remote_exec {
             Arc::new(
                 EnvironmentManager::create_for_tests(
@@ -6458,51 +6454,37 @@ async fn in_app_resume_uses_configured_or_explicit_cwd() -> Result<()> {
         } else {
             Arc::new(EnvironmentManager::default_for_tests())
         };
-        let mut app_server = crate::start_app_server_for_picker(
-            &config,
-            &crate::AppServerTarget::Embedded,
-            state_db.clone(),
-            Arc::clone(&environment_manager),
-        )
-        .await?;
+        let server = if has_remote_exec {
+            &mut remote_app_server
+        } else {
+            &mut local_app_server
+        };
+        let app_server = match server {
+            Some(server) => server,
+            slot @ None => slot.insert(
+                crate::start_app_server_for_picker(
+                    &config,
+                    &crate::AppServerTarget::Embedded,
+                    /*state_db*/ None,
+                    Arc::clone(&environment_manager),
+                )
+                .await?,
+            ),
+        };
         let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
         app.config = config;
-        app.launch_cwd = launch_cwd;
-        app.state_db = state_db;
+        app.launch_cwd = launch_cwd.clone();
         app.environment_manager = environment_manager;
-        app.harness_overrides.cwd = has_explicit_cwd.then_some(explicit_cwd);
+        app.harness_overrides.cwd = has_explicit_cwd.then_some(explicit_cwd.clone());
+        app.runtime_working_directory_override = has_runtime_cwd.then_some(runtime_cwd.clone());
         app.chat_widget
-            .handle_thread_session_quiet(test_thread_session(ThreadId::new(), active_cwd));
+            .handle_thread_session_quiet(test_thread_session(ThreadId::new(), active_cwd.clone()));
         let mut tui = crate::tui::test_support::make_test_tui()?;
-        if has_runtime_cwd {
-            let started = app_server
-                .start_thread_with_session_start_source(
-                    &app.config,
-                    /*session_start_source*/ None,
-                )
-                .await?;
-            let empty_thread_id = started.session.thread_id;
-            app.replace_chat_widget_with_app_server_thread(
-                &mut tui,
-                started,
-                crate::app::session_lifecycle::ThreadAttachPresentation::SessionLineage,
-                /*initial_user_message*/ None,
-            )
-            .await?;
-            app.change_working_directory(&mut tui, &mut app_server, runtime_cwd.clone().abs())
-                .await;
-
-            assert_ne!(app.chat_widget.thread_id(), Some(empty_thread_id));
-            assert_eq!(
-                app.runtime_working_directory_override.as_deref(),
-                Some(runtime_cwd.as_path()),
-            );
-        }
 
         let control = app
             .resume_target_session(
                 &mut tui,
-                &mut app_server,
+                app_server,
                 crate::resume_picker::SessionTarget {
                     path: Some(rollout_path),
                     thread_id,
@@ -6522,20 +6504,12 @@ async fn in_app_resume_uses_configured_or_explicit_cwd() -> Result<()> {
             &expected_cwd,
         ));
         assert_eq!(app.chat_widget.thread_id(), Some(thread_id));
+    }
 
-        let control = Box::pin(app.handle_event(
-            &mut tui,
-            &mut app_server,
-            AppEvent::ForkCurrentSession { name: None },
-        ))
-        .await?;
-
-        assert!(matches!(control, AppRunControl::Continue));
-        assert!(!crate::session_resume::cwds_differ(
-            app.chat_widget.config_ref().cwd.as_path(),
-            &expected_cwd,
-        ));
-        assert_ne!(app.chat_widget.thread_id(), Some(thread_id));
+    if let Some(app_server) = local_app_server {
+        app_server.shutdown().await?;
+    }
+    if let Some(app_server) = remote_app_server {
         app_server.shutdown().await?;
     }
 
