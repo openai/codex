@@ -41,6 +41,30 @@ async fn async_telemetry_client_uses_resolved_system_proxy() {
     );
 }
 
+#[test]
+fn blocking_telemetry_client_uses_resolved_system_proxy() {
+    let (proxy_address, proxy) = spawn_proxy();
+    let endpoint = "http://blocking-telemetry-proxy.test/v1/metrics";
+    cache_system_proxy_route_for_test(endpoint, format!("http://{proxy_address}"));
+    let client = HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy)
+        .build_blocking_telemetry_client(
+            endpoint,
+            Duration::from_secs(2),
+            &TelemetryClientTlsConfig::default(),
+        )
+        .expect("blocking telemetry client should build");
+
+    let response = futures::executor::block_on(client.send_bytes(telemetry_request(endpoint)))
+        .expect("telemetry request should use proxy");
+    let request = proxy.join().expect("proxy should complete");
+
+    assert_eq!(response.status(), http::StatusCode::OK);
+    assert_eq!(
+        request.lines().next(),
+        Some("POST http://blocking-telemetry-proxy.test/v1/metrics HTTP/1.1")
+    );
+}
+
 #[tokio::test]
 async fn async_system_proxy_telemetry_client_does_not_follow_redirects() {
     let (proxy_address, proxy) = spawn_proxy_with_response(
@@ -59,6 +83,28 @@ async fn async_system_proxy_telemetry_client_does_not_follow_redirects() {
     let response = client
         .send_bytes(telemetry_request(endpoint))
         .await
+        .expect("redirect should be returned to the exporter");
+    proxy.join().expect("proxy should complete");
+
+    assert_eq!(response.status(), http::StatusCode::TEMPORARY_REDIRECT);
+}
+
+#[test]
+fn blocking_system_proxy_telemetry_client_does_not_follow_redirects() {
+    let (proxy_address, proxy) = spawn_proxy_with_response(
+        "HTTP/1.1 307 Temporary Redirect\r\nLocation: http://different-route.test/v1/metrics\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+    );
+    let endpoint = "http://blocking-telemetry-redirect.test/v1/metrics";
+    cache_system_proxy_route_for_test(endpoint, format!("http://{proxy_address}"));
+    let client = HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy)
+        .build_blocking_telemetry_client(
+            endpoint,
+            Duration::from_secs(2),
+            &TelemetryClientTlsConfig::default(),
+        )
+        .expect("blocking telemetry client should build");
+
+    let response = futures::executor::block_on(client.send_bytes(telemetry_request(endpoint)))
         .expect("redirect should be returned to the exporter");
     proxy.join().expect("proxy should complete");
 

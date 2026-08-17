@@ -4,7 +4,9 @@ use crate::BuildRouteAwareHttpClientError;
 use crate::ClientRouteClass;
 use crate::HttpClientFactory;
 use crate::OutboundProxyPolicy;
+use crate::OutboundProxyRoute;
 use crate::custom_ca::BuildCustomCaTransportError;
+use crate::custom_ca::build_blocking_reqwest_client_with_custom_ca;
 use opentelemetry_http::HttpClient;
 use std::fs;
 use std::io;
@@ -91,6 +93,46 @@ impl HttpClientFactory {
             .map_err(Into::into)
     }
 
+    /// Builds a blocking exporter client for one fixed collector endpoint.
+    ///
+    /// Callers inside a Tokio runtime must construct this on a blocking-capable
+    /// thread, just as they would for any other blocking reqwest client.
+    pub fn build_blocking_telemetry_client(
+        &self,
+        endpoint: &str,
+        timeout: Duration,
+        tls: &TelemetryClientTlsConfig,
+    ) -> Result<impl HttpClient + 'static + use<>, BuildTelemetryHttpClientError> {
+        let tls = prepare_tls_config(tls)?;
+        let mut builder = reqwest::blocking::Client::builder().timeout(timeout);
+        if let Some(certificate) = tls.root_certificate {
+            builder = builder
+                .tls_built_in_root_certs(false)
+                .add_root_certificate(certificate);
+        }
+        if let Some(identity) = tls.client_identity {
+            builder = builder.identity(identity).https_only(true);
+        }
+        if self.outbound_proxy_policy() == OutboundProxyPolicy::RespectSystemProxy {
+            builder = builder.redirect(reqwest::redirect::Policy::none());
+        }
+
+        builder = match self.resolve_proxy_route(endpoint) {
+            OutboundProxyRoute::TransportDefault => builder,
+            OutboundProxyRoute::Direct => builder.no_proxy(),
+            OutboundProxyRoute::Proxy { url, no_proxy } => {
+                let proxy = reqwest::Proxy::all(&url).map_err(|_| {
+                    BuildRouteAwareHttpClientError::InvalidProxyConfig {
+                        route_class: ClientRouteClass::Other,
+                    }
+                })?;
+                let no_proxy = no_proxy.as_deref().and_then(reqwest::NoProxy::from_string);
+                builder.proxy(proxy.no_proxy(no_proxy))
+            }
+        };
+
+        build_blocking_reqwest_client_with_custom_ca(builder).map_err(Into::into)
+    }
 }
 
 fn prepare_tls_config(

@@ -182,6 +182,13 @@ pub fn build_reqwest_client_with_custom_ca(
     build_reqwest_client_with_env(&ProcessEnv, builder)
 }
 
+/// Applies the same custom-CA policy to blocking exporter transports.
+pub(crate) fn build_blocking_reqwest_client_with_custom_ca(
+    builder: reqwest::blocking::ClientBuilder,
+) -> Result<reqwest::blocking::Client, BuildCustomCaTransportError> {
+    build_reqwest_client_with_env(&ProcessEnv, builder)
+}
+
 /// Builds a rustls client config when a Codex custom CA bundle is configured.
 ///
 /// This is the websocket-facing sibling of [`build_reqwest_client_with_custom_ca`]. When
