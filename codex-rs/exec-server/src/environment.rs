@@ -45,6 +45,8 @@ use crate::remote_process::RemoteProcess;
 use codex_utils_path_uri::PathUri;
 use tokio::sync::watch;
 use tokio_util::task::AbortOnDropHandle;
+use tracing::Instrument;
+use tracing::instrument::WithSubscriber;
 
 pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
 pub const CODEX_EXEC_SERVER_NOISE_REGISTRY_URL_ENV_VAR: &str =
@@ -879,6 +881,11 @@ impl Environment {
     }
 
     /// Returns environment information from the selected execution/filesystem environment.
+    #[tracing::instrument(
+        name = "exec_server.environment.info",
+        skip_all,
+        fields(remote = self.is_remote())
+    )]
     pub async fn info(&self) -> Result<EnvironmentInfo, ExecServerError> {
         match &self.remote_client {
             Some(client) => client.environment_info().await,
@@ -1001,11 +1008,15 @@ impl Environment {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if startup_task.is_none() {
             let client = client.clone();
-            *startup_task = Some(AbortOnDropHandle::new(tokio::spawn(async move {
-                if let Err(error) = client.wait_until_ready().await {
-                    tracing::debug!(%error, "exec-server environment startup failed");
+            *startup_task = Some(AbortOnDropHandle::new(tokio::spawn(
+                async move {
+                    if let Err(error) = client.wait_until_ready().await {
+                        tracing::debug!(%error, "exec-server environment startup failed");
+                    }
                 }
-            })));
+                .in_current_span()
+                .with_current_subscriber(),
+            )));
         }
     }
 
@@ -1017,6 +1028,11 @@ impl Environment {
     }
 
     /// Waits for initial startup, retrying a previous transient failure when possible.
+    #[tracing::instrument(
+        name = "exec_server.environment.wait_until_ready",
+        skip_all,
+        fields(remote = self.is_remote())
+    )]
     pub async fn wait_until_ready(&self) -> Result<(), ExecServerError> {
         match &self.remote_client {
             Some(client) => client.wait_until_ready().await,
