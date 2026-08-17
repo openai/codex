@@ -22,6 +22,7 @@ use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::ResponseItemId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SessionSource;
@@ -38,6 +39,7 @@ use serde_json::json;
 
 use super::encrypted_parent_compaction;
 use crate::config::DEFAULT_MODEL_CONTEXT_ITEM_TOKENS;
+use crate::config::DEFAULT_PARENT_COMPACTION_TOKENS;
 use crate::sampler::MODEL;
 
 const TEST_GUARDIAN_POLICY: &str =
@@ -67,11 +69,17 @@ fn encrypted_parent_compaction_preserves_the_latest_valid_item() {
     };
 
     assert_eq!(
-        encrypted_parent_compaction([&older, &latest].into_iter()),
+        encrypted_parent_compaction(
+            [&older, &latest].into_iter(),
+            DEFAULT_PARENT_COMPACTION_TOKENS,
+        ),
         Some(latest.clone())
     );
     assert_eq!(
-        encrypted_parent_compaction([&latest, &older].into_iter()),
+        encrypted_parent_compaction(
+            [&latest, &older].into_iter(),
+            DEFAULT_PARENT_COMPACTION_TOKENS,
+        ),
         Some(older)
     );
 }
@@ -113,11 +121,98 @@ fn encrypted_parent_compaction_rejects_invalid_latest_item() {
 
     for latest in &invalid {
         assert_eq!(
-            encrypted_parent_compaction([&older, latest].into_iter()),
+            encrypted_parent_compaction(
+                [&older, latest].into_iter(),
+                DEFAULT_PARENT_COMPACTION_TOKENS,
+            ),
             None,
             "an unusable latest summary must not resurrect older context"
         );
     }
+}
+
+#[test]
+fn encrypted_parent_compaction_rejects_oversized_latest_item() -> Result<()> {
+    let max_compaction_bytes =
+        TruncationPolicy::Tokens(DEFAULT_PARENT_COMPACTION_TOKENS).byte_budget();
+    let mut bounded = [
+        ResponseItem::Compaction {
+            id: Some(ResponseItemId::from_server("cmp_bounded".to_owned())),
+            encrypted_content: String::new(),
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::ContextCompaction {
+            id: Some(ResponseItemId::from_server("ctx_bounded".to_owned())),
+            encrypted_content: Some(String::new()),
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ];
+
+    for item in &mut bounded {
+        let envelope_bytes = serde_json::to_vec(&*item)?.len();
+        let encrypted_content = match item {
+            ResponseItem::Compaction {
+                encrypted_content, ..
+            }
+            | ResponseItem::ContextCompaction {
+                encrypted_content: Some(encrypted_content),
+                ..
+            } => encrypted_content,
+            _ => unreachable!("test fixtures are encrypted compaction items"),
+        };
+        *encrypted_content = "a".repeat(max_compaction_bytes - envelope_bytes);
+        assert_eq!(serde_json::to_vec(&*item)?.len(), max_compaction_bytes);
+        assert_eq!(
+            encrypted_parent_compaction(std::iter::once(&*item), DEFAULT_PARENT_COMPACTION_TOKENS,),
+            Some(item.clone())
+        );
+
+        let mut oversized = item.clone();
+        match &mut oversized {
+            ResponseItem::Compaction {
+                encrypted_content, ..
+            }
+            | ResponseItem::ContextCompaction {
+                encrypted_content: Some(encrypted_content),
+                ..
+            } => encrypted_content.push('a'),
+            _ => unreachable!("test fixtures are encrypted compaction items"),
+        }
+        assert_eq!(
+            serde_json::to_vec(&oversized)?.len(),
+            max_compaction_bytes + 1
+        );
+        assert_eq!(
+            encrypted_parent_compaction(
+                [&*item, &oversized].into_iter(),
+                DEFAULT_PARENT_COMPACTION_TOKENS,
+            ),
+            None,
+            "an oversized latest summary must not resurrect older context"
+        );
+    }
+
+    let oversized_metadata = ResponseItem::ContextCompaction {
+        id: Some(ResponseItemId::from_server(
+            "ctx_oversized_metadata".to_owned(),
+        )),
+        encrypted_content: Some("bounded encrypted summary".to_owned()),
+        internal_chat_message_metadata_passthrough: Some(InternalChatMessageMetadataPassthrough {
+            turn_id: Some("a".repeat(max_compaction_bytes)),
+            ..Default::default()
+        }),
+    };
+    assert!(serde_json::to_vec(&oversized_metadata)?.len() > max_compaction_bytes);
+    assert_eq!(
+        encrypted_parent_compaction(
+            [&bounded[0], &oversized_metadata].into_iter(),
+            DEFAULT_PARENT_COMPACTION_TOKENS,
+        ),
+        None,
+        "oversized passthrough metadata must not bypass the complete-item limit"
+    );
+
+    Ok(())
 }
 
 async fn sample_conversation_history(
@@ -241,6 +336,7 @@ review_threshold = 0.60
 reasoning_effort = "minimal"
 max_action_tokens = 128
 max_classifier_instruction_tokens = 100000
+max_parent_compaction_tokens = 256
 
 [features.guardianv2.transcript]
 sources = ["tool_outputs", "reasoning"]
@@ -688,7 +784,16 @@ async fn contributor_reuses_the_latest_compatible_parent_compaction() -> Result<
     skip_if_no_network!(Ok(()));
 
     let thread_server = responses::start_mock_server().await;
-    let test = test_codex().build_with_auto_env(&thread_server).await?;
+    let test = test_codex()
+        .with_pre_build_hook(|home| {
+            std::fs::write(
+                home.join("config.toml"),
+                "[features.guardianv2]\nenabled = true\nmax_parent_compaction_tokens = 256\n",
+            )
+            .expect("Guardian v2 parent compaction configuration should be written");
+        })
+        .build_with_auto_env(&thread_server)
+        .await?;
     let events = vec![
         ev_assistant_message("sample", r#"{"scores":{"action_risk":0.25}}"#),
         ev_completed("response-1"),
@@ -792,9 +897,70 @@ async fn contributor_reuses_the_latest_compatible_parent_compaction() -> Result<
     );
     assert_eq!(
         request["input"][2],
-        serde_json::to_value(latest_compaction)?
+        serde_json::to_value(&latest_compaction)?
     );
     assert_eq!(request["input"][3]["role"], "user");
+
+    let previous_score = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(score) = thread_store.get::<SecurityRiskScore>() {
+                return score;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    assert_eq!(previous_score.scores.get("action_risk"), Some(&0.25));
+    assert_eq!(
+        registry
+            .approval_review(&session_store, thread_store, "review action")
+            .await,
+        Some(ReviewDecision::Approved)
+    );
+
+    let oversized_compaction = ResponseItem::Compaction {
+        id: Some(ResponseItemId::from_server("cmp_oversized".to_owned())),
+        encrypted_content: "a".repeat(TruncationPolicy::Tokens(/*limit*/ 256).byte_budget()),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    registry.tool_lifecycle_contributors()[0]
+        .on_tool_start(ToolStartInput {
+            session_store: &session_store,
+            thread_store,
+            turn_store: &turn_store,
+            turn_id: "turn-1",
+            call_id: "call-2",
+            tool_name: &tool_name,
+            payload: &tool_payload,
+            conversation_history: Arc::new(TestConversationHistory(vec![
+                latest_compaction,
+                oversized_compaction,
+            ])),
+            source: ToolCallSource::Direct,
+        })
+        .await;
+
+    let fail_closed_score = thread_store
+        .get::<SecurityRiskScore>()
+        .expect("an oversized compaction should immediately receive the maximum risk score");
+    assert_eq!(
+        fail_closed_score.as_ref(),
+        &SecurityRiskScore {
+            scores: BTreeMap::from([("action_risk".to_owned(), 1.0)]),
+            sampled_at: fail_closed_score.sampled_at,
+        }
+    );
+    assert_eq!(
+        registry
+            .approval_review(&session_store, thread_store, "review action")
+            .await,
+        None
+    );
+    assert_eq!(
+        server.connections().iter().map(Vec::len).sum::<usize>(),
+        1,
+        "an oversized latest compaction must bypass Luna rather than reuse stale context"
+    );
 
     Ok(())
 }

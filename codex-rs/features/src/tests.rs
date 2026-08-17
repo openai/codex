@@ -139,6 +139,7 @@ review_threshold = 0.65
 reasoning_effort = "minimal"
 max_action_tokens = 512
 max_classifier_instruction_tokens = 256
+max_parent_compaction_tokens = 384
 
 [guardianv2.transcript]
 sources = ["tool_outputs", "reasoning"]
@@ -160,6 +161,7 @@ max_recent_non_user_entries = 12
             reasoning_effort: Some(codex_protocol::openai_models::ReasoningEffort::Minimal),
             max_action_tokens: Some(512),
             max_classifier_instruction_tokens: Some(256),
+            max_parent_compaction_tokens: Some(384),
             transcript: Some(crate::GuardianV2TranscriptConfigToml {
                 sources: Some(vec![
                     crate::GuardianV2TranscriptSource::ToolOutputs,
@@ -184,6 +186,7 @@ fn guardian_v2_feature_config_rejects_invalid_settings() {
     for setting in [
         "max_action_tokens",
         "max_classifier_instruction_tokens",
+        "max_parent_compaction_tokens",
         "transcript.max_message_entry_tokens",
         "transcript.max_tool_entry_tokens",
         "transcript.max_message_transcript_tokens",
@@ -221,6 +224,7 @@ fn guardian_v2_feature_config_accepts_boundary_values() {
              review_threshold = {threshold:.1}\n\
              max_action_tokens = {tokens}\n\
              max_classifier_instruction_tokens = {tokens}\n\
+             max_parent_compaction_tokens = {tokens}\n\
              [guardianv2.transcript]\n\
              max_message_entry_tokens = {tokens}\n\
              max_tool_entry_tokens = {tokens}\n\

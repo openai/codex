@@ -1251,6 +1251,12 @@
           "minimum": 100.0,
           "type": "integer"
         },
+        "max_parent_compaction_tokens": {
+          "format": "uint",
+          "maximum": 100000.0,
+          "minimum": 100.0,
+          "type": "integer"
+        },
         "reasoning_effort": {
           "$ref": "#/definitions/ReasoningEffort"
         },

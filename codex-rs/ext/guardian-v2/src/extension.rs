@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::Weak;
 use std::time::SystemTime;
@@ -288,6 +289,46 @@ impl ToolLifecycleContributor for GuardianV2Extension {
             return Box::pin(std::future::ready(()));
         };
         let sampled_at = SystemTime::now();
+        let latest_parent_compaction = input
+            .conversation_history
+            .items()
+            .filter(|item| {
+                matches!(
+                    item,
+                    ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. }
+                )
+            })
+            .last();
+        let parent_compaction = latest_parent_compaction.and_then(|item| {
+            encrypted_parent_compaction(
+                std::iter::once(item),
+                guardian_config.max_parent_compaction_tokens,
+            )
+        });
+        if parent_compaction.is_none()
+            && latest_parent_compaction.is_some_and(|item| match item {
+                ResponseItem::Compaction {
+                    id: Some(_),
+                    encrypted_content,
+                    ..
+                }
+                | ResponseItem::ContextCompaction {
+                    id: Some(_),
+                    encrypted_content: Some(encrypted_content),
+                    ..
+                } => !encrypted_content.is_empty(),
+                _ => false,
+            })
+        {
+            let score = SecurityRiskScore {
+                scores: BTreeMap::from([("action_risk".to_owned(), 1.0)]),
+                sampled_at: Some(sampled_at.into()),
+            };
+            input.thread_store.insert_if(score.clone(), |previous| {
+                previous.is_none_or(|previous| previous.sampled_at <= score.sampled_at)
+            });
+            return Box::pin(std::future::ready(()));
+        }
         let event_sink = Arc::clone(&self.event_sink);
         let thread_manager = self.thread_manager.clone();
         let thread_id = input.thread_store.level_id().to_owned();
@@ -306,7 +347,6 @@ impl ToolLifecycleContributor for GuardianV2Extension {
         let conversation_history = Arc::clone(&input.conversation_history);
 
         tokio::spawn(async move {
-            let parent_compaction = encrypted_parent_compaction(conversation_history.items());
             let transcript = guardian_config
                 .transcript
                 .build(conversation_history.items());
@@ -460,7 +500,9 @@ impl ToolLifecycleContributor for GuardianV2Extension {
 
 fn encrypted_parent_compaction<'a>(
     items: impl Iterator<Item = &'a ResponseItem>,
+    max_parent_compaction_tokens: usize,
 ) -> Option<ResponseItem> {
+    let max_compaction_bytes = TruncationPolicy::Tokens(max_parent_compaction_tokens).byte_budget();
     let item = items
         .filter(|item| {
             matches!(
@@ -475,12 +517,17 @@ fn encrypted_parent_compaction<'a>(
             id: Some(_),
             encrypted_content,
             ..
-        } if !encrypted_content.is_empty() => Some(item.clone()),
-        ResponseItem::ContextCompaction {
+        }
+        | ResponseItem::ContextCompaction {
             id: Some(_),
             encrypted_content: Some(encrypted_content),
             ..
-        } if !encrypted_content.is_empty() => Some(item.clone()),
+        } if !encrypted_content.is_empty()
+            && serde_json::to_vec(item)
+                .is_ok_and(|serialized| serialized.len() <= max_compaction_bytes) =>
+        {
+            Some(item.clone())
+        }
         _ => None,
     }
 }

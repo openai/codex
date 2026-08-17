@@ -125,6 +125,9 @@ pub struct GuardianV2ConfigToml {
     #[schemars(range(min = 100, max = 100000))]
     pub max_classifier_instruction_tokens: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 100, max = 100000))]
+    pub max_parent_compaction_tokens: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub transcript: Option<GuardianV2TranscriptConfigToml>,
 }
 
@@ -166,6 +169,10 @@ where
         (
             "max_classifier_instruction_tokens",
             config.max_classifier_instruction_tokens,
+        ),
+        (
+            "max_parent_compaction_tokens",
+            config.max_parent_compaction_tokens,
         ),
         ("transcript max_message_entry_tokens", message_entry),
         ("transcript max_tool_entry_tokens", tool_entry),
