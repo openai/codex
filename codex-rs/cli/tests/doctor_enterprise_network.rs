@@ -5,8 +5,10 @@ use std::process::Stdio;
 
 use anyhow::Context as _;
 use anyhow::Result;
+#[cfg(target_os = "macos")]
 use pretty_assertions::assert_eq;
 use serde_json::Value;
+#[cfg(target_os = "macos")]
 use serde_json::json;
 use tempfile::TempDir;
 use wiremock::Mock;
@@ -63,9 +65,10 @@ async fn invalid_custom_ca_falls_back_to_system_roots() -> Result<()> {
             .context("failed to run the doctor with an invalid custom CA")?;
         let report: Value = serde_json::from_slice(&output.stdout)?;
 
-        assert_eq!(
-            report["checks"]["network.provider_reachability"]["status"],
-            json!("ok")
+        assert!(
+            report["checks"]["network.provider_reachability"]["details"]["local API inference URL"]
+                .as_str()
+                .is_some_and(|detail| detail.ends_with("reachable (HTTP 200)"))
         );
     }
     server.verify().await;

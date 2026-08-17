@@ -13,6 +13,8 @@ use std::os::windows::io::FromRawHandle;
 #[cfg(target_os = "windows")]
 use std::os::windows::io::OwnedHandle;
 #[cfg(target_os = "macos")]
+use std::path::Path;
+#[cfg(target_os = "macos")]
 use std::path::PathBuf;
 #[cfg(target_os = "macos")]
 use std::process::Stdio;
@@ -43,20 +45,19 @@ use windows_sys::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION;
 use super::super::CheckStatus;
 use super::super::DoctorCheck;
 
-pub(super) struct InstalledApp {
-    pub(super) identity: &'static str,
-    pub(super) version: String,
+pub(in crate::doctor) struct InstalledApp {
+    pub(in crate::doctor) identity: &'static str,
+    pub(in crate::doctor) version: String,
     #[cfg(target_os = "windows")]
     package_family: &'static str,
     #[cfg(target_os = "macos")]
-    pub(super) bundle: PathBuf,
+    pub(in crate::doctor) bundle: PathBuf,
     #[cfg(target_os = "macos")]
-    #[allow(dead_code, reason = "used by downstream desktop diagnostics")]
-    pub(super) build: u64,
+    pub(in crate::doctor) build: u64,
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(super) struct DiscoveryError;
+pub(in crate::doctor) struct DiscoveryError;
 
 pub(super) async fn installed_app() -> Result<Option<InstalledApp>, DiscoveryError> {
     #[cfg(target_os = "windows")]
@@ -232,42 +233,51 @@ async fn installed_macos_app() -> Result<Option<InstalledApp>, DiscoveryError> {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(_) => return Err(DiscoveryError),
         }
-
-        let mut command = Command::new("/usr/bin/plutil");
-        command
-            .args(["-convert", "json", "-o", "-"])
-            .arg(bundle.join("Contents/Info.plist"))
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .kill_on_drop(true);
-        let output = timeout(Duration::from_secs(5), command.output())
-            .await
-            .map_err(|_| DiscoveryError)?
-            .map_err(|_| DiscoveryError)?;
-        if !output.status.success() || output.stdout.len() > 64 * 1024 {
-            return Err(DiscoveryError);
+        if let Some(application) = inspect_macos_bundle(&bundle).await? {
+            return Ok(Some(application));
         }
-        let metadata: Value = serde_json::from_slice(&output.stdout).map_err(|_| DiscoveryError)?;
-        if metadata.get("CFBundleIdentifier").and_then(Value::as_str) != Some("com.openai.codex") {
-            continue;
-        }
-        let version = metadata
-            .get("CFBundleShortVersionString")
-            .or_else(|| metadata.get("CFBundleVersion"))
-            .and_then(Value::as_str)
-            .ok_or(DiscoveryError)?;
-        let build = metadata
-            .get("CFBundleVersion")
-            .and_then(Value::as_str)
-            .and_then(|value| value.parse().ok())
-            .ok_or(DiscoveryError)?;
-        return Ok(Some(InstalledApp {
-            identity: "com.openai.codex",
-            version: version.to_string(),
-            bundle,
-            build,
-        }));
     }
 
     Ok(None)
+}
+
+#[cfg(target_os = "macos")]
+pub(in crate::doctor) async fn inspect_macos_bundle(
+    bundle: &Path,
+) -> Result<Option<InstalledApp>, DiscoveryError> {
+    let mut command = Command::new("/usr/bin/plutil");
+    command
+        .args(["-convert", "json", "-o", "-"])
+        .arg(bundle.join("Contents/Info.plist"))
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let output = timeout(Duration::from_secs(5), command.output())
+        .await
+        .map_err(|_| DiscoveryError)?
+        .map_err(|_| DiscoveryError)?;
+    if !output.status.success() || output.stdout.len() > 64 * 1024 {
+        return Err(DiscoveryError);
+    }
+    let metadata: Value = serde_json::from_slice(&output.stdout).map_err(|_| DiscoveryError)?;
+    if metadata.get("CFBundleIdentifier").and_then(Value::as_str) != Some("com.openai.codex") {
+        return Ok(None);
+    }
+    let version = metadata
+        .get("CFBundleShortVersionString")
+        .or_else(|| metadata.get("CFBundleVersion"))
+        .and_then(Value::as_str)
+        .ok_or(DiscoveryError)?;
+    let build = metadata
+        .get("CFBundleVersion")
+        .and_then(Value::as_str)
+        .and_then(|value| value.parse().ok())
+        .ok_or(DiscoveryError)?;
+
+    Ok(Some(InstalledApp {
+        identity: "com.openai.codex",
+        version: version.to_string(),
+        bundle: bundle.to_path_buf(),
+        build,
+    }))
 }

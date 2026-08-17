@@ -5,6 +5,7 @@ expression: "render_human_report(&report, detailed_no_color_unicode_options())"
 Codex Doctor v0.0.0
 
 Notes
+   ↑ desktop      build 123 available (ready to install)
    ⚠ terminal     narrow terminal
    ✗ auth         token expired - Run `codex login`.
    ⚠ git          this worktree is not on a Windows Dev Drive - create a trusted Windows Dev Drive: https://learn.microsoft.com/en-us/windows/dev-drive/
@@ -56,6 +57,8 @@ Desktop App
 
 Updates
   ✓ updates      update configuration is locally consistent
+      desktop update status    ready to install
+      desktop latest build     123
 
 Connectivity
   ✓ network      network environment readable
@@ -66,7 +69,7 @@ Background Server
   ✓ app-server   background server is not running
 
 ─────────────────────────────────────────────────────────────
-15 ok · 4 notes · 3 warn · 1 fail failed
+15 ok · 5 notes · 3 warn · 1 fail failed
 
 --summary compact output           --all expand truncated lists
 --json redacted report

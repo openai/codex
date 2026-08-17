@@ -138,28 +138,30 @@ pub(super) async fn probe_status(
             .send()
             .await
     }
-    .map_err(|error| {
-        match error.failure_class() {
-            Some(RouteFailureClass::TlsError) => "TLS handshake or certificate validation failed",
-            Some(RouteFailureClass::ProxyAuthenticationRequired) => "proxy authentication required",
-            Some(RouteFailureClass::InvalidProxyConfig) => "invalid proxy configuration",
-            Some(RouteFailureClass::ProxyResolutionUnavailable) => {
-                "system proxy configuration unavailable"
-            }
-            Some(RouteFailureClass::ConnectTimeout) => "request timed out",
-            Some(RouteFailureClass::UnsupportedProxyScheme) => "unsupported proxy configuration",
-            Some(RouteFailureClass::ResolverError) => "proxy resolution failed",
-            None if error.is_timeout() => "request timed out",
-            None if error.is_connect() => "connect failed",
-            None => "request failed",
-        }
-        .to_string()
-    })?;
+    .map_err(request_error)?;
     let status = response.status().as_u16();
     if status == 407 {
         return Err("proxy authentication required (HTTP 407)".to_string());
     }
     Ok(status)
+}
+
+pub(super) fn request_error(error: RouteAwareRequestError) -> String {
+    match error.failure_class() {
+        Some(RouteFailureClass::TlsError) => "TLS handshake or certificate validation failed",
+        Some(RouteFailureClass::ProxyAuthenticationRequired) => "proxy authentication required",
+        Some(RouteFailureClass::InvalidProxyConfig) => "invalid proxy configuration",
+        Some(RouteFailureClass::ProxyResolutionUnavailable) => {
+            "system proxy configuration unavailable"
+        }
+        Some(RouteFailureClass::ConnectTimeout) => "request timed out",
+        Some(RouteFailureClass::UnsupportedProxyScheme) => "unsupported proxy configuration",
+        Some(RouteFailureClass::ResolverError) => "proxy resolution failed",
+        None if error.is_timeout() => "request timed out",
+        None if error.is_connect() => "connect failed",
+        None => "request failed",
+    }
+    .to_string()
 }
 
 #[cfg(test)]
