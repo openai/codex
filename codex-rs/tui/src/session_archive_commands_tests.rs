@@ -19,6 +19,7 @@ use crate::app_server_session::AppServerSession;
 use crate::app_server_session::ThreadParamsMode;
 use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
+use crate::session_queue_commands::run_session_queue_action_with_app_server;
 use crate::tests::start_test_embedded_app_server;
 
 async fn build_config(temp_dir: &TempDir) -> std::io::Result<Config> {
@@ -57,6 +58,7 @@ fn write_rollout(
     archived: bool,
     timestamp: &str,
     preview: &str,
+    source: SessionSource,
 ) -> color_eyre::Result<PathBuf> {
     let subdir = if archived {
         "archived_sessions"
@@ -76,7 +78,7 @@ fn write_rollout(
             cwd: config.codex_home.join("project").to_path_buf(),
             originator: "codex".to_string(),
             cli_version: "0.0.0".to_string(),
-            source: SessionSource::Cli,
+            source,
             model_provider: Some(config.model_provider_id.clone()),
             ..Default::default()
         },
@@ -157,6 +159,7 @@ async fn archives_by_sqlite_name() -> color_eyre::Result<()> {
         /*archived*/ false,
         "2025-02-01T10:00:00Z",
         "preview",
+        SessionSource::Cli,
     )?;
     runtime
         .upsert_thread(&thread_metadata(
@@ -208,6 +211,7 @@ async fn unarchives_by_sqlite_name() -> color_eyre::Result<()> {
         /*archived*/ true,
         "2025-02-01T10:00:00Z",
         "preview",
+        SessionSource::Cli,
     )?;
     runtime
         .upsert_thread(&thread_metadata(
@@ -259,6 +263,7 @@ async fn deletes_valid_duplicate_after_stale_sqlite_hit() -> color_eyre::Result<
         /*archived*/ true,
         "2025-02-01T10:00:00Z",
         "stale preview",
+        SessionSource::Cli,
     )?;
     runtime
         .upsert_thread(&thread_metadata(
@@ -278,6 +283,7 @@ async fn deletes_valid_duplicate_after_stale_sqlite_hit() -> color_eyre::Result<
         /*archived*/ false,
         "2025-02-01T10:00:00Z",
         "preview",
+        SessionSource::Cli,
     )?;
     codex_rollout::append_thread_name(config.codex_home.as_path(), thread_id, "saved-session")
         .await?;
@@ -330,6 +336,7 @@ async fn trusts_sqlite_name_over_legacy_index_for_delete() -> color_eyre::Result
         /*archived*/ false,
         "2025-02-01T10:00:00Z",
         "preview",
+        SessionSource::Cli,
     )?;
     runtime
         .upsert_thread(&thread_metadata(
@@ -345,6 +352,19 @@ async fn trusts_sqlite_name_over_legacy_index_for_delete() -> color_eyre::Result
         .await?;
 
     let mut app_server = start_app_server(config.clone()).await?;
+    let error = run_session_queue_action_with_app_server(
+        &mut app_server,
+        config.codex_home.as_path(),
+        "old-session",
+        "do the thing",
+        "stable-client-message-id",
+    )
+    .await
+    .expect_err("stale legacy names must not select renamed threads");
+    assert_eq!(
+        error.to_string(),
+        "No active session found matching 'old-session'."
+    );
     let message = run_session_archive_action_with_app_server(
         &mut app_server,
         config.codex_home.as_path(),
@@ -368,6 +388,121 @@ async fn trusts_sqlite_name_over_legacy_index_for_delete() -> color_eyre::Result
             false,
             None,
         ),
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn queues_non_interactive_and_custom_sessions_and_rejects_ambiguous_name()
+-> color_eyre::Result<()> {
+    let temp_dir = TempDir::new()?;
+    let config = build_config(&temp_dir).await?;
+    let runtime = state_runtime(&config).await?;
+    let thread_id = ThreadId::new();
+    let rollout_path = write_rollout(
+        &config,
+        thread_id,
+        /*archived*/ false,
+        "2025-02-01T10:00:00Z",
+        "preview",
+        SessionSource::Exec,
+    )?;
+    let mut metadata = thread_metadata(
+        &config,
+        thread_id,
+        rollout_path,
+        "saved-session",
+        /*archived*/ false,
+    );
+    metadata.source = "exec".to_string();
+    runtime
+        .upsert_thread(&metadata)
+        .await
+        .map_err(std::io::Error::other)?;
+
+    let mut app_server = start_app_server(config.clone()).await?;
+    let (resolved_thread_id, response) = run_session_queue_action_with_app_server(
+        &mut app_server,
+        config.codex_home.as_path(),
+        "saved-session",
+        "do the thing",
+        "stable-client-message-id",
+    )
+    .await?;
+    let queued = runtime
+        .thread_queue()
+        .list_page(thread_id, /*offset*/ 0, /*limit*/ 10)
+        .await
+        .map_err(|error| color_eyre::eyre::eyre!("{error}"))?;
+    assert_eq!(resolved_thread_id, thread_id);
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].id, response.queued_submission.id);
+    assert_eq!(
+        response.queued_submission.client_user_message_id,
+        "stable-client-message-id"
+    );
+
+    let custom_thread_id = ThreadId::new();
+    let custom_source = SessionSource::Custom("atlas".to_string());
+    let custom_rollout_path = write_rollout(
+        &config,
+        custom_thread_id,
+        /*archived*/ false,
+        "2025-02-01T10:00:00Z",
+        "preview",
+        custom_source.clone(),
+    )?;
+    let mut custom_metadata = thread_metadata(
+        &config,
+        custom_thread_id,
+        custom_rollout_path,
+        "atlas-session",
+        /*archived*/ false,
+    );
+    custom_metadata.source = serde_json::to_string(&custom_source)?;
+    runtime
+        .upsert_thread(&custom_metadata)
+        .await
+        .map_err(std::io::Error::other)?;
+    let (resolved_custom_thread_id, _) = run_session_queue_action_with_app_server(
+        &mut app_server,
+        config.codex_home.as_path(),
+        "atlas-session",
+        "do the thing",
+        "custom-client-message-id",
+    )
+    .await?;
+    assert_eq!(resolved_custom_thread_id, custom_thread_id);
+
+    let legacy_thread_id = ThreadId::new();
+    write_rollout(
+        &config,
+        legacy_thread_id,
+        /*archived*/ false,
+        "2025-02-01T10:00:00Z",
+        "preview",
+        SessionSource::Cli,
+    )?;
+    codex_rollout::append_thread_name(
+        config.codex_home.as_path(),
+        legacy_thread_id,
+        "saved-session",
+    )
+    .await?;
+    let error = run_session_queue_action_with_app_server(
+        &mut app_server,
+        config.codex_home.as_path(),
+        "saved-session",
+        "do the thing",
+        "stable-client-message-id",
+    )
+    .await
+    .expect_err("ambiguous session names should be rejected");
+    app_server.shutdown().await?;
+
+    assert_eq!(
+        error.to_string(),
+        "More than one active session is named 'saved-session'; use a session UUID instead."
     );
     Ok(())
 }

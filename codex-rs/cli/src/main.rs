@@ -55,6 +55,7 @@ mod marketplace_cmd;
 mod mcp_cmd;
 mod migrate_rollouts;
 mod plugin_cmd;
+mod queue_cmd;
 mod remote_control_cmd;
 #[cfg(target_os = "windows")]
 mod sandbox_setup;
@@ -65,6 +66,7 @@ mod wsl_paths;
 use crate::mcp_cmd::McpCli;
 use crate::plugin_cmd::PluginCli;
 use crate::plugin_cmd::PluginSubcommand;
+use crate::queue_cmd::QueueCommand;
 use crate::remote_control_cmd::RemoteControlCommand;
 use doctor::DoctorCommand;
 use state_db_recovery as local_state_db;
@@ -186,6 +188,9 @@ enum Subcommand {
 
     /// Resume a previous interactive session (picker by default; use --last to continue the most recent).
     Resume(ResumeCommand),
+
+    /// Queue a message for an existing session.
+    Queue(QueueCommand),
 
     /// Archive a saved session by id or session name.
     Archive(SessionArchiveCommand),
@@ -1324,6 +1329,18 @@ async fn cli_main(
             .await?;
             println!("{output}");
         }
+        Some(Subcommand::Queue(cmd)) => {
+            let output = queue_cmd::run_queue_command(
+                cmd,
+                interactive,
+                root_config_overrides.clone(),
+                root_remote.clone(),
+                root_remote_auth_token_env.clone(),
+                arg0_paths.clone(),
+            )
+            .await?;
+            println!("{output}");
+        }
         Some(Subcommand::Delete(DeleteCommand { session, force })) => {
             let action = delete_action(&session.target, force)?;
             let output = run_session_archive_cli_command(
@@ -1707,6 +1724,7 @@ fn profile_v2_for_subcommand<'a>(
         Subcommand::Exec(_)
         | Subcommand::Review(_)
         | Subcommand::Resume(_)
+        | Subcommand::Queue(_)
         | Subcommand::Archive(_)
         | Subcommand::Delete(_)
         | Subcommand::Unarchive(_)
@@ -1717,7 +1735,7 @@ fn profile_v2_for_subcommand<'a>(
             subcommand: DebugSubcommand::PromptInput(_),
         }) => Ok(Some(profile_v2)),
         _ => anyhow::bail!(
-            "--profile only applies to runtime commands and `codex mcp`: `codex`, `codex exec`, `codex review`, `codex resume`, `codex archive`, `codex delete`, `codex unarchive`, `codex fork`, `codex mcp`, `codex sandbox`, and `codex debug prompt-input`."
+            "--profile only applies to runtime commands and `codex mcp`: `codex`, `codex exec`, `codex review`, `codex resume`, `codex queue`, `codex archive`, `codex delete`, `codex unarchive`, `codex fork`, `codex mcp`, `codex sandbox`, and `codex debug prompt-input`."
         ),
     }
 }
@@ -2275,6 +2293,7 @@ fn unsupported_subcommand_name_for_strict_config(
         | Some(Subcommand::McpServer(_))
         | Some(Subcommand::ExecServer(_))
         | Some(Subcommand::Resume(_))
+        | Some(Subcommand::Queue(_))
         | Some(Subcommand::Archive(_))
         | Some(Subcommand::Delete(_))
         | Some(Subcommand::Unarchive(_))
