@@ -120,6 +120,8 @@ pub struct GuardianV2ConfigToml {
     #[schemars(range(min = 0.0, max = 1.0))]
     pub review_threshold: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tool_call_lag: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<ReasoningEffort>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 100, max = 100000))]

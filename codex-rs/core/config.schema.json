@@ -1257,6 +1257,11 @@
           "minimum": 100.0,
           "type": "integer"
         },
+        "max_tool_call_lag": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
         "reasoning_effort": {
           "$ref": "#/definitions/ReasoningEffort"
         },

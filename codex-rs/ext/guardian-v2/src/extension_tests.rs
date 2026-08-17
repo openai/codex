@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -42,6 +43,7 @@ use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
+use super::GuardianV2ScoreProgress;
 use super::encrypted_parent_compaction;
 use crate::config::DEFAULT_MODEL_CONTEXT_ITEM_TOKENS;
 use crate::config::DEFAULT_PARENT_COMPACTION_TOKENS;
@@ -364,6 +366,7 @@ async fn contributor_uses_configured_prompt_effort_threshold_and_transcript() ->
 enabled = true
 classifier_instructions = "Use the experimental security classification prompt."
 review_threshold = 0.60
+max_tool_call_lag = 2
 reasoning_effort = "minimal"
 max_action_tokens = 128
 max_classifier_instruction_tokens = 100000
@@ -481,6 +484,45 @@ max_recent_non_user_entries = 8
         scores: BTreeMap::from([("action_risk".to_owned(), 0.55)]),
         sampled_at: None,
     });
+    assert_eq!(
+        registry
+            .approval_review(&session_store, thread_store, "review action")
+            .await,
+        Some(ReviewDecision::Approved)
+    );
+
+    let score_progress = thread_store
+        .get::<GuardianV2ScoreProgress>()
+        .expect("Guardian v2 should track score progress per thread");
+    assert_eq!(
+        score_progress
+            .latest_scored_tool_call
+            .load(Ordering::Acquire),
+        1
+    );
+    score_progress
+        .latest_tool_call
+        .store(/*val*/ 3, Ordering::Release);
+    assert_eq!(
+        registry
+            .approval_review(&session_store, thread_store, "review action")
+            .await,
+        Some(ReviewDecision::Approved)
+    );
+
+    score_progress
+        .latest_tool_call
+        .store(/*val*/ 4, Ordering::Release);
+    assert_eq!(
+        registry
+            .approval_review(&session_store, thread_store, "review action")
+            .await,
+        None
+    );
+
+    score_progress
+        .latest_scored_tool_call
+        .store(/*val*/ 2, Ordering::Release);
     assert_eq!(
         registry
             .approval_review(&session_store, thread_store, "review action")

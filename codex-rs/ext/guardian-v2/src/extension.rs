@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::Weak;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::SystemTime;
 
 use codex_core::ThreadManager;
@@ -181,6 +183,12 @@ fn truncate_action_value(value: &mut serde_json::Value, max_tokens: usize) {
 }
 struct GuardianV2Enabled;
 
+#[derive(Default)]
+struct GuardianV2ScoreProgress {
+    latest_tool_call: AtomicUsize,
+    latest_scored_tool_call: AtomicUsize,
+}
+
 #[derive(Clone)]
 struct GuardianV2Extension {
     auth_manager: Arc<AuthManager>,
@@ -248,6 +256,9 @@ impl ThreadLifecycleContributor<Config> for GuardianV2Extension {
                 Ok(sampler) => {
                     input.thread_store.insert(sampler);
                     input.thread_store.insert(guardian_config);
+                    input
+                        .thread_store
+                        .insert(GuardianV2ScoreProgress::default());
                     input.thread_store.insert(GuardianV2Enabled);
                 }
                 Err(error) => self.event_sink.emit_warning(ExtensionWarning {
@@ -270,6 +281,18 @@ impl ApprovalReviewContributor for GuardianV2Extension {
         Box::pin(async move {
             thread_store.get::<GuardianV2Enabled>()?;
             let guardian_config = thread_store.get::<GuardianV2Config>()?;
+            let score_progress = thread_store.get::<GuardianV2ScoreProgress>()?;
+            let tool_call_lag = score_progress
+                .latest_tool_call
+                .load(Ordering::Acquire)
+                .saturating_sub(
+                    score_progress
+                        .latest_scored_tool_call
+                        .load(Ordering::Acquire),
+                );
+            if tool_call_lag > guardian_config.max_tool_call_lag {
+                return None;
+            }
 
             thread_store
                 .get::<SecurityRiskScore>()
@@ -305,6 +328,13 @@ impl ToolLifecycleContributor for GuardianV2Extension {
             }
         };
         input.thread_store.insert(guardian_config.clone());
+        let Some(score_progress) = input.thread_store.get::<GuardianV2ScoreProgress>() else {
+            return Box::pin(std::future::ready(()));
+        };
+        let tool_call_index = score_progress
+            .latest_tool_call
+            .fetch_add(/*val*/ 1, Ordering::Relaxed)
+            .saturating_add(1);
         let sampled_at = SystemTime::now();
         let latest_parent_compaction = input
             .conversation_history
@@ -496,6 +526,9 @@ impl ToolLifecycleContributor for GuardianV2Extension {
                 {
                     return Ok(());
                 }
+                score_progress
+                    .latest_scored_tool_call
+                    .fetch_max(tool_call_index, Ordering::Release);
                 if !config.ephemeral {
                     thread
                         .append_rollout_items(&[RolloutItem::SecurityRiskScore(score)])

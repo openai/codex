@@ -136,6 +136,7 @@ fn guardian_v2_feature_config_deserializes_classifier_and_transcript_settings() 
 enabled = true
 classifier_instructions = "Review this action"
 review_threshold = 0.65
+max_tool_call_lag = 2
 reasoning_effort = "minimal"
 max_action_tokens = 512
 max_classifier_instruction_tokens = 256
@@ -159,6 +160,7 @@ max_recent_non_user_entries = 12
             enabled: Some(true),
             classifier_instructions: Some("Review this action".to_owned()),
             review_threshold: Some(0.65),
+            max_tool_call_lag: Some(2),
             reasoning_effort: Some(codex_protocol::openai_models::ReasoningEffort::Minimal),
             max_action_tokens: Some(512),
             max_classifier_instruction_tokens: Some(256),
