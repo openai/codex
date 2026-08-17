@@ -44,6 +44,7 @@ use crate::relay::HarnessKeyValidator;
 use crate::relay::run_multiplexed_environment;
 use crate::server::ConnectionProcessor;
 use crate::server::RequestDispatchMode;
+use crate::trace_context::current_rendezvous_headers;
 use crate::trace_context::current_trace_context_headers;
 
 const ERROR_BODY_PREVIEW_BYTES: usize = 4096;
@@ -673,9 +674,7 @@ async fn connect_rendezvous(
     let started_at = Instant::now();
     let result = async {
         let mut request = url.into_client_request()?;
-        request
-            .headers_mut()
-            .extend(current_trace_context_headers());
+        request.headers_mut().extend(current_rendezvous_headers());
         let connector = WebSocketConnector::new_with_tls_mode(
             http_client_factory,
             WebSocketTlsMode::TungsteniteDefault,
