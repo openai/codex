@@ -191,10 +191,9 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
 ) -> anyhow::Result<AccessibleConnectorsStatus> {
     let auth_manager =
         AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await?;
-    let auth = auth_manager.auth().await;
     let plugins_manager = Arc::new(plugins_manager_for_config(
         config,
-        auth.as_ref().map(CodexAuth::api_auth_mode),
+        Arc::clone(&auth_manager),
     ));
     let mcp_manager = Arc::new(McpManager::new(plugins_manager));
     list_accessible_connectors_from_mcp_tools_with_mcp_manager(

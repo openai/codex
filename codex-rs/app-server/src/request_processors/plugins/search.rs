@@ -50,9 +50,6 @@ impl PluginRequestProcessor {
 
         let auth = self.auth_manager.auth().await;
         let auth_mode = auth.as_ref().map(CodexAuth::api_auth_mode);
-        self.thread_manager
-            .plugins_manager()
-            .set_auth_mode(auth_mode);
         let remote_plugin_enabled = config.features.enabled(Feature::RemotePlugin);
         let use_remote_global_catalog =
             remote_plugin_enabled && auth_mode.is_some_and(DomainAuthMode::uses_codex_backend);

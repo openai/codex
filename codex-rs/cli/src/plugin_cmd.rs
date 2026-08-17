@@ -22,12 +22,12 @@ use codex_core_plugins::marketplace::find_marketplace_manifest_path;
 use codex_login::AuthManager;
 use codex_plugin::PluginId;
 use codex_plugin::validate_plugin_segment;
-use codex_protocol::auth::AuthMode;
 use codex_utils_cli::CliConfigOverrides;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::marketplace_cmd::MarketplaceCli;
 
@@ -590,7 +590,7 @@ async fn load_plugin_command_context(
         .await
         .context("failed to load configuration")?;
     let plugins_input = config.plugins_config_input();
-    let manager = plugins_manager_for_config(&config, load_cli_auth_mode(&config).await?);
+    let manager = plugins_manager_for_config(&config, load_cli_auth_manager(&config).await?);
     Ok(PluginCommandContext {
         codex_home: codex_home.to_path_buf(),
         plugins_input,
@@ -598,14 +598,8 @@ async fn load_plugin_command_context(
     })
 }
 
-pub(crate) async fn load_cli_auth_mode(config: &Config) -> Result<Option<AuthMode>> {
-    Ok(
-        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ true)
-            .await?
-            .auth()
-            .await
-            .map(|auth| auth.api_auth_mode()),
-    )
+pub(crate) async fn load_cli_auth_manager(config: &Config) -> Result<Arc<AuthManager>> {
+    Ok(AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ true).await?)
 }
 
 struct PluginSelection {

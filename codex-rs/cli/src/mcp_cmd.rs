@@ -41,7 +41,7 @@ use codex_utils_cli::CliConfigOverrides;
 use codex_utils_cli::format_env_display;
 
 use crate::cloud_config;
-use crate::plugin_cmd::load_cli_auth_mode;
+use crate::plugin_cmd::load_cli_auth_manager;
 
 /// Subcommands:
 /// - `list`   — list configured servers (with `--json`)
@@ -523,7 +523,7 @@ async fn run_remove(config_overrides: &CliConfigOverrides, remove_args: RemoveAr
 async fn load_mcp_manager(config: &Config) -> Result<McpManager> {
     let plugins_manager = Arc::new(plugins_manager_for_config(
         config,
-        load_cli_auth_mode(config).await?,
+        load_cli_auth_manager(config).await?,
     ));
     Ok(McpManager::new(plugins_manager))
 }

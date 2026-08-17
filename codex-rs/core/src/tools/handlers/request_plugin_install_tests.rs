@@ -12,6 +12,7 @@ use codex_config::types::ToolSuggestDiscoverable;
 use codex_config::types::ToolSuggestDiscoverableType;
 use codex_core_plugins::PluginInstallRequest;
 use codex_core_plugins::startup_sync::curated_plugins_repo_path;
+use codex_login::test_support::auth_manager_from_optional_auth;
 use codex_rmcp_client::ElicitationResponse;
 use codex_tools::DiscoverablePluginInfo;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -40,7 +41,8 @@ async fn verified_plugin_install_completed_requires_installed_plugin() {
     write_plugins_feature_config(codex_home.path());
 
     let config = load_plugins_config(codex_home.path()).await;
-    let plugins_manager = plugins_manager_for_config(&config, /*auth_mode*/ None);
+    let plugins_manager =
+        plugins_manager_for_config(&config, auth_manager_from_optional_auth(/*auth*/ None));
 
     assert!(!verified_plugin_install_completed(
         "sample@openai-api-curated",

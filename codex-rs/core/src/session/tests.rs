@@ -5672,7 +5672,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
     let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
     let plugins_manager = Arc::new(plugins_manager_for_config(
         &config,
-        auth_manager.get_api_auth_mode(),
+        Arc::clone(&auth_manager),
     ));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
     let skills_service = Arc::new(HostSkillsService::new(
@@ -5843,7 +5843,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     );
     let plugins_manager = Arc::new(plugins_manager_for_config(
         &config,
-        auth_manager.get_api_auth_mode(),
+        Arc::clone(&auth_manager),
     ));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
     let skills_service = Arc::new(HostSkillsService::new(
@@ -6103,7 +6103,7 @@ async fn make_session_with_config_and_rx(
     let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
     let plugins_manager = Arc::new(plugins_manager_for_config(
         &config,
-        auth_manager.get_api_auth_mode(),
+        Arc::clone(&auth_manager),
     ));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
     let skills_service = Arc::new(HostSkillsService::new(
@@ -6224,7 +6224,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
     let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
     let plugins_manager = Arc::new(plugins_manager_for_config(
         &config,
-        auth_manager.get_api_auth_mode(),
+        Arc::clone(&auth_manager),
     ));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
     let skills_service = Arc::new(HostSkillsService::new(
@@ -7962,7 +7962,7 @@ where
     let state_db = None;
     let config = Arc::new(config);
     let thread_id = ThreadId::default();
-    let auth_manager = AuthManager::from_auth_for_testing(auth);
+    let auth_manager = AuthManager::from_auth_for_testing_with_home(auth, codex_home.to_path_buf());
     let models_manager = models_manager_with_provider(
         config.codex_home.to_path_buf(),
         auth_manager.clone(),
@@ -8048,7 +8048,7 @@ where
     );
     let plugins_manager = Arc::new(plugins_manager_for_config(
         &config,
-        auth_manager.get_api_auth_mode(),
+        Arc::clone(&auth_manager),
     ));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
     let skills_service = Arc::new(HostSkillsService::new(
@@ -8569,26 +8569,38 @@ async fn mcp_policy_changes_schedule_runtime_refresh() {
 }
 
 #[tokio::test]
-async fn mcp_refresh_updates_plugin_auth_mode_before_checking_pending_state() {
-    let codex_home = tempfile::tempdir().expect("create auth test directory");
-    let (mut session, _turn_context) = make_session_and_context().await;
-    session.services.auth_manager = AuthManager::from_auth_for_testing_with_home(
-        CodexAuth::from_api_key("old-api-key"),
-        codex_home.path().to_path_buf(),
+async fn mcp_refresh_detects_shared_auth_manager_changes() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let session = Arc::new(session);
+
+    assert_eq!(
+        session.services.plugins_manager.auth_mode(),
+        Some(codex_protocol::auth::AuthMode::ApiKey)
     );
+    session.refresh_mcp_if_dirty().await;
+    assert!(
+        session
+            .services
+            .mcp_runtime
+            .current_auth_matches(session.services.auth_manager.auth_cached().as_ref())
+    );
+
     session
         .services
-        .plugins_manager
-        .set_auth_mode(/*auth_mode*/ None);
-    let session = Arc::new(session);
-    let auth_mode = session.services.auth_manager.get_api_auth_mode();
-
-    assert_ne!(session.services.plugins_manager.auth_mode(), auth_mode);
-    session.mcp_refresh.claim();
+        .auth_manager
+        .logout()
+        .await
+        .expect("logout should succeed");
+    assert_eq!(session.services.plugins_manager.auth_mode(), None);
+    assert!(
+        !session
+            .services
+            .mcp_runtime
+            .current_auth_matches(session.services.auth_manager.auth_cached().as_ref())
+    );
 
     session.refresh_mcp_if_dirty().await;
 
-    assert_eq!(session.services.plugins_manager.auth_mode(), auth_mode);
     assert!(
         session
             .services
@@ -8597,28 +8609,6 @@ async fn mcp_refresh_updates_plugin_auth_mode_before_checking_pending_state() {
             .await
             .is_some()
     );
-
-    codex_login::login_with_api_key(
-        codex_home.path(),
-        "new-api-key",
-        codex_login::AuthCredentialsStoreMode::File,
-        codex_login::AuthKeyringBackendKind::default(),
-    )
-    .expect("store replacement API key");
-    session.services.auth_manager.reload().await;
-    assert_eq!(
-        session
-            .services
-            .auth_manager
-            .auth_cached()
-            .and_then(|auth| auth.get_token().ok()),
-        Some("new-api-key".to_string())
-    );
-    assert_eq!(session.services.plugins_manager.auth_mode(), auth_mode);
-    session.mcp_refresh.claim();
-
-    session.refresh_mcp_if_dirty().await;
-
     assert!(
         session
             .services

@@ -3,6 +3,7 @@ use crate::plugins::test_support::load_plugins_config;
 use crate::plugins::test_support::write_file;
 use crate::plugins::test_support::write_openai_api_curated_marketplace;
 use codex_core_plugins::startup_sync::curated_plugins_repo_path;
+use codex_login::test_support::auth_manager_from_optional_auth;
 use codex_tools::DiscoverablePluginInfo;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
@@ -11,7 +12,8 @@ async fn list_discoverable_plugins(
     config: &crate::config::Config,
     loaded_plugin_app_connector_ids: &[String],
 ) -> anyhow::Result<Vec<DiscoverablePluginInfo>> {
-    let plugins_manager = plugins_manager_for_config(config, /*auth_mode*/ None);
+    let plugins_manager =
+        plugins_manager_for_config(config, auth_manager_from_optional_auth(/*auth*/ None));
     super::list_tool_suggest_discoverable_plugins(
         config,
         &plugins_manager,

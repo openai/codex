@@ -2145,8 +2145,13 @@ impl AuthManager {
 
     /// Create an AuthManager with a specific CodexAuth, for testing only.
     pub fn from_auth_for_testing(auth: CodexAuth) -> Arc<Self> {
+        Self::from_optional_auth_for_testing(Some(auth))
+    }
+
+    /// Create an AuthManager with an optional CodexAuth, for testing only.
+    pub(crate) fn from_optional_auth_for_testing(auth: Option<CodexAuth>) -> Arc<Self> {
         let cached = CachedAuth {
-            auth: Some(auth),
+            auth,
             permanent_refresh_failure: None,
         };
         let (auth_change_tx, _auth_change_rx) = watch::channel(0);

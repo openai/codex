@@ -786,7 +786,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
     );
     let plugins_manager = Arc::new(plugins_manager_for_config(
         &config,
-        auth_manager.get_api_auth_mode(),
+        Arc::clone(&auth_manager),
     ));
     let skills_service = Arc::new(HostSkillsService::new(
         config.codex_home.clone(),

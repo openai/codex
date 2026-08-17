@@ -30,6 +30,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs;
 use std::io;
+use std::sync::Arc;
 use toml::Value as TomlValue;
 
 const EXTERNAL_AGENT_CONFIG_DETECT_METRIC: &str = "codex.external_agent_config.detect";
@@ -351,7 +352,7 @@ impl ExternalAgentConfigService {
                         .unwrap_or_default();
                     let configured_marketplace_plugins = configured_marketplace_plugins(
                         &config,
-                        &plugins_manager_for_config(&config, self.auth_mode),
+                        &plugins_manager_for_config(&config, Arc::clone(&self.auth_manager)),
                     )?;
                     let source_root = repo_root.unwrap_or(self.external_agent_home.as_path());
                     if let Some(detected) =

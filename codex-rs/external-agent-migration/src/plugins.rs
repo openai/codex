@@ -11,6 +11,7 @@ use codex_core_plugins::marketplace_add::is_local_marketplace_source;
 use std::collections::BTreeMap;
 use std::io;
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::migration_source::MarketplaceImportSource;
 use crate::model::MigrationDetails;
@@ -101,7 +102,7 @@ impl ExternalAgentConfigService {
             .map_err(|err| io::Error::other(format!("failed to load config: {err}")))?;
         let requirements = config.config_layer_stack.requirements().clone();
         let mut outcome = PluginImportOutcome::default();
-        let plugins_manager = plugins_manager_for_config(&config, self.auth_mode)
+        let plugins_manager = plugins_manager_for_config(&config, Arc::clone(&self.auth_manager))
             .with_plugin_install_source(PluginInstallSource::ExternalAgentMigration);
         if let Some(analytics_events_client) = self.analytics_events_client.clone() {
             plugins_manager.set_analytics_events_client(analytics_events_client);

@@ -3145,6 +3145,7 @@ dependencies = [
  "codex-core",
  "codex-core-plugins",
  "codex-hooks",
+ "codex-login",
  "codex-memories-write",
  "codex-otel",
  "codex-plugin",

@@ -8,6 +8,7 @@ use codex_connectors::merge::plugin_connector_to_app_info;
 use codex_connectors::metadata::connector_install_url;
 use codex_connectors::metadata::sanitize_name;
 use codex_features::Feature;
+use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::ToolInfo;
@@ -537,7 +538,8 @@ discoverables = [
         .await
         .expect("config should load");
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
-    let plugins_manager = plugins_manager_for_config(&config, Some(auth.api_auth_mode()));
+    let plugins_manager =
+        plugins_manager_for_config(&config, AuthManager::from_auth_for_testing(auth.clone()));
 
     let discoverable_tools = list_tool_suggest_discoverable_tools_with_auth(
         &config,
@@ -575,7 +577,8 @@ apps = true
         .expect("config should load");
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let loaded_plugin_app_connector_ids = vec!["asdk_app_databricks_workspace".to_string()];
-    let plugins_manager = plugins_manager_for_config(&config, Some(auth.api_auth_mode()));
+    let plugins_manager =
+        plugins_manager_for_config(&config, AuthManager::from_auth_for_testing(auth.clone()));
 
     let discoverable_tools = list_tool_suggest_discoverable_tools_with_auth(
         &config,

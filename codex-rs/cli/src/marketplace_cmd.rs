@@ -26,7 +26,7 @@ use std::path::PathBuf;
 use crate::plugin_cmd::JsonMarketplaceSource;
 use crate::plugin_cmd::configured_marketplace_snapshot_issues;
 use crate::plugin_cmd::configured_marketplace_sources;
-use crate::plugin_cmd::load_cli_auth_mode;
+use crate::plugin_cmd::load_cli_auth_manager;
 
 #[derive(Debug, Parser)]
 #[command(bin_name = "codex plugin marketplace")]
@@ -211,7 +211,7 @@ async fn run_list(overrides: Vec<(String, toml::Value)>, args: ListMarketplaceAr
     let config = Config::load_with_cli_overrides(overrides)
         .await
         .context("failed to load configuration")?;
-    let manager = plugins_manager_for_config(&config, load_cli_auth_mode(&config).await?);
+    let manager = plugins_manager_for_config(&config, load_cli_auth_manager(&config).await?);
     let plugins_input = config.plugins_config_input();
     let marketplace_listing = manager
         .discover_marketplaces_for_config(&plugins_input, &[])
@@ -377,7 +377,7 @@ async fn run_upgrade(
     let config = Config::load_with_cli_overrides(overrides)
         .await
         .context("failed to load configuration")?;
-    let manager = plugins_manager_for_config(&config, load_cli_auth_mode(&config).await?);
+    let manager = plugins_manager_for_config(&config, load_cli_auth_manager(&config).await?);
     let plugins_input = config.plugins_config_input();
     let outcome = manager
         .upgrade_configured_marketplaces_for_config(&plugins_input, marketplace_name.as_deref())

@@ -443,7 +443,7 @@ impl ThreadManager {
         let plugins_manager = Arc::new(PluginsManager::new_with_options(
             codex_home.to_path_buf(),
             restriction_product,
-            auth_manager.get_api_auth_mode(),
+            Arc::clone(&auth_manager),
             skills_service.clone(),
         ));
         let mcp_manager = Arc::new(McpManager::new_with_extensions(
@@ -590,7 +590,7 @@ impl ThreadManager {
         let plugins_manager = Arc::new(PluginsManager::new_with_options(
             codex_home.clone(),
             restriction_product,
-            auth_manager.get_api_auth_mode(),
+            Arc::clone(&auth_manager),
             skills_service.clone(),
         ));
         let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));

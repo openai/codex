@@ -567,7 +567,6 @@ impl PluginRequestProcessor {
         }
         let auth = self.auth_manager.auth().await;
         let auth_mode = auth.as_ref().map(CodexAuth::api_auth_mode);
-        plugins_manager.set_auth_mode(auth_mode);
         let plugins_input = config.plugins_config_input();
         if include_local
             && force_refetch
@@ -821,7 +820,6 @@ impl PluginRequestProcessor {
         }
         let auth = self.auth_manager.auth().await;
         let auth_mode = auth.as_ref().map(CodexAuth::api_auth_mode);
-        plugins_manager.set_auth_mode(auth_mode);
 
         let plugins_input = config.plugins_config_input();
         let use_remote_global_catalog = config.features.enabled(Feature::RemotePlugin)
@@ -1011,7 +1009,6 @@ impl PluginRequestProcessor {
         let config = self.load_latest_config(config_cwd).await?;
         let plugins_input = config.plugins_config_input();
         let auth = self.auth_manager.auth().await;
-        plugins_manager.set_auth_mode(auth.as_ref().map(CodexAuth::api_auth_mode));
 
         let plugin = match read_source {
             Ok(marketplace_path) => {

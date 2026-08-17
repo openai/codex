@@ -21,6 +21,14 @@ use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
 use codex_http_client::RouteAwareClientPool;
 use codex_http_client::RouteAwareRequestBuilder;
+use codex_login::AuthHeaders;
+use codex_login::AuthManager;
+use codex_login::CodexAuth;
+use codex_login::ExternalAuth;
+use codex_login::ExternalAuthFuture;
+use codex_login::ExternalAuthRefreshContext;
+use codex_login::auth::BedrockApiKeyAuth;
+use codex_login::test_support::auth_manager_from_optional_auth;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
@@ -45,7 +53,7 @@ pub(crate) const TEST_CURATED_PLUGIN_CACHE_VERSION: &str = "01234567";
 pub(crate) fn test_plugins_manager(codex_home: PathBuf) -> PluginsManager {
     PluginsManager::new(
         codex_home,
-        /*auth_mode*/ None,
+        test_auth_manager(/*auth_mode*/ None),
         test_skill_root_loader(),
     )
 }
@@ -58,9 +66,70 @@ pub(crate) fn test_plugins_manager_with_options(
     PluginsManager::new_with_options(
         codex_home,
         restriction_product,
-        auth_mode,
+        test_auth_manager(auth_mode),
         test_skill_root_loader(),
     )
+}
+
+pub(crate) fn test_plugins_manager_with_auth_manager(
+    codex_home: PathBuf,
+    restriction_product: Option<Product>,
+    auth_manager: Arc<AuthManager>,
+) -> PluginsManager {
+    PluginsManager::new_with_options(
+        codex_home,
+        restriction_product,
+        auth_manager,
+        test_skill_root_loader(),
+    )
+}
+
+pub(crate) fn test_auth_manager(auth_mode: Option<AuthMode>) -> Arc<AuthManager> {
+    auth_manager_from_optional_auth(test_codex_auth(auth_mode))
+}
+
+pub(crate) async fn set_test_auth_mode(auth_manager: &AuthManager, auth_mode: Option<AuthMode>) {
+    let Some(auth) = test_codex_auth(auth_mode) else {
+        auth_manager.clear_external_auth();
+        return;
+    };
+    auth_manager
+        .set_external_auth(Arc::new(StaticExternalAuth(auth)))
+        .await
+        .expect("test auth should update");
+}
+
+fn test_codex_auth(auth_mode: Option<AuthMode>) -> Option<CodexAuth> {
+    auth_mode.map(|auth_mode| match auth_mode {
+        AuthMode::ApiKey => CodexAuth::from_api_key("test-api-key"),
+        AuthMode::Chatgpt => CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+        AuthMode::ChatgptAuthTokens => CodexAuth::from_external_chatgpt_tokens(
+            "header.e30.test",
+            "test-account",
+            /*chatgpt_plan_type*/ None,
+        )
+        .expect("test ChatGPT tokens should parse"),
+        AuthMode::Headers => CodexAuth::Headers(AuthHeaders::new(http::HeaderMap::new())),
+        AuthMode::BedrockApiKey => CodexAuth::BedrockApiKey(BedrockApiKeyAuth {
+            api_key: "test-api-key".to_string(),
+            region: "us-east-1".to_string(),
+        }),
+        AuthMode::AgentIdentity | AuthMode::PersonalAccessToken => {
+            panic!("test auth mode requires a purpose-built CodexAuth")
+        }
+    })
+}
+
+struct StaticExternalAuth(CodexAuth);
+
+impl ExternalAuth for StaticExternalAuth {
+    fn resolve(&self) -> ExternalAuthFuture<'_, CodexAuth> {
+        Box::pin(async { Ok(self.0.clone()) })
+    }
+
+    fn refresh(&self, _context: ExternalAuthRefreshContext) -> ExternalAuthFuture<'_, CodexAuth> {
+        Box::pin(async { Ok(self.0.clone()) })
+    }
 }
 
 pub(crate) fn test_skill_root_loader() -> Arc<dyn SkillRootLoader<PluginSkillRoot>> {

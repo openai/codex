@@ -182,9 +182,6 @@ impl AccountRequestProcessor {
 
     pub(crate) fn clear_external_auth(&self) {
         self.auth_manager.clear_external_auth();
-        self.thread_manager
-            .plugins_manager()
-            .set_auth_mode(self.auth_manager.get_api_auth_mode());
     }
 
     fn current_account_updated_notification(&self) -> AccountUpdatedNotification {
@@ -217,9 +214,6 @@ impl AccountRequestProcessor {
         thread_manager: &Arc<ThreadManager>,
         auth: Option<CodexAuth>,
     ) {
-        thread_manager
-            .plugins_manager()
-            .set_auth_mode(auth.as_ref().map(CodexAuth::api_auth_mode));
         thread_manager
             .plugins_manager()
             .clear_recommended_plugins_cache();

@@ -1,7 +1,8 @@
 use super::super::*;
 use crate::migration_source::MarketplaceImportSource;
 use crate::source_cla;
-use codex_protocol::auth::AuthMode;
+use codex_login::AuthManager;
+use codex_login::CodexAuth;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
@@ -45,8 +46,9 @@ async fn authenticated_plugin_migration_uses_chatgpt_curated_marketplace() {
     )
     .expect("write curated plugin manifest");
 
-    let service = service_for_paths(external_agent_home.clone(), codex_home)
-        .with_auth_mode(Some(AuthMode::Chatgpt));
+    let mut service = service_for_paths(external_agent_home.clone(), codex_home);
+    service.auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
     let items = service
         .detect(ExternalAgentConfigDetectOptions {
             include_home: true,

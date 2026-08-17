@@ -20,8 +20,11 @@ use crate::startup_sync::curated_plugins_repo_path;
 use crate::test_support::TEST_CURATED_PLUGIN_CACHE_VERSION;
 use crate::test_support::TEST_CURATED_PLUGIN_SHA;
 use crate::test_support::load_plugins_config as load_plugins_config_input;
+use crate::test_support::set_test_auth_mode;
+use crate::test_support::test_auth_manager;
 use crate::test_support::test_http_client_factory;
 use crate::test_support::test_plugins_manager;
+use crate::test_support::test_plugins_manager_with_auth_manager;
 use crate::test_support::test_plugins_manager_with_options;
 use crate::test_support::test_skill_root_loader;
 use crate::test_support::write_curated_plugin;
@@ -45,6 +48,7 @@ use codex_config::SkillConfigRules;
 use codex_config::compose_requirements;
 use codex_config::types::McpServerTransportConfig;
 use codex_login::CodexAuth;
+use codex_login::test_support::auth_manager_with_agent_identity;
 use codex_model_provider::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_plugin::AppDeclaration;
 use codex_plugin::PluginId;
@@ -118,18 +122,22 @@ fn plugins_config_input_with_requirements(
     )
 }
 
-#[test]
-fn plugins_manager_tracks_auth_mode() {
+#[tokio::test]
+async fn plugins_manager_reads_auth_mode_from_auth_manager() {
     let tmp = TempDir::new().unwrap();
-    let manager = test_plugins_manager(tmp.path().to_path_buf());
+    let auth_manager = test_auth_manager(/*auth_mode*/ None);
+    let manager = test_plugins_manager_with_auth_manager(
+        tmp.path().to_path_buf(),
+        Some(Product::Codex),
+        Arc::clone(&auth_manager),
+    );
 
     assert_eq!(manager.auth_mode(), None);
-    assert!(manager.set_auth_mode(Some(AuthMode::ApiKey)));
+    set_test_auth_mode(&auth_manager, Some(AuthMode::ApiKey)).await;
     assert_eq!(manager.auth_mode(), Some(AuthMode::ApiKey));
-    assert!(!manager.set_auth_mode(Some(AuthMode::ApiKey)));
-    assert!(manager.set_auth_mode(Some(AuthMode::ChatgptAuthTokens)));
+    set_test_auth_mode(&auth_manager, Some(AuthMode::ChatgptAuthTokens)).await;
     assert_eq!(manager.auth_mode(), Some(AuthMode::ChatgptAuthTokens));
-    assert!(manager.set_auth_mode(/*auth_mode*/ None));
+    set_test_auth_mode(&auth_manager, /*auth_mode*/ None).await;
     assert_eq!(manager.auth_mode(), None);
 
     let manager_with_auth = test_plugins_manager_with_options(
@@ -514,10 +522,12 @@ async fn plugin_auth_projection_hides_dual_surface_mcp_with_agent_identity_apps_
     write_auth_projection_plugin(codex_home.path(), "sample", /*include_app*/ true);
     write_auth_projection_plugin(codex_home.path(), "docs", /*include_app*/ false);
     let config = auth_projection_config(codex_home.path()).await;
-    let manager = test_plugins_manager_with_options(
+    let manager = test_plugins_manager_with_auth_manager(
         codex_home.path().to_path_buf(),
         Some(Product::Codex),
-        Some(AuthMode::AgentIdentity),
+        auth_manager_with_agent_identity()
+            .await
+            .expect("create test Agent Identity auth manager"),
     );
 
     let outcome = manager.plugins_for_config(&config).await;
@@ -656,10 +666,12 @@ async fn plugin_auth_projection_reprojects_cached_plugins_when_auth_changes() {
     write_auth_projection_plugin(codex_home.path(), "sample", /*include_app*/ true);
     write_auth_projection_plugin(codex_home.path(), "docs", /*include_app*/ false);
     let config = auth_projection_config(codex_home.path()).await;
-    let manager = test_plugins_manager_with_options(
+    let auth_manager = test_auth_manager(/*auth_mode*/ None);
+    set_test_auth_mode(&auth_manager, Some(AuthMode::Chatgpt)).await;
+    let manager = test_plugins_manager_with_auth_manager(
         codex_home.path().to_path_buf(),
         Some(Product::Codex),
-        Some(AuthMode::Chatgpt),
+        Arc::clone(&auth_manager),
     );
 
     let chatgpt_outcome = manager.plugins_for_config(&config).await;
@@ -695,7 +707,7 @@ async fn plugin_auth_projection_reprojects_cached_plugins_when_auth_changes() {
         ]
     );
 
-    assert!(manager.set_auth_mode(Some(AuthMode::ApiKey)));
+    set_test_auth_mode(&auth_manager, Some(AuthMode::ApiKey)).await;
     let api_key_outcome = manager.plugins_for_config(&config).await;
 
     assert_eq!(
@@ -1625,10 +1637,12 @@ enabled = true
     write_cached_plugin(codex_home.path(), "openai-curated-remote", "remote-only");
 
     let mut config = load_config(codex_home.path(), codex_home.path()).await;
-    let manager = test_plugins_manager_with_options(
+    let auth_manager = test_auth_manager(/*auth_mode*/ None);
+    set_test_auth_mode(&auth_manager, Some(AuthMode::Chatgpt)).await;
+    let manager = test_plugins_manager_with_auth_manager(
         codex_home.path().to_path_buf(),
         Some(Product::Codex),
-        Some(AuthMode::Chatgpt),
+        Arc::clone(&auth_manager),
     );
     manager.write_remote_installed_plugins_cache(vec![remote_installed_plugin("remote-only")]);
     assert_eq!(
@@ -1636,14 +1650,14 @@ enabled = true
         vec!["remote-only@openai-curated-remote".to_string()]
     );
 
-    manager.set_auth_mode(/*auth_mode*/ None);
+    set_test_auth_mode(&auth_manager, /*auth_mode*/ None).await;
     assert_eq!(
         loaded_plugin_names(&manager, &config).await,
         vec!["linear@openai-api-curated".to_string()]
     );
 
     for auth_mode in [AuthMode::ApiKey, AuthMode::BedrockApiKey] {
-        manager.set_auth_mode(Some(auth_mode));
+        set_test_auth_mode(&auth_manager, Some(auth_mode)).await;
 
         assert_eq!(
             loaded_plugin_names(&manager, &config).await,
@@ -1651,7 +1665,7 @@ enabled = true
         );
     }
 
-    manager.set_auth_mode(/*auth_mode*/ None);
+    set_test_auth_mode(&auth_manager, /*auth_mode*/ None).await;
     for model_provider_id in ["openai", AMAZON_BEDROCK_PROVIDER_ID, "ollama"] {
         config.model_provider_id = model_provider_id.to_string();
         assert_eq!(
@@ -1660,7 +1674,7 @@ enabled = true
         );
     }
 
-    manager.set_auth_mode(Some(AuthMode::Chatgpt));
+    set_test_auth_mode(&auth_manager, Some(AuthMode::Chatgpt)).await;
     assert_eq!(
         loaded_plugin_names(&manager, &config).await,
         vec!["remote-only@openai-curated-remote".to_string()]
@@ -4804,8 +4818,11 @@ plugins = true
     );
 
     let config = load_config(tmp.path(), tmp.path()).await;
-    let manager = test_plugins_manager(tmp.path().to_path_buf());
-    manager.set_auth_mode(Some(AuthMode::ApiKey));
+    let manager = test_plugins_manager_with_options(
+        tmp.path().to_path_buf(),
+        Some(Product::Codex),
+        Some(AuthMode::ApiKey),
+    );
     let marketplaces = manager
         .list_marketplaces_for_config(&config, &[], /*include_openai_curated*/ true)
         .unwrap()
@@ -4939,8 +4956,11 @@ plugins = true
     write_openai_api_curated_marketplace(&curated_root, &["api-plugin"]);
 
     let config = load_config(tmp.path(), tmp.path()).await;
-    let manager = test_plugins_manager(tmp.path().to_path_buf());
-    manager.set_auth_mode(Some(AuthMode::Chatgpt));
+    let manager = test_plugins_manager_with_options(
+        tmp.path().to_path_buf(),
+        Some(Product::Codex),
+        Some(AuthMode::Chatgpt),
+    );
     let marketplaces = manager
         .list_marketplaces_for_config(&config, &[], /*include_openai_curated*/ true)
         .unwrap()
@@ -4975,8 +4995,11 @@ plugins = true
     );
 
     let config = load_config(tmp.path(), tmp.path()).await;
-    let manager = test_plugins_manager(tmp.path().to_path_buf());
-    manager.set_auth_mode(Some(AuthMode::BedrockApiKey));
+    let manager = test_plugins_manager_with_options(
+        tmp.path().to_path_buf(),
+        Some(Product::Codex),
+        Some(AuthMode::BedrockApiKey),
+    );
     let outcome = manager
         .list_marketplaces_for_config(&config, &[], /*include_openai_curated*/ true)
         .unwrap();
@@ -6635,10 +6658,11 @@ enabled = true
         );
     }
     let config = load_config(codex_home.path(), codex_home.path()).await;
-    let manager = test_plugins_manager_with_options(
+    let auth_manager = test_auth_manager(Some(AuthMode::Chatgpt));
+    let manager = test_plugins_manager_with_auth_manager(
         codex_home.path().to_path_buf(),
         Some(Product::Codex),
-        Some(AuthMode::Chatgpt),
+        Arc::clone(&auth_manager),
     );
 
     let chatgpt_hooks = manager
@@ -6653,7 +6677,7 @@ enabled = true
         vec!["linear@openai-curated"]
     );
 
-    assert!(manager.set_auth_mode(Some(AuthMode::ApiKey)));
+    set_test_auth_mode(&auth_manager, Some(AuthMode::ApiKey)).await;
     let api_hooks = manager
         .plugin_hooks_for_layer_stack(&config.config_layer_stack, &config)
         .await;
@@ -6666,7 +6690,7 @@ enabled = true
         vec!["linear@openai-api-curated"]
     );
 
-    assert!(manager.set_auth_mode(/*auth_mode*/ None));
+    set_test_auth_mode(&auth_manager, /*auth_mode*/ None).await;
     let bedrock_hooks = manager
         .plugin_hooks_for_layer_stack(&config.config_layer_stack, &config)
         .await;
