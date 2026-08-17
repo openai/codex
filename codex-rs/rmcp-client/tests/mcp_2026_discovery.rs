@@ -230,8 +230,9 @@ async fn modern_discovery_does_not_follow_redirects_with_sensitive_headers() -> 
 }
 
 #[tokio::test]
-async fn legacy_mcp_requests_follow_redirects_with_configured_headers() -> anyhow::Result<()> {
-    let redirect_target = MockServer::start().await;
+async fn legacy_mcp_requests_follow_same_origin_redirects_with_configured_headers()
+-> anyhow::Result<()> {
+    let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/forwarded"))
         .and(header("x-api-key", "sensitive-key"))
@@ -244,23 +245,19 @@ async fn legacy_mcp_requests_follow_redirects_with_configured_headers() -> anyho
             }
         })
         .expect(2)
-        .mount(&redirect_target)
+        .mount(&server)
         .await;
 
-    let resource_server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/mcp"))
-        .respond_with(
-            ResponseTemplate::new(307)
-                .insert_header("location", format!("{}/forwarded", redirect_target.uri())),
-        )
+        .respond_with(ResponseTemplate::new(307).insert_header("location", "/forwarded"))
         .expect(2)
-        .mount(&resource_server)
+        .mount(&server)
         .await;
 
     let client = RmcpClient::new_streamable_http_client_with_protocol_mode(
         "legacy-redirect-test",
-        &format!("{}/mcp", resource_server.uri()),
+        &format!("{}/mcp", server.uri()),
         /*bearer_token*/ None,
         Some(HashMap::from([(
             "x-api-key".to_string(),
@@ -275,9 +272,63 @@ async fn legacy_mcp_requests_follow_redirects_with_configured_headers() -> anyho
     )
     .await?;
     initialize_client(&client).await?;
-    redirect_target.verify().await;
-    resource_server.verify().await;
+    server.verify().await;
     client.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn legacy_fallback_does_not_follow_cross_origin_tool_redirects() -> anyhow::Result<()> {
+    for mode in [McpProtocolMode::Legacy, McpProtocolMode::V20260728] {
+        let destination = MockServer::start().await;
+        let server = MockServer::start().await;
+        let destination_url = format!("{}/private", destination.uri());
+        Mock::given(method("POST"))
+            .and(path("/redirected"))
+            .respond_with(ResponseTemplate::new(307).insert_header("location", destination_url))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/mcp"))
+            .respond_with(move |request: &Request| {
+                let body: Value = request.body_json().expect("valid JSON-RPC request");
+                match body["method"].as_str() {
+                    Some("server/discover") => ResponseTemplate::new(200).set_body_json(json!({
+                        "jsonrpc": "2.0",
+                        "id": body["id"],
+                        "error": {"code": -32601, "message": "method not found"},
+                    })),
+                    Some("initialize") => legacy_initialize_response(&body),
+                    Some("notifications/initialized") => ResponseTemplate::new(202),
+                    Some("tools/call") => {
+                        ResponseTemplate::new(307).insert_header("location", "/redirected")
+                    }
+                    other => panic!("unexpected legacy MCP method: {other:?}"),
+                }
+            })
+            .mount(&server)
+            .await;
+
+        let client = create_client(&server, mode).await?;
+        initialize_client(&client).await?;
+        let error = client
+            .call_tool(
+                "query_logs_sql".to_string(),
+                Some(json!({"query": "sensitive-query"})),
+                /*meta*/ None,
+                Some(Duration::from_secs(5)),
+            )
+            .await
+            .expect_err("cross-origin tools/call redirect must fail");
+        assert!(
+            format!("{error:#}").contains("different origin"),
+            "cross-origin tools/call redirect must explain its rejection: {error:#}"
+        );
+        assert!(destination.received_requests().await.unwrap().is_empty());
+        client.shutdown().await;
+    }
+
     Ok(())
 }
 

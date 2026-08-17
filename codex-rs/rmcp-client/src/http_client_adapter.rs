@@ -56,6 +56,7 @@ use sse_stream::SseStream;
 use tokio::sync::oneshot;
 
 use crate::event_notification_transport::MAX_EVENT_NOTIFICATION_BYTES;
+use crate::http_client_redirect::SameOriginRedirectHttpClient;
 use crate::incoming_jsonrpc::deserialize_incoming_jsonrpc_message;
 use crate::incoming_jsonrpc::normalize_sse_jsonrpc_message;
 use crate::local_stdio_transport::MAX_MCP_STDIO_LINE_BYTES;
@@ -124,7 +125,7 @@ impl StreamableHttpClientAdapter {
         initialize_deadline: Arc<Mutex<Option<Instant>>>,
     ) -> Self {
         Self {
-            http_client,
+            http_client: Arc::new(SameOriginRedirectHttpClient::new(http_client)),
             default_headers,
             auth_provider,
             event_stream_cancellations: Arc::default(),

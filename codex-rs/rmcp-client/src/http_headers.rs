@@ -197,6 +197,23 @@ impl HttpHeadersClient {
         }
         Ok(params)
     }
+
+    fn reject_proxy_authorization_redirect(
+        response: &HttpRequestResponse,
+    ) -> Result<(), ExecServerError> {
+        if (300..400).contains(&response.status)
+            && response
+                .headers
+                .iter()
+                .any(|header| header.name.eq_ignore_ascii_case("location"))
+        {
+            return Err(ExecServerError::HttpRequest(
+                "MCP HTTP redirect cannot safely replay Proxy-Authorization credentials"
+                    .to_string(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl HttpClient for HttpHeadersClient {
@@ -205,8 +222,21 @@ impl HttpClient for HttpHeadersClient {
         params: HttpRequestParams,
     ) -> BoxFuture<'_, Result<HttpRequestResponse, ExecServerError>> {
         async move {
+            // OAuth validates redirect responses itself; only intercept MCP replay.
+            let mcp_redirect_was_stopped = params.redirect_policy == HttpRedirectPolicy::Stop
+                && !params.request_id.starts_with("oauth-request-");
             let params = self.prepare_request(params).await?;
-            self.inner.http_request(params).await
+            let prevent_proxy_authorization_redirect = mcp_redirect_was_stopped
+                && Url::parse(&params.url).is_ok_and(|url| url.scheme() == "http")
+                && params
+                    .headers
+                    .iter()
+                    .any(|header| header.name.eq_ignore_ascii_case("proxy-authorization"));
+            let response = self.inner.http_request(params).await?;
+            if prevent_proxy_authorization_redirect {
+                Self::reject_proxy_authorization_redirect(&response)?;
+            }
+            Ok(response)
         }
         .boxed()
     }
@@ -216,8 +246,20 @@ impl HttpClient for HttpHeadersClient {
         params: HttpRequestParams,
     ) -> BoxFuture<'_, Result<(HttpRequestResponse, HttpResponseBodyStream), ExecServerError>> {
         async move {
+            let mcp_redirect_was_stopped = params.redirect_policy == HttpRedirectPolicy::Stop
+                && !params.request_id.starts_with("oauth-request-");
             let params = self.prepare_request(params).await?;
-            self.inner.http_request_stream(params).await
+            let prevent_proxy_authorization_redirect = mcp_redirect_was_stopped
+                && Url::parse(&params.url).is_ok_and(|url| url.scheme() == "http")
+                && params
+                    .headers
+                    .iter()
+                    .any(|header| header.name.eq_ignore_ascii_case("proxy-authorization"));
+            let (response, stream) = self.inner.http_request_stream(params).await?;
+            if prevent_proxy_authorization_redirect {
+                Self::reject_proxy_authorization_redirect(&response)?;
+            }
+            Ok((response, stream))
         }
         .boxed()
     }
