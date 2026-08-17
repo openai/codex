@@ -555,6 +555,8 @@ fn build_tracer_provider(
                 };
 
                 let client = crate::otlp::build_async_http_client(
+                    http_client_factory,
+                    &endpoint,
                     tls.as_ref(),
                     OTEL_EXPORTER_OTLP_TRACES_TIMEOUT,
                 )?;

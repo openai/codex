@@ -3,17 +3,15 @@ use codex_http_client::HttpClientFactory;
 use codex_http_client::TelemetryClientTlsConfig;
 use codex_http_client::TelemetryHttpClient;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use http::HeaderMap;
+use http::HeaderName;
+use http::HeaderValue;
 use http::Uri;
 use opentelemetry_otlp::OTEL_EXPORTER_OTLP_TIMEOUT;
 use opentelemetry_otlp::OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT;
 use opentelemetry_otlp::tonic_types::transport::Certificate as TonicCertificate;
 use opentelemetry_otlp::tonic_types::transport::ClientTlsConfig;
 use opentelemetry_otlp::tonic_types::transport::Identity as TonicIdentity;
-use reqwest::Certificate as ReqwestCertificate;
-use reqwest::Identity as ReqwestIdentity;
-use reqwest::header::HeaderMap;
-use reqwest::header::HeaderName;
-use reqwest::header::HeaderValue;
 use std::env;
 use std::error::Error;
 use std::fs;
@@ -114,50 +112,17 @@ pub(crate) fn current_tokio_runtime_is_multi_thread() -> bool {
 }
 
 pub(crate) fn build_async_http_client(
+    http_client_factory: &HttpClientFactory,
+    endpoint: &str,
     tls: Option<&OtelTlsConfig>,
     timeout_var: &str,
-) -> Result<reqwest::Client, Box<dyn Error>> {
-    let mut builder = reqwest::Client::builder().timeout(resolve_otlp_timeout(timeout_var));
-
-    if let Some(tls) = tls {
-        if let Some(path) = tls.ca_certificate.as_ref() {
-            let (pem, location) = read_bytes(path)?;
-            let certificate = ReqwestCertificate::from_pem(pem.as_slice()).map_err(|error| {
-                config_error(format!(
-                    "failed to parse certificate {}: {error}",
-                    location.display()
-                ))
-            })?;
-            builder = builder
-                .tls_built_in_root_certs(false)
-                .add_root_certificate(certificate);
-        }
-
-        match (&tls.client_certificate, &tls.client_private_key) {
-            (Some(cert_path), Some(key_path)) => {
-                let (mut cert_pem, cert_location) = read_bytes(cert_path)?;
-                let (key_pem, key_location) = read_bytes(key_path)?;
-                cert_pem.extend_from_slice(key_pem.as_slice());
-                let identity = ReqwestIdentity::from_pem(cert_pem.as_slice()).map_err(|error| {
-                    config_error(format!(
-                        "failed to parse client identity using {} and {}: {error}",
-                        cert_location.display(),
-                        key_location.display()
-                    ))
-                })?;
-                builder = builder.identity(identity).https_only(true);
-            }
-            (Some(_), None) | (None, Some(_)) => {
-                return Err(config_error(
-                    "client_certificate and client_private_key must both be provided for mTLS",
-                ));
-            }
-            (None, None) => {}
-        }
-    }
-
-    builder
-        .build()
+) -> Result<impl TelemetryHttpClient + 'static + use<>, Box<dyn Error>> {
+    http_client_factory
+        .build_async_telemetry_client(
+            endpoint,
+            resolve_otlp_timeout(timeout_var),
+            &telemetry_tls_config(tls),
+        )
         .map_err(|error| Box::new(error) as Box<dyn Error>)
 }
 

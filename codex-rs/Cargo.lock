@@ -3856,7 +3856,6 @@ dependencies = [
  "opentelemetry_sdk",
  "os_info",
  "pretty_assertions",
- "reqwest 0.12.28",
  "seccompiler",
  "serde",
  "serde_json",
