@@ -9,7 +9,6 @@ use codex_api::ImageGenerationRequest;
 use codex_api::ImageQuality;
 use codex_api::ImageUrl;
 use codex_exec_server::CreateDirectoryOptions;
-use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
 use codex_extension_api::ExtensionTurnItem;
 use codex_extension_api::FunctionCallError;
@@ -59,6 +58,9 @@ use crate::backend::CodexImagesBackend;
 
 const IMAGE_MODEL: &str = "gpt-image-2";
 const MAX_EDIT_IMAGES: usize = 5;
+const MAX_EXECUTOR_GENERATED_IMAGE_BYTES: usize = 32 * 1024 * 1024;
+const MAX_EXECUTOR_GENERATED_IMAGE_BASE64_BYTES: usize =
+    MAX_EXECUTOR_GENERATED_IMAGE_BYTES.div_ceil(3) * 4;
 const IMAGEGEN_DESCRIPTION: &str = include_str!("../imagegen_description.md");
 
 #[derive(Clone)]
@@ -198,31 +200,14 @@ impl ImageGenerationTool {
                 return Err(FunctionCallError::RespondToModel(message));
             }
         };
-        let saved_path = match self.save_root.as_ref() {
-            Some(save_root) => match save_image_generation_result(
-                LOCAL_FS.as_ref(),
-                save_root,
-                &self.thread_id,
-                &call.call_id,
-                &result,
-            )
-            .await
-            {
-                Ok(path) => Some(path),
-                Err(error) => {
-                    let output_path =
-                        image_generation_artifact_path(save_root, &self.thread_id, &call.call_id);
-                    let output_dir = output_path.parent().unwrap_or_else(|| save_root.clone());
-                    tracing::warn!(
-                        call_id = %call.call_id,
-                        output_dir = %output_dir.display(),
-                        "failed to save generated image: {error}"
-                    );
-                    None
-                }
-            },
-            None => None,
-        };
+        let saved_path = save_image_generation_result(
+            self.save_root.as_ref(),
+            call.environments.first(),
+            &self.thread_id,
+            &call.call_id,
+            &result,
+        )
+        .await;
         let item = ImageGenerationItem {
             id: call.call_id.clone(),
             status: "completed".to_string(),
@@ -275,27 +260,125 @@ fn usage_limit_failure(error: &CodexErr) -> Option<ImageGenerationFailure> {
 }
 
 async fn save_image_generation_result(
-    fs: &dyn ExecutorFileSystem,
-    save_root: &AbsolutePathBuf,
+    save_root: Option<&AbsolutePathBuf>,
+    environment: Option<&ToolEnvironment>,
     session_id: &str,
     call_id: &str,
     result: &str,
-) -> io::Result<AbsolutePathBuf> {
-    let bytes = BASE64_STANDARD
-        .decode(result.trim().as_bytes())
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    let path = image_generation_artifact_path(save_root, session_id, call_id);
-    if let Some(parent) = path.parent() {
-        fs.create_directory(
-            &PathUri::from_abs_path(&parent),
-            CreateDirectoryOptions { recursive: true },
-            /*sandbox*/ None,
-        )
-        .await?;
+) -> Option<AbsolutePathBuf> {
+    let (output_dir, save_result) = match save_root {
+        Some(save_root) => {
+            let path = image_generation_artifact_path(save_root, session_id, call_id);
+            let output_dir = path.parent().unwrap_or_else(|| save_root.clone());
+            let save_result: io::Result<AbsolutePathBuf> = async {
+                let bytes = BASE64_STANDARD
+                    .decode(result.trim().as_bytes())
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+                if let Some(parent) = path.parent() {
+                    LOCAL_FS
+                        .create_directory(
+                            &PathUri::from_abs_path(&parent),
+                            CreateDirectoryOptions { recursive: true },
+                            /*sandbox*/ None,
+                        )
+                        .await?;
+                }
+                LOCAL_FS
+                    .write_file(&PathUri::from_abs_path(&path), bytes, /*sandbox*/ None)
+                    .await?;
+                Ok(path)
+            }
+            .await;
+            (output_dir, save_result)
+        }
+        None => {
+            let environment = environment?;
+            let output_dir = environment.cwd.join("generated_images");
+            let save_result: io::Result<AbsolutePathBuf> = async {
+                let result = result.trim();
+                if result.len() > MAX_EXECUTOR_GENERATED_IMAGE_BASE64_BYTES {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "generated image exceeds the executor file size limit",
+                    ));
+                }
+                let bytes = BASE64_STANDARD
+                    .decode(result.as_bytes())
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+                if bytes.len() > MAX_EXECUTOR_GENERATED_IMAGE_BYTES {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "generated image exceeds the executor file size limit",
+                    ));
+                }
+
+                let artifact_path =
+                    image_generation_artifact_path(&environment.cwd, session_id, call_id);
+                let path = output_dir.join(artifact_path.as_path().file_name().unwrap_or_default());
+                let sandbox = Some(&environment.file_system_sandbox_context);
+                if let Some(parent) = path.parent() {
+                    let parent_uri = PathUri::from_abs_path(&parent);
+                    environment
+                        .file_system
+                        .create_directory(
+                            &parent_uri,
+                            CreateDirectoryOptions { recursive: true },
+                            sandbox,
+                        )
+                        .await?;
+
+                    // Full-access executor contexts do not prevent symlinked output directories.
+                    let metadata = environment
+                        .file_system
+                        .get_metadata(&parent_uri, sandbox)
+                        .await?;
+                    if metadata.is_symlink || !metadata.is_directory {
+                        return Err(io::Error::new(
+                            io::ErrorKind::PermissionDenied,
+                            "generated image directory is not a real directory",
+                        ));
+                    }
+                }
+
+                // Existing destination hardlinks could otherwise overwrite files outside the workspace.
+                let path_uri = PathUri::from_abs_path(&path);
+                match environment
+                    .file_system
+                    .get_metadata(&path_uri, sandbox)
+                    .await
+                {
+                    Ok(_) => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::AlreadyExists,
+                            "generated image destination already exists",
+                        ));
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
+                }
+
+                environment
+                    .file_system
+                    .write_file(&path_uri, bytes, sandbox)
+                    .await?;
+                Ok(path)
+            }
+            .await;
+            (output_dir, save_result)
+        }
+    };
+
+    match save_result {
+        Ok(path) => Some(path),
+        Err(error) => {
+            tracing::warn!(
+                call_id = %call_id,
+                output_dir = %output_dir.display(),
+                "failed to save generated image: {error}"
+            );
+            None
+        }
     }
-    fs.write_file(&PathUri::from_abs_path(&path), bytes, /*sandbox*/ None)
-        .await?;
-    Ok(path)
 }
 
 #[derive(Debug, PartialEq)]
