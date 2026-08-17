@@ -583,11 +583,13 @@ fn diff_buffers(a: &Buffer, b: &Buffer) -> Vec<DrawCommand> {
     for y in 0..a.area.height {
         let row_start = y as usize * a.area.width as usize;
         let row_end = row_start + a.area.width as usize;
+        let previous_row = &a.content[row_start..row_end];
         let row = &next_buffer[row_start..row_end];
         let bg = row.last().map(|cell| cell.bg).unwrap_or(Color::Reset);
 
         // Scan the row to find the rightmost column that still matters: any non-space glyph,
-        // any cell whose bg differs from the row’s trailing bg, or any cell with modifiers.
+        // any cell whose bg differs from the row’s trailing bg, any cell with modifiers,
+        // or any cell explicitly marked for updating.
         // Multi-width glyphs extend that region through their full displayed width.
         // After that point the rest of the row can be cleared with a single ClearToEnd, a perf win
         // versus emitting multiple space Put commands.
@@ -596,20 +598,44 @@ fn diff_buffers(a: &Buffer, b: &Buffer) -> Vec<DrawCommand> {
         while column < row.len() {
             let cell = &row[column];
             let width = usize::from(cell.cell_width());
-            if cell.symbol() != " " || cell.bg != bg || cell.modifier != Modifier::empty() {
+            // Keep AlwaysUpdate blanks in the drawable prefix; otherwise filtering the tail
+            // would discard the repaint explicitly requested by Ratatui.
+            if cell.symbol() != " "
+                || cell.bg != bg
+                || cell.modifier != Modifier::empty()
+                || cell.diff_option == CellDiffOption::AlwaysUpdate
+            {
                 last_nonblank_column = column + (width.saturating_sub(1));
             }
             column += width.max(1); // treat zero-width symbols as width 1
         }
 
-        if last_nonblank_column + 1 < row.len() {
-            let (x, y) = a.pos_of(row_start + last_nonblank_column + 1);
-            updates.push(DrawCommand::ClearToEnd { x, y, bg });
+        let clear_start = last_nonblank_column + 1;
+        if clear_start < row.len() {
+            // Equal cached tails need no clear when the buffers reflect the terminal.
+            // Viewport invalidation marks old cells, so out-of-band writes force inequality.
+            let tail_changed = previous_row[clear_start..] != row[clear_start..];
+
+            // Wide-glyph continuation cells look blank, so an equal tail can still overlap
+            // a glyph whose leader lies before the clear boundary.
+            let wide_char_overlaps_tail = previous_row[..clear_start]
+                .iter()
+                .enumerate()
+                .rev()
+                .find(|(_, cell)| cell.symbol() != " " || cell.cell_width() > 1)
+                .is_some_and(|(column, cell)| {
+                    column + usize::from(cell.cell_width()) > clear_start
+                });
+            if tail_changed || wide_char_overlaps_tail {
+                let (x, y) = a.pos_of(row_start + clear_start);
+                updates.push(DrawCommand::ClearToEnd { x, y, bg });
+            }
         }
 
         last_nonblank_columns[y as usize] = last_nonblank_column as u16;
     }
 
+    // Preserve Ratatui's native Skip, AlwaysUpdate, and multi-width diff semantics.
     let mut cell_updates = a.diff_iter(b).collect::<Vec<_>>();
     // Ratatui's ForcedWidth path skips trailing-cell invalidation when a styled wide cell shrinks.
     let visible_on_blank = Modifier::REVERSED
@@ -1034,6 +1060,28 @@ mod tests {
     }
 
     #[test]
+    fn diff_buffers_only_updates_changed_cells_when_row_tails_are_unchanged() {
+        let area = Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 10, /*height*/ 2,
+        );
+        let mut previous = Buffer::empty(area);
+        previous.set_string(0, 0, "-", Style::default());
+        previous.set_string(0, 1, "中", Style::default());
+
+        assert_eq!(diff_buffers(&previous, &previous).len(), 0);
+
+        let mut next = previous.clone();
+        next.set_string(0, 0, "\\", Style::default());
+
+        let commands = diff_buffers(&previous, &next);
+        assert_eq!(commands.len(), 1, "unexpected draw commands: {commands:?}");
+        assert!(matches!(
+            commands.as_slice(),
+            [DrawCommand::Put { x: 0, y: 0, cell }] if cell.symbol() == "\\"
+        ));
+    }
+
+    #[test]
     fn diff_buffers_does_not_emit_clear_to_end_for_full_width_row() {
         let area = Rect::new(0, 0, 3, 2);
         let previous = Buffer::empty(area);
@@ -1064,19 +1112,31 @@ mod tests {
     #[test]
     fn diff_buffers_clear_to_end_starts_after_wide_char() {
         let area = Rect::new(0, 0, 10, 1);
-        let mut previous = Buffer::empty(area);
-        let mut next = Buffer::empty(area);
+        for (before, after) in [("中文", "中"), ("ｶﾞﾞ", "ｶﾞ")] {
+            let mut previous = Buffer::empty(area);
+            let mut next = Buffer::empty(area);
 
-        previous.set_string(0, 0, "中文", Style::default());
-        next.set_string(0, 0, "中", Style::default());
+            previous.set_string(0, 0, before, Style::default());
+            next.set_string(0, 0, after, Style::default());
 
-        let commands = diff_buffers(&previous, &next);
-        assert!(
-            commands
-                .iter()
-                .any(|command| matches!(command, DrawCommand::ClearToEnd { x: 2, y: 0, .. })),
-            "expected clear-to-end to start after the remaining wide char; commands: {commands:?}"
-        );
+            let commands = diff_buffers(&previous, &next);
+            assert!(
+                commands
+                    .iter()
+                    .any(|command| matches!(command, DrawCommand::ClearToEnd { x: 2, y: 0, .. })),
+                "expected clear-to-end after {before:?} became {after:?}; commands: {commands:?}"
+            );
+        }
+
+        let mut terminal =
+            Terminal::with_options(VT100Backend::new(area.width, area.height)).expect("terminal");
+        terminal.set_viewport_area(area);
+        for text in ["ｶﾞﾞ", "ｶﾞ"] {
+            terminal
+                .draw(|frame| Paragraph::new(text).render(area, frame.buffer_mut()))
+                .expect("draw");
+        }
+        assert_snapshot!(terminal.backend().vt100().screen().contents(), @"ｶﾞ");
     }
 
     #[test]
@@ -1118,18 +1178,20 @@ mod tests {
     fn diff_buffers_emits_always_update_cells() {
         use ratatui::buffer::CellDiffOption;
 
-        let mut previous = Buffer::with_lines(["abc"]);
-        let mut next = Buffer::with_lines(["abc"]);
-        previous[(1, 0)].set_diff_option(CellDiffOption::AlwaysUpdate);
-        next[(1, 0)].set_diff_option(CellDiffOption::AlwaysUpdate);
+        for text in ["abc", "a  "] {
+            let mut previous = Buffer::with_lines([text]);
+            let mut next = Buffer::with_lines([text]);
+            previous[(1, 0)].set_diff_option(CellDiffOption::AlwaysUpdate);
+            next[(1, 0)].set_diff_option(CellDiffOption::AlwaysUpdate);
 
-        let commands = diff_buffers(&previous, &next);
-        assert!(
-            commands
-                .iter()
-                .any(|command| matches!(command, DrawCommand::Put { x: 1, y: 0, .. })),
-            "expected the always-update cell to be emitted; commands: {commands:?}"
-        );
+            let commands = diff_buffers(&previous, &next);
+            assert!(
+                commands
+                    .iter()
+                    .any(|command| matches!(command, DrawCommand::Put { x: 1, y: 0, .. })),
+                "expected the always-update cell in {text:?} to be emitted; commands: {commands:?}"
+            );
+        }
     }
 
     #[test]
