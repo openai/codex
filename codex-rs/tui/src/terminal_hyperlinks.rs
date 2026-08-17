@@ -500,15 +500,20 @@ pub(crate) fn mark_buffer_hyperlinks(
     lines: &[HyperlinkLine],
     scroll_rows: usize,
 ) {
-    if area.width == 0 || lines.iter().all(|line| line.hyperlinks.is_empty()) {
+    if area.width == 0 || area.height == 0 || lines.iter().all(|line| line.hyperlinks.is_empty()) {
         return;
     }
+    let viewport_end = scroll_rows.saturating_add(usize::from(area.height));
     let mut logical_row = 0usize;
     for line in lines {
+        if logical_row >= viewport_end {
+            break;
+        }
         let paragraph =
             Paragraph::new(Text::from(line_to_borrowed(&line.line))).wrap(Wrap { trim: false });
         let rendered_height = paragraph.line_count(area.width).max(/*other*/ 1);
-        if line.hyperlinks.is_empty() {
+        if line.hyperlinks.is_empty() || logical_row.saturating_add(rendered_height) <= scroll_rows
+        {
             logical_row += rendered_height;
             continue;
         }
@@ -542,15 +547,16 @@ pub(crate) fn mark_buffer_hyperlinks(
             })
             .collect();
         for (row, rendered) in remap_wrapped_line(line, rendered_lines).iter().enumerate() {
+            let row = logical_row + row;
+            if row < scroll_rows || row >= viewport_end {
+                continue;
+            }
             for link in &rendered.hyperlinks {
+                let destination = link.terminal_destination();
                 let mut trailing_columns = 0usize;
                 for column in link.columns.clone() {
                     if trailing_columns > 0 {
                         trailing_columns -= 1;
-                        continue;
-                    }
-                    let row = logical_row + row;
-                    if row < scroll_rows || row - scroll_rows >= usize::from(area.height) {
                         continue;
                     }
                     let x = area.x + column as u16;
@@ -560,7 +566,7 @@ pub(crate) fn mark_buffer_hyperlinks(
                         continue;
                     }
                     trailing_columns = usize::from(cell.cell_width()).saturating_sub(1);
-                    let symbol = link.terminal_destination().map_or_else(
+                    let symbol = destination.as_ref().map_or_else(
                         || cell.symbol().to_string(),
                         |destination| {
                             format!("\x1b]8;;{destination}\x07{}\x1b]8;;\x07", cell.symbol())
@@ -787,6 +793,55 @@ mod tests {
             })
             .collect::<String>();
         assert_eq!(linked_text, destination);
+    }
+
+    #[test]
+    fn buffer_hyperlinks_follow_scrolled_wrapped_rows() {
+        let hidden_destination = "https://example.com/hidden";
+        let visible_destination = "https://example.com/visible";
+        let trailing_destination = "https://example.com/trailing";
+
+        let mut hidden = HyperlinkLine::new(Line::default());
+        hidden.push_span("hidden".into(), Some(hidden_destination));
+        let mut visible = HyperlinkLine::new(Line::from("prefix "));
+        visible.push_span("visible-link".into(), Some(visible_destination));
+        let mut trailing = HyperlinkLine::new(Line::default());
+        trailing.push_span("trailing".into(), Some(trailing_destination));
+        let lines = vec![hidden, visible, trailing];
+
+        let area = Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 8, /*height*/ 2,
+        );
+        let backend = crate::test_backend::VT100Backend::new(area.width, area.height);
+        let mut terminal =
+            crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(area);
+        terminal
+            .draw(|frame| {
+                let buf = frame.buffer_mut();
+                Paragraph::new(Text::from(visible_lines_ref(&lines)))
+                    .wrap(Wrap { trim: false })
+                    .scroll((/*vertical*/ 2, /*horizontal*/ 0))
+                    .render(area, buf);
+                mark_buffer_hyperlinks(buf, area, &lines, /*scroll_rows*/ 2);
+
+                let linked_text = area
+                    .positions()
+                    .filter_map(|position| {
+                        let symbol = buf[position].symbol();
+                        symbol
+                            .contains(&format!("\x1b]8;;{visible_destination}\x07"))
+                            .then(|| strip_osc8(symbol))
+                    })
+                    .collect::<String>();
+                assert_eq!(linked_text, "visible-link");
+            })
+            .expect("render scrolled hyperlinks");
+
+        insta::assert_snapshot!(
+            "buffer_hyperlinks_follow_scrolled_wrapped_rows",
+            terminal.backend()
+        );
     }
 
     #[test]
