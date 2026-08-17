@@ -464,8 +464,15 @@ max_recent_non_user_entries = 8
 
     let session_store = ExtensionData::new("session-1");
     let thread_store = test.codex.thread_extension_data();
+    let score_progress = thread_store
+        .get::<GuardianV2ScoreProgress>()
+        .expect("Guardian v2 should track score progress per thread");
     tokio::time::timeout(Duration::from_secs(5), async {
-        while thread_store.get::<SecurityRiskScore>().is_none() {
+        while score_progress
+            .latest_scored_tool_call
+            .load(Ordering::Acquire)
+            == 0
+        {
             tokio::task::yield_now().await;
         }
     })
@@ -491,9 +498,6 @@ max_recent_non_user_entries = 8
         Some(ReviewDecision::Approved)
     );
 
-    let score_progress = thread_store
-        .get::<GuardianV2ScoreProgress>()
-        .expect("Guardian v2 should track score progress per thread");
     assert_eq!(
         score_progress
             .latest_scored_tool_call
