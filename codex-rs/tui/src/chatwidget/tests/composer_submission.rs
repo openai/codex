@@ -49,7 +49,7 @@ async fn parent_owned_thread_blocks_all_direct_input_entry_points() {
         "/side inspect this",
         "/archive",
         "/rename",
-        "/agent parent",
+        "/subagents parent",
         "/diff now",
         "!echo blocked",
         " !echo blocked",

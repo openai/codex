@@ -1723,13 +1723,13 @@ async fn open_agent_picker_preserves_running_hints_until_observed_completion() -
         let event = app_event_rx.try_recv().expect("agent status history cell");
         if let AppEvent::InsertHistoryCell(cell) = event {
             let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
-            if rendered.contains("/agent") {
+            if rendered.contains("/subagents") {
                 break rendered;
             }
         }
     };
     assert_snapshot!(status, @r###"
-    /agent
+    /subagents
     Sub-agents running
 
       • `/root/child`

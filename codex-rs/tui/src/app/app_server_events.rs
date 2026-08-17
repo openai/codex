@@ -1,6 +1,7 @@
 //! App-server event stream handling for the TUI app.
 
 use super::App;
+use super::ThreadBufferedEvent;
 use super::app_server_event_targets::ServerNotificationThreadTarget;
 use super::app_server_event_targets::server_notification_thread_target;
 use super::app_server_event_targets::server_request_thread_id;
@@ -11,9 +12,15 @@ use crate::app_server_session::AppServerSession;
 use crate::app_server_session::status_account_display_from_auth_mode;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::AuthMode;
+use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::RateLimitReachedType;
+use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::SessionSource;
+use codex_app_server_protocol::ThreadReadParams;
+use codex_app_server_protocol::ThreadReadResponse;
+use codex_protocol::protocol::SubAgentSource;
 
 impl App {
     pub(super) fn refresh_mcp_startup_expected_servers_from_config(&mut self) {
@@ -81,6 +88,10 @@ impl App {
     ) {
         match &notification {
             ServerNotification::ServerRequestResolved(notification) => {
+                self.pending_primary_events.retain(|event| {
+                    !matches!(event, ThreadBufferedEvent::Request(request)
+                        if request.id() == &notification.request_id)
+                });
                 if let Some(request) = self
                     .pending_app_server_requests
                     .resolve_notification(&notification.request_id)
@@ -179,6 +190,31 @@ impl App {
 
         match server_notification_thread_target(&notification) {
             ServerNotificationThreadTarget::Thread(thread_id) => {
+                if self.primary_thread_id.is_none() && !self.pending_startup_thread_start {
+                    return;
+                }
+                if self.primary_thread_id.is_some()
+                    && self.primary_thread_id != Some(thread_id)
+                    && !self.thread_event_channels.contains_key(&thread_id)
+                    && self.agent_navigation.get(&thread_id).is_none()
+                    && !self.side_threads.contains_key(&thread_id)
+                    && !matches!(&notification, ServerNotification::McpServerStatusUpdated(_))
+                    && !matches!(
+                        &notification,
+                        ServerNotification::ThreadStarted(started)
+                            if matches!(
+                                &started.thread.source,
+                                SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                                    parent_thread_id,
+                                    ..
+                                }) if self.primary_thread_id == Some(*parent_thread_id)
+                                    || self.thread_event_channels.contains_key(parent_thread_id)
+                                    || self.agent_navigation.get(parent_thread_id).is_some()
+                            )
+                    )
+                {
+                    return;
+                }
                 let result = if self.primary_thread_id == Some(thread_id)
                     || self.primary_thread_id.is_none()
                 {
@@ -231,6 +267,52 @@ impl App {
                 tracing::warn!("{err}");
             }
             return;
+        }
+        if thread_id.is_some()
+            && self.primary_thread_id.is_none()
+            && self.pending_startup_thread_start
+        {
+            self.pending_primary_events
+                .push_back(ThreadBufferedEvent::Request(Box::new(request)));
+            return;
+        }
+        if thread_id.is_some()
+            && self.primary_thread_id.is_none()
+            && !self.pending_startup_thread_start
+        {
+            return;
+        }
+        if let Some(thread_id) = thread_id
+            && self.primary_thread_id.is_some()
+            && self.primary_thread_id != Some(thread_id)
+            && !self.thread_event_channels.contains_key(&thread_id)
+            && self.agent_navigation.get(&thread_id).is_none()
+            && !self.side_threads.contains_key(&thread_id)
+        {
+            let thread = app_server_client
+                .request_handle()
+                .request_typed::<ThreadReadResponse>(ClientRequest::ThreadRead {
+                    request_id: RequestId::String(format!("subagent-approval-{thread_id}")),
+                    params: ThreadReadParams {
+                        thread_id: thread_id.to_string(),
+                        include_turns: false,
+                    },
+                })
+                .await;
+            if !matches!(
+                thread,
+                Ok(ThreadReadResponse { thread })
+                    if matches!(thread.source,
+                        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                            parent_thread_id,
+                            ..
+                        }) if self.primary_thread_id == Some(parent_thread_id)
+                            || self.thread_event_channels.contains_key(&parent_thread_id)
+                            || self.agent_navigation.get(&parent_thread_id).is_some()
+                    )
+            ) {
+                return;
+            }
         }
 
         if let Some(unsupported) = self

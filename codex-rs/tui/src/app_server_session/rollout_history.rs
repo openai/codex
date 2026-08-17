@@ -52,7 +52,10 @@ impl AppServerSession {
         thread_id: ThreadId,
         model_settings: ResumeModelSettings,
     ) -> Result<AppServerStartedThread> {
-        let session_config = if model_settings == ResumeModelSettings::RestoreFromThread {
+        let session_config = if matches!(
+            model_settings,
+            ResumeModelSettings::RestoreFromThread | ResumeModelSettings::PreserveExistingThread
+        ) {
             config.clone()
         } else {
             self.session_config_with_effective_service_tier(&config)

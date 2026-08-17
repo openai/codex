@@ -3,6 +3,7 @@ use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::tui::FrameRequester;
+use app_test_support::create_fake_parented_rollout_with_source;
 use codex_app_server_protocol::ToolRequestUserInputOption;
 use codex_app_server_protocol::ToolRequestUserInputQuestion;
 use crossterm::event::KeyCode;
@@ -842,6 +843,195 @@ async fn startup_thread_started_submits_queued_startup_input() {
         ),
         other => panic!("expected queued startup input submission, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn startup_thread_started_discards_another_threads_buffered_events() {
+    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    app.pending_startup_thread_start = true;
+    let other_thread_id = ThreadId::new();
+    app.enqueue_primary_thread_notification(ServerNotification::McpServerStatusUpdated(
+        McpServerStatusUpdatedNotification {
+            thread_id: Some(other_thread_id.to_string()),
+            name: "other".to_string(),
+            status: McpServerStartupState::Starting,
+            error: None,
+            failure_reason: None,
+        },
+    ))
+    .await
+    .expect("foreign notification should be buffered");
+
+    let request = ServerRequest::CommandExecutionRequestApproval {
+        request_id: AppServerRequestId::Integer(1),
+        params: CommandExecutionRequestApprovalParams {
+            thread_id: other_thread_id.to_string(),
+            turn_id: "turn-1".to_string(),
+            item_id: "item-1".to_string(),
+            started_at_ms: 0,
+            approval_id: None,
+            environment_id: None,
+            reason: None,
+            network_approval_context: None,
+            command: None,
+            cwd: None,
+            command_actions: None,
+            additional_permissions: None,
+            proposed_execpolicy_amendment: None,
+            proposed_network_policy_amendments: None,
+            available_decisions: None,
+        },
+    };
+    app.pending_app_server_requests
+        .note_server_request(&request);
+    app.enqueue_primary_thread_request(request)
+        .await
+        .expect("foreign request should be buffered");
+
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+        app.chat_widget.config_ref(),
+    ))
+    .await
+    .expect("embedded app server");
+    app.handle_app_server_event(
+        &app_server,
+        codex_app_server_client::AppServerEvent::ServerRequest(Box::new(
+            ServerRequest::CurrentTimeRead {
+                request_id: AppServerRequestId::Integer(2),
+                params: codex_app_server_protocol::CurrentTimeReadParams {
+                    thread_id: other_thread_id.to_string(),
+                },
+            },
+        )),
+    )
+    .await;
+    assert!(app.pending_primary_events.iter().any(|event| {
+        matches!(event, ThreadBufferedEvent::Request(request)
+            if matches!(request.as_ref(), ServerRequest::CurrentTimeRead { .. }))
+    }));
+    let thread_id = ThreadId::new();
+    app.handle_startup_thread_started(
+        &mut app_server,
+        Ok(AppServerStartedThread {
+            session: test_thread_session(thread_id, test_path_buf("/tmp/project")),
+            turns: Vec::new(),
+            blocks_direct_input: false,
+        }),
+    )
+    .await
+    .expect("startup thread should attach");
+
+    assert!(app.pending_primary_events.is_empty());
+    assert!(
+        app.active_thread_rx
+            .as_mut()
+            .is_some_and(|rx| rx.try_recv().is_err())
+    );
+}
+
+#[tokio::test]
+async fn startup_thread_started_does_not_replay_resolved_approval() -> Result<()> {
+    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    app.pending_startup_thread_start = true;
+    let app_server =
+        crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+    let thread_id = ThreadId::new();
+    let request = exec_approval_request(thread_id, "turn-1", "item-1", /*approval_id*/ None);
+    let request_id = request.id().clone();
+
+    app.handle_app_server_event(
+        &app_server,
+        codex_app_server_client::AppServerEvent::ServerRequest(Box::new(request.clone())),
+    )
+    .await;
+    app.handle_app_server_event(
+        &app_server,
+        codex_app_server_client::AppServerEvent::ServerNotification(Box::new(
+            ServerNotification::ServerRequestResolved(
+                codex_app_server_protocol::ServerRequestResolvedNotification {
+                    thread_id: thread_id.to_string(),
+                    request_id,
+                },
+            ),
+        )),
+    )
+    .await;
+
+    let mut app_server = app_server;
+    app.handle_startup_thread_started(
+        &mut app_server,
+        Ok(AppServerStartedThread {
+            session: test_thread_session(thread_id, test_path_buf("/tmp/project")),
+            turns: Vec::new(),
+            blocks_direct_input: false,
+        }),
+    )
+    .await?;
+
+    assert!(
+        !app.pending_app_server_requests
+            .contains_server_request(&request)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn owned_subagent_approval_before_thread_started_is_preserved() -> Result<()> {
+    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let codex_home = tempdir()?;
+    app.config.codex_home = codex_home.path().to_path_buf().abs();
+    app.config.sqlite = codex_state::SqliteConfig::new_for_testing(codex_home.path().abs());
+    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    let parent = app_server.start_thread(&app.config).await?;
+    let parent_thread_id = parent.session.thread_id;
+    app.enqueue_primary_thread_session(parent.session, parent.turns)
+        .await?;
+    let child_thread_id = ThreadId::from_string(
+        &create_fake_parented_rollout_with_source(
+            codex_home.path(),
+            "2026-01-01T00-00-01",
+            "2026-01-01T00:00:01Z",
+            "child task",
+            Some(app.config.model_provider_id.as_str()),
+            /*git_info*/ None,
+            RolloutSessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+            }),
+            parent_thread_id.into(),
+            parent_thread_id,
+        )
+        .expect("create child rollout"),
+    )?;
+    app_server
+        .resume_thread(
+            app.config.clone(),
+            child_thread_id,
+            crate::app_server_session::ResumeModelSettings::RestoreFromThread,
+        )
+        .await?;
+    let request = exec_approval_request(
+        child_thread_id,
+        "turn-1",
+        "item-1",
+        /*approval_id*/ None,
+    );
+
+    app.handle_app_server_event(
+        &app_server,
+        codex_app_server_client::AppServerEvent::ServerRequest(Box::new(request.clone())),
+    )
+    .await;
+
+    assert!(
+        app.pending_app_server_requests
+            .contains_server_request(&request)
+    );
+    assert!(app.thread_event_channels.contains_key(&child_thread_id));
+    Ok(())
 }
 
 #[tokio::test]

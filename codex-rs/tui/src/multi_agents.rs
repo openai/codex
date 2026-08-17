@@ -1,8 +1,8 @@
 //! Helpers for rendering and navigating multi-agent state in the TUI.
 //!
-//! This module owns the shared presentation contracts for multi-agent history rows, `/agent` picker
-//! entries, and the fast-switch keyboard shortcuts. Higher-level coordination, such as deciding
-//! which thread becomes active or when a thread closes, stays in [`crate::app::App`].
+//! This module owns the shared presentation contracts for multi-agent history rows, `/subagents`
+//! picker entries, and the fast-switch keyboard shortcuts. Higher-level coordination, such as
+//! deciding which thread becomes active or when a thread closes, stays in [`crate::app::App`].
 
 use crate::history_cell::PlainHistoryCell;
 use crate::render::line_utils::prefix_lines;
