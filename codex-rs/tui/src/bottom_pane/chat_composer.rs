@@ -12190,8 +12190,16 @@ mod tests {
         );
 
         let count = LARGE_PASTE_CHAR_THRESHOLD; // 1000 in current config
-        let chars: Vec<char> = vec!['z'; count];
-        type_chars_humanlike(&mut composer, &chars);
+        let mut now = Instant::now();
+        let step = ChatComposer::recommended_paste_flush_delay();
+        for _ in 0..count {
+            let _ = composer.handle_input_basic_with_time(
+                KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE),
+                now,
+            );
+            now += step;
+            let _ = composer.handle_paste_burst_flush(now);
+        }
 
         assert_eq!(composer.draft.textarea.text(), "z".repeat(count));
         assert!(composer.draft.pending_pastes.is_empty());
