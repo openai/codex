@@ -2,7 +2,9 @@ use codex_config::ConfigRequirements;
 use codex_config::RequirementSource;
 use codex_config::Sourced;
 use codex_config::config_toml::ConfigToml;
+use codex_config::types::ApprovalsReviewer;
 use codex_config::types::FeedbackConfigToml;
+use codex_features::FeatureToml;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::path::Path;
 
@@ -31,6 +33,13 @@ pub(super) fn apply_to_config(
     apply_exact!(model_catalog_json);
     apply_exact!(check_for_update_on_startup);
     apply_exact!(allow_login_shell);
+    if requirements
+        .approvals_reviewer
+        .can_set(&ApprovalsReviewer::User)
+        .is_err()
+    {
+        config.features.get_or_insert_default().guardianv2 = Some(FeatureToml::Enabled(false));
+    }
     apply_feedback_requirement(
         &mut config.feedback,
         requirements.feedback.as_ref(),

@@ -1,3 +1,4 @@
+use codex_features::FeatureToml;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::SandboxMode;
@@ -1432,6 +1433,14 @@ impl ConfigRequirementsToml {
         apply_exact!(model_catalog_json);
         apply_exact!(check_for_update_on_startup);
         apply_exact!(allow_login_shell);
+
+        if self
+            .allowed_approvals_reviewers
+            .as_ref()
+            .is_some_and(|reviewers| !reviewers.contains(&ApprovalsReviewer::User))
+        {
+            config.features.get_or_insert_default().guardianv2 = Some(FeatureToml::Enabled(false));
+        }
 
         if let Some(enabled) = self.feedback.as_ref().and_then(|feedback| feedback.enabled) {
             config.feedback.get_or_insert_default().enabled = Some(enabled);

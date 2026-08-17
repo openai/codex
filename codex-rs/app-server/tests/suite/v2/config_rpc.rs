@@ -232,6 +232,40 @@ service_tier = "fast"
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_read_disables_guardian_v2_when_managed_config_requires_guardian_v1() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_config(&codex_home, "[features]\nguardianv2 = true\n")?;
+    std::fs::write(
+        codex_home.path().join("requirements.toml"),
+        "allowed_approvals_reviewers = [\"auto_review\"]\n",
+    )?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+
+    let request_id = mcp
+        .send_config_read_request(ConfigReadParams {
+            include_layers: false,
+            cwd: None,
+        })
+        .await?;
+    let ConfigReadResponse { config, .. } =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
+
+    assert_eq!(
+        config
+            .additional
+            .get("features")
+            .and_then(|features| features.get("guardianv2")),
+        Some(&json!(false))
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_read_returns_effective_and_layers() -> Result<()> {
     let codex_home = TempDir::new()?;
     write_config(

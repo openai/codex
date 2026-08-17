@@ -1,6 +1,7 @@
 use anyhow::Result;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::test_support::CloudConfigBundleFixture;
+use codex_features::Feature;
 use codex_protocol::protocol::AskForApproval;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
@@ -66,6 +67,44 @@ async fn refreshed_cloud_bundle_updates_later_sessions() -> Result<()> {
             .as_deref(),
         Some("refreshed managed instructions")
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn managed_guardian_v1_requirements_disable_guardian_v2() -> Result<()> {
+    let server = start_mock_server().await;
+
+    for (requirements, guardian_v2_enabled) in [
+        (r#"allowed_approvals_reviewers = ["auto_review"]"#, false),
+        (
+            r#"allowed_approvals_reviewers = ["guardian_subagent"]"#,
+            false,
+        ),
+        (
+            r#"allowed_approvals_reviewers = ["auto_review", "user"]"#,
+            true,
+        ),
+        ("[features]\nguardian_approval = true\n", true),
+        ("[features]\nauto_review = true\n", true),
+    ] {
+        let mut builder = test_codex()
+            .with_pre_build_hook(|home| {
+                std::fs::write(home.join("config.toml"), "[features]\nguardianv2 = true\n")
+                    .expect("Guardian v2 configuration should be written");
+            })
+            .with_cloud_config_bundle(
+                CloudConfigBundleFixture::loader_with_enterprise_requirement(requirements),
+            );
+        let test = builder.build_with_auto_env(&server).await?;
+
+        assert!(test.config.features.enabled(Feature::GuardianApproval));
+        assert_eq!(
+            test.config.features.enabled(Feature::GuardianV2),
+            guardian_v2_enabled,
+            "{requirements}"
+        );
+    }
 
     Ok(())
 }
