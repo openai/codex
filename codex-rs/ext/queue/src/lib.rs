@@ -15,5 +15,7 @@ pub fn install<C>(registry: &mut ExtensionRegistryBuilder<C>, service: Arc<Queue
 where
     C: Send + Sync + 'static,
 {
+    let watcher = Arc::downgrade(&service);
     registry.thread_lifecycle_contributor(service);
+    tokio::spawn(QueuedItemService::watch_external_messages(watcher));
 }

@@ -1,7 +1,9 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::Weak;
+use std::time::Duration;
 
 use codex_core::CodexThread;
 use codex_core::StartIfIdleSubmission;
@@ -13,6 +15,7 @@ use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ThreadIdleCause;
 use codex_extension_api::ThreadIdleInput;
 use codex_extension_api::ThreadLifecycleContributor;
+use codex_extension_api::ThreadResumeInput;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::snapshot_local_user_input;
@@ -30,6 +33,7 @@ use codex_thread_store::ThreadStoreError;
 use thiserror::Error;
 use tokio::sync::Mutex;
 use tokio::sync::OwnedMutexGuard;
+use tokio::sync::broadcast::error::TryRecvError;
 use uuid::Uuid;
 
 /// One user message waiting to start on its thread.
@@ -63,6 +67,7 @@ pub struct QueuedItemService {
     thread_manager: Weak<ThreadManager>,
     event_sink: Arc<dyn ExtensionEventSink>,
     dispatch_locks: Arc<StdMutex<HashMap<ThreadId, Weak<Mutex<()>>>>>,
+    resumed_threads: Arc<StdMutex<HashSet<ThreadId>>>,
 }
 
 impl QueuedItemService {
@@ -76,6 +81,165 @@ impl QueuedItemService {
             thread_manager,
             event_sink,
             dispatch_locks: Arc::new(StdMutex::new(HashMap::new())),
+            resumed_threads: Arc::new(StdMutex::new(HashSet::new())),
+        }
+    }
+
+    // Check SQLite's inexpensive data version every 10 seconds, then use the
+    // durable revision index to discover only changed threads. Independent
+    // dispatch tasks keep a blocked or failed thread from starving other queues.
+    pub(crate) async fn watch_external_messages(service: Weak<Self>) {
+        let mut last_version = None;
+        let mut last_revision = 0;
+        let mut dispatches: HashMap<ThreadId, tokio::task::JoinHandle<()>> = HashMap::new();
+        let mut interval = tokio::time::interval(Duration::from_secs(/*secs*/ 10));
+        let mut manager_initialized = false;
+        let mut thread_created = None;
+        let mut newly_loaded_threads = HashSet::new();
+        loop {
+            interval.tick().await;
+            let Some(service) = service.upgrade() else {
+                return;
+            };
+            let Some(manager) = service.thread_manager.upgrade() else {
+                if manager_initialized {
+                    return;
+                }
+                drop(service);
+                tokio::time::sleep(Duration::from_millis(/*millis*/ 1)).await;
+                interval.reset_immediately();
+                continue;
+            };
+            manager_initialized = true;
+            let thread_created =
+                thread_created.get_or_insert_with(|| manager.subscribe_thread_created());
+            loop {
+                match thread_created.try_recv() {
+                    Ok(thread_id) => {
+                        newly_loaded_threads.insert(thread_id);
+                    }
+                    Err(TryRecvError::Lagged(_)) => {
+                        newly_loaded_threads.extend(manager.list_thread_ids().await);
+                    }
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Closed) => return,
+                }
+            }
+            newly_loaded_threads.extend(
+                service
+                    .resumed_threads
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .drain(),
+            );
+
+            let version = match service.queue.change_version().await {
+                Ok(version) => version,
+                Err(error) => {
+                    tracing::warn!(%error, "failed to check queue change version");
+                    continue;
+                }
+            };
+            let version_changed = last_version != Some(version);
+            if !version_changed && newly_loaded_threads.is_empty() {
+                continue;
+            }
+
+            let thread_ids = manager.list_thread_ids().await;
+            let mut changes = Vec::new();
+            let mut observed_revision = last_revision;
+            if version_changed {
+                match service
+                    .queue
+                    .changes_since(last_revision, &thread_ids)
+                    .await
+                {
+                    Ok(changed_threads) => {
+                        if let Some((_, revision)) = changed_threads.last() {
+                            observed_revision = *revision;
+                        }
+                        changes.extend(changed_threads);
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "failed to discover changed thread queues");
+                        continue;
+                    }
+                }
+            }
+            if !newly_loaded_threads.is_empty() {
+                let created_threads = thread_ids
+                    .iter()
+                    .copied()
+                    .filter(|thread_id| newly_loaded_threads.contains(thread_id))
+                    .collect::<Vec<_>>();
+                match service
+                    .queue
+                    .changes_since(/*revision*/ 0, &created_threads)
+                    .await
+                {
+                    Ok(changed_threads) => changes.extend(changed_threads),
+                    Err(error) => {
+                        tracing::warn!(%error, "failed to discover newly loaded thread queues");
+                        continue;
+                    }
+                }
+            }
+            last_version = Some(version);
+            last_revision = observed_revision;
+            newly_loaded_threads.clear();
+            dispatches.retain(|_, dispatch| !dispatch.is_finished());
+
+            let mut changed_threads = HashSet::new();
+            for (thread_id, _) in changes {
+                if !changed_threads.insert(thread_id) {
+                    continue;
+                }
+                service.emit_changed(thread_id);
+                if dispatches
+                    .get(&thread_id)
+                    .is_some_and(|dispatch| !dispatch.is_finished())
+                {
+                    continue;
+                }
+                let service = Arc::downgrade(&service);
+                let dispatch = tokio::spawn(async move {
+                    loop {
+                        {
+                            let Some(service) = service.upgrade() else {
+                                return;
+                            };
+                            let Some(manager) = service.thread_manager.upgrade() else {
+                                return;
+                            };
+                            let Ok(thread) = manager.get_thread(thread_id).await else {
+                                return;
+                            };
+                            if matches!(
+                                thread.agent_status().await,
+                                AgentStatus::Running
+                                    | AgentStatus::Interrupted
+                                    | AgentStatus::Shutdown
+                                    | AgentStatus::NotFound
+                            ) {
+                                return;
+                            }
+                            match service
+                                .queue
+                                .list_page(thread_id, /*offset*/ 0, /*limit*/ 1)
+                                .await
+                            {
+                                Ok(items) if items.is_empty() => return,
+                                Ok(_) => service.wake_if_loaded(thread_id).await,
+                                Err(error) => {
+                                    tracing::warn!(%thread_id, %error, "failed to check queued user input");
+                                }
+                            }
+                        }
+                        tokio::time::sleep(Duration::from_secs(/*secs*/ 10)).await;
+                    }
+                });
+                dispatches.insert(thread_id, dispatch);
+            }
         }
     }
 
@@ -362,6 +526,17 @@ impl<C> ThreadLifecycleContributor<C> for QueuedItemService
 where
     C: Send + Sync + 'static,
 {
+    fn on_thread_resume<'a>(&'a self, input: ThreadResumeInput<'a>) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            if let Ok(thread_id) = ThreadId::from_string(input.thread_store.level_id()) {
+                self.resumed_threads
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .insert(thread_id);
+            }
+        })
+    }
+
     fn on_thread_idle<'a>(&'a self, input: ThreadIdleInput<'a>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
             if input.cause == ThreadIdleCause::Interrupted {

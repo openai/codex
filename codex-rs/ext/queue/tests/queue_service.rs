@@ -8,6 +8,7 @@ use std::time::Duration;
 use anyhow::Context;
 use codex_core::NotSubmittedReason;
 use codex_core::StartIfIdleSubmission;
+use codex_core::StartThreadOptions;
 use codex_core::TurnInput;
 use codex_core::TurnInputRequest;
 use codex_core::TurnInputSubmission;
@@ -21,6 +22,7 @@ use codex_extension_api::NoopExtensionEventSink;
 use codex_extension_api::ThreadIdleCause;
 use codex_extension_api::ThreadIdleInput;
 use codex_extension_api::ThreadLifecycleContributor;
+use codex_extension_api::ThreadResumeInput;
 use codex_protocol::ThreadId;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ImageDetail;
@@ -45,6 +47,7 @@ use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event_match;
+use core_test_support::wait_for_event_with_timeout;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::sync::oneshot;
@@ -73,11 +76,32 @@ impl ExtensionEventSink for RecordingEventSink {
 }
 
 #[derive(Default)]
-struct InstalledQueue(OnceLock<Arc<QueuedItemService>>);
+struct InstalledQueue {
+    service: OnceLock<Arc<QueuedItemService>>,
+    skip_next_idle: Mutex<Option<ThreadId>>,
+}
 
 impl ThreadLifecycleContributor<codex_core::config::Config> for InstalledQueue {
+    fn on_thread_resume<'a>(&'a self, input: ThreadResumeInput<'a>) -> ExtensionFuture<'a, ()> {
+        match self.service.get() {
+            Some(service) => <QueuedItemService as ThreadLifecycleContributor<
+                codex_core::config::Config,
+            >>::on_thread_resume(service.as_ref(), input),
+            None => Box::pin(async {}),
+        }
+    }
+
     fn on_thread_idle<'a>(&'a self, input: ThreadIdleInput<'a>) -> ExtensionFuture<'a, ()> {
-        match self.0.get() {
+        if self
+            .skip_next_idle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take_if(|thread_id| thread_id.to_string() == input.thread_store.level_id())
+            .is_some()
+        {
+            return Box::pin(async {});
+        }
+        match self.service.get() {
             Some(service) => <QueuedItemService as ThreadLifecycleContributor<
                 codex_core::config::Config,
             >>::on_thread_idle(service.as_ref(), input),
@@ -105,7 +129,7 @@ fn install_registered_queue(
         Arc::downgrade(&test.thread_manager),
         Arc::new(NoopExtensionEventSink),
     ));
-    assert!(installed.0.set(Arc::clone(&service)).is_ok());
+    assert!(installed.service.set(Arc::clone(&service)).is_ok());
     Ok(service)
 }
 
@@ -482,6 +506,136 @@ async fn registered_queue_lifecycle_starts_messages_in_fifo_order() -> anyhow::R
         .collect::<anyhow::Result<Vec<_>>>()?;
     assert_eq!(vec!["A", "B", "C"], prompts);
     assert!(queue.list(thread_id).await?.is_empty());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn externally_changed_queues_dispatch_independently_and_retry_failed_wakes()
+-> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let model_responses = responses::mount_sse_sequence(
+        &server,
+        [
+            "independent-queued-turn",
+            "external-queued-turn",
+            "resumed-queued-turn",
+        ]
+        .into_iter()
+        .map(responses::sse_completed)
+        .collect(),
+    )
+    .await;
+    let (installed, extensions) = registered_queue_extensions();
+    let test = test_codex()
+        .with_extensions(extensions)
+        .with_config(|config| config.include_environment_context = false)
+        .build_with_auto_env(&server)
+        .await?;
+    let thread_id = test.session_configured.thread_id;
+    let queue = install_registered_queue(&test, installed.as_ref())?;
+    let independent_thread = test
+        .thread_manager
+        .start_thread(StartThreadOptions::new(test.config.clone()))
+        .await?;
+    let external_runtime = StateRuntime::init(
+        test.codex
+            .state_db()
+            .context("state runtime unavailable")?
+            .sqlite()
+            .clone(),
+        "test-provider".to_string(),
+    )
+    .await?;
+    let external_queue = QueuedItemService::new(
+        Arc::new(LocalQueueStore::new(external_runtime)),
+        Weak::new(),
+        Arc::new(NoopExtensionEventSink),
+    );
+    let mut watcher_extensions = ExtensionRegistryBuilder::<codex_core::config::Config>::new();
+    codex_queue_extension::install(&mut watcher_extensions, Arc::clone(&queue));
+
+    tokio::time::sleep(Duration::from_secs(/*secs*/ 1)).await;
+    assert!(model_responses.requests().is_empty());
+    *installed
+        .skip_next_idle
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(thread_id);
+    let first = external_queue
+        .enqueue(thread_id, user_input("written by another process"))
+        .await?;
+    let updated = queue
+        .update(
+            thread_id,
+            first.id,
+            user_input("locally edited external message"),
+        )
+        .await?
+        .context("external queue item disappeared")?;
+    external_queue
+        .enqueue(
+            independent_thread.thread_id,
+            user_input("independent thread"),
+        )
+        .await?;
+
+    wait_for_event_with_timeout(
+        independent_thread.thread.as_ref(),
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        Duration::from_secs(/*secs*/ 25),
+    )
+    .await;
+    assert_eq!(1, model_responses.requests().len());
+    assert_eq!(vec![updated], queue.list(thread_id).await?);
+
+    wait_for_event_with_timeout(
+        test.codex.as_ref(),
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        Duration::from_secs(/*secs*/ 25),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_secs(/*secs*/ 11)).await;
+
+    assert!(queue.list(thread_id).await?.is_empty());
+    assert!(queue.list(independent_thread.thread_id).await?.is_empty());
+
+    let rollout_path = test.codex.rollout_path().context("rollout path missing")?;
+    test.codex.shutdown_and_wait().await?;
+    test.thread_manager.remove_thread(&thread_id).await;
+    external_queue
+        .enqueue(thread_id, user_input("queued before ordinary resume"))
+        .await?;
+    tokio::time::sleep(Duration::from_secs(/*secs*/ 11)).await;
+    let resumed = test
+        .thread_manager
+        .resume_thread_from_rollout(
+            test.config.clone(),
+            rollout_path,
+            test.thread_manager.auth_manager(),
+            /*parent_trace*/ None,
+            Default::default(),
+        )
+        .await?;
+    wait_for_event_with_timeout(
+        resumed.thread.as_ref(),
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        Duration::from_secs(/*secs*/ 25),
+    )
+    .await;
+    assert!(queue.list(thread_id).await?.is_empty());
+
+    let prompts = model_responses
+        .requests()
+        .into_iter()
+        .filter_map(|request| request.message_input_texts("user").pop())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        vec![
+            "independent thread",
+            "locally edited external message",
+            "queued before ordinary resume",
+        ],
+        prompts
+    );
     Ok(())
 }
 

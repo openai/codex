@@ -12,6 +12,16 @@ use crate::ThreadStoreFuture;
 
 /// Storage-neutral persistence for ordered, thread-scoped user messages.
 pub trait QueueStore: Send + Sync {
+    /// Return a stable revision that changes when another connection updates the queue.
+    fn change_version(&self) -> ThreadStoreFuture<'_, i64>;
+
+    /// Return changed, loaded thread IDs and their durable revisions after `revision`.
+    fn changes_since<'a>(
+        &'a self,
+        revision: i64,
+        thread_ids: &'a [ThreadId],
+    ) -> ThreadStoreFuture<'a, Vec<(ThreadId, i64)>>;
+
     fn enqueue(
         &self,
         thread_id: ThreadId,
@@ -72,6 +82,18 @@ where
 }
 
 impl QueueStore for LocalQueueStore {
+    fn change_version(&self) -> ThreadStoreFuture<'_, i64> {
+        queue_future(self.queue().change_version())
+    }
+
+    fn changes_since<'a>(
+        &'a self,
+        revision: i64,
+        thread_ids: &'a [ThreadId],
+    ) -> ThreadStoreFuture<'a, Vec<(ThreadId, i64)>> {
+        queue_future(self.queue().changes_since(revision, thread_ids))
+    }
+
     fn enqueue(
         &self,
         thread_id: ThreadId,

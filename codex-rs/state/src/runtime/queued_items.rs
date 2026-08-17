@@ -1,21 +1,77 @@
 use super::*;
 use crate::MAX_QUEUE_ITEMS;
 use crate::QueuedUserSubmissionRecord;
+use sqlx::Connection;
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 /// SQLite-backed persistence for durable, thread-scoped user messages.
 #[derive(Clone)]
 pub struct SqliteQueueStore {
     pool: Arc<SqlitePool>,
+    change_version_connection: Arc<Mutex<Option<SqliteConnection>>>,
 }
 
 impl SqliteQueueStore {
     pub(crate) fn new(pool: Arc<SqlitePool>) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            change_version_connection: Arc::new(Mutex::new(None)),
+        }
     }
 
     pub(crate) async fn close(&self) {
+        let connection = self.change_version_connection.lock().await.take();
+        if let Some(connection) = connection
+            && let Err(error) = connection.close().await
+        {
+            tracing::warn!(%error, "failed to close queue change-version connection");
+        }
         self.pool.close().await;
+    }
+
+    /// Observe queue-database commits through one stable SQLite connection.
+    pub async fn change_version(&self) -> anyhow::Result<i64> {
+        let mut connection = Arc::clone(&self.change_version_connection)
+            .lock_owned()
+            .await;
+        if connection.is_none() {
+            *connection = Some(self.pool.acquire().await?.detach());
+        }
+        let Some(connection) = connection.as_mut() else {
+            unreachable!("queue change-version connection was initialized");
+        };
+        Ok(sqlx::query_scalar("PRAGMA data_version")
+            .fetch_one(connection)
+            .await?)
+    }
+
+    /// Return changed revisions only for the supplied loaded thread IDs.
+    pub async fn changes_since(
+        &self,
+        revision: i64,
+        thread_ids: &[ThreadId],
+    ) -> anyhow::Result<Vec<(ThreadId, i64)>> {
+        if thread_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut query = QueryBuilder::<Sqlite>::new(
+            "SELECT thread_id, revision FROM queued_thread_revisions WHERE revision > ",
+        );
+        query.push_bind(revision).push(" AND thread_id IN (");
+        let mut separated = query.separated(", ");
+        for thread_id in thread_ids {
+            separated.push_bind(thread_id.to_string());
+        }
+        separated.push_unseparated(") ORDER BY revision");
+        let rows = query
+            .build_query_as::<(String, i64)>()
+            .fetch_all(self.pool.as_ref())
+            .await?;
+        rows.into_iter()
+            .map(|(thread_id, revision)| Ok((ThreadId::try_from(thread_id)?, revision)))
+            .collect()
     }
 
     pub async fn enqueue(
