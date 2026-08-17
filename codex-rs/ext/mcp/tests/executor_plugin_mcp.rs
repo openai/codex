@@ -1,3 +1,5 @@
+use codex_config::AppToolApproval;
+use codex_config::McpServerToolConfig;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
@@ -14,6 +16,7 @@ use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -52,6 +55,10 @@ async fn selected_plugin_servers_use_managed_requirements_for_the_selected_root_
     "unlisted": {"command":"unlisted-command"}
   }
 }"#,
+    )?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        "[plugins.\"selected-root\".mcp_servers.mismatched]\nenabled = true\n[plugins.\"selected-root\".mcp_servers.unlisted]\nenabled = true",
     )?;
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
@@ -160,7 +167,46 @@ async fn high_level_discovery_matches_the_existing_plugin_provider() -> TestResu
     )?;
     std::fs::write(
         plugin_root.path().join("servers.json"),
-        r#"{"mcpServers":{"first":{"command":"first"},"second":{"command":"second"}}}"#,
+        r#"{
+  "mcpServers": {
+    "first": {
+      "command": "first",
+      "default_tools_approval_mode": "writes",
+      "enabled_tools": ["read", "deploy", "trusted", "package-only"],
+      "disabled_tools": ["package-denied"],
+      "tools": {
+        "read": {"approval_mode": "prompt"},
+        "deploy": {"approval_mode": "approve"},
+        "trusted": {"approval_mode": "approve"}
+      }
+    },
+    "second": {
+      "command": "second",
+      "enabled": false,
+      "default_tools_approval_mode": "prompt"
+    }
+  }
+}"#,
+    )?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        r#"
+[plugins."selected-root".mcp_servers.first]
+enabled = false
+default_tools_approval_mode = "prompt"
+enabled_tools = ["read", "deploy", "trusted", "host-only"]
+disabled_tools = ["write"]
+
+[plugins."selected-root".mcp_servers.first.tools.read]
+approval_mode = "approve"
+
+[plugins."selected-root".mcp_servers.first.tools.trusted]
+approval_mode = "approve"
+
+[plugins."selected-root".mcp_servers.second]
+enabled = true
+default_tools_approval_mode = "auto"
+"#,
     )?;
     let mut config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
@@ -168,6 +214,63 @@ async fn high_level_discovery_matches_the_existing_plugin_provider() -> TestResu
         .build()
         .await?;
     let existing = selected_plugin_contributions(&config, plugin_root.path()).await?;
+    let mut servers = raw_selected_plugin_contributions(&config, plugin_root.path())
+        .await?
+        .into_iter()
+        .filter_map(|contribution| match contribution {
+            McpServerContribution::SelectedPlugin { name, config, .. } => Some((name, config)),
+            _ => None,
+        })
+        .collect::<HashMap<_, _>>();
+    let server = servers
+        .remove("first")
+        .expect("disabled selected server remains registered");
+    let declared_disabled_server = servers
+        .remove("second")
+        .expect("package-disabled server remains registered");
+    assert_eq!(
+        (
+            server.enabled,
+            server.default_tools_approval_mode,
+            server.enabled_tools,
+            server.disabled_tools,
+            server.tools,
+            declared_disabled_server.enabled,
+            declared_disabled_server.default_tools_approval_mode,
+        ),
+        (
+            false,
+            Some(AppToolApproval::Prompt),
+            Some(vec![
+                "read".to_string(),
+                "deploy".to_string(),
+                "trusted".to_string(),
+            ]),
+            Some(vec!["package-denied".to_string(), "write".to_string()]),
+            HashMap::from([
+                (
+                    "read".to_string(),
+                    McpServerToolConfig {
+                        approval_mode: Some(AppToolApproval::Prompt),
+                    },
+                ),
+                (
+                    "deploy".to_string(),
+                    McpServerToolConfig {
+                        approval_mode: Some(AppToolApproval::Prompt),
+                    },
+                ),
+                (
+                    "trusted".to_string(),
+                    McpServerToolConfig {
+                        approval_mode: Some(AppToolApproval::Approve),
+                    },
+                ),
+            ]),
+            false,
+            Some(AppToolApproval::Prompt),
+        )
+    );
     config
         .features
         .enable(Feature::ExecutorCapabilityDiscovery)

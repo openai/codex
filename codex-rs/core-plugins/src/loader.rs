@@ -1397,6 +1397,73 @@ pub async fn load_configured_plugin_mcp_servers(
     load_plugin_mcp_servers_with_policy(plugin_root, auth_mode, plugin_policy).await
 }
 
+/// Resolves effective per-plugin MCP policies without validating opaque selected-root IDs.
+pub fn configured_plugin_mcp_server_policies(
+    config_layer_stack: &ConfigLayerStack,
+) -> HashMap<String, HashMap<String, PluginMcpServerConfig>> {
+    config_layer_stack
+        .effective_user_config()
+        .map(|config| configured_plugins_from_user_config_value(&config))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(plugin_id, plugin)| (plugin_id, plugin.mcp_servers))
+        .collect()
+}
+
+/// Applies user policy without widening the selected plugin's declared restrictions.
+pub fn apply_configured_plugin_mcp_server_policies(
+    policies: &HashMap<String, PluginMcpServerConfig>,
+    servers: &mut HashMap<String, McpServerConfig>,
+) {
+    for (name, server) in servers {
+        if let Some(policy) = policies.get(name) {
+            let declared_approval_mode = server.default_tools_approval_mode.unwrap_or_default();
+            server.enabled &= policy.enabled;
+
+            if let Some(approval_mode) = policy.default_tools_approval_mode {
+                server.default_tools_approval_mode =
+                    Some(declared_approval_mode.restrict_to(approval_mode));
+            }
+            if let Some(enabled_tools) = &policy.enabled_tools {
+                match &mut server.enabled_tools {
+                    Some(declared_tools) => {
+                        declared_tools.retain(|tool| enabled_tools.contains(tool));
+                    }
+                    None => server.enabled_tools = Some(enabled_tools.clone()),
+                }
+            }
+            if let Some(disabled_tools) = &policy.disabled_tools {
+                let declared_tools = server.disabled_tools.get_or_insert_default();
+                for tool in disabled_tools {
+                    if !declared_tools.contains(tool) {
+                        declared_tools.push(tool.clone());
+                    }
+                }
+            }
+            for (tool_name, tool_policy) in &policy.tools {
+                if tool_policy.approval_mode.is_some() {
+                    server.tools.entry(tool_name.clone()).or_default();
+                }
+            }
+            for (tool_name, tool_config) in &mut server.tools {
+                if let Some(approval_mode) = policy
+                    .tools
+                    .get(tool_name)
+                    .and_then(|tool_policy| tool_policy.approval_mode)
+                    .or(policy.default_tools_approval_mode)
+                {
+                    tool_config.approval_mode = Some(
+                        tool_config
+                            .approval_mode
+                            .unwrap_or(declared_approval_mode)
+                            .restrict_to(approval_mode),
+                    );
+                }
+            }
+        }
+    }
+}
+
 async fn load_plugin_mcp_servers_with_policy(
     plugin_root: &Path,
     auth_mode: Option<AuthMode>,

@@ -1,6 +1,9 @@
+use codex_config::types::PluginMcpServerConfig;
 use codex_connectors_extension::ExecutorPluginConnectorProvider;
 use codex_core::config::Config;
 use codex_core_plugins::ExecutorPluginProvider;
+use codex_core_plugins::loader::apply_configured_plugin_mcp_server_policies;
+use codex_core_plugins::loader::configured_plugin_mcp_server_policies;
 use codex_exec_server::EnvironmentManager;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::McpServerContribution;
@@ -154,6 +157,8 @@ impl McpServerContributor<Config> for SelectedExecutorPluginMcpContributor {
             let Some(selected_roots) = context.ready_selected_capability_roots() else {
                 return Vec::new();
             };
+            let plugin_policies =
+                configured_plugin_mcp_server_policies(&context.config().config_layer_stack);
             let mut contributions = Vec::new();
 
             if let Some(snapshot) = context.executor_capability_discovery() {
@@ -176,6 +181,7 @@ impl McpServerContributor<Config> for SelectedExecutorPluginMcpContributor {
                     };
                     contributions.extend(project_metadata(
                         context.config(),
+                        plugin_policies.get(&plugin.plugin_id),
                         selection_order,
                         plugin,
                     ));
@@ -188,6 +194,7 @@ impl McpServerContributor<Config> for SelectedExecutorPluginMcpContributor {
                     };
                     contributions.extend(project_metadata(
                         context.config(),
+                        plugin_policies.get(&plugin.plugin_id),
                         selection_order,
                         plugin,
                     ));
@@ -201,10 +208,14 @@ impl McpServerContributor<Config> for SelectedExecutorPluginMcpContributor {
 
 fn project_metadata(
     config: &Config,
+    plugin_policy: Option<&HashMap<String, PluginMcpServerConfig>>,
     selection_order: usize,
     plugin: SelectedPluginMetadata,
 ) -> Vec<McpServerContribution> {
     let mut servers = plugin.servers.iter().cloned().collect::<HashMap<_, _>>();
+    if let Some(plugin_policy) = plugin_policy {
+        apply_configured_plugin_mcp_server_policies(plugin_policy, &mut servers);
+    }
     config.apply_plugin_mcp_server_requirements(&plugin.plugin_id, &mut servers);
     let mut servers = servers.into_iter().collect::<Vec<_>>();
     servers.sort_unstable_by(|left, right| left.0.cmp(&right.0));
