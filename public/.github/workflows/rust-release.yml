@@ -16,6 +16,7 @@ on:
 
 env:
   CODEX_ZSH_RELEASE_TAG: codex-zsh-v0.1.0
+  CODEX_ZSH_MANIFEST_SHA256: c534eab89dcea7e3d8a5e5b3f49c025c7c64cd4e4d9814ee24871de58a9359a1
 
 concurrency:
   group: ${{ github.workflow }}
@@ -361,6 +362,8 @@ jobs:
           curl -fsSL \
             "https://github.com/${GITHUB_REPOSITORY}/releases/download/${CODEX_ZSH_RELEASE_TAG}/codex-zsh" \
             -o "${RUNNER_TEMP}/codex-zsh"
+          bash "${GITHUB_WORKSPACE}/.github/scripts/verify-zsh-manifest.sh" \
+            "${RUNNER_TEMP}/codex-zsh" "$CODEX_ZSH_MANIFEST_SHA256"
 
       - name: Build Codex package archive
         if: ${{ runner.os != 'macOS' }}
@@ -599,6 +602,8 @@ jobs:
           curl -fsSL \
             "https://github.com/${GITHUB_REPOSITORY}/releases/download/${CODEX_ZSH_RELEASE_TAG}/codex-zsh" \
             -o "$zsh_manifest"
+          bash "${GITHUB_WORKSPACE}/.github/scripts/verify-zsh-manifest.sh" \
+            "$zsh_manifest" "$CODEX_ZSH_MANIFEST_SHA256"
 
           PYTHONPATH="${GITHUB_WORKSPACE}/scripts" python3 - "$TARGET" "$signed_root" "$zsh_manifest" <<'PY'
           import shutil
