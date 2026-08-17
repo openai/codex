@@ -4,6 +4,7 @@ use codex_protocol::config_types::Personality;
 use codex_protocol::openai_models::ApprovalMessages;
 use codex_protocol::openai_models::AutoReviewMessages;
 use codex_protocol::openai_models::CollaborationModeMessages;
+use codex_protocol::openai_models::GuardianV2ModelConfig;
 use codex_protocol::openai_models::ModelTokenBudgetConfig;
 use codex_protocol::openai_models::MultiAgentMessages;
 use codex_protocol::openai_models::MultiAgentModeMessages;
@@ -59,6 +60,10 @@ fn base_instruction_override_is_literal_and_preserves_catalog_messages() {
         auto_compact_fallback_prompt: "compact prompt".to_string(),
         auto_compact_fallback_buffer_tokens: 64,
     };
+    let guardian_v2 = GuardianV2ModelConfig {
+        classifier_instructions: Some("Guardian experiment".to_string()),
+        ..Default::default()
+    };
     model.model_messages = Some(ModelMessages {
         instructions_template: Some("template".to_string()),
         instructions_variables: Some(ModelInstructionsVariables {
@@ -72,6 +77,7 @@ fn base_instruction_override_is_literal_and_preserves_catalog_messages() {
         permissions: Some(permissions.clone()),
         multi_agent: Some(multi_agent.clone()),
         token_budget: Some(token_budget.clone()),
+        guardian_v2: Some(guardian_v2.clone()),
     });
     let config = ModelsManagerConfig {
         base_instructions: Some(override_instructions.to_string()),
@@ -91,6 +97,7 @@ fn base_instruction_override_is_literal_and_preserves_catalog_messages() {
             permissions: Some(permissions),
             multi_agent: Some(multi_agent),
             token_budget: Some(token_budget),
+            guardian_v2: Some(guardian_v2),
         })
     );
     assert_eq!(
@@ -121,6 +128,7 @@ fn disabled_personality_bakes_default_and_preserves_catalog_approval_messages() 
         permissions: None,
         multi_agent: None,
         token_budget: None,
+        guardian_v2: None,
     });
     let config = ModelsManagerConfig {
         personality_enabled: false,
@@ -140,6 +148,7 @@ fn disabled_personality_bakes_default_and_preserves_catalog_approval_messages() 
             permissions: None,
             multi_agent: None,
             token_budget: None,
+            guardian_v2: None,
         })
     );
 }
@@ -166,6 +175,7 @@ fn disabled_personality_uses_plain_base_instructions_for_local_personality_model
                 permissions: None,
                 multi_agent: None,
                 token_budget: None,
+                guardian_v2: None,
             }),
             "unexpected model messages for {slug}"
         );
@@ -206,6 +216,7 @@ fn personality_none_strips_catalog_instruction_sources_through_the_next_h1() {
             permissions: None,
             multi_agent: None,
             token_budget: None,
+            guardian_v2: None,
         });
 
         let updated = with_config_overrides(model, &config);

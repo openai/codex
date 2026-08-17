@@ -288,6 +288,23 @@ impl ToolLifecycleContributor for GuardianV2Extension {
         let Some(guardian_config) = input.thread_store.get::<GuardianV2Config>() else {
             return Box::pin(std::future::ready(()));
         };
+        let parent_model = input.thread_store.get::<ModelInfo>();
+        let model_defaults = parent_model
+            .as_ref()
+            .and_then(|model| model.model_messages.as_ref())
+            .and_then(|messages| messages.guardian_v2.as_ref());
+        let guardian_config = match guardian_config.with_model_defaults(model_defaults) {
+            Ok(config) => config,
+            Err(error) => {
+                self.event_sink.emit_warning(ExtensionWarning {
+                    thread_id: input.thread_store.level_id().to_owned(),
+                    turn_id: Some(input.turn_id.to_owned()),
+                    message: error,
+                });
+                return Box::pin(std::future::ready(()));
+            }
+        };
+        input.thread_store.insert(guardian_config.clone());
         let sampled_at = SystemTime::now();
         let latest_parent_compaction = input
             .conversation_history
@@ -337,7 +354,6 @@ impl ToolLifecycleContributor for GuardianV2Extension {
             tool_name: input.tool_name.clone(),
             payload: input.payload.clone(),
         };
-        let parent_model = input.thread_store.get::<ModelInfo>();
         let parent_compaction_hash = parent_model
             .as_ref()
             .and_then(|model| model.comp_hash.clone());

@@ -33,6 +33,12 @@ use crate::config_types::ServiceTier;
 use crate::config_types::Verbosity;
 use crate::protocol::MultiAgentVersion;
 
+#[path = "openai_models/guardian_v2.rs"]
+mod guardian_v2;
+
+pub use guardian_v2::GuardianV2ModelConfig;
+pub use guardian_v2::GuardianV2TranscriptModelConfig;
+
 const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
 /// Backend model-catalog specialty identifying cybersecurity-focused models.
 pub const MODEL_SPECIALTY_CYBER: &str = "cyber";
@@ -534,6 +540,8 @@ pub struct ModelMessages {
     pub multi_agent: Option<MultiAgentMessages>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_budget: Option<ModelTokenBudgetConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guardian_v2: Option<GuardianV2ModelConfig>,
 }
 
 /// Model-owned defaults for the context-window token-budget feature.
@@ -758,6 +766,7 @@ where
                     permissions: None,
                     multi_agent: None,
                     token_budget: None,
+                    guardian_v2: None,
                 });
                 messages.instructions_template = Some(base_instructions);
             }
@@ -947,6 +956,7 @@ mod tests {
                 permissions: None,
                 multi_agent: None,
                 token_budget: None,
+                guardian_v2: None,
             }
         );
     }
@@ -1088,6 +1098,7 @@ mod tests {
                 permissions: None,
                 multi_agent: None,
                 token_budget: None,
+                guardian_v2: None,
             }
         );
     }
@@ -1169,6 +1180,7 @@ mod tests {
             permissions: None,
             multi_agent: None,
             token_budget: None,
+            guardian_v2: None,
         }));
 
         let instructions = model.get_model_instructions(Some(Personality::Friendly));
@@ -1191,6 +1203,7 @@ mod tests {
             permissions: None,
             multi_agent: None,
             token_budget: None,
+            guardian_v2: None,
         }));
         assert_eq!(
             model.get_model_instructions(Some(Personality::Pragmatic)),
@@ -1214,6 +1227,7 @@ mod tests {
             permissions: None,
             multi_agent: None,
             token_budget: None,
+            guardian_v2: None,
         }));
         assert_eq!(
             model_no_personality.get_model_instructions(Some(Personality::Friendly)),
@@ -1248,6 +1262,7 @@ mod tests {
             permissions: None,
             multi_agent: None,
             token_budget: None,
+            guardian_v2: None,
         }));
 
         let instructions = model.get_model_instructions(Some(Personality::Friendly));
@@ -1288,6 +1303,7 @@ mod tests {
                 permissions: None,
                 multi_agent: None,
                 token_budget: None,
+                guardian_v2: None,
             })
         );
         assert_eq!(
@@ -1339,6 +1355,7 @@ mod tests {
                 permissions: None,
                 multi_agent: None,
                 token_budget: None,
+                guardian_v2: None,
             }))],
         };
 
@@ -1376,6 +1393,17 @@ mod tests {
             }),
             multi_agent: None,
             token_budget: None,
+            guardian_v2: Some(GuardianV2ModelConfig {
+                classifier_instructions: Some("Guardian classification".to_string()),
+                review_threshold_basis_points: Some(7_500),
+                reasoning_effort: Some(ReasoningEffort::Minimal),
+                transcript: Some(GuardianV2TranscriptModelConfig {
+                    sources: Some(vec!["reasoning".to_string()]),
+                    max_tool_entry_tokens: Some(500),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
         };
         let mut value = serde_json::to_value(ModelsResponse {
             models: vec![test_model(Some(messages.clone()))],
@@ -1398,6 +1426,7 @@ mod tests {
             permissions: None,
             multi_agent: None,
             token_budget: None,
+            guardian_v2: None,
         };
         let mut value = serde_json::to_value(ModelsResponse {
             models: vec![test_model(Some(canonical_messages.clone()))],

@@ -112,6 +112,7 @@ async fn remote_models_get_model_info_uses_longest_matching_prefix() -> Result<(
             permissions: None,
             multi_agent: None,
             token_budget: None,
+            guardian_v2: None,
         }),
         ..specific
     };
@@ -126,6 +127,7 @@ async fn remote_models_get_model_info_uses_longest_matching_prefix() -> Result<(
             permissions: None,
             multi_agent: None,
             token_budget: None,
+            guardian_v2: None,
         }),
         ..generic
     };
@@ -774,6 +776,7 @@ async fn remote_models_apply_legacy_instructions() -> Result<()> {
             permissions: None,
             multi_agent: None,
             token_budget: None,
+            guardian_v2: None,
         }),
         include_skills_usage_instructions: false,
         include_plugin_usage_instructions: false,

@@ -26,6 +26,9 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::ReasoningItemReasoningSummary;
+use codex_protocol::openai_models::GuardianV2ModelConfig;
+use codex_protocol::openai_models::GuardianV2TranscriptModelConfig;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TruncationPolicy;
@@ -222,8 +225,14 @@ async fn sample_conversation_history(
     arguments: &str,
     guardian_policy: Option<&str>,
 ) -> Result<(serde_json::Value, TestCodex, ExtensionRegistry<Config>)> {
-    sample_configured_conversation_history(conversation_history, arguments, guardian_policy, "")
-        .await
+    sample_configured_conversation_history(
+        conversation_history,
+        arguments,
+        guardian_policy,
+        "",
+        /*model_defaults*/ None,
+    )
+    .await
 }
 
 async fn sample_configured_conversation_history(
@@ -231,11 +240,13 @@ async fn sample_configured_conversation_history(
     arguments: &str,
     guardian_policy: Option<&str>,
     guardian_config: &str,
+    model_defaults: Option<GuardianV2ModelConfig>,
 ) -> Result<(serde_json::Value, TestCodex, ExtensionRegistry<Config>)> {
     let thread_server = responses::start_mock_server().await;
     let guardian_policy = guardian_policy.map(str::to_owned);
     let guardian_config = guardian_config.to_owned();
-    let test = test_codex()
+    let has_model_defaults = model_defaults.is_some();
+    let builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_model_info_override("codex-auto-review", |model_info| {
             model_info
@@ -254,9 +265,19 @@ async fn sample_configured_conversation_history(
                 std::fs::write(home.join("config.toml"), guardian_config)
                     .expect("Guardian v2 configuration should be written");
             }
+        });
+    let mut builder = if let Some(model_defaults) = model_defaults {
+        builder.with_model_info_override("gpt-5.5", move |model| {
+            model
+                .model_messages
+                .as_mut()
+                .expect("test model should expose model messages")
+                .guardian_v2 = Some(model_defaults);
         })
-        .build_with_auto_env(&thread_server)
-        .await?;
+    } else {
+        builder
+    };
+    let test = builder.build_with_auto_env(&thread_server).await?;
     let events = vec![
         ev_assistant_message("sample", r#"{"scores":{"action_risk":0.8}}"#),
         ev_completed("response-1"),
@@ -279,6 +300,14 @@ async fn sample_configured_conversation_history(
     let registry = builder.build();
     let session_store = ExtensionData::new("session-1");
     let thread_store = test.codex.thread_extension_data();
+    if has_model_defaults {
+        let parent_model = test
+            .thread_manager
+            .get_models_manager()
+            .get_model_info("gpt-5.5", &config.to_models_manager_config())
+            .await;
+        thread_store.insert(parent_model);
+    }
     assert_eq!(
         registry
             .approval_review(&session_store, thread_store, "review action")
@@ -389,6 +418,7 @@ max_recent_non_user_entries = 8
         &arguments,
         Some(TEST_GUARDIAN_POLICY),
         configuration,
+        /*model_defaults*/ None,
     )
     .await?;
 
@@ -508,6 +538,7 @@ include_images = true
         r#"{"path":"README.md"}"#,
         Some(TEST_GUARDIAN_POLICY),
         configuration,
+        /*model_defaults*/ None,
     )
     .await?;
     let content = request["input"][2]["content"]
@@ -526,6 +557,121 @@ include_images = true
                 "image_url": "data:image/png;base64,tool-screenshot",
             }),
         ]
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn contributor_uses_model_defaults_and_preserves_local_overrides() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let model_defaults = GuardianV2ModelConfig {
+        classifier_instructions: Some("Use the experimental model-owned prompt.".to_owned()),
+        review_threshold_basis_points: Some(6_000),
+        reasoning_effort: Some(ReasoningEffort::Minimal),
+        transcript: Some(GuardianV2TranscriptModelConfig {
+            sources: Some(vec!["reasoning".to_owned()]),
+            max_message_entry_tokens: Some(128),
+            max_message_transcript_tokens: Some(256),
+            ..Default::default()
+        }),
+        max_action_tokens: Some(128),
+        max_classifier_instruction_tokens: Some(256),
+        max_parent_compaction_tokens: Some(384),
+    };
+    let conversation_history = vec![
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_owned(),
+            content: vec![ContentItem::InputText {
+                text: "Review the pending action.".to_owned(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::Reasoning {
+            id: None,
+            summary: vec![ReasoningItemReasoningSummary::SummaryText {
+                text: "Use the experimental transcript.".to_owned(),
+            }],
+            content: None,
+            encrypted_content: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "list_dir".to_owned(),
+            namespace: None,
+            arguments: r#"{"path":"."}"#.to_owned(),
+            encrypted_function_args: None,
+            call_id: "previous-call".to_owned(),
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ];
+    let arguments = json!({"body": "x".repeat(4_000)}).to_string();
+    let local_config = "[features.guardianv2]\nenabled = true\nreview_threshold = 0.70\n";
+    let (request, test, registry) = sample_configured_conversation_history(
+        conversation_history,
+        &arguments,
+        Some(TEST_GUARDIAN_POLICY),
+        local_config,
+        Some(model_defaults),
+    )
+    .await?;
+
+    assert_eq!(
+        request["input"][1],
+        json!({
+            "type": "message",
+            "role": "developer",
+            "content": [{
+                "type": "input_text",
+                "text": format!(
+                    "Use the experimental model-owned prompt.\n\n# Security Policy\n{TEST_GUARDIAN_POLICY}"
+                )
+            }]
+        })
+    );
+    assert_eq!(request["reasoning"]["effort"], "minimal");
+    let content = request["input"][2]["content"]
+        .as_array()
+        .expect("Luna user content should be an array");
+    let transcript = content
+        .iter()
+        .filter_map(|item| item["text"].as_str())
+        .collect::<Vec<_>>();
+    assert!(transcript.contains(&"[2] reasoning: Use the experimental transcript.\n"));
+    assert!(!transcript.iter().any(|entry| entry.contains("list_dir")));
+    let action = content[content.len() - 2]["text"]
+        .as_str()
+        .expect("planned action should be a text item");
+    assert!(action.len() <= TruncationPolicy::Tokens(/*limit*/ 128).byte_budget());
+
+    let session_store = ExtensionData::new("session-1");
+    let thread_store = test.codex.thread_extension_data();
+    assert_eq!(
+        thread_store
+            .get::<crate::config::GuardianV2Config>()
+            .expect("Guardian v2 configuration should be installed")
+            .max_parent_compaction_tokens,
+        384
+    );
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while thread_store.get::<SecurityRiskScore>().is_none() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    thread_store.insert(SecurityRiskScore {
+        scores: BTreeMap::from([("action_risk".to_owned(), 0.65)]),
+        sampled_at: None,
+    });
+    assert_eq!(
+        registry
+            .approval_review(&session_store, thread_store, "review action")
+            .await,
+        Some(ReviewDecision::Approved)
     );
 
     Ok(())

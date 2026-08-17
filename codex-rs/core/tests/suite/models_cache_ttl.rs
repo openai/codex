@@ -512,6 +512,7 @@ fn test_remote_model(slug: &str, priority: i32) -> ModelInfo {
             permissions: None,
             multi_agent: None,
             token_budget: None,
+            guardian_v2: None,
         }),
         include_skills_usage_instructions: false,
         include_plugin_usage_instructions: false,

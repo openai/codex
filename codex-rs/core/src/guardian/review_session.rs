@@ -1836,6 +1836,7 @@ mod tests {
             permissions: None,
             multi_agent: None,
             token_budget: None,
+            guardian_v2: None,
         };
 
         let guardian_config = build_guardian_review_session_config(
@@ -1871,6 +1872,7 @@ mod tests {
             permissions: None,
             multi_agent: None,
             token_budget: None,
+            guardian_v2: None,
         };
 
         let guardian_config = build_guardian_review_session_config(
@@ -1914,6 +1916,7 @@ mod tests {
             permissions: None,
             multi_agent: None,
             token_budget: None,
+            guardian_v2: None,
         };
 
         let guardian_config = build_guardian_review_session_config(
