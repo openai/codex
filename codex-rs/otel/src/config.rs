@@ -69,6 +69,8 @@ pub struct OtelSettings {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StatsigMetricsSettings {
     pub environment: String,
+    #[serde(default)]
+    pub respect_system_proxy: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -109,7 +111,9 @@ pub enum OtelExporter {
 #[cfg(test)]
 mod tests {
     use super::OtelExporter;
+    use super::StatsigMetricsSettings;
     use super::resolve_exporter;
+    use pretty_assertions::assert_eq;
 
     #[test]
     fn statsig_default_metrics_exporter_is_disabled_in_debug_builds() {
@@ -119,4 +123,29 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn statsig_settings_default_missing_proxy_policy_for_older_payloads() {
+        let settings: StatsigMetricsSettings =
+            serde_json::from_str(r#"{"environment":"prod"}"#).expect("legacy settings");
+
+        assert_eq!(
+            settings,
+            StatsigMetricsSettings {
+                environment: "prod".to_string(),
+                respect_system_proxy: false,
+            }
+        );
+    }
+
+    #[test]
+    fn statsig_settings_preserve_system_proxy_policy() {
+        let settings = StatsigMetricsSettings {
+            environment: "prod".to_string(),
+            respect_system_proxy: true,
+        };
+        let json = serde_json::to_string(&settings).expect("serialize settings");
+        let restored = serde_json::from_str(&json).expect("deserialize settings");
+
+        assert_eq!(settings, restored);
+    }
 }

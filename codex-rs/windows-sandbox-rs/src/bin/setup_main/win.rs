@@ -1098,6 +1098,25 @@ mod tests {
             payload.otel,
             Some(StatsigMetricsSettings {
                 environment: "prod".to_string(),
+                respect_system_proxy: false,
+            })
+        );
+    }
+
+    #[test]
+    fn payload_preserves_otel_system_proxy_policy() {
+        let mut payload = payload_json();
+        payload["otel"] = json!({
+            "environment": "prod",
+            "respect_system_proxy": true,
+        });
+        let payload: Payload = serde_json::from_value(payload).expect("payload");
+
+        assert_eq!(
+            payload.otel,
+            Some(StatsigMetricsSettings {
+                environment: "prod".to_string(),
+                respect_system_proxy: true,
             })
         );
     }

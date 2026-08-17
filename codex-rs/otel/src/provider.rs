@@ -7,6 +7,7 @@ use crate::metrics::MetricsConfig;
 use crate::targets::is_log_export_target;
 use crate::targets::is_trace_safe_target;
 use codex_http_client::HttpClientFactory;
+use codex_http_client::OutboundProxyPolicy;
 use gethostname::gethostname;
 use opentelemetry::Context;
 use opentelemetry::KeyValue;
@@ -278,6 +279,8 @@ impl OtelProvider {
             if matches!(settings.metrics_exporter, OtelExporter::Statsig) {
                 crate::metrics::install_global_statsig_settings(StatsigMetricsSettings {
                     environment: settings.environment.clone(),
+                    respect_system_proxy: settings.http_client_factory.outbound_proxy_policy()
+                        == OutboundProxyPolicy::RespectSystemProxy,
                 });
             }
         }
@@ -614,7 +617,6 @@ mod shutdown_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_http_client::OutboundProxyPolicy;
     use crate::metrics::API_CALL_COUNT_METRIC;
     use crate::metrics::API_CALL_DURATION_METRIC;
     use crate::metrics::MetricsExporter;

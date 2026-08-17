@@ -56,7 +56,11 @@ fn build_wfp_metrics_provider(
         exporter: OtelExporter::None,
         trace_exporter: OtelExporter::None,
         metrics_exporter: OtelExporter::Statsig,
-        http_client_factory: HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        http_client_factory: HttpClientFactory::new(if otel.respect_system_proxy {
+            OutboundProxyPolicy::RespectSystemProxy
+        } else {
+            OutboundProxyPolicy::ReqwestDefault
+        }),
         runtime_metrics: false,
         span_attributes: BTreeMap::new(),
         tracestate: BTreeMap::new(),
