@@ -15,11 +15,13 @@ use codex_api::ResponsesApiRequest;
 use codex_api::ResponsesWebsocketClient;
 use codex_api::ResponsesWebsocketConnection;
 use codex_api::ResponsesWsRequest;
+use codex_api::TransportError;
 use codex_api::build_session_headers;
 use codex_api::create_text_param_for_request;
 use codex_http_client::HttpClientFactory;
 use codex_login::AgentIdentityAuthPolicy;
 use codex_login::CodexAuth;
+use codex_login::UnauthorizedRecovery;
 use codex_login::default_client::add_originator_header;
 use codex_login::default_client::default_headers;
 use codex_model_provider::AgentIdentitySessionFallback;
@@ -31,6 +33,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::SessionSource;
 use http::HeaderValue;
+use http::StatusCode;
 use serde_json::Value;
 use thiserror::Error;
 use tokio::sync::OwnedSemaphorePermit;
@@ -41,6 +44,7 @@ pub(crate) const MODEL: &str = "gpt-5.6-luna";
 const MAX_OUTPUT_BYTES: usize = 8 * 1024;
 const INITIAL_WEBSOCKET_CONNECTIONS: usize = 2;
 const MAX_WEBSOCKET_CONNECTIONS: usize = 16;
+const MAX_SAMPLING_RETRIES: usize = 2;
 const MAX_WEBSOCKET_AGE: Duration = Duration::from_secs(55 * 60);
 const RESPONSES_WEBSOCKETS_BETA: &str = "responses_websockets=2026-02-06";
 const RESPONSES_LITE_METADATA_KEY: &str =
@@ -153,10 +157,9 @@ impl LunaSampler {
             capacity: Arc::new(Semaphore::new(MAX_WEBSOCKET_CONNECTIONS)),
             active_requests: Mutex::new(VecDeque::with_capacity(MAX_WEBSOCKET_CONNECTIONS)),
         };
-        for index in 0..INITIAL_WEBSOCKET_CONNECTIONS {
+        for _ in 0..INITIAL_WEBSOCKET_CONNECTIONS {
             let connection = match sampler.open_connection().await {
                 Ok(connection) => connection,
-                Err(error) if index == 0 => return Err(error),
                 Err(_) => break,
             };
             sampler
@@ -277,6 +280,63 @@ impl LunaSampler {
         })
     }
 
+    async fn retry_after_failure(
+        &self,
+        error: &LunaSamplerError,
+        auth_recovery: &mut Option<UnauthorizedRecovery>,
+        retries: &mut usize,
+    ) -> bool {
+        let retryable = match error {
+            LunaSamplerError::ConnectionTimeout
+            | LunaSamplerError::Api(
+                ApiError::Retryable { .. } | ApiError::Stream(_) | ApiError::ServerOverloaded,
+            )
+            | LunaSamplerError::Api(ApiError::Transport(
+                TransportError::RetryLimit
+                | TransportError::Timeout
+                | TransportError::Connection(_)
+                | TransportError::Network(_),
+            )) => true,
+            LunaSamplerError::Api(ApiError::Transport(TransportError::Http { status, .. }))
+            | LunaSamplerError::Api(ApiError::Api { status, .. }) => {
+                if *status == StatusCode::UNAUTHORIZED {
+                    let Some(recovery) = auth_recovery.as_mut() else {
+                        return false;
+                    };
+                    if !recovery.has_next() || recovery.next().await.is_err() {
+                        return false;
+                    }
+                    self.idle_connections
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clear();
+                    return true;
+                } else {
+                    status.is_server_error() || *status == StatusCode::TOO_MANY_REQUESTS
+                }
+            }
+            LunaSamplerError::Provider(_)
+            | LunaSamplerError::MissingOutput
+            | LunaSamplerError::OutputTooLarge
+            | LunaSamplerError::Superseded
+            | LunaSamplerError::Api(
+                ApiError::Transport(TransportError::Build(_))
+                | ApiError::ContextWindowExceeded
+                | ApiError::QuotaExceeded
+                | ApiError::UsageNotIncluded
+                | ApiError::RateLimit(_)
+                | ApiError::InvalidRequest { .. }
+                | ApiError::MisalignmentPolicyViolation { .. }
+                | ApiError::CyberPolicy { .. },
+            ) => false,
+        };
+        if retryable && *retries < MAX_SAMPLING_RETRIES {
+            *retries += 1;
+            return true;
+        }
+        false
+    }
+
     /// Sends one structured, tool-less request on an exclusively leased WebSocket.
     pub async fn sample(&self, request: LunaSamplingRequest) -> Result<String, LunaSamplerError> {
         let metadata = HashMap::from([
@@ -377,13 +437,29 @@ impl LunaSampler {
             });
         }
         let mut retries = 0;
+        let mut auth_recovery = self
+            .config
+            .provider
+            .auth_manager()
+            .map(|manager| manager.unauthorized_recovery());
         'retry: loop {
-            let lease = tokio::select! {
+            let lease = match tokio::select! {
                 biased;
                 _ = &mut superseded => return Err(LunaSamplerError::Superseded),
-                lease = self.lease_connection() => lease?,
+                lease = self.lease_connection() => lease,
+            } {
+                Ok(lease) => lease,
+                Err(error) => {
+                    if self
+                        .retry_after_failure(&error, &mut auth_recovery, &mut retries)
+                        .await
+                    {
+                        continue;
+                    }
+                    return Err(error);
+                }
             };
-            let mut stream = lease
+            let mut stream = match lease
                 .connection
                 .connection
                 .stream_request(
@@ -392,7 +468,19 @@ impl LunaSampler {
                     /*turn_state*/ None,
                 )
                 .await
-                .map_err(LunaSamplerError::Api)?;
+            {
+                Ok(stream) => stream,
+                Err(error) => {
+                    let error = LunaSamplerError::Api(error);
+                    if self
+                        .retry_after_failure(&error, &mut auth_recovery, &mut retries)
+                        .await
+                    {
+                        continue;
+                    }
+                    return Err(error);
+                }
+            };
 
             let mut output = String::new();
             let mut deltas = String::new();
@@ -409,17 +497,16 @@ impl LunaSampler {
             } {
                 let event = match event {
                     Ok(event) => event,
-                    Err(error)
-                        if retries < INITIAL_WEBSOCKET_CONNECTIONS
-                            && matches!(
-                                error,
-                                ApiError::Retryable { .. } | ApiError::Stream(_)
-                            ) =>
-                    {
-                        retries += 1;
-                        continue 'retry;
+                    Err(error) => {
+                        let error = LunaSamplerError::Api(error);
+                        if self
+                            .retry_after_failure(&error, &mut auth_recovery, &mut retries)
+                            .await
+                        {
+                            continue 'retry;
+                        }
+                        return Err(error);
                     }
-                    Err(error) => return Err(LunaSamplerError::Api(error)),
                 };
                 match event {
                     ResponseEvent::OutputTextDelta(delta) => {
