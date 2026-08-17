@@ -279,6 +279,7 @@ impl<'a> NamedSessionCandidates<'a> {
                     )),
                     archived: Some(self.collection == SessionCollection::Archived),
                     section_id: None,
+                    project_id: None,
                     parent_thread_id: None,
                     ancestor_thread_id: None,
                     cwd: None,

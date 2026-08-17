@@ -958,6 +958,7 @@ impl AppServerSession {
                 request_id,
                 params: ThreadMetadataUpdateParams {
                     thread_id: thread_id.to_string(),
+                    project_id: None,
                     git_info: Some(ThreadMetadataGitInfoUpdateParams {
                         sha: None,
                         branch: Some(Some(branch)),
@@ -3164,6 +3165,7 @@ mod tests {
                 ephemeral: false,
                 section: None,
                 section_entered_at: None,
+                project_id: None,
                 history_mode: Default::default(),
                 model_provider: "openai".to_string(),
                 created_at: 1,

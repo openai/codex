@@ -46,6 +46,11 @@ pub(super) async fn update_thread_metadata(
         merged_patch.merge(patch);
         patch = merged_patch;
     }
+    if patch.project_id.is_some() && store.state_db().await.is_none() {
+        return Err(ThreadStoreError::Unsupported {
+            operation: "projects",
+        });
+    }
     if patch.is_empty() {
         return read_thread::read_thread(
             store,
@@ -312,6 +317,22 @@ async fn apply_metadata_update(
                     .map_err(|err| ThreadStoreError::Internal {
                         message: format!("failed to read thread metadata for {thread_id}: {err}"),
                     })?;
+            let project_id = if existing.is_none()
+                && let Some(Some(project_id)) = patch.project_id.as_ref()
+                && state_db
+                    .get_project(project_id)
+                    .await
+                    .map_err(|err| ThreadStoreError::Internal {
+                        message: format!(
+                            "failed to read initial thread project for {thread_id}: {err}"
+                        ),
+                    })?
+                    .is_none()
+            {
+                Some(None)
+            } else {
+                patch.project_id.clone()
+            };
             let advance_recency_at = patch.advance_recency_at;
             if existing.is_none() && rollout_path.is_none() {
                 let resolved = if include_archived {
@@ -425,12 +446,49 @@ async fn apply_metadata_update(
                 metadata.git_branch = branch;
                 metadata.git_origin_url = origin_url;
             }
-            state_db
-                .upsert_thread(&metadata)
-                .await
-                .map_err(|err| ThreadStoreError::Internal {
+            if let Some(project_id) = project_id.as_ref() {
+                metadata.project_id = project_id.clone();
+            }
+            let upsert_result = state_db.upsert_thread(&metadata).await;
+            if existing.is_none()
+                && metadata.project_id.is_some()
+                && matches!(&upsert_result, Err(err) if err.to_string().contains("FOREIGN KEY constraint failed"))
+            {
+                metadata.project_id = None;
+                state_db.upsert_thread(&metadata).await.map_err(|err| {
+                    ThreadStoreError::Internal {
+                        message: format!("failed to update thread metadata for {thread_id}: {err}"),
+                    }
+                })?;
+            } else {
+                upsert_result.map_err(|err| ThreadStoreError::Internal {
                     message: format!("failed to update thread metadata for {thread_id}: {err}"),
                 })?;
+            }
+            if existing.is_some()
+                && let Some(project_id) = project_id.as_ref()
+            {
+                state_db
+                    .set_thread_project(&thread_id.to_string(), project_id.as_deref())
+                    .await
+                    .map_err(|err| {
+                        let message = err.to_string();
+                        if message.contains("project not found") {
+                            ThreadStoreError::InvalidRequest { message }
+                        } else {
+                            ThreadStoreError::Internal {
+                                message: format!(
+                                    "failed to update thread project for {thread_id}: {err}"
+                                ),
+                            }
+                        }
+                    })?
+                    .ok_or_else(|| ThreadStoreError::Internal {
+                        message: format!(
+                            "thread metadata unavailable before project update: {thread_id}"
+                        ),
+                    })?;
+            }
             if let Some(name) = patch.name.as_ref() {
                 let history_mode = history_mode.ok_or_else(|| ThreadStoreError::Internal {
                     message: format!(
@@ -595,8 +653,9 @@ fn sqlite_write_failure_should_block(patch: &ThreadMetadataPatch) -> bool {
     // transcript-derived metadata, thread names, and memory-mode indexing were log-only. Keep that
     // failure isolation so a corrupted optional state DB does not make JSONL transcript durability
     // look broken. Explicit git-only updates still require SQLite because partial git patches need
-    // the existing SQLite value to preserve unspecified fields.
-    patch.git_info.is_some() && !has_observed_metadata_facts(patch)
+    // the existing SQLite value to preserve unspecified fields. Project updates always require
+    // SQLite because assignment only exists in the state database.
+    patch.project_id.is_some() || (patch.git_info.is_some() && !has_observed_metadata_facts(patch))
 }
 
 fn sqlite_write_error_is_best_effort(err: &ThreadStoreError) -> bool {
@@ -926,6 +985,7 @@ mod tests {
                 model_providers: None,
                 cwd_filters: None,
                 section: Some(Some(codex_state::PINNED_THREAD_SECTION_ID.to_string())),
+                project_id: None,
                 archived: false,
                 search_term: None,
                 relation_filter: None,
@@ -2090,6 +2150,7 @@ mod tests {
                 model_providers: Some(Vec::new()),
                 cwd_filters: Some(vec![workspace]),
                 section: None,
+                project_id: None,
                 archived: false,
                 search_term: None,
                 relation_filter: None,

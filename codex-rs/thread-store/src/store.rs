@@ -7,20 +7,26 @@ use std::pin::Pin;
 use crate::AppendThreadItemsParams;
 use crate::ArchiveThreadParams;
 use crate::ArchiveThreadsParams;
+use crate::CreateProjectParams;
 use crate::CreateThreadParams;
 use crate::CreateThreadSectionParams;
+use crate::CreatedProject;
 use crate::DeleteThreadParams;
 use crate::DeleteThreadSectionParams;
 use crate::DeleteThreadsParams;
+use crate::DeletedProject;
 use crate::ItemPage;
 use crate::ListItemsParams;
+use crate::ListProjectsParams;
 use crate::ListThreadSectionsParams;
 use crate::ListThreadsParams;
 use crate::ListTurnsParams;
 use crate::LoadThreadHistoryParams;
+use crate::MoveProjectParams;
 use crate::MoveThreadToSectionParams;
 use crate::PrepareForkParams;
 use crate::PreparedFork;
+use crate::ProjectMoveOutcome;
 use crate::ReadThreadByRolloutPathParams;
 use crate::ReadThreadParams;
 use crate::RenameThreadSectionParams;
@@ -29,6 +35,8 @@ use crate::RevertThreadParams;
 use crate::SearchThreadOccurrencesParams;
 use crate::SearchThreadsParams;
 use crate::StoredModelContext;
+use crate::StoredProject;
+use crate::StoredProjectsPage;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
 use crate::StoredThreadSection;
@@ -40,7 +48,9 @@ use crate::ThreadSearchPage;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
 use crate::TurnPage;
+use crate::UpdateProjectParams;
 use crate::UpdateThreadMetadataParams;
+use crate::UpdatedProject;
 
 /// Future returned by [`ThreadStore`] operations.
 pub type ThreadStoreFuture<'a, T> = Pin<Box<dyn Future<Output = ThreadStoreResult<T>> + Send + 'a>>;
@@ -237,6 +247,71 @@ pub trait ThreadStore: Any + Send + Sync {
         Box::pin(async {
             Err(ThreadStoreError::Unsupported {
                 operation: "threadSection/delete",
+            })
+        })
+    }
+
+    /// Whether this store supports durable host-owned projects.
+    fn supports_projects(&self) -> bool {
+        false
+    }
+
+    fn list_projects(
+        &self,
+        _params: ListProjectsParams,
+    ) -> ThreadStoreFuture<'_, StoredProjectsPage> {
+        Box::pin(async {
+            Err(ThreadStoreError::Unsupported {
+                operation: "project/list",
+            })
+        })
+    }
+
+    fn read_project(&self, _project_id: String) -> ThreadStoreFuture<'_, Option<StoredProject>> {
+        Box::pin(async {
+            Err(ThreadStoreError::Unsupported {
+                operation: "project/read",
+            })
+        })
+    }
+
+    fn create_project(
+        &self,
+        _params: CreateProjectParams,
+    ) -> ThreadStoreFuture<'_, CreatedProject> {
+        Box::pin(async {
+            Err(ThreadStoreError::Unsupported {
+                operation: "project/create",
+            })
+        })
+    }
+
+    fn update_project(
+        &self,
+        _params: UpdateProjectParams,
+    ) -> ThreadStoreFuture<'_, Option<UpdatedProject>> {
+        Box::pin(async {
+            Err(ThreadStoreError::Unsupported {
+                operation: "project/update",
+            })
+        })
+    }
+
+    fn move_project(
+        &self,
+        _params: MoveProjectParams,
+    ) -> ThreadStoreFuture<'_, Option<ProjectMoveOutcome>> {
+        Box::pin(async {
+            Err(ThreadStoreError::Unsupported {
+                operation: "project/move",
+            })
+        })
+    }
+
+    fn delete_project(&self, _project_id: String) -> ThreadStoreFuture<'_, Option<DeletedProject>> {
+        Box::pin(async {
+            Err(ThreadStoreError::Unsupported {
+                operation: "project/delete",
             })
         })
     }

@@ -258,6 +258,7 @@ fn thread_resume_response_round_trips_initial_turns_page() {
                 appearance: None,
             }),
             section_entered_at: Some(1),
+            project_id: None,
             history_mode: Default::default(),
             model_provider: "openai".to_string(),
             created_at: 1,
@@ -314,10 +315,12 @@ fn thread_resume_response_round_trips_initial_turns_page() {
         .expect("serialized thread should be an object");
     legacy_thread_fields.remove("section");
     legacy_thread_fields.remove("sectionEnteredAt");
+    legacy_thread_fields.remove("projectId");
     let legacy_thread =
         serde_json::from_value::<Thread>(legacy_thread).expect("deserialize legacy thread");
     assert_eq!(legacy_thread.section, None);
     assert_eq!(legacy_thread.section_entered_at, None);
+    assert_eq!(legacy_thread.project_id, None);
 
     assert_eq!(
         value.get("initialTurnsPage"),

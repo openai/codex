@@ -318,6 +318,9 @@ pub struct ListThreadsParams {
     /// Omit to include every section, set to `None` to match unsectioned
     /// threads, or provide a section ID to match that section.
     pub section: Option<Option<String>>,
+    /// Omit to include every project, set to None for unassigned threads,
+    /// or provide a project ID to match that project.
+    pub project_id: ClearableField<String>,
     /// Whether archived threads should be listed instead of active threads.
     pub archived: bool,
     /// Optional substring/full-text search term for thread title/preview.
@@ -588,6 +591,9 @@ pub struct StoredThread {
     /// The time when the thread most recently entered its current section.
     #[serde(default)]
     pub section_entered_at: Option<DateTime<Utc>>,
+    /// Canonical project assignment owned by app-server, if any.
+    #[serde(default)]
+    pub project_id: Option<String>,
     /// Working directory captured for the thread.
     pub cwd: PathBuf,
     /// CLI version captured for the thread.
@@ -748,6 +754,13 @@ pub struct ThreadMetadataPatch {
     pub git_info: Option<GitInfoPatch>,
     /// Thread memory behavior.
     pub memory_mode: Option<MemoryMode>,
+    /// Initial project assignment supplied with thread creation.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "optional_option"
+    )]
+    pub project_id: ClearableField<String>,
 }
 
 impl ThreadMetadataPatch {
@@ -828,6 +841,9 @@ impl ThreadMetadataPatch {
         if next.memory_mode.is_some() {
             self.memory_mode = next.memory_mode;
         }
+        if next.project_id.is_some() {
+            self.project_id = next.project_id;
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -854,6 +870,7 @@ impl ThreadMetadataPatch {
             && self.first_user_message.is_none()
             && self.git_info.is_none()
             && self.memory_mode.is_none()
+            && self.project_id.is_none()
     }
 }
 

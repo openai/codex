@@ -35,6 +35,7 @@ use crate::request_processors::MarketplaceRequestProcessor;
 use crate::request_processors::McpRequestProcessor;
 use crate::request_processors::PluginRequestProcessor;
 use crate::request_processors::ProcessExecRequestProcessor;
+use crate::request_processors::ProjectRequestProcessor;
 use crate::request_processors::RemoteControlRequestProcessor;
 use crate::request_processors::SearchRequestProcessor;
 use crate::request_processors::ThreadGoalRequestProcessor;
@@ -147,6 +148,7 @@ pub(crate) struct MessageProcessor {
     marketplace_processor: MarketplaceRequestProcessor,
     mcp_processor: McpRequestProcessor,
     plugin_processor: PluginRequestProcessor,
+    project_processor: ProjectRequestProcessor,
     remote_control_processor: RemoteControlRequestProcessor,
     search_processor: SearchRequestProcessor,
     thread_goal_processor: ThreadGoalRequestProcessor,
@@ -475,6 +477,11 @@ impl MessageProcessor {
             outgoing.clone(),
             queue_service,
         );
+        let project_processor = ProjectRequestProcessor::new(
+            Arc::clone(&thread_store),
+            outgoing.clone(),
+            Arc::clone(&thread_list_state_permit),
+        );
         let thread_processor = ThreadRequestProcessor::new(
             auth_manager.clone(),
             Arc::clone(&thread_manager),
@@ -562,6 +569,7 @@ impl MessageProcessor {
             marketplace_processor,
             mcp_processor,
             plugin_processor,
+            project_processor,
             remote_control_processor,
             search_processor,
             thread_goal_processor,
@@ -1267,6 +1275,27 @@ impl MessageProcessor {
             }
             ClientRequest::ThreadList { params, .. } => {
                 self.thread_processor.thread_list(params).await
+            }
+            ClientRequest::ProjectList { params, .. } => {
+                self.project_processor.project_list(params).await
+            }
+            ClientRequest::ProjectRead { params, .. } => {
+                self.project_processor.project_read(params).await
+            }
+            ClientRequest::ProjectCreate { params, .. } => {
+                self.project_processor.project_create(params).await
+            }
+            ClientRequest::ProjectImport { params, .. } => {
+                self.project_processor.project_import(params).await
+            }
+            ClientRequest::ProjectUpdate { params, .. } => {
+                self.project_processor.project_update(params).await
+            }
+            ClientRequest::ProjectMove { params, .. } => {
+                self.project_processor.project_move(params).await
+            }
+            ClientRequest::ProjectDelete { params, .. } => {
+                self.project_processor.project_delete(params).await
             }
             ClientRequest::ThreadSearch { params, .. } => {
                 self.thread_processor.thread_search(params).await

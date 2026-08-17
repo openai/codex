@@ -172,6 +172,7 @@ pub(super) fn stored_thread_from_rollout_item(
         section: item.section,
         section_position: None,
         section_entered_at: None,
+        project_id: item.project_id,
         cwd: item.cwd.unwrap_or_default(),
         cli_version: item.cli_version.unwrap_or_default(),
         source,

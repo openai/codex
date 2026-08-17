@@ -194,7 +194,7 @@ pub struct ThreadSectionAppearance {
     pub color: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
+#[derive(Serialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct Thread {
@@ -220,6 +220,12 @@ pub struct Thread {
     #[serde(default)]
     #[ts(type = "number | null")]
     pub section_entered_at: Option<i64>,
+    /// Canonical project assignment owned by app-server, if any.
+    #[schemars(
+        required,
+        schema_with = "crate::protocol::serde_helpers::nullable_string_schema"
+    )]
+    pub project_id: Option<String>,
     /// Persisted thread history contract selected when this thread was created.
     #[experimental("thread.historyMode")]
     #[serde(default)]
@@ -264,6 +270,82 @@ pub struct Thread {
     /// For all other responses and notifications returning a Thread,
     /// the turns field will be an empty list.
     pub turns: Vec<Turn>,
+}
+
+// TODO: Remove this compatibility decoder after app-server versions that omitted
+// `projectId` have aged out of the supported TUI -> remote app-server version-skew window.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ThreadCompatibility {
+    id: String,
+    extra: Option<ThreadExtra>,
+    session_id: String,
+    forked_from_id: Option<String>,
+    parent_thread_id: Option<String>,
+    preview: String,
+    ephemeral: bool,
+    #[serde(default)]
+    section: Option<ThreadSection>,
+    #[serde(default)]
+    section_entered_at: Option<i64>,
+    #[serde(default)]
+    project_id: Option<String>,
+    #[serde(default)]
+    history_mode: ThreadHistoryMode,
+    model_provider: String,
+    created_at: i64,
+    updated_at: i64,
+    recency_at: Option<i64>,
+    status: ThreadStatus,
+    path: Option<PathBuf>,
+    cwd: AbsolutePathBuf,
+    cli_version: String,
+    source: SessionSource,
+    can_accept_direct_input: Option<bool>,
+    thread_source: Option<ThreadSource>,
+    agent_nickname: Option<String>,
+    agent_role: Option<String>,
+    git_info: Option<GitInfo>,
+    name: Option<String>,
+    turns: Vec<Turn>,
+}
+
+impl<'de> Deserialize<'de> for Thread {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let thread = ThreadCompatibility::deserialize(deserializer)?;
+        Ok(Self {
+            id: thread.id,
+            extra: thread.extra,
+            session_id: thread.session_id,
+            forked_from_id: thread.forked_from_id,
+            parent_thread_id: thread.parent_thread_id,
+            preview: thread.preview,
+            ephemeral: thread.ephemeral,
+            section: thread.section,
+            section_entered_at: thread.section_entered_at,
+            project_id: thread.project_id,
+            history_mode: thread.history_mode,
+            model_provider: thread.model_provider,
+            created_at: thread.created_at,
+            updated_at: thread.updated_at,
+            recency_at: thread.recency_at,
+            status: thread.status,
+            path: thread.path,
+            cwd: thread.cwd,
+            cli_version: thread.cli_version,
+            source: thread.source,
+            can_accept_direct_input: thread.can_accept_direct_input,
+            thread_source: thread.thread_source,
+            agent_nickname: thread.agent_nickname,
+            agent_role: thread.agent_role,
+            git_info: thread.git_info,
+            name: thread.name,
+            turns: thread.turns,
+        })
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

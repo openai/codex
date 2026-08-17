@@ -59,6 +59,8 @@ pub struct ThreadItem {
     pub preview: Option<String>,
     /// The user-selected section in SQLite-owned metadata.
     pub section: Option<codex_state::ThreadSection>,
+    /// Canonical project assignment in SQLite-owned metadata.
+    pub project_id: Option<String>,
     /// Working directory from session metadata.
     pub cwd: Option<PathBuf>,
     /// Git branch from session metadata.
@@ -835,6 +837,7 @@ async fn build_thread_item(
             first_user_message,
             preview,
             section: None,
+            project_id: None,
             cwd,
             git_branch,
             git_sha,

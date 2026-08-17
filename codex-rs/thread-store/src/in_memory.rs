@@ -174,6 +174,7 @@ mod tests {
                 model_providers: None,
                 cwd_filters: None,
                 section: None,
+                project_id: None,
                 archived: false,
                 search_term: None,
                 relation_filter: Some(ThreadRelationFilter::DirectChildrenOf(parent_thread_id)),
@@ -202,6 +203,7 @@ mod tests {
                 model_providers: None,
                 cwd_filters: None,
                 section: None,
+                project_id: None,
                 archived: false,
                 search_term: None,
                 relation_filter: Some(ThreadRelationFilter::DescendantsOf(parent_thread_id)),
@@ -230,6 +232,7 @@ mod tests {
                 model_providers: None,
                 cwd_filters: None,
                 section: Some(Some(codex_state::PINNED_THREAD_SECTION_ID.to_string())),
+                project_id: None,
                 archived: false,
                 search_term: None,
                 relation_filter: Some(ThreadRelationFilter::DescendantsOf(parent_thread_id)),
@@ -258,6 +261,7 @@ mod tests {
                 model_providers: None,
                 cwd_filters: None,
                 section: Some(None),
+                project_id: None,
                 archived: false,
                 search_term: None,
                 relation_filter: Some(ThreadRelationFilter::DescendantsOf(parent_thread_id)),
@@ -704,6 +708,11 @@ impl InMemoryThreadStore {
         &self,
         params: UpdateThreadMetadataParams,
     ) -> ThreadStoreResult<StoredThread> {
+        if params.patch.project_id.is_some() {
+            return Err(ThreadStoreError::Unsupported {
+                operation: "projects",
+            });
+        }
         let mut state = self.state.lock().await;
         state.calls.update_thread_metadata += 1;
         if !state.created_threads.contains_key(&params.thread_id) {
@@ -1067,6 +1076,7 @@ fn stored_thread_from_state(
             }),
         section_position: state.section_positions.get(&thread_id).copied(),
         section_entered_at: state.section_entered_at.get(&thread_id).copied(),
+        project_id: None,
         cwd: metadata
             .and_then(|metadata| metadata.cwd.clone())
             .unwrap_or_default(),

@@ -703,6 +703,7 @@ mod tests {
             section: None,
             section_position: None,
             section_entered_at: None,
+            project_id: None,
             git_sha: None,
             git_branch: None,
             git_origin_url: None,

@@ -606,6 +606,7 @@ mod thread_processor_behavior_tests {
             section: None,
             section_position: None,
             section_entered_at: None,
+            project_id: None,
             cwd: PathBuf::from("/tmp"),
             cli_version: "0.0.0".to_string(),
             source: SessionSource::Cli,

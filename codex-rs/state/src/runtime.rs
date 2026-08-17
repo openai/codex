@@ -44,6 +44,7 @@ mod external_agent_config_imports;
 mod goals;
 mod logs;
 mod memories;
+mod projects;
 mod queued_items;
 mod recovery;
 mod remote_control;

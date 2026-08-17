@@ -283,6 +283,7 @@ mod tests {
                 model_providers: None,
                 cwd_filters: None,
                 section: None,
+                project_id: None,
                 archived: true,
                 search_term: None,
                 relation_filter: None,

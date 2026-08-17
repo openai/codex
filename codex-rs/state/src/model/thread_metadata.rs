@@ -176,6 +176,8 @@ pub struct ThreadMetadata {
     pub section_position: Option<i64>,
     /// The time when the thread most recently entered its current section.
     pub section_entered_at: Option<DateTime<Utc>>,
+    /// Canonical project assignment owned by app-server, if any.
+    pub project_id: Option<String>,
     /// The git commit SHA, if known.
     pub git_sha: Option<String>,
     /// The git branch name, if known.
@@ -309,6 +311,7 @@ impl ThreadMetadataBuilder {
             section: None,
             section_position: None,
             section_entered_at: None,
+            project_id: None,
             git_sha: self.git_sha.clone(),
             git_branch: self.git_branch.clone(),
             git_origin_url: self.git_origin_url.clone(),
@@ -432,6 +435,9 @@ impl ThreadMetadata {
         if self.section_entered_at != other.section_entered_at {
             diffs.push("section_entered_at");
         }
+        if self.project_id != other.project_id {
+            diffs.push("project_id");
+        }
         if self.git_sha != other.git_sha {
             diffs.push("git_sha");
         }
@@ -480,6 +486,7 @@ pub(crate) struct ThreadRow {
     section_appearance: Option<String>,
     section_position: Option<i64>,
     section_entered_at_ms: Option<i64>,
+    project_id: Option<String>,
     git_sha: Option<String>,
     git_branch: Option<String>,
     git_origin_url: Option<String>,
@@ -517,6 +524,7 @@ impl ThreadRow {
             section_appearance: row.try_get("section_appearance")?,
             section_position: row.try_get("section_position")?,
             section_entered_at_ms: row.try_get("section_entered_at_ms")?,
+            project_id: row.try_get("project_id")?,
             git_sha: row.try_get("git_sha")?,
             git_branch: row.try_get("git_branch")?,
             git_origin_url: row.try_get("git_origin_url")?,
@@ -558,6 +566,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             section_appearance,
             section_position,
             section_entered_at_ms,
+            project_id,
             git_sha,
             git_branch,
             git_origin_url,
@@ -614,6 +623,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             section_entered_at: section_entered_at_ms
                 .map(epoch_millis_to_datetime)
                 .transpose()?,
+            project_id,
             git_sha,
             git_branch,
             git_origin_url,
@@ -720,6 +730,7 @@ mod tests {
             section_appearance: None,
             section_position: None,
             section_entered_at_ms: None,
+            project_id: None,
             git_sha: None,
             git_branch: None,
             git_origin_url: None,
@@ -756,6 +767,7 @@ mod tests {
             section: None,
             section_position: None,
             section_entered_at: None,
+            project_id: None,
             git_sha: None,
             git_branch: None,
             git_origin_url: None,

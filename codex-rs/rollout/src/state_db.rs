@@ -362,6 +362,7 @@ pub async fn list_threads_db(
     relation_filter: Option<codex_state::ThreadRelationFilter>,
     archived: bool,
     section: Option<Option<&str>>,
+    project_id: Option<Option<&str>>,
     search_term: Option<&str>,
 ) -> Option<codex_state::ThreadsPage> {
     let ctx = context?;
@@ -407,6 +408,7 @@ pub async fn list_threads_db(
             allowed_sources: allowed_sources.as_slice(),
             model_providers: model_providers.as_deref(),
             cwd_filters: normalized_cwd_filters.as_deref(),
+            project_id,
             anchor: anchor.as_ref(),
             sort_key: state_sort_key,
             sort_direction: state_sort_direction,
@@ -434,6 +436,7 @@ pub async fn list_threads_db(
             allowed_sources: allowed_sources.as_slice(),
             model_providers: model_providers.as_deref(),
             cwd_filters: normalized_cwd_filters.as_deref(),
+            project_id,
             anchor: anchor.as_ref(),
             sort_key: state_sort_key,
             sort_direction: state_sort_direction,

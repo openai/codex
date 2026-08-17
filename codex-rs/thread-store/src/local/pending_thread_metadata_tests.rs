@@ -30,7 +30,6 @@ async fn pending_thread_metadata_is_consumed_by_first_metadata_update() {
         .stage_pending_thread_metadata(thread_id, pending_patch.clone())
         .await
         .expect("stage pending metadata");
-
     let live_thread = LiveThread::create(store.clone(), create_thread_params(thread_id))
         .await
         .expect("create live thread");

@@ -97,6 +97,7 @@ async fn list_threads(mcp: &mut TestAppServer) -> Result<ThreadListResponse> {
             source_kinds: None,
             archived: None,
             section_id: None,
+            project_id: None,
             cwd: None,
             use_state_db_only: false,
             search_term: None,

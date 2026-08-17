@@ -100,6 +100,7 @@ pub(super) async fn search_threads(
         model_providers: None,
         cwd_filters: None,
         section: None,
+        project_id: None,
         archived: params.archived,
         search_term: None,
         relation_filter: None,

@@ -2551,6 +2551,17 @@
       ],
       "type": "object"
     },
+    "ProjectRoot": {
+      "properties": {
+        "path": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
     "RealtimeConversationVersion": {
       "enum": [
         "v1",

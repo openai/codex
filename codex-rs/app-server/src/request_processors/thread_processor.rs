@@ -25,11 +25,53 @@ const CODEX_TUI_CLIENT_NAME: &str = "codex-tui";
 const THREAD_ROLLBACK_DEPRECATION_SUMMARY: &str =
     "thread/rollback is deprecated and will be removed soon";
 
+async fn stage_pending_project_metadata(
+    thread_manager: &ThreadManager,
+    thread_store: &dyn ThreadStore,
+    project_id: Option<&str>,
+    operation: &'static str,
+) -> Result<Option<ThreadId>, JSONRPCErrorError> {
+    let Some(project_id) = project_id else {
+        return Ok(None);
+    };
+    let thread_id = thread_manager.reserve_thread_id();
+    thread_store
+        .stage_pending_thread_metadata(
+            thread_id,
+            StoreThreadMetadataPatch {
+                project_id: Some(Some(project_id.to_string())),
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(|error| match error {
+            ThreadStoreError::Unsupported { .. } => {
+                method_not_found(format!("{operation} is unavailable without sqlite state"))
+            }
+            ThreadStoreError::InvalidRequest { message } => invalid_request(message),
+            error => internal_error(format!("failed to stage {operation} metadata: {error}")),
+        })?;
+    Ok(Some(thread_id))
+}
+
+async fn remove_pending_project_metadata(
+    thread_store: &dyn ThreadStore,
+    thread_id: Option<ThreadId>,
+) {
+    let Some(thread_id) = thread_id else {
+        return;
+    };
+    if let Err(error) = thread_store.remove_pending_thread_metadata(thread_id).await {
+        warn!("failed to remove staged project metadata for {thread_id}: {error}");
+    }
+}
+
 struct ThreadListFilters {
     model_providers: Option<Vec<String>>,
     source_kinds: Option<Vec<ThreadSourceKind>>,
     archived: bool,
     section_id: Option<Option<String>>,
+    project_id: StoreClearableField<String>,
     cwd_filters: Option<Vec<PathBuf>>,
     search_term: Option<String>,
     use_state_db_only: bool,
@@ -1083,6 +1125,7 @@ impl ThreadRequestProcessor {
             history_mode,
             session_start_source,
             thread_source,
+            project_id,
             environments,
         } = params;
         if matches!(
@@ -1098,6 +1141,24 @@ impl ThreadRequestProcessor {
             return Err(invalid_request(
                 "`permissions` cannot be combined with `sandbox`",
             ));
+        }
+        if let Some(project_id) = project_id.as_ref() {
+            if project_id.is_empty() {
+                return Err(invalid_request("projectId must not be empty"));
+            }
+            let project = self
+                .thread_store
+                .read_project(project_id.clone())
+                .await
+                .map_err(|err| match err {
+                    ThreadStoreError::Unsupported { operation } => {
+                        unsupported_thread_store_operation(operation)
+                    }
+                    err => internal_error(format!("failed to read project: {err}")),
+                })?;
+            if project.is_none() {
+                return Err(invalid_request(format!("project not found: {project_id}")));
+            }
         }
         let runtime_workspace_roots = runtime_workspace_roots.map(resolve_runtime_workspace_roots);
         let environments =
@@ -1130,12 +1191,14 @@ impl ThreadRequestProcessor {
         };
         let request_trace = request_context.request_trace();
         let config_manager = self.config_manager.clone();
+        let thread_store = Arc::clone(&self.thread_store);
         let initial_config_warnings = Arc::clone(&self.initial_config_warnings);
         let outgoing = Arc::clone(&listener_task_context.outgoing);
         let error_request_id = request_id.clone();
         let thread_start_task = async move {
             if let Err(error) = Self::thread_start_task(
                 listener_task_context,
+                thread_store,
                 config_manager,
                 request_id,
                 app_server_client_name,
@@ -1148,6 +1211,7 @@ impl ThreadRequestProcessor {
                 history_mode.map(Into::into),
                 session_start_source,
                 thread_source.map(Into::into),
+                project_id,
                 environments,
                 service_name,
                 allow_provider_model_fallback,
@@ -1213,6 +1277,7 @@ impl ThreadRequestProcessor {
     #[allow(clippy::too_many_arguments)]
     async fn thread_start_task(
         listener_task_context: ListenerTaskContext,
+        thread_store: Arc<dyn ThreadStore>,
         config_manager: ConfigManager,
         request_id: ConnectionRequestId,
         app_server_client_name: Option<String>,
@@ -1225,6 +1290,7 @@ impl ThreadRequestProcessor {
         history_mode: Option<ThreadHistoryMode>,
         session_start_source: Option<codex_app_server_protocol::ThreadStartSource>,
         thread_source: Option<codex_protocol::protocol::ThreadSource>,
+        project_id: Option<String>,
         environment_selections: Option<Vec<TurnEnvironmentSelection>>,
         service_name: Option<String>,
         allow_provider_model_fallback: bool,
@@ -1340,13 +1406,21 @@ impl ThreadRequestProcessor {
         if !selected_capability_roots.is_empty() {
             thread_extension_init.insert(selected_capability_roots);
         }
+        let mut start_options = StartThreadOptions::new(config);
+        let reserved_thread_id = if start_options.config.ephemeral {
+            None
+        } else {
+            stage_pending_project_metadata(
+                listener_task_context.thread_manager.as_ref(),
+                thread_store.as_ref(),
+                project_id.as_deref(),
+                "thread/start",
+            )
+            .await?
+        };
+        start_options.reserved_thread_id = reserved_thread_id;
         let create_thread_started_at = std::time::Instant::now();
-        let NewThread {
-            thread_id,
-            thread,
-            session_configured,
-            ..
-        } = listener_task_context
+        let new_thread = listener_task_context
             .thread_manager
             .start_thread(StartThreadOptions {
                 allow_provider_model_fallback,
@@ -1364,21 +1438,32 @@ impl ThreadRequestProcessor {
                 environments: Some(environments),
                 thread_extension_init,
                 client_mcp_extensions,
-                ..StartThreadOptions::new(config)
+                ..start_options
             })
             .instrument(tracing::info_span!(
                 "app_server.thread_start.create_thread",
                 otel.name = "app_server.thread_start.create_thread",
                 thread_start.dynamic_tool_count = dynamic_tool_count,
             ))
-            .await
-            .map_err(|err| match err.details() {
-                CodexErrorDetails::InvalidRequest(message) => invalid_request(message.clone()),
-                CodexErrorDetails::UnsupportedOperation(message) => {
-                    method_not_found(message.clone())
-                }
-                _ => internal_error(format!("error creating thread: {err}")),
-            })?;
+            .await;
+        let NewThread {
+            thread_id,
+            thread,
+            session_configured,
+            ..
+        } = match new_thread {
+            Ok(new_thread) => new_thread,
+            Err(err) => {
+                remove_pending_project_metadata(thread_store.as_ref(), reserved_thread_id).await;
+                return Err(match err.details() {
+                    CodexErrorDetails::InvalidRequest(message) => invalid_request(message.clone()),
+                    CodexErrorDetails::UnsupportedOperation(message) => {
+                        method_not_found(message.clone())
+                    }
+                    _ => internal_error(format!("error creating thread: {err}")),
+                });
+            }
+        };
         let session_telemetry = thread.session_telemetry();
         session_telemetry.record_startup_phase(
             "thread_start_create_thread",
@@ -1408,6 +1493,7 @@ impl ThreadRequestProcessor {
             &config_snapshot,
             session_configured.rollout_path.clone(),
         );
+        thread.project_id = project_id.clone();
 
         // Auto-attach a thread listener when starting a thread.
         log_listener_attach_result(
@@ -1755,13 +1841,31 @@ impl ThreadRequestProcessor {
     ) -> Result<ThreadMetadataUpdateResponse, JSONRPCErrorError> {
         let ThreadMetadataUpdateParams {
             thread_id,
+            project_id,
             git_info,
         } = params;
-
         let thread_uuid = ThreadId::from_string(&thread_id)
             .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
 
-        if git_info.is_none() {
+        if let Some(project_id) = project_id.as_ref()
+            && !project_id.is_empty()
+        {
+            let project = self
+                .thread_store
+                .read_project(project_id.clone())
+                .await
+                .map_err(|err| match err {
+                    ThreadStoreError::Unsupported { operation } => {
+                        unsupported_thread_store_operation(operation)
+                    }
+                    err => internal_error(format!("failed to read project: {err}")),
+                })?;
+            if project.is_none() {
+                return Err(invalid_request(format!("project not found: {project_id}")));
+            }
+        }
+
+        if git_info.is_none() && project_id.is_none() {
             return Err(invalid_request(
                 "thread metadata update must include at least one field",
             ));
@@ -1793,16 +1897,63 @@ impl ThreadRequestProcessor {
             )
             .transpose()?;
 
+        let project_update: StoreClearableField<String> = if let Some(project_id) = project_id {
+            if project_id.is_empty() {
+                Some(None)
+            } else {
+                Some(Some(project_id))
+            }
+        } else {
+            None
+        };
         let updated_thread = {
             let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
+            let previous_project_id = if project_update.is_some() {
+                Some(
+                    self.thread_store
+                        .read_thread(StoreReadThreadParams {
+                            thread_id: thread_uuid,
+                            include_archived: true,
+                            include_history: false,
+                        })
+                        .await
+                        .map_err(|err| match err {
+                            ThreadStoreError::ThreadNotFound { .. } => {
+                                invalid_request(format!("thread not found: {thread_id}"))
+                            }
+                            ThreadStoreError::Unsupported { operation } => {
+                                unsupported_thread_store_operation(operation)
+                            }
+                            err => internal_error(format!("failed to read thread metadata: {err}")),
+                        })?
+                        .project_id,
+                )
+            } else {
+                None
+            };
             let patch = StoreThreadMetadataPatch {
                 git_info,
+                project_id: project_update.clone(),
                 ..Default::default()
             };
-            self.thread_manager
+            let updated_thread = self
+                .thread_manager
                 .update_thread_metadata(thread_uuid, patch, /*include_archived*/ true)
                 .await
-                .map_err(|err| core_thread_write_error("update thread metadata", err))?
+                .map_err(|err| core_thread_write_error("update thread metadata", err))?;
+            if let Some(project_id) = project_update.as_ref()
+                && previous_project_id.as_ref() != Some(project_id)
+            {
+                self.outgoing
+                    .send_server_notification(ServerNotification::ThreadProjectUpdated(
+                        ThreadProjectUpdatedNotification {
+                            thread_id: thread_id.clone(),
+                            project_id: project_id.clone(),
+                        },
+                    ))
+                    .await;
+            }
+            updated_thread
         };
         let (mut thread, _) = thread_from_stored_thread(
             updated_thread,
@@ -2303,12 +2454,33 @@ impl ThreadRequestProcessor {
             source_kinds,
             archived,
             section_id,
+            project_id,
             cwd,
             use_state_db_only,
             search_term,
             parent_thread_id,
             ancestor_thread_id,
         } = params;
+        if project_id.is_some() && !self.thread_store.supports_projects() {
+            return Err(unsupported_thread_store_operation("projects"));
+        }
+        if let Some(Some(project_id)) = project_id.as_ref() {
+            if project_id.is_empty() {
+                return Err(invalid_params("projectId must not be empty"));
+            }
+            match self.thread_store.read_project(project_id.clone()).await {
+                Ok(Some(_)) => {}
+                Ok(None) => {
+                    return Err(invalid_params(format!("project not found: {project_id}")));
+                }
+                Err(ThreadStoreError::Unsupported { operation }) => {
+                    return Err(unsupported_thread_store_operation(operation));
+                }
+                Err(err) => {
+                    return Err(internal_error(format!("failed to read project: {err}")));
+                }
+            }
+        }
         let cwd_filters = normalize_thread_list_cwd_filters(cwd)?;
         let relation_filter = match (parent_thread_id, ancestor_thread_id) {
             (Some(_), Some(_)) => {
@@ -2354,6 +2526,7 @@ impl ThreadRequestProcessor {
                     source_kinds,
                     archived: archived.unwrap_or(false),
                     section_id,
+                    project_id,
                     cwd_filters,
                     search_term,
                     use_state_db_only,
@@ -4588,6 +4761,18 @@ impl ThreadRequestProcessor {
         let ephemeral_token_usage_turn_id = (ephemeral && include_turns)
             .then(|| restored_token_usage_turn_id(&history_items, ephemeral_turns.as_slice()));
         let token_usage_history_items = paginated_source.then(|| Arc::clone(&history_items));
+        let inherited_project_id = source_thread.project_id.clone();
+        let reserved_thread_id = if config.ephemeral {
+            None
+        } else {
+            stage_pending_project_metadata(
+                self.thread_manager.as_ref(),
+                self.thread_store.as_ref(),
+                inherited_project_id.as_deref(),
+                "thread/fork",
+            )
+            .await?
+        };
 
         let new_thread = if let Some(prepared_fork) = prepared_fork {
             self.thread_manager
@@ -4596,7 +4781,8 @@ impl ThreadRequestProcessor {
                     prepared_fork,
                     thread_source,
                     parent_trace,
-                    client_mcp_extensions.clone(),
+                    client_mcp_extensions,
+                    reserved_thread_id,
                 )
                 .await
         } else {
@@ -4612,6 +4798,7 @@ impl ThreadRequestProcessor {
                     thread_source,
                     parent_trace,
                     client_mcp_extensions,
+                    reserved_thread_id,
                 )
                 .await
         };
@@ -4620,13 +4807,20 @@ impl ThreadRequestProcessor {
             thread: forked_thread,
             session_configured,
             ..
-        } = new_thread.map_err(|err| match err.details() {
-            CodexErrorDetails::Io(_) | CodexErrorDetails::Json(_) => {
-                invalid_request(format!("failed to load thread {source_thread_id}: {err}"))
+        } = match new_thread {
+            Ok(new_thread) => new_thread,
+            Err(err) => {
+                remove_pending_project_metadata(self.thread_store.as_ref(), reserved_thread_id)
+                    .await;
+                return Err(match err.details() {
+                    CodexErrorDetails::Io(_) | CodexErrorDetails::Json(_) => {
+                        invalid_request(format!("failed to load thread {source_thread_id}: {err}"))
+                    }
+                    CodexErrorDetails::InvalidRequest(message) => invalid_request(message.clone()),
+                    _ => internal_error(format!("error forking thread: {err}")),
+                });
             }
-            CodexErrorDetails::InvalidRequest(message) => invalid_request(message.clone()),
-            _ => internal_error(format!("error forking thread: {err}")),
-        })?;
+        };
 
         Self::set_app_server_client_info(
             forked_thread.as_ref(),
@@ -4754,6 +4948,9 @@ impl ThreadRequestProcessor {
         ));
         thread.session_id = session_configured.session_id.to_string();
         thread.thread_source = config_snapshot.thread_source.clone().map(Into::into);
+        if thread.path.is_none() {
+            thread.project_id = inherited_project_id.clone();
+        }
 
         self.thread_watch_manager
             .upsert_thread_silently(&thread.id)
@@ -4769,7 +4966,6 @@ impl ThreadRequestProcessor {
         let active_permission_profile =
             thread_response_active_permission_profile(config_snapshot.active_permission_profile);
         let thread_originator = config_snapshot.originator.clone();
-
         let response = ThreadForkResponse {
             thread: thread.clone(),
             model: session_configured.model,
@@ -4872,6 +5068,7 @@ impl ThreadRequestProcessor {
             source_kinds,
             archived,
             section_id,
+            project_id,
             cwd_filters,
             search_term,
             use_state_db_only,
@@ -4920,6 +5117,7 @@ impl ThreadRequestProcessor {
                     cwd_filters: cwd_filters.clone(),
                     archived,
                     section: section_id.clone(),
+                    project_id: project_id.clone(),
                     search_term: search_term.clone(),
                     use_state_db_only,
                     relation_filter,
@@ -5528,6 +5726,7 @@ pub(crate) fn thread_from_stored_thread(
         section_entered_at: thread
             .section_entered_at
             .map(|entered_at| entered_at.timestamp()),
+        project_id: thread.project_id,
         history_mode: thread.history_mode.into(),
         model_provider: if thread.model_provider.is_empty() {
             fallback_provider.to_string()
@@ -5710,6 +5909,7 @@ fn build_thread_from_snapshot(
         ephemeral: config_snapshot.ephemeral,
         section: None,
         section_entered_at: None,
+        project_id: None,
         history_mode: config_snapshot.history_mode.into(),
         model_provider: config_snapshot.model_provider_id.clone(),
         created_at: now,

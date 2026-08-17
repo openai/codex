@@ -142,6 +142,7 @@ async fn load_recent_threads(sess: &Session) -> Vec<StoredThread> {
             relation_filter: None,
             archived: false,
             section: None,
+            project_id: None,
             search_term: None,
             use_state_db_only: false,
         })

@@ -8,6 +8,7 @@ mod model_context;
 mod move_thread_to_section;
 mod paginated_fork;
 mod pending_thread_metadata;
+mod projects;
 mod read_thread;
 mod revert_thread;
 mod rollout_migration;
@@ -48,21 +49,27 @@ use tokio::sync::RwLock;
 use crate::AppendThreadItemsParams;
 use crate::ArchiveThreadParams;
 use crate::ArchiveThreadsParams;
+use crate::CreateProjectParams;
 use crate::CreateThreadParams;
 use crate::CreateThreadSectionParams;
+use crate::CreatedProject;
 use crate::DeleteThreadParams;
 use crate::DeleteThreadSectionParams;
 use crate::DeleteThreadsParams;
+use crate::DeletedProject;
 use crate::ItemPage;
 use crate::ListItemsParams;
+use crate::ListProjectsParams;
 use crate::ListThreadSectionsParams;
 use crate::ListThreadsParams;
 use crate::ListTurnsParams;
 use crate::LoadThreadHistoryParams;
+use crate::MoveProjectParams;
 use crate::MoveThreadToSectionParams;
 use crate::PersistContext;
 use crate::PrepareForkParams;
 use crate::PreparedFork;
+use crate::ProjectMoveOutcome;
 use crate::ReadThreadByRolloutPathParams;
 use crate::ReadThreadParams;
 use crate::RenameThreadSectionParams;
@@ -71,6 +78,8 @@ use crate::RevertThreadParams;
 use crate::SearchThreadOccurrencesParams;
 use crate::SearchThreadsParams;
 use crate::StoredModelContext;
+use crate::StoredProject;
+use crate::StoredProjectsPage;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
 use crate::StoredThreadSection;
@@ -84,7 +93,9 @@ use crate::ThreadStoreError;
 use crate::ThreadStoreFuture;
 use crate::ThreadStoreResult;
 use crate::TurnPage;
+use crate::UpdateProjectParams;
 use crate::UpdateThreadMetadataParams;
+use crate::UpdatedProject;
 use crate::local::writer_lock::WriterLockCoordinator;
 use crate::local::writer_lock::WriterLockGuard;
 
@@ -533,6 +544,43 @@ impl ThreadStore for LocalThreadStore {
         params: DeleteThreadSectionParams,
     ) -> ThreadStoreFuture<'_, bool> {
         Box::pin(async move { thread_sections::delete_thread_section(self, params).await })
+    }
+
+    fn supports_projects(&self) -> bool {
+        self.state_db.is_some()
+    }
+
+    fn list_projects(
+        &self,
+        params: ListProjectsParams,
+    ) -> ThreadStoreFuture<'_, StoredProjectsPage> {
+        Box::pin(async move { projects::list_projects(self, params).await })
+    }
+
+    fn read_project(&self, project_id: String) -> ThreadStoreFuture<'_, Option<StoredProject>> {
+        Box::pin(async move { projects::read_project(self, project_id).await })
+    }
+
+    fn create_project(&self, params: CreateProjectParams) -> ThreadStoreFuture<'_, CreatedProject> {
+        Box::pin(async move { projects::create_project(self, params).await })
+    }
+
+    fn update_project(
+        &self,
+        params: UpdateProjectParams,
+    ) -> ThreadStoreFuture<'_, Option<UpdatedProject>> {
+        Box::pin(async move { projects::update_project(self, params).await })
+    }
+
+    fn move_project(
+        &self,
+        params: MoveProjectParams,
+    ) -> ThreadStoreFuture<'_, Option<ProjectMoveOutcome>> {
+        Box::pin(async move { projects::move_project(self, params).await })
+    }
+
+    fn delete_project(&self, project_id: String) -> ThreadStoreFuture<'_, Option<DeletedProject>> {
+        Box::pin(async move { projects::delete_project(self, project_id).await })
     }
 
     fn supports_paginated_history_lists(&self) -> bool {

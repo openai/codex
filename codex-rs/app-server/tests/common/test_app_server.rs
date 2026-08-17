@@ -73,6 +73,9 @@ use codex_app_server_protocol::PluginSkillReadParams;
 use codex_app_server_protocol::PluginUninstallParams;
 use codex_app_server_protocol::ProcessKillParams;
 use codex_app_server_protocol::ProcessSpawnParams;
+use codex_app_server_protocol::ProjectImportParams;
+use codex_app_server_protocol::ProjectListParams;
+use codex_app_server_protocol::ProjectReadParams;
 use codex_app_server_protocol::RemoteControlClientsListParams;
 use codex_app_server_protocol::RemoteControlClientsRevokeParams;
 use codex_app_server_protocol::RemoteControlPairingStartParams;
@@ -471,6 +474,33 @@ impl TestAppServer {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("thread/start", params).await
+    }
+
+    /// Send a `project/import` JSON-RPC request.
+    pub async fn send_project_import_request(
+        &mut self,
+        params: ProjectImportParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("project/import", params).await
+    }
+
+    /// Send a `project/list` JSON-RPC request.
+    pub async fn send_project_list_request(
+        &mut self,
+        params: ProjectListParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("project/list", params).await
+    }
+
+    /// Send a project/read JSON-RPC request.
+    pub async fn send_project_read_request(
+        &mut self,
+        params: ProjectReadParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("project/read", params).await
     }
 
     /// Sends a `thread/start` request selecting the builder's automatic

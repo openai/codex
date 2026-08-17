@@ -1159,6 +1159,7 @@ impl ThreadManager {
             thread_source,
             parent_trace,
             ClientMcpExtensions::default(),
+            /*reserved_thread_id*/ None,
         )
         .await
     }
@@ -1182,6 +1183,7 @@ impl ThreadManager {
     }
 
     /// Fork an existing thread from already-loaded store history.
+    #[allow(clippy::too_many_arguments)]
     pub async fn fork_thread_from_history<S>(
         &self,
         snapshot: S,
@@ -1190,6 +1192,7 @@ impl ThreadManager {
         thread_source: Option<ThreadSource>,
         parent_trace: Option<W3cTraceContext>,
         client_mcp_extensions: ClientMcpExtensions,
+        reserved_thread_id: Option<ThreadId>,
     ) -> CodexResult<NewThread>
     where
         S: Into<ForkSnapshot>,
@@ -1204,6 +1207,7 @@ impl ThreadManager {
             thread_source,
             parent_trace,
             client_mcp_extensions,
+            reserved_thread_id,
         )
         .await
     }
@@ -1216,6 +1220,7 @@ impl ThreadManager {
         thread_source: Option<ThreadSource>,
         parent_trace: Option<W3cTraceContext>,
         client_mcp_extensions: ClientMcpExtensions,
+        reserved_thread_id: Option<ThreadId>,
     ) -> CodexResult<NewThread> {
         let history = InitialHistory::Resumed(ResumedHistory {
             conversation_id: prepared.source_thread_id,
@@ -1237,6 +1242,7 @@ impl ThreadManager {
                 thread_source,
                 parent_trace,
                 client_mcp_extensions,
+                reserved_thread_id,
             )
             .await;
         drop(prepared);
@@ -1250,6 +1256,7 @@ impl ThreadManager {
         thread_source: Option<ThreadSource>,
         parent_trace: Option<W3cTraceContext>,
         client_mcp_extensions: ClientMcpExtensions,
+        reserved_thread_id: Option<ThreadId>,
     ) -> CodexResult<NewThread> {
         let ForkHistory {
             snapshot,
@@ -1282,6 +1289,7 @@ impl ThreadManager {
             thread_source,
             parent_trace,
             client_mcp_extensions,
+            reserved_thread_id,
             ..StartThreadOptions::new(config)
         };
         let mut request =

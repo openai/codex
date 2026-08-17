@@ -2227,6 +2227,7 @@ mod tests {
             section: None,
             section_position: None,
             section_entered_at: None,
+            project_id: None,
             cwd: test_path_buf("/tmp").abs().into(),
             cli_version: "0.0.0".to_string(),
             source: SessionSource::Cli,

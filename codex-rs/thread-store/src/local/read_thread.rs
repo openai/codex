@@ -65,6 +65,7 @@ pub(super) async fn read_thread(
             if thread.name.is_some() {
                 rollout_thread.name = thread.name;
             }
+            rollout_thread.project_id = thread.project_id;
             rollout_thread.git_info = thread.git_info;
             rollout_thread.permission_profile = permission_profile_from_metadata_value(
                 &metadata_sandbox_policy,
@@ -139,6 +140,7 @@ pub(super) async fn read_thread_by_rollout_path(
             thread.section = metadata.section;
             thread.section_position = metadata.section_position;
             thread.section_entered_at = metadata.section_entered_at;
+            thread.project_id = metadata.project_id;
             if !metadata.cwd.as_os_str().is_empty()
                 && resolve_requested_rollout_path(store, metadata.rollout_path.clone())
                     .await
@@ -380,6 +382,7 @@ pub(super) fn stored_thread_from_state_metadata(
         section: metadata.section,
         section_position: metadata.section_position,
         section_entered_at: metadata.section_entered_at,
+        project_id: metadata.project_id,
         cwd: metadata.cwd,
         cli_version: metadata.cli_version,
         source: parse_session_source(&metadata.source),
@@ -478,6 +481,7 @@ fn stored_thread_from_meta_line(
         section: None,
         section_position: None,
         section_entered_at: None,
+        project_id: None,
         cwd: meta_line.meta.cwd,
         cli_version: meta_line.meta.cli_version,
         source: meta_line.meta.source,

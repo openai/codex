@@ -228,6 +228,7 @@ async fn assert_copied_fork_persists_inherited_history(history_mode: ThreadHisto
             /*thread_source*/ None,
             /*parent_trace*/ None,
             ClientMcpExtensions::default(),
+            /*reserved_thread_id*/ None,
         )
         .await
         .expect("fork from stored history");

@@ -169,6 +169,7 @@ async fn split_homes_support_backfill_listing_and_paginated_history() {
             search_term: None,
             relation_filter: None,
             section: None,
+            project_id: None,
             use_state_db_only: true,
         })
         .await

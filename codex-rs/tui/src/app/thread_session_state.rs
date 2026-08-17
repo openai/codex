@@ -419,6 +419,7 @@ mod tests {
             ephemeral: false,
             section: None,
             section_entered_at: None,
+            project_id: None,
             history_mode: Default::default(),
             model_provider: "read-provider".to_string(),
             created_at: 1,

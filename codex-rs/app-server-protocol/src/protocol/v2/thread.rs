@@ -118,6 +118,11 @@ pub struct ThreadStartParams {
     /// Optional client-supplied analytics source classification for this thread.
     #[ts(optional = nullable)]
     pub thread_source: Option<ThreadSource>,
+    /// Optional project identity for this new thread. Durable threads persist
+    /// the assignment; ephemeral threads expose it only in live responses.
+    #[experimental("thread/start.projectId")]
+    #[ts(optional = nullable)]
+    pub project_id: Option<String>,
     /// Optional sticky environments for this thread.
     ///
     /// Omitted selects the default environment when environment access is
@@ -858,7 +863,7 @@ pub struct ThreadGoalClearResponse {
     pub cleared: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct QueuedSubmission {
@@ -965,11 +970,16 @@ pub struct ThreadQueueStartResponse {
     pub turn: Turn,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadMetadataUpdateParams {
     pub thread_id: String,
+    /// Omit to leave the project unchanged, use an empty string to clear it,
+    /// or provide an existing project ID to assign it.
+    #[experimental("thread/metadata/update.projectId")]
+    #[ts(optional = nullable)]
+    pub project_id: Option<String>,
     /// Patch the stored Git metadata for this thread.
     /// Omit a field to leave it unchanged, set it to `null` to clear it, or
     /// provide a string to replace the stored value.
@@ -1381,6 +1391,17 @@ pub struct ThreadListParams {
     )]
     #[ts(optional = nullable, type = "string | null")]
     pub section_id: Option<Option<String>>,
+    /// Omit to include every project, set to null for unassigned threads,
+    /// or provide a project ID to return only threads in that project.
+    #[experimental("thread/list.projectId")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::protocol::serde_helpers::serialize_double_option",
+        deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option"
+    )]
+    #[ts(optional = nullable, type = "string | null")]
+    pub project_id: Option<Option<String>>,
     /// Optional cwd filter or filters; when set, only threads whose session cwd
     /// exactly matches one of these paths are returned.
     #[ts(optional = nullable, type = "string | Array<string> | null")]

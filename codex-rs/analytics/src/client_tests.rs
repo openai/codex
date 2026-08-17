@@ -614,6 +614,7 @@ fn sample_thread(thread_id: &str) -> Thread {
         ephemeral: false,
         section: None,
         section_entered_at: None,
+        project_id: None,
         history_mode: Default::default(),
         model_provider: "openai".to_string(),
         created_at: 1,

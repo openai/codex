@@ -34,6 +34,9 @@ section: ThreadSection | null, /**
  * Unix timestamp in seconds when the thread entered its current section.
  */
 sectionEnteredAt: number | null, /**
+ * Canonical project assignment owned by app-server, if any.
+ */
+projectId: string | null, /**
  * Model provider used for this thread (for example, 'openai').
  */
 modelProvider: string, /**

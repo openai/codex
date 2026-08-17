@@ -45,6 +45,7 @@ impl App {
                                 source_kinds: Some(vec![ThreadSourceKind::SubAgentThreadSpawn]),
                                 archived: None,
                                 section_id: None,
+                                project_id: None,
                                 cwd: None,
                                 use_state_db_only: true,
                                 search_term: None,

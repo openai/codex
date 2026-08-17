@@ -429,7 +429,40 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
+    use crate::CreateThreadParams;
     use crate::ThreadPersistenceMetadata;
+
+    #[tokio::test]
+    async fn create_without_project_omits_project_patch() {
+        let thread_id = ThreadId::new();
+        let sync = ThreadMetadataSync::for_create(&CreateThreadParams {
+            session_id: thread_id.into(),
+            thread_id,
+            extra_config: None,
+            forked_from_id: None,
+            parent_thread_id: None,
+            source: SessionSource::Exec,
+            thread_source: None,
+            originator: "test_originator".to_string(),
+            base_instructions: codex_protocol::models::BaseInstructions::default(),
+            dynamic_tools: Vec::new(),
+            selected_capability_roots: Vec::new(),
+            multi_agent_version: None,
+            history_mode: ThreadHistoryMode::Legacy,
+            history_base: None,
+            subagent_history_start_ordinal: None,
+            initial_window_id: uuid::Uuid::now_v7().to_string(),
+            metadata: ThreadPersistenceMetadata {
+                cwd: None,
+                model_provider: "test-provider".to_string(),
+                memory_mode: ThreadMemoryMode::Enabled,
+            },
+        })
+        .await;
+
+        let update = sync.take_pending_update().expect("pending metadata update");
+        assert_eq!(update.patch.project_id, None);
+    }
 
     #[test]
     fn resume_history_keeps_derived_metadata_pending_until_applied() {
