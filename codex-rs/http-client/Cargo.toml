@@ -11,6 +11,7 @@ futures = { workspace = true }
 http = { workspace = true }
 native-tls = "0.2"
 opentelemetry = { workspace = true }
+opentelemetry-http = { workspace = true, features = ["reqwest"] }
 reqwest = { workspace = true, features = ["blocking", "json", "rustls-tls-native-roots", "stream"] }
 rustls = { workspace = true }
 rustls-native-certs = { workspace = true }

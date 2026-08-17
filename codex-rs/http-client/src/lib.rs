@@ -8,6 +8,7 @@ mod outbound_proxy;
 mod request;
 mod route_aware_client_pool;
 mod route_aware_redirect;
+mod telemetry_client;
 mod tls_backend_fallback;
 mod transport;
 
@@ -53,7 +54,10 @@ pub use crate::route_aware_client_pool::RouteAwareClientPool;
 pub use crate::route_aware_client_pool::RouteAwareClientPoolError;
 pub use crate::route_aware_client_pool::RouteAwareRequestBuilder;
 pub use crate::route_aware_client_pool::RouteAwareRequestError;
+pub use crate::telemetry_client::BuildTelemetryHttpClientError;
+pub use crate::telemetry_client::TelemetryClientTlsConfig;
 pub use crate::transport::ByteStream;
 pub use crate::transport::HttpTransport;
 pub use crate::transport::ReqwestTransport;
 pub use crate::transport::StreamResponse;
+pub use opentelemetry_http::HttpClient as TelemetryHttpClient;

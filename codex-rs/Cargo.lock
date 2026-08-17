@@ -3381,6 +3381,7 @@ dependencies = [
  "http 1.4.0",
  "native-tls",
  "opentelemetry",
+ "opentelemetry-http",
  "opentelemetry_sdk",
  "pretty_assertions",
  "rcgen",
