@@ -207,6 +207,9 @@ mod agent_message_consolidation;
 mod agent_navigation;
 mod agent_picker;
 mod agent_status_feed;
+mod agents_overview;
+mod agents_overview_view;
+pub(crate) use agents_overview::AGENTS_OVERVIEW_VIEW_ID;
 mod app_server_event_targets;
 mod app_server_events;
 pub(crate) mod app_server_requests;
@@ -592,6 +595,7 @@ pub(crate) struct App {
     thread_event_channels: HashMap<ThreadId, ThreadEventChannel>,
     thread_event_listener_tasks: HashMap<ThreadId, JoinHandle<()>>,
     agent_navigation: AgentNavigationState,
+    agents_overview: agents_overview::AgentsOverviewState,
     side_threads: HashMap<ThreadId, SideThreadState>,
     abandoned_side_threads: HashSet<ThreadId>,
     active_thread_id: Option<ThreadId>,
@@ -862,7 +866,24 @@ impl App {
     }
 
     fn render_chat_widget_frame(&mut self, tui: &mut tui::Tui, screen_size: Size) -> Result<Rect> {
+        let dashboard_visible = self
+            .chat_widget
+            .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
+            .is_some();
+        if std::mem::replace(
+            &mut self.agents_overview.rendered_full_screen,
+            dashboard_visible,
+        ) && !dashboard_visible
+        {
+            self.schedule_immediate_resize_reflow(tui);
+            self.maybe_run_resize_reflow(tui, screen_size)?;
+        }
         self.with_chat_widget_frame(screen_size.width, |desired_height, chat_widget| {
+            let desired_height = if dashboard_visible {
+                screen_size.height
+            } else {
+                desired_height
+            };
             let mut rendered_area = Rect::default();
             tui.draw_with_resize_reflow(desired_height, screen_size, |frame| {
                 let area = frame.area();

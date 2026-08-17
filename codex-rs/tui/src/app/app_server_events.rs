@@ -64,6 +64,7 @@ impl App {
                 );
                 self.refresh_mcp_startup_expected_servers_from_config();
                 self.chat_widget.finish_mcp_startup_after_lag();
+                self.refresh_agents_overview_threads(app_server_client);
             }
             AppServerEvent::ServerNotification(notification) => {
                 self.handle_server_notification_event(app_server_client, *notification)
@@ -86,6 +87,18 @@ impl App {
         app_server_client: &AppServerSession,
         notification: ServerNotification,
     ) {
+        if matches!(
+            &notification,
+            ServerNotification::ThreadStarted(_)
+                | ServerNotification::ThreadStatusChanged(_)
+                | ServerNotification::ThreadSettingsUpdated(_)
+                | ServerNotification::ThreadNameUpdated(_)
+                | ServerNotification::ThreadArchived(_)
+                | ServerNotification::ThreadDeleted(_)
+                | ServerNotification::ThreadClosed(_)
+        ) {
+            self.refresh_agents_overview_threads(app_server_client);
+        }
         match &notification {
             ServerNotification::ServerRequestResolved(notification) => {
                 self.pending_primary_events.retain(|event| {

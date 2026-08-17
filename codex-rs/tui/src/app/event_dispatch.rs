@@ -2314,6 +2314,12 @@ impl App {
             AppEvent::OpenApprovalsPopup => {
                 self.chat_widget.open_approvals_popup();
             }
+            AppEvent::OpenAgentsOverview => {
+                self.open_agents_overview(app_server);
+            }
+            AppEvent::AgentsOverviewThreadsLoaded { request_id, result } => {
+                self.apply_agents_overview_thread_refresh(app_server, request_id, result);
+            }
             AppEvent::OpenAgentPicker => {
                 self.open_agent_picker(app_server).await;
             }

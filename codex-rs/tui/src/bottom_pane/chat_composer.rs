@@ -384,6 +384,7 @@ fn parent_owned_command_is_allowed(command: SlashCommand, args: &str) -> bool {
                 | SlashCommand::App
                 | SlashCommand::Side
                 | SlashCommand::Btw
+                | SlashCommand::Agents
                 | SlashCommand::MultiAgents
                 | SlashCommand::Vim
                 | SlashCommand::Keymap
@@ -4976,6 +4977,7 @@ mod tests {
     #[test]
     fn parent_owned_thread_allows_bare_navigation_commands() {
         for (command, expected) in [
+            ("/agents", SlashCommand::Agents),
             ("/subagents", SlashCommand::MultiAgents),
             ("/side", SlashCommand::Side),
             ("/btw", SlashCommand::Btw),
@@ -4996,13 +4998,13 @@ mod tests {
     fn parent_owned_thread_allows_safe_command_selected_from_prefix() {
         let (mut composer, _rx) = new_test_composer();
         composer.set_parent_owned_thread();
-        type_chars_humanlike(&mut composer, &['/', 's', 'u', 'b']);
+        type_chars_humanlike(&mut composer, &['/', 'a', 'g']);
 
         let result = composer
             .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
             .0;
 
-        assert_eq!(result, InputResult::Command(SlashCommand::MultiAgents));
+        assert_eq!(result, InputResult::Command(SlashCommand::Agents));
     }
 
     #[test]

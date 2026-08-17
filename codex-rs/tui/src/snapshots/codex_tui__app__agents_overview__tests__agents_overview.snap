@@ -1,0 +1,29 @@
+---
+source: tui/src/app/agents_overview_tests.rs
+assertion_line: 49
+expression: "render_bottom_popup(&app.chat_widget, 96)"
+---
+  Agent command center
+  1 need input   0 working   0 ready
+  ────────────────────────────────────────────────────────────────────────────────────────────
+  /tmp/project  1
+  › ● Example task  current  Needs input
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ↑↓ navigate  ctrl+f search  ctrl+s group  esc back

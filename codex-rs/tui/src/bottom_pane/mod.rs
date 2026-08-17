@@ -1222,6 +1222,21 @@ impl BottomPane {
         popup_consts::standard_popup_hint_line_for_keymap(&self.keymap.list)
     }
 
+    pub(crate) fn replace_view_if_present(
+        &mut self,
+        view_id: &'static str,
+        view: Box<dyn BottomPaneView>,
+    ) {
+        if let Some(index) = self
+            .view_stack
+            .iter()
+            .rposition(|existing| existing.view_id() == Some(view_id))
+        {
+            self.view_stack[index] = view;
+            self.request_redraw();
+        }
+    }
+
     pub(crate) fn list_keymap(&self) -> crate::keymap::ListKeymap {
         self.keymap.list.clone()
     }
@@ -1383,7 +1398,7 @@ impl BottomPane {
             .lines()
             .next()
             .and_then(parse_slash_name)
-            .is_some_and(|(name, _, _)| name == "subagents");
+            .is_some_and(|(name, _, _)| matches!(name, "agents" | "subagents"));
 
         self.keymap.chat.interrupt_turn.is_pressed(key_event)
             && self.is_task_running

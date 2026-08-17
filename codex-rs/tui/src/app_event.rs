@@ -195,6 +195,13 @@ pub(crate) enum TranscriptExportDestination {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(crate) enum AppEvent {
+    /// Open the daemon-wide overview of loaded root sessions and their subagents.
+    OpenAgentsOverview,
+    /// Update the daemon-wide overview after a background thread listing finishes.
+    AgentsOverviewThreadsLoaded {
+        request_id: Uuid,
+        result: Result<Vec<Thread>, String>,
+    },
     /// Open the agent picker for switching active threads.
     OpenAgentPicker,
     /// Merge a completed root-scoped agent-picker refresh without blocking terminal input.

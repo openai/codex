@@ -1,6 +1,7 @@
 //! Key routing and composer-adjacent UI interaction for `ChatWidget`.
 
 use super::*;
+use crate::bottom_pane::BottomPaneView;
 
 impl ChatWidget {
     pub(crate) fn keymap_contexts(&self) -> crate::keymap::KeymapContextSet {
@@ -239,6 +240,21 @@ impl ChatWidget {
         self.bottom_pane.show_selection_view(params);
         self.refresh_plan_mode_nudge();
         self.request_redraw();
+    }
+
+    pub(crate) fn show_bottom_pane_view(&mut self, view: Box<dyn BottomPaneView>) {
+        self.bottom_pane.show_view(view);
+        self.refresh_plan_mode_nudge();
+        self.request_redraw();
+    }
+
+    pub(crate) fn replace_bottom_pane_view_if_present(
+        &mut self,
+        view_id: &'static str,
+        view: Box<dyn BottomPaneView>,
+    ) {
+        self.bottom_pane.replace_view_if_present(view_id, view);
+        self.refresh_plan_mode_nudge();
     }
 
     pub(crate) fn selected_index_for_present_view(&self, view_id: &'static str) -> Option<usize> {
