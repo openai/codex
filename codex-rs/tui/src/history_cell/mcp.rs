@@ -2,6 +2,16 @@
 
 use super::*;
 
+#[path = "mcp_result.rs"]
+mod result;
+
+use result::McpResultKind;
+use result::McpToolResult;
+
+#[cfg(test)]
+#[path = "mcp_tests.rs"]
+mod tests;
+
 #[derive(Debug)]
 struct McpImageOutputCell;
 
@@ -29,7 +39,7 @@ pub(crate) struct McpToolCallCell {
     invocation: McpInvocation,
     start_time: Instant,
     duration: Option<Duration>,
-    result: Option<Result<codex_protocol::mcp::CallToolResult, String>>,
+    result: Option<Result<McpToolResult, String>>,
     animations_enabled: bool,
 }
 
@@ -79,8 +89,12 @@ impl McpToolCallCell {
         duration: Duration,
         result: Result<codex_protocol::mcp::CallToolResult, String>,
     ) -> Option<Box<dyn HistoryCell>> {
-        let image_cell = try_new_completed_mcp_tool_call_with_image_output(&result)
-            .map(|cell| Box::new(cell) as Box<dyn HistoryCell>);
+        let result = result.map(|result| McpToolResult::new(result, self.result_kind()));
+        let image_cell = result
+            .as_ref()
+            .ok()
+            .filter(|result| result.has_image)
+            .map(|_| Box::new(McpImageOutputCell) as Box<dyn HistoryCell>);
         self.duration = Some(duration);
         self.result = Some(result);
         image_cell
@@ -88,7 +102,7 @@ impl McpToolCallCell {
 
     fn success(&self) -> Option<bool> {
         match self.result.as_ref() {
-            Some(Ok(result)) => Some(!result.is_error.unwrap_or(false)),
+            Some(Ok(result)) => Some(!result.is_error),
             Some(Err(_)) => Some(false),
             None => None,
         }
@@ -100,40 +114,18 @@ impl McpToolCallCell {
         self.result = Some(Err("interrupted".to_string()));
     }
 
-    fn render_content_block(block: &serde_json::Value, width: usize) -> String {
-        let content = match serde_json::from_value::<rmcp::model::ContentBlock>(block.clone()) {
-            Ok(content) => content,
-            Err(_) => {
-                return format_and_truncate_tool_result(
-                    &block.to_string(),
-                    TOOL_CALL_MAX_LINES,
-                    width,
-                );
-            }
-        };
-
-        match content {
-            rmcp::model::ContentBlock::Text(text) => {
-                format_and_truncate_tool_result(&text.text, TOOL_CALL_MAX_LINES, width)
-            }
-            rmcp::model::ContentBlock::Image(_) => "<image content>".to_string(),
-            rmcp::model::ContentBlock::Audio(_) => "<audio content>".to_string(),
-            rmcp::model::ContentBlock::Resource(resource) => {
-                let uri = match resource.resource {
-                    rmcp::model::ResourceContents::TextResourceContents { uri, .. } => uri,
-                    rmcp::model::ResourceContents::BlobResourceContents { uri, .. } => uri,
-                    _ => return "<unknown embedded resource>".to_string(),
-                };
-                format!("embedded resource: {uri}")
-            }
-            rmcp::model::ContentBlock::ResourceLink(link) => format!("link: {}", link.uri),
-            _ => format_and_truncate_tool_result(&block.to_string(), TOOL_CALL_MAX_LINES, width),
+    fn result_kind(&self) -> McpResultKind {
+        if self.invocation.server == "node_repl" && self.invocation.tool == "js" {
+            McpResultKind::NodeRepl
+        } else {
+            McpResultKind::Standard
         }
     }
+
     fn render_lines(&self, width: u16, mode: McpToolCallRenderMode) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
         let status = self.success();
-        let node_repl = self.invocation.server == "node_repl" && self.invocation.tool == "js";
+        let node_repl = self.result_kind() == McpResultKind::NodeRepl;
         let compact = node_repl && mode == McpToolCallRenderMode::Display;
         let bullet = match status {
             Some(true) => "•".green().bold(),
@@ -194,24 +186,21 @@ impl McpToolCallCell {
 
         if let Some(result) = &self.result {
             match result {
-                Ok(codex_protocol::mcp::CallToolResult { content, .. }) => {
+                Ok(McpToolResult { content, .. }) => {
                     if !content.is_empty() {
                         for block in content {
                             let text = if compact && status == Some(true) {
-                                let meaningful_output = block
-                                    .get("text")
-                                    .and_then(serde_json::Value::as_str)
-                                    .and_then(|text| {
-                                        if text.starts_with("Script completed\n") {
-                                            return text
-                                                .split_once("\nOutput:\n")
-                                                .map(|(_, output)| output.to_string());
-                                        }
-                                        serde_json::from_str::<NodeReplExecOutput>(text)
-                                            .ok()
-                                            .filter(|output| output.exit_code == 0)
-                                            .map(|output| output.output)
-                                    });
+                                let meaningful_output = block.text().and_then(|text| {
+                                    if text.starts_with("Script completed\n") {
+                                        return text
+                                            .split_once("\nOutput:\n")
+                                            .map(|(_, output)| output.to_string());
+                                    }
+                                    serde_json::from_str::<NodeReplExecOutput>(text)
+                                        .ok()
+                                        .filter(|output| output.exit_code == 0)
+                                        .map(|output| output.output)
+                                });
                                 match meaningful_output {
                                     Some(output) if output.is_empty() => continue,
                                     Some(output) => format_and_truncate_tool_result(
@@ -219,16 +208,15 @@ impl McpToolCallCell {
                                         TOOL_CALL_MAX_LINES,
                                         detail_wrap_width,
                                     ),
-                                    None => Self::render_content_block(block, detail_wrap_width),
+                                    None => block.render(detail_wrap_width),
                                 }
                             } else if node_repl
                                 && mode == McpToolCallRenderMode::Transcript
-                                && let Some(output) =
-                                    block.get("text").and_then(serde_json::Value::as_str)
+                                && let Some(output) = block.text()
                             {
                                 output.trim_end_matches('\n').to_string()
                             } else {
-                                Self::render_content_block(block, detail_wrap_width)
+                                block.render(detail_wrap_width)
                             };
                             for segment in text.split('\n') {
                                 let line = Line::from(segment.to_string().dim());
@@ -301,9 +289,9 @@ impl HistoryCell for McpToolCallCell {
 
         if let Some(result) = &self.result {
             match result {
-                Ok(codex_protocol::mcp::CallToolResult { content, .. }) => {
+                Ok(McpToolResult { content, .. }) => {
                     for block in content {
-                        let text = Self::render_content_block(block, RAW_TOOL_OUTPUT_WIDTH);
+                        let text = block.render(RAW_TOOL_OUTPUT_WIDTH);
                         lines.extend(raw_lines_from_source(&text));
                     }
                 }
@@ -328,68 +316,6 @@ pub(crate) fn new_active_mcp_tool_call(
     animations_enabled: bool,
 ) -> McpToolCallCell {
     McpToolCallCell::new(call_id, invocation, animations_enabled)
-}
-/// Returns an additional history cell if an MCP tool result includes a decodable image.
-///
-/// This intentionally returns at most one cell: the first image in `CallToolResult.content` that
-/// successfully base64-decodes and parses as an image. This is used as a lightweight “image output
-/// exists” affordance separate from the main MCP tool call cell.
-///
-/// Manual testing tip:
-/// - Run the rmcp stdio test server (`codex-rs/rmcp-client/src/bin/test_stdio_server.rs`) and
-///   register it as an MCP server via `codex mcp add`.
-/// - Use its `image_scenario` tool with cases like `text_then_image`,
-///   `invalid_base64_then_image`, or `invalid_image_bytes_then_image` to ensure this path triggers
-///   even when the first block is not a valid image.
-fn try_new_completed_mcp_tool_call_with_image_output(
-    result: &Result<codex_protocol::mcp::CallToolResult, String>,
-) -> Option<McpImageOutputCell> {
-    result
-        .as_ref()
-        .ok()?
-        .content
-        .iter()
-        .find_map(decode_mcp_image)?;
-
-    Some(McpImageOutputCell)
-}
-
-/// Decodes an MCP `ImageContent` block into an in-memory image.
-///
-/// Returns `None` when the block is not an image, when base64 decoding fails, when the format
-/// cannot be inferred, or when the image decoder rejects the bytes.
-fn decode_mcp_image(block: &serde_json::Value) -> Option<DynamicImage> {
-    let content = serde_json::from_value::<rmcp::model::ContentBlock>(block.clone()).ok()?;
-    let rmcp::model::ContentBlock::Image(image) = content else {
-        return None;
-    };
-    let base64_data = if let Some(data_url) = image.data.strip_prefix("data:") {
-        data_url.split_once(',')?.1
-    } else {
-        image.data.as_str()
-    };
-    let raw_data = base64::engine::general_purpose::STANDARD
-        .decode(base64_data)
-        .map_err(|e| {
-            error!("Failed to decode image data: {e}");
-            e
-        })
-        .ok()?;
-    let reader = ImageReader::new(Cursor::new(raw_data))
-        .with_guessed_format()
-        .map_err(|e| {
-            error!("Failed to guess image format: {e}");
-            e
-        })
-        .ok()?;
-
-    reader
-        .decode()
-        .map_err(|e| {
-            error!("Image decoding failed: {e}");
-            e
-        })
-        .ok()
 }
 /// Render a summary of configured MCP servers from the current `Config`.
 pub(crate) fn empty_mcp_output() -> WebHyperlinkHistoryCell {
