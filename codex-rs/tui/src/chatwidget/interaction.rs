@@ -111,18 +111,7 @@ impl ChatWidget {
         }
 
         if key_event.kind == KeyEventKind::Press
-            && (self.chat_keymap.edit_queued_message.is_pressed(key_event)
-                || (self.bottom_pane.composer_is_empty()
-                    && self
-                        .bottom_pane
-                        .keymap_contexts()
-                        .contains(crate::keymap::KeymapContext::VimNormal)
-                    && self
-                        .bottom_pane
-                        .runtime_keymap()
-                        .vim_normal
-                        .move_up
-                        .is_pressed(key_event)))
+            && self.chat_keymap.edit_queued_message.is_pressed(key_event)
             && self.has_queued_follow_up_messages()
             && self.bottom_pane.no_modal_or_popup_active()
         {

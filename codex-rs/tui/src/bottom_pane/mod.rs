@@ -1222,12 +1222,8 @@ impl BottomPane {
         popup_consts::standard_popup_hint_line_for_keymap(&self.keymap.list)
     }
 
-    pub(crate) fn runtime_keymap(&self) -> &RuntimeKeymap {
-        &self.keymap
-    }
-
     pub(crate) fn list_keymap(&self) -> crate::keymap::ListKeymap {
-        self.runtime_keymap().list.clone()
+        self.keymap.list.clone()
     }
 
     /// Replace one or more active views whose IDs are in `view_ids` with a

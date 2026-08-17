@@ -44,11 +44,6 @@
 //! - Persistent cross-session history (text-only; no element ranges or attachments).
 //! - Local in-session history (full text + text elements + local/remote image attachments).
 //!
-//! Before composer history handles Vim-normal history-up, `ChatWidget` restores the latest queued
-//! follow-up when the composer is empty and no popup is active. It removes the message from the
-//! queue before placing it in the composer, so editing and requeuing it replaces the prior
-//! revision instead of creating duplicates.
-//!
 //! When recalling a local entry, the composer rehydrates text elements and both attachment kinds
 //! (local image paths + remote image URLs).
 //! When recalling a persistent entry, only the text is restored.
