@@ -25,7 +25,7 @@ fn dangerous_command_match_with_depth(
     wrapper_depth: usize,
 ) -> Option<DangerousCommandMatch> {
     if wrapper_depth > MAX_DANGEROUS_COMMAND_WRAPPER_DEPTH {
-        return None;
+        return Some(DangerousCommandMatch::Other);
     }
 
     if let Some(dangerous_match) = dangerous_command_match_for_exec(command, wrapper_depth) {
@@ -285,6 +285,27 @@ mod tests {
                 Some(DangerousCommandMatch::ForcedRm),
                 "{command:?}"
             );
+        }
+    }
+
+    #[test]
+    fn deeply_nested_command_wrappers_fail_closed() {
+        for (depth, expected) in [
+            (
+                MAX_DANGEROUS_COMMAND_WRAPPER_DEPTH,
+                DangerousCommandMatch::ForcedRm,
+            ),
+            (
+                MAX_DANGEROUS_COMMAND_WRAPPER_DEPTH + 1,
+                DangerousCommandMatch::Other,
+            ),
+        ] {
+            let command = std::iter::repeat_n("env", depth)
+                .chain(["rm", "-rf", "/tmp/example"])
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+
+            assert_eq!(dangerous_command_match(&command), Some(expected));
         }
     }
 

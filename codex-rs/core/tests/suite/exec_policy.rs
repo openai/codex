@@ -290,6 +290,68 @@ async fn granular_complex_forced_rm_requests_approval_when_allowed() -> Result<(
     Ok(())
 }
 
+#[tokio::test]
+async fn deeply_nested_forced_rm_is_rejected_before_execution_when_approvals_are_disabled()
+-> Result<()> {
+    skip_if_target_windows!(Ok(()), "uses a POSIX shell command fixture");
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex();
+    let test = builder.build_with_auto_env(&server).await?;
+    let sentinel = test.config.cwd.join("forced-rm-sentinel");
+    fs::write(&sentinel, "must not be deleted")?;
+    let call_id = "deeply-nested-forced-rm";
+    let args = json!({
+        "command": "env env env env env env env env env rm -rf forced-rm-sentinel",
+        "timeout_ms": 1_000,
+    });
+
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-deeply-nested-forced-rm-1"),
+            ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-deeply-nested-forced-rm-1"),
+        ]),
+    )
+    .await;
+    let results_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-deeply-nested-forced-rm", "done"),
+            ev_completed("resp-deeply-nested-forced-rm-2"),
+        ]),
+    )
+    .await;
+
+    submit_user_turn(
+        &test,
+        "run the deeply nested forced rm",
+        AskForApproval::Never,
+        PermissionProfile::Disabled,
+        /*collaboration_mode*/ None,
+    )
+    .await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let output_item = results_mock.single_request().function_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("function call output should include a string output payload");
+    assert!(
+        output.contains("rejected: blocked by policy"),
+        "unexpected output: {output}"
+    );
+    assert!(sentinel.exists(), "the rejected command must not execute");
+
+    Ok(())
+}
+
 #[cfg(windows)]
 #[tokio::test]
 async fn unified_exec_disabled_windows_sandbox_rejects_managed_read_only_command() -> Result<()> {
