@@ -198,14 +198,18 @@ pub(crate) fn resolve_provider_auth(
     auth: Option<&CodexAuth>,
     provider: &ModelProviderInfo,
 ) -> codex_protocol::error::Result<SharedAuthProvider> {
+    if let Some(auth) = bearer_auth_for_provider(provider)? {
+        return Ok(Arc::new(auth));
+    }
+
+    if !provider.requires_openai_auth && provider.auth.is_none() {
+        return Ok(unauthenticated_auth_provider());
+    }
+
     if matches!(auth, Some(CodexAuth::BedrockApiKey(_))) {
         return Err(CodexErr::UnsupportedOperation(
             BEDROCK_API_KEY_UNSUPPORTED_MESSAGE.to_string(),
         ));
-    }
-
-    if let Some(auth) = bearer_auth_for_provider(provider)? {
-        return Ok(Arc::new(auth));
     }
 
     Ok(match auth {
@@ -341,10 +345,12 @@ mod tests {
     use codex_model_provider_info::WireApi;
     use codex_model_provider_info::create_oss_provider_with_base_url;
     use codex_protocol::account::PlanType;
+    use codex_protocol::config_types::ModelProviderAuthInfo;
     use codex_protocol::error::CodexErrorDetails;
     use http::header::AUTHORIZATION;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use std::num::NonZeroU64;
     use std::path::Path;
     use std::path::PathBuf;
     use std::sync::atomic::AtomicUsize;
@@ -464,6 +470,109 @@ mod tests {
         let auth = resolve_provider_auth(/*auth*/ None, &provider).expect("auth should resolve");
 
         assert!(auth.to_auth_headers().is_empty());
+    }
+
+    #[test]
+    fn custom_provider_does_not_inherit_ambient_auth_headers() {
+        let provider =
+            create_oss_provider_with_base_url("http://localhost:11434/v1", WireApi::Responses);
+        let mut ambient_headers = HeaderMap::new();
+        ambient_headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_static("Bearer ambient-token"),
+        );
+        ambient_headers.insert(
+            "ChatGPT-Account-ID",
+            HeaderValue::from_static("account-123"),
+        );
+        let ambient_auth = CodexAuth::Headers(AuthHeaders::new(ambient_headers));
+
+        let auth =
+            resolve_provider_auth(Some(&ambient_auth), &provider).expect("auth should resolve");
+
+        assert!(auth.to_auth_headers().is_empty());
+    }
+
+    #[test]
+    fn custom_provider_does_not_inherit_ambient_bedrock_auth() {
+        let provider =
+            create_oss_provider_with_base_url("http://localhost:11434/v1", WireApi::Responses);
+        let ambient_auth = CodexAuth::BedrockApiKey(BedrockApiKeyAuth {
+            api_key: "bedrock-api-key-test".to_string(),
+            region: "us-east-1".to_string(),
+        });
+
+        let auth =
+            resolve_provider_auth(Some(&ambient_auth), &provider).expect("auth should resolve");
+
+        assert!(auth.to_auth_headers().is_empty());
+    }
+
+    #[test]
+    fn custom_provider_uses_explicit_bearer_instead_of_ambient_auth() {
+        let mut provider =
+            create_oss_provider_with_base_url("http://localhost:11434/v1", WireApi::Responses);
+        provider.experimental_bearer_token = Some("provider-token".to_string());
+        let ambient_auth = CodexAuth::BedrockApiKey(BedrockApiKeyAuth {
+            api_key: "bedrock-api-key-test".to_string(),
+            region: "us-east-1".to_string(),
+        });
+
+        let headers = resolve_provider_auth(Some(&ambient_auth), &provider)
+            .expect("auth should resolve")
+            .to_auth_headers();
+
+        assert_eq!(
+            headers.get(AUTHORIZATION),
+            Some(&HeaderValue::from_static("Bearer provider-token"))
+        );
+        assert_eq!(headers.len(), 1);
+    }
+
+    #[test]
+    fn custom_provider_uses_command_resolved_auth() {
+        let mut provider =
+            create_oss_provider_with_base_url("http://localhost:11434/v1", WireApi::Responses);
+        provider.auth = Some(ModelProviderAuthInfo {
+            command: "print-token".to_string(),
+            args: Vec::new(),
+            timeout_ms: NonZeroU64::new(5_000).expect("timeout should be non-zero"),
+            refresh_interval_ms: 300_000,
+            cwd: std::env::current_dir()
+                .expect("current directory should be available")
+                .try_into()
+                .expect("current directory should be absolute"),
+        });
+        let command_auth = CodexAuth::from_api_key("command-token");
+
+        let headers = resolve_provider_auth(Some(&command_auth), &provider)
+            .expect("auth should resolve")
+            .to_auth_headers();
+
+        assert_eq!(
+            headers.get(AUTHORIZATION),
+            Some(&HeaderValue::from_static("Bearer command-token"))
+        );
+    }
+
+    #[test]
+    fn openai_provider_preserves_ambient_auth_headers() {
+        let provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+        let mut expected = HeaderMap::new();
+        expected.insert(
+            AUTHORIZATION,
+            HeaderValue::from_static("Bearer ambient-token"),
+        );
+        expected.insert(
+            "ChatGPT-Account-ID",
+            HeaderValue::from_static("account-123"),
+        );
+        let ambient_auth = CodexAuth::Headers(AuthHeaders::new(expected.clone()));
+
+        let auth =
+            resolve_provider_auth(Some(&ambient_auth), &provider).expect("auth should resolve");
+
+        assert_eq!(auth.to_auth_headers(), expected);
     }
 
     #[test]

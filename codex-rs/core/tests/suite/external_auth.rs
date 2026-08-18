@@ -3,6 +3,8 @@ use codex_login::CodexAuth;
 use codex_login::ExternalAuth;
 use codex_login::ExternalAuthFuture;
 use codex_login::ExternalAuthRefreshContext;
+use codex_model_provider_info::WireApi;
+use codex_model_provider_info::create_oss_provider_with_base_url;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
@@ -75,6 +77,10 @@ async fn header_auth_is_attached_to_responses_requests() -> anyhow::Result<()> {
     .await;
     let mut headers = HeaderMap::new();
     headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer external"));
+    headers.insert(
+        "ChatGPT-Account-ID",
+        HeaderValue::from_static("account-123"),
+    );
     headers.insert("x-external-auth", HeaderValue::from_static("enabled"));
     let mut builder = test_codex().with_auth(CodexAuth::Headers(AuthHeaders::new(headers)));
     let test = builder.build_with_auto_env(&server).await?;
@@ -90,6 +96,82 @@ async fn header_auth_is_attached_to_responses_requests() -> anyhow::Result<()> {
         request.header("x-external-auth").as_deref(),
         Some("enabled")
     );
+    assert_eq!(
+        request.header("chatgpt-account-id").as_deref(),
+        Some("account-123")
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn custom_provider_does_not_receive_ambient_auth_headers() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let response_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let mut headers = HeaderMap::new();
+    headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer ambient"));
+    headers.insert(
+        "ChatGPT-Account-ID",
+        HeaderValue::from_static("account-123"),
+    );
+    let provider =
+        create_oss_provider_with_base_url(&format!("{}/v1", server.uri()), WireApi::Responses);
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::Headers(AuthHeaders::new(headers)))
+        .with_config(move |config| {
+            config.model_provider_id = provider.name.clone();
+            config.model_provider = provider;
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+
+    test.submit_turn("hello").await?;
+
+    let request = response_mock.single_request();
+    assert_eq!(request.header("authorization"), None);
+    assert_eq!(request.header("chatgpt-account-id"), None);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn custom_provider_uses_explicit_bearer_without_ambient_account() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let response_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let mut headers = HeaderMap::new();
+    headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer ambient"));
+    headers.insert(
+        "ChatGPT-Account-ID",
+        HeaderValue::from_static("account-123"),
+    );
+    let mut provider =
+        create_oss_provider_with_base_url(&format!("{}/v1", server.uri()), WireApi::Responses);
+    provider.experimental_bearer_token = Some("provider-token".to_string());
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::Headers(AuthHeaders::new(headers)))
+        .with_config(move |config| {
+            config.model_provider_id = provider.name.clone();
+            config.model_provider = provider;
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+
+    test.submit_turn("hello").await?;
+
+    let request = response_mock.single_request();
+    assert_eq!(
+        request.header("authorization").as_deref(),
+        Some("Bearer provider-token")
+    );
+    assert_eq!(request.header("chatgpt-account-id"), None);
     Ok(())
 }
 
