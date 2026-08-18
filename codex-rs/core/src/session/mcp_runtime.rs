@@ -141,6 +141,7 @@ impl Session {
         ready_selected_capability_roots: &[SelectedCapabilityRoot],
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) {
+        let selected_plugins = mcp_projection.selected_plugins.clone();
         let input = self.build_mcp_runtime_input(
             desired,
             mcp_projection,
@@ -148,6 +149,7 @@ impl Session {
             elicitation_reviewer,
         );
         self.services.mcp_runtime.replace(input).await;
+        self.services.thread_extension_data.insert(selected_plugins);
     }
 
     pub(super) fn build_mcp_runtime_input(
@@ -161,6 +163,7 @@ impl Session {
         let McpRuntimeProjection {
             mut config,
             plugins_available,
+            selected_plugins: _,
         } = mcp_projection;
         config.approval_policy = desired.config.permissions.approval_policy.clone();
         config.permission_profile = desired.config.permissions.effective_permission_profile();

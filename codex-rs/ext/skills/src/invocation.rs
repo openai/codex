@@ -71,7 +71,7 @@ pub fn detect_implicit_skill_invocation(
                         skill_id: entry.canonical_skill_id.clone(),
                         scope: entry.analytics_scope,
                     },
-                    plugin_id: None,
+                    plugin_id: entry.plugin_id.clone(),
                     remote_plugin_id: None,
                     invocation_type: InvocationType::Implicit,
                 });

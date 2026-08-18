@@ -14,6 +14,7 @@ use codex_extension_api::ExtensionData;
 use codex_extension_api::FunctionCallError;
 use codex_extension_api::JsonToolOutput;
 use codex_extension_api::ResponsesApiTool;
+use codex_extension_api::SelectedPluginSnapshot;
 use codex_extension_api::ThreadOriginator;
 use codex_extension_api::ToolCall;
 use codex_extension_api::ToolExecutor;
@@ -37,6 +38,7 @@ use crate::catalog::SkillCatalog;
 use crate::catalog::SkillCatalogEntry;
 use crate::catalog::SkillSourceKind;
 use crate::provider::SkillListQuery;
+use crate::provider::attribute_executor_plugins;
 use crate::shadow_selection_experiment::ShadowSelectionExperiment;
 use crate::sources::SkillProviders;
 use crate::state::SkillsSessionState;
@@ -53,14 +55,19 @@ pub(crate) fn skill_tools(
     providers: SkillProviders,
     session_store: &ExtensionData,
     thread_store: &ExtensionData,
-    orchestrator_available: bool,
     executor_query: Option<SkillListQuery>,
+    selected_plugins: Option<Arc<SelectedPluginSnapshot>>,
     sandbox_contexts: Option<Arc<HashMap<String, FileSystemSandboxContext>>>,
     shadow_selection: Arc<ShadowSelectionExperiment>,
 ) -> Vec<Arc<dyn ToolExecutor<ToolCall>>> {
     let Some(thread_state) = thread_store.get::<SkillsThreadState>() else {
         return Vec::new();
     };
+    let orchestrator_available =
+        providers.has_orchestrator_provider() && thread_state.orchestrator_skills_enabled();
+    if !orchestrator_available && executor_query.is_none() {
+        return Vec::new();
+    }
     let mcp_resources = session_store
         .get::<SkillsSessionState>()
         .and_then(|state| state.mcp_resources.clone());
@@ -72,6 +79,7 @@ pub(crate) fn skill_tools(
         analytics,
         orchestrator_available,
         executor_query,
+        selected_plugins,
         sandbox_contexts,
         executor_catalog: Arc::new(OnceCell::new()),
         shadow_selection,
@@ -127,8 +135,7 @@ impl SkillAnalytics {
                     skill_id: skill.canonical_skill_id.clone(),
                     scope: skill.analytics_scope,
                 },
-                // TODO: Include plugin identifiers once skills can be attributed to their plugin.
-                plugin_id: None,
+                plugin_id: skill.plugin_id.clone(),
                 remote_plugin_id: None,
                 invocation_type,
             }],
@@ -144,6 +151,7 @@ struct SkillToolContext {
     analytics: Option<SkillAnalytics>,
     orchestrator_available: bool,
     executor_query: Option<SkillListQuery>,
+    selected_plugins: Option<Arc<SelectedPluginSnapshot>>,
     sandbox_contexts: Option<Arc<HashMap<String, FileSystemSandboxContext>>>,
     executor_catalog: Arc<OnceCell<SkillCatalog>>,
     shadow_selection: Arc<ShadowSelectionExperiment>,
@@ -178,10 +186,15 @@ impl SkillToolContext {
                     return SkillCatalog::default();
                 };
                 query.turn_id = turn_id.to_string();
-                self.executor_catalog
+                let mut catalog = self
+                    .executor_catalog
                     .get_or_init(|| self.providers.list_executor_for_turn(query))
                     .await
-                    .clone()
+                    .clone();
+                if let Some(selected_plugins) = &self.selected_plugins {
+                    attribute_executor_plugins(&mut catalog, selected_plugins);
+                }
+                catalog
             }
         }
     }

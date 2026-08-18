@@ -183,6 +183,7 @@ impl McpServerContributor<Config> for SelectedExecutorPluginMcpContributor {
                         context.config(),
                         plugin_policies.get(&plugin.plugin_id),
                         selection_order,
+                        &root.selected_root.id,
                         plugin,
                     ));
                 }
@@ -196,6 +197,7 @@ impl McpServerContributor<Config> for SelectedExecutorPluginMcpContributor {
                         context.config(),
                         plugin_policies.get(&plugin.plugin_id),
                         selection_order,
+                        &selected_root.id,
                         plugin,
                     ));
                 }
@@ -210,6 +212,7 @@ fn project_metadata(
     config: &Config,
     plugin_policy: Option<&HashMap<String, PluginMcpServerConfig>>,
     selection_order: usize,
+    selected_root_id: &str,
     plugin: SelectedPluginMetadata,
 ) -> Vec<McpServerContribution> {
     let mut servers = plugin.servers.iter().cloned().collect::<HashMap<_, _>>();
@@ -231,6 +234,7 @@ fn project_metadata(
         .collect::<Vec<_>>();
     // Keep the package visible even when it contributes only skills.
     contributions.push(McpServerContribution::SelectedPluginPackage {
+        selected_root_id: selected_root_id.to_owned(),
         plugin_id: plugin.plugin_id,
         plugin_display_name: plugin.plugin_display_name,
         connector_ids: plugin.connector_ids,

@@ -46,6 +46,8 @@ pub use contributors::PreviousWorldStateSection;
 pub use contributors::PromptFragment;
 pub use contributors::PromptSlot;
 pub use contributors::RenderedWorldStateFragment;
+pub use contributors::SelectedPluginIdentity;
+pub use contributors::SelectedPluginSnapshot;
 pub use contributors::SkillInvocationContributor;
 pub use contributors::SkillInvocationInput;
 pub use contributors::SkillInvocationKind;

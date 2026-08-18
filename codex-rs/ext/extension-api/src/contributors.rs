@@ -25,6 +25,8 @@ mod world_state;
 pub use context::TurnContextContributionInput;
 pub use mcp::McpServerContribution;
 pub use mcp::McpServerContributionContext;
+pub use mcp::SelectedPluginIdentity;
+pub use mcp::SelectedPluginSnapshot;
 pub use prompt::PromptFragment;
 pub use prompt::PromptSlot;
 pub use skill_invocation::SkillInvocationInput;

@@ -28,6 +28,9 @@ use serde_json::json;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
+use super::analytics::mount_analytics_capture;
+use super::analytics::wait_for_matching_analytics_event;
+
 #[cfg(target_os = "macos")]
 const READ_TIMEOUT: Duration = Duration::from_secs(60);
 #[cfg(not(target_os = "macos"))]
@@ -109,11 +112,17 @@ async fn exercise_executor_skill(scenario: ExecutorSkillScenario) -> Result<()> 
         } else {
             ("never", "")
         };
+    let analytics_config = if scenario == ExecutorSkillScenario::ExplicitOnly {
+        format!("chatgpt_base_url = \"{}\"", server.uri())
+    } else {
+        String::new()
+    };
     std::fs::write(
         codex_home.path().join("config.toml"),
         format!(
             r#"
 model = "mock-model"
+{analytics_config}
 approval_policy = "{approval_policy}"
 {sandbox_config}
 model_provider = "mock_provider"
@@ -133,6 +142,9 @@ stream_max_retries = 0
             server.uri()
         ),
     )?;
+    if scenario == ExecutorSkillScenario::ExplicitOnly {
+        mount_analytics_capture(&server, codex_home.path()).await?;
+    }
     let local_skill_dir = codex_home.path().join("skills/local-deploy");
     std::fs::create_dir_all(&local_skill_dir)?;
     std::fs::write(
@@ -439,6 +451,17 @@ stream_max_retries = 0
         app_server.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+    if scenario == ExecutorSkillScenario::ExplicitOnly {
+        for invocation_type in ["explicit", "implicit"] {
+            let event = wait_for_matching_analytics_event(&server, READ_TIMEOUT, |event| {
+                event["event_type"] == "skill_invocation"
+                    && event["event_params"]["invoke_type"] == invocation_type
+            })
+            .await?;
+            assert_eq!(event["event_params"]["plugin_id"], authority_id);
+            assert_eq!(event["event_params"]["skill_scope"], "user");
+        }
+    }
 
     let requests = response_mock.requests();
     let request = &requests[0];

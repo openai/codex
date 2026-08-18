@@ -134,6 +134,7 @@ async fn selected_plugin_package_is_contributed_without_servers_or_connectors() 
             plugin_id,
             plugin_display_name,
             connector_ids,
+            ..
         } = contribution
         else {
             return None;

@@ -13,6 +13,8 @@ use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::McpServerContribution;
 use codex_extension_api::McpServerContributionContext;
+use codex_extension_api::SelectedPluginIdentity;
+use codex_extension_api::SelectedPluginSnapshot;
 use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::EffectiveMcpServer;
@@ -35,6 +37,7 @@ const LEGACY_CODEX_APPS_REGISTRATION_ID: &str = "legacy_codex_apps";
 pub(crate) struct McpRuntimeProjection {
     pub(crate) config: McpConfig,
     pub(crate) plugins_available: bool,
+    pub(crate) selected_plugins: SelectedPluginSnapshot,
 }
 
 pub(crate) struct McpThreadIdentity<'a> {
@@ -143,6 +146,7 @@ impl McpManager {
         let mut selected_plugin_available = false;
         let mut selected_plugin_connector_sources = Vec::new();
         let mut selected_plugin_registrations = Vec::new();
+        let mut selected_plugins = Vec::new();
         let mut overlays = Vec::new();
         // A contributor can emit multiple ordered actions, so order each action globally rather
         // than enumerating contributors.
@@ -173,11 +177,16 @@ impl McpManager {
                         ),
                     ),
                     McpServerContribution::SelectedPluginPackage {
+                        selected_root_id,
                         plugin_id,
                         plugin_display_name,
                         connector_ids,
                     } => {
                         selected_plugin_available = true;
+                        selected_plugins.push(SelectedPluginIdentity {
+                            selected_root_id,
+                            plugin_id: plugin_id.clone(),
+                        });
                         if !connector_ids.is_empty() {
                             selected_plugin_connector_sources.push(
                                 PluginConnectorSource::from_connector_ids(
@@ -265,6 +274,9 @@ impl McpManager {
         McpRuntimeProjection {
             config: mcp_config,
             plugins_available,
+            selected_plugins: SelectedPluginSnapshot {
+                plugins: selected_plugins,
+            },
         }
     }
 

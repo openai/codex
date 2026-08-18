@@ -3193,6 +3193,19 @@ impl Session {
         }
         .or_cancel(cancellation_token)
         .await?;
+        let mut selected_plugins = self
+            .services
+            .thread_extension_data
+            .get::<codex_extension_api::SelectedPluginSnapshot>()
+            .map(|snapshot| snapshot.as_ref().clone())
+            .unwrap_or_default();
+        selected_plugins.plugins.retain(|plugin| {
+            ready_selected_capability_roots
+                .iter()
+                .any(|root| root.id == plugin.selected_root_id)
+        });
+        extension_data.insert(selected_plugins.clone());
+        turn_context.extension_data.insert(selected_plugins);
         let tool_router = turn::built_tools(
             self.as_ref(),
             turn_context.as_ref(),

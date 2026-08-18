@@ -2,8 +2,10 @@ use std::sync::Arc;
 
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::FileSystemSandboxContext;
+use codex_extension_api::SelectedPluginSnapshot;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::protocol::Product;
+use codex_protocol::protocol::SkillScope;
 use codex_skills::EnvironmentSkillMetadata;
 use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
@@ -42,6 +44,22 @@ impl ExecutorSkillProvider {
         Self {
             environment_manager,
             restriction_product,
+        }
+    }
+}
+
+pub(crate) fn attribute_executor_plugins(
+    catalog: &mut SkillCatalog,
+    snapshot: &SelectedPluginSnapshot,
+) {
+    for skill in &mut catalog.entries {
+        if let Some(plugin) = snapshot
+            .plugins
+            .iter()
+            .find(|plugin| plugin.selected_root_id == skill.authority.id)
+        {
+            skill.plugin_id = Some(plugin.plugin_id.clone());
+            skill.analytics_scope = Some(SkillScope::User);
         }
     }
 }
