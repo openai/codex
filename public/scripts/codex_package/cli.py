@@ -1,6 +1,7 @@
 """Command-line interface for building Codex package directories."""
 
 import argparse
+import re
 import tempfile
 from pathlib import Path
 
@@ -17,6 +18,30 @@ from .targets import default_target
 from .targets import resolve_input_path
 from .zsh import resolve_zsh_bin
 from .version import read_workspace_version
+
+
+# Release pipelines run this builder with system Python, so avoid new dependencies.
+SEMVER_PATTERN = re.compile(
+    r"(?P<major>0|[1-9][0-9]*)\."
+    r"(?P<minor>0|[1-9][0-9]*)\."
+    r"(?P<patch>0|[1-9][0-9]*)"
+    r"(?:-(?P<prerelease>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?"
+    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+)
+
+
+def parse_package_version(value: str) -> str:
+    match = SEMVER_PATTERN.fullmatch(value)
+    if match is not None:
+        components = (match.group(name) for name in ("major", "minor", "patch"))
+        prerelease = match.group("prerelease") or ""
+        if all(int(component) <= 2**64 - 1 for component in components) and all(
+            not (part.isdigit() and len(part) > 1 and part.startswith("0"))
+            for part in prerelease.split(".")
+        ):
+            return value
+
+    raise argparse.ArgumentTypeError(f"invalid semantic version: {value!r}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -38,6 +63,12 @@ def parse_args() -> argparse.Namespace:
         choices=sorted(PACKAGE_VARIANTS),
         default="codex",
         help="Package variant to build.",
+    )
+    parser.add_argument(
+        "--package-version",
+        type=parse_package_version,
+        default=read_workspace_version(),
+        help="Semantic version to record in codex-package.json.",
     )
     parser.add_argument(
         "--package-dir",
@@ -183,7 +214,6 @@ def main() -> int:
             "--codex-windows-sandbox-setup-bin",
         ),
     )
-    version = read_workspace_version()
     inputs = PackageInputs(
         entrypoint_bin=source_outputs.entrypoint_bin,
         code_mode_host_bin=source_outputs.code_mode_host_bin,
@@ -194,7 +224,7 @@ def main() -> int:
         codex_windows_sandbox_setup_bin=source_outputs.codex_windows_sandbox_setup_bin,
     )
     prepare_package_dir(package_dir, force=args.force)
-    build_package_dir(package_dir, version, variant, spec, inputs)
+    build_package_dir(package_dir, args.package_version, variant, spec, inputs)
     validate_package_dir(
         package_dir, variant, spec, include_zsh=inputs.zsh_bin is not None
     )
