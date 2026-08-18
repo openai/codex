@@ -1168,6 +1168,20 @@ client_request_definitions! {
         response: v2::LoginAccountResponse,
     },
 
+    #[experimental("account/bedrock/discover")]
+    BedrockDiscover => "account/bedrock/discover" {
+        params: v2::BedrockDiscoverParams,
+        serialization: global_shared_read("account-auth"),
+        response: v2::BedrockDiscoverResponse,
+    },
+
+    #[experimental("account/bedrock/setup")]
+    BedrockSetup => "account/bedrock/setup" {
+        params: v2::BedrockSetupParams,
+        serialization: global("account-auth"),
+        response: v2::BedrockSetupResponse,
+    },
+
     CancelLoginAccount => "account/login/cancel" {
         params: v2::CancelLoginAccountParams,
         serialization: global("account-auth"),
