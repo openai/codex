@@ -48,8 +48,6 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::LoaderOverrides;
 use codex_config::NoopThreadConfigLoader;
-use codex_config::RemoteThreadConfigLoader;
-use codex_config::ThreadConfigLoader;
 use codex_core::config::Config;
 pub use codex_core::otel_init::build_provider as build_otel_provider;
 pub use codex_exec_server::EnvironmentManager;
@@ -212,13 +210,6 @@ pub struct InProcessClientStartArgs {
     pub channel_capacity: usize,
 }
 
-fn configured_thread_config_loader(config: &Config) -> Arc<dyn ThreadConfigLoader> {
-    match config.experimental_thread_config_endpoint.as_deref() {
-        Some(endpoint) => Arc::new(RemoteThreadConfigLoader::new(endpoint)),
-        None => Arc::new(NoopThreadConfigLoader),
-    }
-}
-
 impl InProcessClientStartArgs {
     /// Builds initialize params from caller-provided metadata.
     pub fn initialize_params(&self) -> InitializeParams {
@@ -246,7 +237,6 @@ impl InProcessClientStartArgs {
 
     fn into_runtime_start_args(self) -> InProcessStartArgs {
         let initialize = self.initialize_params();
-        let thread_config_loader = configured_thread_config_loader(&self.config);
         InProcessStartArgs {
             arg0_paths: self.arg0_paths,
             config: self.config,
@@ -254,7 +244,7 @@ impl InProcessClientStartArgs {
             loader_overrides: self.loader_overrides,
             strict_config: self.strict_config,
             cloud_config_bundle: self.cloud_config_bundle,
-            thread_config_loader,
+            thread_config_loader: Arc::new(NoopThreadConfigLoader),
             feedback: self.feedback,
             log_db: self.log_db,
             state_db: self.state_db,
@@ -2011,45 +2001,6 @@ mod tests {
                 .default_environment()
                 .expect("default environment")
                 .is_remote()
-        );
-    }
-
-    #[tokio::test]
-    async fn runtime_start_args_use_remote_thread_config_loader_when_configured() {
-        let mut config = build_test_config().await;
-        config.experimental_thread_config_endpoint = Some("not-a-valid-endpoint".to_string());
-
-        let runtime_args = InProcessClientStartArgs {
-            arg0_paths: Arg0DispatchPaths::default(),
-            config: Arc::new(config),
-            cli_overrides: Vec::new(),
-            loader_overrides: LoaderOverrides::default(),
-            strict_config: false,
-            cloud_config_bundle: CloudConfigBundleLoader::default(),
-            feedback: CodexFeedback::new(),
-            log_db: None,
-            state_db: None,
-            environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
-            config_warnings: Vec::new(),
-            session_source: SessionSource::Exec,
-            enable_codex_api_key_env: false,
-            client_name: "codex-app-server-client-test".to_string(),
-            client_version: "0.0.0-test".to_string(),
-            experimental_api: true,
-            mcp_server_openai_form_elicitation: false,
-            opt_out_notification_methods: Vec::new(),
-            channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
-        }
-        .into_runtime_start_args();
-
-        let err = runtime_args
-            .thread_config_loader
-            .load(Default::default())
-            .await
-            .expect_err("configured remote loader should try to connect");
-        assert_eq!(
-            err.code(),
-            codex_config::ThreadConfigLoadErrorCode::RequestFailed
         );
     }
 

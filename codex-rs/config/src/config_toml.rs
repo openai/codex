@@ -409,10 +409,6 @@ pub struct ConfigToml {
     /// active.
     pub experimental_realtime_start_instructions: Option<String>,
 
-    /// Experimental / do not use. When set, app-server fetches thread-scoped
-    /// config from a remote service at this endpoint.
-    pub experimental_thread_config_endpoint: Option<String>,
-
     /// Removed. Former remote thread-store endpoint setting kept only so we can
     /// fail fast instead of silently falling back to local persistence.
     #[schemars(skip)]
