@@ -1691,6 +1691,7 @@ async fn approval_modal_exec_multiline_prefix_hides_execpolicy_option_snapshot()
 #[tokio::test]
 async fn approval_modal_patch_snapshot() -> anyhow::Result<()> {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.cwd = test_path_buf("/tmp/project").abs();
     chat.config
         .permissions
         .approval_policy
@@ -1709,7 +1710,7 @@ async fn approval_modal_patch_snapshot() -> anyhow::Result<()> {
         turn_id: "turn-approve-patch".into(),
         changes,
         reason: Some("The model wants to apply changes".into()),
-        grant_root: Some(PathBuf::from("/tmp")),
+        grant_root: Some(test_path_buf("/tmp/project")),
     };
     handle_apply_patch_approval_request(&mut chat, "sub-approve-patch", ev);
 
@@ -1722,7 +1723,7 @@ async fn approval_modal_patch_snapshot() -> anyhow::Result<()> {
         .expect("draw patch approval modal");
     let contents = terminal.backend().vt100().screen().contents();
     assert!(!contents.contains("$ apply_patch"));
-    assert_chatwidget_snapshot!("approval_modal_patch", contents);
+    assert_chatwidget_snapshot!("approval_modal_patch", normalize_snapshot_paths(contents));
 
     Ok(())
 }

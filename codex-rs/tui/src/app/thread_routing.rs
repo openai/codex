@@ -202,17 +202,6 @@ impl App {
         store.session.as_ref().map(|session| session.cwd.clone())
     }
 
-    async fn thread_file_change_changes(
-        &self,
-        thread_id: ThreadId,
-        turn_id: &str,
-        item_id: &str,
-    ) -> Option<Vec<codex_app_server_protocol::FileUpdateChange>> {
-        let channel = self.thread_event_channels.get(&thread_id)?;
-        let store = channel.store.lock().await;
-        store.file_change_changes(turn_id, item_id)
-    }
-
     pub(super) async fn interactive_request_for_thread_request(
         &self,
         thread_id: ThreadId,
@@ -1451,7 +1440,10 @@ impl App {
         let mut disconnected = false;
         loop {
             match rx.try_recv() {
-                Ok(event) => self.handle_thread_event_now(event),
+                Ok(event) => {
+                    self.handle_thread_event_now_recovering_file_changes(event)
+                        .await
+                }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     disconnected = true;
@@ -1503,6 +1495,25 @@ impl App {
         snapshot: ThreadEventSnapshot,
         resume_restored_queue: bool,
     ) {
+        let request_changes = snapshot
+            .events
+            .iter()
+            .map(|event| {
+                let ThreadBufferedEvent::Request(request) = event else {
+                    return None;
+                };
+                let ServerRequest::FileChangeRequestApproval { params, .. } = request.as_ref()
+                else {
+                    return None;
+                };
+                file_change_changes(
+                    snapshot.events.iter(),
+                    &snapshot.turns,
+                    &params.turn_id,
+                    &params.item_id,
+                )
+            })
+            .collect::<Vec<_>>();
         self.refresh_mcp_startup_expected_servers_from_config();
         let should_buffer_replay = !snapshot.turns.is_empty() || !snapshot.events.is_empty();
         if should_buffer_replay {
@@ -1536,11 +1547,16 @@ impl App {
             self.chat_widget
                 .replay_thread_turns(snapshot.turns, ReplayKind::ThreadSnapshot);
         }
-        for event in snapshot.events {
+        for (event, changes) in snapshot.events.into_iter().zip(request_changes) {
             if suppress_replay_notices && replay_filter::event_is_notice(&event) {
                 continue;
             }
-            self.handle_thread_event_replay(event);
+            match (event, changes) {
+                (ThreadBufferedEvent::Request(request), Some(changes)) => {
+                    self.handle_file_change_request(*request, changes)
+                }
+                (event, _) => self.handle_thread_event_replay(event),
+            }
         }
         if should_buffer_replay {
             self.app_event_tx
@@ -1753,7 +1769,8 @@ impl App {
             self.pending_shutdown_exit_thread_id = None;
         }
         let had_active_view = self.chat_widget.has_active_view();
-        self.handle_thread_event_now(event);
+        self.handle_thread_event_now_recovering_file_changes(event)
+            .await;
         if !had_active_view
             && self.chat_widget.has_active_view()
             && self.startup_protected_input_boundary

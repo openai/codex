@@ -14,7 +14,7 @@ impl ChatWidget {
         );
     }
 
-    pub(super) fn on_apply_patch_approval_request(
+    pub(crate) fn on_apply_patch_approval_request(
         &mut self,
         _id: String,
         ev: ApplyPatchApprovalRequestEvent,

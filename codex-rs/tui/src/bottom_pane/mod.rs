@@ -56,6 +56,7 @@ use std::time::Instant;
 
 mod action_required_title;
 mod app_link_view;
+mod apply_patch_header;
 mod approval_overlay;
 mod mcp_server_elicitation;
 mod multi_select_picker;

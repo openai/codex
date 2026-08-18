@@ -217,6 +217,7 @@ mod background_requests;
 mod config_persistence;
 mod connector_mentions;
 mod event_dispatch;
+mod file_change_approvals;
 mod history_pagination;
 mod history_ui;
 mod input;
