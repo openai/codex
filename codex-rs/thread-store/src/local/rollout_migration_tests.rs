@@ -156,6 +156,7 @@ fn agent_message(text: &str) -> RolloutItem {
         message: text.to_string(),
         phase: None,
         memory_citation: None,
+        delivery: None,
     }))
 }
 

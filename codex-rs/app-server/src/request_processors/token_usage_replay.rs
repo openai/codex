@@ -177,6 +177,7 @@ mod tests {
                 message: "first answer".to_string(),
                 phase: None,
                 memory_citation: None,
+                delivery: None,
             })),
             RolloutItem::EventMsg(EventMsg::TokenCount(TokenCountEvent {
                 info: None,

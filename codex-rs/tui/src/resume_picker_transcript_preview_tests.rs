@@ -41,6 +41,7 @@ fn rollout_agent_message(text: &str) -> RolloutItem {
         message: text.to_string(),
         phase: None,
         memory_citation: None,
+        delivery: None,
     }))
 }
 
@@ -258,6 +259,7 @@ fn transcript_preview_reverse_scan_stops_before_older_items() {
         text: String::from("one\ntwo\nthree\nfour\nfive\nsix"),
         phase: None,
         memory_citation: None,
+        delivery: None,
     };
     let mut lines = Vec::new();
 

@@ -135,6 +135,7 @@ pub(super) fn rollout_items_from_messages(messages: Vec<ConversationMessage>) ->
                         message: message.text.clone(),
                         phase: None,
                         memory_citation: None,
+                        delivery: None,
                     },
                 )));
                 items.push(RolloutItem::ResponseItem(response_item(message).into()));
@@ -156,6 +157,7 @@ fn external_session_imported_marker_item() -> RolloutItem {
         message: EXTERNAL_SESSION_IMPORTED_MARKER.to_string(),
         phase: None,
         memory_citation: None,
+        delivery: None,
     }))
 }
 
@@ -251,6 +253,7 @@ mod tests {
                 text: EXTERNAL_SESSION_IMPORTED_MARKER.into(),
                 phase: None,
                 memory_citation: None,
+                delivery: None,
             }
         );
     }
@@ -283,6 +286,7 @@ mod tests {
                 text: EXTERNAL_SESSION_IMPORTED_MARKER.into(),
                 phase: None,
                 memory_citation: None,
+                delivery: None,
             })
         );
         let last_turn_complete = imported

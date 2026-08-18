@@ -73,6 +73,7 @@ mod tests {
                 text: "kept".to_string(),
                 phase: None,
                 memory_citation: None,
+                delivery: None,
             },
             ThreadItem::McpToolCall {
                 id: "mcp-1".to_string(),
@@ -122,6 +123,7 @@ mod tests {
                 text: "kept".to_string(),
                 phase: None,
                 memory_citation: None,
+                delivery: None,
             }
         );
         assert_eq!(

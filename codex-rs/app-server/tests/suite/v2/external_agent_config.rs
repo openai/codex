@@ -2041,6 +2041,7 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
             text: "<EXTERNAL SESSION IMPORTED>".into(),
             phase: None,
             memory_citation: None,
+            delivery: None,
         })
     );
 

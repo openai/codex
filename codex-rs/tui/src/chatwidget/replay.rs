@@ -94,6 +94,8 @@ impl ChatWidget {
                 text,
                 phase,
                 memory_citation,
+                delivery,
+                ..
             } => {
                 self.on_agent_message_item_completed(
                     AgentMessageItem {
@@ -117,6 +119,7 @@ impl ChatWidget {
                                 rollout_ids: citation.thread_ids,
                             }
                         }),
+                        delivery,
                     },
                     &turn_id,
                     from_replay,

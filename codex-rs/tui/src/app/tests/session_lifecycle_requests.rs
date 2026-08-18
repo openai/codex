@@ -366,6 +366,7 @@ async fn older_pagination_reconciles_review_prompts_across_page_boundaries() -> 
             }],
             phase: None,
             memory_citation: None,
+            delivery: None,
         })
     }));
     items.extend([
@@ -554,6 +555,7 @@ async fn transcript_home_loads_every_older_history_page() -> Result<()> {
                 }],
                 phase: None,
                 memory_citation: None,
+                delivery: None,
             }),
             started_at_ms: None,
             completed_at_ms: 0,
@@ -919,6 +921,7 @@ async fn underfilled_scrollback_fetches_older_pages_without_opening_the_transcri
                 }],
                 phase: None,
                 memory_citation: None,
+                delivery: None,
             }),
             started_at_ms: None,
             completed_at_ms: 0,

@@ -122,6 +122,7 @@ fn projects_completed_canonical_turn_items() {
         }],
         phase: None,
         memory_citation: None,
+        delivery: None,
     });
 
     let user_changes = project(item_completed(thread_id, "turn-1", user_item.clone()));

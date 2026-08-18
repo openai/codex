@@ -65,6 +65,7 @@ async fn turn_timing_state_records_ttfm_independently_of_ttft() {
                 content: Vec::new(),
                 phase: None,
                 memory_citation: None,
+                delivery: None,
             }))
             .await
             .is_some()
@@ -76,6 +77,7 @@ async fn turn_timing_state_records_ttfm_independently_of_ttft() {
                 content: Vec::new(),
                 phase: None,
                 memory_citation: None,
+                delivery: None,
             }))
             .await,
         None

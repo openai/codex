@@ -2225,6 +2225,7 @@ mod tests {
                 message: "after rollback".to_string(),
                 phase: None,
                 memory_citation: None,
+                delivery: None,
             })),
         ];
         let stored_thread = StoredThread {
@@ -3634,6 +3635,7 @@ mod tests {
                         ],
                         phase: None,
                         memory_citation: None,
+                        delivery: None,
                     }),
                     started_at_ms: Some(0),
                     completed_at_ms: 0,
@@ -3651,6 +3653,7 @@ mod tests {
                         }],
                         phase: None,
                         memory_citation: None,
+                        delivery: None,
                     }),
                     started_at_ms: Some(0),
                     completed_at_ms: 0,

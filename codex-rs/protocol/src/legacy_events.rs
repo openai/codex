@@ -105,6 +105,7 @@ impl AgentMessageItem {
                     message: text.clone(),
                     phase: self.phase.clone(),
                     memory_citation: self.memory_citation.clone(),
+                    delivery: self.delivery,
                 }),
             })
             .collect()
