@@ -16,6 +16,7 @@ use app_test_support::test_absolute_path;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use chrono::Utc;
+use codex_app_server_protocol::ActivePermissionProfile;
 use codex_app_server_protocol::ApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ClientInfo;
@@ -30,6 +31,8 @@ use codex_app_server_protocol::McpToolCallAppContext;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SandboxMode;
+use codex_app_server_protocol::SandboxPolicy as AppSandboxPolicy;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SessionSource;
@@ -75,6 +78,9 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::Settings;
 use codex_protocol::mcp::CallToolResult;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -1124,6 +1130,358 @@ async fn thread_resume_preserves_acknowledged_model_effort_and_approvals_reviewe
     assert_eq!(reasoning_effort, None);
 
     Ok(())
+}
+
+#[tokio::test]
+async fn cold_resume_reresolves_persisted_active_permission_profile() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    for history_mode in [ThreadHistoryMode::Legacy, ThreadHistoryMode::Paginated] {
+        let codex_home = TempDir::new()?;
+        let previous_workspace_root = TempDir::new()?;
+        write_dev_permission_config(&server.uri(), codex_home.path(), ":workspace")?;
+        let thread_id = {
+            let mut mcp = TestAppServer::builder()
+                .with_codex_home(codex_home.path())
+                .without_managed_config()
+                .build_initialized()
+                .await?;
+            let thread_id = materialize_dev_permission_thread(&mut mcp, history_mode).await?;
+            timeout(
+                DEFAULT_READ_TIMEOUT,
+                mcp.start_turn_and_wait_for_completion(TurnStartParams {
+                    thread_id: thread_id.clone(),
+                    runtime_workspace_roots: Some(vec![AbsolutePathBuf::from_absolute_path(
+                        previous_workspace_root.path(),
+                    )?]),
+                    input: vec![UserInput::Text {
+                        text: "update runtime workspace roots".to_string(),
+                        text_elements: Vec::new(),
+                    }],
+                    ..Default::default()
+                }),
+            )
+            .await??;
+            thread_id
+        };
+
+        write_dev_permission_config(&server.uri(), codex_home.path(), ":read-only")?;
+        let mut mcp = TestAppServer::builder()
+            .with_codex_home(codex_home.path())
+            .without_managed_config()
+            .build_initialized()
+            .await?;
+        let resume_id = mcp
+            .send_thread_resume_request(ThreadResumeParams {
+                thread_id,
+                ..Default::default()
+            })
+            .await?;
+        let ThreadResumeResponse {
+            sandbox,
+            active_permission_profile,
+            runtime_workspace_roots,
+            ..
+        } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(resume_id)).await??;
+
+        assert!(matches!(sandbox, AppSandboxPolicy::ReadOnly { .. }));
+        assert_eq!(
+            active_permission_profile,
+            Some(ActivePermissionProfile {
+                id: "dev".to_string(),
+                extends: Some(BUILT_IN_PERMISSION_PROFILE_READ_ONLY.to_string()),
+            })
+        );
+        assert!(
+            !runtime_workspace_roots.contains(&AbsolutePathBuf::from_absolute_path(
+                previous_workspace_root.path(),
+            )?)
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn cold_resume_with_removed_permission_profile_uses_configured_default() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    for history_mode in [ThreadHistoryMode::Legacy, ThreadHistoryMode::Paginated] {
+        let codex_home = TempDir::new()?;
+        write_dev_permission_config(&server.uri(), codex_home.path(), ":workspace")?;
+        let thread_id = {
+            let mut mcp = TestAppServer::builder()
+                .with_codex_home(codex_home.path())
+                .without_managed_config()
+                .build_initialized()
+                .await?;
+            materialize_dev_permission_thread(&mut mcp, history_mode).await?
+        };
+
+        MockResponsesConfig::new(&server.uri())
+            .with_root_config(&format!(
+                "default_permissions = \"{BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS}\""
+            ))
+            .write(codex_home.path())?;
+        let mut mcp = TestAppServer::builder()
+            .with_codex_home(codex_home.path())
+            .without_managed_config()
+            .build_initialized()
+            .await?;
+        let resume_id = mcp
+            .send_thread_resume_request(ThreadResumeParams {
+                thread_id,
+                ..Default::default()
+            })
+            .await?;
+        let ThreadResumeResponse {
+            sandbox,
+            active_permission_profile,
+            ..
+        } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(resume_id)).await??;
+
+        assert!(matches!(sandbox, AppSandboxPolicy::DangerFullAccess));
+        assert_eq!(
+            active_permission_profile,
+            Some(ActivePermissionProfile::new(
+                BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS,
+            ))
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn cold_resume_permission_overrides_win_over_persisted_profile() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    write_dev_permission_config(&server.uri(), codex_home.path(), ":workspace")?;
+    let thread_id = {
+        let mut mcp = TestAppServer::builder()
+            .with_codex_home(codex_home.path())
+            .without_managed_config()
+            .build_initialized()
+            .await?;
+        materialize_dev_permission_thread(&mut mcp, ThreadHistoryMode::Legacy).await?
+    };
+
+    for params in [
+        ThreadResumeParams {
+            thread_id: thread_id.clone(),
+            sandbox: Some(SandboxMode::ReadOnly),
+            ..Default::default()
+        },
+        ThreadResumeParams {
+            thread_id: thread_id.clone(),
+            permissions: Some(BUILT_IN_PERMISSION_PROFILE_READ_ONLY.to_string()),
+            ..Default::default()
+        },
+        ThreadResumeParams {
+            thread_id: thread_id.clone(),
+            config: Some(std::collections::HashMap::from([(
+                "default_permissions".to_string(),
+                json!(BUILT_IN_PERMISSION_PROFILE_READ_ONLY),
+            )])),
+            ..Default::default()
+        },
+    ] {
+        let expected_active_permission_profile = params
+            .sandbox
+            .is_none()
+            .then(ActivePermissionProfile::read_only);
+        let mut mcp = TestAppServer::builder()
+            .with_codex_home(codex_home.path())
+            .without_managed_config()
+            .build_initialized()
+            .await?;
+        let resume_id = mcp.send_thread_resume_request(params).await?;
+        let ThreadResumeResponse {
+            sandbox,
+            active_permission_profile,
+            ..
+        } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(resume_id)).await??;
+
+        assert!(matches!(sandbox, AppSandboxPolicy::ReadOnly { .. }));
+        assert_eq!(
+            active_permission_profile,
+            expected_active_permission_profile
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn cold_resume_without_active_permission_profile_uses_current_config() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    mock_responses_config(&server.uri()).write(codex_home.path())?;
+    let thread_id = {
+        let mut mcp = TestAppServer::builder()
+            .with_codex_home(codex_home.path())
+            .without_managed_config()
+            .build_initialized()
+            .await?;
+        let ThreadStartResponse { thread, .. } = mcp
+            .start_thread(ThreadStartParams {
+                model: Some("mock-model".to_string()),
+                ..Default::default()
+            })
+            .await?;
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.start_turn_and_wait_for_completion(TurnStartParams {
+                thread_id: thread.id.clone(),
+                input: vec![UserInput::Text {
+                    text: "persist full access".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                sandbox_policy: Some(AppSandboxPolicy::DangerFullAccess),
+                ..Default::default()
+            }),
+        )
+        .await??;
+        thread.id
+    };
+
+    MockResponsesConfig::new(&server.uri())
+        .with_root_config(&format!(
+            "default_permissions = \"{BUILT_IN_PERMISSION_PROFILE_WORKSPACE}\""
+        ))
+        .write(codex_home.path())?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_managed_config()
+        .build_initialized()
+        .await?;
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id,
+            ..Default::default()
+        })
+        .await?;
+    let ThreadResumeResponse {
+        sandbox,
+        active_permission_profile,
+        ..
+    } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(resume_id)).await??;
+
+    assert!(matches!(sandbox, AppSandboxPolicy::WorkspaceWrite { .. }));
+    assert_eq!(
+        active_permission_profile,
+        Some(ActivePermissionProfile::new(
+            BUILT_IN_PERMISSION_PROFILE_WORKSPACE
+        ))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn cold_resume_restores_profile_selected_by_settings_update() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    mock_responses_config(&server.uri()).write(codex_home.path())?;
+    let thread_id = {
+        let mut mcp = TestAppServer::builder()
+            .with_codex_home(codex_home.path())
+            .without_managed_config()
+            .build_initialized()
+            .await?;
+        let ThreadStartResponse { thread, .. } = mcp
+            .start_thread(ThreadStartParams {
+                model: Some("mock-model".to_string()),
+                ..Default::default()
+            })
+            .await?;
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.start_turn_and_wait_for_completion(TurnStartParams {
+                thread_id: thread.id.clone(),
+                input: vec![UserInput::Text {
+                    text: "persist permission profile".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            }),
+        )
+        .await??;
+        let update_id = mcp
+            .send_thread_settings_update_request(ThreadSettingsUpdateParams {
+                thread_id: thread.id.clone(),
+                permissions: Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string()),
+                ..Default::default()
+            })
+            .await?;
+        let _: ThreadSettingsUpdateResponse =
+            timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(update_id)).await??;
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_notification_message("thread/settings/updated"),
+        )
+        .await??;
+        thread.id
+    };
+
+    mock_responses_config(&server.uri()).write(codex_home.path())?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_managed_config()
+        .build_initialized()
+        .await?;
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id,
+            ..Default::default()
+        })
+        .await?;
+    let ThreadResumeResponse {
+        sandbox,
+        active_permission_profile,
+        ..
+    } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(resume_id)).await??;
+
+    assert!(matches!(sandbox, AppSandboxPolicy::WorkspaceWrite { .. }));
+    assert_eq!(
+        active_permission_profile,
+        Some(ActivePermissionProfile::new(
+            BUILT_IN_PERMISSION_PROFILE_WORKSPACE
+        ))
+    );
+    Ok(())
+}
+
+async fn materialize_dev_permission_thread(
+    mcp: &mut TestAppServer,
+    history_mode: ThreadHistoryMode,
+) -> Result<String> {
+    let ThreadStartResponse { thread, .. } = mcp
+        .start_thread(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            history_mode: Some(history_mode),
+            permissions: Some("dev".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.start_turn_and_wait_for_completion(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "persist permission profile".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        }),
+    )
+    .await??;
+    Ok(thread.id)
+}
+
+fn write_dev_permission_config(
+    server_uri: &str,
+    codex_home: &Path,
+    dev_extends: &str,
+) -> std::io::Result<()> {
+    MockResponsesConfig::new(server_uri)
+        .with_root_config("default_permissions = \":danger-full-access\"")
+        .with_extra_config(&format!("[permissions.dev]\nextends = \"{dev_extends}\""))
+        .write(codex_home)
 }
 
 #[tokio::test]

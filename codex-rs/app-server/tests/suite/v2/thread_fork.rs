@@ -10,12 +10,16 @@ use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::rollout_path;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
+use codex_app_server_protocol::ActivePermissionProfile;
 use codex_app_server_protocol::ApprovalsReviewer;
+use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SandboxMode;
+use codex_app_server_protocol::SandboxPolicy;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::ThreadForkParams;
@@ -293,6 +297,115 @@ async fn paginated_thread_fork_preserves_persisted_approvals_reviewer() -> Resul
     assert_thread_fork_preserves_persisted_approvals_reviewer(ThreadHistoryMode::Paginated).await
 }
 
+#[tokio::test]
+async fn thread_fork_preserves_persisted_permission_profile_and_honors_overrides() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+
+    for history_mode in [ThreadHistoryMode::Legacy, ThreadHistoryMode::Paginated] {
+        let codex_home = TempDir::new()?;
+        MockResponsesConfig::new(&server.uri())
+            .with_root_config("default_permissions = \":danger-full-access\"")
+            .with_extra_config("[permissions.dev]\nextends = \":read-only\"")
+            .write(codex_home.path())?;
+
+        let source_thread_id = {
+            let mut mcp = TestAppServer::builder()
+                .with_codex_home(codex_home.path())
+                .without_managed_config()
+                .build_initialized()
+                .await?;
+            let start_id = mcp
+                .send_thread_start_request_with_auto_env(ThreadStartParams {
+                    history_mode: Some(history_mode),
+                    approval_policy: Some(AskForApproval::OnRequest),
+                    permissions: Some("dev".to_string()),
+                    ..Default::default()
+                })
+                .await?;
+            let ThreadStartResponse { thread, .. } =
+                timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(start_id)).await??;
+            timeout(
+                DEFAULT_READ_TIMEOUT,
+                mcp.start_turn_and_wait_for_completion(TurnStartParams {
+                    thread_id: thread.id.clone(),
+                    input: vec![UserInput::Text {
+                        text: "persist permission profile".to_string(),
+                        text_elements: Vec::new(),
+                    }],
+                    ..Default::default()
+                }),
+            )
+            .await??;
+            thread.id
+        };
+
+        let mut mcp = TestAppServer::builder()
+            .with_codex_home(codex_home.path())
+            .without_managed_config()
+            .build_initialized()
+            .await?;
+        let fork_id = mcp
+            .send_thread_fork_request(ThreadForkParams {
+                thread_id: source_thread_id.clone(),
+                ..Default::default()
+            })
+            .await?;
+        let ThreadForkResponse {
+            approval_policy,
+            sandbox,
+            active_permission_profile,
+            ..
+        } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(fork_id)).await??;
+        assert!(matches!(sandbox, SandboxPolicy::ReadOnly { .. }));
+        assert_eq!(approval_policy, AskForApproval::OnRequest);
+        assert_eq!(
+            active_permission_profile,
+            Some(ActivePermissionProfile {
+                id: "dev".to_string(),
+                extends: Some(":read-only".to_string()),
+            })
+        );
+
+        let fork_id = mcp
+            .send_thread_fork_request(ThreadForkParams {
+                thread_id: source_thread_id.clone(),
+                approval_policy: Some(AskForApproval::Never),
+                sandbox: Some(SandboxMode::DangerFullAccess),
+                ..Default::default()
+            })
+            .await?;
+        let ThreadForkResponse {
+            approval_policy,
+            sandbox,
+            active_permission_profile,
+            ..
+        } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(fork_id)).await??;
+        assert!(matches!(sandbox, SandboxPolicy::DangerFullAccess));
+        assert_eq!(approval_policy, AskForApproval::Never);
+        assert_eq!(active_permission_profile, None);
+
+        let fork_id = mcp
+            .send_thread_fork_request(ThreadForkParams {
+                thread_id: source_thread_id,
+                permissions: Some(":workspace".to_string()),
+                ..Default::default()
+            })
+            .await?;
+        let ThreadForkResponse {
+            sandbox,
+            active_permission_profile,
+            ..
+        } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(fork_id)).await??;
+        assert!(matches!(sandbox, SandboxPolicy::WorkspaceWrite { .. }));
+        assert_eq!(
+            active_permission_profile,
+            Some(ActivePermissionProfile::new(":workspace"))
+        );
+    }
+
+    Ok(())
+}
+
 async fn assert_thread_fork_preserves_persisted_approvals_reviewer(
     history_mode: ThreadHistoryMode,
 ) -> Result<()> {
@@ -309,6 +422,7 @@ async fn assert_thread_fork_preserves_persisted_approvals_reviewer(
         let start_id = mcp
             .send_thread_start_request_with_auto_env(ThreadStartParams {
                 history_mode: Some(history_mode),
+                permissions: Some(":workspace".to_string()),
                 ..Default::default()
             })
             .await?;
@@ -348,7 +462,9 @@ async fn assert_thread_fork_preserves_persisted_approvals_reviewer(
                     text: "switch to auto-review".to_string(),
                     text_elements: Vec::new(),
                 }],
+                approval_policy: Some(AskForApproval::OnRequest),
                 approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+                permissions: Some(":read-only".to_string()),
                 ..Default::default()
             })
             .await?;
@@ -372,9 +488,17 @@ async fn assert_thread_fork_preserves_persisted_approvals_reviewer(
                 })
                 .await?;
             let ThreadForkResponse {
-                approvals_reviewer, ..
+                approval_policy,
+                approvals_reviewer,
+                active_permission_profile,
+                ..
             } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(fork_id)).await??;
+            assert_eq!(approval_policy, AskForApproval::OnRequest);
             assert_eq!(approvals_reviewer, ApprovalsReviewer::AutoReview);
+            assert_eq!(
+                active_permission_profile,
+                Some(ActivePermissionProfile::new(":read-only"))
+            );
         }
 
         (thread.id, turn.id)
@@ -397,24 +521,41 @@ async fn assert_thread_fork_preserves_persisted_approvals_reviewer(
     )
     .await??;
     let ThreadForkResponse {
-        approvals_reviewer, ..
+        approval_policy,
+        approvals_reviewer,
+        active_permission_profile,
+        ..
     } = to_response(fork_resp)?;
 
+    assert_eq!(approval_policy, AskForApproval::OnRequest);
     assert_eq!(approvals_reviewer, ApprovalsReviewer::AutoReview);
+    assert_eq!(
+        active_permission_profile,
+        Some(ActivePermissionProfile::new(":read-only"))
+    );
 
     if matches!(history_mode, ThreadHistoryMode::Paginated) {
         let fork_id = mcp
             .send_thread_fork_request(ThreadForkParams {
                 thread_id: source_thread_id,
                 last_turn_id: Some(source_turn_id),
+                approval_policy: Some(AskForApproval::Never),
                 approvals_reviewer: Some(ApprovalsReviewer::User),
                 ..Default::default()
             })
             .await?;
         let ThreadForkResponse {
-            approvals_reviewer, ..
+            approval_policy,
+            approvals_reviewer,
+            active_permission_profile,
+            ..
         } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(fork_id)).await??;
+        assert_eq!(approval_policy, AskForApproval::Never);
         assert_eq!(approvals_reviewer, ApprovalsReviewer::User);
+        assert_eq!(
+            active_permission_profile,
+            Some(ActivePermissionProfile::new(":read-only"))
+        );
     }
 
     Ok(())

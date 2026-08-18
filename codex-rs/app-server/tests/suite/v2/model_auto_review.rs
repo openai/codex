@@ -346,7 +346,12 @@ async fn thread_resume_and_fork_upgrade_legacy_protected_model_settings() -> Res
         ))
         .await?;
     let fork: ForkResponse = timeout(TIMEOUT, server.read_response(id)).await??;
-    assert_protected(&fork.model, fork.approval_policy, fork.approvals_reviewer);
+    assert_protected_with_policy(
+        &fork.model,
+        fork.approval_policy,
+        fork.approvals_reviewer,
+        Never,
+    );
     let id = server
         .send_thread_resume_request(params!(
             ResumeParams,

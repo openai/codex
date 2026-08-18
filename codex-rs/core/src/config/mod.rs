@@ -2388,6 +2388,7 @@ struct PermissionSelectionToml {
 struct EffectivePermissionSelection<'a> {
     profiles: Option<PermissionsToml>,
     selected_profile_id: Option<&'a str>,
+    persisted_profile_id_was_provided: bool,
     requirements_force_profile_selection: bool,
 }
 
@@ -2403,7 +2404,8 @@ impl EffectivePermissionSelection<'_> {
         default_permissions_override: Option<&str>,
         permission_config_syntax: Option<PermissionConfigSyntax>,
     ) -> bool {
-        self.requirements_force_profile_selection
+        self.persisted_profile_id_was_provided
+            || self.requirements_force_profile_selection
             || default_permissions_override.is_some()
             || matches!(
                 permission_config_syntax,
@@ -2506,6 +2508,10 @@ pub struct ConfigOverrides {
     pub sandbox_mode: Option<SandboxMode>,
     pub permission_profile: Option<PermissionProfile>,
     pub default_permissions: Option<String>,
+    /// Permission profile ID recovered from persisted thread state. Explicit
+    /// permission overrides take precedence, and stale profile IDs fall back
+    /// to the configured default.
+    pub persisted_permission_profile_id: Option<String>,
     pub model_provider: Option<String>,
     pub service_tier: Option<Option<String>>,
     pub codex_self_exe: Option<PathBuf>,
@@ -3153,6 +3159,7 @@ impl Config {
             sandbox_mode,
             permission_profile,
             default_permissions: default_permissions_override,
+            persisted_permission_profile_id,
             model_provider,
             service_tier: service_tier_override,
             codex_self_exe,
@@ -3297,9 +3304,23 @@ impl Config {
             sandbox_mode,
         );
         let requirements_toml = config_layer_stack.requirements_toml();
+        let windows_sandbox_level = match effective_windows_sandbox_mode {
+            Some(WindowsSandboxModeToml::Elevated) => WindowsSandboxLevel::Elevated,
+            Some(WindowsSandboxModeToml::Unelevated) => WindowsSandboxLevel::RestrictedToken,
+            None => WindowsSandboxLevel::Disabled,
+        };
+        let persisted_permission_profile_id = if sandbox_mode.is_some()
+            || permission_profile.is_some()
+            || default_permissions_override.is_some()
+        {
+            None
+        } else {
+            persisted_permission_profile_id.as_deref()
+        };
         let effective_permission_selection = resolve_effective_permission_selection(
             cfg.permissions.as_ref(),
             default_permissions_override.as_deref(),
+            persisted_permission_profile_id,
             cfg.default_permissions.as_deref(),
             requirements_toml,
             &mut startup_warnings,
@@ -3318,11 +3339,6 @@ impl Config {
             ));
         }
 
-        let windows_sandbox_level = match effective_windows_sandbox_mode {
-            Some(WindowsSandboxModeToml::Elevated) => WindowsSandboxLevel::Elevated,
-            Some(WindowsSandboxModeToml::Unelevated) => WindowsSandboxLevel::RestrictedToken,
-            None => WindowsSandboxLevel::Disabled,
-        };
         let memories_config: MemoriesConfig = cfg.memories.clone().unwrap_or_default().into();
         let memories_root = memory_root(&codex_home);
 
@@ -3330,7 +3346,9 @@ impl Config {
             default_permissions_override.as_deref(),
             permission_config_syntax,
         );
-        let explicit_permission_profile_mode = default_permissions_override.is_some()
+        let explicit_permission_profile_mode = effective_permission_selection
+            .persisted_profile_id_was_provided
+            || default_permissions_override.is_some()
             || matches!(
                 permission_config_syntax,
                 Some(PermissionConfigSyntax::Profiles)
@@ -3342,7 +3360,9 @@ impl Config {
         .into_iter()
         .filter(|profile| !is_builtin_permission_profile_name(&profile.id))
         .collect();
-        let using_implicit_builtin_profile = permission_config_syntax.is_none()
+        let using_implicit_builtin_profile = !effective_permission_selection
+            .persisted_profile_id_was_provided
+            && permission_config_syntax.is_none()
             && effective_permission_selection.selected_profile_id.is_none();
         let should_seed_legacy_workspace_roots = effective_permission_selection
             .selected_profile_id
@@ -4387,18 +4407,31 @@ fn merge_managed_permission_profiles(
 }
 
 fn resolve_effective_permission_selection<'a>(
-    configured_permissions: Option<&PermissionsToml>,
+    configured_profiles: Option<&PermissionsToml>,
     default_permissions_override: Option<&'a str>,
-    configured_default_permissions: Option<&'a str>,
+    persisted_profile_id: Option<&'a str>,
+    configured_default_profile_id: Option<&'a str>,
     requirements_toml: &'a ConfigRequirementsToml,
     startup_warnings: &mut Vec<String>,
 ) -> std::io::Result<EffectivePermissionSelection<'a>> {
-    let profiles = merge_managed_permission_profiles(configured_permissions, requirements_toml)?;
+    let profiles = merge_managed_permission_profiles(configured_profiles, requirements_toml)?;
     validate_user_permission_profile_names(profiles.as_ref())?;
     validate_required_permission_profile_catalog(requirements_toml, profiles.as_ref())?;
+    let valid_persisted_profile_id = persisted_profile_id.filter(|profile_id| {
+        is_builtin_permission_profile_name(profile_id)
+            || profiles.as_ref().is_some_and(|profiles| {
+                compile_permission_profile_selection(
+                    Some(profiles),
+                    profile_id,
+                    /*workspace_write*/ None,
+                    &mut Vec::new(),
+                )
+                .is_ok()
+            })
+    });
     let selected_profile_id = resolve_default_permissions(
-        default_permissions_override,
-        configured_default_permissions,
+        default_permissions_override.or(valid_persisted_profile_id),
+        configured_default_profile_id,
         requirements_toml,
         startup_warnings,
     )?;
@@ -4406,6 +4439,8 @@ fn resolve_effective_permission_selection<'a>(
     Ok(EffectivePermissionSelection {
         profiles,
         selected_profile_id,
+        persisted_profile_id_was_provided: default_permissions_override.is_none()
+            && valid_persisted_profile_id.is_some(),
         requirements_force_profile_selection: requirements_toml
             .allowed_permission_profiles
             .is_some(),

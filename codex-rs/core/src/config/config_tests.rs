@@ -2360,6 +2360,196 @@ async fn permission_profile_override_populates_runtime_permissions() -> std::io:
     Ok(())
 }
 
+#[tokio::test]
+async fn persisted_permission_profile_id_wins_over_configured_default() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let config_toml = toml::from_str(
+        r#"
+default_permissions = ":read-only"
+
+[permissions.dev]
+extends = ":workspace"
+"#,
+    )
+    .expect("permission profile config should deserialize");
+
+    let config = Config::load_from_base_config_with_overrides(
+        config_toml,
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            persisted_permission_profile_id: Some("dev".to_string()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.permissions.active_permission_profile(),
+        Some(ActivePermissionProfile {
+            id: "dev".to_string(),
+            extends: Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string()),
+        })
+    );
+    assert_eq!(
+        config.legacy_sandbox_policy(),
+        SandboxPolicy::new_workspace_write_policy()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn missing_persisted_permission_profile_id_uses_configured_default() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let project_key = cwd.path().to_string_lossy().to_string();
+
+    for (configured_default, configured_sandbox, expected_active_profile) in [
+        (
+            Some(BUILT_IN_PERMISSION_PROFILE_READ_ONLY.to_string()),
+            None,
+            Some(ActivePermissionProfile::read_only()),
+        ),
+        (None, Some(SandboxMode::ReadOnly), None),
+    ] {
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml {
+                default_permissions: configured_default,
+                sandbox_mode: configured_sandbox,
+                projects: Some(HashMap::from([(
+                    project_key.clone(),
+                    ProjectConfig {
+                        trust_level: Some(TrustLevel::Trusted),
+                    },
+                )])),
+                ..Default::default()
+            },
+            ConfigOverrides {
+                cwd: Some(cwd.path().to_path_buf()),
+                persisted_permission_profile_id: Some("removed-profile".to_string()),
+                ..Default::default()
+            },
+            codex_home.abs(),
+        )
+        .await?;
+
+        assert_eq!(
+            config.permissions.active_permission_profile(),
+            expected_active_profile
+        );
+        assert_eq!(
+            config.permissions.effective_permission_profile(),
+            PermissionProfile::read_only()
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn invalid_persisted_permission_profile_uses_configured_default() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    for invalid_profile in [
+        "extends = \"removed-parent\"",
+        "extends = \":read-only\"\n\n[permissions.dev.filesystem]\nglob_scan_max_depth = 0",
+    ] {
+        let config_toml = toml::from_str(&format!(
+            "default_permissions = \":danger-full-access\"\n\n[permissions.dev]\n{invalid_profile}"
+        ))
+        .expect("permission profile config should deserialize");
+
+        let config = Config::load_from_base_config_with_overrides(
+            config_toml,
+            ConfigOverrides {
+                cwd: Some(cwd.path().to_path_buf()),
+                persisted_permission_profile_id: Some("dev".to_string()),
+                ..Default::default()
+            },
+            codex_home.abs(),
+        )
+        .await?;
+
+        assert_eq!(
+            config.permissions.active_permission_profile(),
+            Some(ActivePermissionProfile::new(
+                BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS,
+            ))
+        );
+        assert_eq!(
+            config.permissions.effective_permission_profile(),
+            PermissionProfile::Disabled
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn persisted_profile_cycle_uses_configured_default() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let config_toml = toml::from_str(
+        r#"
+default_permissions = ":danger-full-access"
+
+[permissions.dev]
+extends = "base"
+
+[permissions.base]
+extends = "dev"
+"#,
+    )
+    .expect("permission profile config should deserialize");
+
+    let config = Config::load_from_base_config_with_overrides(
+        config_toml,
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            persisted_permission_profile_id: Some("dev".to_string()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.permissions.active_permission_profile(),
+        Some(ActivePermissionProfile::new(
+            BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS,
+        ))
+    );
+    assert_eq!(
+        config.permissions.effective_permission_profile(),
+        PermissionProfile::Disabled
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn missing_explicit_default_permissions_remains_an_error() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+
+    let error = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            default_permissions: Some("removed-profile".to_string()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await
+    .expect_err("explicit missing profile should be rejected");
+
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(
+        error.to_string(),
+        "default_permissions requires a `[permissions]` table"
+    );
+    Ok(())
+}
+
 #[test]
 fn permission_snapshot_setter_preserves_permission_constraints() {
     let initial_profile = PermissionProfile::read_only();
@@ -10383,32 +10573,46 @@ async fn permission_profile_override_falls_back_when_disallowed_by_requirements(
 #[tokio::test]
 async fn active_profile_is_cleared_when_requirements_force_fallback() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
-    let config = ConfigBuilder::without_managed_config_for_tests()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .harness_overrides(ConfigOverrides {
+    for overrides in [
+        ConfigOverrides {
             default_permissions: Some(BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS.to_string()),
             ..Default::default()
-        })
-        .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
-                r#"allowed_sandbox_modes = ["read-only"]"#,
+        },
+        ConfigOverrides {
+            persisted_permission_profile_id: Some(
+                BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS.to_string(),
             ),
-        )
-        .build()
-        .await?;
+            ..Default::default()
+        },
+    ] {
+        let config = ConfigBuilder::without_managed_config_for_tests()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .harness_overrides(overrides)
+            .cloud_config_bundle(
+                CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                    r#"allowed_sandbox_modes = ["read-only"]"#,
+                ),
+            )
+            .build()
+            .await?;
 
-    assert_eq!(
-        config.permissions.effective_permission_profile(),
-        PermissionProfile::read_only()
-    );
-    assert_eq!(config.permissions.active_permission_profile(), None);
-    assert!(
-        config.startup_warnings.iter().any(|warning| warning
-            .contains("Configured value for `permission_profile` is disallowed by requirements")),
-        "{:?}",
-        config.startup_warnings
-    );
+        assert_eq!(
+            config.permissions.effective_permission_profile(),
+            PermissionProfile::read_only()
+        );
+        assert_eq!(config.permissions.active_permission_profile(), None);
+        assert!(
+            config
+                .startup_warnings
+                .iter()
+                .any(|warning| warning.contains(
+                    "Configured value for `permission_profile` is disallowed by requirements"
+                )),
+            "{:?}",
+            config.startup_warnings
+        );
+    }
     Ok(())
 }
 
