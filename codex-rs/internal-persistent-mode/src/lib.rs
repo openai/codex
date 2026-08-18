@@ -50,24 +50,26 @@ impl ThreadLifecycleContributor<Config> for PersistentModeExtension {
                     return;
                 }
             };
+            let continue_without_message = stored_thread.model.as_deref() == Some("nathree");
             let Some(message) = stored_thread
                 .extra_config
                 .and_then(|extra_config| extra_config.persistent_mode_message)
             else {
                 return;
             };
-            let item = ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText { text: message }],
-                phase: None,
-                internal_chat_message_metadata_passthrough: None,
+            let request = if continue_without_message {
+                TurnInputRequest::user_input(Vec::new())
+            } else {
+                TurnInputRequest::new(TurnInput::ResponseItem(ResponseItem::Message {
+                    id: None,
+                    role: "user".to_string(),
+                    content: vec![ContentItem::InputText { text: message }],
+                    phase: None,
+                    internal_chat_message_metadata_passthrough: None,
+                }))
             };
 
-            match thread
-                .start_turn_if_idle(TurnInputRequest::new(TurnInput::ResponseItem(item)))
-                .await
-            {
+            match thread.start_turn_if_idle(request).await {
                 Ok(StartIfIdleSubmission::Started { .. }) => {}
                 Ok(StartIfIdleSubmission::NotSubmitted { reason }) => {
                     debug!(

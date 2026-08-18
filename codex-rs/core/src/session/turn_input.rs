@@ -347,9 +347,9 @@ async fn start_if_idle(
             turn_context.session_telemetry.user_prompt(content);
         }
         task_input.push(pending_turn_input(input));
-    } else if is_automatic_idle_work {
-        // Recovery resumes an existing turn, so it must not queue a new empty
-        // user message for that turn.
+    } else if is_automatic_idle_work && !matches!(&input, SubmittedTurnInput::UserInput { .. }) {
+        // Automatic response-item work still needs to be queued, but an empty
+        // user-input request should start sampling without adding a message.
         session
             .input_queue
             .extend_pending_input_for_turn_state(
