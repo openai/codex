@@ -2567,7 +2567,8 @@ async fn run_interactive_tui(
     };
     let mut attempted_backups = HashSet::new();
     loop {
-        let err = match start_tui().await {
+        // Keep the large TUI future out of the CLI dispatcher's stack frame.
+        let err = match Box::pin(start_tui()).await {
             Ok(exit_info) => return Ok(exit_info),
             Err(err) => err,
         };
@@ -2794,6 +2795,19 @@ mod tests {
     use codex_protocol::ThreadId;
     use codex_tui::TokenUsage;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn interactive_tui_future_stays_bounded() {
+        let future = run_interactive_tui(
+            TuiCli::parse_from(["codex"]),
+            /*remote*/ None,
+            /*remote_auth_token_env*/ None,
+            Arg0DispatchPaths::default(),
+        );
+        let size = std::mem::size_of_val(&future);
+
+        assert!(size < 64 * 1024, "interactive TUI future is {size} bytes");
+    }
 
     #[tokio::test]
     async fn updater_http_client_factory_honors_respect_system_proxy() {
