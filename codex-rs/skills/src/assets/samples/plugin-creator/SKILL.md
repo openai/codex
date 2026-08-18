@@ -72,9 +72,11 @@ For updates to an existing local plugin during development, keep the scaffold fl
 reference instead of hand-editing marketplace files:
 
 ```bash
+python3 scripts/read_marketplace_name.py
 python3 scripts/update_plugin_cachebuster.py <plugin-path>
 ```
 
+For a repo/team marketplace, pass `--marketplace-path <marketplace-json-path>` to the first command.
 Prefer the helper default cachebuster unless the user explicitly asks for a specific override.
 See `references/installing-and-updating.md` for the expected cachebuster and reinstall flow while iterating on an existing local plugin.
 
@@ -112,9 +114,13 @@ See `references/installing-and-updating.md` for the expected cachebuster and rei
 - Do not use `--marketplace-name` to rename an existing marketplace file in place. If the file
   already exists, its top-level `name` must already match.
 - If the user specifies a different marketplace path, treat that marketplace as needing explicit installation via `codex plugin marketplace add`.
-- Prefer `scripts/read_marketplace_name.py` when you need the marketplace name from any
-  `marketplace.json` file. With no argument it reads the default personal marketplace; with an
-  explicit path it works for repo/team marketplaces too.
+- Plugin names must match `[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*`.
+- Marketplace names must match `[A-Za-z0-9_-]+`.
+- For existing marketplaces, always validate names with `scripts/read_marketplace_name.py`; stop if
+  validation fails. With no argument it reads the default personal marketplace; with an explicit
+  path it works for repo/team marketplaces too. The scaffold validates new marketplaces itself.
+- Before updating existing plugins, validate both identifiers before changing files or constructing
+  install commands.
 - In either location, the generated source path remains `./plugins/<plugin-name>`.
 - Marketplace root metadata supports top-level `name` plus optional `interface.displayName`.
 - Treat plugin order in `plugins[]` as render order in Codex. Append new entries unless a user explicitly asks to reorder the list.

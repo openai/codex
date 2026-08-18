@@ -10,6 +10,10 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from identifier_validation import validate_plugin_identifier
+
 
 CACHEBUSTER_PREFIX = "codex"
 
@@ -34,6 +38,11 @@ def main() -> None:
     plugin_root = Path(args.plugin_path).expanduser().resolve()
     manifest_path = plugin_root / ".codex-plugin" / "plugin.json"
     manifest = load_manifest(manifest_path)
+
+    plugin_name = manifest.get("name")
+    if not isinstance(plugin_name, str) or not plugin_name.strip():
+        raise ValueError(f"{manifest_path} must contain a non-empty string 'name'.")
+    validate_plugin_identifier(plugin_name)
 
     version = manifest.get("version")
     if not isinstance(version, str) or not version.strip():

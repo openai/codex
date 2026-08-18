@@ -19,13 +19,31 @@ flow first and only then switch to this reinstall flow.
 
 ## Update Loop
 
-1. Update the plugin manifest to a single Codex cachebuster suffix:
+1. Before changing the plugin, read the marketplace name from the personal marketplace file:
+
+```bash
+python3 scripts/read_marketplace_name.py
+```
+
+Here, "personal marketplace" means the marketplace whose file is at
+`~/.agents/plugins/marketplace.json`. On Windows, use the equivalent path under the user profile.
+The helper uses Python's home-directory resolution and prints the validated marketplace name to use
+when constructing the install command. If the helper fails, stop.
+
+To read the name from a different marketplace file, pass the path directly:
+
+```bash
+python3 scripts/read_marketplace_name.py --marketplace-path <path-to-marketplace.json>
+```
+
+2. Update the plugin manifest to a single Codex cachebuster suffix:
 
 ```bash
 python3 scripts/update_plugin_cachebuster.py \
   <plugin-path>
 ```
 
+The helper validates the plugin name before changing the manifest. If validation fails, stop.
 Prefer the default helper behavior here. If you omit `--cachebuster`, the helper uses a UTC
 timestamp down to seconds, which is the recommended path for routine local iteration.
 
@@ -36,23 +54,6 @@ outside Codex depends on a specific token:
 python3 scripts/update_plugin_cachebuster.py \
   <plugin-path> \
   --cachebuster local-20260519-184516
-```
-
-2. For the default scaffolded flow, read the marketplace name from the personal marketplace file:
-
-```bash
-python3 scripts/read_marketplace_name.py
-```
-
-Here, "personal marketplace" means the marketplace whose file is at
-`~/.agents/plugins/marketplace.json`. On Windows, use the equivalent path under the user profile.
-The helper uses Python's home-directory resolution and prints the marketplace name to use when
-constructing the install command.
-
-To read the name from a different marketplace file, pass the path directly:
-
-```bash
-python3 scripts/read_marketplace_name.py --marketplace-path <path-to-marketplace.json>
 ```
 
 3. Reinstall from that marketplace name:
