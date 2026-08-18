@@ -10,6 +10,7 @@ use codex_core::TurnInputRequest;
 use codex_core::config::Config;
 use codex_core::config::Constrained;
 use codex_core::config::CurrentTimeReminderConfig;
+use codex_core::context::NodeReplReviewEvidence;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ToolCallOutcome;
@@ -33,6 +34,8 @@ use codex_protocol::dynamic_tools::DynamicToolNamespaceSpec;
 use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ImageDetail;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ToolMode;
@@ -4340,6 +4343,77 @@ env=propagated-env
 isError=false
 contentLength=0"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_node_repl_screenshots_can_be_captured_without_guardian_transcript_flags()
+-> Result<()> {
+    skip_if_wine_exec!(
+        Ok(()),
+        "requires a Windows test_stdio_server in the Wine-exec environment"
+    );
+    skip_if_no_network!(Ok(()));
+
+    const SCREENSHOT: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
+    let server = responses::start_mock_server().await;
+    let mcp_server_bin = remote_aware_stdio_server_bin()?;
+    let mut builder = test_codex().with_config(move |config| {
+        config
+            .features
+            .enable(Feature::CodeMode)
+            .expect("enable Code Mode");
+        let mcp = serde_json::from_value(serde_json::json!({
+            "command": mcp_server_bin,
+            "environment_id": remote_aware_environment_id(),
+            "env": { "MCP_TEST_ENABLE_NODE_REPL_JS": "1" },
+            "omit_tools_from": ["deferred"],
+        }))
+        .expect("valid node_repl MCP server config");
+        config
+            .mcp_servers
+            .set(HashMap::from([("node_repl".to_owned(), mcp)]))
+            .expect("configure node_repl MCP server");
+    });
+    let test = builder.build_with_auto_env(&server).await?;
+    core_test_support::wait_for_mcp_server(&test.codex, "node_repl").await?;
+    let evidence = test
+        .codex
+        .thread_extension_data()
+        .get_or_init(NodeReplReviewEvidence::default);
+    evidence.enable_image_capture();
+
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_custom_tool_call(
+                    "node-repl-image",
+                    "exec",
+                    r#"for (let index = 0; index < 2; index++) await tools.mcp__node_repl__js({ code: 'await nodeRepl.emitImage(await tab.screenshot())' });"#,
+                ),
+                ev_completed("response-node-repl"),
+            ]),
+            sse(vec![ev_completed("response-done")]),
+        ],
+    )
+    .await;
+    test.submit_text_turn("capture a computer-use screenshot")
+        .await?;
+
+    assert_eq!(
+        evidence.images(),
+        vec![ContentItem::InputImage {
+            image_url: SCREENSHOT.to_owned(),
+            detail: Some(ImageDetail::Low),
+        }]
+    );
+    let parent_request = response_mock
+        .requests()
+        .pop()
+        .expect("parent turn should complete");
+    assert!(!serde_json::to_string(&parent_request.input())?.contains(SCREENSHOT));
 
     Ok(())
 }

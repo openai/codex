@@ -63,6 +63,7 @@ impl TranscriptConfig {
     pub(crate) fn images<'a>(
         &self,
         items: impl IntoIterator<Item = &'a ResponseItem>,
+        node_repl_images: impl IntoIterator<Item = ContentItem>,
     ) -> Vec<ContentItem> {
         if !self.include_images {
             return Vec::new();
@@ -115,6 +116,13 @@ impl TranscriptConfig {
                     }
                 }
                 _ => {}
+            }
+        }
+        if self.sources.contains(&TranscriptSource::ToolOutputs) {
+            for image in node_repl_images {
+                if let ContentItem::InputImage { image_url, detail } = image {
+                    include_image(&image_url, detail);
+                }
             }
         }
 

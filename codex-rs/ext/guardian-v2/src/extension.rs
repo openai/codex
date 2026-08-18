@@ -7,6 +7,7 @@ use std::time::SystemTime;
 
 use codex_core::ThreadManager;
 use codex_core::config::Config;
+use codex_core::context::NodeReplReviewEvidence;
 use codex_extension_api::ApprovalReviewContributor;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
@@ -266,6 +267,12 @@ impl ThreadLifecycleContributor<Config> for GuardianV2Extension {
 
             match sampler {
                 Ok(sampler) => {
+                    if guardian_config.transcript.include_images {
+                        input
+                            .thread_store
+                            .get_or_init(NodeReplReviewEvidence::default)
+                            .enable_image_capture();
+                    }
                     input.thread_store.insert(sampler);
                     input.thread_store.insert(guardian_config);
                     input
@@ -424,6 +431,15 @@ impl ToolLifecycleContributor for GuardianV2Extension {
             .as_ref()
             .and_then(|model| model.auto_review_model_override.clone());
         let conversation_history = Arc::clone(&input.conversation_history);
+        let node_repl_images = if guardian_config.transcript.include_images {
+            input
+                .thread_store
+                .get::<NodeReplReviewEvidence>()
+                .map(|evidence| evidence.images())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
 
         tokio::spawn(async move {
             let transcript = guardian_config
@@ -431,7 +447,7 @@ impl ToolLifecycleContributor for GuardianV2Extension {
                 .build(conversation_history.items());
             let images = guardian_config
                 .transcript
-                .images(conversation_history.items());
+                .images(conversation_history.items(), node_repl_images);
             drop(conversation_history);
             let planned_action = match action.render(guardian_config.max_action_tokens) {
                 Ok(planned_action) => planned_action,

@@ -5,6 +5,7 @@ use std::sync::Mutex;
 use std::sync::PoisonError;
 
 use codex_features::Feature;
+use codex_protocol::models::ContentItem;
 use codex_protocol::user_input::UserInput;
 use codex_protocol::user_input::UserInput::Image;
 use codex_protocol::user_input::UserInput::Text;
@@ -84,13 +85,50 @@ struct NodeReplReviewEvidenceState {
     responses: VecDeque<Arc<NodeReplReviewResponse>>,
     next_sequence: u64,
     retained_bytes: usize,
+    image_capture_enabled: bool,
 }
 
+/// Bounded, thread-scoped evidence collected from nested `node_repl` calls.
 #[derive(Debug, Default)]
-pub(crate) struct NodeReplReviewEvidence(Mutex<NodeReplReviewEvidenceState>);
+pub struct NodeReplReviewEvidence(Mutex<NodeReplReviewEvidenceState>);
 
 impl NodeReplReviewEvidence {
     pub(crate) const MAX_RETAINED_BYTES: usize = 8 * 1024 * 1024;
+
+    /// Enables screenshot capture even when synchronous Guardian transcripts are disabled.
+    pub fn enable_image_capture(&self) {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .image_capture_enabled = true;
+    }
+
+    pub(crate) fn image_capture_enabled(&self) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .image_capture_enabled
+    }
+
+    /// Returns the screenshots currently retained for this thread, oldest first.
+    pub fn images(&self) -> Vec<ContentItem> {
+        let state = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut seen_images = HashSet::new();
+        state
+            .responses
+            .iter()
+            .flat_map(|response| &response.items)
+            .filter_map(|item| match item {
+                Image { image_url, detail } if seen_images.insert(image_url) => {
+                    Some(ContentItem::InputImage {
+                        image_url: image_url.clone(),
+                        detail: *detail,
+                    })
+                }
+                _ => None,
+            })
+            .collect()
+    }
 
     pub(crate) fn record(
         &self,
