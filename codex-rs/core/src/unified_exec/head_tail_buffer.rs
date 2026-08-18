@@ -83,21 +83,6 @@ impl HeadTailBuffer {
         self.push_to_tail(&chunk[head_len..]);
     }
 
-    /// Snapshot the retained output as a list of chunks.
-    ///
-    /// The returned chunks are ordered as: head chunks first, then tail chunks.
-    /// Omitted bytes are not represented in the snapshot.
-    pub(crate) fn snapshot_chunks(&self) -> Vec<Vec<u8>> {
-        let mut out = Vec::with_capacity(2);
-        if !self.head.is_empty() {
-            out.push(self.head.clone());
-        }
-        if !self.tail.is_empty() {
-            out.push(self.tail.iter().copied().collect());
-        }
-        out
-    }
-
     /// Return the retained output as a single byte vector.
     ///
     /// The output is formed by concatenating head chunks, then tail chunks.

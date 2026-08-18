@@ -30,7 +30,6 @@ fn max_bytes_zero_drops_everything() {
     assert_eq!(buf.retained_bytes(), 0);
     assert_eq!(buf.omitted_bytes(), 3);
     assert_eq!(buf.to_bytes(), b"".to_vec());
-    assert_eq!(buf.snapshot_chunks(), Vec::<Vec<u8>>::new());
 }
 
 #[test]
@@ -105,10 +104,6 @@ fn empty_and_tiny_chunks_have_bounded_metadata() {
         buf.push_chunk(vec![*byte]);
     }
 
-    assert_eq!(
-        buf.snapshot_chunks(),
-        vec![b"01234".to_vec(), b"789ab".to_vec()]
-    );
     assert_eq!(buf.retained_bytes(), 10);
     assert_eq!(buf.omitted_bytes(), 2);
 }

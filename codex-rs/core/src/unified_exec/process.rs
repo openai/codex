@@ -259,9 +259,9 @@ impl UnifiedExecProcess {
         self.terminate();
     }
 
-    async fn snapshot_output(&self) -> Vec<Vec<u8>> {
+    async fn snapshot_output(&self) -> Vec<u8> {
         let guard = self.output.output_buffer.lock().await;
-        guard.snapshot_chunks()
+        guard.to_bytes()
     }
 
     pub(crate) fn sandbox_type(&self) -> SandboxType {
@@ -279,13 +279,9 @@ impl UnifiedExecProcess {
         )
         .await;
 
-        let collected_chunks = self.snapshot_output().await;
-        let mut aggregated: Vec<u8> = Vec::new();
-        for chunk in collected_chunks {
-            aggregated.extend_from_slice(&chunk);
-        }
-        let aggregated_text = String::from_utf8_lossy(&aggregated).to_string();
-        self.check_for_sandbox_denial_with_text(&aggregated_text)
+        let aggregated = self.snapshot_output().await;
+        let aggregated_text = String::from_utf8_lossy(&aggregated);
+        self.check_for_sandbox_denial_with_text(aggregated_text.as_ref())
             .await?;
 
         Ok(())
