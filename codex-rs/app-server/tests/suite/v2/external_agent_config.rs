@@ -24,6 +24,8 @@ use codex_app_server_protocol::ExternalAgentConfigImportHistoriesReadResponse;
 use codex_app_server_protocol::ExternalAgentConfigImportHistoryRecordResponse;
 use codex_app_server_protocol::ExternalAgentConfigImportProgressNotification;
 use codex_app_server_protocol::ExternalAgentConfigImportResponse;
+#[cfg(unix)]
+use codex_app_server_protocol::ExternalAgentConfigImportTypeResult;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItemType;
 use codex_app_server_protocol::ExternalAgentImportedConnectorCandidate;
 use codex_app_server_protocol::ExternalAgentImportedConnectorSource;
@@ -137,6 +139,87 @@ async fn external_agent_config_detect_accepts_migration_source_and_defaults_unkn
     );
     let expected = responses[0].clone();
     assert_eq!(responses, vec![expected; 4]);
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn external_agent_config_import_skips_repository_redirect_after_detection() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let repository = TempDir::new()?;
+    let repo_root = repository.path();
+    let repo_config_dir = repo_root.join(".codex");
+    let global_config = codex_home.path().join("config.toml");
+    std::fs::create_dir(repo_root.join(".git"))?;
+    std::fs::create_dir(&repo_config_dir)?;
+    std::fs::write(
+        repo_root.join(".mcp.json"),
+        r#"{"mcpServers":{"repository-server":{"command":"repository-server"}}}"#,
+    )?;
+    std::fs::write(&global_config, "model = \"gpt-5.4\"\n")?;
+
+    let home_dir = codex_home.path().display().to_string();
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("HOME", Some(home_dir.as_str()))])
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+    let original_global_config = std::fs::read_to_string(&global_config)?;
+
+    let detect_request_id = mcp
+        .send_raw_request(
+            "externalAgentConfig/detect",
+            Some(serde_json::json!({
+                "includeHome": false,
+                "cwds": [repo_root],
+            })),
+        )
+        .await?;
+    let detection: ExternalAgentConfigDetectResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(detect_request_id)).await??;
+    assert_eq!(detection.items.len(), 1);
+    assert_eq!(
+        detection.items[0].item_type,
+        ExternalAgentConfigMigrationItemType::McpServerConfig
+    );
+
+    std::fs::remove_dir(&repo_config_dir)?;
+    std::os::unix::fs::symlink(codex_home.path(), &repo_config_dir)?;
+
+    let import_request_id = mcp
+        .send_raw_request(
+            "externalAgentConfig/import",
+            Some(serde_json::json!({
+                "migrationItems": detection.items,
+            })),
+        )
+        .await?;
+    let response: ExternalAgentConfigImportResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(import_request_id)).await??;
+    let import_id = assert_import_response(response);
+    let completed: ExternalAgentConfigImportCompletedNotification = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_notification("externalAgentConfig/import/completed"),
+    )
+    .await??;
+
+    assert_eq!(
+        completed,
+        ExternalAgentConfigImportCompletedNotification {
+            import_id,
+            item_type_results: vec![ExternalAgentConfigImportTypeResult {
+                item_type: ExternalAgentConfigMigrationItemType::McpServerConfig,
+                successes: Vec::new(),
+                failures: Vec::new(),
+            }],
+        }
+    );
+    assert_eq!(
+        std::fs::read_to_string(global_config)?,
+        original_global_config
+    );
 
     Ok(())
 }

@@ -1,5 +1,6 @@
 use crate::RewriteProfile;
 use crate::invalid_data_error;
+use crate::scope::is_redirected_destination;
 use serde_yaml::Value as YamlValue;
 use std::collections::BTreeMap;
 use std::fs;
@@ -46,7 +47,7 @@ pub fn missing_subagent_names(
         let Some(target) = subagent_target_file(&source_file, target_agents) else {
             continue;
         };
-        if !target.exists() {
+        if !target.exists() && !is_redirected_destination(&target)? {
             names.push(metadata.name);
         }
     }
@@ -68,7 +69,7 @@ pub fn import_subagents_with_rewrite_profile(
         let Some(target) = subagent_target_file(&source_file, target_agents) else {
             continue;
         };
-        if target.exists() {
+        if target.exists() || is_redirected_destination(&target)? {
             continue;
         }
         let document = parse_document(&source_file)?;

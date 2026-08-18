@@ -1,4 +1,5 @@
 use crate::invalid_data_error;
+use crate::scope::is_redirected_destination;
 use crate::utils::is_missing_or_empty_text_file;
 use serde_json::Value as JsonValue;
 use std::fs;
@@ -250,6 +251,9 @@ pub(super) fn copy_hook_scripts(
 }
 
 fn copy_dir_recursive_skip_existing(source: &Path, target: &Path) -> io::Result<()> {
+    if is_redirected_destination(target)? {
+        return Ok(());
+    }
     fs::create_dir_all(target)?;
     for entry in fs::read_dir(source)? {
         let entry = entry?;
@@ -258,7 +262,10 @@ fn copy_dir_recursive_skip_existing(source: &Path, target: &Path) -> io::Result<
         let file_type = entry.file_type()?;
         if file_type.is_dir() {
             copy_dir_recursive_skip_existing(&source_path, &target_path)?;
-        } else if file_type.is_file() && !target_path.exists() {
+        } else if file_type.is_file()
+            && !target_path.exists()
+            && !is_redirected_destination(&target_path)?
+        {
             fs::copy(source_path, target_path)?;
         }
     }
