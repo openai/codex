@@ -10,6 +10,7 @@ use codex_login::ExternalAuthRefreshContext;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::ResponseItemId;
+use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::SessionSource;
@@ -22,6 +23,7 @@ use core_test_support::responses::ev_output_text_delta;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -34,6 +36,54 @@ use super::LunaSamplerConfig;
 use super::LunaSamplingRequest;
 use super::MAX_SAMPLING_RETRIES;
 use super::MAX_WEBSOCKET_CONNECTIONS;
+
+fn assert_connection_metadata(server: &responses::WebSocketTestServer) -> Result<String> {
+    let handshake = server.single_handshake();
+    let thread_id = handshake.header("thread-id").expect("classifier thread ID");
+    ThreadId::from_string(&thread_id)?;
+    assert_ne!(thread_id, "thread-1");
+    assert_eq!(
+        [
+            handshake.header("x-client-request-id"),
+            handshake.header("x-openai-subagent"),
+            handshake.header("x-codex-window-id"),
+        ],
+        [
+            Some(thread_id.clone()),
+            Some("guardian".to_owned()),
+            Some(format!("{thread_id}:0")),
+        ]
+    );
+    for request in server.single_connection() {
+        let mut metadata = request.body_json()["client_metadata"].clone();
+        let turn_id = metadata["turn_id"].clone();
+        metadata["x-codex-turn-metadata"] = serde_json::from_str(
+            metadata["x-codex-turn-metadata"]
+                .as_str()
+                .expect("serialized turn metadata"),
+        )?;
+        assert_eq!(
+            metadata,
+            json!({
+                "session_id": "session-1",
+                "thread_id": thread_id,
+                "turn_id": turn_id,
+                "x-openai-subagent": "guardian",
+                "x-codex-window-id": format!("{thread_id}:0"),
+                "ws_request_header_x_openai_internal_codex_responses_lite": "true",
+                "x-codex-turn-metadata": {
+                    "session_id": "session-1",
+                    "thread_id": thread_id,
+                    "guardian_classifier_source_thread_id": "thread-1",
+                    "turn_id": turn_id,
+                    "request_kind": "guardian_classifier",
+                    "is_guardian_mode": true,
+                },
+            })
+        );
+    }
+    Ok(thread_id)
+}
 
 async fn proxy_websocket_servers(servers: &[&responses::WebSocketTestServer]) -> Result<String> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -174,7 +224,6 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_structured_requ
         Some("true".to_owned())
     );
     assert_eq!(handshake.header("session-id"), Some("session-1".to_owned()));
-    assert_eq!(handshake.header("thread-id"), Some("thread-1".to_owned()));
     assert_eq!(
         handshake.header("originator"),
         Some("guardian-v2-test".to_owned())
@@ -237,6 +286,11 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_structured_requ
     );
     requests.extend(refreshed.single_connection());
     assert_eq!(requests.len(), 2);
+    let thread_id = assert_connection_metadata(&server)?;
+    assert_ne!(
+        Some(thread_id),
+        idle_server.single_handshake().header("thread-id")
+    );
     assert_eq!(
         requests[0].body_json()["input"][2]["content"],
         json!([
@@ -252,20 +306,14 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_structured_requ
         assert_eq!(request["tool_choice"], "none");
         assert_eq!(request["text"]["format"]["strict"], true);
         assert_eq!(request["prompt_cache_key"], "guardian-v2:thread-1");
-        assert_eq!(request["client_metadata"]["session_id"], "session-1");
-        assert_eq!(request["client_metadata"]["thread_id"], "thread-1");
         assert_eq!(
-            request["client_metadata"]["ws_request_header_x_openai_internal_codex_responses_lite"],
-            "true"
+            request["client_metadata"]["turn_id"],
+            format!("turn-{}", index + 1)
         );
         assert!(request.get("tools").is_none());
         let effort = if index == 0 { "none" } else { "medium" };
         assert_eq!(request["reasoning"]["effort"], effort);
         assert_eq!(request["reasoning"]["context"], "all_turns");
-        assert_eq!(
-            request["client_metadata"]["turn_id"],
-            format!("turn-{}", index + 1)
-        );
     }
 
     Ok(())
@@ -493,9 +541,26 @@ async fn sampler_grows_its_pool_for_overlapping_requests() -> Result<()> {
             r#"{"score":0.25}"#.to_owned(),
         )
     );
+    let mut thread_ids = HashSet::new();
+    let mut turn_ids = HashSet::new();
     for server in [&first, &second, &third] {
         assert_eq!(server.single_connection().len(), 1);
+        assert!(thread_ids.insert(assert_connection_metadata(server)?));
+        turn_ids.insert(
+            server.single_connection()[0].body_json()["client_metadata"]["turn_id"]
+                .as_str()
+                .expect("turn ID")
+                .to_owned(),
+        );
     }
+    assert_eq!(
+        turn_ids,
+        HashSet::from_iter([
+            "turn-1".to_owned(),
+            "turn-2".to_owned(),
+            "turn-3".to_owned()
+        ])
+    );
     Ok(())
 }
 
@@ -629,10 +694,61 @@ async fn sampler_retries_expired_websockets_on_another_warm_connection() -> Resu
     let healthy_requests = healthy.single_connection();
     assert_eq!(expired_requests.len(), 1);
     assert_eq!(healthy_requests.len(), 1);
-    assert_eq!(
-        expired_requests[0].body_json(),
-        healthy_requests[0].body_json()
+    assert_ne!(
+        assert_connection_metadata(&expired)?,
+        assert_connection_metadata(&healthy)?
     );
+    let mut expired_request = expired_requests[0].body_json();
+    let mut healthy_request = healthy_requests[0].body_json();
+    for request in [&mut expired_request, &mut healthy_request] {
+        assert_eq!(request["client_metadata"]["turn_id"], "turn-1");
+        request
+            .as_object_mut()
+            .expect("request object")
+            .remove("client_metadata");
+    }
+    assert_eq!(expired_request, healthy_request);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sampler_assigns_a_fresh_identity_when_replacing_aged_connections() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let response = vec![vec![
+        ev_assistant_message("response-1", r#"{"score":0.25}"#),
+        ev_completed("response-1"),
+    ]];
+    let first = responses::start_websocket_server(vec![response.clone()]).await;
+    let second = responses::start_websocket_server(vec![response.clone()]).await;
+    let replacement = responses::start_websocket_server(vec![response]).await;
+    let sampler = LunaSampler::connect(sampler_config(
+        proxy_websocket_servers(&[&first, &second, &replacement]).await?,
+    ))
+    .await?;
+
+    assert_eq!(
+        sampler.sample(sample_request("turn-1")).await?,
+        r#"{"score":0.25}"#
+    );
+    {
+        let mut connections = sampler.idle_connections.lock().unwrap();
+        for connection in connections.iter_mut() {
+            connection.expires_at = std::time::Instant::now();
+        }
+    }
+    assert_eq!(
+        sampler.sample(sample_request("turn-2")).await?,
+        r#"{"score":0.25}"#
+    );
+
+    let thread_ids = [&first, &second, &replacement]
+        .into_iter()
+        .map(assert_connection_metadata)
+        .collect::<Result<HashSet<_>>>()?;
+    assert_eq!(thread_ids.len(), 3);
+    assert_eq!(second.single_connection().len(), 1);
+    assert_eq!(replacement.single_connection().len(), 1);
     Ok(())
 }
 

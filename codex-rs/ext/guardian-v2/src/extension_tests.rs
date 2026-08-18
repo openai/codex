@@ -26,6 +26,7 @@ use codex_login::ExternalAuthFuture;
 use codex_login::ExternalAuthRefreshContext;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::ResponseItemId;
+use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -1042,9 +1043,30 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
     let session_store = ExtensionData::new("session-1");
     let thread_store = test.codex.thread_extension_data();
     assert_eq!(request["model"], "gpt-5.6-luna");
+    let classifier_thread_id = request["client_metadata"]["thread_id"]
+        .as_str()
+        .expect("classifier thread ID");
+    assert_ne!(ThreadId::from_string(classifier_thread_id)?, thread_id);
+    let turn_metadata: serde_json::Value = serde_json::from_str(
+        request["client_metadata"]["x-codex-turn-metadata"]
+            .as_str()
+            .expect("serialized turn metadata"),
+    )?;
     assert_eq!(
-        request["client_metadata"]["thread_id"],
-        thread_id.to_string()
+        turn_metadata,
+        json!({
+            "session_id": request["client_metadata"]["session_id"],
+            "thread_id": classifier_thread_id,
+            "guardian_classifier_source_thread_id": thread_id.to_string(),
+            "turn_id": "turn-1",
+            "request_kind": "guardian_classifier",
+            "is_guardian_mode": true,
+        })
+    );
+    assert_eq!(request["client_metadata"]["x-openai-subagent"], "guardian");
+    assert_eq!(
+        request["client_metadata"]["x-codex-window-id"],
+        format!("{classifier_thread_id}:0")
     );
     assert_eq!(request["client_metadata"]["turn_id"], "turn-1");
     assert_eq!(request["reasoning"]["effort"], "low");

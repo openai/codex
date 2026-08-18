@@ -27,6 +27,7 @@ use codex_login::default_client::default_headers;
 use codex_model_provider::AgentIdentitySessionFallback;
 use codex_model_provider::ProviderAuthScope;
 use codex_model_provider::SharedModelProvider;
+use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -35,6 +36,7 @@ use codex_protocol::protocol::SessionSource;
 use http::HeaderValue;
 use http::StatusCode;
 use serde_json::Value;
+use serde_json::json;
 use thiserror::Error;
 use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::Semaphore;
@@ -49,6 +51,7 @@ const MAX_WEBSOCKET_AGE: Duration = Duration::from_secs(55 * 60);
 const RESPONSES_WEBSOCKETS_BETA: &str = "responses_websockets=2026-02-06";
 const RESPONSES_LITE_METADATA_KEY: &str =
     "ws_request_header_x_openai_internal_codex_responses_lite";
+const TURN_METADATA_KEY: &str = "x-codex-turn-metadata";
 
 /// Host-owned provider, authentication, and attribution for one Luna connection.
 pub struct LunaSamplerConfig {
@@ -117,7 +120,9 @@ pub enum LunaSamplerError {
 
 struct PooledConnection {
     connection: ResponsesWebsocketConnection,
-    connected_at: Instant,
+    // The bridge routes by thread ID, so each socket needs its own identity.
+    thread_id: String,
+    expires_at: Instant,
     auth_changes: Option<tokio::sync::watch::Receiver<u64>>,
 }
 
@@ -192,9 +197,19 @@ impl LunaSampler {
             .await
             .map_err(LunaSamplerError::Provider)?
             .auth;
+        let thread_id = ThreadId::new().to_string();
         let mut headers = build_session_headers(
             Some(self.config.session_id.clone()),
-            Some(self.config.thread_id.clone()),
+            Some(thread_id.clone()),
+        );
+        headers.insert("x-openai-subagent", HeaderValue::from_static("guardian"));
+        headers.insert(
+            "x-codex-window-id",
+            HeaderValue::from_str(&format!("{thread_id}:0")).map_err(|error| {
+                LunaSamplerError::Api(ApiError::Stream(format!(
+                    "invalid classifier window ID: {error}"
+                )))
+            })?,
         );
         headers.insert(
             "openai-beta",
@@ -207,7 +222,7 @@ impl LunaSampler {
         if let Some(originator) = self.config.originator.as_deref() {
             add_originator_header(&mut headers, originator);
         }
-        if let Ok(request_id) = HeaderValue::from_str(&self.config.thread_id) {
+        if let Ok(request_id) = HeaderValue::from_str(&thread_id) {
             headers.insert("x-client-request-id", request_id);
         }
 
@@ -258,7 +273,8 @@ impl LunaSampler {
 
         Ok(PooledConnection {
             connection,
-            connected_at: Instant::now(),
+            thread_id,
+            expires_at: Instant::now() + MAX_WEBSOCKET_AGE,
             auth_changes,
         })
     }
@@ -280,7 +296,7 @@ impl LunaSampler {
                         .auth_changes
                         .as_ref()
                         .is_none_or(|auth| !auth.has_changed().unwrap_or(true))
-                        && connection.connected_at.elapsed() < MAX_WEBSOCKET_AGE
+                        && Instant::now() < connection.expires_at
                         && !connection.connection.is_closed().await =>
                 {
                     break connection;
@@ -355,12 +371,7 @@ impl LunaSampler {
 
     /// Sends one structured, tool-less request on an exclusively leased WebSocket.
     pub async fn sample(&self, request: LunaSamplingRequest) -> Result<String, LunaSamplerError> {
-        let metadata = HashMap::from([
-            ("session_id".to_owned(), self.config.session_id.clone()),
-            ("thread_id".to_owned(), self.config.thread_id.clone()),
-            ("turn_id".to_owned(), request.turn_id),
-            (RESPONSES_LITE_METADATA_KEY.to_owned(), "true".to_owned()),
-        ]);
+        let turn_id = request.turn_id;
         let mut input = vec![
             ResponseItem::AdditionalTools {
                 id: None,
@@ -405,7 +416,7 @@ impl LunaSampler {
             phase: None,
             internal_chat_message_metadata_passthrough: None,
         });
-        let request = ResponsesApiRequest {
+        let mut request = ResponsesApiRequest {
             model: MODEL.to_owned(),
             instructions: String::new(),
             input,
@@ -428,7 +439,7 @@ impl LunaSampler {
                 &Some(request.output_schema),
                 /*output_schema_strict*/ true,
             ),
-            client_metadata: Some(metadata),
+            client_metadata: None,
         };
         let (supersede, mut superseded) = oneshot::channel();
         let scored = Arc::new(AtomicBool::new(false));
@@ -475,6 +486,26 @@ impl LunaSampler {
                     return Err(error);
                 }
             };
+            let thread_id = &lease.connection.thread_id;
+            let turn_metadata = json!({
+                "session_id": self.config.session_id,
+                "thread_id": thread_id,
+                "guardian_classifier_source_thread_id": self.config.thread_id,
+                "turn_id": turn_id,
+                "request_kind": "guardian_classifier",
+                "is_guardian_mode": true,
+            })
+            .to_string();
+            request.client_metadata = Some(HashMap::from([
+                ("session_id".to_owned(), self.config.session_id.clone()),
+                ("thread_id".to_owned(), thread_id.clone()),
+                ("turn_id".to_owned(), turn_id.clone()),
+                ("x-openai-subagent".to_owned(), "guardian".to_owned()),
+                // Classifier requests do not advance their own context window.
+                ("x-codex-window-id".to_owned(), format!("{thread_id}:0")),
+                (RESPONSES_LITE_METADATA_KEY.to_owned(), "true".to_owned()),
+                (TURN_METADATA_KEY.to_owned(), turn_metadata),
+            ]));
             let mut stream = match lease
                 .connection
                 .connection
