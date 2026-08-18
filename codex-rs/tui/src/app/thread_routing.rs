@@ -828,7 +828,7 @@ impl App {
         }
     }
 
-    fn turn_permissions_override_from_config(
+    pub(super) fn turn_permissions_override_from_config(
         config: &Config,
         active_permission_profile: Option<&ActivePermissionProfile>,
         runtime_permission_profile_override: Option<&PermissionProfile>,

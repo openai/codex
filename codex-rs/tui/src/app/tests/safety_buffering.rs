@@ -4,6 +4,12 @@ use crate::app::session_lifecycle::ThreadAttachPresentation;
 use crate::chatwidget::UserMessage;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::ModelSafetyBufferingUpdatedNotification;
+use codex_protocol::models::ManagedFileSystemPermissions;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSpecialPath;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_utils_absolute_path::test_support::PathExt;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
@@ -31,6 +37,7 @@ enum SafetyRetryScenario {
     Once,
     RetryTwice,
     InterruptedPrevious,
+    UnsupportedPermissions,
 }
 
 fn response_chunks(response_id: &str) -> Vec<StreamingSseChunk> {
@@ -483,7 +490,7 @@ goals = true
         .expect("source goal usage should be recorded");
 
     submit_prompt(&mut app, RETRY_PROMPT);
-    let active_turn = next_user_turn_event(&mut app_event_rx);
+    let mut active_turn = next_user_turn_event(&mut app_event_rx);
     app.submit_thread_op(&mut app_server, source_thread_id, active_turn.clone())
         .await?;
     let active_turn_id = next_turn_started(&mut app, &mut app_server, source_thread_id).await;
@@ -572,18 +579,97 @@ goals = true
     app.primary_thread_id = Some(source_thread_id);
     while app_event_rx.try_recv().is_ok() {}
 
+    if scenario == SafetyRetryScenario::UnsupportedPermissions {
+        let extra_root =
+            AbsolutePathBuf::resolve_path_against_base("extra", app.config.cwd.as_path());
+        let permission_profile = PermissionProfile::Managed {
+            network: NetworkSandboxPolicy::Restricted,
+            file_system: ManagedFileSystemPermissions::Restricted {
+                entries: vec![
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Special {
+                            value: FileSystemSpecialPath::Root,
+                        },
+                        access: FileSystemAccessMode::Read,
+                        missing_path_behavior: None,
+                    },
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Path {
+                            path: extra_root.into(),
+                        },
+                        access: FileSystemAccessMode::Write,
+                        missing_path_behavior: None,
+                    },
+                ],
+                glob_scan_max_depth: None,
+            },
+        };
+        app.config
+            .permissions
+            .set_permission_profile(permission_profile.clone())?;
+        app.chat_widget.set_permission_profile_with_active_profile(
+            permission_profile,
+            /*active_permission_profile*/ None,
+        )?;
+        app.runtime_permission_profile_override =
+            Some(RuntimePermissionProfileOverride::from_config(&app.config));
+        if let AppCommand::UserTurn {
+            active_permission_profile,
+            ..
+        } = &mut active_turn
+        {
+            *active_permission_profile = None;
+        }
+    }
+
     Box::pin(app.retry_safety_buffered_turn(
         &mut tui,
         &mut app_server,
         SafetyBufferedRetry {
             thread_id: source_thread_id,
-            turn_id: active_turn_id,
+            turn_id: active_turn_id.clone(),
             model: FASTER_MODEL.to_string(),
             turn: active_turn,
             prompt: UserMessage::from(RETRY_PROMPT),
         },
     ))
     .await;
+
+    if scenario == SafetyRetryScenario::UnsupportedPermissions {
+        assert_eq!(app.active_thread_id, Some(source_thread_id));
+        assert_eq!(app.primary_thread_id, Some(source_thread_id));
+        assert_eq!(app.chat_widget.thread_id(), Some(source_thread_id));
+        assert!(
+            app.chat_widget
+                .can_retry_safety_buffered_turn(&active_turn_id)
+        );
+        let source = app_server
+            .thread_read(source_thread_id, /*include_turns*/ true)
+            .await?;
+        assert_eq!(
+            source.turns.last().map(|turn| &turn.status),
+            Some(&TurnStatus::InProgress)
+        );
+        let error_cell = std::iter::from_fn(|| app_event_rx.try_recv().ok())
+            .find_map(|event| match event {
+                AppEvent::InsertHistoryCell(cell) => Some(cell),
+                _ => None,
+            })
+            .expect("unsupported permissions should be added to history");
+        insta::assert_snapshot!(
+            lines_to_single_string(&error_cell.display_lines(/*width*/ 200)),
+            @"■ Failed to retry with a faster model: the selected permission profile cannot be safely represented by the legacy app-server sandbox policy; select a named or legacy-compatible permission profile"
+        );
+        if let Some(release_active_response) = release_active_response.take() {
+            let _ = release_active_response.send(());
+        }
+        let _ = release_steered_response.send(());
+        let _ = release_previous_response.send(());
+        let _ = release_retry_response.send(());
+        app_server.shutdown().await?;
+        server.shutdown().await;
+        return Ok(());
+    }
 
     let first_retry_thread_id = app.chat_widget.thread_id().expect("first retry thread id");
     if scenario == SafetyRetryScenario::RetryTwice {
@@ -887,6 +973,17 @@ async fn safety_retry_branch_failure_preserves_unsent_draft() -> Result<()> {
         Some(UNSENT_DRAFT),
         /*committed_steer*/ None,
         SafetyRetryScenario::Once,
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn safety_retry_rejects_unsupported_permissions_before_interrupting() -> Result<()> {
+    run_safety_retry(
+        /*previous_prompt*/ None,
+        /*failing_draft*/ None,
+        /*committed_steer*/ None,
+        SafetyRetryScenario::UnsupportedPermissions,
     )
     .await
 }

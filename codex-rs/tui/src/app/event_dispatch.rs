@@ -7,6 +7,8 @@ use super::resize_reflow::trailing_run_start;
 use super::session_lifecycle::ThreadAttachPresentation;
 use super::*;
 use crate::app_server_session::ForkGoalContinuation;
+use crate::app_server_session::UnsupportedLegacyPermissionProfile;
+use crate::app_server_session::turn_permissions_overrides;
 use crate::config_update::format_config_error;
 use crate::external_agent_config_migration::flow::ExternalAgentConfigMigrationFlowOutcome;
 use crate::pager_overlay::TranscriptHistoryState;
@@ -664,12 +666,19 @@ impl App {
                 }
                 self.chat_widget.prepare_local_op_submission(&op);
                 if let Err(err) = self.submit_active_thread_op(app_server, op).await {
+                    let unsupported_permissions = err
+                        .downcast_ref::<UnsupportedLegacyPermissionProfile>()
+                        .is_some();
+                    if unsupported_permissions {
+                        self.chat_widget
+                            .set_queue_autosend_suppressed(/*suppressed*/ true);
+                    }
                     let handled = is_user_turn
-                        && matches!(
+                        && (matches!(
                             err.downcast_ref::<TypedRequestError>(),
                             Some(TypedRequestError::Server { method, .. })
                                 if method == "turn/start"
-                        )
+                        ) || unsupported_permissions)
                         && self
                             .chat_widget
                             .handle_turn_start_rejection(format!("Failed to start turn: {err:#}"));
@@ -1404,9 +1413,21 @@ impl App {
             }
             AppEvent::SettingsSelectionSettled => {
                 if self.chat_widget.no_modal_or_popup_active() {
-                    self.chat_widget
-                        .set_queue_autosend_suppressed(/*suppressed*/ false);
-                    self.chat_widget.maybe_send_next_queued_input();
+                    let config = self.chat_widget.config_ref();
+                    let permissions_override = Self::turn_permissions_override_from_config(
+                        config,
+                        config.permissions.active_permission_profile().as_ref(),
+                        self.runtime_permission_profile_override
+                            .as_ref()
+                            .map(|profile| &profile.permission_profile),
+                    );
+                    if turn_permissions_overrides(permissions_override, config.cwd.as_path())
+                        .is_ok()
+                    {
+                        self.chat_widget
+                            .set_queue_autosend_suppressed(/*suppressed*/ false);
+                        self.chat_widget.maybe_send_next_queued_input();
+                    }
                 }
             }
             AppEvent::OpenReasoningPopup { model } => {

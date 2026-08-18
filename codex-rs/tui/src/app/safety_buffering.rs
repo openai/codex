@@ -4,6 +4,7 @@ use super::session_lifecycle::ThreadAttachPresentation;
 use super::*;
 use crate::app_server_session::ForkGoalContinuation;
 use crate::app_server_session::HISTORY_ITEM_PAGE_LIMIT;
+use crate::app_server_session::turn_permissions_overrides;
 use crate::chatwidget::ThreadInputState;
 use crate::chatwidget::ThreadInputStateRestoreMode;
 use crate::chatwidget::UserMessage;
@@ -52,6 +53,8 @@ impl App {
 
         let AppCommand::UserTurn {
             items,
+            cwd,
+            active_permission_profile,
             model: turn_model,
             effort,
             collaboration_mode,
@@ -63,6 +66,18 @@ impl App {
             );
             return;
         };
+        let permissions_override = Self::turn_permissions_override_from_config(
+            &retry_config,
+            active_permission_profile.as_ref(),
+            self.runtime_permission_profile_override
+                .as_ref()
+                .map(|profile| &profile.permission_profile),
+        );
+        if let Err(err) = turn_permissions_overrides(permissions_override, cwd.as_path()) {
+            self.chat_widget
+                .add_error_message(format!("Failed to retry with a faster model: {err}"));
+            return;
+        }
         *turn_model = model.clone();
         *effort = Some(ReasoningEffortConfig::Low);
         *collaboration_mode = collaboration_mode.as_ref().map(|mode| {

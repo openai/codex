@@ -14,7 +14,6 @@ pub(crate) use history::thread_items_page_params;
 
 use crate::bottom_pane::FeedbackAudience;
 use crate::legacy_core::config::Config;
-use crate::permission_compat::legacy_compatible_permission_profile;
 use crate::service_tier_resolution;
 use crate::session_state::MessageHistoryMetadata;
 use crate::session_state::ThreadSessionState;
@@ -334,6 +333,12 @@ pub(crate) enum TurnPermissionsOverride {
     /// Apply a user-selected legacy/custom permission profile.
     LegacySandbox(PermissionProfile),
 }
+
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "the selected permission profile cannot be safely represented by the legacy app-server sandbox policy; select a named or legacy-compatible permission profile"
+)]
+pub(crate) struct UnsupportedLegacyPermissionProfile;
 
 impl AppServerSession {
     pub(crate) fn new(client: AppServerClient, thread_params_mode: ThreadParamsMode) -> Self {
@@ -1051,7 +1056,7 @@ impl AppServerSession {
     ) -> Result<TurnStartResponse> {
         let request_id = self.next_request_id();
         let (sandbox_policy, permissions) =
-            turn_permissions_overrides(permissions_override, cwd.as_path());
+            turn_permissions_overrides(permissions_override, cwd.as_path())?;
         self.client
             .request_typed(ClientRequest::TurnStart {
                 request_id,
@@ -1607,14 +1612,14 @@ fn permission_profile_id_from_active_profile(active: ActivePermissionProfile) ->
     active.id
 }
 
-fn turn_permissions_overrides(
+pub(crate) fn turn_permissions_overrides(
     permissions_override: TurnPermissionsOverride,
     cwd: &std::path::Path,
-) -> (
+) -> Result<(
     Option<codex_app_server_protocol::SandboxPolicy>,
     Option<String>,
-) {
-    match permissions_override {
+)> {
+    Ok(match permissions_override {
         TurnPermissionsOverride::Preserve => (None, None),
         TurnPermissionsOverride::ActiveProfile(active_permission_profile) => (
             None,
@@ -1623,17 +1628,20 @@ fn turn_permissions_overrides(
             )),
         ),
         TurnPermissionsOverride::LegacySandbox(permission_profile) => {
-            let legacy_profile = legacy_compatible_permission_profile(&permission_profile, cwd);
-            let policy = legacy_profile
+            let policy = permission_profile
                 .to_legacy_sandbox_policy(cwd)
-                .unwrap_or_else(|err| {
-                    unreachable!(
-                        "legacy-compatible permissions must project to legacy policy: {err}"
-                    )
-                });
+                .map_err(|_| UnsupportedLegacyPermissionProfile)?;
+            let projected_profile =
+                PermissionProfile::from_legacy_sandbox_policy_for_cwd(&policy, cwd);
+            if !permission_profile
+                .file_system_sandbox_policy()
+                .is_semantically_equivalent_to(&projected_profile.file_system_sandbox_policy(), cwd)
+            {
+                return Err(UnsupportedLegacyPermissionProfile.into());
+            }
             (Some(policy.into()), None)
         }
-    }
+    })
 }
 
 fn permissions_selection_from_config(
@@ -2426,7 +2434,8 @@ mod tests {
         let (sandbox_policy, permissions) = turn_permissions_overrides(
             TurnPermissionsOverride::ActiveProfile(active_permission_profile),
             cwd.as_path(),
-        );
+        )
+        .expect("active permission profile should be supported");
 
         assert_eq!(sandbox_policy, None);
         assert_eq!(permissions, Some(expected_permissions));
@@ -2441,7 +2450,8 @@ mod tests {
         let (sandbox_policy, permissions) = turn_permissions_overrides(
             TurnPermissionsOverride::ActiveProfile(active_permission_profile),
             cwd.as_path(),
-        );
+        )
+        .expect("active permission profile should be supported");
 
         assert_eq!(sandbox_policy, None);
         assert_eq!(
@@ -2455,7 +2465,8 @@ mod tests {
         let cwd = test_path_buf("/workspace/project").abs();
 
         let (sandbox_policy, permissions) =
-            turn_permissions_overrides(TurnPermissionsOverride::Preserve, cwd.as_path());
+            turn_permissions_overrides(TurnPermissionsOverride::Preserve, cwd.as_path())
+                .expect("preserving permissions should be supported");
 
         assert_eq!(sandbox_policy, None);
         assert_eq!(permissions, None);
@@ -2468,7 +2479,8 @@ mod tests {
         let (sandbox_policy, permissions) = turn_permissions_overrides(
             TurnPermissionsOverride::LegacySandbox(PermissionProfile::read_only()),
             cwd.as_path(),
-        );
+        )
+        .expect("read-only permission profile should be supported");
 
         assert_eq!(
             sandbox_policy,
@@ -2477,6 +2489,118 @@ mod tests {
             })
         );
         assert_eq!(permissions, None);
+    }
+
+    #[test]
+    fn legacy_turn_permissions_preserve_workspace_write() {
+        let cwd = test_path_buf("/workspace/project").abs();
+
+        let (sandbox_policy, permissions) = turn_permissions_overrides(
+            TurnPermissionsOverride::LegacySandbox(PermissionProfile::workspace_write()),
+            cwd.as_path(),
+        )
+        .expect("workspace-write permission profile should be supported");
+
+        assert_eq!(
+            sandbox_policy,
+            Some(codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
+                writable_roots: Vec::new(),
+                network_access: false,
+                exclude_tmpdir_env_var: false,
+                exclude_slash_tmp: false,
+            })
+        );
+        assert_eq!(permissions, None);
+    }
+
+    #[test]
+    fn legacy_turn_permissions_reject_non_cwd_write_roots() {
+        let cwd = test_path_buf("/workspace/project").abs();
+        let extra_root = test_path_buf("/workspace/extra").abs();
+        let permission_profile = PermissionProfile::Managed {
+            network: NetworkSandboxPolicy::Restricted,
+            file_system: ManagedFileSystemPermissions::Restricted {
+                entries: vec![
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Special {
+                            value: FileSystemSpecialPath::Root,
+                        },
+                        access: FileSystemAccessMode::Read,
+                        missing_path_behavior: None,
+                    },
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Path {
+                            path: extra_root.into(),
+                        },
+                        access: FileSystemAccessMode::Write,
+                        missing_path_behavior: None,
+                    },
+                ],
+                glob_scan_max_depth: None,
+            },
+        };
+
+        let error = turn_permissions_overrides(
+            TurnPermissionsOverride::LegacySandbox(permission_profile),
+            cwd.as_path(),
+        )
+        .expect_err("non-cwd write roots must not grant cwd write access");
+
+        assert_eq!(
+            error.to_string(),
+            "the selected permission profile cannot be safely represented by the legacy app-server sandbox policy; select a named or legacy-compatible permission profile"
+        );
+    }
+
+    #[test]
+    fn legacy_turn_permissions_reject_restrictions_lost_by_projection() {
+        let cwd = test_path_buf("/workspace/project").abs();
+        let docs = test_path_buf("/workspace/project/docs").abs();
+
+        for (path, access) in [
+            (
+                FileSystemPath::Path {
+                    path: docs.clone().into(),
+                },
+                FileSystemAccessMode::Read,
+            ),
+            (
+                FileSystemPath::Path { path: docs.into() },
+                FileSystemAccessMode::Deny,
+            ),
+            (
+                FileSystemPath::GlobPattern {
+                    pattern: "**/*.secret".to_string(),
+                },
+                FileSystemAccessMode::Deny,
+            ),
+        ] {
+            let mut permission_profile = PermissionProfile::workspace_write();
+            let PermissionProfile::Managed {
+                file_system: ManagedFileSystemPermissions::Restricted { entries, .. },
+                ..
+            } = &mut permission_profile
+            else {
+                unreachable!("workspace-write profiles use restricted managed permissions");
+            };
+            entries.push(FileSystemSandboxEntry {
+                path,
+                access,
+                missing_path_behavior: None,
+            });
+
+            let error = turn_permissions_overrides(
+                TurnPermissionsOverride::LegacySandbox(permission_profile),
+                cwd.as_path(),
+            )
+            .expect_err("legacy projection must not discard filesystem restrictions");
+
+            assert!(
+                error
+                    .downcast_ref::<UnsupportedLegacyPermissionProfile>()
+                    .is_some()
+            );
+        }
     }
 
     #[test]
@@ -2489,7 +2613,8 @@ mod tests {
         let (sandbox_policy, permissions) = turn_permissions_overrides(
             TurnPermissionsOverride::ActiveProfile(active_permission_profile),
             cwd.as_path(),
-        );
+        )
+        .expect("active permission profile should be supported");
 
         assert_eq!(sandbox_policy, None);
         assert_eq!(permissions, Some(expected_permissions));
