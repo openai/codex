@@ -402,6 +402,8 @@ fn effective_originator_prefers_thread_scoped_sources_before_env_originator() {
             Some("inherited_originator"),
             "chatgpt_cca",
         ),
+        (Some("chatgpt_slack"), None, None, "chatgpt_slack"), // copybara:strip-for-public
+        (Some("chatgpt_teams"), None, None, "chatgpt_teams"), // copybara:strip-for-public
         (
             Some("chatgpt_cca_extra"),
             Some("persisted_originator"),
