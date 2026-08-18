@@ -22,6 +22,8 @@ Use `devcontainer.secure.json` when you want a stricter runtime profile for runn
 
 This profile keeps the stricter networking isolated to the customer path instead of changing the default Codex contributor container.
 
+The firewall does not apply its domain allowlist to DNS traffic, so code from an untrusted repository can exfiltrate data through DNS. This devcontainer does not provide secure DNS resolution. Use it only with trusted repositories. To mitigate DNS exfiltration, implement your own DNS filtering and restrict outbound DNS traffic to the filtered resolver; this does not make untrusted repositories safe because they can still exfiltrate data through allowed HTTPS destinations.
+
 Start it from the CLI with:
 
 ```bash
