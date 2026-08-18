@@ -31,6 +31,7 @@ use futures::SinkExt;
 use futures::StreamExt;
 use http::HeaderMap;
 use http::HeaderValue;
+use http::StatusCode;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -52,10 +53,13 @@ use tracing::info;
 use tracing::trace;
 use tracing::warn;
 use tungstenite::protocol::WebSocketConfig;
+use tungstenite::protocol::frame::coding::CloseCode;
 use url::Url;
 
 const REALTIME_WIRE_LOG_TARGET: &str = "codex_api::realtime_websocket::wire";
 const OPENAI_REALTIME_API_BASE_URL: &str = "https://api.openai.com/v1";
+const MAX_ACTIVE_TRANSCRIPT_BYTES: usize = 8 * 1024;
+const TRUNCATED_TRANSCRIPT_PREFIX: &str = "…";
 
 struct WsStream {
     tx_command: mpsc::Sender<WsCommand>,
@@ -221,15 +225,19 @@ pub struct RealtimeWebsocketWriter {
 pub struct RealtimeWebsocketEvents {
     rx_message: async_channel::Receiver<Result<Message, WsError>>,
     pending_events: Arc<Mutex<VecDeque<RealtimeEvent>>>,
-    active_transcript: Arc<Mutex<ActiveTranscriptState>>,
+    transcript_state: RealtimeTranscriptState,
     event_parser: RealtimeEventParser,
     is_closed: Arc<AtomicBool>,
+}
+
+#[derive(Clone, Default)]
+pub struct RealtimeTranscriptState {
+    active: Arc<Mutex<ActiveTranscriptState>>,
 }
 
 #[derive(Default)]
 struct ActiveTranscriptState {
     entries: Vec<RealtimeTranscriptEntry>,
-    last_handoff_entry_count: usize,
     new_input_entry: bool,
     new_output_entry: bool,
 }
@@ -277,6 +285,7 @@ impl RealtimeWebsocketConnection {
         stream: WsStream,
         rx_message: async_channel::Receiver<Result<Message, WsError>>,
         event_parser: RealtimeEventParser,
+        transcript_state: RealtimeTranscriptState,
     ) -> Self {
         let stream = Arc::new(stream);
         let is_closed = Arc::new(AtomicBool::new(false));
@@ -290,7 +299,7 @@ impl RealtimeWebsocketConnection {
             events: RealtimeWebsocketEvents {
                 rx_message,
                 pending_events: Arc::new(Mutex::new(VecDeque::new())),
-                active_transcript: Arc::new(Mutex::new(ActiveTranscriptState::default())),
+                transcript_state,
                 event_parser,
                 is_closed,
             },
@@ -486,11 +495,12 @@ impl RealtimeWebsocketWriter {
 }
 
 impl RealtimeWebsocketEvents {
+    pub fn transcript_state(&self) -> RealtimeTranscriptState {
+        self.transcript_state.clone()
+    }
+
     pub async fn take_transcript_tail(&self) -> Vec<RealtimeTranscriptEntry> {
-        let mut active_transcript = self.active_transcript.lock().await;
-        let tail = active_transcript.entries[active_transcript.last_handoff_entry_count..].to_vec();
-        active_transcript.last_handoff_entry_count = active_transcript.entries.len();
-        tail
+        self.transcript_state.take_transcript_tail().await
     }
 
     pub async fn next_event(&self) -> Result<Option<RealtimeEvent>, ApiError> {
@@ -514,6 +524,12 @@ impl RealtimeWebsocketEvents {
                 }
                 Err(_) => {
                     self.is_closed.store(true, Ordering::SeqCst);
+                    if self.event_parser == RealtimeEventParser::FramelessBidi {
+                        error!("realtime websocket event stream ended unexpectedly");
+                        return Err(ApiError::Stream(
+                            "realtime websocket event stream ended unexpectedly".to_string(),
+                        ));
+                    }
                     info!("realtime websocket event stream ended");
                     return Ok(None);
                 }
@@ -536,7 +552,20 @@ impl RealtimeWebsocketEvents {
                         frame.as_ref().map(|frame| frame.code),
                         frame.as_ref().map(|frame| frame.reason.as_str())
                     );
-                    return Ok(None);
+                    if self.event_parser != RealtimeEventParser::FramelessBidi {
+                        return Ok(None);
+                    }
+                    return match frame {
+                        Some(frame) if frame.code == CloseCode::Normal => Ok(None),
+                        Some(frame) => Err(ApiError::Stream(format!(
+                            "realtime websocket closed unexpectedly: code={:?} reason={:?}",
+                            frame.code, frame.reason
+                        ))),
+                        None => Err(ApiError::Stream(
+                            "realtime websocket closed unexpectedly without a status code"
+                                .to_string(),
+                        )),
+                    };
                 }
                 Message::Binary(_) => {
                     return Ok(Some(RealtimeEvent::Error(
@@ -567,7 +596,7 @@ impl RealtimeWebsocketEvents {
     }
 
     async fn update_active_transcript(&self, event: &mut RealtimeEvent) {
-        let mut active_transcript = self.active_transcript.lock().await;
+        let mut active_transcript = self.transcript_state.active.lock().await;
         match event {
             RealtimeEvent::InputAudioSpeechStarted(_) => {
                 active_transcript.new_input_entry = true;
@@ -609,10 +638,7 @@ impl RealtimeWebsocketEvents {
             }
             RealtimeEvent::HandoffRequested(handoff) => {
                 append_handoff_input(&mut active_transcript.entries, &handoff.input_transcript);
-                handoff.active_transcript = active_transcript.entries
-                    [active_transcript.last_handoff_entry_count..]
-                    .to_vec();
-                active_transcript.last_handoff_entry_count = active_transcript.entries.len();
+                handoff.active_transcript = std::mem::take(&mut active_transcript.entries);
                 active_transcript.new_input_entry = true;
                 active_transcript.new_output_entry = true;
             }
@@ -628,7 +654,46 @@ impl RealtimeWebsocketEvents {
             | RealtimeEvent::ConversationItemAdded(_)
             | RealtimeEvent::Error(_) => {}
         }
+        truncate_active_transcript(&mut active_transcript.entries);
     }
+}
+
+impl RealtimeTranscriptState {
+    pub async fn take_transcript_tail(&self) -> Vec<RealtimeTranscriptEntry> {
+        std::mem::take(&mut self.active.lock().await.entries)
+    }
+}
+
+fn truncate_active_transcript(entries: &mut Vec<RealtimeTranscriptEntry>) {
+    let mut total_bytes = transcript_entries_bytes(entries);
+    while total_bytes > MAX_ACTIVE_TRANSCRIPT_BYTES && entries.len() > 1 {
+        total_bytes = total_bytes.saturating_sub(transcript_entry_bytes(&entries[0]));
+        entries.remove(0);
+    }
+    let Some(entry) = entries.first_mut() else {
+        return;
+    };
+    let entry_overhead = entry.role.len() + 3;
+    let max_text_bytes = MAX_ACTIVE_TRANSCRIPT_BYTES.saturating_sub(entry_overhead);
+    if entry.text.len() <= max_text_bytes {
+        return;
+    }
+    let mut start = entry
+        .text
+        .len()
+        .saturating_sub(max_text_bytes.saturating_sub(TRUNCATED_TRANSCRIPT_PREFIX.len()));
+    while !entry.text.is_char_boundary(start) {
+        start += 1;
+    }
+    entry.text = format!("{TRUNCATED_TRANSCRIPT_PREFIX}{}", &entry.text[start..]);
+}
+
+fn transcript_entries_bytes(entries: &[RealtimeTranscriptEntry]) -> usize {
+    entries.iter().map(transcript_entry_bytes).sum()
+}
+
+fn transcript_entry_bytes(entry: &RealtimeTranscriptEntry) -> usize {
+    entry.role.len() + entry.text.len() + 3
 }
 
 fn append_transcript_delta(
@@ -735,6 +800,7 @@ impl RealtimeWebsocketClient {
             extra_headers,
             default_headers,
             /*initialize_session*/ true,
+            RealtimeTranscriptState::default(),
         )
         .await
     }
@@ -745,6 +811,7 @@ impl RealtimeWebsocketClient {
         call_id: &str,
         extra_headers: HeaderMap,
         default_headers: HeaderMap,
+        transcript_state: RealtimeTranscriptState,
     ) -> Result<RealtimeWebsocketConnection, ApiError> {
         // The WebRTC call already exists; this loop only retries joining its sideband control
         // socket. Once joined, the returned connection is the same reader/writer state that the
@@ -756,10 +823,12 @@ impl RealtimeWebsocketClient {
                     call_id,
                     extra_headers.clone(),
                     default_headers.clone(),
+                    transcript_state.clone(),
                 )
                 .await;
             match result {
                 Ok(connection) => return Ok(connection),
+                Err(err) if webrtc_sideband_session_ended(&err) => return Err(err),
                 Err(err) if attempt < self.provider.retry.max_attempts => {
                     let delay = backoff(self.provider.retry.base_delay, attempt + 1);
                     warn!(
@@ -785,6 +854,7 @@ impl RealtimeWebsocketClient {
         call_id: &str,
         extra_headers: HeaderMap,
         default_headers: HeaderMap,
+        transcript_state: RealtimeTranscriptState,
     ) -> Result<RealtimeWebsocketConnection, ApiError> {
         // Keep the parser/session query shaping from standalone realtime while replacing the model
         // query with a call_id join onto an existing WebRTC session.
@@ -795,6 +865,7 @@ impl RealtimeWebsocketClient {
             extra_headers,
             default_headers,
             /*initialize_session*/ false,
+            transcript_state,
         )
         .await
     }
@@ -821,6 +892,7 @@ impl RealtimeWebsocketClient {
         extra_headers: HeaderMap,
         default_headers: HeaderMap,
         initialize_session: bool,
+        transcript_state: RealtimeTranscriptState,
     ) -> Result<RealtimeWebsocketConnection, ApiError> {
         ensure_rustls_crypto_provider();
 
@@ -848,7 +920,7 @@ impl RealtimeWebsocketClient {
             connector,
         )
         .await
-        .map_err(|err| ApiError::Stream(format!("failed to connect realtime websocket: {err}")))?;
+        .map_err(map_realtime_websocket_connect_error)?;
         info!(
             ws_url = %ws_url,
             status = %response.status(),
@@ -856,7 +928,12 @@ impl RealtimeWebsocketClient {
         );
 
         let (stream, rx_message) = WsStream::new(stream);
-        let connection = RealtimeWebsocketConnection::new(stream, rx_message, config.event_parser);
+        let connection = RealtimeWebsocketConnection::new(
+            stream,
+            rx_message,
+            config.event_parser,
+            transcript_state,
+        );
         if initialize_session || config.event_parser != RealtimeEventParser::FramelessBidi {
             debug!(
                 session_id = config.session_id.as_deref().unwrap_or("<none>"),
@@ -878,6 +955,24 @@ impl RealtimeWebsocketClient {
             connection.events.wait_for_session_started().await?;
         }
         Ok(connection)
+    }
+}
+
+fn webrtc_sideband_session_ended(err: &ApiError) -> bool {
+    matches!(
+        err,
+        ApiError::Api { status, .. }
+            if matches!(*status, StatusCode::NOT_FOUND | StatusCode::GONE)
+    )
+}
+
+fn map_realtime_websocket_connect_error(err: WsError) -> ApiError {
+    match err {
+        WsError::Http(response) => ApiError::Api {
+            status: response.status(),
+            message: "realtime websocket handshake failed".to_string(),
+        },
+        err => ApiError::Stream(format!("failed to connect realtime websocket: {err}")),
     }
 }
 
@@ -1047,6 +1142,7 @@ mod tests {
     use codex_protocol::protocol::RealtimeTranscriptDone;
     use codex_protocol::protocol::RealtimeVoice;
     use http::HeaderValue;
+    use http::StatusCode;
     use pretty_assertions::assert_eq;
     use serde_json::Value;
     use serde_json::json;
@@ -1055,6 +1151,7 @@ mod tests {
     use tokio::net::TcpListener;
     use tokio_tungstenite::accept_async;
     use tokio_tungstenite::tungstenite::Message;
+    use tungstenite::protocol::CloseFrame;
 
     #[test]
     fn parse_session_updated_event() {
@@ -1152,7 +1249,7 @@ mod tests {
         let events = RealtimeWebsocketEvents {
             rx_message,
             pending_events: Arc::new(Mutex::new(VecDeque::new())),
-            active_transcript: Arc::new(Mutex::new(ActiveTranscriptState::default())),
+            transcript_state: RealtimeTranscriptState::default(),
             event_parser: RealtimeEventParser::V1,
             is_closed: Arc::new(AtomicBool::new(false)),
         };
@@ -1195,6 +1292,156 @@ mod tests {
             }]
         );
         assert_eq!(events.take_transcript_tail().await, vec![]);
+    }
+
+    #[tokio::test]
+    async fn transcript_state_survives_reconnect_and_reconciles_done() {
+        let transcript_state = RealtimeTranscriptState::default();
+        let (_first_tx, first_rx) = async_channel::unbounded();
+        let first_events = RealtimeWebsocketEvents {
+            rx_message: first_rx,
+            pending_events: Arc::new(Mutex::new(VecDeque::new())),
+            transcript_state: transcript_state.clone(),
+            event_parser: RealtimeEventParser::FramelessBidi,
+            is_closed: Arc::new(AtomicBool::new(false)),
+        };
+        let mut partial = RealtimeEvent::InputTranscriptDelta(RealtimeTranscriptDelta {
+            delta: "hello wor".to_string(),
+        });
+        first_events.update_active_transcript(&mut partial).await;
+
+        let (_second_tx, second_rx) = async_channel::unbounded();
+        let second_events = RealtimeWebsocketEvents {
+            rx_message: second_rx,
+            pending_events: Arc::new(Mutex::new(VecDeque::new())),
+            transcript_state,
+            event_parser: RealtimeEventParser::FramelessBidi,
+            is_closed: Arc::new(AtomicBool::new(false)),
+        };
+        let mut done = RealtimeEvent::InputTranscriptDone(RealtimeTranscriptDone {
+            text: "hello world".to_string(),
+        });
+        second_events.update_active_transcript(&mut done).await;
+
+        assert_eq!(
+            second_events.take_transcript_tail().await,
+            vec![RealtimeTranscriptEntry {
+                role: "user".to_string(),
+                text: "hello world".to_string(),
+            }]
+        );
+        assert_eq!(second_events.take_transcript_tail().await, vec![]);
+    }
+
+    #[tokio::test]
+    async fn active_transcript_retains_a_bounded_suffix() {
+        let (_tx_message, rx_message) = async_channel::unbounded();
+        let events = RealtimeWebsocketEvents {
+            rx_message,
+            pending_events: Arc::new(Mutex::new(VecDeque::new())),
+            transcript_state: RealtimeTranscriptState::default(),
+            event_parser: RealtimeEventParser::FramelessBidi,
+            is_closed: Arc::new(AtomicBool::new(false)),
+        };
+        let mut oversized = RealtimeEvent::InputTranscriptDelta(RealtimeTranscriptDelta {
+            delta: format!("old{}new", "x".repeat(MAX_ACTIVE_TRANSCRIPT_BYTES)),
+        });
+        events.update_active_transcript(&mut oversized).await;
+
+        let tail = events.take_transcript_tail().await;
+        assert!(transcript_entries_bytes(&tail) <= MAX_ACTIVE_TRANSCRIPT_BYTES);
+        assert!(tail[0].text.starts_with(TRUNCATED_TRANSCRIPT_PREFIX));
+        assert!(tail[0].text.ends_with("new"));
+    }
+
+    #[test]
+    fn terminal_sideband_handshake_statuses_are_not_retryable() {
+        for status in [StatusCode::NOT_FOUND, StatusCode::GONE] {
+            assert!(webrtc_sideband_session_ended(&ApiError::Api {
+                status,
+                message: "session ended".to_string(),
+            }));
+        }
+        assert!(!webrtc_sideband_session_ended(&ApiError::Api {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            message: "retry".to_string(),
+        }));
+    }
+
+    enum TestRealtimeTermination {
+        Close(Option<CloseCode>),
+        EventChannelEnd,
+    }
+
+    async fn realtime_termination_is_transport_error(
+        event_parser: RealtimeEventParser,
+        termination: TestRealtimeTermination,
+    ) -> bool {
+        let (tx_message, rx_message) = async_channel::unbounded();
+        let events = RealtimeWebsocketEvents {
+            rx_message,
+            pending_events: Arc::new(Mutex::new(VecDeque::new())),
+            transcript_state: RealtimeTranscriptState::default(),
+            event_parser,
+            is_closed: Arc::new(AtomicBool::new(false)),
+        };
+        match termination {
+            TestRealtimeTermination::Close(close_code) => {
+                let frame = close_code.map(|code| CloseFrame {
+                    code,
+                    reason: "session ended".into(),
+                });
+                tx_message
+                    .send(Ok(Message::Close(frame)))
+                    .await
+                    .expect("send close frame");
+            }
+            TestRealtimeTermination::EventChannelEnd => drop(tx_message),
+        }
+        events.next_event().await.is_err()
+    }
+
+    #[tokio::test]
+    async fn websocket_termination_classification_preserves_protocol_behavior() {
+        use CloseCode::Away;
+        use CloseCode::Normal;
+        use RealtimeEventParser::FramelessBidi;
+        use RealtimeEventParser::RealtimeV2;
+        use RealtimeEventParser::V1;
+        use TestRealtimeTermination::Close;
+        use TestRealtimeTermination::EventChannelEnd;
+
+        for (event_parser, termination, expect_transport_error) in [
+            (FramelessBidi, Close(Some(Normal)), false),
+            (FramelessBidi, Close(Some(Away)), true),
+            (FramelessBidi, Close(None), true),
+            (FramelessBidi, EventChannelEnd, true),
+            (V1, Close(Some(Away)), false),
+            (V1, EventChannelEnd, false),
+            (RealtimeV2, Close(Some(Away)), false),
+        ] {
+            assert_eq!(
+                realtime_termination_is_transport_error(event_parser, termination).await,
+                expect_transport_error,
+                "unexpected termination classification for {event_parser:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn websocket_handshake_error_preserves_http_status() {
+        let response = http::Response::builder()
+            .status(StatusCode::GONE)
+            .body(None)
+            .expect("build response");
+
+        assert!(matches!(
+            map_realtime_websocket_connect_error(WsError::Http(Box::new(response))),
+            ApiError::Api {
+                status: StatusCode::GONE,
+                ..
+            }
+        ));
     }
 
     #[test]

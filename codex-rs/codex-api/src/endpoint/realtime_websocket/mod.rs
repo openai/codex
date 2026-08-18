@@ -9,6 +9,7 @@ mod protocol_frameless_bidi;
 mod protocol_v1;
 mod protocol_v2;
 
+pub use methods::RealtimeTranscriptState;
 pub use methods::RealtimeWebsocketClient;
 pub use methods::RealtimeWebsocketConnection;
 pub use methods::RealtimeWebsocketEvents;

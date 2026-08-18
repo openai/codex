@@ -10,6 +10,7 @@ use codex_api::RealtimeEventParser;
 use codex_api::RealtimeOutputModality;
 use codex_api::RealtimeSessionConfig;
 use codex_api::RealtimeSessionMode;
+use codex_api::RealtimeTranscriptState;
 use codex_api::RealtimeWebsocketClient;
 use codex_api::RetryConfig;
 use codex_protocol::protocol::RealtimeHandoffRequested;
@@ -263,6 +264,7 @@ async fn realtime_ws_connect_webrtc_sideband_retries_join_until_server_is_availa
             "rtc_test",
             HeaderMap::new(),
             HeaderMap::new(),
+            RealtimeTranscriptState::default(),
         )
         .await
         .expect("connect on retry");

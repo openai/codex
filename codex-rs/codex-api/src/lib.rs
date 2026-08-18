@@ -59,6 +59,7 @@ pub use crate::endpoint::RealtimeEventParser;
 pub use crate::endpoint::RealtimeOutputModality;
 pub use crate::endpoint::RealtimeSessionConfig;
 pub use crate::endpoint::RealtimeSessionMode;
+pub use crate::endpoint::RealtimeTranscriptState;
 pub use crate::endpoint::RealtimeWebsocketClient;
 pub use crate::endpoint::RealtimeWebsocketConnection;
 pub use crate::endpoint::RealtimeWebsocketEvents;

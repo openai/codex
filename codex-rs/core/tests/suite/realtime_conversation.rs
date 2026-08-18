@@ -24,8 +24,10 @@ use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::RealtimeEvent;
+use codex_protocol::protocol::RealtimeHandoffRequested;
 use codex_protocol::protocol::RealtimeNoopRequested;
 use codex_protocol::protocol::RealtimeOutputModality;
+use codex_protocol::protocol::RealtimeTranscriptEntry;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
@@ -41,6 +43,8 @@ use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
+use futures::SinkExt;
+use futures::StreamExt;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -51,14 +55,18 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
+use tokio_tungstenite::accept_async;
+use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
 use wiremock::Match;
 use wiremock::Mock;
 use wiremock::Request as WiremockRequest;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
+use wiremock::matchers::path;
 use wiremock::matchers::path_regex;
 
 const STARTUP_CONTEXT_HEADER: &str = "Startup context from Codex.";
@@ -812,6 +820,276 @@ async fn conversation_webrtc_start_posts_generated_session() -> Result<()> {
     ));
 
     realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_webrtc_live_reconnects_sideband_after_unclean_disconnect() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/live"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Location", "/v1/live/rtc_reconnect")
+                .set_body_string("v=answer\r\n"),
+        )
+        .mount(&server)
+        .await;
+    let _response_mock = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-reconnect"),
+            responses::ev_assistant_message("msg-reconnect", "ok"),
+            responses::ev_completed("resp-reconnect"),
+        ]),
+    )
+    .await;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let realtime_ws_base_url = format!("ws://{}", listener.local_addr()?);
+    let (inbound_flood_started_tx, inbound_flood_started_rx) = oneshot::channel();
+    let sideband_server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await?;
+        let mut websocket = accept_async(stream).await?;
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "input_transcript.added",
+                    "item": { "text": "hello wor" }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await?;
+        let (mut websocket_tx, mut websocket_rx) = websocket.split();
+        inbound_flood_started_tx
+            .send(())
+            .map_err(|_| anyhow::anyhow!("realtime client dropped before inbound flood"))?;
+        let inbound_flood = tokio::spawn(async move {
+            let mut event_count = 0_u32;
+            loop {
+                websocket_tx
+                    .send(Message::Text(
+                        json!({
+                            "type": "session.updated",
+                            "session": { "id": "sess_reconnect_flood" }
+                        })
+                        .to_string()
+                        .into(),
+                    ))
+                    .await?;
+                event_count += 1;
+                if event_count.is_multiple_of(64) {
+                    tokio::task::yield_now().await;
+                }
+            }
+            #[allow(unreachable_code)]
+            Ok::<(), anyhow::Error>(())
+        });
+        timeout(Duration::from_secs(5), async {
+            loop {
+                let message = websocket_rx
+                    .next()
+                    .await
+                    .context("sideband closed before outbound text")??;
+                let Message::Text(payload) = message else {
+                    continue;
+                };
+                let payload: Value = serde_json::from_str(&payload)?;
+                let saw_outbound_text = payload["type"] == "session.context.append"
+                    && payload["content"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|content| content["text"].as_str())
+                        .any(|text| text.contains("outbound during inbound flood"));
+                if saw_outbound_text {
+                    break Ok::<(), anyhow::Error>(());
+                }
+            }
+        })
+        .await
+        .context("outbound text was starved by sustained inbound traffic")??;
+        inbound_flood.abort();
+        drop(websocket_rx);
+
+        let (stream, _) = listener.accept().await?;
+        let mut websocket = accept_async(stream).await?;
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "turn.done",
+                    "turn": { "role": "user", "transcript": "hello world" }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await?;
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "output_transcript.added",
+                    "item": { "text": "after reconnect" }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await?;
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "delegation.created",
+                    "item": {
+                        "id": "handoff_reconnect",
+                        "type": "delegation",
+                        "target": "client",
+                        "content": [{ "type": "input_text", "text": "hello world" }]
+                    }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await?;
+        drop(websocket);
+
+        let (mut stream, _) = listener.accept().await?;
+        let mut request = vec![0_u8; 4096];
+        let request_len = stream.read(&mut request).await?;
+        if !request[..request_len].starts_with(b"GET ") {
+            anyhow::bail!("expected reconnect websocket handshake");
+        }
+        stream
+            .write_all(b"HTTP/1.1 410 Gone\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .await?;
+        if timeout(Duration::from_secs(1), listener.accept())
+            .await
+            .is_ok()
+        {
+            anyhow::bail!("terminal sideband response was retried");
+        }
+        Ok::<(), anyhow::Error>(())
+    });
+
+    let mut builder = test_codex().with_config(move |config| {
+        config.experimental_realtime_ws_backend_prompt = Some("backend prompt".to_string());
+        config.experimental_realtime_ws_model = Some("realtime-test-model".to_string());
+        config.experimental_realtime_ws_startup_context = Some(String::new());
+        config.experimental_realtime_ws_base_url = Some(realtime_ws_base_url);
+        config.realtime.version = RealtimeWsVersion::V3;
+    });
+    let test = builder.build(&server).await?;
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            client_managed_handoffs: false,
+            delegation_ack_filler: None,
+            flush_transcript_tail_on_session_end: false,
+            codex_responses_as_items: false,
+            codex_response_item_prefix: None,
+            codex_response_handoff_mode:
+                codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            codex_response_handoff_channel_prefixes: None,
+            model: None,
+            output_modality: RealtimeOutputModality::Audio,
+            include_startup_context: true,
+            initial_items: Vec::new(),
+            realtime_start_instructions: None,
+            realtime_end_instructions: None,
+            prompt: Some(Some("backend prompt".to_string())),
+            realtime_session_id: None,
+            transport: Some(ConversationStartTransport::Webrtc {
+                sdp: "v=offer\r\n".to_string(),
+            }),
+            version: Some(RealtimeConversationVersion::V3),
+            voice: None,
+        }))
+        .await?;
+    timeout(Duration::from_secs(5), inbound_flood_started_rx)
+        .await
+        .context("timed out waiting for sustained inbound traffic")?
+        .context("sideband server stopped before sustained inbound traffic")?;
+    test.codex
+        .submit(Op::RealtimeConversationText(ConversationTextParams {
+            text: "outbound during inbound flood".to_string(),
+            role: ConversationTextRole::User,
+        }))
+        .await?;
+
+    let handoff = timeout(Duration::from_secs(10), async {
+        let mut saw_post_reconnect_transcript = false;
+        loop {
+            match test.codex.next_event().await?.msg {
+                EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+                    payload: RealtimeEvent::OutputTranscriptDelta(delta),
+                }) if delta.delta == "after reconnect" => {
+                    saw_post_reconnect_transcript = true;
+                }
+                EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+                    payload: RealtimeEvent::HandoffRequested(handoff),
+                }) => {
+                    if !saw_post_reconnect_transcript {
+                        anyhow::bail!("handoff arrived before the post-reconnect transcript");
+                    }
+                    break Ok::<_, anyhow::Error>(handoff);
+                }
+                EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+                    payload: RealtimeEvent::Error(message),
+                }) => anyhow::bail!("reconnect emitted a realtime error: {message}"),
+                EventMsg::RealtimeConversationClosed(closed) => {
+                    anyhow::bail!("reconnect closed the conversation early: {closed:?}")
+                }
+                EventMsg::Error(err) => {
+                    anyhow::bail!("reconnect emitted an app error: {}", err.message)
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .context("timed out waiting for the reconnected sideband")??;
+    assert_eq!(
+        handoff,
+        RealtimeHandoffRequested {
+            handoff_id: "handoff_reconnect".to_string(),
+            item_id: "handoff_reconnect".to_string(),
+            input_transcript: "hello world".to_string(),
+            active_transcript: vec![
+                RealtimeTranscriptEntry {
+                    role: "user".to_string(),
+                    text: "hello world".to_string(),
+                },
+                RealtimeTranscriptEntry {
+                    role: "assistant".to_string(),
+                    text: "after reconnect".to_string(),
+                }
+            ],
+        }
+    );
+
+    let closed = timeout(Duration::from_secs(10), async {
+        loop {
+            match test.codex.next_event().await?.msg {
+                EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+                    payload: RealtimeEvent::Error(message),
+                }) => anyhow::bail!("terminal reconnect emitted a realtime error: {message}"),
+                EventMsg::RealtimeConversationClosed(closed) => {
+                    break Ok::<_, anyhow::Error>(closed);
+                }
+                EventMsg::Error(err) => {
+                    anyhow::bail!("terminal reconnect emitted an app error: {}", err.message)
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .context("timed out waiting for the terminal reconnect response")??;
+    assert_eq!(closed.reason.as_deref(), Some("transport_closed"));
+    timeout(Duration::from_secs(10), sideband_server)
+        .await
+        .context("timed out waiting for sideband server")???;
     Ok(())
 }
 
