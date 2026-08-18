@@ -20,18 +20,18 @@ use codex_plugin::PluginId;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
-use tracing::info;
+use std::sync::Weak;
+use tokio::sync::Semaphore;
 use tracing::warn;
 
-static REMOTE_INSTALLED_PLUGIN_BUNDLE_SYNC_IN_FLIGHT: OnceLock<
-    Mutex<HashSet<RemoteInstalledPluginBundleSyncKey>>,
+static REMOTE_INSTALLED_PLUGIN_BUNDLE_SYNC_GATES: OnceLock<
+    Mutex<HashMap<PathBuf, Weak<Semaphore>>>,
 > = OnceLock::new();
 static REMOTE_PLUGIN_CACHE_MUTATIONS_IN_FLIGHT: OnceLock<
     Mutex<HashMap<RemotePluginCacheMutationKey, usize>>,
@@ -69,11 +69,6 @@ pub enum RemoteInstalledPluginBundleSyncError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct RemoteInstalledPluginBundleSyncKey {
-    plugin_cache_root: PathBuf,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct RemotePluginCacheMutationKey {
     plugin_cache_root: PathBuf,
     marketplace_name: String,
@@ -84,50 +79,20 @@ pub struct RemotePluginCacheMutationGuard {
     key: RemotePluginCacheMutationKey,
 }
 
-pub(crate) fn maybe_start_remote_installed_plugin_bundle_sync(
-    codex_home: PathBuf,
-    config: RemotePluginServiceConfig,
-    auth: Option<CodexAuth>,
-    on_local_cache_changed: Option<
-        Arc<dyn Fn(RemoteInstalledPluginBundleSyncOutcome) + Send + Sync + 'static>,
-    >,
-) {
-    let Some(auth) = auth else {
-        return;
+pub(crate) fn remote_installed_plugin_bundle_sync_gate(codex_home: &Path) -> Arc<Semaphore> {
+    let plugin_cache_root = remote_plugin_cache_root(codex_home);
+    let gates =
+        REMOTE_INSTALLED_PLUGIN_BUNDLE_SYNC_GATES.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut gates = match gates.lock() {
+        Ok(gates) => gates,
+        Err(err) => err.into_inner(),
     };
-    let key = RemoteInstalledPluginBundleSyncKey {
-        plugin_cache_root: remote_plugin_cache_root(&codex_home),
-    };
-    if !mark_remote_installed_plugin_bundle_sync_in_flight(key.clone()) {
-        return;
+    if let Some(gate) = gates.get(&plugin_cache_root).and_then(Weak::upgrade) {
+        return gate;
     }
-
-    tokio::spawn(async move {
-        let result =
-            sync_remote_installed_plugin_bundles_once(codex_home, &config, Some(&auth)).await;
-        match result {
-            Ok(outcome) => {
-                info!(
-                    materialized_remote_plugins = ?outcome.materialized_remote_plugins,
-                    removed_cache_plugin_ids = ?outcome.removed_cache_plugin_ids,
-                    failed_remote_plugin_ids = ?outcome.failed_remote_plugin_ids,
-                    "completed remote installed plugin bundle sync"
-                );
-                if outcome.changed_local_cache()
-                    && let Some(on_local_cache_changed) = on_local_cache_changed
-                {
-                    on_local_cache_changed(outcome);
-                }
-            }
-            Err(err) => {
-                warn!(
-                    error = %err,
-                    "remote installed plugin bundle sync failed"
-                );
-            }
-        }
-        clear_remote_installed_plugin_bundle_sync_in_flight(&key);
-    });
+    let gate = Arc::new(Semaphore::new(/*permits*/ 1));
+    gates.insert(plugin_cache_root, Arc::downgrade(&gate));
+    gate
 }
 
 pub async fn sync_remote_installed_plugin_bundles_once(
@@ -431,29 +396,6 @@ fn is_remote_plugin_cache_mutation_in_flight(
     })
 }
 
-fn mark_remote_installed_plugin_bundle_sync_in_flight(
-    key: RemoteInstalledPluginBundleSyncKey,
-) -> bool {
-    let syncs =
-        REMOTE_INSTALLED_PLUGIN_BUNDLE_SYNC_IN_FLIGHT.get_or_init(|| Mutex::new(HashSet::new()));
-    let mut syncs = match syncs.lock() {
-        Ok(syncs) => syncs,
-        Err(err) => err.into_inner(),
-    };
-    syncs.insert(key)
-}
-
-fn clear_remote_installed_plugin_bundle_sync_in_flight(key: &RemoteInstalledPluginBundleSyncKey) {
-    let Some(syncs) = REMOTE_INSTALLED_PLUGIN_BUNDLE_SYNC_IN_FLIGHT.get() else {
-        return;
-    };
-    let mut syncs = match syncs.lock() {
-        Ok(syncs) => syncs,
-        Err(err) => err.into_inner(),
-    };
-    syncs.remove(key);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -466,27 +408,6 @@ mod tests {
     use wiremock::matchers::path;
     use wiremock::matchers::query_param;
     use wiremock::matchers::query_param_is_missing;
-
-    #[test]
-    fn remote_installed_plugin_sync_in_flight_dedupes_by_cache_root() {
-        let codex_home = tempfile::tempdir().expect("create codex home");
-        let key = RemoteInstalledPluginBundleSyncKey {
-            plugin_cache_root: remote_plugin_cache_root(codex_home.path()),
-        };
-
-        assert!(mark_remote_installed_plugin_bundle_sync_in_flight(
-            key.clone()
-        ));
-        assert!(!mark_remote_installed_plugin_bundle_sync_in_flight(
-            key.clone()
-        ));
-
-        clear_remote_installed_plugin_bundle_sync_in_flight(&key);
-        assert!(mark_remote_installed_plugin_bundle_sync_in_flight(
-            key.clone()
-        ));
-        clear_remote_installed_plugin_bundle_sync_in_flight(&key);
-    }
 
     #[tokio::test]
     async fn sync_same_version_backfills_metadata_without_materialization() {

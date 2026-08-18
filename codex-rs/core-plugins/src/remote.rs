@@ -60,7 +60,7 @@ pub use remote_installed_plugin_sync::RemoteInstalledPluginBundleSyncOutcome;
 pub use remote_installed_plugin_sync::RemotePluginCacheMutationGuard;
 pub use remote_installed_plugin_sync::RemotePluginMaterialization;
 pub use remote_installed_plugin_sync::mark_remote_plugin_cache_mutation_in_flight;
-pub(crate) use remote_installed_plugin_sync::maybe_start_remote_installed_plugin_bundle_sync;
+pub(crate) use remote_installed_plugin_sync::remote_installed_plugin_bundle_sync_gate;
 pub use remote_installed_plugin_sync::sync_remote_installed_plugin_bundles_once;
 pub use search::RemotePluginSearchPage;
 pub use search::RemotePluginSearchRequest;

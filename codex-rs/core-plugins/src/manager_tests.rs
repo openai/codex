@@ -6776,6 +6776,61 @@ fn remote_installed_plugins_cache_refresh_coalesces_materializations() {
     );
 }
 
+#[tokio::test]
+async fn background_remote_installed_bundle_sync_stays_deduped() {
+    let codex_home = TempDir::new().unwrap();
+    write_file(
+        &codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+remote_plugin = true
+"#,
+    );
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/ps/plugins/installed"))
+        .and(query_param("includeDownloadUrls", "true"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_delay(Duration::from_millis(200))
+                .set_body_json(serde_json::json!({
+                    "plugins": [],
+                    "pagination": {"next_page_token": null},
+                })),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut config = load_config(codex_home.path(), codex_home.path()).await;
+    config.chatgpt_base_url = format!("{}/backend-api", server.uri());
+    let first_manager = std::sync::Arc::new(test_plugins_manager_with_options(
+        codex_home.path().to_path_buf(),
+        Some(Product::Codex),
+        Some(AuthMode::Chatgpt),
+    ));
+    let second_manager = std::sync::Arc::new(test_plugins_manager_with_options(
+        codex_home.path().to_path_buf(),
+        Some(Product::Codex),
+        Some(AuthMode::Chatgpt),
+    ));
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+
+    first_manager.maybe_start_remote_installed_plugin_bundle_sync(
+        &config,
+        Some(auth.clone()),
+        /*on_effective_plugins_changed*/ None,
+    );
+    second_manager.maybe_start_remote_installed_plugin_bundle_sync(
+        &config,
+        Some(auth),
+        /*on_effective_plugins_changed*/ None,
+    );
+
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    server.verify().await;
+}
+
 #[test]
 fn plugin_install_error_preserves_store_io_sub_error_type() {
     let error = PluginInstallError::Store(PluginStoreError::Io {

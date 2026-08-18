@@ -47,7 +47,6 @@ use crate::marketplace_upgrade::upgrade_configured_git_marketplaces;
 use crate::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use crate::remote::RecommendedPluginsMode;
 use crate::remote::RemoteInstalledPlugin;
-use crate::remote::RemoteInstalledPluginBundleSyncOutcome;
 use crate::remote::RemotePluginCatalogError;
 use crate::remote::RemotePluginMaterialization;
 use crate::remote::RemotePluginScope;
@@ -444,6 +443,7 @@ pub struct PluginsManager {
     skill_root_loader: Arc<dyn SkillRootLoader<PluginSkillRoot>>,
     tool_suggest_metadata_cache: ToolSuggestMetadataCache,
     remote_installed_plugins_cache: RwLock<Option<Vec<RemoteInstalledPlugin>>>,
+    remote_installed_plugin_bundle_sync_gate: Arc<Semaphore>,
     remote_installed_plugins_cache_refresh_state: RwLock<RemoteInstalledPluginsCacheRefreshState>,
     remote_catalog_cache_refresh_state: RwLock<RemoteCatalogCacheRefreshState>,
     restriction_product: Option<Product>,
@@ -524,6 +524,8 @@ impl PluginsManager {
         // already-admitted plugins may continue exposing MCP servers/tools from shared local state.
         //
         // This assumes a single CODEX_HOME is only used by one product.
+        let remote_installed_plugin_bundle_sync_gate =
+            crate::remote::remote_installed_plugin_bundle_sync_gate(&codex_home);
         Self {
             codex_home: codex_home.clone(),
             store: PluginStore::new(codex_home),
@@ -544,6 +546,7 @@ impl PluginsManager {
             skill_root_loader,
             tool_suggest_metadata_cache: ToolSuggestMetadataCache::new(),
             remote_installed_plugins_cache: RwLock::new(None),
+            remote_installed_plugin_bundle_sync_gate,
             remote_installed_plugins_cache_refresh_state: RwLock::new(
                 RemoteInstalledPluginsCacheRefreshState::default(),
             ),
@@ -1095,28 +1098,53 @@ impl PluginsManager {
             return;
         }
 
+        let Some(auth) = auth else {
+            return;
+        };
+        let Ok(permit) =
+            Arc::clone(&self.remote_installed_plugin_bundle_sync_gate).try_acquire_owned()
+        else {
+            return;
+        };
         let manager = Arc::clone(self);
         let config_for_refresh = config.clone();
-        let auth_for_refresh = auth.clone();
-        let on_local_cache_changed =
-            Arc::new(move |outcome: RemoteInstalledPluginBundleSyncOutcome| {
-                manager.maybe_start_remote_installed_plugins_cache_refresh_with_notify(
-                    &config_for_refresh,
-                    auth_for_refresh.clone(),
-                    RemoteInstalledPluginsCacheRefreshNotify::AfterSuccessfulRefresh,
-                    on_effective_plugins_changed.clone(),
-                    EffectivePluginsChange {
-                        materialized_remote_plugins: outcome.materialized_remote_plugins,
-                    },
-                );
-            });
-
-        crate::remote::maybe_start_remote_installed_plugin_bundle_sync(
-            self.codex_home.clone(),
-            remote_plugin_service_config(config),
-            auth,
-            Some(on_local_cache_changed),
-        );
+        let service_config = remote_plugin_service_config(config);
+        tokio::spawn(async move {
+            let _permit = permit;
+            let result = crate::remote::sync_remote_installed_plugin_bundles_once(
+                manager.codex_home.clone(),
+                &service_config,
+                Some(&auth),
+            )
+            .await;
+            match result {
+                Ok(outcome) => {
+                    tracing::info!(
+                        materialized_remote_plugins = ?outcome.materialized_remote_plugins,
+                        removed_cache_plugin_ids = ?outcome.removed_cache_plugin_ids,
+                        failed_remote_plugin_ids = ?outcome.failed_remote_plugin_ids,
+                        "completed remote installed plugin bundle sync"
+                    );
+                    if outcome.changed_local_cache() {
+                        manager.maybe_start_remote_installed_plugins_cache_refresh_with_notify(
+                            &config_for_refresh,
+                            Some(auth),
+                            RemoteInstalledPluginsCacheRefreshNotify::AfterSuccessfulRefresh,
+                            on_effective_plugins_changed,
+                            EffectivePluginsChange {
+                                materialized_remote_plugins: outcome.materialized_remote_plugins,
+                            },
+                        );
+                    }
+                }
+                Err(err) => {
+                    warn!(
+                        error = %err,
+                        "remote installed plugin bundle sync failed"
+                    );
+                }
+            }
+        });
     }
 
     fn maybe_start_remote_catalog_cache_refresh(
