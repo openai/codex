@@ -544,6 +544,7 @@ mod git_processor;
 mod initialize_processor;
 mod marketplace_processor;
 mod mcp_processor;
+mod persisted_resume_settings;
 mod plugins;
 mod process_exec_processor;
 mod projects;

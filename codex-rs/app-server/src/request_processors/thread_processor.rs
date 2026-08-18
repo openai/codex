@@ -1,3 +1,4 @@
+use super::persisted_resume_settings::latest_persisted_resume_settings;
 use super::thread_enrichment::enrich_loaded_threads;
 use super::thread_fork_goal::inherit_thread_goal_snapshot;
 use super::turn_processor::can_accept_direct_input;
@@ -223,26 +224,6 @@ fn merge_persisted_resume_metadata(
             serde_json::Value::String(reasoning_effort.to_string()),
         );
     }
-}
-
-fn merge_persisted_approvals_reviewer(
-    history: &[RolloutItem],
-    request_overrides: Option<&HashMap<String, serde_json::Value>>,
-    typesafe_overrides: &mut ConfigOverrides,
-) {
-    if typesafe_overrides.approvals_reviewer.is_some()
-        || request_overrides.is_some_and(|overrides| overrides.contains_key("approvals_reviewer"))
-    {
-        return;
-    }
-
-    typesafe_overrides.approvals_reviewer = history.iter().rev().find_map(|item| match item {
-        RolloutItem::TurnContext(turn_context) => turn_context.approvals_reviewer,
-        RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event)) => {
-            Some(event.thread_settings.approvals_reviewer)
-        }
-        _ => None,
-    });
 }
 
 fn latest_persisted_approval_policy(
@@ -3950,11 +3931,15 @@ impl ThreadRequestProcessor {
         let InitialHistory::Resumed(resumed_history) = thread_history else {
             return None;
         };
-        merge_persisted_approvals_reviewer(
-            &resumed_history.history,
-            request_overrides.as_ref(),
-            typesafe_overrides,
-        );
+        if typesafe_overrides.approvals_reviewer.is_none()
+            && !request_overrides
+                .as_ref()
+                .is_some_and(|overrides| overrides.contains_key("approvals_reviewer"))
+        {
+            typesafe_overrides.approvals_reviewer =
+                latest_persisted_resume_settings(&resumed_history.history)
+                    .and_then(|settings| settings.approvals_reviewer);
+        }
         if typesafe_overrides.approval_policy.is_none() {
             typesafe_overrides.approval_policy =
                 latest_persisted_approval_policy(&resumed_history.history);
@@ -4711,13 +4696,18 @@ impl ThreadRequestProcessor {
         } else {
             None
         };
-        merge_persisted_approvals_reviewer(
-            latest_context
-                .as_deref()
-                .unwrap_or_else(|| source_history_items.as_ref()),
-            request_overrides.as_ref(),
-            &mut typesafe_overrides,
-        );
+        if typesafe_overrides.approvals_reviewer.is_none()
+            && !request_overrides
+                .as_ref()
+                .is_some_and(|overrides| overrides.contains_key("approvals_reviewer"))
+        {
+            typesafe_overrides.approvals_reviewer = latest_persisted_resume_settings(
+                latest_context
+                    .as_deref()
+                    .unwrap_or_else(|| source_history_items.as_ref()),
+            )
+            .and_then(|settings| settings.approvals_reviewer);
+        }
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
         let config = self
             .config_manager
