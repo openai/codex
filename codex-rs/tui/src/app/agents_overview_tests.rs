@@ -254,6 +254,25 @@ async fn shared_overview_shows_only_root_sessions() {
     assert!(app.last_rendered_history_tail.is_some());
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn embedded_sessions_offer_to_start_a_background_server_without_migrating() {
+    let mut app = make_test_app().await;
+    let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+        .await
+        .expect("embedded app server");
+
+    app.open_agents_overview(&app_server);
+
+    insta::with_settings!({snapshot_path => "../snapshots"}, {
+        insta::assert_snapshot!(
+            "agents_overview_embedded",
+            render_bottom_popup(&app.chat_widget, /*width*/ 96)
+        );
+    });
+    app_server.shutdown().await.expect("shutdown app server");
+}
+
 #[tokio::test]
 async fn failed_root_switch_keeps_background_requests_on_the_active_session() -> Result<()> {
     let mut app = make_test_app().await;

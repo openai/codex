@@ -40,6 +40,9 @@ fn startup_waiting_gate_is_only_for_fresh_or_exit_session_selection() {
         App::should_wait_for_initial_session(&SessionSelection::Exit),
         true
     );
+    assert!(!App::should_wait_for_initial_session(
+        &SessionSelection::AgentsOverview
+    ));
     assert_eq!(
         App::should_wait_for_initial_session(&SessionSelection::Resume(
             crate::resume_picker::SessionTarget {

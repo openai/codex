@@ -120,6 +120,7 @@ impl SessionTarget {
 #[derive(Debug, Clone)]
 pub enum SessionSelection {
     StartFresh,
+    AgentsOverview,
     Resume(SessionTarget),
     Fork(SessionTarget),
     Exit,

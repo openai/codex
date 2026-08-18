@@ -148,7 +148,7 @@ pub(super) async fn run_main_inner(
         && loader_overrides_are_default(&launch_loader_overrides)
         && !strict_config
         && !cli.bypass_hook_trust;
-    let initial_screen = if cli.resume_picker || cli.fork_picker {
+    let initial_screen = if cli.resume_picker || cli.fork_picker || cli.agents_overview {
         startup_draft::StartupDraftInitialScreen::SessionPicker
     } else if !cli.oss
         && explicit_remote_endpoint.is_none()

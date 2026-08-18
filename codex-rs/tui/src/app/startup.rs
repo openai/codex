@@ -122,7 +122,9 @@ impl App {
         let bootstrap_ms = bootstrap.duration.as_millis();
         if matches!(
             &session_selection,
-            SessionSelection::StartFresh | SessionSelection::Exit
+            SessionSelection::StartFresh
+                | SessionSelection::Exit
+                | SessionSelection::AgentsOverview
         ) {
             apply_managed_new_thread_defaults(
                 &mut config,
@@ -222,23 +224,33 @@ impl App {
             &session_selection,
             SessionSelection::StartFresh | SessionSelection::Exit
         );
+        let start_in_agents_overview =
+            matches!(&session_selection, SessionSelection::AgentsOverview);
         let (mut chat_widget, initial_started_thread) = match session_selection {
-            SessionSelection::StartFresh | SessionSelection::Exit => {
-                spawn_startup_thread_start(&app_server, config.clone(), app_event_tx.clone());
+            SessionSelection::StartFresh
+            | SessionSelection::Exit
+            | SessionSelection::AgentsOverview => {
+                if !start_in_agents_overview {
+                    spawn_startup_thread_start(&app_server, config.clone(), app_event_tx.clone());
+                }
                 // Count a startup tooltip once the initial chat widget can render it.
-                let startup_tooltip_override = match startup_draft
-                    .run_until(
-                        tui,
-                        prepare_startup_tooltip_override(
-                            &mut config,
-                            &available_models,
-                            is_first_run,
-                        ),
-                    )
-                    .await
-                {
-                    Ok(tooltip_override) => tooltip_override,
-                    Err(err) => return shutdown_on_startup_error(app_server, err).await,
+                let startup_tooltip_override = if start_in_agents_overview {
+                    None
+                } else {
+                    match startup_draft
+                        .run_until(
+                            tui,
+                            prepare_startup_tooltip_override(
+                                &mut config,
+                                &available_models,
+                                is_first_run,
+                            ),
+                        )
+                        .await
+                    {
+                        Ok(tooltip_override) => tooltip_override,
+                        Err(err) => return shutdown_on_startup_error(app_server, err).await,
+                    }
                 };
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
@@ -268,7 +280,9 @@ impl App {
                     session_telemetry: session_telemetry.clone(),
                 };
                 let mut chat_widget = ChatWidget::new_with_app_event(init);
-                chat_widget.set_queue_submissions_until_session_configured(/*queue*/ true);
+                chat_widget.set_queue_submissions_until_session_configured(
+                    /*queue*/ !start_in_agents_overview,
+                );
                 (chat_widget, None)
             }
             SessionSelection::Resume(target_session) => {
@@ -451,6 +465,9 @@ See the Codex keymap documentation for supported actions and examples."
             pending_plugin_enabled_writes: HashMap::new(),
             pending_hook_enabled_writes: HashMap::new(),
         };
+        if start_in_agents_overview {
+            app.open_agents_overview(&app_server);
+        }
         if let Some(entry) = startup_hooks_browser {
             app.chat_widget.open_hooks_browser(entry);
         }

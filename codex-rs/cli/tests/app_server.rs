@@ -33,6 +33,25 @@ foo = "bar"
 }
 
 #[test]
+fn agents_reject_session_overrides_before_starting_the_daemon() -> Result<()> {
+    let codex_home = TempDir::new()?;
+
+    for args in [
+        ["--yolo", "agents"].as_slice(),
+        ["--search", "agents"].as_slice(),
+        ["--model", "gpt-5", "agents"].as_slice(),
+    ] {
+        let mut cmd = codex_command(codex_home.path())?;
+        cmd.args(args)
+            .assert()
+            .failure()
+            .stderr(contains("invocation-specific configuration overrides"));
+    }
+
+    Ok(())
+}
+
+#[test]
 fn app_server_emits_json_info_events() -> Result<()> {
     let codex_home = TempDir::new()?;
     let event = app_server_json_shutdown_event("codex", &["app-server"], codex_home.path())?;

@@ -131,6 +131,9 @@ struct MultitoolCli {
 
 #[derive(Debug, clap::Subcommand)]
 enum Subcommand {
+    /// Browse all agent sessions on the shared local app-server daemon.
+    Agents(AgentsCommand),
+
     /// Run Codex non-interactively.
     #[clap(visible_alias = "e")]
     Exec(ExecCli),
@@ -321,6 +324,20 @@ struct DebugTraceReduceCommand {
     /// Output path for reduced RolloutTrace JSON. Defaults to TRACE_BUNDLE/state.json.
     #[arg(long = "output", short = 'o', value_name = "FILE")]
     output: Option<PathBuf>,
+}
+
+#[derive(Debug, Parser)]
+struct AgentsCommand {
+    #[clap(flatten)]
+    remote: InteractiveRemoteOptions,
+
+    /// Use this directory for new tasks on a remote server.
+    #[arg(long = "cd", short = 'C', value_name = "DIR")]
+    cwd: Option<PathBuf>,
+
+    /// Disable alternate screen mode.
+    #[arg(long = "no-alt-screen", default_value_t = false)]
+    no_alt_screen: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -1009,8 +1026,27 @@ async fn cli_main(
     // Fold --enable/--disable into config overrides so they flow to all subcommands.
     let toggle_overrides = feature_toggles.to_overrides()?;
     root_config_overrides.raw_overrides.extend(toggle_overrides);
-    let root_remote = remote.remote;
-    let root_remote_auth_token_env = remote.remote_auth_token_env;
+    let agents_options = match &subcommand {
+        Some(Subcommand::Agents(options)) => Some(options),
+        _ => None,
+    };
+    if let Some(options) = agents_options
+        && let Some(root_endpoint) = &remote.remote
+        && let Some(agents_endpoint) = &options.remote.remote
+        && root_endpoint != agents_endpoint
+    {
+        anyhow::bail!("`codex agents` received conflicting remote server endpoints");
+    }
+    let root_remote = agents_options
+        .and_then(|options| options.remote.remote.clone())
+        .or(remote.remote);
+    let root_remote_auth_token_env = agents_options
+        .and_then(|options| options.remote.remote_auth_token_env.clone())
+        .or(remote.remote_auth_token_env);
+    if let Some(options) = agents_options {
+        interactive.cwd = options.cwd.clone().or(interactive.cwd.take());
+        interactive.no_alt_screen |= options.no_alt_screen;
+    }
     let root_strict_config = interactive.strict_config;
     interactive
         .shared
@@ -1020,8 +1056,45 @@ async fn cli_main(
         profile_v2_for_subcommand(&interactive, subcommand)?;
     }
 
+    let open_agents_overview = matches!(&subcommand, Some(Subcommand::Agents(_)));
     match subcommand {
-        None => {
+        None | Some(Subcommand::Agents(_)) => {
+            if open_agents_overview {
+                if !root_config_overrides.raw_overrides.is_empty()
+                    || root_strict_config
+                    || interactive.prompt.is_some()
+                    || !interactive.images.is_empty()
+                    || interactive.model.is_some()
+                    || interactive.oss
+                    || interactive.oss_provider.is_some()
+                    || interactive.config_profile_v2.is_some()
+                    || interactive.sandbox_mode.is_some()
+                    || interactive.dangerously_bypass_approvals_and_sandbox
+                    || interactive.bypass_hook_trust
+                    || interactive.cwd.is_some() && root_remote.is_none()
+                    || !interactive.add_dir.is_empty()
+                    || interactive.approval_policy.is_some()
+                    || interactive.web_search
+                {
+                    anyhow::bail!(
+                        "`codex agents` cannot attach to shared sessions with invocation-specific configuration overrides"
+                    );
+                }
+                if is_workload_identity_selected() {
+                    anyhow::bail!(
+                        "`codex agents` is unavailable while workload identity is active"
+                    );
+                }
+                if root_remote.is_none() {
+                    resolve_remote_endpoint(
+                        /*remote*/ None,
+                        root_remote_auth_token_env.clone(),
+                    )?;
+                    #[cfg(not(unix))]
+                    anyhow::bail!("`codex agents` requires `--remote` on this platform");
+                }
+                interactive.agents_overview = true;
+            }
             prepend_config_flags(
                 &mut interactive.config_overrides,
                 root_config_overrides.clone(),
@@ -1721,7 +1794,8 @@ fn profile_v2_for_subcommand<'a>(
     };
 
     match subcommand {
-        Subcommand::Exec(_)
+        Subcommand::Agents(_)
+        | Subcommand::Exec(_)
         | Subcommand::Review(_)
         | Subcommand::Resume(_)
         | Subcommand::Queue(_)
@@ -2288,6 +2362,7 @@ fn unsupported_subcommand_name_for_strict_config(
 ) -> Option<&'static str> {
     match subcommand {
         None
+        | Some(Subcommand::Agents(_))
         | Some(Subcommand::Exec(_))
         | Some(Subcommand::Review(_))
         | Some(Subcommand::McpServer(_))
@@ -2457,6 +2532,22 @@ async fn run_interactive_tui(
                 "Refusing to start the interactive TUI because TERM is set to \"dumb\". Run in a supported terminal or unset TERM.",
             ));
         }
+    }
+
+    #[cfg(unix)]
+    if interactive.agents_overview && remote.is_none() {
+        if !std::io::stdin().is_terminal() {
+            return Ok(AppExitInfo::fatal("stdin is not a terminal"));
+        }
+        if !std::io::stdout().is_terminal() {
+            return Ok(AppExitInfo::fatal("stdout is not a terminal"));
+        }
+        cloud_config::load_config(&interactive.config_overrides, LoaderOverrides::default())
+            .await
+            .map_err(std::io::Error::other)?;
+        codex_app_server_daemon::run(AppServerLifecycleCommand::Start)
+            .await
+            .map_err(std::io::Error::other)?;
     }
 
     let remote_endpoint = match resolve_remote_endpoint(remote, remote_auth_token_env) {
@@ -4028,6 +4119,39 @@ mod tests {
             panic!("expected resume subcommand");
         };
         assert_eq!(remote.remote.as_deref(), Some("unix://codex.sock"));
+    }
+
+    #[test]
+    fn agents_subcommand_accepts_remote_session_options() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "agents",
+            "--remote",
+            "ws://127.0.0.1:4500",
+            "--remote-auth-token-env",
+            "CODEX_REMOTE_AUTH_TOKEN",
+            "--cd",
+            "/workspace",
+            "--no-alt-screen",
+        ])
+        .expect("parse");
+        let Some(Subcommand::Agents(options)) = cli.subcommand else {
+            panic!("expected agents subcommand");
+        };
+
+        assert_eq!(
+            options.remote.remote.as_deref(),
+            Some("ws://127.0.0.1:4500")
+        );
+        assert_eq!(
+            options.remote.remote_auth_token_env.as_deref(),
+            Some("CODEX_REMOTE_AUTH_TOKEN")
+        );
+        assert_eq!(
+            options.cwd.as_deref(),
+            Some(std::path::Path::new("/workspace"))
+        );
+        assert!(options.no_alt_screen);
     }
 
     #[test]

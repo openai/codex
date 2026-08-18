@@ -1226,7 +1226,7 @@ async fn run_ratatui_app(
         initial_config
     };
     startup_draft.apply_config(&config);
-    if !(cli.resume_picker || cli.fork_picker)
+    if !(cli.resume_picker || cli.fork_picker || cli.agents_overview)
         && let Err(err) = startup_draft.show(&mut tui)
     {
         shutdown_startup_session(app_server.take(), &mut terminal_restore_guard).await;
@@ -1254,7 +1254,9 @@ async fn run_ratatui_app(
         };
 
     let use_fork = cli.fork_picker || cli.fork_last || cli.fork_session_id.is_some();
-    let session_selection = if use_fork {
+    let session_selection = if cli.agents_overview {
+        resume_picker::SessionSelection::AgentsOverview
+    } else if use_fork {
         if let Some(id_str) = cli.fork_session_id.as_deref() {
             let Some(startup_app_server) = app_server.as_mut() else {
                 unreachable!("app server should be initialized for --fork <id>");

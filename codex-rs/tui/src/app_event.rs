@@ -220,6 +220,14 @@ pub(crate) enum AppEvent {
     StopAgentsOverviewThread {
         thread_id: ThreadId,
     },
+    /// Start the shared app-server daemon without moving the current embedded session.
+    #[cfg(unix)]
+    StartAgentsDaemon,
+    /// Report whether starting the shared app-server daemon succeeded.
+    #[cfg(unix)]
+    AgentsDaemonStarted {
+        result: Result<(), String>,
+    },
     /// Open the agent picker for switching active threads.
     OpenAgentPicker,
     /// Merge a completed root-scoped agent-picker refresh without blocking terminal input.

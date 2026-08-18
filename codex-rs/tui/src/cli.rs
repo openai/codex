@@ -37,6 +37,10 @@ pub struct Cli {
     #[clap(skip)]
     pub resume_include_non_interactive: bool,
 
+    /// Internal: open the daemon-wide agents overview instead of starting a thread.
+    #[clap(skip)]
+    pub agents_overview: bool,
+
     // Internal controls set by the top-level `codex fork` subcommand.
     // These are not exposed as user flags on the base `codex` command.
     #[clap(skip)]

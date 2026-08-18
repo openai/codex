@@ -183,7 +183,9 @@ impl StartupDraftPump {
         session_selection: &SessionSelection,
     ) -> io::Result<()> {
         let session_action = match session_selection {
-            SessionSelection::StartFresh | SessionSelection::Exit => StartupDraftSessionAction::New,
+            SessionSelection::StartFresh
+            | SessionSelection::Exit
+            | SessionSelection::AgentsOverview => StartupDraftSessionAction::New,
             SessionSelection::Resume(_) => StartupDraftSessionAction::Resume,
             SessionSelection::Fork(_) => StartupDraftSessionAction::Fork,
         };
