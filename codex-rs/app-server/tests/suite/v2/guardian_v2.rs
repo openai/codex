@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
@@ -9,7 +8,6 @@ use anyhow::Result;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use app_test_support::create_fake_rollout;
-use app_test_support::rollout_path;
 use axum::Json;
 use axum::Router;
 use axum::extract::State;
@@ -18,6 +16,7 @@ use axum::extract::ws::WebSocketUpgrade;
 use axum::http::header;
 use axum::response::IntoResponse;
 use axum::routing::get;
+use axum::routing::post;
 use codex_app_server_protocol::ApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ItemGuardianApprovalReviewStartedNotification;
@@ -31,9 +30,6 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput;
 use codex_features::Feature;
-use codex_protocol::security_risk::SecurityRiskScore;
-use codex_rollout::RolloutItem;
-use codex_rollout::append_rollout_item_to_path;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
@@ -58,6 +54,7 @@ struct MockResponsesState {
     luna_requests: Mutex<Vec<Value>>,
     allow_luna: Notify,
     allow_guardian_review: Notify,
+    classification_completed: Notify,
     luna_score: f64,
 }
 
@@ -170,11 +167,10 @@ async fn guardian_v2_routes_tool_approvals(
     risk: GuardianRisk,
     lifecycle: ThreadLifecycle,
 ) -> Result<()> {
-    let (luna_score, expected_guardian_reviews) = match (risk, lifecycle) {
-        (GuardianRisk::Low, ThreadLifecycle::New) => (0.25, 1),
-        (GuardianRisk::Low, ThreadLifecycle::Resume | ThreadLifecycle::Fork) => (0.25, 0),
-        (GuardianRisk::Threshold, _) => (0.5, 2),
-        (GuardianRisk::High, _) => (0.95, 2),
+    let (luna_score, expected_guardian_reviews) = match risk {
+        GuardianRisk::Low => (0.25, 1),
+        GuardianRisk::Threshold => (0.5, 2),
+        GuardianRisk::High => (0.95, 2),
     };
     let responses_state = Arc::new(MockResponsesState {
         luna_score,
@@ -184,6 +180,16 @@ async fn guardian_v2_routes_tool_approvals(
     let responses_url = format!("http://{}", listener.local_addr()?);
     let router = Router::new()
         .route("/v1/responses", get(luna_websocket).post(parent_response))
+        .route(
+            "/metrics",
+            post(
+                |State(state): State<Arc<MockResponsesState>>, body: String| async move {
+                    if body.contains("codex.guardian_v2.classification") {
+                        state.classification_completed.notify_one();
+                    }
+                },
+            ),
+        )
         .with_state(Arc::clone(&responses_state));
     let responses_server = tokio::spawn(async move {
         let _ = axum::serve(listener, router).await;
@@ -196,39 +202,25 @@ async fn guardian_v2_routes_tool_approvals(
         .with_approval_policy("on-request")
         .with_root_config("approvals_reviewer = \"auto_review\"")
         .with_extra_config(&format!(
-            "[mcp_servers.{TEST_SERVER_NAME}]\nurl = \"{mcp_server_url}/mcp\"\ndefault_tools_approval_mode = \"prompt\""
+            "[mcp_servers.{TEST_SERVER_NAME}]\nurl = \"{mcp_server_url}/mcp\"\ndefault_tools_approval_mode = \"prompt\"\n\n[analytics]\nenabled = true\n\n[otel]\nmetrics_exporter = {{ otlp-http = {{ endpoint = \"{responses_url}/metrics\", protocol = \"json\" }} }}"
         ))
         .enable_feature(Feature::GuardianV2)
         .enable_feature(Feature::GuardianApproval)
         .write(codex_home.path())?;
     let original_thread_id = match lifecycle {
         ThreadLifecycle::New => None,
-        ThreadLifecycle::Resume | ThreadLifecycle::Fork => {
-            let thread_id = create_fake_rollout(
-                codex_home.path(),
-                "2025-01-05T12-00-00",
-                "2025-01-05T12:00:00Z",
-                USER_CONTEXT,
-                Some("mock_provider"),
-                /*git_info*/ None,
-            )?;
-            let original_rollout =
-                rollout_path(codex_home.path(), "2025-01-05T12-00-00", &thread_id);
-            for action_risk in [0.95, 0.1] {
-                append_rollout_item_to_path(
-                    &original_rollout,
-                    &RolloutItem::SecurityRiskScore(SecurityRiskScore {
-                        scores: BTreeMap::from([("action_risk".to_owned(), action_risk)]),
-                        sampled_at: None,
-                    }),
-                )
-                .await?;
-            }
-            Some(thread_id)
-        }
+        ThreadLifecycle::Resume | ThreadLifecycle::Fork => Some(create_fake_rollout(
+            codex_home.path(),
+            "2025-01-05T12-00-00",
+            "2025-01-05T12:00:00Z",
+            USER_CONTEXT,
+            Some("mock_provider"),
+            /*git_info*/ None,
+        )?),
     };
     let mut app_server = TestAppServer::builder()
         .with_codex_home(codex_home.path())
+        .with_env_overrides(&[("OTEL_METRIC_EXPORT_INTERVAL", Some("25"))])
         .build_initialized_with_timeout(TIMEOUT)
         .await?;
     let thread = match lifecycle {
@@ -274,7 +266,6 @@ async fn guardian_v2_routes_tool_approvals(
         }
     };
     let thread_id = thread.id;
-    let rollout = thread.path.expect("thread should be persisted");
     let turn_request_id = app_server
         .send_turn_start_request(TurnStartParams {
             thread_id: thread_id.clone(),
@@ -289,14 +280,12 @@ async fn guardian_v2_routes_tool_approvals(
         .await?;
     let _: TurnStartResponse =
         timeout(TIMEOUT, app_server.read_response(turn_request_id)).await??;
-    if matches!(lifecycle, ThreadLifecycle::New) {
-        let review_started: ItemGuardianApprovalReviewStartedNotification = timeout(
-            TIMEOUT,
-            app_server.read_notification("item/autoApprovalReview/started"),
-        )
-        .await??;
-        assert_eq!(review_started.thread_id, thread_id);
-    }
+    let review_started: ItemGuardianApprovalReviewStartedNotification = timeout(
+        TIMEOUT,
+        app_server.read_notification("item/autoApprovalReview/started"),
+    )
+    .await??;
+    assert_eq!(review_started.thread_id, thread_id);
 
     let luna_request = timeout(TIMEOUT, async {
         loop {
@@ -332,34 +321,8 @@ async fn guardian_v2_routes_tool_approvals(
                 })
             })
     );
-    if matches!(lifecycle, ThreadLifecycle::Resume | ThreadLifecycle::Fork) {
-        timeout(TIMEOUT, async {
-            while responses_state.parent_requests.load(Ordering::SeqCst) < 3 {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await?;
-        assert_eq!(responses_state.guardian_reviews.load(Ordering::SeqCst), 0);
-    }
-
     responses_state.allow_luna.notify_one();
-    timeout(TIMEOUT, async {
-        loop {
-            if tokio::fs::read_to_string(&rollout)
-                .await?
-                .lines()
-                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-                .any(|line| {
-                    line["type"] == "security_risk_score"
-                        && line["payload"]["scores"]["action_risk"] == json!(luna_score)
-                })
-            {
-                return Ok::<(), std::io::Error>(());
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await??;
+    timeout(TIMEOUT, responses_state.classification_completed.notified()).await?;
     responses_state.allow_guardian_review.notify_one();
     responses_state.allow_luna.notify_one();
     timeout(
@@ -425,13 +388,13 @@ async fn guardian_v2_threshold_score_requires_full_reviews() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn resumed_thread_inherits_latest_guardian_score() -> Result<()> {
+async fn resumed_thread_starts_without_guardian_score() -> Result<()> {
     skip_if_no_network!(Ok(()));
     guardian_v2_routes_tool_approvals(GuardianRisk::Low, ThreadLifecycle::Resume).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn forked_thread_inherits_latest_guardian_score() -> Result<()> {
+async fn forked_thread_starts_without_guardian_score() -> Result<()> {
     skip_if_no_network!(Ok(()));
     guardian_v2_routes_tool_approvals(GuardianRisk::Low, ThreadLifecycle::Fork).await
 }

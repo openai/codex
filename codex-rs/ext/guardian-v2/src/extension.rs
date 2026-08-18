@@ -27,7 +27,6 @@ use codex_extension_api::ToolName;
 use codex_extension_api::ToolPayload;
 use codex_extension_api::ToolStartInput;
 use codex_features::Feature;
-use codex_history::RolloutItem;
 use codex_login::AgentIdentityAuthPolicy;
 use codex_login::AuthManager;
 use codex_model_provider::create_model_provider;
@@ -614,12 +613,6 @@ impl ToolLifecycleContributor for GuardianV2Extension {
                     .latest_scored_tool_call
                     .fetch_max(tool_call_index, Ordering::Release);
                 classification_finished_at = Some(Instant::now());
-                if !config.ephemeral {
-                    thread
-                        .append_rollout_items(&[RolloutItem::SecurityRiskScore(score)])
-                        .await
-                        .map_err(|error| error.to_string())?;
-                }
                 Ok("success")
             }
             .await;

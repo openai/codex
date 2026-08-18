@@ -18,7 +18,6 @@ use codex_extension_api::ToolName;
 use codex_extension_api::ToolPayload;
 use codex_extension_api::ToolStartInput;
 use codex_features::Feature;
-use codex_history::RolloutItem;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::ExternalAuth;
@@ -1201,21 +1200,6 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
             .await,
         None
     );
-    test.codex.ensure_rollout_materialized().await;
-    test.codex.flush_rollout().await?;
-    let persisted_scores = test
-        .codex
-        .load_history(/*include_archived*/ false)
-        .await?
-        .items
-        .into_iter()
-        .filter_map(|item| match item {
-            RolloutItem::SecurityRiskScore(score) => Some(score),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(persisted_scores, vec![score.as_ref().clone()]);
-
     thread_store.insert(SecurityRiskScore {
         scores: BTreeMap::from([("action_risk".to_string(), 0.5)]),
         sampled_at: None,
