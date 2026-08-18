@@ -262,6 +262,8 @@ pub enum Feature {
     MentionsV2,
     /// Allow request_user_input in Default collaboration mode.
     DefaultModeRequestUserInput,
+    /// Allow sending a user-visible message without ending the current turn.
+    SendAsyncMessage,
     /// Enable automatic review for approval prompts.
     GuardianApproval,
     /// Reuse encrypted parent compaction when restarting Guardian review sessions.
@@ -1347,6 +1349,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::DefaultModeRequestUserInput,
         key: "default_mode_request_user_input",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::SendAsyncMessage,
+        key: "send_async_message",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

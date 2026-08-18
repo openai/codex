@@ -723,6 +723,9 @@
             "secret_auth_storage": {
               "type": "boolean"
             },
+            "send_async_message": {
+              "type": "boolean"
+            },
             "shell_snapshot": {
               "type": "boolean"
             },
@@ -5580,6 +5583,9 @@
           "type": "boolean"
         },
         "secret_auth_storage": {
+          "type": "boolean"
+        },
+        "send_async_message": {
           "type": "boolean"
         },
         "shell_snapshot": {
