@@ -19,6 +19,7 @@ use crate::reasons::REASON_MITM_REQUIRED;
 use crate::reasons::REASON_NOT_ALLOWED;
 use crate::reasons::REASON_PROXY_DISABLED;
 use crate::reasons::REASON_UNIX_SOCKET_UNSUPPORTED;
+use crate::request_disconnect::NetworkRequestDisconnect;
 use crate::responses::PolicyDecisionDetails;
 use crate::responses::blocked_header_value;
 use crate::responses::blocked_message_with_policy;
@@ -179,6 +180,7 @@ async fn http_connect_accept(
     environment_id: Option<String>,
     mut req: Request,
 ) -> Result<(Response, Request), Response> {
+    let started_at = Instant::now();
     let app_state = req
         .extensions()
         .get::<Arc<NetworkProxyState>>()
@@ -218,7 +220,8 @@ async fn http_connect_accept(
         .await);
     }
 
-    let request = NetworkPolicyRequest::new(NetworkPolicyRequestArgs {
+    let disconnect = NetworkRequestDisconnect::default();
+    let mut request = NetworkPolicyRequest::new(NetworkPolicyRequestArgs {
         protocol: NetworkProtocol::HttpsConnect,
         host: host.clone(),
         port: authority.port,
@@ -229,7 +232,14 @@ async fn http_connect_accept(
         exec_policy_hint: None,
     });
 
-    match evaluate_host_policy(&app_state, policy_decider.as_ref(), &request).await {
+    request.disconnect = Some(disconnect.clone());
+    match disconnect
+        .track_http_request(
+            started_at,
+            evaluate_host_policy(&app_state, policy_decider.as_ref(), &request),
+        )
+        .await
+    {
         Ok(NetworkDecision::Deny {
             reason,
             source,
@@ -510,6 +520,7 @@ async fn http_plain_proxy(
     environment_id: Option<String>,
     mut req: Request,
 ) -> Result<Response, Infallible> {
+    let started_at = Instant::now();
     let app_state = match req.extensions().get::<Arc<NetworkProxyState>>().cloned() {
         Some(state) => state,
         None => {
@@ -709,7 +720,8 @@ async fn http_plain_proxy(
         .await);
     }
 
-    let request = NetworkPolicyRequest::new(NetworkPolicyRequestArgs {
+    let disconnect = NetworkRequestDisconnect::default();
+    let mut request = NetworkPolicyRequest::new(NetworkPolicyRequestArgs {
         protocol: NetworkProtocol::Http,
         host: host.clone(),
         port,
@@ -720,7 +732,14 @@ async fn http_plain_proxy(
         exec_policy_hint: None,
     });
 
-    match evaluate_host_policy(&app_state, policy_decider.as_ref(), &request).await {
+    request.disconnect = Some(disconnect.clone());
+    match disconnect
+        .track_http_request(
+            started_at,
+            evaluate_host_policy(&app_state, policy_decider.as_ref(), &request),
+        )
+        .await
+    {
         Ok(NetworkDecision::Deny {
             reason,
             source,

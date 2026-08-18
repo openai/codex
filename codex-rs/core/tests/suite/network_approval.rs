@@ -69,6 +69,7 @@ use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tempfile::TempDir;
+use test_case::test_case;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 
@@ -419,6 +420,122 @@ async fn cancelled_guardian_network_review_fails_closed_without_rewriting_turn_s
     wait_for_turn_complete(&test).await;
     assert!(state_check.single_request().body_contains_text(marker));
 
+    Ok(())
+}
+
+#[test_case("GET", "http://codex-network-test.invalid/"; "plain_http")]
+#[test_case("CONNECT", "codex-network-test.invalid:443"; "connect")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "requires the trusted Linux proxy bridge"
+)]
+async fn disconnected_network_request_explains_failure_to_model(
+    method: &str,
+    target: &str,
+) -> Result<()> {
+    skip_if_target_windows!(Ok(()), "uses the POSIX/Python network fixture");
+    skip_if_host_windows!(Ok(()));
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+    // This tests the controller-local proxy; remote disconnect forwarding is not supported yet.
+    let test = managed_network_unified_exec_test(&server).await?;
+    let call_id = "network-disconnect";
+    let poll_call_id = "network-disconnect-poll";
+    let command = format!(
+        r#"python3 - <<'PY'
+import os, socket, time, urllib.parse
+proxy = urllib.parse.urlparse(os.environ['HTTP_PROXY'])
+sock = socket.create_connection((proxy.hostname, proxy.port), timeout=10)
+sock.sendall(b'{method} {target} HTTP/1.1\r\nHost: codex-network-test.invalid\r\n\r\n')
+while not os.path.exists('disconnect-now'):
+    time.sleep(0.01)
+sock.close()
+time.sleep(60)
+PY"#
+    );
+    let mut args = network_exec_args(&command);
+    args["environment_id"] = json!(LOCAL_ENVIRONMENT_ID);
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            !is_guardian_request(request) && !request_body_contains(request, call_id)
+        },
+        sse(vec![
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("parent-start"),
+        ]),
+    )
+    .await;
+    let pending_guardian = mount_response_once_match(
+        &server,
+        is_guardian_request,
+        sse_response(sse(vec![ev_completed("guardian")])).set_delay(Duration::from_secs(60)),
+    )
+    .await;
+    let parent_poll = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            !is_guardian_request(request)
+                && request_body_contains(request, call_id)
+                && !request_body_contains(request, poll_call_id)
+        },
+        sse(vec![
+            ev_function_call(
+                poll_call_id,
+                "write_stdin",
+                &json!({
+                    "session_id": 1000, "chars": "", "yield_time_ms": 10_000,
+                })
+                .to_string(),
+            ),
+            ev_completed("parent-poll"),
+        ]),
+    )
+    .await;
+    let parent_final = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            !is_guardian_request(request) && request_body_contains(request, poll_call_id)
+        },
+        sse(vec![
+            ev_assistant_message("done", "understood"),
+            ev_completed("parent-done"),
+        ]),
+    )
+    .await;
+    submit_managed_network_turn(
+        &test,
+        "explain why the network request fails",
+        vec![local(test.config.cwd.clone())],
+        ApprovalsReviewer::AutoReview,
+        AskForApproval::OnRequest,
+    )
+    .await?;
+    wait_for_response_request(&pending_guardian).await;
+    wait_for_response_request(&parent_poll).await;
+    fs::write(test.config.cwd.join("disconnect-now"), "close")?;
+    wait_for_completion_without_network_prompt(&test).await;
+
+    let output = parent_final
+        .single_request()
+        .function_call_output_text(poll_call_id)
+        .context("expected model-visible disconnect output")?;
+    let prefix = "Network request disconnected after ";
+    let suffix = " ms, before approval could complete";
+    let elapsed = output
+        .split_once(prefix)
+        .and_then(|(_, rest)| rest.split_once(suffix))
+        .map(|(elapsed, _)| elapsed)
+        .with_context(|| format!("missing disconnect explanation: {output}"))?;
+    assert!(elapsed.parse::<u128>()? > 0);
+    let message = &output[output.find(prefix).context("missing disconnect prefix")?..];
+    let message = &message[..prefix.len() + elapsed.len() + suffix.len()];
+    insta::assert_snapshot!(message.replacen(elapsed, "<elapsed>", 1), @r"
+    Network request disconnected after <elapsed> ms, before approval could complete
+    ");
     Ok(())
 }
 

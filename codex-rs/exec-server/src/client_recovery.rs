@@ -704,6 +704,7 @@ impl ExecServerClient {
                                 command: None,
                                 exec_policy_hint: None,
                                 execution_id: None,
+                                disconnect: None,
                             });
                         let inner = Arc::downgrade(&inner);
                         let rpc_client = Arc::downgrade(&rpc_client);

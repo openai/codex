@@ -572,9 +572,7 @@ async fn blocked_request_does_not_override_recorded_approval_outcome() {
     register_call_with_default_shell_trigger(&service, "registration-1").await;
     let rejection = "approval client unavailable";
 
-    service
-        .record_call_outcome("registration-1", rejection.to_string())
-        .await;
+    service.record_call_outcome("registration-1", rejection.to_string());
     service
         .record_blocked_request(denied_blocked_request("example.com"))
         .await;
@@ -594,9 +592,7 @@ async fn specific_approval_outcome_replaces_earlier_blocked_request() {
     service
         .record_blocked_request(denied_blocked_request("example.com"))
         .await;
-    service
-        .record_call_outcome("registration-1", rejection.to_string())
-        .await;
+    service.record_call_outcome("registration-1", rejection.to_string());
 
     let error =
         network_approval_outcome_to_result(service.take_call_outcome("registration-1").await)
@@ -605,16 +601,50 @@ async fn specific_approval_outcome_replaces_earlier_blocked_request() {
 }
 
 #[tokio::test]
+async fn disconnect_fallback_preserves_earlier_approval_outcome() {
+    let service = NetworkApprovalService::default();
+    let cancellation = register_call_with_default_shell_trigger(&service, "registration-1").await;
+    let denial = "approval client unavailable";
+
+    service.record_call_outcome("registration-1", denial.to_string());
+    service.record_call_outcome_if_absent("registration-1", "network disconnected".to_string());
+
+    assert!(cancellation.is_cancelled());
+    assert_eq!(
+        service.take_call_outcome("registration-1").await,
+        Some(denial.to_string())
+    );
+}
+
+#[tokio::test]
+async fn disconnect_fallback_cancels_execution_and_yields_to_explicit_denial() {
+    let service = NetworkApprovalService::default();
+    let cancellation = register_call_with_default_shell_trigger(&service, "registration-1").await;
+    let disconnect = "network disconnected";
+    let denial = "explicit approval denial";
+
+    service.record_call_outcome_if_absent("registration-1", disconnect.to_string());
+    assert!(cancellation.is_cancelled());
+    assert_eq!(
+        service.take_call_outcome("registration-1").await,
+        Some(disconnect.to_string())
+    );
+
+    service.record_call_outcome_if_absent("registration-1", disconnect.to_string());
+    service.record_call_outcome("registration-1", denial.to_string());
+    assert_eq!(
+        service.take_call_outcome("registration-1").await,
+        Some(denial.to_string())
+    );
+}
+
+#[tokio::test]
 async fn latest_specific_approval_outcome_replaces_earlier_specific_outcome() {
     let service = NetworkApprovalService::default();
     register_call_with_default_shell_trigger(&service, "registration-1").await;
 
-    service
-        .record_call_outcome("registration-1", "earlier approval rejection".to_string())
-        .await;
-    service
-        .record_call_outcome("registration-1", "latest approval rejection".to_string())
-        .await;
+    service.record_call_outcome("registration-1", "earlier approval rejection".to_string());
+    service.record_call_outcome("registration-1", "latest approval rejection".to_string());
 
     let error =
         network_approval_outcome_to_result(service.take_call_outcome("registration-1").await)
@@ -645,9 +675,7 @@ async fn finish_call_returns_denial_and_unregisters_active_call() {
     let cancellation_token =
         register_call_with_default_shell_trigger(&service, "registration-1").await;
 
-    service
-        .record_call_outcome("registration-1", "network denied".to_string())
-        .await;
+    service.record_call_outcome("registration-1", "network denied".to_string());
 
     let err = service
         .finish_call("registration-1", &cancellation_token)
@@ -688,9 +716,7 @@ async fn deferred_finish_reuses_denial_result_after_first_consumer() {
         finish_outcome: Arc::new(OnceCell::new()),
         _execution_proxy: None,
     };
-    service
-        .record_call_outcome("registration-1", "network denied".to_string())
-        .await;
+    service.record_call_outcome("registration-1", "network denied".to_string());
 
     let first = deferred
         .finish(&service)
@@ -712,9 +738,7 @@ async fn record_call_outcome_ignores_inactive_call() {
         register_call_with_default_shell_trigger(&service, "registration-1").await;
     service.unregister_call("registration-1").await;
 
-    service
-        .record_call_outcome("registration-1", "network denied".to_string())
-        .await;
+    service.record_call_outcome("registration-1", "network denied".to_string());
 
     assert!(!cancellation_token.is_cancelled());
     assert_eq!(service.take_call_outcome("registration-1").await, None);

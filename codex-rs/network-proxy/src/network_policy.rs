@@ -1,4 +1,5 @@
 use crate::reasons::REASON_POLICY_DENIED;
+use crate::request_disconnect::NetworkRequestDisconnect;
 use crate::runtime::HostBlockDecision;
 use crate::runtime::HostBlockReason;
 use crate::state::NetworkProxyState;
@@ -106,6 +107,8 @@ pub struct NetworkPolicyRequest {
     pub command: Option<String>,
     pub exec_policy_hint: Option<String>,
     pub execution_id: Option<String>,
+    /// Present only when the local HTTP transport can identify an abandoned request.
+    pub disconnect: Option<NetworkRequestDisconnect>,
 }
 
 pub struct NetworkPolicyRequestArgs {
@@ -141,6 +144,7 @@ impl NetworkPolicyRequest {
             command,
             exec_policy_hint,
             execution_id: None,
+            disconnect: None,
         }
     }
 }
