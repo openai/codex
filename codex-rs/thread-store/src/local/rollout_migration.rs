@@ -8,6 +8,7 @@
 //! recoverable paginated rollout. Once the rollout path is replaced, the durable `.pending`
 //! journal must be enough for a later migration run to finish SQLite recovery safely.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -32,6 +33,7 @@ use tokio::io::BufWriter;
 use tokio::time::Instant;
 
 use super::LocalThreadStore;
+use super::helpers::distinct_thread_metadata_title;
 use super::thread_history;
 use super::thread_history::ProjectedRolloutLine;
 use super::thread_history::RolloutProjectionStep;
@@ -297,12 +299,24 @@ impl LocalThreadStore {
                     .is_some_and(|thread_id| pending_thread_ids.contains(&thread_id))
             });
         }
+        // The name index is global, so read it once before either migrating or repairing names.
+        let legacy_names = if options.mode == RolloutMigrationMode::Apply {
+            let thread_ids = paths
+                .iter()
+                .filter_map(|path| thread_id_from_rollout_filename(path))
+                .collect();
+            codex_rollout::find_thread_names_by_ids(&self.config.codex_home, &thread_ids)
+                .await
+                .unwrap_or_default()
+        } else {
+            HashMap::new()
+        };
         let total_paths = paths.len();
         let mut report = RolloutMigrationReport::default();
 
         for (index, path) in paths.into_iter().enumerate() {
             let outcome = self
-                .migrate_rollout_path(path, &options, &mut limiter)
+                .migrate_rollout_path(path, &options, &legacy_names, &mut limiter)
                 .await?;
             let outcome_status = outcome.as_ref().map(|outcome| outcome.status);
             if let Some(outcome) = outcome {
@@ -322,6 +336,7 @@ impl LocalThreadStore {
         &self,
         mut path: PathBuf,
         options: &RolloutMigrationOptions,
+        legacy_names: &HashMap<ThreadId, String>,
         limiter: &mut RolloutMigrationRateLimiter,
     ) -> ThreadStoreResult<Option<RolloutMigrationOutcome>> {
         let metadata = match codex_rollout::read_session_meta_line(&path).await {
@@ -380,7 +395,13 @@ impl LocalThreadStore {
             let result = if pending_published_migration {
                 let _live_writer_guard = self.live_writer_locks.lock(thread_id).await;
                 match self
-                    .recover_published_migration(thread_id, &path, &journal_path, limiter)
+                    .recover_published_migration(
+                        thread_id,
+                        &path,
+                        &journal_path,
+                        legacy_names,
+                        limiter,
+                    )
                     .await
                 {
                     Ok(recovered_path) => {
@@ -399,6 +420,9 @@ impl LocalThreadStore {
                     Err(error) => Err(error),
                 }
             } else {
+                if options.mode == RolloutMigrationMode::Apply {
+                    self.promote_legacy_name(thread_id, legacy_names).await?;
+                }
                 Ok(RolloutMigrationStatus::AlreadyPaginated)
             };
             let bytes_processed = limiter.bytes_processed.saturating_sub(bytes_before);
@@ -438,7 +462,7 @@ impl LocalThreadStore {
         };
         let bytes_before = limiter.bytes_processed;
         let result = match self
-            .migrate_one_rollout(thread_id, &path, &journal_path, kind, limiter)
+            .migrate_one_rollout(thread_id, &path, &journal_path, kind, legacy_names, limiter)
             .await
         {
             Ok(()) => Ok(RolloutMigrationStatus::Migrated),
@@ -470,6 +494,7 @@ impl LocalThreadStore {
         rollout_path: &Path,
         journal_path: &Path,
         kind: RolloutMigrationKind,
+        legacy_names: &HashMap<ThreadId, String>,
         limiter: &mut RolloutMigrationRateLimiter,
     ) -> ThreadStoreResult<()> {
         if let Some(state_db) = &self.state_db
@@ -627,7 +652,7 @@ impl LocalThreadStore {
                 .map_err(migration_error)?;
         }
         sync_parent_directory(rollout_path).await?;
-        self.finish_published_migration(thread_id, journal_path)
+        self.finish_published_migration(thread_id, journal_path, legacy_names)
             .await
     }
 
@@ -798,6 +823,7 @@ impl LocalThreadStore {
         thread_id: ThreadId,
         rollout_path: &Path,
         journal_path: &Path,
+        legacy_names: &HashMap<ThreadId, String>,
         limiter: &mut RolloutMigrationRateLimiter,
     ) -> ThreadStoreResult<PathBuf> {
         let _writer_guard = self.writer_lock_coordinator.acquire(thread_id)?;
@@ -838,7 +864,7 @@ impl LocalThreadStore {
         if let Some(decompressed_path) = decompressed_path.as_ref() {
             remove_file_if_present(decompressed_path).await?;
         }
-        self.finish_published_migration(thread_id, journal_path)
+        self.finish_published_migration(thread_id, journal_path, legacy_names)
             .await?;
         Ok(rollout_path.to_path_buf())
     }
@@ -870,21 +896,50 @@ impl LocalThreadStore {
         &self,
         thread_id: ThreadId,
         journal_path: &Path,
+        legacy_names: &HashMap<ThreadId, String>,
     ) -> ThreadStoreResult<()> {
-        if let Some(state_db) = &self.state_db
-            && !state_db
-                .mark_thread_paginated(thread_id)
-                .await
-                .map_err(migration_error)?
-        {
-            return Err(migration_error(format!(
-                "thread {thread_id} is missing its SQLite metadata"
-            )));
-        }
+        self.promote_legacy_name(thread_id, legacy_names).await?;
         tokio::fs::remove_file(journal_path)
             .await
             .map_err(migration_error)?;
         sync_parent_directory(journal_path).await
+    }
+
+    async fn promote_legacy_name(
+        &self,
+        thread_id: ThreadId,
+        legacy_names: &HashMap<ThreadId, String>,
+    ) -> ThreadStoreResult<()> {
+        if let Some(state_db) = &self.state_db {
+            let metadata = state_db
+                .get_thread(thread_id)
+                .await
+                .map_err(migration_error)?
+                .ok_or_else(|| {
+                    migration_error(format!("thread {thread_id} is missing its SQLite metadata"))
+                })?;
+            if metadata.history_mode == ThreadHistoryMode::Paginated
+                && metadata
+                    .name
+                    .as_deref()
+                    .is_some_and(|name| !name.trim().is_empty())
+            {
+                return Ok(());
+            }
+            let legacy_name = distinct_thread_metadata_title(&metadata)
+                .or_else(|| legacy_names.get(&thread_id).cloned())
+                .filter(|name| !name.trim().is_empty());
+            if !state_db
+                .mark_thread_paginated(thread_id, legacy_name.as_deref())
+                .await
+                .map_err(migration_error)?
+            {
+                return Err(migration_error(format!(
+                    "thread {thread_id} is missing its SQLite metadata"
+                )));
+            }
+        }
+        Ok(())
     }
 
     async fn project_rollout_in_batches(

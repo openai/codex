@@ -61,12 +61,31 @@ WHERE threads.id = ?
             .transpose()
     }
 
-    /// Permanently promote a thread to paginated history without changing metadata or recency.
-    pub async fn mark_thread_paginated(&self, thread_id: ThreadId) -> anyhow::Result<bool> {
-        let result = sqlx::query("UPDATE threads SET history_mode = 'paginated' WHERE id = ?")
-            .bind(thread_id.to_string())
-            .execute(self.pool.as_ref())
-            .await?;
+    /// Permanently promote a thread, preserving its canonical name or a legacy-visible fallback.
+    pub async fn mark_thread_paginated(
+        &self,
+        thread_id: ThreadId,
+        legacy_name: Option<&str>,
+    ) -> anyhow::Result<bool> {
+        // Legacy threads display `title`, then fall back to the name index. Paginated threads
+        // display `name`; `title` remains derived metadata used for search. Preserve an existing
+        // `name`, otherwise carry over the legacy display name.
+        let result = sqlx::query(
+            r#"
+UPDATE threads
+SET
+    history_mode = 'paginated',
+    name = CASE
+        WHEN name IS NULL OR trim(name) = '' THEN ?
+        ELSE name
+    END
+WHERE id = ?
+            "#,
+        )
+        .bind(legacy_name)
+        .bind(thread_id.to_string())
+        .execute(self.pool.as_ref())
+        .await?;
         Ok(result.rows_affected() > 0)
     }
     pub async fn get_thread_memory_mode(&self, id: ThreadId) -> anyhow::Result<Option<String>> {
@@ -1594,7 +1613,7 @@ mod tests {
 
         assert!(
             runtime
-                .mark_thread_paginated(thread_id)
+                .mark_thread_paginated(thread_id, /*legacy_name*/ None)
                 .await
                 .expect("mark paginated history")
         );
