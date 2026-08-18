@@ -510,13 +510,28 @@ fn v2_history_item_groups(
 }
 
 fn is_retained_for_remote_compaction_v2(item: &ResponseItem) -> bool {
-    if let ResponseItem::AgentMessage { content, .. } = item {
+    if let ResponseItem::AgentMessage {
+        author,
+        recipient,
+        content,
+        ..
+    } = item
+    {
+        let is_descendant_progress = author
+            .strip_prefix(recipient)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+            && matches!(
+                content.first(),
+                Some(AgentMessageInputContent::InputText { text })
+                    if text.starts_with("Message Type: MESSAGE\n")
+            );
         let is_completion = matches!(
             content.first(),
             Some(AgentMessageInputContent::InputText { text })
                 if text.starts_with("Message Type: FINAL_ANSWER\n")
         );
-        return !is_completion
+        return !is_descendant_progress
+            && !is_completion
             && estimate_item_token_count(item) <= MAX_RETAINED_AGENT_MESSAGE_TOKENS;
     }
 
