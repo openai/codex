@@ -27,19 +27,27 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::auth::AgentIdentityAuthPolicy;
 use codex_model_provider::BearerAuthProvider;
+use codex_model_provider::ModelProvider;
+use codex_model_provider::ModelProviderFuture;
+use codex_model_provider::ProviderAccountResult;
+use codex_model_provider::ProviderUnauthorizedRecovery;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::CHATGPT_CODEX_BASE_URL;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_model_provider_info::create_oss_provider_with_base_url;
+use codex_models_manager::manager::SharedModelsManager;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::auth::AuthMode;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::SessionSource;
@@ -57,6 +65,7 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -659,6 +668,7 @@ async fn bedrock_unauthorized_error_uses_provider_mapping() {
         /*auth_manager*/ None,
     );
     let mut auth_recovery = None;
+    let mut provider_auth_recovery_attempted = false;
     let url = "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses";
     let error = super::handle_unauthorized(
         TransportError::Http {
@@ -671,6 +681,7 @@ async fn bedrock_unauthorized_error_uses_provider_mapping() {
             ),
         },
         &mut auth_recovery,
+        &mut provider_auth_recovery_attempted,
         &test_session_telemetry(),
         &provider,
     )
@@ -683,6 +694,113 @@ async fn bedrock_unauthorized_error_uses_provider_mapping() {
             "Amazon Bedrock rejected the request because its AWS signature has expired. Refresh your AWS credentials and retry. If `AWS_BEARER_TOKEN_BEDROCK` is set, update or unset it, then restart Codex, url: {url}"
         )
     );
+}
+
+#[derive(Debug)]
+struct TestRecoveryProvider {
+    inner: SharedModelProvider,
+    should_fail: bool,
+    attempts: Arc<AtomicUsize>,
+}
+
+impl ModelProvider for TestRecoveryProvider {
+    fn info(&self) -> &ModelProviderInfo {
+        self.inner.info()
+    }
+
+    fn auth_manager(&self) -> Option<Arc<AuthManager>> {
+        None
+    }
+
+    fn auth(&self) -> ModelProviderFuture<'_, Option<CodexAuth>> {
+        self.inner.auth()
+    }
+
+    fn account_state(&self) -> ProviderAccountResult {
+        self.inner.account_state()
+    }
+
+    fn recover_from_unauthorized(
+        &self,
+    ) -> ModelProviderFuture<'_, codex_protocol::error::Result<ProviderUnauthorizedRecovery>> {
+        self.attempts.fetch_add(1, Ordering::Relaxed);
+        Box::pin(async move {
+            if self.should_fail {
+                Err(CodexErr::Io(std::io::Error::other(
+                    "provider recovery failed",
+                )))
+            } else {
+                Ok(ProviderUnauthorizedRecovery::Recovered)
+            }
+        })
+    }
+
+    fn models_manager(
+        &self,
+        codex_home: PathBuf,
+        config_model_catalog: Option<ModelsResponse>,
+    ) -> SharedModelsManager {
+        self.inner.models_manager(codex_home, config_model_catalog)
+    }
+}
+
+#[tokio::test]
+async fn provider_owned_auth_recovery_is_bounded_and_preserves_unauthorized_failures() {
+    for should_fail in [false, true] {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let provider: SharedModelProvider = Arc::new(TestRecoveryProvider {
+            inner: test_model_provider(),
+            should_fail,
+            attempts: Arc::clone(&attempts),
+        });
+        assert!(provider.auth_manager().is_none());
+
+        let unauthorized = || TransportError::Http {
+            status: http::StatusCode::UNAUTHORIZED,
+            url: Some("https://example.com/v1/responses".to_string()),
+            headers: None,
+            body: Some("unauthorized".to_string()),
+        };
+        let mut auth_recovery = None;
+        let mut provider_auth_recovery_attempted = false;
+        let telemetry = test_session_telemetry();
+        let result = super::handle_unauthorized(
+            unauthorized(),
+            &mut auth_recovery,
+            &mut provider_auth_recovery_attempted,
+            &telemetry,
+            &provider,
+        )
+        .await;
+
+        let error = if should_fail {
+            result.expect_err("failed provider recovery should return the original error")
+        } else {
+            let recovered = result.expect("provider recovery should succeed without AuthManager");
+            assert_eq!(
+                (recovered.mode, recovered.phase),
+                ("provider", "provider_refresh")
+            );
+            super::handle_unauthorized(
+                unauthorized(),
+                &mut auth_recovery,
+                &mut provider_auth_recovery_attempted,
+                &telemetry,
+                &provider,
+            )
+            .await
+            .expect_err("provider recovery should not run more than once")
+        };
+
+        match error.details() {
+            CodexErrorDetails::UnexpectedStatus(response) => {
+                assert_eq!(response.status, http::StatusCode::UNAUTHORIZED);
+                assert_eq!(response.body, "unauthorized");
+            }
+            other => panic!("unexpected error after provider recovery: {other}"),
+        }
+        assert_eq!(attempts.load(Ordering::Relaxed), 1);
+    }
 }
 
 #[tokio::test]
