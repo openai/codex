@@ -22,6 +22,7 @@ use tokio::time::timeout;
 
 use super::super::ClaudeHooksEngine;
 use super::super::ConfiguredHandlerKind;
+use super::super::tests::mcp_executor;
 use super::CommandHookRuntime;
 use super::CommandShell;
 use super::ConfiguredHandler;
@@ -199,7 +200,7 @@ async fn schedule(runtime: &CommandHookRuntime, handler: ConfiguredHandler, cwd:
         warnings: Vec::new(),
         required_load_errors: Vec::new(),
         command_runtime: runtime.clone(),
-        mcp_executor: None,
+        mcp_executor: mcp_executor(),
     };
     engine
         .run_user_prompt_submit(UserPromptSubmitRequest {

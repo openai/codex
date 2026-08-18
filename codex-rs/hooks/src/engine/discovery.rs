@@ -603,17 +603,6 @@ fn append_matcher_groups(
                         );
                         continue;
                     }
-                    if matches!(&source.requirement, HookRequirement::Required(_)) {
-                        source.record_load_failure(
-                            format!(
-                                "skipping MCP tool hook in {}: MCP tool hooks are not supported yet",
-                                source.path.display()
-                            ),
-                            warnings,
-                        );
-                        continue;
-                    }
-
                     let timeout_sec = timeout_sec.unwrap_or(600).max(1);
                     let config = HookHandlerConfig::McpTool {
                         server: server.clone(),

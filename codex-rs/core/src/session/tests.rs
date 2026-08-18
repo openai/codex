@@ -11,6 +11,7 @@ use crate::environment_selection::EnvironmentConfigOrigin;
 use crate::environment_selection::ThreadEnvironments;
 use crate::environment_selection::TurnEnvironmentState;
 use crate::function_tool::FunctionCallError;
+use crate::hook_mcp_executor::CoreHookMcpExecutor;
 use crate::plugins::plugins_manager_for_config;
 use crate::session::step_context::StepContext;
 use crate::shell::default_user_shell;
@@ -814,6 +815,10 @@ async fn preview_session_start_hooks(
             ..HooksConfig::default()
         },
         thread_id,
+        Arc::new(CoreHookMcpExecutor {
+            runtime: Arc::new(McpRuntime::empty(config.prefix_mcp_tool_names())),
+            thread_id,
+        }),
     )
     .expect("initialize hooks for session-start preview");
 
@@ -5888,6 +5893,10 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             ..HooksConfig::default()
         },
         thread_id,
+        Arc::new(CoreHookMcpExecutor {
+            runtime: Arc::clone(&mcp_runtime),
+            thread_id,
+        }),
     )
     .expect("initialize test hooks");
     let services = SessionServices {
@@ -8093,6 +8102,10 @@ where
             ..HooksConfig::default()
         },
         thread_id,
+        Arc::new(CoreHookMcpExecutor {
+            runtime: Arc::clone(&mcp_runtime),
+            thread_id,
+        }),
     )
     .expect("initialize test hooks");
     let services = SessionServices {

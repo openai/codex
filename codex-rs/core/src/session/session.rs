@@ -5,6 +5,7 @@ use crate::agents_md_manager::AgentsMdManager;
 use crate::config::ConstraintError;
 use crate::environment_selection::ThreadEnvironments;
 use crate::environment_selection::TurnEnvironmentSnapshot;
+use crate::hook_mcp_executor::CoreHookMcpExecutor;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::state::ActiveTurn;
 use codex_extension_api::ExtensionDataInit;
@@ -1197,13 +1198,24 @@ impl Session {
                     (None, None)
                 };
 
+            // Hooks and extensions share one stable thread-owned MCP runtime handle.
+            let mcp_runtime = Arc::new(McpRuntime::empty(
+                mcp_projection.config.prefix_mcp_tool_names,
+            ));
             let hooks_config = build_hooks_config(
                 &config,
                 plugins_manager.as_ref(),
                 resolved_environments.single_local_environment(),
             )
             .await;
-            let (hooks, async_hook_results) = Hooks::new(hooks_config, thread_id)?;
+            let (hooks, async_hook_results) = Hooks::new(
+                hooks_config,
+                thread_id,
+                Arc::new(CoreHookMcpExecutor {
+                    runtime: Arc::clone(&mcp_runtime),
+                    thread_id,
+                }),
+            )?;
             for warning in hooks.startup_warnings() {
                 post_session_configured_events.push(Event {
                     id: INITIAL_SUBMIT_ID.to_owned(),
@@ -1220,10 +1232,6 @@ impl Session {
                     config.analytics_enabled,
                 )
             });
-            // Extensions need a stable thread-owned resource client before the Session exists.
-            let mcp_runtime = Arc::new(McpRuntime::empty(
-                mcp_projection.config.prefix_mcp_tool_names,
-            ));
             for item in initial_history.get_rollout_items() {
                 match item {
                     RolloutItem::Compacted(compacted) => {

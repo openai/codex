@@ -171,6 +171,8 @@ use codex_protocol::models::NetworkPermissions as CoreNetworkPermissions;
 use codex_protocol::models::PermissionProfile as CorePermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::HookEventName;
+use codex_protocol::protocol::HookExecutionMode;
+use codex_protocol::protocol::HookHandlerType;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::SessionSource;
@@ -3745,6 +3747,8 @@ fn hook_run_event_serializes_expected_shape() {
             HookRunFact {
                 event_name: HookEventName::PreToolUse,
                 hook_source: HookSource::User,
+                handler_type: HookHandlerType::McpTool,
+                execution_mode: HookExecutionMode::Sync,
                 status: HookRunStatus::Completed,
             },
         ),
@@ -3763,6 +3767,8 @@ fn hook_run_event_serializes_expected_shape() {
                 "model_slug": "gpt-5",
                 "hook_name": "PreToolUse",
                 "hook_source": "user",
+                "handler_type": "mcp_tool",
+                "execution_mode": "sync",
                 "status": "completed"
             }
         })
@@ -3778,6 +3784,8 @@ fn hook_run_metadata_maps_sources_and_statuses() {
         HookRunFact {
             event_name: HookEventName::SessionStart,
             hook_source: HookSource::System,
+            handler_type: HookHandlerType::Command,
+            execution_mode: HookExecutionMode::Sync,
             status: HookRunStatus::Completed,
         },
     ))
@@ -3787,6 +3795,8 @@ fn hook_run_metadata_maps_sources_and_statuses() {
         HookRunFact {
             event_name: HookEventName::Stop,
             hook_source: HookSource::Project,
+            handler_type: HookHandlerType::Prompt,
+            execution_mode: HookExecutionMode::Async,
             status: HookRunStatus::Blocked,
         },
     ))
@@ -3796,6 +3806,8 @@ fn hook_run_metadata_maps_sources_and_statuses() {
         HookRunFact {
             event_name: HookEventName::Stop,
             hook_source: HookSource::CloudRequirements,
+            handler_type: HookHandlerType::Agent,
+            execution_mode: HookExecutionMode::Sync,
             status: HookRunStatus::Blocked,
         },
     ))
@@ -3805,6 +3817,8 @@ fn hook_run_metadata_maps_sources_and_statuses() {
         HookRunFact {
             event_name: HookEventName::UserPromptSubmit,
             hook_source: HookSource::Unknown,
+            handler_type: HookHandlerType::Command,
+            execution_mode: HookExecutionMode::Async,
             status: HookRunStatus::Failed,
         },
     ))
@@ -3829,6 +3843,8 @@ fn hook_run_metadata_maps_stopped_status() {
         HookRunFact {
             event_name: HookEventName::Stop,
             hook_source: HookSource::User,
+            handler_type: HookHandlerType::Command,
+            execution_mode: HookExecutionMode::Sync,
             status: HookRunStatus::Stopped,
         },
     ))
@@ -4015,6 +4031,8 @@ async fn reducer_ingests_hook_run_fact() {
                 hook: HookRunFact {
                     event_name: HookEventName::PostToolUse,
                     hook_source: HookSource::Unknown,
+                    handler_type: HookHandlerType::Agent,
+                    execution_mode: HookExecutionMode::Async,
                     status: HookRunStatus::Failed,
                 },
             })),
@@ -4027,6 +4045,8 @@ async fn reducer_ingests_hook_run_fact() {
     assert_eq!(payload[0]["event_type"], "codex_hook_run");
     assert_eq!(payload[0]["event_params"]["hook_name"], "PostToolUse");
     assert_eq!(payload[0]["event_params"]["hook_source"], "unknown");
+    assert_eq!(payload[0]["event_params"]["handler_type"], "agent");
+    assert_eq!(payload[0]["event_params"]["execution_mode"], "async");
     assert_eq!(payload[0]["event_params"]["status"], "failed");
 }
 

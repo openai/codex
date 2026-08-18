@@ -44,7 +44,6 @@ pub struct HooksConfig {
     pub plugin_hook_load_warnings: Vec<String>,
     pub shell_program: Option<String>,
     pub shell_args: Vec<String>,
-    pub mcp_executor: Option<Arc<dyn HookMcpExecutor>>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -65,9 +64,10 @@ impl Hooks {
     pub fn new(
         config: HooksConfig,
         thread_id: ThreadId,
+        mcp_executor: Arc<dyn HookMcpExecutor>,
     ) -> anyhow::Result<(Self, Receiver<codex_protocol::protocol::HookCompletedEvent>)> {
         let (result_sender, result_receiver) = async_channel::unbounded();
-        let hooks = Self::from_config(config, |shell| {
+        let hooks = Self::from_config(config, mcp_executor, |shell| {
             CommandHookRuntime::new(shell, thread_id, result_sender)
         });
         let required_load_errors = hooks.engine.required_load_errors();
@@ -82,13 +82,14 @@ impl Hooks {
 
     /// Preserve in-flight background hooks while applying a refreshed configuration.
     pub fn reconfigured(&self, config: HooksConfig) -> Self {
-        Self::from_config(config, |shell| {
+        Self::from_config(config, Arc::clone(&self.engine.mcp_executor), |shell| {
             self.engine.command_runtime.reconfigured(shell)
         })
     }
 
     fn from_config(
         config: HooksConfig,
+        mcp_executor: Arc<dyn HookMcpExecutor>,
         build_runtime: impl FnOnce(CommandShell) -> CommandHookRuntime,
     ) -> Self {
         let after_agent = config
@@ -108,7 +109,7 @@ impl Hooks {
             config.plugin_hook_sources,
             config.plugin_hook_load_warnings,
             command_runtime,
-            config.mcp_executor,
+            mcp_executor,
         );
         Self {
             after_agent,

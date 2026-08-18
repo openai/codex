@@ -39,6 +39,8 @@ use codex_protocol::protocol::GuardianCommandSource;
 use codex_protocol::protocol::GuardianRiskLevel;
 use codex_protocol::protocol::GuardianUserAuthorization;
 use codex_protocol::protocol::HookEventName;
+use codex_protocol::protocol::HookExecutionMode;
+use codex_protocol::protocol::HookHandlerType;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -942,6 +944,8 @@ pub(crate) struct CodexHookRunMetadata {
     pub(crate) model_slug: Option<String>,
     pub(crate) hook_name: Option<String>,
     pub(crate) hook_source: Option<&'static str>,
+    pub(crate) handler_type: Option<HookHandlerType>,
+    pub(crate) execution_mode: Option<HookExecutionMode>,
     pub(crate) status: Option<HookRunStatus>,
 }
 
@@ -1396,6 +1400,8 @@ pub(crate) fn codex_hook_run_metadata(
         model_slug: Some(tracking.model_slug.clone()),
         hook_name: Some(analytics_hook_event_name(hook.event_name).to_owned()),
         hook_source: Some(analytics_hook_source(hook.hook_source)),
+        handler_type: Some(hook.handler_type),
+        execution_mode: Some(hook.execution_mode),
         status: Some(analytics_hook_status(hook.status)),
     }
 }

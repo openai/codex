@@ -129,20 +129,24 @@ pub(crate) async fn execute_handlers<T: 'static>(
                     tool,
                     input,
                 } => {
-                    let executor = engine.mcp_executor.as_deref()?;
-                    run_mcp_tool(executor, &handler, server, tool, input, &input_json).await
+                    run_mcp_tool(
+                        engine.mcp_executor.as_ref(),
+                        &handler,
+                        server,
+                        tool,
+                        input,
+                        &input_json,
+                    )
+                    .await
                 }
             };
-            Some((configured_order, parse(&handler, result, turn_id)))
+            (configured_order, parse(&handler, result, turn_id))
         });
     }
 
     let mut completed = Vec::new();
     let mut completion_order = 0;
-    while let Some(result) = pending.next().await {
-        let Some((configured_order, mut parsed)) = result else {
-            continue;
-        };
+    while let Some((configured_order, mut parsed)) = pending.next().await {
         parsed.completion_order = completion_order;
         completion_order += 1;
         completed.push((configured_order, parsed));
@@ -207,14 +211,16 @@ pub(crate) fn hook_event_name_label(event_name: HookEventName) -> &'static str {
     }
 }
 
-pub(crate) fn hook_execution_mode_label(mode: HookExecutionMode) -> &'static str {
+/// Returns the canonical label for a hook execution mode.
+pub fn hook_execution_mode_label(mode: HookExecutionMode) -> &'static str {
     match mode {
         HookExecutionMode::Sync => "sync",
         HookExecutionMode::Async => "async",
     }
 }
 
-pub(crate) fn hook_handler_type_label(handler_type: HookHandlerType) -> &'static str {
+/// Returns the canonical label for a hook handler type.
+pub fn hook_handler_type_label(handler_type: HookHandlerType) -> &'static str {
     match handler_type {
         HookHandlerType::Command => "command",
         HookHandlerType::McpTool => "mcp_tool",

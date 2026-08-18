@@ -54,6 +54,13 @@ fn command_runtime(shell: CommandShell) -> CommandHookRuntime {
     CommandHookRuntime::new(shell, ThreadId::new(), result_sender)
 }
 
+pub(crate) fn mcp_executor() -> Arc<dyn HookMcpExecutor> {
+    Arc::new(StaticMcpExecutor {
+        calls: Arc::new(Mutex::new(Vec::new())),
+        output: String::new(),
+    })
+}
+
 #[test]
 fn permission_request_timeout_only_counts_synchronous_handlers() {
     let mut engine = ClaudeHooksEngine::new(
@@ -66,7 +73,7 @@ fn permission_request_timeout_only_counts_synchronous_handlers() {
             program: String::new(),
             args: Vec::new(),
         }),
-        /*mcp_executor*/ None,
+        mcp_executor(),
     );
     let command = "echo synchronous permission hook";
     let synchronous_handler = ConfiguredHandler {
@@ -245,6 +252,7 @@ fn required_managed_hooks_allow_disabled_hooks_feature() {
             ..Default::default()
         },
         ThreadId::new(),
+        mcp_executor(),
     )
     .expect("disabled hooks feature should not enforce managed requirements hooks");
 
@@ -268,6 +276,7 @@ fn required_managed_hooks_reject_invalid_matchers() {
             ..Default::default()
         },
         ThreadId::new(),
+        mcp_executor(),
     )
     .err()
     .expect("invalid required managed matcher should reject startup");
@@ -295,6 +304,7 @@ fn required_managed_hooks_allow_invalid_matchers_without_handlers() {
             ..Default::default()
         },
         ThreadId::new(),
+        mcp_executor(),
     )
     .expect("an empty matcher group should not prevent required managed hooks from loading");
 
@@ -317,6 +327,7 @@ fn required_managed_hooks_reject_empty_commands() {
             ..Default::default()
         },
         ThreadId::new(),
+        mcp_executor(),
     )
     .err()
     .expect("empty required managed command should reject startup");
@@ -330,13 +341,7 @@ fn required_managed_hooks_reject_unsupported_handler_types() {
     let events = HookEventsToml {
         pre_tool_use: vec![MatcherGroup {
             matcher: Some("^Bash$".to_string()),
-            hooks: vec![HookHandlerConfig::McpTool {
-                server: "policy".to_string(),
-                tool: "check".to_string(),
-                input: Default::default(),
-                timeout_sec: None,
-                status_message: None,
-            }],
+            hooks: vec![HookHandlerConfig::Prompt {}],
         }],
         ..Default::default()
     };
@@ -352,6 +357,7 @@ fn required_managed_hooks_reject_unsupported_handler_types() {
             ..Default::default()
         },
         ThreadId::new(),
+        mcp_executor(),
     )
     .err()
     .expect("unsupported required managed handler should reject startup");
@@ -359,7 +365,7 @@ fn required_managed_hooks_reject_unsupported_handler_types() {
     assert!(
         error
             .to_string()
-            .contains("MCP tool hooks are not supported yet")
+            .contains("prompt hooks are not supported yet")
     );
 }
 
@@ -391,6 +397,7 @@ fn required_managed_mcp_hooks_reject_empty_targets() {
             ..Default::default()
         },
         ThreadId::new(),
+        mcp_executor(),
     )
     .err()
     .expect("invalid required managed MCP hook should reject startup");
@@ -430,6 +437,7 @@ fn required_managed_session_end_mcp_hooks_reject_startup() {
             ..Default::default()
         },
         ThreadId::new(),
+        mcp_executor(),
     )
     .err()
     .expect("required managed SessionEnd MCP hook should reject startup");
@@ -456,6 +464,7 @@ fn required_managed_hooks_with_unknown_source_still_reject_discovery_failures() 
             ..Default::default()
         },
         ThreadId::new(),
+        mcp_executor(),
     )
     .err()
     .expect("unknown-source managed requirements hook should still reject startup");
@@ -478,6 +487,7 @@ fn valid_required_managed_hooks_allow_startup() {
             ..Default::default()
         },
         ThreadId::new(),
+        mcp_executor(),
     )
     .expect("valid managed requirements hook should allow startup");
 
@@ -506,6 +516,7 @@ fn managed_config_layer_hook_failures_remain_startup_warnings() {
             ..Default::default()
         },
         ThreadId::new(),
+        mcp_executor(),
     )
     .expect("managed config layer hooks should remain optional");
 
@@ -580,7 +591,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
             program: String::new(),
             args: Vec::new(),
         }),
-        /*mcp_executor*/ None,
+        mcp_executor(),
     );
 
     assert!(engine.warnings().is_empty());
@@ -598,7 +609,6 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
         plugin_hook_load_warnings: Vec::new(),
         shell_program: None,
         shell_args: Vec::new(),
-        mcp_executor: None,
     });
     assert!(listed.hooks[0].is_managed);
     let cwd = cwd();
@@ -689,7 +699,7 @@ async fn requirements_managed_hooks_execute_windows_command_override() {
             program: String::new(),
             args: Vec::new(),
         }),
-        /*mcp_executor*/ None,
+        mcp_executor(),
     );
 
     let outcome = engine
@@ -770,7 +780,7 @@ fn unknown_requirement_source_hooks_stay_managed() {
             program: String::new(),
             args: Vec::new(),
         }),
-        /*mcp_executor*/ None,
+        mcp_executor(),
     );
 
     assert_eq!(engine.handlers.len(), 1);
@@ -854,7 +864,7 @@ fn user_disablement_filters_non_managed_hooks_but_not_managed_hooks() {
             program: String::new(),
             args: Vec::new(),
         }),
-        /*mcp_executor*/ None,
+        mcp_executor(),
     );
 
     assert_eq!(engine.handlers.len(), 1);
@@ -921,7 +931,7 @@ fn user_disablement_does_not_filter_managed_layer_hooks() {
             program: String::new(),
             args: Vec::new(),
         }),
-        /*mcp_executor*/ None,
+        mcp_executor(),
     );
 
     assert_eq!(engine.handlers.len(), 1);
@@ -1084,7 +1094,7 @@ fn requirements_managed_hooks_load_when_managed_dir_is_missing() {
             program: String::new(),
             args: Vec::new(),
         }),
-        /*mcp_executor*/ None,
+        mcp_executor(),
     );
 
     assert!(engine.warnings().is_empty());
@@ -1148,7 +1158,7 @@ fn allow_managed_hooks_only_false_keeps_unmanaged_hooks() {
             program: String::new(),
             args: Vec::new(),
         }),
-        /*mcp_executor*/ None,
+        mcp_executor(),
     );
 
     assert!(engine.warnings().is_empty());
@@ -1206,7 +1216,7 @@ fn allow_managed_hooks_only_in_config_toml_does_not_enable_policy() {
             program: String::new(),
             args: Vec::new(),
         }),
-        /*mcp_executor*/ None,
+        mcp_executor(),
     );
 
     assert!(engine.warnings().is_empty());
@@ -1280,7 +1290,7 @@ fn allow_managed_hooks_only_skips_unmanaged_json_and_toml_hooks() {
             program: String::new(),
             args: Vec::new(),
         }),
-        /*mcp_executor*/ None,
+        mcp_executor(),
     );
 
     assert!(engine.handlers.is_empty());
@@ -1320,7 +1330,7 @@ fn allow_managed_hooks_only_skips_unmanaged_plugin_hooks() {
             program: String::new(),
             args: Vec::new(),
         }),
-        /*mcp_executor*/ None,
+        mcp_executor(),
     );
 
     assert!(engine.handlers.is_empty());
@@ -1393,7 +1403,7 @@ fn allow_managed_hooks_only_keeps_managed_requirement_and_config_layer_hooks() {
             program: String::new(),
             args: Vec::new(),
         }),
-        /*mcp_executor*/ None,
+        mcp_executor(),
     );
 
     assert!(engine.warnings().is_empty());
@@ -1507,7 +1517,7 @@ fn discovers_hooks_from_json_and_toml_in_the_same_layer() {
             program: String::new(),
             args: Vec::new(),
         }),
-        /*mcp_executor*/ None,
+        mcp_executor(),
     );
 
     assert!(engine.warnings().iter().any(|warning| {
@@ -1603,7 +1613,7 @@ fn profile_user_layers_load_shared_hooks_json_once() {
             program: String::new(),
             args: Vec::new(),
         }),
-        /*mcp_executor*/ None,
+        mcp_executor(),
     );
 
     assert!(engine.warnings().is_empty());
@@ -1678,7 +1688,7 @@ fn malformed_hooks_json_is_reported_as_startup_warning() {
             program: String::new(),
             args: Vec::new(),
         }),
-        /*mcp_executor*/ None,
+        mcp_executor(),
     );
 
     assert!(engine.handlers.is_empty());
@@ -1751,7 +1761,7 @@ print(json.dumps({
             program: String::new(),
             args: Vec::new(),
         }),
-        /*mcp_executor*/ None,
+        mcp_executor(),
     );
 
     let preview = engine.preview_pre_tool_use(&PreToolUseRequest {
@@ -1779,7 +1789,6 @@ print(json.dumps({
         plugin_hook_load_warnings: Vec::new(),
         shell_program: None,
         shell_args: Vec::new(),
-        mcp_executor: None,
     });
     assert_eq!(
         listed.hooks[0].plugin_id.as_deref(),
@@ -1873,7 +1882,7 @@ fn plugin_hook_sources_expand_plugin_placeholders() {
             program: String::new(),
             args: Vec::new(),
         }),
-        /*mcp_executor*/ None,
+        mcp_executor(),
     );
 
     assert_eq!(
@@ -1918,7 +1927,7 @@ fn plugin_hook_load_warnings_are_startup_warnings() {
             program: String::new(),
             args: Vec::new(),
         }),
-        /*mcp_executor*/ None,
+        mcp_executor(),
     );
 
     assert_eq!(engine.warnings(), &["failed plugin hook".to_string()]);
@@ -1976,22 +1985,19 @@ async fn mcp_tool_hooks_expand_event_input_and_apply_pre_tool_decisions() {
     )
     .expect("config layer stack");
 
-    let unavailable = ClaudeHooksEngine::new(
-        /*enabled*/ true,
-        /*bypass_hook_trust*/ true,
-        Some(&config_layer_stack),
-        Vec::new(),
-        Vec::new(),
-        command_runtime(CommandShell {
-            program: String::new(),
-            args: Vec::new(),
-        }),
-        /*mcp_executor*/ None,
-    );
-    assert!(unavailable.handlers.is_empty());
-    assert_eq!(unavailable.warnings().len(), 1);
-    assert!(unavailable.warnings()[0].contains("MCP invocation is not available"));
-
+    let request = PreToolUseRequest {
+        session_id: ThreadId::new(),
+        turn_id: "turn-1".to_string(),
+        subagent: None,
+        cwd: cwd(),
+        transcript_path: None,
+        model: "gpt-test".to_string(),
+        permission_mode: "default".to_string(),
+        tool_name: "Bash".to_string(),
+        matcher_aliases: Vec::new(),
+        tool_use_id: "tool-1".to_string(),
+        tool_input: serde_json::json!({ "command": "rm important.txt" }),
+    };
     let calls = Arc::new(Mutex::new(Vec::new()));
     let executor = StaticMcpExecutor {
         calls: Arc::clone(&calls),
@@ -2014,23 +2020,9 @@ async fn mcp_tool_hooks_expand_event_input_and_apply_pre_tool_decisions() {
             program: String::new(),
             args: Vec::new(),
         }),
-        Some(Arc::new(executor)),
+        Arc::new(executor),
     );
-    let outcome = engine
-        .run_pre_tool_use(PreToolUseRequest {
-            session_id: ThreadId::new(),
-            turn_id: "turn-1".to_string(),
-            subagent: None,
-            cwd: cwd(),
-            transcript_path: None,
-            model: "gpt-test".to_string(),
-            permission_mode: "default".to_string(),
-            tool_name: "Bash".to_string(),
-            matcher_aliases: Vec::new(),
-            tool_use_id: "tool-1".to_string(),
-            tool_input: serde_json::json!({ "command": "rm important.txt" }),
-        })
-        .await;
+    let outcome = engine.run_pre_tool_use(request).await;
 
     assert!(outcome.should_block);
     assert_eq!(

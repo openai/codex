@@ -21,6 +21,8 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::HookEventName;
+use codex_protocol::protocol::HookExecutionMode;
+use codex_protocol::protocol::HookHandlerType;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::SessionSource;
@@ -649,6 +651,8 @@ pub(crate) struct HookRunInput {
 pub struct HookRunFact {
     pub event_name: HookEventName,
     pub hook_source: HookSource,
+    pub handler_type: HookHandlerType,
+    pub execution_mode: HookExecutionMode,
     pub status: HookRunStatus,
 }
 

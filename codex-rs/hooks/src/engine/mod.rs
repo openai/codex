@@ -162,7 +162,7 @@ pub(crate) struct ClaudeHooksEngine {
     warnings: Vec<String>,
     required_load_errors: Vec<String>,
     pub(crate) command_runtime: CommandHookRuntime,
-    mcp_executor: Option<Arc<dyn HookMcpExecutor>>,
+    pub(crate) mcp_executor: Arc<dyn HookMcpExecutor>,
 }
 
 impl ClaudeHooksEngine {
@@ -173,7 +173,7 @@ impl ClaudeHooksEngine {
         plugin_hook_sources: Vec<PluginHookSource>,
         plugin_hook_load_warnings: Vec<String>,
         command_runtime: CommandHookRuntime,
-        mcp_executor: Option<Arc<dyn HookMcpExecutor>>,
+        mcp_executor: Arc<dyn HookMcpExecutor>,
     ) -> Self {
         if !enabled {
             return Self {
@@ -186,25 +186,12 @@ impl ClaudeHooksEngine {
         }
 
         let _ = schema_loader::generated_hook_schemas();
-        let mut discovered = discovery::discover_handlers(
+        let discovered = discovery::discover_handlers(
             config_layer_stack,
             plugin_hook_sources,
             plugin_hook_load_warnings,
             bypass_hook_trust,
         );
-        if mcp_executor.is_none() {
-            discovered.handlers.retain(|handler| {
-                if matches!(&handler.kind, ConfiguredHandlerKind::McpTool { .. }) {
-                    discovered.warnings.push(format!(
-                        "skipping MCP tool hook in {}: MCP invocation is not available yet",
-                        handler.source_path.display()
-                    ));
-                    false
-                } else {
-                    true
-                }
-            });
-        }
         Self {
             handlers: discovered.handlers,
             warnings: discovered.warnings,

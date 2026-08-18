@@ -233,6 +233,33 @@ print({python_output_literal})
     Ok(())
 }
 
+fn write_mcp_tool_hook(
+    home: &Path,
+    event_name: &str,
+    matcher: Option<&str>,
+    server: &str,
+    output: &str,
+) -> Result<()> {
+    let hooks = json!({
+        "hooks": {
+            event_name: [{
+                "matcher": matcher,
+                "hooks": [{
+                    "type": "mcp_tool",
+                    "server": server,
+                    "tool": "image_scenario",
+                    "input": {
+                        "scenario": "text_only",
+                        "caption": output,
+                    },
+                    "timeout": 5,
+                }],
+            }],
+        },
+    });
+    fs::write(home.join("hooks.json"), hooks.to_string()).context("write MCP tool hook config")
+}
+
 fn read_hook_inputs(home: &Path, log_name: &str) -> Result<Vec<Value>> {
     fs::read_to_string(home.join(log_name))
         .with_context(|| format!("read {log_name}"))?
@@ -416,6 +443,297 @@ async fn run_mcp_permission_request_hook_test(outcome: PermissionRequestHookOutc
     assert!(
         hook_inputs[0].get("tool_use_id").is_none(),
         "PermissionRequest input should not include a tool_use_id",
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_tool_hook_interpolates_prompt_and_runs_without_tool_approval() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let response = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "hook context received"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let rmcp_test_server_bin = stdio_server_bin()?;
+    let test = test_codex()
+        .with_pre_build_hook(|home| {
+            write_mcp_tool_hook(
+                home,
+                "UserPromptSubmit",
+                /*matcher*/ None,
+                RMCP_SERVER,
+                r#"{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"MCP scanner checked ${prompt}"}}"#,
+            )
+            .expect("write MCP prompt hook fixture");
+        })
+        .with_config(move |config| {
+            enable_hooks_and_rmcp_server(
+                config,
+                rmcp_test_server_bin,
+                AppToolApproval::Prompt,
+                /*prefix_mcp_tool_names*/ true,
+            );
+        })
+        .build(&server)
+        .await?;
+    wait_for_mcp_server(&test.codex, RMCP_SERVER).await?;
+
+    tokio::time::timeout(
+        Duration::from_secs(15),
+        test.submit_turn("review checkout.rs"),
+    )
+    .await
+    .context("MCP hook must not wait for model-tool approval")??;
+
+    assert!(
+        response
+            .single_request()
+            .message_input_texts("developer")
+            .contains(&"MCP scanner checked review checkout.rs".to_string())
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_tool_hook_passes_thread_metadata_to_model_hidden_tools() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let response = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "thread context received"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let rmcp_test_server_bin = stdio_server_bin()?;
+    let test = test_codex()
+        .with_pre_build_hook(|home| {
+            let hooks = json!({
+                "hooks": {
+                    "UserPromptSubmit": [{
+                        "hooks": [{
+                            "type": "mcp_tool",
+                            "server": RMCP_SERVER,
+                            "tool": "thread_hint",
+                            "input": {},
+                            "timeout": 5,
+                        }],
+                    }],
+                },
+            });
+            fs::write(home.join("hooks.json"), hooks.to_string())
+                .expect("write model-hidden MCP tool hook config");
+        })
+        .with_config(move |config| {
+            enable_hooks_and_rmcp_server(
+                config,
+                rmcp_test_server_bin,
+                AppToolApproval::Prompt,
+                /*prefix_mcp_tool_names*/ true,
+            );
+        })
+        .build(&server)
+        .await?;
+    wait_for_mcp_server(&test.codex, RMCP_SERVER).await?;
+
+    test.submit_turn("load thread context").await?;
+
+    let request = response.single_request();
+    let expected_context = format!(
+        "manual history hint for thread {}\nunstructured notes/thread_hint fixture result",
+        test.session_configured.thread_id,
+    );
+    assert!(
+        request
+            .message_input_texts("developer")
+            .contains(&expected_context)
+    );
+    assert!(
+        request
+            .tool_by_name(RMCP_PREFIXED_NAMESPACE, "thread_hint")
+            .is_none(),
+        "the hook tool must remain hidden from the model"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_tool_hook_marks_thread_memory_mode_polluted_when_configured() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "hook context received"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let rmcp_test_server_bin = stdio_server_bin()?;
+    let test = test_codex()
+        .with_pre_build_hook(|home| {
+            write_mcp_tool_hook(
+                home,
+                "UserPromptSubmit",
+                /*matcher*/ None,
+                RMCP_SERVER,
+                r#"{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"external MCP context"}}"#,
+            )
+            .expect("write MCP prompt hook fixture");
+        })
+        .with_config(move |config| {
+            enable_hooks_and_rmcp_server(
+                config,
+                rmcp_test_server_bin,
+                AppToolApproval::Prompt,
+                /*prefix_mcp_tool_names*/ true,
+            );
+            config
+                .features
+                .enable(Feature::Sqlite)
+                .expect("test config should allow feature update");
+            config.memories.disable_on_external_context = true;
+        })
+        .build(&server)
+        .await?;
+    wait_for_mcp_server(&test.codex, RMCP_SERVER).await?;
+
+    let db = test.codex.state_db().expect("state db enabled");
+    let thread_id = test.session_configured.thread_id;
+    test.submit_turn("review checkout.rs").await?;
+
+    assert_eq!(
+        db.get_thread_memory_mode(thread_id).await?,
+        Some("polluted".to_string())
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_tool_hook_blocks_model_tool_without_recursive_hooks_or_approval() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "mcp-hook-denied-echo";
+    let arguments = json!({ "message": RMCP_ECHO_MESSAGE }).to_string();
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call_with_namespace(
+                    call_id,
+                    RMCP_PREFIXED_NAMESPACE,
+                    "echo",
+                    &arguments,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "the MCP hook blocked that tool"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let rmcp_test_server_bin = stdio_server_bin()?;
+    let test = test_codex()
+        .with_pre_build_hook(|home| {
+            write_mcp_tool_hook(
+                home,
+                "PreToolUse",
+                Some("mcp__rmcp__.*"),
+                RMCP_SERVER,
+                r#"{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"MCP blocked ${tool_input.message}"}}"#,
+            )
+            .expect("write MCP denial hook fixture");
+        })
+        .with_config(move |config| {
+            enable_hooks_and_rmcp_server(
+                config,
+                rmcp_test_server_bin,
+                AppToolApproval::Prompt,
+                /*prefix_mcp_tool_names*/ true,
+            );
+        })
+        .build(&server)
+        .await?;
+    wait_for_mcp_server(&test.codex, RMCP_SERVER).await?;
+
+    tokio::time::timeout(
+        Duration::from_secs(15),
+        test.submit_turn("call the blocked MCP tool"),
+    )
+    .await
+    .context("MCP hook must not recurse or request model-tool approval")??;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    let output = requests[1].function_call_output(call_id);
+    let output = output["output"]
+        .as_str()
+        .context("blocked model tool output")?;
+    assert!(output.contains("MCP blocked hook e2e ping"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_tool_hook_fails_open_when_server_is_unavailable() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let response = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "continued without the missing server"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let test = test_codex()
+        .with_pre_build_hook(|home| {
+            write_mcp_tool_hook(
+                home,
+                "UserPromptSubmit",
+                /*matcher*/ None,
+                "missing-server",
+                r#"{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"this must not appear"}}"#,
+            )
+            .expect("write unavailable MCP server fixture");
+        })
+        .with_config(trust_discovered_hooks)
+        .build(&server)
+        .await?;
+
+    tokio::time::timeout(Duration::from_secs(5), test.submit_turn("continue"))
+        .await
+        .context("unavailable MCP hook server must fail immediately")??;
+
+    assert!(
+        !response
+            .single_request()
+            .message_input_texts("developer")
+            .iter()
+            .any(|message| message.contains("this must not appear"))
     );
 
     Ok(())

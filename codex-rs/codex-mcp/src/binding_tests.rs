@@ -269,6 +269,7 @@ async fn prepared_call_does_not_reroute_after_captured_connection_closes() {
         .call(
             Some(serde_json::json!({"query": "codex"})),
             /*meta*/ None,
+            /*timeout*/ None,
         )
         .await
         .expect_err("a call bound to a closed connection must fail");
@@ -297,6 +298,7 @@ async fn prepared_call_is_rejected_after_catalog_refresh() {
         .call(
             Some(serde_json::json!({"query": "codex"})),
             /*meta*/ None,
+            /*timeout*/ None,
         )
         .await
         .expect_err("a call from an older catalog must be rejected");
@@ -323,7 +325,7 @@ async fn stale_prepared_call_does_not_run_preparation() {
     let marker = Arc::clone(&prepared_side_effect_ran);
 
     prepared
-        .call_with_preparation(|| async move {
+        .call_with_preparation(/*requested_timeout*/ None, || async move {
             marker.store(true, Ordering::SeqCst);
             Ok((None, None))
         })
@@ -351,7 +353,7 @@ async fn preparation_holds_catalog_authority_until_it_finishes() {
     let finish = Arc::clone(&finish_preparation);
     let call = tokio::spawn(async move {
         prepared
-            .call_with_preparation(|| async move {
+            .call_with_preparation(/*requested_timeout*/ None, || async move {
                 started.notify_one();
                 finish.notified().await;
                 Err(anyhow::anyhow!("stop after preparation"))

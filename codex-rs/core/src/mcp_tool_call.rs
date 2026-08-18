@@ -409,7 +409,7 @@ async fn handle_approved_mcp_tool_call(
     let result = async {
         let result = async {
             let result = prepared_call
-                .call_with_preparation(|| async {
+                .call_with_preparation(/*requested_timeout*/ None, || async {
                     if let McpToolApprovalApplication::Apply { decision, policy } =
                         &approval_application
                     {

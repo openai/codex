@@ -1205,9 +1205,7 @@ async fn thread_start_fails_when_managed_hook_handler_is_unsupported() -> Result
 matcher = "^Bash$"
 
 [[hooks.PreToolUse.hooks]]
-type = "mcp_tool"
-server = "security"
-tool = "scan"
+type = "prompt"
 "#,
     )?;
 
@@ -1225,10 +1223,42 @@ tool = "scan"
     .await??;
 
     assert!(
-        error.error.message.contains("MCP tool hook"),
+        error.error.message.contains("prompt hook"),
         "unexpected error message: {}",
         error.error.message
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_succeeds_when_managed_mcp_hook_is_supported() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
+    std::fs::write(
+        codex_home.path().join("requirements.toml"),
+        r#"[hooks]
+
+[[hooks.PreToolUse]]
+matcher = "^Bash$"
+
+[[hooks.PreToolUse.hooks]]
+type = "mcp_tool"
+server = "security"
+tool = "scan"
+"#,
+    )?;
+
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let response = app_server
+        .start_thread(ThreadStartParams::default())
+        .await?;
+
+    assert!(!response.thread.id.is_empty());
 
     Ok(())
 }
