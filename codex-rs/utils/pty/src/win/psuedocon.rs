@@ -85,20 +85,10 @@ shared_library!(Ntdll,
     ) -> NTSTATUS,
 );
 
-fn load_conpty() -> ConPtyFuncs {
-    let kernel = ConPtyFuncs::open(Path::new("kernel32.dll")).expect(
+lazy_static! {
+    static ref CONPTY: ConPtyFuncs = ConPtyFuncs::open(Path::new("kernel32.dll")).expect(
         "this system does not support conpty.  Windows 10 October 2018 or newer is required",
     );
-
-    if let Ok(sideloaded) = ConPtyFuncs::open(Path::new("conpty.dll")) {
-        sideloaded
-    } else {
-        kernel
-    }
-}
-
-lazy_static! {
-    static ref CONPTY: ConPtyFuncs = load_conpty();
 }
 
 pub fn conpty_supported() -> bool {

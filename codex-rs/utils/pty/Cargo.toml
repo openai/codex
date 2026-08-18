@@ -24,6 +24,7 @@ winapi = { version = "0.3.9", features = [
     "handleapi",
     "jobapi",
     "jobapi2",
+    "libloaderapi",
     "minwinbase",
     "processthreadsapi",
     "synchapi",
