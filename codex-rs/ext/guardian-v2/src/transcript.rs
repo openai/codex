@@ -34,6 +34,37 @@ struct TranscriptEntry {
     tokens: usize,
 }
 
+fn retained_tokens(
+    entries: &[TranscriptEntry],
+    retained: &VecDeque<usize>,
+    kind: TranscriptEntryKind,
+) -> usize {
+    retained
+        .iter()
+        .filter_map(|&index| {
+            let entry = &entries[index];
+            (entry.kind == kind).then_some(entry.tokens)
+        })
+        .sum()
+}
+
+fn evict_oldest_matching(
+    entries: &[TranscriptEntry],
+    retained: &mut VecDeque<usize>,
+    count: usize,
+    mut matches: impl FnMut(TranscriptEntryKind) -> bool,
+) {
+    let mut remaining = count;
+    retained.retain(|&index| {
+        if remaining > 0 && matches(entries[index].kind) {
+            remaining -= 1;
+            false
+        } else {
+            true
+        }
+    });
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TranscriptConfig {
     pub(crate) sources: Vec<TranscriptSource>,
@@ -288,7 +319,6 @@ impl TranscriptConfig {
 
         let mut included = vec![false; entries.len()];
         let mut message_tokens = 0;
-        let mut tool_tokens = 0;
         let user_indices = entries
             .iter()
             .enumerate()
@@ -320,34 +350,67 @@ impl TranscriptConfig {
             message_tokens += entries[index].tokens;
         }
 
-        let mut retained_non_user_entries = 0;
-        for (index, entry) in entries.iter().enumerate().rev() {
-            if entry.kind == TranscriptEntryKind::User
-                || retained_non_user_entries >= self.max_recent_non_user_entries
-            {
+        let available_message_tokens = self
+            .max_message_transcript_tokens
+            .saturating_sub(message_tokens);
+        let mut retained_non_user = VecDeque::new();
+
+        // Replay the transcript as an append-only bounded buffer. When a new entry would overflow
+        // a budget, remove half of the existing entries in that pool before appending it. This
+        // keeps the retained prefix stable between overflow points without storing sampler state.
+        for (index, entry) in entries.iter().enumerate() {
+            if entry.kind == TranscriptEntryKind::User {
                 continue;
             }
 
-            let fits_budget = match entry.kind {
-                TranscriptEntryKind::Tool => {
-                    tool_tokens + entry.tokens <= self.max_tool_transcript_tokens
-                }
-                TranscriptEntryKind::Message => {
-                    message_tokens + entry.tokens <= self.max_message_transcript_tokens
-                }
+            let token_budget = match entry.kind {
+                TranscriptEntryKind::Tool => self.max_tool_transcript_tokens,
+                TranscriptEntryKind::Message => available_message_tokens,
                 TranscriptEntryKind::User => unreachable!("user entries were selected separately"),
             };
-            if !fits_budget {
+
+            // An entry that cannot fit on its own must not evict retained evidence.
+            if entry.tokens > token_budget || self.max_recent_non_user_entries == 0 {
                 continue;
             }
 
-            included[index] = true;
-            retained_non_user_entries += 1;
-            match entry.kind {
-                TranscriptEntryKind::Tool => tool_tokens += entry.tokens,
-                TranscriptEntryKind::Message => message_tokens += entry.tokens,
-                TranscriptEntryKind::User => unreachable!("user entries were selected separately"),
+            if retained_tokens(&entries, &retained_non_user, entry.kind)
+                .saturating_add(entry.tokens)
+                > token_budget
+            {
+                let retained_kind_count = retained_non_user
+                    .iter()
+                    .filter(|&&retained_index| entries[retained_index].kind == entry.kind)
+                    .count();
+                evict_oldest_matching(
+                    &entries,
+                    &mut retained_non_user,
+                    retained_kind_count.div_ceil(2),
+                    |kind| kind == entry.kind,
+                );
+                while retained_tokens(&entries, &retained_non_user, entry.kind)
+                    .saturating_add(entry.tokens)
+                    > token_budget
+                {
+                    evict_oldest_matching(
+                        &entries,
+                        &mut retained_non_user,
+                        /*count*/ 1,
+                        |kind| kind == entry.kind,
+                    );
+                }
             }
+
+            if retained_non_user.len().saturating_add(1) > self.max_recent_non_user_entries {
+                let entries_to_evict = retained_non_user.len().div_ceil(2);
+                evict_oldest_matching(&entries, &mut retained_non_user, entries_to_evict, |_| true);
+            }
+
+            retained_non_user.push_back(index);
+        }
+
+        for index in retained_non_user {
+            included[index] = true;
         }
 
         entries

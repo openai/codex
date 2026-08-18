@@ -261,6 +261,187 @@ fn transcript_reserves_separate_budget_for_recent_tool_evidence() {
             .sum::<usize>()
             <= MAX_TOOL_TRANSCRIPT_TOKENS
     );
+
+    let first_retained_tool = tool_entries
+        .first()
+        .expect("at least one tool entry should be retained")
+        .to_string();
+    items.push(ResponseItem::FunctionCall {
+        id: None,
+        name: "exec_command".to_string(),
+        namespace: None,
+        arguments: format!("tool evidence 12: {}", "signal ".repeat(1_000)),
+        encrypted_function_args: None,
+        call_id: "call-12".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    });
+    let next_transcript = TranscriptConfig::default().build(&items);
+    let next_first_retained_tool = next_transcript
+        .iter()
+        .find(|entry| entry.contains("tool exec_command call:"))
+        .expect("at least one tool entry should be retained");
+
+    assert_eq!(next_first_retained_tool, &first_retained_tool);
+    assert!(
+        next_transcript
+            .iter()
+            .filter(|entry| entry.contains("tool exec_command call:"))
+            .map(|entry| TruncationPolicy::Bytes(entry.len()).token_budget())
+            .sum::<usize>()
+            <= MAX_TOOL_TRANSCRIPT_TOKENS
+    );
+}
+
+#[test]
+fn transcript_preserves_newest_manual_approval_when_message_budget_overflows() {
+    let older_text = "older assistant evidence ".repeat(20);
+    let approval_text = format!(
+        "{MANUAL_APPROVAL_DEVELOPER_PREFIX} {}",
+        "approval details ".repeat(20)
+    );
+    let older_entry = format!("[1] assistant: {older_text}\n");
+    let approval_entry = format!("[2] developer: {approval_text}\n");
+    let message_budget = TruncationPolicy::Bytes(older_entry.len())
+        .token_budget()
+        .max(TruncationPolicy::Bytes(approval_entry.len()).token_budget());
+    let items = vec![
+        ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText { text: older_text }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: approval_text,
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ];
+
+    let transcript = TranscriptConfig {
+        max_message_transcript_tokens: message_budget,
+        ..TranscriptConfig::default()
+    }
+    .build(&items);
+
+    assert_eq!(transcript, vec![approval_entry]);
+}
+
+#[test]
+fn rejected_message_does_not_evict_retained_tool_entries() {
+    let user_text = "Inspect the workspace.";
+    let user_entry = format!("[1] user: {user_text}\n");
+    let mut items = vec![ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: user_text.to_string(),
+        }],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    }];
+    items.extend((0..40).map(|index| ResponseItem::FunctionCall {
+        id: None,
+        name: "exec_command".to_string(),
+        namespace: None,
+        arguments: format!("tool evidence {index}"),
+        encrypted_function_args: None,
+        call_id: format!("call-{index}"),
+        internal_chat_message_metadata_passthrough: None,
+    }));
+    items.push(ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: "This message has no remaining budget.".to_string(),
+        }],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    });
+    let mut expected = vec![user_entry.clone()];
+    expected.extend((0..40).map(|index| {
+        format!(
+            "[{}] tool exec_command call: tool evidence {index}\n",
+            index + 2
+        )
+    }));
+
+    let transcript = TranscriptConfig {
+        max_message_transcript_tokens: TruncationPolicy::Bytes(user_entry.len()).token_budget(),
+        ..TranscriptConfig::default()
+    }
+    .build(&items);
+
+    assert_eq!(transcript, expected);
+}
+
+#[test]
+fn transcript_evicts_non_user_entries_in_cacheable_chunks() {
+    let config = TranscriptConfig {
+        max_recent_non_user_entries: 4,
+        ..TranscriptConfig::default()
+    };
+    let build_transcript = |tool_call_count| {
+        let mut items = vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "Inspect the workspace.".to_string(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        }];
+        items.extend(
+            (0..tool_call_count).map(|index| ResponseItem::FunctionCall {
+                id: None,
+                name: "exec_command".to_string(),
+                namespace: None,
+                arguments: format!("tool evidence {index}"),
+                encrypted_function_args: None,
+                call_id: format!("call-{index}"),
+                internal_chat_message_metadata_passthrough: None,
+            }),
+        );
+        config.build(&items)
+    };
+
+    let first_overflow = build_transcript(5);
+    let next_transcript = build_transcript(6);
+    let second_overflow = build_transcript(7);
+
+    assert_eq!(
+        first_overflow,
+        vec![
+            "[1] user: Inspect the workspace.\n",
+            "[4] tool exec_command call: tool evidence 2\n",
+            "[5] tool exec_command call: tool evidence 3\n",
+            "[6] tool exec_command call: tool evidence 4\n",
+        ]
+    );
+    assert_eq!(
+        next_transcript,
+        vec![
+            "[1] user: Inspect the workspace.\n",
+            "[4] tool exec_command call: tool evidence 2\n",
+            "[5] tool exec_command call: tool evidence 3\n",
+            "[6] tool exec_command call: tool evidence 4\n",
+            "[7] tool exec_command call: tool evidence 5\n",
+        ]
+    );
+    assert_eq!(
+        second_overflow,
+        vec![
+            "[1] user: Inspect the workspace.\n",
+            "[6] tool exec_command call: tool evidence 4\n",
+            "[7] tool exec_command call: tool evidence 5\n",
+            "[8] tool exec_command call: tool evidence 6\n",
+        ]
+    );
 }
 
 #[test]
