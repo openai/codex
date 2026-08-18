@@ -9,6 +9,7 @@ use crate::is_openai_curated_marketplace_name;
 use crate::marketplace::marketplace_root_dir;
 use crate::marketplace_add::MarketplaceSource;
 use crate::marketplace_add::parse_marketplace_source;
+use crate::remote::RemotePluginScope;
 use crate::startup_sync::curated_plugins_api_marketplace_path;
 use crate::startup_sync::curated_plugins_repo_path;
 use codex_config::ConfigLayerStack;
@@ -107,13 +108,17 @@ impl MarketplacePolicy {
         marketplace_path: &AbsolutePathBuf,
         marketplace_name: &str,
     ) -> Result<(), String> {
-        if !self.is_restricted() {
-            return Ok(());
-        }
-
         let root = marketplace_root_dir(marketplace_path).map_err(|err| err.to_string())?;
         if let Some(expected_name) = managed_marketplace_name(codex_home, marketplace_path, &root) {
             return validate_expected_marketplace_name(expected_name, marketplace_name);
+        }
+        if is_reserved_marketplace_name(marketplace_name) {
+            return Err(format!(
+                "marketplace `{marketplace_name}` is reserved and cannot be loaded from this source"
+            ));
+        }
+        if !self.is_restricted() {
+            return Ok(());
         }
 
         let user_config = config_layer_stack.effective_user_config().ok_or_else(|| {
@@ -208,9 +213,6 @@ pub(crate) fn project_effective_user_config(
 ) -> Option<toml::Value> {
     let mut user_config = config_layer_stack.effective_user_config()?;
     let policy = MarketplacePolicy::from_requirements(config_layer_stack.requirements());
-    if !policy.is_restricted() {
-        return Some(user_config);
-    }
     let allowed_marketplace_names =
         allowed_configured_marketplace_names_with_policy(&user_config, &policy, codex_home);
     let configured_marketplace_names = user_config
@@ -232,11 +234,13 @@ pub(crate) fn project_effective_user_config(
     {
         plugins.retain(|plugin_key, _| {
             let Ok(plugin_id) = PluginId::parse(plugin_key) else {
-                return false;
+                return !policy.is_restricted();
             };
-            (is_openai_curated_marketplace_name(&plugin_id.marketplace_name)
-                && !configured_marketplace_names.contains(&plugin_id.marketplace_name))
-                || allowed_marketplace_names.contains(&plugin_id.marketplace_name)
+            let marketplace_name = &plugin_id.marketplace_name;
+            if configured_marketplace_names.contains(marketplace_name) {
+                return allowed_marketplace_names.contains(marketplace_name);
+            }
+            is_openai_curated_marketplace_name(marketplace_name) || !policy.is_restricted()
         });
     }
     Some(user_config)
@@ -264,14 +268,13 @@ fn allowed_configured_marketplace_names_with_policy(
     else {
         return HashSet::new();
     };
-    if !policy.is_restricted() {
-        return marketplaces.keys().cloned().collect();
-    }
     marketplaces
         .iter()
         .filter_map(|(marketplace_name, marketplace)| {
             let allowed = match managed_marketplace_config_name(codex_home, marketplace) {
                 Some(expected_name) => expected_name == marketplace_name,
+                None if is_reserved_marketplace_name(marketplace_name) => false,
+                None if !policy.is_restricted() => true,
                 None => policy
                     .validate_configured_marketplace(marketplace_name, marketplace)
                     .is_ok(),
@@ -306,13 +309,13 @@ pub(crate) fn validate_marketplace_source_for_add(
     source: &MarketplaceSource,
 ) -> Result<Option<&'static str>, String> {
     let policy = MarketplacePolicy::from_requirements(requirements);
-    if !policy.is_restricted() {
-        return Ok(None);
-    }
     if let MarketplaceSource::Local { path } = source
         && let Some(expected_name) = managed_local_marketplace_name(codex_home, path)
     {
         return Ok(Some(expected_name));
+    }
+    if !policy.is_restricted() {
+        return Ok(None);
     }
     policy.validate_source(source)?;
     Ok(None)
@@ -325,7 +328,7 @@ pub(crate) fn validate_marketplace_name_for_add(
     if let Some(expected_name) = expected_name {
         return validate_expected_marketplace_name(expected_name, marketplace_name);
     }
-    if is_openai_curated_marketplace_name(marketplace_name) {
+    if is_reserved_marketplace_name(marketplace_name) {
         return Err(format!(
             "marketplace `{marketplace_name}` is reserved and cannot be added from this source"
         ));
@@ -443,18 +446,30 @@ fn validate_expected_marketplace_name(
         })
 }
 
+fn is_reserved_marketplace_name(marketplace_name: &str) -> bool {
+    matches!(
+        marketplace_name,
+        OPENAI_CURATED_MARKETPLACE_NAME
+            | OPENAI_API_CURATED_MARKETPLACE_NAME
+            | OPENAI_BUNDLED_MARKETPLACE_NAME
+            | OPENAI_BUNDLED_ALPHA_MARKETPLACE_NAME
+            | OPENAI_PRIMARY_RUNTIME_MARKETPLACE_NAME
+    ) || RemotePluginScope::from_marketplace_name(marketplace_name).is_some()
+}
+
 fn managed_marketplace_name(
     codex_home: &Path,
     marketplace_path: &AbsolutePathBuf,
     root: &AbsolutePathBuf,
 ) -> Option<&'static str> {
-    if paths_match_after_normalization(
+    if is_expected_managed_path(
         marketplace_path.as_path(),
-        curated_plugins_api_marketplace_path(codex_home),
-    ) {
+        &curated_plugins_api_marketplace_path(codex_home),
+    ) && is_expected_managed_path(root.as_path(), &curated_plugins_repo_path(codex_home))
+    {
         return Some(OPENAI_API_CURATED_MARKETPLACE_NAME);
     }
-    if paths_match_after_normalization(root.as_path(), curated_plugins_repo_path(codex_home)) {
+    if is_expected_managed_path(root.as_path(), &curated_plugins_repo_path(codex_home)) {
         return Some(OPENAI_CURATED_MARKETPLACE_NAME);
     }
     managed_local_marketplace_name(codex_home, root.as_path())
@@ -483,14 +498,42 @@ fn managed_local_marketplace_name(codex_home: &Path, root: &Path) -> Option<&'st
         let expected_root = codex_home
             .join(".tmp/bundled-marketplaces")
             .join(marketplace_name);
-        if paths_match_after_normalization(root, &expected_root) {
+        if is_expected_managed_path(root, &expected_root) {
             return Some(marketplace_name);
         }
     }
 
     let runtime_root = primary_runtime_marketplace_root()?;
-    paths_match_after_normalization(root, &runtime_root)
-        .then_some(OPENAI_PRIMARY_RUNTIME_MARKETPLACE_NAME)
+    is_expected_managed_path(root, &runtime_root).then_some(OPENAI_PRIMARY_RUNTIME_MARKETPLACE_NAME)
+}
+
+fn is_expected_managed_path(path: &Path, expected: &Path) -> bool {
+    if path == expected {
+        return true;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        path.strip_prefix("/private/var")
+            .is_ok_and(|suffix| Path::new("/var").join(suffix) == expected)
+            || expected
+                .strip_prefix("/private/var")
+                .is_ok_and(|suffix| Path::new("/var").join(suffix) == path)
+    }
+    #[cfg(windows)]
+    {
+        let path = path.to_string_lossy();
+        let expected = expected.to_string_lossy();
+        let path = codex_utils_absolute_path::normalize_windows_device_path(&path)
+            .unwrap_or_else(|| path.into_owned());
+        let expected = codex_utils_absolute_path::normalize_windows_device_path(&expected)
+            .unwrap_or_else(|| expected.into_owned());
+        path.replace('/', "\\")
+            .eq_ignore_ascii_case(&expected.replace('/', "\\"))
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    {
+        false
+    }
 }
 
 pub(crate) fn primary_runtime_marketplace_root() -> Option<PathBuf> {
@@ -511,7 +554,12 @@ fn primary_runtime_cache_dir_from_user_profile(user_profile: Option<PathBuf>) ->
     user_profile.map(|profile| profile.join(".cache"))
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+fn primary_runtime_cache_dir() -> Option<PathBuf> {
+    dirs::home_dir().map(|home| home.join(".cache"))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn primary_runtime_cache_dir() -> Option<PathBuf> {
     dirs::cache_dir()
 }

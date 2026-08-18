@@ -10,6 +10,7 @@ use crate::installed_marketplaces::marketplace_install_root;
 use crate::marketplace::validate_marketplace_root;
 use crate::marketplace_add::MarketplaceSource;
 use crate::marketplace_policy::MarketplacePolicy;
+use crate::marketplace_policy::validate_marketplace_name_for_add;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerStack;
 use codex_config::MarketplaceConfigUpdate;
@@ -99,7 +100,10 @@ pub fn upgrade_configured_git_marketplaces(
     let policy = MarketplacePolicy::from_requirements(config_layer_stack.requirements());
     for marketplace in marketplaces {
         let normalized_source =
-            match policy.validate_git_source(&marketplace.source, marketplace.ref_name.clone()) {
+            match validate_marketplace_name_for_add(/*expected_name*/ None, &marketplace.name)
+                .and_then(|()| {
+                    policy.validate_git_source(&marketplace.source, marketplace.ref_name.clone())
+                }) {
                 Ok(normalized_source) => normalized_source,
                 Err(message) => {
                     errors.push(ConfiguredMarketplaceUpgradeError {

@@ -19,6 +19,7 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginDisabledReason;
+use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginInstallPolicySource;
 use codex_app_server_protocol::PluginInstalledParams;
@@ -154,6 +155,68 @@ async fn plugin_list_skips_invalid_marketplace_file_and_reports_error() -> Resul
             .contains("invalid marketplace file"),
         "unexpected error: {:?}",
         response.marketplace_load_errors
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_rpcs_reject_repository_spoofing_openai_curated() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let repository = TempDir::new()?;
+    std::fs::create_dir_all(repository.path().join(".git"))?;
+    std::fs::create_dir_all(repository.path().join(".agents/plugins"))?;
+    std::fs::create_dir_all(repository.path().join("attacker/.codex-plugin"))?;
+    std::fs::write(
+        repository.path().join("attacker/.codex-plugin/plugin.json"),
+        r#"{"name":"attacker"}"#,
+    )?;
+    let marketplace_path =
+        AbsolutePathBuf::try_from(repository.path().join(".agents/plugins/marketplace.json"))?;
+    std::fs::write(
+        marketplace_path.as_path(),
+        r#"{"name":"openai-curated","plugins":[{"name":"attacker","source":{"source":"local","path":"./attacker"}}]}"#,
+    )?;
+    write_plugins_enabled_config(codex_home.path())?;
+    let original_config = std::fs::read(codex_home.path().join("config.toml"))?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+
+    let request_id = mcp
+        .send_plugin_list_request(PluginListParams {
+            cwds: Some(vec![AbsolutePathBuf::try_from(repository.path())?]),
+            marketplace_kinds: None,
+            force_refetch: false,
+        })
+        .await?;
+    let response: PluginListResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
+    assert!(
+        response
+            .marketplaces
+            .iter()
+            .all(|marketplace| marketplace.path.as_ref() != Some(&marketplace_path))
+    );
+
+    let request_id = mcp
+        .send_plugin_install_request(PluginInstallParams {
+            marketplace_path: Some(marketplace_path),
+            remote_marketplace_name: None,
+            install_attempt_id: None,
+            plugin_name: "attacker".to_string(),
+        })
+        .await?;
+    let error = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert!(error.error.message.contains("reserved"));
+    assert!(!codex_home.path().join("plugins/cache").exists());
+    assert_eq!(
+        std::fs::read(codex_home.path().join("config.toml"))?,
+        original_config
     );
     Ok(())
 }

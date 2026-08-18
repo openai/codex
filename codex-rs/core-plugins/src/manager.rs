@@ -40,7 +40,6 @@ use crate::marketplace::home_dir;
 use crate::marketplace::list_marketplaces_with_home;
 use crate::marketplace::plugin_interface_with_marketplace_category;
 use crate::marketplace_policy::MarketplacePolicy;
-use crate::marketplace_policy::allowed_configured_marketplace_names;
 use crate::marketplace_policy::configured_plugins_from_stack;
 use crate::marketplace_upgrade::ConfiguredMarketplaceUpgradeError;
 use crate::marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome;
@@ -2921,16 +2920,15 @@ impl PluginsManager {
     ) -> Result<MarketplaceListOutcome, MarketplaceError> {
         let mut outcome = list_marketplaces_with_home(roots, home_dir().as_deref())?;
         let policy = MarketplacePolicy::from_requirements(config.config_layer_stack.requirements());
-        if !policy.is_restricted() {
-            return Ok(outcome);
-        }
-        let allowed_marketplace_names = allowed_configured_marketplace_names(
-            &config.config_layer_stack,
-            self.codex_home.as_path(),
-        );
         outcome.marketplaces.retain(|marketplace| {
-            is_openai_curated_marketplace_name(&marketplace.name)
-                || allowed_marketplace_names.contains(&marketplace.name)
+            policy
+                .validate_install(
+                    &config.config_layer_stack,
+                    self.codex_home.as_path(),
+                    &marketplace.path,
+                    &marketplace.name,
+                )
+                .is_ok()
         });
         Ok(outcome)
     }
