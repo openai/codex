@@ -259,6 +259,10 @@ pub use resolved_permissions::WindowsSandboxTokenMode;
 #[cfg(target_os = "windows")]
 pub use resolved_permissions::token_mode_for_permission_profile;
 #[cfg(target_os = "windows")]
+pub use setup::OFFLINE_USERNAME;
+#[cfg(target_os = "windows")]
+pub use setup::ONLINE_USERNAME;
+#[cfg(target_os = "windows")]
 pub use setup::SETUP_VERSION;
 #[cfg(target_os = "windows")]
 pub use setup::SandboxSetupRequest;
@@ -286,6 +290,8 @@ pub use setup_error::SetupErrorReport;
 pub use setup_error::SetupFailure;
 #[cfg(target_os = "windows")]
 pub use setup_error::extract_failure as extract_setup_failure;
+#[cfg(target_os = "windows")]
+pub use setup_error::read_setup_error_report;
 #[cfg(target_os = "windows")]
 pub use setup_error::sanitize_setup_metric_tag_value;
 #[cfg(target_os = "windows")]

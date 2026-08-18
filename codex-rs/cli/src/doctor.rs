@@ -79,6 +79,7 @@ mod network;
 mod output;
 mod progress;
 mod runtime;
+mod sandbox;
 mod security;
 mod system;
 mod thread_inventory;
@@ -100,6 +101,7 @@ use progress::DoctorProgress;
 use progress::doctor_progress;
 use runtime::runtime_check;
 use runtime::search_check;
+use sandbox::sandbox_check;
 use system::system_check;
 use thread_inventory::thread_inventory_check;
 use title::terminal_title_check;
@@ -1696,41 +1698,6 @@ async fn mcp_check_from_servers(servers: &HashMap<String, McpServerConfig>) -> D
         check = check.remediation("Set the missing MCP env vars or disable the affected server.");
     }
     check
-}
-
-fn sandbox_check(config: &Config, arg0_paths: &Arg0DispatchPaths) -> DoctorCheck {
-    let mut details = Vec::new();
-    details.push(format!(
-        "approval policy: {:?}",
-        config.permissions.approval_policy.value()
-    ));
-    let file_system_sandbox = config.permissions.file_system_sandbox_policy();
-    details.push(format!("filesystem sandbox: {}", file_system_sandbox.kind));
-    details.push(format!(
-        "network sandbox: {}",
-        config.permissions.network_sandbox_policy()
-    ));
-    push_path_detail(
-        &mut details,
-        "codex-linux-sandbox helper",
-        arg0_paths.codex_linux_sandbox_exe.as_deref(),
-    );
-    push_path_detail(
-        &mut details,
-        "execve wrapper helper",
-        arg0_paths.main_execve_wrapper_exe.as_deref(),
-    );
-
-    let mut status = CheckStatus::Ok;
-    let mut summary = "sandbox configuration is readable".to_string();
-    if let Some(helper) = arg0_paths.codex_linux_sandbox_exe.as_deref()
-        && !helper.exists()
-    {
-        status = CheckStatus::Warning;
-        summary = "Linux sandbox helper path does not exist".to_string();
-    }
-
-    DoctorCheck::new("sandbox.helpers", "sandbox", status, summary).details(details)
 }
 
 #[derive(Clone, Debug)]
