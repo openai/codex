@@ -6,7 +6,7 @@ use codex_exec_server_protocol::JSONRPCMessage;
 use crate::ExecServerError;
 
 const LENGTH_PREFIX_BYTES: usize = size_of::<u32>();
-const MAX_NOISE_JSONRPC_MESSAGE_LEN: usize = 64 * 1024 * 1024;
+pub(crate) const MAX_NOISE_JSONRPC_MESSAGE_LEN: usize = 64 * 1024 * 1024;
 pub(crate) const NOISE_RECORD_PLAINTEXT_LEN: usize = 60 * 1024;
 
 /// Serialize one JSON-RPC message into the encrypted record byte stream.
@@ -20,6 +20,14 @@ pub(crate) fn frame_jsonrpc_message(message: &JSONRPCMessage) -> Result<Vec<u8>,
     serde_json::to_writer(&mut framed, message)?;
     let prefix = message_length_prefix(framed.len() - LENGTH_PREFIX_BYTES)?;
     framed[..LENGTH_PREFIX_BYTES].copy_from_slice(&prefix);
+    Ok(framed)
+}
+
+pub(crate) fn frame_message(message: &[u8]) -> Result<Vec<u8>, ExecServerError> {
+    let prefix = message_length_prefix(message.len())?;
+    let mut framed = Vec::with_capacity(LENGTH_PREFIX_BYTES + message.len());
+    framed.extend_from_slice(&prefix);
+    framed.extend_from_slice(message);
     Ok(framed)
 }
 

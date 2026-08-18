@@ -597,8 +597,16 @@ struct AppServerCommand {
 
 #[derive(Debug, Parser)]
 struct ExecServerCommand {
+    #[command(subcommand)]
+    command: Option<ExecServerSubcommand>,
+
     /// Error out when config.toml contains fields that are not recognized by this version of Codex.
-    #[arg(long = "strict-config", default_value_t = false)]
+    #[arg(
+        id = "exec_server_strict_config",
+        long = "strict-config",
+        default_value_t = false,
+        global = true
+    )]
     strict_config: bool,
 
     /// Maximum number of requests to process concurrently on each connection.
@@ -610,32 +618,57 @@ struct ExecServerCommand {
     request_dispatch_mode: codex_exec_server::RequestDispatchMode,
 
     /// Transport endpoint URL. Supported values: `ws://IP:PORT` (default), `stdio`, `stdio://`.
-    #[arg(long = "listen", value_name = "URL", conflicts_with = "remote")]
+    #[arg(
+        long = "listen",
+        value_name = "URL",
+        conflicts_with = "exec_server_remote"
+    )]
     listen: Option<String>,
 
     /// Register this exec-server as a remote environment using the given base URL.
-    #[arg(long = "remote", value_name = "URL", requires = "environment_id")]
+    #[arg(
+        long = "remote",
+        id = "exec_server_remote",
+        value_name = "URL",
+        requires = "environment_id",
+        global = true
+    )]
     remote: Option<String>,
 
     /// Environment id to attach to when registering remotely.
-    #[arg(long = "environment-id", value_name = "ID")]
+    #[arg(long = "environment-id", value_name = "ID", global = true)]
     environment_id: Option<String>,
 
     /// Human-readable environment name.
-    #[arg(long = "name", value_name = "NAME")]
+    #[arg(long = "name", value_name = "NAME", global = true)]
     name: Option<String>,
 
     /// Use Agent Identity auth from CODEX_ACCESS_TOKEN for remote registration.
-    #[arg(long = "use-agent-identity-auth", requires = "remote")]
+    #[arg(
+        long = "use-agent-identity-auth",
+        requires = "exec_server_remote",
+        global = true
+    )]
     use_agent_identity_auth: bool,
 
     /// Exit when the parent-owned standard-input pipe closes.
     #[arg(
         long = "exit-on-stdin-close",
         env = codex_exec_server::CODEX_EXEC_SERVER_EXIT_ON_STDIN_CLOSE_ENV_VAR,
-        requires_if("true", "remote")
+        requires_if("true", "exec_server_remote"),
+        global = true
     )]
     exit_on_stdin_close: bool,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum ExecServerSubcommand {
+    /// Register an existing WebSocket exec-server as a remote environment.
+    Forward {
+        /// Destination exec-server WebSocket URL.
+        #[arg(long, value_name = "URL", requires = "exec_server_remote")]
+        connect: String,
+    },
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -1861,14 +1894,27 @@ async fn run_exec_server_command(
         let (shutdown_sender, shutdown_receiver) = tokio::sync::oneshot::channel();
         exec_server_telemetry::run_until_shutdown(
             async move {
-                codex_exec_server::run_remote_environment_until_shutdown(
-                    remote_config,
-                    runtime_paths,
-                    async move {
-                        let _ = shutdown_receiver.await;
-                    },
-                )
-                .await
+                let shutdown = async move {
+                    let _ = shutdown_receiver.await;
+                };
+                match cmd.command {
+                    Some(ExecServerSubcommand::Forward { connect }) => {
+                        codex_exec_server::run_remote_environment_forward_until_shutdown(
+                            remote_config,
+                            connect,
+                            shutdown,
+                        )
+                        .await
+                    }
+                    None => {
+                        codex_exec_server::run_remote_environment_until_shutdown(
+                            remote_config,
+                            runtime_paths,
+                            shutdown,
+                        )
+                        .await
+                    }
+                }
             },
             parent_lifetime,
             exec_server_telemetry::ShutdownBehavior::Graceful(shutdown_sender),
@@ -4015,6 +4061,63 @@ mod tests {
                 ..
             }))
         );
+    }
+
+    #[test]
+    fn exec_server_forward_parses_shared_remote_options() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "exec-server",
+            "forward",
+            "--connect",
+            "ws://127.0.0.1:8765",
+            "--remote",
+            "https://example.openai.com",
+            "--environment-id",
+            "env-1",
+            "--name",
+            "forwarded",
+            "--strict-config",
+            "--use-agent-identity-auth",
+        ])
+        .expect("parse forward");
+        assert!(cli.remote.remote.is_none());
+        assert!(!cli.interactive.strict_config);
+        assert_matches!(cli.subcommand, Some(Subcommand::ExecServer(ExecServerCommand {
+            command: Some(ExecServerSubcommand::Forward { connect }),
+            remote: Some(remote),
+            environment_id: Some(environment_id),
+            name: Some(name),
+            strict_config: true,
+            use_agent_identity_auth: true,
+            ..
+        })) if connect == "ws://127.0.0.1:8765" && remote == "https://example.openai.com" && environment_id == "env-1" && name == "forwarded");
+    }
+
+    #[test]
+    fn exec_server_forward_requires_registration_and_destination() {
+        for args in [
+            vec!["forward", "--connect", "ws://127.0.0.1:8765"],
+            vec![
+                "forward",
+                "--remote",
+                "https://example.openai.com",
+                "--environment-id",
+                "env-1",
+            ],
+            vec![
+                "forward",
+                "--connect",
+                "ws://127.0.0.1:8765",
+                "--remote",
+                "https://example.openai.com",
+            ],
+        ] {
+            assert!(
+                MultitoolCli::try_parse_from(["codex", "exec-server"].into_iter().chain(args))
+                    .is_err()
+            );
+        }
     }
 
     #[test]

@@ -23,11 +23,21 @@ The CLI entrypoint supports:
 
 - `ws://IP:PORT` (default)
 - `--remote URL --environment-id ID [--name NAME]`
+- `forward --connect ws://HOST:PORT --remote URL --environment-id ID`
 
 Remote mode registers the local exec-server with the environment registry,
 then reconnects to the service-provided rendezvous websocket as the environment.
 Remote communication uses the Noise relay contract; the registry and harness
 must support it.
+Forward mode uses the same registration and Noise relay, but opens an independent
+WebSocket connection to the destination exec-server for each authenticated
+harness stream. Complete message payloads pass unchanged in both directions;
+the forwarder does not parse RPCs, initialize sessions, or execute requests.
+The destination owns session IDs, processes, and session resumption.
+Disconnecting either side closes its peer and resets the remote stream. The
+existing harness reconnect flow can then resume a retained destination session.
+The forwarder does not replay requests or persist execution state, so recovery
+is limited by the destination's session and process-output retention.
 It uses the standard Codex ChatGPT sign-in state; run `codex login` first when
 remote registration needs authentication. Containerized callers that receive an
 Agent Identity JWT in `CODEX_ACCESS_TOKEN` can opt into that auth path with
@@ -46,7 +56,7 @@ codex exec-server \
 
 Wire framing:
 
-- local websocket: one JSON-RPC message per websocket frame
+- local websocket: one JSON-RPC message per websocket message
 - Noise remote websocket: binary protobuf relay frames carrying encrypted payloads
 
 ## Remote Relay Message Format

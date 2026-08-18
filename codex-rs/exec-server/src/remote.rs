@@ -39,7 +39,9 @@ use crate::NoiseChannelPublicKey;
 use crate::NoiseRendezvousConnectBundle;
 use crate::NoiseRendezvousConnectProvider;
 use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT;
+use crate::forward::Forwarder;
 use crate::noise_relay::noise_relay_websocket_config;
+use crate::noise_relay::stream_handler::NoiseStreamHandler;
 use crate::relay::HarnessKeyValidator;
 use crate::relay::run_multiplexed_environment;
 use crate::server::ConnectionProcessor;
@@ -550,13 +552,6 @@ pub async fn run_remote_environment_until_shutdown<F>(
 where
     F: std::future::Future<Output = ()>,
 {
-    ensure_rustls_crypto_provider();
-    let client = EnvironmentRegistryClient::new_with_telemetry(
-        config.base_url.clone(),
-        config.auth_provider.clone(),
-        config.telemetry.clone(),
-        config.http_client_factory.clone(),
-    )?;
     let processor = ConnectionProcessor::new_with_telemetry(
         runtime_paths,
         config.telemetry.clone(),
@@ -564,22 +559,56 @@ where
         config.request_dispatch_mode,
     );
 
-    let result = {
-        let run = run_remote_environment_connections(config, client, processor.clone());
-        tokio::pin!(run, shutdown);
-        tokio::select! {
-            result = &mut run => result,
-            _ = &mut shutdown => Ok(()),
-        }
-    };
+    let result = run_remote_transport(config, processor.clone(), shutdown).await;
     processor.shutdown().await;
     result
 }
 
-async fn run_remote_environment_connections(
+/// Register a remote environment backed by an independently owned WebSocket executor.
+pub async fn run_remote_environment_forward_until_shutdown<F>(
+    config: RemoteEnvironmentConfig,
+    websocket_url: String,
+    shutdown: F,
+) -> Result<(), ExecServerError>
+where
+    F: std::future::Future<Output = ()>,
+{
+    let forwarder = Forwarder::new(
+        websocket_url,
+        &config.http_client_factory,
+        config.telemetry.clone(),
+    )?;
+    run_remote_transport(config, forwarder, shutdown).await
+}
+
+async fn run_remote_transport<F, H>(
+    config: RemoteEnvironmentConfig,
+    handler: H,
+    shutdown: F,
+) -> Result<(), ExecServerError>
+where
+    F: std::future::Future<Output = ()>,
+    H: NoiseStreamHandler,
+{
+    ensure_rustls_crypto_provider();
+    let client = EnvironmentRegistryClient::new_with_telemetry(
+        config.base_url.clone(),
+        config.auth_provider.clone(),
+        config.telemetry.clone(),
+        config.http_client_factory.clone(),
+    )?;
+    let run = run_remote_environment_connections(config, client, handler);
+    tokio::pin!(run, shutdown);
+    tokio::select! {
+        result = &mut run => result,
+        _ = &mut shutdown => Ok(()),
+    }
+}
+
+async fn run_remote_environment_connections<H: NoiseStreamHandler>(
     config: RemoteEnvironmentConfig,
     client: EnvironmentRegistryClient,
-    processor: ConnectionProcessor,
+    handler: H,
 ) -> Result<(), ExecServerError> {
     let identity = NoiseChannelIdentity::generate().map_err(|error| {
         ExecServerError::Protocol(format!("failed to generate Noise relay identity: {error}"))
@@ -607,7 +636,7 @@ async fn run_remote_environment_connections(
                 );
                 let disconnect_reason = run_multiplexed_environment(
                     websocket,
-                    processor.clone(),
+                    handler.clone(),
                     response.environment_id.clone(),
                     executor_registration_id.clone(),
                     identity.clone(),

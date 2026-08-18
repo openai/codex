@@ -1,6 +1,6 @@
 pub(crate) mod executor_stream;
 mod harness;
-mod message_framing;
+pub(crate) mod message_framing;
 mod ordered_ciphertext;
 pub(crate) mod stream_handler;
 
