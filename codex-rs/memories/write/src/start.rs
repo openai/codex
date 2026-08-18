@@ -1,3 +1,4 @@
+use crate::ensure_layout;
 use crate::extensions::seed_extension_instructions;
 use crate::guard;
 use crate::memory_root;
@@ -52,8 +53,8 @@ pub fn start_memories_startup_task(
 
     tokio::spawn(async move {
         let root = memory_root(&config.codex_home);
-        if let Err(err) = tokio::fs::create_dir_all(&root).await {
-            warn!("failed creating memories root: {err}");
+        if let Err(err) = ensure_layout(&root).await {
+            warn!("failed preparing memories root: {err}");
             return;
         }
         if let Err(err) = seed_extension_instructions(&root).await {

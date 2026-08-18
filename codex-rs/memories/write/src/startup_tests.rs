@@ -37,7 +37,11 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
+#[cfg(unix)]
+use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::sse;
+#[cfg(unix)]
+use core_test_support::responses::sse_failed;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
@@ -62,6 +66,110 @@ async fn memories_startup_creates_memory_root() -> anyhow::Result<()> {
     wait_for_dir(&memory_root).await?;
 
     shutdown_test_codex(&test).await?;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn memories_startup_removes_symlinked_extensions_before_seeding() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    let memory_root = home.path().join("memories");
+    let outside = home.path().join("outside");
+    tokio::fs::create_dir_all(&memory_root).await?;
+    tokio::fs::create_dir_all(&outside).await?;
+    std::os::unix::fs::symlink(&outside, memory_root.join("extensions"))?;
+
+    let test = build_test_codex(&server, home).await?;
+    trigger_memories_startup(&test).await;
+    wait_for_dir(&memory_root.join("extensions/ad_hoc")).await?;
+
+    assert!(
+        tokio::fs::symlink_metadata(memory_root.join("extensions"))
+            .await?
+            .is_dir()
+    );
+    assert!(
+        !outside.join("ad_hoc").exists(),
+        "extension seeding must not create directories through the removed symbolic link"
+    );
+
+    shutdown_test_codex(&test).await?;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn memories_startup_fails_consolidation_when_worker_creates_extension_symlink()
+-> anyhow::Result<()> {
+    let responses = [
+        sse(vec![
+            ev_response_created("resp-phase2-complete"),
+            ev_assistant_message("msg-phase2-complete", "phase2 complete"),
+            ev_completed("resp-phase2-complete"),
+        ]),
+        sse_failed("resp-phase2-failed", "server_error", "worker failed"),
+    ];
+
+    for response in responses {
+        let server = start_mock_server().await;
+        let home = Arc::new(TempDir::new()?);
+        let db = init_state_db(&home).await?;
+        let root = home.path().join("memories");
+        seed_stage1_output(
+            db.as_ref(),
+            home.path(),
+            chrono::Utc::now(),
+            "raw memory",
+            "rollout summary",
+            "worker-symlink",
+        )
+        .await?;
+        seed_required_memory_artifacts(&root).await?;
+        reset_git_repository(&root).await?;
+
+        let target = home.path().join("outside.md");
+        tokio::fs::write(&target, "outside content").await?;
+        let link = root.join("extensions/external_agent_import/instructions.md");
+        let worker_target = target.clone();
+        let worker_link = link.clone();
+        let phase2 = mount_sse_once_match(
+            &server,
+            move |_request: &wiremock::Request| {
+                std::fs::create_dir_all(worker_link.parent().expect("extension directory"))
+                    .expect("create extension directory");
+                std::os::unix::fs::symlink(&worker_target, &worker_link)
+                    .expect("create worker symbolic link");
+                true
+            },
+            response,
+        )
+        .await;
+        let test = build_test_codex(&server, home).await?;
+
+        trigger_memories_startup(&test).await;
+        wait_for_single_request(&phase2).await;
+
+        assert_eq!(
+            wait_for_phase2_job_to_finish(db.as_ref()).await?,
+            Phase2JobClaimOutcome::SkippedRetryUnavailable
+        );
+        assert_eq!(tokio::fs::read_to_string(&target).await?, "outside content");
+        assert_eq!(
+            tokio::fs::symlink_metadata(&link)
+                .await
+                .expect_err("worker-created symbolic link should be removed")
+                .kind(),
+            std::io::ErrorKind::NotFound
+        );
+        assert!(
+            root.join("phase2_workspace_diff.md").exists(),
+            "a rejected consolidation result must not reset the trusted baseline"
+        );
+
+        shutdown_test_codex(&test).await?;
+    }
+
     Ok(())
 }
 

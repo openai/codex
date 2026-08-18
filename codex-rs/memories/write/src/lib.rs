@@ -130,5 +130,18 @@ pub fn raw_memories_file(root: &Path) -> PathBuf {
 }
 
 pub async fn ensure_layout(root: &Path) -> std::io::Result<()> {
+    tokio::fs::create_dir_all(root).await?;
+    if tokio::fs::symlink_metadata(root)
+        .await?
+        .file_type()
+        .is_symlink()
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("memory root cannot be a symbolic link: {}", root.display()),
+        ));
+    }
+
+    workspace::remove_memory_symlinks(root).await?;
     tokio::fs::create_dir_all(rollout_summaries_dir(root)).await
 }
