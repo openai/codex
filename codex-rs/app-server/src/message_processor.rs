@@ -815,7 +815,6 @@ impl MessageProcessor {
 
     /// Handle a standalone JSON-RPC response originating from the peer.
     pub(crate) async fn process_response(&self, response: JSONRPCResponse) {
-        tracing::info!("<- response: {:?}", response);
         let JSONRPCResponse { id, result, .. } = response;
         self.outgoing.notify_client_response(id, result).await
     }

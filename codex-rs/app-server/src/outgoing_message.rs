@@ -386,14 +386,15 @@ impl OutgoingMessageSender {
         match entry {
             Some((id, entry)) => {
                 let completed_at_ms = now_unix_timestamp_ms();
-                if let Ok(response) = entry.request.response_from_result(result.clone())
-                    && !matches!(response, ServerResponse::PermissionsRequestApproval { .. })
-                {
-                    self.analytics_events_client
-                        .track_server_response(completed_at_ms, response);
+                if let Ok(response) = entry.request.response_from_result(result.clone()) {
+                    tracing::info!("<- response: {response:?}");
+                    if !matches!(response, ServerResponse::PermissionsRequestApproval { .. }) {
+                        self.analytics_events_client
+                            .track_server_response(completed_at_ms, response);
+                    }
                 }
-                if let Err(err) = entry.callback.send(Ok(result)) {
-                    warn!("could not notify callback for {id:?} due to: {err:?}");
+                if entry.callback.send(Ok(result)).is_err() {
+                    warn!("could not notify callback for {id:?}: receiver dropped");
                 }
             }
             None => {

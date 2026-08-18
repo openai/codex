@@ -13,6 +13,7 @@ use codex_protocol::protocol::SpendControlLimitSnapshot as CoreSpendControlLimit
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::fmt;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -277,13 +278,23 @@ pub struct ChatgptAuthTokensRefreshParams {
     pub previous_account_id: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ChatgptAuthTokensRefreshResponse {
     pub access_token: String,
     pub chatgpt_account_id: String,
     pub chatgpt_plan_type: Option<String>,
+}
+
+impl fmt::Debug for ChatgptAuthTokensRefreshResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ChatgptAuthTokensRefreshResponse")
+            .field("access_token", &"<redacted>")
+            .field("chatgpt_account_id", &self.chatgpt_account_id)
+            .field("chatgpt_plan_type", &self.chatgpt_plan_type)
+            .finish()
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
