@@ -56,6 +56,14 @@ const GENERIC_READ_MASK: u32 = 0x8000_0000;
 const GENERIC_WRITE_MASK: u32 = 0x4000_0000;
 const DENY_ACCESS: i32 = 3;
 
+fn acl_api_result(path: &Path, operation: &str, code: u32) -> Result<()> {
+    if code == ERROR_SUCCESS {
+        Ok(())
+    } else {
+        Err(anyhow!("{operation} failed for {}: {code}", path.display()))
+    }
+}
+
 /// Fetch DACL via handle-based query; caller must LocalFree the returned SD.
 ///
 /// # Safety
@@ -625,10 +633,17 @@ unsafe fn add_deny_ace(path: &Path, psid: *mut c_void, kind: DenyAceKind) -> Res
         &mut p_sd,
     );
     if code != ERROR_SUCCESS {
-        return Err(anyhow!("GetNamedSecurityInfoW failed: {code}"));
+        if !p_sd.is_null() {
+            LocalFree(p_sd as HLOCAL);
+        }
+        return Err(anyhow!(
+            "GetNamedSecurityInfoW failed for {}: {code}",
+            path.display()
+        ));
     }
-    let mut added = false;
-    if !kind.already_present(p_dacl, psid) {
+    let result = if kind.already_present(p_dacl, psid) {
+        Ok(false)
+    } else {
         let trustee = TRUSTEE_W {
             pMultipleTrustee: std::ptr::null_mut(),
             MultipleTrusteeOperation: 0,
@@ -643,7 +658,9 @@ unsafe fn add_deny_ace(path: &Path, psid: *mut c_void, kind: DenyAceKind) -> Res
         explicit.Trustee = trustee;
         let mut p_new_dacl: *mut ACL = std::ptr::null_mut();
         let code2 = SetEntriesInAclW(1, &explicit, p_dacl, &mut p_new_dacl);
-        if code2 == ERROR_SUCCESS {
+        let result = if let Err(err) = acl_api_result(path, "SetEntriesInAclW", code2) {
+            Err(err)
+        } else {
             let code3 = SetNamedSecurityInfoW(
                 to_wide(path).as_ptr() as *mut u16,
                 1,
@@ -653,18 +670,17 @@ unsafe fn add_deny_ace(path: &Path, psid: *mut c_void, kind: DenyAceKind) -> Res
                 p_new_dacl,
                 std::ptr::null_mut(),
             );
-            if code3 == ERROR_SUCCESS {
-                added = true;
-            }
-            if !p_new_dacl.is_null() {
-                LocalFree(p_new_dacl as HLOCAL);
-            }
+            acl_api_result(path, "SetNamedSecurityInfoW", code3).map(|()| true)
+        };
+        if !p_new_dacl.is_null() {
+            LocalFree(p_new_dacl as HLOCAL);
         }
-    }
+        result
+    };
     if !p_sd.is_null() {
         LocalFree(p_sd as HLOCAL);
     }
-    Ok(added)
+    result
 }
 
 /// Adds a deny ACE to prevent reads for the given SID on the target path.
@@ -679,6 +695,10 @@ unsafe fn add_deny_ace(path: &Path, psid: *mut c_void, kind: DenyAceKind) -> Res
 pub unsafe fn add_deny_read_ace(path: &Path, psid: *mut c_void) -> Result<bool> {
     add_deny_ace(path, psid, DenyAceKind::Read)
 }
+
+#[cfg(test)]
+#[path = "acl_tests.rs"]
+mod tests;
 
 pub unsafe fn revoke_ace(path: &Path, psid: *mut c_void) {
     let mut p_sd: *mut c_void = std::ptr::null_mut();
