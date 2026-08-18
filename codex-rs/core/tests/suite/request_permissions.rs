@@ -13,6 +13,8 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::models::AdditionalPermissionProfile as PermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile as CorePermissionProfile;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -27,6 +29,8 @@ use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
+use core_test_support::responses::ev_apply_patch_custom_tool_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -38,9 +42,12 @@ use core_test_support::responses::sse;
 use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_remote;
 use core_test_support::skip_if_sandbox;
+use core_test_support::skip_if_target_windows;
 use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::TestCodex;
+use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
@@ -2206,5 +2213,274 @@ async fn request_permissions_session_grants_carry_across_turns() -> Result<()> {
     assert_eq!(result.stdout.trim(), "session-sticky-ok");
     assert_eq!(fs::read_to_string(&outside_write)?, "session-sticky-ok");
 
+    Ok(())
+}
+
+const SENTINEL_PATH: &str = "denied-child-permissions/secrets/nested/sentinel.txt";
+const SENTINEL_CONTENT: &str = "untouched\n";
+const PERMISSIONS_CALL_ID: &str = "denied-child-permissions-grant";
+const WRITE_CALL_ID: &str = "denied-child-permissions-write";
+
+#[derive(Clone, Copy, Debug)]
+enum WriteTool {
+    ExecCommand,
+    ShellCommand,
+    ApplyPatch,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ApprovalMode {
+    Prompt,
+    Never,
+    InlineFeatureDisabled,
+}
+
+#[test_case(WriteTool::ExecCommand, PermissionGrantScope::Turn, ApprovalMode::Prompt; "exec_command_turn")]
+#[test_case(WriteTool::ExecCommand, PermissionGrantScope::Session, ApprovalMode::Prompt; "exec_command_session")]
+#[test_case(WriteTool::ShellCommand, PermissionGrantScope::Turn, ApprovalMode::Prompt; "shell_command_turn")]
+#[test_case(WriteTool::ShellCommand, PermissionGrantScope::Session, ApprovalMode::Prompt; "shell_command_session")]
+#[test_case(WriteTool::ApplyPatch, PermissionGrantScope::Turn, ApprovalMode::Prompt; "apply_patch_turn")]
+#[test_case(WriteTool::ApplyPatch, PermissionGrantScope::Session, ApprovalMode::Prompt; "apply_patch_session")]
+#[test_case(WriteTool::ExecCommand, PermissionGrantScope::Session, ApprovalMode::Never; "exec_command_session_never")]
+#[test_case(WriteTool::ExecCommand, PermissionGrantScope::Session, ApprovalMode::InlineFeatureDisabled; "exec_command_inline_feature_disabled")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn denied_child_permissions_require_fresh_approval(
+    tool: WriteTool,
+    scope: PermissionGrantScope,
+    mode: ApprovalMode,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_target_windows!(
+        Ok(()),
+        "this regression exercises POSIX split-policy enforcement; a disabled Windows sandbox can independently prompt for the command"
+    );
+    if matches!(tool, WriteTool::ShellCommand) {
+        skip_if_remote!(
+            Ok(()),
+            "the legacy shell_command tool is only registered for a single local environment"
+        );
+    }
+
+    let harness =
+        TestCodexHarness::with_auto_env_builder(test_codex().with_config(move |config| {
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+            config.approvals_reviewer = ApprovalsReviewer::User;
+            config
+                .permissions
+                .set_permission_profile(CorePermissionProfile::read_only())
+                .expect("set permission profile");
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("enable unified exec");
+            let inline_permissions = if mode == ApprovalMode::InlineFeatureDisabled {
+                config.features.disable(Feature::ExecPermissionApprovals)
+            } else {
+                config.features.enable(Feature::ExecPermissionApprovals)
+            };
+            inline_permissions.expect("configure inline permissions");
+            config
+                .features
+                .enable(Feature::RequestPermissionsTool)
+                .expect("enable request_permissions");
+        }))
+        .await?;
+    harness.write_file(SENTINEL_PATH, SENTINEL_CONTENT).await?;
+    let test = harness.test();
+    let root = test
+        .fs()
+        .canonicalize(
+            &PathUri::from_abs_path(&harness.path_abs("denied-child-permissions")),
+            /*sandbox*/ None,
+        )
+        .await?
+        .to_abs_path()?;
+    let denied_root = root.join("secrets");
+    let target = denied_root.join("nested/sentinel.txt");
+    let requested_permissions = requested_directory_write_permissions(root.as_path());
+    let constrained_permissions = RequestPermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            entries: vec![
+                FileSystemSandboxEntry::new(root.clone().into(), FileSystemAccessMode::Write),
+                FileSystemSandboxEntry::new(denied_root.clone().into(), FileSystemAccessMode::Deny),
+            ],
+            glob_scan_max_depth: None,
+        }),
+        ..Default::default()
+    };
+    let approved_response = RequestPermissionsResponse {
+        permissions: constrained_permissions.clone(),
+        scope,
+        strict_auto_review: false,
+    };
+    let fresh_permissions = requested_directory_write_permissions(target.as_path());
+    let command = format!("printf changed > {:?}", target.as_path());
+    let write_event = match tool {
+        WriteTool::ExecCommand => exec_command_event_with_request_permissions(
+            WRITE_CALL_ID,
+            &command,
+            &fresh_permissions,
+        )?,
+        WriteTool::ShellCommand => {
+            shell_event_with_request_permissions(WRITE_CALL_ID, &command, &fresh_permissions)?
+        }
+        WriteTool::ApplyPatch => ev_apply_patch_custom_tool_call(
+            WRITE_CALL_ID,
+            &format!(
+                "*** Begin Patch\n*** Update File: {}\n@@\n-untouched\n+changed\n*** End Patch\n",
+                target.display()
+            ),
+        ),
+    };
+    let response = |id, event| sse(vec![ev_response_created(id), event, ev_completed(id)]);
+    let mut response_sequence = vec![response(
+        "grant",
+        request_permissions_tool_event(
+            PERMISSIONS_CALL_ID,
+            "Allow writes except in secrets",
+            &requested_permissions,
+        )?,
+    )];
+    if scope == PermissionGrantScope::Session {
+        response_sequence.push(response(
+            "grant-complete",
+            ev_assistant_message("grant-message", "grant recorded"),
+        ));
+    }
+    response_sequence.extend([
+        response("write", write_event),
+        response("complete", ev_assistant_message("done-message", "done")),
+    ]);
+    let responses = mount_sse_sequence(harness.server(), response_sequence).await;
+
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "request constrained permissions, then try the denied child".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    assert_eq!(
+        expect_request_permissions_event(test, PERMISSIONS_CALL_ID).await,
+        requested_permissions
+    );
+    test.codex
+        .submit(Op::RequestPermissionsResponse {
+            id: PERMISSIONS_CALL_ID.to_string(),
+            response: approved_response.clone(),
+        })
+        .await?;
+
+    if scope == PermissionGrantScope::Session {
+        wait_for_completion(test).await;
+        let approval_policy = match mode {
+            ApprovalMode::Never => AskForApproval::Never,
+            ApprovalMode::Prompt | ApprovalMode::InlineFeatureDisabled => AskForApproval::OnRequest,
+        };
+        test.codex
+            .start_or_steer_turn(
+                TurnInputRequest::user_input(vec![UserInput::Text {
+                    text: "try the denied child using the stored session grant".into(),
+                    text_elements: Vec::new(),
+                }])
+                .with_thread_settings(ThreadSettingsOverrides {
+                    approval_policy: Some(approval_policy),
+                    ..Default::default()
+                }),
+            )
+            .await?;
+    }
+
+    let expected_error = match mode {
+        ApprovalMode::Prompt => None,
+        ApprovalMode::Never => Some("approval policy is Never"),
+        ApprovalMode::InlineFeatureDisabled => Some("additional permissions are disabled"),
+    };
+    let event = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::ExecApprovalRequest(_)
+                | EventMsg::ApplyPatchApprovalRequest(_)
+                | EventMsg::TurnComplete(_)
+        ) || (expected_error.is_some() && matches!(event, EventMsg::ExecCommandBegin(_)))
+    })
+    .await;
+    if let Some(expected_error) = expected_error {
+        assert!(
+            matches!(event, EventMsg::TurnComplete(_)),
+            "{mode:?} must reject before approval or execution: {event:?}"
+        );
+        let output = responses
+            .function_call_output_text(WRITE_CALL_ID)
+            .context("rejected exec output")?;
+        assert!(
+            output.contains(expected_error),
+            "unexpected rejection: {output}"
+        );
+        assert_eq!(
+            harness.read_file_text(SENTINEL_PATH).await?,
+            SENTINEL_CONTENT
+        );
+        return Ok(());
+    }
+
+    let (decision, reason) = match (tool, event) {
+        (
+            WriteTool::ExecCommand | WriteTool::ShellCommand,
+            EventMsg::ExecApprovalRequest(approval),
+        ) => {
+            assert_eq!(approval.call_id, WRITE_CALL_ID);
+            let expected_permissions = PermissionProfile {
+                file_system: Some(FileSystemPermissions {
+                    entries: vec![
+                        FileSystemSandboxEntry::new(target.into(), FileSystemAccessMode::Write),
+                        FileSystemSandboxEntry::new(root.into(), FileSystemAccessMode::Write),
+                        FileSystemSandboxEntry::new(denied_root.into(), FileSystemAccessMode::Deny),
+                    ],
+                    glob_scan_max_depth: None,
+                }),
+                ..Default::default()
+            };
+            assert_eq!(approval.additional_permissions, Some(expected_permissions));
+            (
+                Op::ExecApproval {
+                    id: approval.effective_approval_id(),
+                    turn_id: None,
+                    decision: ReviewDecision::denied("denied child is not approved"),
+                },
+                approval.reason,
+            )
+        }
+        (WriteTool::ApplyPatch, EventMsg::ApplyPatchApprovalRequest(approval)) => {
+            assert_eq!(approval.call_id, WRITE_CALL_ID);
+            (
+                Op::PatchApproval {
+                    id: approval.call_id,
+                    decision: ReviewDecision::denied("denied child is not approved"),
+                },
+                approval.reason,
+            )
+        }
+        (_, event) => panic!("expected fresh {tool:?} permission approval, got {event:?}"),
+    };
+    let content_before_denial = harness.read_file_text(SENTINEL_PATH).await?;
+    test.codex.submit(decision).await?;
+    wait_for_completion(test).await;
+
+    assert_eq!(
+        reason, None,
+        "the first attempt must require approval, not only a retry after sandbox denial"
+    );
+    assert_eq!(content_before_denial, SENTINEL_CONTENT);
+    assert_eq!(
+        harness.read_file_text(SENTINEL_PATH).await?,
+        SENTINEL_CONTENT
+    );
+    let recorded_grant: RequestPermissionsResponse = serde_json::from_str(
+        &responses
+            .function_call_output_text(PERMISSIONS_CALL_ID)
+            .context("request_permissions response")?,
+    )?;
+    assert_eq!(recorded_grant, approved_response);
     Ok(())
 }

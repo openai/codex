@@ -72,6 +72,21 @@ pub fn normalize_additional_permissions(
     })
 }
 
+/// Resolves cwd-dependent permission entries without filtering their authority.
+///
+/// Unlike intersection, this preserves narrower grants beneath denied paths.
+pub fn materialize_additional_permissions(
+    mut additional_permissions: AdditionalPermissionProfile,
+    cwd: &Path,
+) -> Result<AdditionalPermissionProfile, String> {
+    if let Some(file_system) = additional_permissions.file_system.as_mut() {
+        for entry in &mut file_system.entries {
+            *entry = materialize_cwd_dependent_entry(entry, cwd);
+        }
+    }
+    normalize_additional_permissions(additional_permissions)
+}
+
 pub fn merge_permission_profiles(
     base: Option<&AdditionalPermissionProfile>,
     permissions: Option<&AdditionalPermissionProfile>,
