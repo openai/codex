@@ -48,6 +48,8 @@ use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
+use super::CLASSIFICATION_DURATION_METRIC;
+use super::CLASSIFICATION_METRIC;
 use super::GuardianV2ScoreProgress;
 use super::REVIEW_FALLBACK_METRIC;
 use super::StrictReviewReason;
@@ -632,11 +634,13 @@ max_recent_non_user_entries = 8
     let score_progress = thread_store
         .get::<GuardianV2ScoreProgress>()
         .expect("Guardian v2 should track score progress per thread");
+    let metrics = thread_store.get::<RecordingMetrics>().unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
         while score_progress
             .latest_scored_tool_call
             .load(Ordering::Acquire)
             == 0
+            || metrics.0.lock().unwrap().len() < 2
         {
             tokio::task::yield_now().await;
         }
@@ -745,9 +749,28 @@ max_recent_non_user_entries = 8
         Some(ReviewDecision::Approved)
     );
 
+    let samples = initial_metrics.0.lock().unwrap();
+    let classification_duration_ms = match &samples[1] {
+        RecordedMetric::Histogram(name, duration_ms, _)
+            if name == CLASSIFICATION_DURATION_METRIC =>
+        {
+            *duration_ms
+        }
+        sample => panic!("expected classification duration metric, got {sample:?}"),
+    };
     assert_eq!(
-        *initial_metrics.0.lock().unwrap(),
+        *samples,
         vec![
+            RecordedMetric::Counter(
+                CLASSIFICATION_METRIC.to_owned(),
+                1,
+                vec![("outcome".to_owned(), "success".to_owned())],
+            ),
+            RecordedMetric::Histogram(
+                CLASSIFICATION_DURATION_METRIC.to_owned(),
+                classification_duration_ms,
+                vec![("outcome".to_owned(), "success".to_owned())],
+            ),
             RecordedMetric::Histogram(TOOL_CALL_LAG_METRIC.to_owned(), 0, vec![]),
             RecordedMetric::Histogram(TOOL_CALL_LAG_METRIC.to_owned(), 0, vec![]),
             RecordedMetric::Histogram(TOOL_CALL_LAG_METRIC.to_owned(), 2, vec![]),
@@ -1338,6 +1361,7 @@ async fn contributor_reuses_the_latest_compatible_parent_compaction() -> Result<
     let registry = builder.build();
     let session_store = ExtensionData::new("session-1");
     let thread_store = test.codex.thread_extension_data();
+    let metrics = Arc::new(RecordingMetrics::default());
     thread_store.insert(parent_model);
     registry.thread_lifecycle_contributors()[0]
         .on_thread_start(ThreadStartInput {
@@ -1346,7 +1370,7 @@ async fn contributor_reuses_the_latest_compatible_parent_compaction() -> Result<
             persistent_thread_state_available: false,
             environments: &[],
             mcp_resource_client: None,
-            extension_metrics: None,
+            extension_metrics: Some(metrics.clone()),
             session_store: &session_store,
             thread_store,
         })
@@ -1488,6 +1512,14 @@ async fn contributor_reuses_the_latest_compatible_parent_compaction() -> Result<
         1,
         "an oversized latest compaction must bypass Luna rather than reuse stale context"
     );
+    assert!(metrics.0.lock().unwrap().iter().any(|sample| {
+        matches!(
+            sample,
+            RecordedMetric::Counter(name, 1, tags)
+                if name == CLASSIFICATION_METRIC
+                    && tags == &[("outcome".to_owned(), "failure".to_owned())]
+        )
+    }));
 
     Ok(())
 }

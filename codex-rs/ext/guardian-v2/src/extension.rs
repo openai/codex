@@ -3,6 +3,8 @@ use std::sync::Arc;
 use std::sync::Weak;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
+use std::time::Instant;
 use std::time::SystemTime;
 
 use codex_core::ThreadManager;
@@ -195,11 +197,31 @@ struct GuardianV2Enabled;
 // Sampled when the approval contributor evaluates the cached Luna score.
 const TOOL_CALL_LAG_METRIC: &str = "codex.guardian_v2.tool_call_lag";
 const REVIEW_FALLBACK_METRIC: &str = "codex.guardian_v2.review_fallback";
+const CLASSIFICATION_METRIC: &str = "codex.guardian_v2.classification";
+const CLASSIFICATION_DURATION_METRIC: &str = "codex.guardian_v2.classification.duration_ms";
 
 #[derive(Default)]
 struct GuardianV2ScoreProgress {
     latest_tool_call: AtomicUsize,
     latest_scored_tool_call: AtomicUsize,
+    metrics: Option<Arc<dyn ExtensionMetrics>>,
+}
+
+fn record_classification(
+    metrics: Option<&dyn ExtensionMetrics>,
+    duration: Duration,
+    outcome: &str,
+) {
+    let Some(metrics) = metrics else {
+        return;
+    };
+    let tags = [("outcome", outcome)];
+    metrics.counter(CLASSIFICATION_METRIC, /*inc*/ 1, &tags);
+    metrics.histogram(
+        CLASSIFICATION_DURATION_METRIC,
+        i64::try_from(duration.as_millis()).unwrap_or(i64::MAX),
+        &tags,
+    );
 }
 
 #[derive(Clone)]
@@ -275,9 +297,10 @@ impl ThreadLifecycleContributor<Config> for GuardianV2Extension {
                     }
                     input.thread_store.insert(sampler);
                     input.thread_store.insert(guardian_config);
-                    input
-                        .thread_store
-                        .insert(GuardianV2ScoreProgress::default());
+                    input.thread_store.insert(GuardianV2ScoreProgress {
+                        metrics: input.extension_metrics.clone(),
+                        ..Default::default()
+                    });
                     input.thread_store.insert(GuardianV2Enabled);
                 }
                 Err(error) => self.event_sink.emit_warning(ExtensionWarning {
@@ -345,12 +368,17 @@ impl ApprovalReviewContributor for GuardianV2Extension {
 
 impl ToolLifecycleContributor for GuardianV2Extension {
     fn on_tool_start<'a>(&'a self, input: ToolStartInput<'a>) -> ToolLifecycleFuture<'a> {
+        let classification_started_at = Instant::now();
         let Some(sampler) = input.thread_store.get::<LunaSampler>() else {
             return Box::pin(std::future::ready(()));
         };
         let Some(guardian_config) = input.thread_store.get::<GuardianV2Config>() else {
             return Box::pin(std::future::ready(()));
         };
+        let Some(score_progress) = input.thread_store.get::<GuardianV2ScoreProgress>() else {
+            return Box::pin(std::future::ready(()));
+        };
+        let metrics = score_progress.metrics.clone();
         let parent_model = input.thread_store.get::<ModelInfo>();
         let model_defaults = parent_model
             .as_ref()
@@ -359,6 +387,11 @@ impl ToolLifecycleContributor for GuardianV2Extension {
         let guardian_config = match guardian_config.with_model_defaults(model_defaults) {
             Ok(config) => config,
             Err(error) => {
+                record_classification(
+                    metrics.as_deref(),
+                    classification_started_at.elapsed(),
+                    "failure",
+                );
                 self.event_sink.emit_warning(ExtensionWarning {
                     thread_id: input.thread_store.level_id().to_owned(),
                     turn_id: Some(input.turn_id.to_owned()),
@@ -368,9 +401,6 @@ impl ToolLifecycleContributor for GuardianV2Extension {
             }
         };
         input.thread_store.insert(guardian_config.clone());
-        let Some(score_progress) = input.thread_store.get::<GuardianV2ScoreProgress>() else {
-            return Box::pin(std::future::ready(()));
-        };
         let tool_call_index = score_progress
             .latest_tool_call
             .fetch_add(/*val*/ 1, Ordering::Relaxed)
@@ -414,6 +444,11 @@ impl ToolLifecycleContributor for GuardianV2Extension {
             input.thread_store.insert_if(score.clone(), |previous| {
                 previous.is_none_or(|previous| previous.sampled_at <= score.sampled_at)
             });
+            record_classification(
+                metrics.as_deref(),
+                classification_started_at.elapsed(),
+                "failure",
+            );
             return Box::pin(std::future::ready(()));
         }
         let event_sink = Arc::clone(&self.event_sink);
@@ -452,6 +487,11 @@ impl ToolLifecycleContributor for GuardianV2Extension {
             let planned_action = match action.render(guardian_config.max_action_tokens) {
                 Ok(planned_action) => planned_action,
                 Err(error) => {
+                    record_classification(
+                        metrics.as_deref(),
+                        classification_started_at.elapsed(),
+                        "failure",
+                    );
                     event_sink.emit_warning(ExtensionWarning {
                         thread_id,
                         turn_id: Some(turn_id),
@@ -470,7 +510,8 @@ impl ToolLifecycleContributor for GuardianV2Extension {
                 format!("{planned_action}\n"),
                 ">>> APPROVAL REQUEST END\n".to_owned(),
             ]);
-            let result: Result<(), String> = async {
+            let mut classification_finished_at = None;
+            let result: Result<&str, String> = async {
                 let parsed_thread_id =
                     ThreadId::from_string(&thread_id).map_err(|error| error.to_string())?;
                 let manager = thread_manager
@@ -544,7 +585,7 @@ impl ToolLifecycleContributor for GuardianV2Extension {
                     .await
                 {
                     Ok(output) => output,
-                    Err(LunaSamplerError::Superseded) => return Ok(()),
+                    Err(LunaSamplerError::Superseded) => return Ok("superseded"),
                     Err(error) => return Err(error.to_string()),
                 };
                 let output: serde_json::Value =
@@ -573,20 +614,30 @@ impl ToolLifecycleContributor for GuardianV2Extension {
                         previous.is_none_or(|previous| previous.sampled_at < score.sampled_at)
                     })
                 {
-                    return Ok(());
+                    return Ok("superseded");
                 }
                 score_progress
                     .latest_scored_tool_call
                     .fetch_max(tool_call_index, Ordering::Release);
+                classification_finished_at = Some(Instant::now());
                 if !config.ephemeral {
                     thread
                         .append_rollout_items(&[RolloutItem::SecurityRiskScore(score)])
                         .await
                         .map_err(|error| error.to_string())?;
                 }
-                Ok(())
+                Ok("success")
             }
             .await;
+            record_classification(
+                metrics.as_deref(),
+                classification_finished_at
+                    .map(|finished_at: Instant| {
+                        finished_at.duration_since(classification_started_at)
+                    })
+                    .unwrap_or_else(|| classification_started_at.elapsed()),
+                result.as_deref().unwrap_or("failure"),
+            );
             if let Err(error) = result {
                 event_sink.emit_warning(ExtensionWarning {
                     thread_id,
