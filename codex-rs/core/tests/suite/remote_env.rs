@@ -1516,6 +1516,39 @@ async fn pending_attachment_installs_configuration_before_waiting_turn_resumes()
             ..pending_selection.clone()
         }]
     );
+    let downgraded_environments = TurnEnvironmentSelections::new(
+        test.config.cwd.clone(),
+        vec![TurnEnvironmentSelection {
+            config: EnvironmentConfigState::FromThread,
+            workspace_roots: Vec::new(),
+            ..pending_selection.clone()
+        }],
+    );
+    for thread in [&waiting.thread, &independent.thread, &failed.thread] {
+        let error = thread
+            .preview_thread_settings_overrides(CodexThreadSettingsOverrides {
+                environments: Some(downgraded_environments.clone()),
+                ..Default::default()
+            })
+            .await
+            .expect_err("owner-controlled environment must not become thread-owned");
+        assert!(error.to_string().contains("owner-provided"));
+    }
+    let error = independent
+        .thread
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "attempt to clear owner configuration".into(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                environments: Some(downgraded_environments),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect_err("turn settings must not clear owner configuration");
+    assert!(error.to_string().contains("owner-provided"));
     assert!(
         waiting
             .thread

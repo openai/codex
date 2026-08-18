@@ -9,6 +9,7 @@ use codex_protocol::protocol::EnvironmentConfig;
 use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 
+use crate::config::ConstraintError;
 use crate::config::ConstraintResult;
 use crate::session::session::Session;
 use crate::session::session::SessionConfiguration;
@@ -78,7 +79,25 @@ impl Session {
         current: &SessionConfiguration,
         updates: &SessionSettingsUpdate,
     ) -> ConstraintResult<SessionConfiguration> {
-        current.apply(updates, &self.services.turn_environments.selections())
+        let current_environments = self.services.turn_environments.selections();
+        if let Some(environments) = &updates.environments
+            && let Some(environment) = environments.environments.iter().find(|environment| {
+                environment.config == EnvironmentConfigState::FromThread
+                    && current_environments.iter().any(|current| {
+                        current.environment_id == environment.environment_id
+                            && current.config != EnvironmentConfigState::FromThread
+                    })
+            })
+        {
+            return Err(ConstraintError::InvalidValue {
+                field_name: "environments",
+                candidate: environment.environment_id.clone(),
+                allowed: "owner-provided environment configuration".to_string(),
+                requirement_source: codex_config::RequirementSource::Unknown,
+            });
+        }
+
+        current.apply(updates, &current_environments)
     }
 
     pub(crate) async fn environment_ready(
