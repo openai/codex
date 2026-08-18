@@ -44,7 +44,6 @@ use crate::LunaSamplerError;
 use crate::LunaSamplingRequest;
 use crate::config::GuardianV2Config;
 use crate::sampler::MODEL;
-use crate::transcript::truncate_entry;
 
 struct GuardianAction {
     tool_name: ToolName,
@@ -546,13 +545,7 @@ impl ToolLifecycleContributor for GuardianV2Extension {
                     None
                 };
                 let policy = config.resolve_guardian_policy(review_model_messages.as_ref());
-                let instructions = truncate_entry(
-                    &format!(
-                        "{}\n\n# Security Policy\n{policy}",
-                        guardian_config.classifier_instructions
-                    ),
-                    guardian_config.max_classifier_instruction_tokens,
-                );
+                let instructions = guardian_config.render_classifier_instructions(policy);
                 let output = match sampler
                     .sample(LunaSamplingRequest {
                         instructions,

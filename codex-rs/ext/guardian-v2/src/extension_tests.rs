@@ -526,6 +526,40 @@ async fn sample_configured_conversation_history(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn contributor_renders_policy_inside_a_configured_prompt() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let configuration = r#"
+[features.guardianv2]
+enabled = true
+classifier_instructions = "Predict future violations.\n# Security Policy\n{{ tenant_policy_config }}\nReturn action_risk."
+"#;
+    let (request, _test, _registry) = sample_configured_conversation_history(
+        Vec::new(),
+        r#"{"path":"README.md"}"#,
+        Some(TEST_GUARDIAN_POLICY),
+        configuration,
+        /*model_defaults*/ None,
+    )
+    .await?;
+
+    assert_eq!(
+        request["input"][1],
+        json!({
+            "type": "message",
+            "role": "developer",
+            "content": [{
+                "type": "input_text",
+                "text": format!(
+                    "Predict future violations.\n# Security Policy\n{TEST_GUARDIAN_POLICY}\nReturn action_risk."
+                ),
+            }],
+        })
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn contributor_uses_configured_prompt_effort_threshold_and_transcript() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1083,9 +1117,9 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
             "role": "developer",
             "content": [{
                 "type": "input_text",
-                "text": format!(
-                    "{}\n\n# Security Policy\n{TEST_GUARDIAN_POLICY}",
-                    crate::config::DEFAULT_CLASSIFIER_INSTRUCTIONS,
+                "text": crate::config::DEFAULT_CLASSIFIER_INSTRUCTIONS.replace(
+                    "{{ tenant_policy_config }}",
+                    TEST_GUARDIAN_POLICY,
                 ),
             }],
         })
@@ -1156,7 +1190,23 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
     assert_eq!(persisted_scores, vec![score.as_ref().clone()]);
 
     thread_store.insert(SecurityRiskScore {
-        scores: BTreeMap::from([("action_risk".to_string(), 0.25)]),
+        scores: BTreeMap::from([("action_risk".to_string(), 0.5)]),
+        sampled_at: None,
+    });
+    assert_eq!(
+        registry
+            .approval_review(
+                &session_store,
+                thread_store,
+                "review action",
+                /*extension_metrics*/ None,
+            )
+            .await,
+        None
+    );
+
+    thread_store.insert(SecurityRiskScore {
+        scores: BTreeMap::from([("action_risk".to_string(), 0.49)]),
         sampled_at: None,
     });
     assert_eq!(
@@ -1209,9 +1259,9 @@ async fn contributor_uses_catalog_policy_without_a_configured_override() -> Resu
             "role": "developer",
             "content": [{
                 "type": "input_text",
-                "text": format!(
-                    "{}\n\n# Security Policy\n{TEST_CATALOG_GUARDIAN_POLICY}",
-                    crate::config::DEFAULT_CLASSIFIER_INSTRUCTIONS,
+                "text": crate::config::DEFAULT_CLASSIFIER_INSTRUCTIONS.replace(
+                    "{{ tenant_policy_config }}",
+                    TEST_CATALOG_GUARDIAN_POLICY,
                 ),
             }],
         })
@@ -1247,10 +1297,13 @@ async fn contributor_bounds_configured_policy_in_luna_developer_instructions() -
         .as_str()
         .expect("Luna request should contain developer instructions");
 
-    assert!(instructions.starts_with(crate::config::DEFAULT_CLASSIFIER_INSTRUCTIONS));
-    assert!(instructions.contains("# Security Policy\nReject unsafe uploads."));
+    let (prefix, suffix) = crate::config::DEFAULT_CLASSIFIER_INSTRUCTIONS
+        .split_once("{{ tenant_policy_config }}")
+        .expect("default classifier prompt should contain the policy placeholder");
+    assert!(instructions.starts_with(&format!("{prefix}Reject unsafe uploads.")));
     assert!(instructions.contains("<truncated omitted_approx_tokens="));
-    assert!(instructions.ends_with("Require explicit approval."));
+    assert!(instructions.contains("Require explicit approval."));
+    assert!(instructions.ends_with(suffix));
     assert!(
         instructions.len()
             <= TruncationPolicy::Tokens(crate::config::DEFAULT_MODEL_CONTEXT_ITEM_TOKENS)
@@ -1448,15 +1501,15 @@ async fn contributor_reuses_the_latest_compatible_parent_compaction() -> Result<
     assert_eq!(request["input"][0]["type"], "additional_tools");
     let developer_message = &request["input"][1];
     assert_eq!(developer_message["role"], "developer");
+    let (prefix, _) = crate::config::DEFAULT_CLASSIFIER_INSTRUCTIONS
+        .split_once("{{ tenant_policy_config }}")
+        .expect("default classifier prompt should contain the policy placeholder");
     assert!(
         developer_message["content"][0]["text"]
             .as_str()
             .expect("Luna request should contain developer instructions")
             .replace("\r\n", "\n")
-            .starts_with(&format!(
-                "{}\n\n# Security Policy\n## Environment Profile\n",
-                crate::config::DEFAULT_CLASSIFIER_INSTRUCTIONS,
-            ))
+            .starts_with(&format!("{prefix}## Environment Profile\n").replace("\r\n", "\n"))
     );
     assert_eq!(
         request["input"][2],

@@ -64,6 +64,7 @@ struct MockResponsesState {
 #[derive(Clone, Copy)]
 enum GuardianRisk {
     Low,
+    Threshold,
     High,
 }
 
@@ -172,6 +173,7 @@ async fn guardian_v2_routes_tool_approvals(
     let (luna_score, expected_guardian_reviews) = match (risk, lifecycle) {
         (GuardianRisk::Low, ThreadLifecycle::New) => (0.25, 1),
         (GuardianRisk::Low, ThreadLifecycle::Resume | ThreadLifecycle::Fork) => (0.25, 0),
+        (GuardianRisk::Threshold, _) => (0.5, 2),
         (GuardianRisk::High, _) => (0.95, 2),
     };
     let responses_state = Arc::new(MockResponsesState {
@@ -376,9 +378,9 @@ async fn guardian_v2_routes_tool_approvals(
         .count();
     assert_eq!(
         strict_review_count,
-        usize::from(matches!(risk, GuardianRisk::High))
+        usize::from(matches!(risk, GuardianRisk::Threshold | GuardianRisk::High))
     );
-    if matches!(risk, GuardianRisk::High) {
+    if matches!(risk, GuardianRisk::Threshold | GuardianRisk::High) {
         let review_started: ItemGuardianApprovalReviewStartedNotification = timeout(
             TIMEOUT,
             app_server.read_notification("item/autoApprovalReview/started"),
@@ -414,6 +416,12 @@ async fn guardian_v2_low_risk_actions_skip_subsequent_reviews() -> Result<()> {
 async fn guardian_v2_high_risk_actions_require_full_reviews() -> Result<()> {
     skip_if_no_network!(Ok(()));
     guardian_v2_routes_tool_approvals(GuardianRisk::High, ThreadLifecycle::New).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_v2_threshold_score_requires_full_reviews() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    guardian_v2_routes_tool_approvals(GuardianRisk::Threshold, ThreadLifecycle::New).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
