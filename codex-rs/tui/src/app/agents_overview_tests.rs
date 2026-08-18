@@ -14,6 +14,9 @@ use codex_app_server_protocol::ThreadActiveFlag;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::ThreadUnsubscribeStatus;
+use codex_config::types::KeybindingSpec;
+use codex_config::types::KeybindingsSpec;
+use codex_config::types::TuiKeymap;
 use codex_protocol::protocol::SubAgentSource;
 
 static OVERVIEW_TIMESTAMP: std::sync::LazyLock<i64> =
@@ -271,6 +274,63 @@ async fn embedded_sessions_offer_to_start_a_background_server_without_migrating(
         );
     });
     app_server.shutdown().await.expect("shutdown app server");
+}
+
+#[tokio::test]
+async fn filtered_dashboard_actions_use_configured_shortcuts() {
+    let mut app = make_test_app().await;
+    let mut keymap = TuiKeymap::default();
+    keymap.agents.search = Some(KeybindingsSpec::One(KeybindingSpec("f6".to_string())));
+    keymap.agents.stop = Some(KeybindingsSpec::One(KeybindingSpec("f10".to_string())));
+    app.keymap = crate::keymap::RuntimeKeymap::from_config(&keymap).expect("runtime keymap");
+    let first = ThreadId::new();
+    let second = ThreadId::new();
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut view = AgentsOverviewView::new(
+        app.agents_overview_view(
+            vec![
+                overview_thread(
+                    first,
+                    /*parent_thread_id*/ None,
+                    "First task",
+                    ThreadStatus::Idle,
+                ),
+                overview_thread(
+                    second,
+                    /*parent_thread_id*/ None,
+                    "Second task",
+                    ThreadStatus::Active {
+                        active_flags: Vec::new(),
+                    },
+                ),
+            ],
+            Some(first),
+        )
+        .rows
+        .clone(),
+        Some(first),
+        /*exit_on_cancel*/ false,
+        crate::app_event_sender::AppEventSender::new(event_tx),
+        app.keymap.clone(),
+        Arc::default(),
+    );
+
+    view.handle_key_event(KeyEvent::new(KeyCode::F(10), KeyModifiers::NONE));
+    assert!(event_rx.try_recv().is_err());
+    assert!(view.handle_paste("Do not dispatch this draft".to_string()));
+    view.handle_key_event(KeyEvent::new(KeyCode::F(6), KeyModifiers::NONE));
+    assert!(view.handle_paste("Second task".to_string()));
+    view.handle_key_event(KeyEvent::new(KeyCode::F(10), KeyModifiers::NONE));
+    assert!(matches!(
+        event_rx.try_recv(),
+        Ok(AppEvent::StopAgentsOverviewThread { thread_id }) if thread_id == second
+    ));
+    view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(matches!(
+        event_rx.try_recv(),
+        Ok(AppEvent::SelectAgentsOverviewThread { thread_id }) if thread_id == second
+    ));
+    assert!(event_rx.try_recv().is_err());
 }
 
 #[tokio::test]

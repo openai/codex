@@ -67,6 +67,7 @@ const fn context_bit(context: KeymapContext) -> u16 {
         KeymapContext::Pager => 7,
         KeymapContext::List => 8,
         KeymapContext::Approval => 9,
+        KeymapContext::Agents => 10,
     }
 }
 
@@ -441,6 +442,15 @@ fn validate_reserved_strokes(binding: &RuntimeChordBinding) -> Result<(), String
         ));
     }
 
+    if binding.action.context == KeymapContext::Agents
+        && binding.chord.prefix.parts() == (KeyCode::Backspace, KeyModifiers::NONE)
+    {
+        return Err(format!(
+            "Invalid `{path}` = `{}`: `backspace` is reserved for editing task input.",
+            binding.spec
+        ));
+    }
+
     #[cfg(unix)]
     if strokes.contains(&crate::key_hint::ctrl(KeyCode::Char('z')).parts()) {
         return Err(format!(
@@ -460,7 +470,7 @@ Choose a different chord and retry.",
         | KeymapContext::VimOperator
         | KeymapContext::VimTextObject => MAIN_RESERVED_BINDINGS,
         KeymapContext::List => LIST_RESERVED_BINDINGS,
-        KeymapContext::Approval => &LIST_RESERVED_BINDINGS[..1],
+        KeymapContext::Agents | KeymapContext::Approval => &LIST_RESERVED_BINDINGS[..1],
     };
     if let Some((reserved_action, _)) = reserved.iter().find(|(_, reserved)| {
         binding.chord.prefix.parts() == reserved.parts()

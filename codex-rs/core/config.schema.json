@@ -3469,6 +3469,13 @@
             }
           ],
           "default": {
+            "agents": {
+              "new_task": null,
+              "rename": null,
+              "search": null,
+              "stop": null,
+              "toggle_grouping": null
+            },
             "approval": {
               "approve": null,
               "approve_for_prefix": null,
@@ -3514,6 +3521,7 @@
             "global": {
               "clear_terminal": null,
               "copy": null,
+              "open_agents": null,
               "open_external_editor": null,
               "open_transcript": null,
               "queue": null,
@@ -3720,6 +3728,53 @@
           "default": false,
           "description": "Start the composer in Vim mode (`Normal`) by default. Defaults to `false`.",
           "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "TuiAgentsKeymap": {
+      "additionalProperties": false,
+      "description": "Shortcuts specific to the shared agents overview.",
+      "properties": {
+        "new_task": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Start composing a new agent task."
+        },
+        "rename": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Rename the selected task."
+        },
+        "search": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Search the available agent tasks."
+        },
+        "stop": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Stop the selected running task."
+        },
+        "toggle_grouping": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Toggle grouping tasks by status or project."
         }
       },
       "type": "object"
@@ -4044,6 +4099,14 @@
           ],
           "description": "Copy the last agent response to the clipboard."
         },
+        "open_agents": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Open the shared agent-session overview."
+        },
         "open_external_editor": {
           "allOf": [
             {
@@ -4123,6 +4186,20 @@
       "additionalProperties": false,
       "description": "Raw keymap configuration from `[tui.keymap]`.\n\nEach context contains action-level overrides. Missing actions inherit from built-in defaults, and selected chat/composer actions can fall back through `global` during runtime resolution.\n\nThis type is intentionally a persistence shape, not the structure used by input handlers. Runtime consumers should resolve it into `RuntimeKeymap` first so precedence, empty-list unbinding, and duplicate-key validation are applied consistently.",
       "properties": {
+        "agents": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TuiAgentsKeymap"
+            }
+          ],
+          "default": {
+            "new_task": null,
+            "rename": null,
+            "search": null,
+            "stop": null,
+            "toggle_grouping": null
+          }
+        },
         "approval": {
           "allOf": [
             {
@@ -4202,6 +4279,7 @@
           "default": {
             "clear_terminal": null,
             "copy": null,
+            "open_agents": null,
             "open_external_editor": null,
             "open_transcript": null,
             "queue": null,

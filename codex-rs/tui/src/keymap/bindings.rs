@@ -22,6 +22,7 @@ pub(crate) enum KeymapContext {
     VimTextObject,
     Pager,
     List,
+    Agents,
     Approval,
 }
 
@@ -37,6 +38,7 @@ impl KeymapContext {
             Self::VimTextObject => "vim_text_object",
             Self::Pager => "pager",
             Self::List => "list",
+            Self::Agents => "agents",
             Self::Approval => "approval",
         }
     }
@@ -57,6 +59,8 @@ impl KeymapContext {
             (self, other),
             (Self::List, Self::Approval)
                 | (Self::Approval, Self::List)
+                | (Self::List, Self::Agents)
+                | (Self::Agents, Self::List)
                 | (Self::Chat, Self::List)
                 | (Self::List, Self::Chat)
         ) || self.is_shared_main() && other.is_main_editor()
@@ -221,6 +225,7 @@ macro_rules! define_runtime_action_bindings {
 
 define_runtime_action_bindings! {
     "global" => Global, app, global [
+        open_agents,
         open_transcript,
         open_external_editor,
         copy,
@@ -339,6 +344,13 @@ define_runtime_action_bindings! {
         jump_bottom,
         accept,
         cancel,
+    ],
+    "agents" => Agents, agents, agents [
+        search,
+        new_task,
+        rename,
+        stop,
+        toggle_grouping,
     ],
     "approval" => Approval, approval, approval [
         open_fullscreen,

@@ -113,6 +113,12 @@ const KEYMAP_CONTEXT_TABS: &[KeymapContextTab] = &[
         contexts: &["pager", "list"],
     },
     KeymapContextTab {
+        id: "agents-shortcuts",
+        label: "Agents",
+        description: "Shared agents dashboard shortcuts.",
+        contexts: &["agents"],
+    },
+    KeymapContextTab {
         id: "approval-shortcuts",
         label: "Approval",
         description: "Approval prompt shortcuts.",

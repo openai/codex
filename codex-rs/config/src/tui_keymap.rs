@@ -92,6 +92,8 @@ impl KeybindingsSpec {
 #[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct TuiGlobalKeymap {
+    /// Open the shared agent-session overview.
+    pub open_agents: Option<KeybindingsSpec>,
     /// Open the transcript overlay.
     pub open_transcript: Option<KeybindingsSpec>,
     /// Open the external editor for the current draft.
@@ -367,6 +369,23 @@ pub struct TuiListKeymap {
     pub cancel: Option<KeybindingsSpec>,
 }
 
+/// Shortcuts specific to the shared agents overview.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct TuiAgentsKeymap {
+    /// Search the available agent tasks.
+    pub search: Option<KeybindingsSpec>,
+    /// Start composing a new agent task.
+    pub new_task: Option<KeybindingsSpec>,
+    /// Rename the selected task.
+    pub rename: Option<KeybindingsSpec>,
+    /// Stop the selected running task.
+    pub stop: Option<KeybindingsSpec>,
+    /// Toggle grouping tasks by status or project.
+    pub toggle_grouping: Option<KeybindingsSpec>,
+}
+
 /// Approval overlay keybindings.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -422,6 +441,8 @@ pub struct TuiKeymap {
     pub pager: TuiPagerKeymap,
     #[serde(default)]
     pub list: TuiListKeymap,
+    #[serde(default)]
+    pub agents: TuiAgentsKeymap,
     #[serde(default)]
     pub approval: TuiApprovalKeymap,
 }

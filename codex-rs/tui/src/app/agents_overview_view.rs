@@ -5,7 +5,10 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::BottomPaneView;
 use crate::bottom_pane::ViewCompletion;
+use crate::key_hint::KeyBindingListExt;
+use crate::key_hint::ShortcutHint;
 use crate::key_hint::is_plain_text_key_event;
+use crate::keymap::AgentsKeymap;
 use crate::keymap::KeymapContext;
 use crate::keymap::KeymapContextSet;
 use crate::keymap::ListAction;
@@ -18,7 +21,6 @@ use codex_app_server_protocol::ThreadStatus;
 use codex_protocol::ThreadId;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
-use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
@@ -98,6 +100,7 @@ pub(super) struct AgentsOverviewView {
     completion: Option<ViewCompletion>,
     app_event_tx: AppEventSender,
     keymap: ListKeymap,
+    agents_keymap: AgentsKeymap,
 }
 
 impl Drop for AgentsOverviewView {
@@ -135,6 +138,7 @@ impl AgentsOverviewView {
             completion: None,
             app_event_tx,
             keymap: keymap.list,
+            agents_keymap: keymap.agents,
         };
         let visible = view.visible_indices();
         if !visible.contains(&view.selected) {
@@ -419,7 +423,7 @@ impl BottomPaneView for AgentsOverviewView {
     }
 
     fn keymap_contexts(&self) -> KeymapContextSet {
-        KeymapContextSet::new(KeymapContext::List)
+        KeymapContextSet::new(KeymapContext::List).with(KeymapContext::Agents)
     }
 
     fn completion(&self) -> Option<ViewCompletion> {
@@ -441,58 +445,69 @@ impl BottomPaneView for AgentsOverviewView {
     }
 
     fn handle_key_event(&mut self, key: KeyEvent) {
-        if key.modifiers == KeyModifiers::CONTROL
-            && matches!(key.code, KeyCode::Char('f' | 'n' | 'r' | 's' | 'x'))
+        if key.code == KeyCode::Backspace
+            && key.modifiers.is_empty()
+            && self.keymap.action_for(key).is_none()
         {
-            match key.code {
-                KeyCode::Char('s') => {
-                    let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-                    state.status_grouping = !state.status_grouping;
+            self.edit_input(|input| {
+                input.pop();
+            });
+            return;
+        }
+        if is_plain_text_key_event(key)
+            && let KeyCode::Char(character) = key.code
+        {
+            self.edit_input(|input| input.push(character));
+            return;
+        }
+
+        if self.agents_keymap.toggle_grouping.is_pressed(key) {
+            let mut state = self.state();
+            state.status_grouping = !state.status_grouping;
+            return;
+        }
+        if self.agents_keymap.search.is_pressed(key) {
+            let mut state = self.state();
+            if !state.renaming {
+                state.searching = !state.searching;
+                if !state.searching {
+                    state.search.clear();
                 }
-                KeyCode::Char('f') => {
-                    let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-                    if !state.renaming {
-                        state.searching = !state.searching;
-                        if !state.searching {
-                            state.search.clear();
-                        }
-                    }
-                }
-                KeyCode::Char('n') => {
-                    let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            }
+            return;
+        }
+        if self.agents_keymap.new_task.is_pressed(key) {
+            let mut state = self.state();
+            state.search.clear();
+            state.searching = false;
+            state.renaming = false;
+            state.input.clear();
+            return;
+        }
+        if self.agents_keymap.rename.is_pressed(key) {
+            if let Some(row) = self.selected_row() {
+                let mut state = self.state();
+                if state.input.is_empty() {
+                    state.input = row.thread.name.clone().unwrap_or_default();
                     state.search.clear();
                     state.searching = false;
-                    state.renaming = false;
-                    state.input.clear();
+                    state.renaming = true;
                 }
-                KeyCode::Char('r') => {
-                    if let Some(row) = self.selected_row() {
-                        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-                        if state.input.is_empty() {
-                            state.input = row.thread.name.clone().unwrap_or_default();
-                            state.search.clear();
-                            state.searching = false;
-                            state.renaming = true;
-                        }
-                    }
-                }
-                KeyCode::Char('x') => {
-                    if let Some(row) = self.selected_row()
-                        && matches!(row.thread.status, ThreadStatus::Active { .. })
-                    {
-                        self.app_event_tx.send(AppEvent::StopAgentsOverviewThread {
-                            thread_id: row.thread_id,
-                        });
-                    }
-                }
-                _ => {}
+            }
+            return;
+        }
+        if self.agents_keymap.stop.is_pressed(key) {
+            if let Some(row) = self.selected_row()
+                && matches!(row.thread.status, ThreadStatus::Active { .. })
+            {
+                self.app_event_tx.send(AppEvent::StopAgentsOverviewThread {
+                    thread_id: row.thread_id,
+                });
             }
             return;
         }
 
-        if !is_plain_text_key_event(key)
-            && let Some(action) = self.keymap.action_for(key)
-        {
+        if let Some(action) = self.keymap.action_for(key) {
             if self.state().renaming
                 && matches!(action, ListAction::JumpTop | ListAction::JumpBottom)
             {
@@ -532,21 +547,10 @@ impl BottomPaneView for AgentsOverviewView {
                 }
                 ListAction::MoveLeft | ListAction::MoveRight => {}
             }
-            return;
-        }
-
-        match key.code {
-            KeyCode::Backspace => {
-                self.edit_input(|input| {
-                    input.pop();
-                });
-            }
-            KeyCode::Char(character)
-                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
-            {
-                self.edit_input(|input| input.push(character));
-            }
-            _ => {}
+        } else if key.code == KeyCode::Backspace {
+            self.edit_input(|input| {
+                input.pop();
+            });
         }
     }
 }
@@ -650,30 +654,85 @@ impl Renderable for AgentsOverviewView {
         let input = &input[visible_start..];
         Line::from(vec![label.cyan().bold(), input.into(), placeholder.dim()])
             .render(inset(prompt), buf);
-        let stop_hint = if self
-            .selected_row()
-            .is_some_and(|row| matches!(row.thread.status, ThreadStatus::Active { .. }))
-        {
-            "ctrl+x".bold()
-        } else {
-            "ctrl+x".dim()
+        let list_hint = |action| {
+            self.keymap.primary_hint(action).filter(|hint| {
+                !matches!(hint, ShortcutHint::Single(binding)
+                if is_plain_text_key_event(KeyEvent::new(
+                    binding.parts().0,
+                    binding.parts().1,
+                )) || [
+                    &self.agents_keymap.search,
+                    &self.agents_keymap.new_task,
+                    &self.agents_keymap.rename,
+                    &self.agents_keymap.stop,
+                    &self.agents_keymap.toggle_grouping,
+                ]
+                .into_iter()
+                .any(|bindings| bindings.contains(binding)))
+            })
         };
-        Line::from(vec![
-            "↑↓".bold(),
-            " navigate  ".dim(),
-            "enter".bold(),
-            " open  ".dim(),
-            "ctrl+f".bold(),
-            " search  ".dim(),
-            "ctrl+s".bold(),
-            " group  ".dim(),
-            "ctrl+r".bold(),
-            " rename  ".dim(),
-            stop_hint,
-            " stop  ".dim(),
-            "esc".bold(),
-            " back".dim(),
-        ])
-        .render(inset(footer), buf);
+        let navigation_hints = [ListAction::MoveUp, ListAction::MoveDown]
+            .into_iter()
+            .filter_map(list_hint)
+            .map(|hint| hint.display_label().replace(" + ", "+"))
+            .collect::<Vec<_>>();
+        let navigation_hint = navigation_hints.join(
+            if navigation_hints
+                .iter()
+                .all(|hint| hint.chars().count() == 1)
+            {
+                ""
+            } else {
+                " "
+            },
+        );
+        let mut footer_spans = Vec::new();
+        if !navigation_hint.is_empty() {
+            footer_spans.extend([navigation_hint.bold(), " navigate  ".dim()]);
+        }
+        let mut add_hint = |hint: Option<ShortcutHint>, label: &'static str, enabled: bool| {
+            if let Some(hint) = hint {
+                let key = hint.display_label().replace(" + ", "+");
+                footer_spans.push(if enabled { key.bold() } else { key.dim() });
+                footer_spans.push(format!(" {label}  ").dim());
+            }
+        };
+        add_hint(list_hint(ListAction::Accept), "open", true);
+        add_hint(
+            self.agents_keymap
+                .primary_hint("search", &self.agents_keymap.search),
+            "search",
+            true,
+        );
+        add_hint(
+            self.agents_keymap
+                .primary_hint("toggle_grouping", &self.agents_keymap.toggle_grouping),
+            "group",
+            true,
+        );
+        add_hint(
+            self.agents_keymap
+                .primary_hint("rename", &self.agents_keymap.rename),
+            "rename",
+            true,
+        );
+        add_hint(
+            self.agents_keymap
+                .primary_hint("stop", &self.agents_keymap.stop),
+            "stop",
+            self.selected_row()
+                .is_some_and(|row| matches!(row.thread.status, ThreadStatus::Active { .. })),
+        );
+        add_hint(list_hint(ListAction::Cancel), "back", true);
+        let footer_area = inset(footer);
+        let mut footer_line: Line = footer_spans.into();
+        if footer_line.width() > usize::from(footer_area.width) {
+            for span in &mut footer_line.spans {
+                if span.content.ends_with("  ") {
+                    span.content.to_mut().pop();
+                }
+            }
+        }
+        footer_line.render(footer_area, buf);
     }
 }

@@ -84,6 +84,7 @@ impl KeymapActionDescriptor {
 
 #[rustfmt::skip]
 pub(super) const KEYMAP_ACTIONS: &[KeymapActionDescriptor] = &[
+    action("global", "Global", "open_agents", "Open the shared agent-session overview."),
     action("global", "Global", "open_transcript", "Open the transcript overlay."),
     action("global", "Global", "open_external_editor", "Open the current draft in an external editor."),
     action("global", "Global", "copy", "Copy the last agent response to the clipboard."),
@@ -186,6 +187,11 @@ pub(super) const KEYMAP_ACTIONS: &[KeymapActionDescriptor] = &[
     action("list", "List", "jump_bottom", "Jump to the last list item."),
     action("list", "List", "accept", "Accept the current list selection."),
     action("list", "List", "cancel", "Cancel and close selection views."),
+    action("agents", "Agents", "search", "Search the available agent tasks."),
+    action("agents", "Agents", "new_task", "Start composing a new agent task."),
+    action("agents", "Agents", "rename", "Rename the selected task."),
+    action("agents", "Agents", "stop", "Stop the selected running task."),
+    action("agents", "Agents", "toggle_grouping", "Group tasks by status or project."),
     action("approval", "Approval", "open_fullscreen", "Open approval details fullscreen."),
     action("approval", "Approval", "open_thread", "Open the approval source thread when available."),
     action("approval", "Approval", "approve", "Approve the primary option."),
@@ -228,6 +234,7 @@ pub(super) fn binding_slot<'a>(
     action: &str,
 ) -> Option<&'a mut Option<KeybindingsSpec>> {
     match (context, action) {
+        ("global", "open_agents") => Some(&mut keymap.global.open_agents),
         ("global", "open_transcript") => Some(&mut keymap.global.open_transcript),
         ("global", "open_external_editor") => Some(&mut keymap.global.open_external_editor),
         ("global", "copy") => Some(&mut keymap.global.copy),
@@ -330,6 +337,11 @@ pub(super) fn binding_slot<'a>(
         ("list", "jump_bottom") => Some(&mut keymap.list.jump_bottom),
         ("list", "accept") => Some(&mut keymap.list.accept),
         ("list", "cancel") => Some(&mut keymap.list.cancel),
+        ("agents", "search") => Some(&mut keymap.agents.search),
+        ("agents", "new_task") => Some(&mut keymap.agents.new_task),
+        ("agents", "rename") => Some(&mut keymap.agents.rename),
+        ("agents", "stop") => Some(&mut keymap.agents.stop),
+        ("agents", "toggle_grouping") => Some(&mut keymap.agents.toggle_grouping),
         ("approval", "open_fullscreen") => Some(&mut keymap.approval.open_fullscreen),
         ("approval", "open_thread") => Some(&mut keymap.approval.open_thread),
         ("approval", "approve") => Some(&mut keymap.approval.approve),

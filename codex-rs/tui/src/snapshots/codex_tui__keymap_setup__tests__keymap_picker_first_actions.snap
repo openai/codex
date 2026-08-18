@@ -2,17 +2,19 @@
 source: tui/src/keymap_setup.rs
 expression: snapshot
 ---
-tab: All (109 selectable)
+tab: All (115 selectable)
 tab: Common (20 selectable)
 tab: Customized (0) (0 selectable)
 tab: Unbound (2) (2 selectable)
-tab: App (11 selectable)
+tab: App (12 selectable)
 tab: Composer (5 selectable)
 tab: Editor (17 selectable)
 tab: Vim (48 selectable)
 tab: Navigation (20 selectable)
+tab: Agents (5 selectable)
 tab: Approval (8 selectable)
 tab: Debug (1 selectable)
+Open Agents | alt-a | Global open_agents Open Agents Open the shared agent-session overview. alt-a Default
 Open Transcript | ctrl-t | Global open_transcript Open Transcript Open the transcript overlay. ctrl-t Default
 Open External Editor | ctrl-g | Global open_external_editor Open External Editor Open the current draft in an external editor. ctrl-g Default
 Copy | ctrl-o | Global copy Copy Copy the last agent response to the clipboard. ctrl-o Default
@@ -24,4 +26,3 @@ Interrupt Turn | esc | Chat interrupt_turn Interrupt Turn Interrupt the active t
 Decrease Reasoning Effort | alt-,, shift-down | Chat decrease_reasoning_effort Decrease Reasoning Effort Decrease reasoning effort. alt-,, shift-down Default
 Increase Reasoning Effort | alt-., shift-up | Chat increase_reasoning_effort Increase Reasoning Effort Increase reasoning effort. alt-., shift-up Default
 Edit Queued Message | alt-up, shift-left | Chat edit_queued_message Edit Queued Message Edit the most recently queued message. alt-up, shift-left Default
-Submit | enter | Composer submit Submit Submit the current composer draft. enter Default
