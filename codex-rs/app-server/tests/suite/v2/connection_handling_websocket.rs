@@ -20,12 +20,15 @@ use codex_app_server_protocol::ThreadLoadedListResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_core::config::set_project_trust_level;
+use codex_http_client::HttpClient;
+use codex_http_client::HttpClientBuilder;
+use codex_http_client::HttpResponse;
 use codex_protocol::config_types::TrustLevel;
 use futures::SinkExt;
 use futures::StreamExt;
 use hmac::Hmac;
 use hmac::Mac;
-use reqwest::StatusCode;
+use http::StatusCode;
 use serde_json::json;
 use sha2::Sha256;
 use std::net::SocketAddr;
@@ -214,7 +217,7 @@ async fn websocket_transport_serves_health_endpoints_on_same_listener() -> Resul
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
 
     let (mut process, bind_addr) = spawn_websocket_server(codex_home.path()).await?;
-    let client = reqwest::Client::new();
+    let client = HttpClientBuilder::new().build_direct()?;
 
     let readyz = http_get(&client, bind_addr, "/readyz").await?;
     assert_eq!(readyz.status(), StatusCode::OK);
@@ -641,11 +644,7 @@ async fn run_websocket_server_to_completion_with_args(
         .context("failed to run websocket app-server")
 }
 
-async fn http_get(
-    client: &reqwest::Client,
-    bind_addr: SocketAddr,
-    path: &str,
-) -> Result<reqwest::Response> {
+async fn http_get(client: &HttpClient, bind_addr: SocketAddr, path: &str) -> Result<HttpResponse> {
     let connectable_bind_addr = connectable_bind_addr(bind_addr);
     let deadline = Instant::now() + DEFAULT_READ_TIMEOUT;
     loop {

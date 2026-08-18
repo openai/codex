@@ -478,6 +478,7 @@ mod tests {
     use codex_rollout::RolloutLine;
     use core_test_support::responses::start_mock_server;
     use core_test_support::test_codex::test_codex;
+    use http::HeaderMap;
     use pretty_assertions::assert_eq;
 
     #[tokio::test]
@@ -790,9 +791,7 @@ mod tests {
     #[test]
     fn tool_cache_feedback_attachments_include_directory_cache_without_account_id() {
         let codex_home = tempfile::tempdir().expect("create tempdir");
-        let auth = CodexAuth::Headers(codex_login::AuthHeaders::new(
-            reqwest::header::HeaderMap::new(),
-        ));
+        let auth = CodexAuth::Headers(codex_login::AuthHeaders::new(HeaderMap::new()));
         let directory_cache_context = ConnectorDirectoryCacheContext::new(
             codex_home.path().to_path_buf(),
             ConnectorDirectoryCacheKey::new(
