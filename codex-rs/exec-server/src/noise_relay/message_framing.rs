@@ -1,4 +1,5 @@
 use bytes::Buf;
+use bytes::Bytes;
 use bytes::BytesMut;
 use codex_exec_server_protocol::JSONRPCMessage;
 
@@ -17,14 +18,18 @@ pub(crate) const NOISE_RECORD_PLAINTEXT_LEN: usize = 60 * 1024;
 pub(crate) fn frame_jsonrpc_message(message: &JSONRPCMessage) -> Result<Vec<u8>, ExecServerError> {
     let mut framed = vec![0; LENGTH_PREFIX_BYTES];
     serde_json::to_writer(&mut framed, message)?;
-    let message_len = framed.len() - LENGTH_PREFIX_BYTES;
-    if message_len > MAX_NOISE_JSONRPC_MESSAGE_LEN {
+    let prefix = message_length_prefix(framed.len() - LENGTH_PREFIX_BYTES)?;
+    framed[..LENGTH_PREFIX_BYTES].copy_from_slice(&prefix);
+    Ok(framed)
+}
+
+fn message_length_prefix(message_len: usize) -> Result<[u8; LENGTH_PREFIX_BYTES], ExecServerError> {
+    if message_len == 0 || message_len > MAX_NOISE_JSONRPC_MESSAGE_LEN {
         return Err(ExecServerError::Protocol(
             "Noise relay JSON-RPC message exceeds maximum length".to_string(),
         ));
     }
-    framed[..LENGTH_PREFIX_BYTES].copy_from_slice(&(message_len as u32).to_be_bytes());
-    Ok(framed)
+    Ok((message_len as u32).to_be_bytes())
 }
 
 /// Incrementally reconstructs authenticated JSON-RPC messages from Noise records.
@@ -33,15 +38,31 @@ pub(crate) fn frame_jsonrpc_message(message: &JSONRPCMessage) -> Result<Vec<u8>,
 /// here so a bad authenticated peer cannot grow the reassembly buffer forever.
 #[derive(Default)]
 pub(crate) struct JsonRpcMessageDecoder {
-    buffered: BytesMut,
+    decoder: MessageDecoder,
 }
 
 impl JsonRpcMessageDecoder {
-    /// Append one decrypted record and return all complete framed messages.
     pub(crate) fn push(
         &mut self,
         plaintext_record: &[u8],
     ) -> Result<Vec<JSONRPCMessage>, ExecServerError> {
+        self.decoder
+            .push(plaintext_record)?
+            .into_iter()
+            .map(|message| serde_json::from_slice(&message).map_err(Into::into))
+            .collect()
+    }
+}
+
+/// Reassembles opaque application payloads without interpreting their schema.
+#[derive(Default)]
+pub(crate) struct MessageDecoder {
+    buffered: BytesMut,
+}
+
+impl MessageDecoder {
+    /// Append one decrypted record and return all complete framed messages.
+    pub(crate) fn push(&mut self, plaintext_record: &[u8]) -> Result<Vec<Bytes>, ExecServerError> {
         if plaintext_record.len() > NOISE_RECORD_PLAINTEXT_LEN {
             return Err(ExecServerError::Protocol(
                 "Noise relay plaintext record exceeds maximum length".to_string(),
@@ -66,10 +87,8 @@ impl JsonRpcMessageDecoder {
             if self.buffered.len() < framed_len {
                 break;
             }
-            messages.push(serde_json::from_slice(
-                &self.buffered[LENGTH_PREFIX_BYTES..framed_len],
-            )?);
-            self.buffered.advance(framed_len);
+            self.buffered.advance(LENGTH_PREFIX_BYTES);
+            messages.push(self.buffered.split_to(message_len).freeze());
         }
 
         // Even before a message is complete, keep reassembly memory bounded.

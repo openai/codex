@@ -4,6 +4,9 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use anyhow::Result;
+use codex_exec_server_protocol::JSONRPCMessage;
+use codex_exec_server_protocol::JSONRPCResponse;
+use codex_exec_server_protocol::RequestId;
 use futures::SinkExt;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
@@ -13,6 +16,7 @@ use tokio::time::timeout;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_util::task::AbortOnDropHandle;
 
 use super::HarnessKeyValidator;
 use super::MAX_FAILED_NOISE_HANDSHAKES;
@@ -21,10 +25,13 @@ use super::RendezvousDisconnectReason;
 use super::run_multiplexed_environment;
 use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
+use crate::connection::JsonRpcConnectionEvent;
 use crate::noise_channel::InitiatorHandshake;
 use crate::noise_channel::NoiseChannelIdentity;
 use crate::noise_channel::NoiseChannelPublicKey;
 use crate::noise_channel::noise_channel_prologue;
+use crate::noise_relay::NoiseHarnessConnectionArgs;
+use crate::noise_relay::noise_harness_connection_from_websocket;
 use crate::relay::RelayFrameBodyKind;
 use crate::relay::decode_relay_message_frame;
 use crate::relay::encode_relay_message_frame;
@@ -134,6 +141,64 @@ impl HarnessKeyValidator for BlockingValidator {
             Ok(())
         }
     }
+}
+
+#[tokio::test]
+async fn processor_exit_resets_noise_harness_stream() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let connecting = tokio::spawn(connect_async(format!("ws://{}", listener.local_addr()?)));
+    let (socket, _) = listener.accept().await?;
+    let environment_websocket = accept_async(socket).await?;
+    let (harness_websocket, _) = connecting.await??;
+    let identity = NoiseChannelIdentity::generate()?;
+    let release = Arc::new(Notify::new());
+    release.notify_one();
+    let environment_task = AbortOnDropHandle::new(tokio::spawn(run_multiplexed_environment(
+        environment_websocket,
+        ConnectionProcessor::new(ExecServerRuntimePaths::new(
+            std::env::current_exe()?,
+            /*codex_linux_sandbox_exe*/ None,
+        )?),
+        ENVIRONMENT_ID.to_string(),
+        EXECUTOR_REGISTRATION_ID.to_string(),
+        identity.clone(),
+        BlockingValidator {
+            calls: Arc::new(AtomicUsize::new(0)),
+            release,
+        },
+    )));
+    let mut connection = noise_harness_connection_from_websocket(
+        harness_websocket,
+        NoiseHarnessConnectionArgs {
+            connection_label: "processor exit test".to_string(),
+            environment_id: ENVIRONMENT_ID.to_string(),
+            executor_registration_id: EXECUTOR_REGISTRATION_ID.to_string(),
+            identity: NoiseChannelIdentity::generate()?,
+            responder_public_key: identity.public_key(),
+            harness_key_authorization: "authorization".to_string(),
+        },
+    );
+    // Valid JSON reaches the processor; an unsolicited response closes it and
+    // aborts its writer. The physical relay must still deliver the reset.
+    connection
+        .outgoing_tx
+        .send(JSONRPCMessage::Response(JSONRPCResponse {
+            id: RequestId::Integer(1),
+            result: serde_json::Value::Null,
+        }))
+        .await?;
+    assert!(matches!(
+        timeout(Duration::from_secs(1), connection.incoming_rx.recv()).await?,
+        Some(JsonRpcConnectionEvent::Disconnected { reason: Some(reason) })
+            if reason == "Noise relay stream reset"
+    ));
+    for task in connection.task_handles {
+        task.abort();
+        let _ = task.await;
+    }
+    environment_task.abort();
+    let _ = environment_task.await;
+    Ok(())
 }
 
 #[tokio::test]

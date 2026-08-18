@@ -31,14 +31,14 @@ use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
-use super::ENVIRONMENT_ID;
-use super::EXECUTOR_REGISTRATION_ID;
-use super::HARNESS_KEY_AUTHORIZATION;
-use super::REGISTRY_TOKEN;
-use super::accept_websocket;
-use super::assert_relay_data_is_encrypted;
-use super::proxy_relay_frames;
-use super::registered_executor_public_key;
+use crate::relay_support::ENVIRONMENT_ID;
+use crate::relay_support::EXECUTOR_REGISTRATION_ID;
+use crate::relay_support::HARNESS_KEY_AUTHORIZATION;
+use crate::relay_support::REGISTRY_TOKEN;
+use crate::relay_support::accept_websocket;
+use crate::relay_support::assert_relay_data_is_encrypted;
+use crate::relay_support::proxy_relay_frames;
+use crate::relay_support::registered_executor_public_key;
 
 const RELEASED_CODEX_ENV_VAR: &str = "CODEX_TEST_RELEASED_CODEX";
 const CURRENT_CODEX_ENV_VAR: &str = "CODEX_TEST_CURRENT_CODEX";

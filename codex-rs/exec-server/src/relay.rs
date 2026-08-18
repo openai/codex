@@ -32,12 +32,14 @@ use crate::noise_relay::NOISE_RELAY_RESET_REASON;
 use crate::noise_relay::executor_stream::ClosedNoiseVirtualStream;
 use crate::noise_relay::executor_stream::NoiseVirtualStream;
 use crate::noise_relay::executor_stream::spawn_noise_virtual_stream;
+use crate::noise_relay::stream_handler::NoiseStreamHandler;
 use crate::relay_proto::RelayData;
 use crate::relay_proto::RelayHandshake;
 use crate::relay_proto::RelayMessageFrame;
 use crate::relay_proto::RelayReset;
 use crate::relay_proto::RelayResume;
 use crate::relay_proto::relay_message_frame;
+#[cfg(test)]
 use crate::server::ConnectionProcessor;
 use crate::websocket_pong_watchdog::WEBSOCKET_PONG_TIMEOUT;
 use crate::websocket_pong_watchdog::WEBSOCKET_PONG_TIMEOUT_REASON;
@@ -475,9 +477,9 @@ pub(crate) trait HarnessKeyValidator: Send + Sync {
 /// Parsing the first Noise message authenticates the harness key. Only a
 /// successful registry check turns that pending handshake into a virtual stream.
 #[tracing::instrument(level = "debug", skip_all, fields(noise_side = "executor"))]
-pub(crate) async fn run_multiplexed_environment<T, E, V>(
+pub(crate) async fn run_multiplexed_environment<T, E, V, H>(
     stream: T,
-    processor: ConnectionProcessor,
+    handler: H,
     environment_id: String,
     executor_registration_id: String,
     identity: NoiseChannelIdentity,
@@ -487,6 +489,7 @@ where
     T: Sink<Message, Error = E> + Stream<Item = Result<Message, E>> + Unpin + Send + 'static,
     E: std::fmt::Display + Send + 'static,
     V: HarnessKeyValidator + Clone + 'static,
+    H: NoiseStreamHandler,
 {
     debug!(
         environment_id,
@@ -563,7 +566,7 @@ where
             }
         }
     });
-    let mut streams: HashMap<String, NoiseVirtualStream> = HashMap::new();
+    let mut streams: HashMap<String, NoiseVirtualStream<H>> = HashMap::new();
     let mut pending_handshakes: HashMap<String, PendingHandshake> = HashMap::new();
     let mut validation_tasks: JoinSet<HarnessKeyValidationResult> = JoinSet::new();
     let mut failed_handshakes = 0usize;
@@ -591,6 +594,7 @@ where
                     .is_some_and(|stream| stream.instance_id == closed_stream.instance_id);
                 if is_current {
                     streams.remove(&closed_stream.stream_id);
+                    send_reset(&physical_outgoing_tx, closed_stream.stream_id);
                 }
                 continue;
             }
@@ -678,7 +682,7 @@ where
                             spawn_noise_virtual_stream(
                                 validation_result.stream_id,
                                 validation_result.validation_id,
-                                processor.clone(),
+                                handler.clone(),
                                 physical_outgoing_tx.clone(),
                                 closed_stream_tx.clone(),
                                 transport,
@@ -877,7 +881,7 @@ where
                 pending_handshakes.remove(&stream_id);
                 if let Some(stream) = streams.remove(&stream_id) {
                     // The reset reason is unauthenticated, so do not log it.
-                    stream.disconnect(/*reason*/ None);
+                    stream.disconnect();
                 }
             }
             RelayFrameBodyKind::Ack
@@ -887,7 +891,7 @@ where
     }
 
     for (_stream_id, stream) in streams {
-        stream.disconnect(/*reason*/ None);
+        stream.disconnect();
     }
     // Dropping the JoinSet aborts any registry checks still running.
     if !physical_writer_task.is_finished() {
