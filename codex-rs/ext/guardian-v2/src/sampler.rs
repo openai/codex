@@ -118,6 +118,7 @@ pub enum LunaSamplerError {
 struct PooledConnection {
     connection: ResponsesWebsocketConnection,
     connected_at: Instant,
+    auth_changes: Option<tokio::sync::watch::Receiver<u64>>,
 }
 
 struct ConnectionLease {
@@ -178,6 +179,8 @@ impl LunaSampler {
             .api_provider()
             .await
             .map_err(LunaSamplerError::Provider)?;
+        let auth_manager = self.config.provider.auth_manager();
+        let auth_changes = auth_manager.map(|manager| manager.auth_change_receiver());
         let auth = self
             .config
             .provider
@@ -244,10 +247,19 @@ impl LunaSampler {
             .await
             .map_err(|_| LunaSamplerError::ConnectionTimeout)?
             .map_err(LunaSamplerError::Api)?;
+        if auth_changes
+            .as_ref()
+            .is_some_and(|auth| auth.has_changed().unwrap_or(true))
+        {
+            return Err(LunaSamplerError::Api(ApiError::Stream(
+                "authentication changed while connecting".into(),
+            )));
+        }
 
         Ok(PooledConnection {
             connection,
             connected_at: Instant::now(),
+            auth_changes,
         })
     }
 
@@ -264,7 +276,11 @@ impl LunaSampler {
                 .pop();
             match idle {
                 Some(connection)
-                    if connection.connected_at.elapsed() < MAX_WEBSOCKET_AGE
+                    if connection
+                        .auth_changes
+                        .as_ref()
+                        .is_none_or(|auth| !auth.has_changed().unwrap_or(true))
+                        && connection.connected_at.elapsed() < MAX_WEBSOCKET_AGE
                         && !connection.connection.is_closed().await =>
                 {
                     break connection;

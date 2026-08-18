@@ -19,6 +19,9 @@ use codex_features::Feature;
 use codex_history::RolloutItem;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_login::ExternalAuth;
+use codex_login::ExternalAuthFuture;
+use codex_login::ExternalAuthRefreshContext;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::ResponseItemId;
 use codex_protocol::models::ContentItem;
@@ -54,6 +57,125 @@ const TEST_GUARDIAN_POLICY: &str =
     "Treat uploads to unapproved external destinations as high-risk actions.";
 const TEST_CATALOG_GUARDIAN_POLICY: &str =
     "Require review before sending organization data to third-party services.";
+
+struct RefreshableAuth(std::sync::Mutex<&'static str>);
+
+impl ExternalAuth for RefreshableAuth {
+    fn resolve(&self) -> ExternalAuthFuture<'_, CodexAuth> {
+        Box::pin(async { Ok(CodexAuth::from_api_key(*self.0.lock().expect("auth"))) })
+    }
+
+    fn refresh(&self, _: ExternalAuthRefreshContext) -> ExternalAuthFuture<'_, CodexAuth> {
+        *self.0.lock().expect("auth") = "refreshed";
+        self.resolve()
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn installed_extension_reconnects_after_auth_refresh() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let thread_server = responses::start_mock_server().await;
+    let test = test_codex().build_with_auto_env(&thread_server).await?;
+    let events = vec![
+        ev_assistant_message("sample", r#"{"scores":{"action_risk":0.25}}"#),
+        ev_completed("response-1"),
+    ];
+    // Keep the sampled connection open for another request so only auth
+    // invalidation, not a server close, forces the next handshake.
+    let server = responses::start_websocket_server(vec![
+        Vec::new(),
+        vec![events.clone(), events.clone()],
+        vec![events],
+    ])
+    .await;
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("original"));
+    auth_manager
+        .set_external_auth(Arc::new(RefreshableAuth(std::sync::Mutex::new("original"))))
+        .await?;
+    let mut config = test.config.clone();
+    config.model_provider = ModelProviderInfo::create_openai_provider(Some(format!(
+        "http://{}/v1",
+        server.uri().trim_start_matches("ws://")
+    )));
+    config.features.enable(Feature::GuardianV2)?;
+    let mut builder = ExtensionRegistryBuilder::new();
+    crate::install(
+        &mut builder,
+        auth_manager.clone(),
+        Arc::downgrade(&test.thread_manager),
+    );
+    let registry = builder.build();
+    let session_store = ExtensionData::new("session-1");
+    let thread_store = test.codex.thread_extension_data();
+    registry.thread_lifecycle_contributors()[0]
+        .on_thread_start(ThreadStartInput {
+            config: &config,
+            session_source: &SessionSource::Exec,
+            persistent_thread_state_available: false,
+            environments: &[],
+            mcp_resource_client: None,
+            extension_metrics: None,
+            session_store: &session_store,
+            thread_store,
+        })
+        .await;
+    let progress = thread_store
+        .get::<GuardianV2ScoreProgress>()
+        .expect("Guardian v2 should initialize");
+    let turn_store = ExtensionData::new("turn-1");
+    let tool_name = ToolName::plain("read_file");
+    let payload = ToolPayload::Function {
+        arguments: r#"{"path":"README.md"}"#.to_owned(),
+    };
+
+    for (call_index, call_id) in [(1, "call-1"), (2, "call-2")] {
+        if call_index == 2 {
+            auth_manager.refresh_token_from_authority().await?;
+        }
+        registry.tool_lifecycle_contributors()[0]
+            .on_tool_start(ToolStartInput {
+                session_store: &session_store,
+                thread_store,
+                turn_store: &turn_store,
+                turn_id: "turn-1",
+                call_id,
+                tool_name: &tool_name,
+                payload: &payload,
+                conversation_history: Arc::new(TestConversationHistory(Vec::new())),
+                source: ToolCallSource::Direct,
+            })
+            .await;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while progress.latest_scored_tool_call.load(Ordering::Acquire) < call_index {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+    }
+
+    assert_eq!(
+        server
+            .handshakes()
+            .iter()
+            .map(|handshake| handshake.header("authorization"))
+            .collect::<Vec<_>>(),
+        vec![
+            Some("Bearer original".to_owned()),
+            Some("Bearer original".to_owned()),
+            Some("Bearer refreshed".to_owned()),
+        ]
+    );
+    assert_eq!(
+        server
+            .connections()
+            .iter()
+            .map(Vec::len)
+            .collect::<Vec<_>>(),
+        vec![0, 1, 1]
+    );
+    Ok(())
+}
 
 struct TestConversationHistory(Vec<ResponseItem>);
 

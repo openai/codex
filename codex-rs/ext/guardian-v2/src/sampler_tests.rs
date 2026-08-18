@@ -4,6 +4,9 @@ use codex_http_client::OutboundProxyPolicy;
 use codex_login::AgentIdentityAuthPolicy;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_login::ExternalAuth;
+use codex_login::ExternalAuthFuture;
+use codex_login::ExternalAuthRefreshContext;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::ResponseItemId;
@@ -92,6 +95,17 @@ fn sample_request(turn_id: &str) -> LunaSamplingRequest {
     }
 }
 
+struct RefreshableAuth(std::sync::Mutex<&'static str>);
+impl ExternalAuth for RefreshableAuth {
+    fn resolve(&self) -> ExternalAuthFuture<'_, CodexAuth> {
+        Box::pin(async { Ok(CodexAuth::from_api_key(*self.0.lock().expect("auth"))) })
+    }
+    fn refresh(&self, _: ExternalAuthRefreshContext) -> ExternalAuthFuture<'_, CodexAuth> {
+        *self.0.lock().expect("auth") = "refreshed";
+        self.resolve()
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn preconnected_sampler_reuses_authenticated_websocket_for_structured_requests() -> Result<()>
 {
@@ -111,13 +125,19 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_structured_requ
         ],
     ];
     let idle_server = responses::start_websocket_server(vec![scripted_requests.clone()]).await;
+    let refreshed =
+        responses::start_websocket_server(vec![vec![scripted_requests[1].clone()]]).await;
     let server = responses::start_websocket_server(vec![scripted_requests]).await;
-    let base_url = proxy_websocket_servers(&[&idle_server, &server]).await?;
+    let base_url = proxy_websocket_servers(&[&idle_server, &server, &refreshed]).await?;
+    let manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test-api-key"));
+    manager
+        .set_external_auth(Arc::new(RefreshableAuth(std::sync::Mutex::new(
+            "test-api-key",
+        ))))
+        .await?;
     let provider = create_model_provider(
         ModelProviderInfo::create_openai_provider(Some(base_url)),
-        Some(AuthManager::from_auth_for_testing(CodexAuth::from_api_key(
-            "test-api-key",
-        ))),
+        Some(manager.clone()),
     );
 
     let sampler = LunaSampler::connect(LunaSamplerConfig {
@@ -193,6 +213,7 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_structured_requ
         }
     })
     .await?;
+    manager.refresh_token_from_authority().await?;
     let second = sampler
         .sample(LunaSamplingRequest {
             instructions: "Return a risk score.".to_owned(),
@@ -208,7 +229,13 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_structured_requ
 
     assert_eq!(first, r#"{"score":0.25}"#);
     assert_eq!(second, r#"{"score":0.75}"#);
-    let requests = server.single_connection();
+    let mut requests = server.single_connection();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        refreshed.single_handshake().header("authorization"),
+        Some("Bearer refreshed".to_owned())
+    );
+    requests.extend(refreshed.single_connection());
     assert_eq!(requests.len(), 2);
     assert_eq!(
         requests[0].body_json()["input"][2]["content"],
