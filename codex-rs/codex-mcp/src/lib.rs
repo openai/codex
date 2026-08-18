@@ -102,6 +102,7 @@ mod openai_docs_source_attribution;
 mod pagination;
 mod plugin_config;
 mod resource_client;
+mod resource_origin;
 pub(crate) mod rmcp_client;
 pub(crate) mod runtime;
 pub(crate) mod server;

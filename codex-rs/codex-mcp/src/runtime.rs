@@ -24,11 +24,13 @@ use codex_exec_server::HttpClient;
 use codex_exec_server::RouteAwareHttpClient;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_protocol::ThreadId;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::with_http_headers_helper;
 use codex_utils_path_uri::PathUri;
@@ -46,6 +48,7 @@ use crate::connection_manager::McpConnectionSet;
 use crate::elicitation::ElicitationLifecycle;
 use crate::elicitation::ElicitationRequestRouter;
 use crate::elicitation::ElicitationReviewerHandle;
+use crate::resource_origin::ResourceOrigins;
 use crate::server::EffectiveMcpServer;
 use crate::tool_catalog_cache::McpToolCatalogCache;
 use crate::tools::ToolInfo;
@@ -88,6 +91,7 @@ pub struct McpRuntime {
     current: ArcSwap<PublishedMcpRuntime>,
     reconnect_pending: AtomicBool,
     elicitation_router: ElicitationRequestRouter,
+    resource_origins: Mutex<ResourceOrigins>,
 }
 
 struct PublishedMcpRuntime {
@@ -171,7 +175,45 @@ impl McpRuntime {
             }),
             reconnect_pending: AtomicBool::new(false),
             elicitation_router: ElicitationRequestRouter::default(),
+            resource_origins: Mutex::default(),
         }
+    }
+
+    /// Updates this thread's bounded resource provenance from a live or restored event.
+    pub fn observe_event(&self, event: &EventMsg) {
+        if !matches!(
+            event,
+            EventMsg::TurnStarted(_)
+                | EventMsg::ItemCompleted(_)
+                | EventMsg::McpToolCallEnd(_)
+                | EventMsg::ThreadRolledBack(_)
+        ) {
+            return;
+        }
+        self.resource_origins
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .observe(event);
+    }
+
+    /// Reads a widget through the current binding of the app tool that produced it.
+    pub async fn read_resource_for_call(
+        &self,
+        thread_id: ThreadId,
+        call_id: &str,
+        uri: &str,
+    ) -> anyhow::Result<ReadResourceResult> {
+        let origin = self
+            .resource_origins
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .find(call_id)?;
+        let binding = self
+            .current_binding_for_call(crate::CODEX_APPS_MCP_SERVER_NAME)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("codex_apps MCP server is unavailable"))?;
+
+        origin.read(&binding, thread_id, uri).await
     }
 
     pub async fn new(input: McpRuntimeInput) -> Self {

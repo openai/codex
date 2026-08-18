@@ -75,15 +75,23 @@ impl McpBinding {
         self.plugins_available
     }
 
-    /// Returns the frozen catalog captured for this binding.
+    /// Returns the frozen model-visible catalog captured for this binding.
     pub fn tools(&self) -> &[ToolInfo] {
         &self.tools
     }
 
-    /// Binds a call to the exact client and metadata advertised by this binding.
+    /// Returns permitted tool metadata, including app-only tools.
+    pub fn tool_info(&self, server: &str, tool: &str) -> Option<&ToolInfo> {
+        self.calls
+            .get(&(server.to_string(), tool.to_string()))
+            .map(PreparedMcpCall::tool_info)
+    }
+
+    /// Binds a model-visible call to the exact client and metadata in this binding.
     pub fn prepare_call(&self, server: &str, tool: &str) -> Option<PreparedMcpCall> {
         self.calls
             .get(&(server.to_string(), tool.to_string()))
+            .filter(|call| crate::tool_is_model_visible(call.tool_info()))
             .cloned()
     }
 

@@ -2328,6 +2328,7 @@ mod tests {
             request_id: request_id(),
             params: v2::McpResourceReadParams {
                 thread_id: Some("thread-1".to_string()),
+                origin_call_id: None,
                 server: "server-a".to_string(),
                 uri: "file:///tmp/resource".to_string(),
             },
@@ -2515,6 +2516,7 @@ mod tests {
             request_id: request_id(),
             params: v2::McpResourceReadParams {
                 thread_id: None,
+                origin_call_id: None,
                 server: "server-a".to_string(),
                 uri: "file:///tmp/resource".to_string(),
             },

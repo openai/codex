@@ -422,6 +422,7 @@ impl McpRequestProcessor {
         let outgoing = Arc::clone(&self.outgoing);
         let McpResourceReadParams {
             thread_id,
+            origin_call_id,
             server,
             uri,
         } = params;
@@ -431,10 +432,20 @@ impl McpRequestProcessor {
             let request_id = request_id.clone();
 
             tokio::spawn(async move {
-                let result = thread.read_mcp_resource(&server, &uri).await;
-                Self::send_mcp_resource_read_response(outgoing, request_id, result).await;
+                let origin_call_id =
+                    origin_call_id.filter(|_| server == codex_mcp::CODEX_APPS_MCP_SERVER_NAME);
+                let result = match origin_call_id.as_deref() {
+                    Some(call_id) => thread.read_mcp_resource_for_call(call_id, &uri).await,
+                    None => thread.read_mcp_resource(&server, &uri).await,
+                };
+                Self::send_mcp_resource_read_response(outgoing, request_id, result, origin_call_id)
+                    .await;
             });
             return Ok(());
+        }
+
+        if origin_call_id.is_some() {
+            return Err(invalid_request("originCallId requires threadId"));
         }
 
         let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
@@ -463,7 +474,10 @@ impl McpRequestProcessor {
             )
             .await
             .and_then(|result| serde_json::to_value(result).map_err(anyhow::Error::from));
-            Self::send_mcp_resource_read_response(outgoing, request_id, result).await;
+            Self::send_mcp_resource_read_response(
+                outgoing, request_id, result, /*origin_call_id*/ None,
+            )
+            .await;
         });
         Ok(())
     }
@@ -472,6 +486,7 @@ impl McpRequestProcessor {
         outgoing: Arc<OutgoingMessageSender>,
         request_id: ConnectionRequestId,
         result: anyhow::Result<serde_json::Value>,
+        origin_call_id: Option<String>,
     ) {
         let result = result
             .map_err(|error| internal_error(format!("{error:#}")))
@@ -481,6 +496,10 @@ impl McpRequestProcessor {
                         "failed to deserialize MCP resource read response: {error}"
                     ))
                 })
+            })
+            .map(|mut response| {
+                response.origin_call_id = origin_call_id;
+                response
             });
         outgoing.send_result(request_id, result).await;
     }

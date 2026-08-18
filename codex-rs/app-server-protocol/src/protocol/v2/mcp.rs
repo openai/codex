@@ -85,6 +85,9 @@ pub struct ListMcpServerStatusResponse {
 pub struct McpResourceReadParams {
     #[ts(optional = nullable)]
     pub thread_id: Option<String>,
+    /// Originating MCP tool call used to select the resource's app.
+    #[ts(optional = nullable)]
+    pub origin_call_id: Option<String>,
     pub server: String,
     pub uri: String,
 }
@@ -94,6 +97,8 @@ pub struct McpResourceReadParams {
 #[ts(export_to = "v2/")]
 pub struct McpResourceReadResponse {
     pub contents: Vec<McpResourceContent>,
+    /// Originating call when the server applied app-specific resource scoping.
+    pub origin_call_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

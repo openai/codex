@@ -13295,6 +13295,13 @@
       "McpResourceReadParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "originCallId": {
+            "description": "Originating MCP tool call used to select the resource's app.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "server": {
             "type": "string"
           },
@@ -13323,6 +13330,13 @@
               "$ref": "#/definitions/v2/ResourceContent"
             },
             "type": "array"
+          },
+          "originCallId": {
+            "description": "Originating call when the server applied app-specific resource scoping.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [

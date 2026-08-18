@@ -1224,6 +1224,11 @@ impl Session {
             let mcp_runtime = Arc::new(McpRuntime::empty(
                 mcp_projection.config.prefix_mcp_tool_names,
             ));
+            for item in initial_history.get_rollout_items() {
+                if let RolloutItem::EventMsg(event) = item {
+                    mcp_runtime.observe_event(event);
+                }
+            }
             let session_extension_data =
                 codex_extension_api::ExtensionData::new(session_id.to_string());
             session_extension_data.insert(analytics_events_client.clone());
