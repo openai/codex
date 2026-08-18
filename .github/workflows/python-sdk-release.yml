@@ -38,10 +38,10 @@ jobs:
           from pathlib import Path
 
           sdk_version = os.environ["GITHUB_REF_NAME"].removeprefix("python-v")
-          if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+b[0-9]+", sdk_version):
+          if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:b[0-9]+)?", sdk_version):
               raise SystemExit(
-                  "Python SDK release tags must identify a beta release, "
-                  "for example python-v0.1.0b1."
+                  "Python SDK release tags must identify a stable or beta release, "
+                  "for example python-v0.147.0 or python-v0.1.0b1."
               )
 
           pyproject = tomllib.loads(Path("sdk/python/pyproject.toml").read_text())
@@ -54,6 +54,11 @@ jobs:
           if len(runtime_versions) != 1:
               raise SystemExit(
                   f"Expected exactly one pinned {prefix} dependency, found {runtime_versions}"
+              )
+
+          if "b" not in sdk_version and sdk_version != runtime_versions[0]:
+              raise SystemExit(
+                  f"Stable SDK version {sdk_version} must match pinned runtime {runtime_versions[0]}."
               )
 
           with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
