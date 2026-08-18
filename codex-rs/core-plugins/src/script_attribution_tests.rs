@@ -572,7 +572,9 @@ fn resolves_local_attribution_for_safe_interpreters_and_wrappers() {
         normalized_relative_path: "scripts/run.py".to_string(),
     });
     let script = script.to_string_lossy().to_string();
-    let unix_wrapper = format!("python -u {script}");
+    // Preserve native path separators and any shell metacharacters as literal argv.
+    let quoted_script = format!("'{}'", script.replace('\'', "'\"'\"'"));
+    let unix_wrapper = format!("python -u {quoted_script}");
     for command in [
         command(&["scripts/run.py"]),
         command(&["/usr/bin/python", "-u", &script]),
@@ -585,13 +587,17 @@ fn resolves_local_attribution_for_safe_interpreters_and_wrappers() {
         command(&["pwsh.exe", "-NoProfile", "-Command", "scripts/run.py"]),
         command(&["cmd.exe", "/c", "scripts/run.py"]),
     ] {
-        assert_eq!(roots.resolve_attribution(&command, &root), expected);
+        assert_eq!(
+            roots.resolve_attribution(&command, &root),
+            expected,
+            "{command:?}"
+        );
     }
 
     let wrapped_command = command(&[
         "bash",
         "-lc",
-        &format!("node {script} --operation-kind create"),
+        &format!("node {quoted_script} --operation-kind create"),
     ]);
     assert_eq!(roots.resolve_attribution(&wrapped_command, &root), expected);
     assert_eq!(

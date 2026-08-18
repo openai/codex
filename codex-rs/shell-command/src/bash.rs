@@ -61,6 +61,9 @@ pub fn try_parse_word_only_commands_sequence(tree: &Tree, src: &str) -> Option<V
             if !ALLOWED_KINDS.contains(&kind) {
                 return None;
             }
+            if matches!(kind, "word" | "number") && !is_literal_word_or_number(node, src) {
+                return None;
+            }
             if kind == "command" {
                 command_nodes.push(node);
             }
@@ -257,7 +260,7 @@ fn parse_literal_command_from_node(cmd: Node<'_>, src: &str) -> Option<Vec<Strin
 
 fn parse_literal_shell_word(node: Node<'_>, src: &str) -> Option<String> {
     match node.kind() {
-        "word" | "number" if is_literal_word_or_number(node) => {
+        "word" | "number" if is_literal_word_or_number(node, src) => {
             Some(node.utf8_text(src.as_bytes()).ok()?.to_owned())
         }
         "string" => parse_double_quoted_string(node, src),
@@ -286,14 +289,14 @@ fn parse_heredoc_command_words(cmd: Node<'_>, src: &str) -> Option<Vec<String>> 
             "command_name" => {
                 let word_node = child.named_child(0)?;
                 if !matches!(word_node.kind(), "word" | "number")
-                    || !is_literal_word_or_number(word_node)
+                    || !is_literal_word_or_number(word_node, src)
                 {
                     return None;
                 }
                 words.push(word_node.utf8_text(src.as_bytes()).ok()?.to_owned());
             }
             "word" | "number" => {
-                if !is_literal_word_or_number(child) {
+                if !is_literal_word_or_number(child, src) {
                     return None;
                 }
                 words.push(child.utf8_text(src.as_bytes()).ok()?.to_owned());
@@ -311,12 +314,20 @@ fn parse_heredoc_command_words(cmd: Node<'_>, src: &str) -> Option<Vec<String>> 
     if words.is_empty() { None } else { Some(words) }
 }
 
-fn is_literal_word_or_number(node: Node<'_>) -> bool {
+fn is_literal_word_or_number(node: Node<'_>, src: &str) -> bool {
     if !matches!(node.kind(), "word" | "number") {
         return false;
     }
     let mut cursor = node.walk();
     node.named_children(&mut cursor).next().is_none()
+        && node.utf8_text(src.as_bytes()).is_ok_and(|word| {
+            // A tree-sitter word can still undergo shell expansion or escape
+            // removal. Do not use its source spelling as proof of runtime argv.
+            // Include Zsh's equals expansion and extended glob syntax because
+            // this parser is also used for Zsh commands.
+            !word.starts_with('=')
+                && !word.contains(['{', '}', '*', '?', '[', ']', '\\', '~', '^', '#', '$', '`'])
+        })
 }
 
 fn is_allowed_heredoc_attachment_kind(kind: &str) -> bool {
@@ -378,7 +389,16 @@ fn parse_double_quoted_string(node: Node, src: &str) -> Option<String> {
     let stripped = raw
         .strip_prefix('"')
         .and_then(|text| text.strip_suffix('"'))?;
-    Some(stripped.to_string())
+    // Double quotes suppress globbing and brace expansion, but not escape
+    // removal. Only accept contents whose source spelling is already literal.
+    if stripped
+        .as_bytes()
+        .windows(2)
+        .any(|pair| pair[0] == b'\\' && matches!(pair[1], b'$' | b'`' | b'"' | b'\\' | b'\n'))
+    {
+        return None;
+    }
+    Some(stripped.to_owned())
 }
 
 fn parse_raw_string(node: Node, src: &str) -> Option<String> {
@@ -396,6 +416,7 @@ fn parse_raw_string(node: Node, src: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::is_safe_command::is_known_safe_command;
     use pretty_assertions::assert_eq;
 
     fn parse_seq(src: &str) -> Option<Vec<Vec<String>>> {
@@ -499,6 +520,99 @@ mod tests {
         assert!(parse_seq("echo `pwd`").is_none());
         assert!(parse_seq("echo $HOME").is_none());
         assert!(parse_seq("echo \"hi $USER\"").is_none());
+    }
+
+    #[test]
+    fn rejects_runtime_expansion_in_plain_words() {
+        for script in [
+            "find . -{delete,print}",
+            "rg --pre{=,=sh} pattern payload.sh",
+            "find . -del*",
+            "find . -delet?",
+            "find . -delet[e]",
+            r"find . -de\lete",
+            "echo ~",
+            "echo ~HOME",
+            "echo HEAD~1",
+            "echo HEAD^",
+            "echo file~",
+            "echo =sh",
+            "echo foo^bar",
+            "echo foo#bar",
+            "l* -l",
+        ] {
+            for shell in ["bash", "zsh"] {
+                for flag in ["-c", "-lc"] {
+                    let command = [shell, flag, script].map(str::to_owned);
+                    assert_eq!(parse_shell_lc_plain_commands(&command), None, "{command:?}");
+                    assert!(!is_known_safe_command(&command), "{command:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn preserves_quoted_literals() {
+        for (script, expected) in [
+            (r#"rg -g"*.py" pattern"#, vec!["rg", "-g*.py", "pattern"]),
+            (r#"echo "\n""#, vec!["echo", r"\n"]),
+            (
+                r#"echo "~HOME" 'HEAD~1' "HEAD^" 'foo#bar' "=sh" 'file~'"#,
+                vec![
+                    "echo", "~HOME", "HEAD~1", "HEAD^", "foo#bar", "=sh", "file~",
+                ],
+            ),
+            (
+                r#"echo -"{a,b}" '*?[]~^#=\\'"#,
+                vec!["echo", "-{a,b}", r"*?[]~^#=\\"],
+            ),
+        ] {
+            let expected = vec![expected.into_iter().map(str::to_owned).collect::<Vec<_>>()];
+            assert_eq!(
+                parse_shell_script_into_commands(script),
+                Some(expected),
+                "{script:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_double_quoted_escapes() {
+        for script in [
+            r#"echo "\$HOME\`\"\\\n""#,
+            "find . \"-de\\\nlete\"",
+            r#"echo "\\""#,
+        ] {
+            assert_eq!(parse_seq(script), None, "{script:?}");
+            for shell in ["bash", "zsh"] {
+                let command = [shell, "-lc", script].map(str::to_owned);
+                assert!(!is_known_safe_command(&command), "{command:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn heredoc_prefix_does_not_restore_dynamic_words() {
+        for script in [
+            "find . -{delete,print}",
+            "find . -del*",
+            r"find . -de\lete",
+            "cat ~",
+            "cat ~HOME",
+            "cat =sh",
+            "c*",
+        ] {
+            let command = [
+                "bash".to_owned(),
+                "-lc".to_owned(),
+                format!("{script} <<'EOF'\nEOF"),
+            ];
+            assert_eq!(
+                parse_shell_lc_single_command_prefix(&command),
+                None,
+                "{script:?}"
+            );
+        }
     }
 
     #[test]

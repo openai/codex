@@ -1796,6 +1796,170 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 output_contains: "rejected by user",
             },
         },
+        // Deny these commands before execution. The nonexistent find target also
+        // keeps a regression from deleting anything in the test workspace.
+        ScenarioSpec {
+            name: "find_brace_expansion_unless_trusted_requires_approval",
+            approval_policy: UnlessTrusted,
+            sandbox_policy: workspace_write(false),
+            action: ActionKind::RunCommand {
+                command: "find ./missing-approval-target -{delete,print}",
+            },
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            features: vec![],
+            model_override: Some("gpt-5.2"),
+            outcome: Outcome::ExecApproval {
+                decision: ReviewDecision::denied("rejected dynamic shell word"),
+                expected_reason: None,
+            },
+            expectation: Expectation::CommandFailure {
+                output_contains: "rejected dynamic shell word",
+            },
+        },
+        ScenarioSpec {
+            name: "rg_brace_expansion_unless_trusted_requires_approval",
+            approval_policy: UnlessTrusted,
+            sandbox_policy: workspace_write(false),
+            action: ActionKind::RunCommand {
+                command: "rg --pre{=,=sh} pattern missing-approval-payload.sh",
+            },
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            features: vec![],
+            model_override: Some("gpt-5.2"),
+            outcome: Outcome::ExecApproval {
+                decision: ReviewDecision::denied("rejected dynamic shell word"),
+                expected_reason: None,
+            },
+            expectation: Expectation::CommandFailure {
+                output_contains: "rejected dynamic shell word",
+            },
+        },
+        ScenarioSpec {
+            name: "brace_expansion_literal_allow_rule_requires_approval",
+            approval_policy: UnlessTrusted,
+            sandbox_policy: workspace_write(false),
+            action: ActionKind::RunCommandWithPolicy {
+                command: "find ./missing-approval-target -{delete,print}",
+                policy_src: r#"prefix_rule(pattern=["find", "./missing-approval-target", "-{delete,print}"], decision="allow")"#,
+            },
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            features: vec![],
+            model_override: Some("gpt-5.2"),
+            outcome: Outcome::ExecApproval {
+                decision: ReviewDecision::denied("rejected dynamic shell word"),
+                expected_reason: None,
+            },
+            expectation: Expectation::CommandFailure {
+                output_contains: "rejected dynamic shell word",
+            },
+        },
+        ScenarioSpec {
+            name: "rg_brace_expansion_literal_allow_rule_requires_approval",
+            approval_policy: UnlessTrusted,
+            sandbox_policy: workspace_write(false),
+            action: ActionKind::RunCommandWithPolicy {
+                command: "rg --pre{=,=sh} pattern missing-approval-payload.sh",
+                policy_src: r#"prefix_rule(pattern=["rg", "--pre{=,=sh}"], decision="allow")"#,
+            },
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            features: vec![],
+            model_override: Some("gpt-5.2"),
+            outcome: Outcome::ExecApproval {
+                decision: ReviewDecision::denied("rejected dynamic shell word"),
+                expected_reason: None,
+            },
+            expectation: Expectation::CommandFailure {
+                output_contains: "rejected dynamic shell word",
+            },
+        },
+        ScenarioSpec {
+            name: "find_glob_unless_trusted_requires_approval",
+            approval_policy: UnlessTrusted,
+            sandbox_policy: workspace_write(false),
+            action: ActionKind::RunCommand {
+                command: "find ./missing-approval-target -del*",
+            },
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            features: vec![],
+            model_override: Some("gpt-5.2"),
+            outcome: Outcome::ExecApproval {
+                decision: ReviewDecision::denied("rejected dynamic shell word"),
+                expected_reason: None,
+            },
+            expectation: Expectation::CommandFailure {
+                output_contains: "rejected dynamic shell word",
+            },
+        },
+        ScenarioSpec {
+            name: "find_escape_unless_trusted_requires_approval",
+            approval_policy: UnlessTrusted,
+            sandbox_policy: workspace_write(false),
+            action: ActionKind::RunCommand {
+                command: r"find ./missing-approval-target -de\lete",
+            },
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            features: vec![],
+            model_override: Some("gpt-5.2"),
+            outcome: Outcome::ExecApproval {
+                decision: ReviewDecision::denied("rejected dynamic shell word"),
+                expected_reason: None,
+            },
+            expectation: Expectation::CommandFailure {
+                output_contains: "rejected dynamic shell word",
+            },
+        },
+        ScenarioSpec {
+            name: "find_quoted_escape_unless_trusted_requires_approval",
+            approval_policy: UnlessTrusted,
+            sandbox_policy: workspace_write(false),
+            action: ActionKind::RunCommand {
+                command: "find ./missing-approval-target \"-de\\\nlete\"",
+            },
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            features: vec![],
+            model_override: Some("gpt-5.2"),
+            outcome: Outcome::ExecApproval {
+                decision: ReviewDecision::denied("rejected dynamic shell word"),
+                expected_reason: None,
+            },
+            expectation: Expectation::CommandFailure {
+                output_contains: "rejected dynamic shell word",
+            },
+        },
+        ScenarioSpec {
+            name: "heredoc_glob_literal_allow_rule_requires_approval",
+            approval_policy: UnlessTrusted,
+            sandbox_policy: workspace_write(false),
+            action: ActionKind::RunCommandWithPolicy {
+                command: "find ./missing-approval-target -del* <<'EOF'\nEOF",
+                policy_src: r#"prefix_rule(pattern=["find", "./missing-approval-target", "-del*"], decision="allow")"#,
+            },
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            features: vec![],
+            model_override: Some("gpt-5.2"),
+            outcome: Outcome::ExecApproval {
+                decision: ReviewDecision::denied("rejected dynamic shell word"),
+                expected_reason: None,
+            },
+            expectation: Expectation::CommandFailure {
+                output_contains: "rejected dynamic shell word",
+            },
+        },
+        ScenarioSpec {
+            name: "quoted_shell_metacharacters_unless_trusted_run_without_prompt",
+            approval_policy: UnlessTrusted,
+            sandbox_policy: workspace_write(false),
+            action: ActionKind::RunCommand {
+                command: r#"echo -g"*.py" '-{delete,print}'"#,
+            },
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            features: vec![],
+            model_override: Some("gpt-5.2"),
+            outcome: Outcome::Auto,
+            expectation: Expectation::CommandSuccess {
+                stdout_contains: "-g*.py -{delete,print}",
+            },
+        },
     ]
 }
 
