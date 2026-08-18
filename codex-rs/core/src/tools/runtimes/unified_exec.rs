@@ -88,6 +88,7 @@ pub struct UnifiedExecRequest {
 #[derive(serde::Serialize, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct UnifiedExecApprovalKey {
     pub environment_id: String,
+    pub executable: Option<String>,
     pub command: Vec<String>,
     pub cwd: PathUri,
     pub tty: bool,

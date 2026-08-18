@@ -237,6 +237,7 @@ impl ApprovalAction {
                 ..
             } => vec![ApprovalCacheKey::ExecCommand(UnifiedExecApprovalKey {
                 environment_id: environment_id.clone(),
+                executable: command.first().cloned(),
                 command: canonicalize_command_for_approval(command),
                 cwd: cwd.clone(),
                 tty: *tty,

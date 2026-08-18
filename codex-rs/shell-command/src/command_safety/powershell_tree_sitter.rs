@@ -10,7 +10,7 @@ use tree_sitter::Parser;
 /// Unknown syntax, parse recovery, and dynamic expressions fail closed instead of being guessed
 /// at. The accepted CST shapes intentionally cover only common literal command forms; rare
 /// PowerShell syntax and value-conversion cases stay opaque.
-pub(super) fn try_parse_powershell_commands(script: &str) -> Option<Vec<Vec<String>>> {
+pub(crate) fn try_parse_powershell_commands(script: &str) -> Option<Vec<Vec<String>>> {
     lower_with_tree_sitter(script).ok()
 }
 

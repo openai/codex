@@ -41,6 +41,7 @@ use codex_shell_command::bash::parse_shell_lc_single_command_prefix;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use shlex::try_join as shlex_try_join;
 
+mod executable_identity;
 mod model_policy;
 
 pub(crate) use model_policy::AllowPrefixRules;
@@ -315,6 +316,20 @@ impl ExecPolicyManager {
         &self,
         req: ExecApprovalRequest<'_>,
     ) -> ExecApprovalRequirement {
+        let commands = commands_for_exec_policy(req.command);
+        self.create_exec_approval_requirement_for_parsed_commands(req, commands)
+            .await
+    }
+
+    async fn create_exec_approval_requirement_for_parsed_commands(
+        &self,
+        req: ExecApprovalRequest<'_>,
+        ExecPolicyCommands {
+            commands,
+            used_complex_parsing,
+            command_origin,
+        }: ExecPolicyCommands,
+    ) -> ExecApprovalRequirement {
         let ExecApprovalRequest {
             command,
             approval_policy,
@@ -326,11 +341,6 @@ impl ExecPolicyManager {
             allow_prefix_rules,
         } = req;
         let exec_policy = self.current_for_environment(environment_policy, allow_prefix_rules);
-        let ExecPolicyCommands {
-            commands,
-            used_complex_parsing,
-            command_origin,
-        } = commands_for_exec_policy(command);
         // Keep heredoc prefix parsing for the rules that apply to this model,
         // but avoid reusable approvals for cyber models or when only the
         // heredoc fallback parser matched.
