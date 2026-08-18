@@ -1,6 +1,6 @@
 use super::residency::is_v2_resident_session_source;
 use super::*;
-use crate::agent::role::apply_role_to_config_for_multi_agent_v2;
+use crate::agent::role::apply_role_to_config;
 use crate::config::PermissionProfileSnapshot;
 use crate::context::ContextualUserFragment;
 use crate::context::CurrentTimeReminder;
@@ -310,7 +310,7 @@ impl AgentControl {
                 ),
             };
 
-            apply_role_to_config_for_multi_agent_v2(&mut config, Some(&role_name))
+            apply_role_to_config(&mut config, Some(&role_name))
                 .await
                 .map_err(CodexErr::InvalidRequest)?;
             config

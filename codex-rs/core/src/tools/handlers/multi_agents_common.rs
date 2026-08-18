@@ -1,5 +1,4 @@
 use crate::agent::role::apply_role_to_config;
-use crate::agent::role::apply_role_to_config_for_multi_agent_v2;
 use crate::config::Config;
 use crate::config::DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS;
 use crate::config::HARD_MAX_MULTI_AGENT_V2_TIMEOUT_MS;
@@ -389,15 +388,9 @@ pub(crate) async fn apply_spawn_agent_role(
 ) -> Result<(), FunctionCallError> {
     let previous_model = config.model.clone();
     let previous_reasoning_effort = config.model_reasoning_effort.clone();
-    if session.multi_agent_version() == Some(MultiAgentVersion::V2) {
-        apply_role_to_config_for_multi_agent_v2(config, role_name)
-            .await
-            .map_err(FunctionCallError::RespondToModel)?;
-    } else {
-        apply_role_to_config(config, role_name)
-            .await
-            .map_err(FunctionCallError::RespondToModel)?;
-    }
+    apply_role_to_config(config, role_name)
+        .await
+        .map_err(FunctionCallError::RespondToModel)?;
     if config.model == previous_model && config.model_reasoning_effort == previous_reasoning_effort
     {
         return Ok(());

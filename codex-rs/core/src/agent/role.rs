@@ -1,25 +1,28 @@
-//! Applies agent-role configuration layers on top of an existing session config.
+//! Applies bounded agent-role overrides to an existing session config.
 //!
-//! Roles are selected at spawn time and are loaded with the same config machinery as
-//! `config.toml`. This module resolves built-in and user-defined role files, inserts the role as a
-//! high-precedence layer, and preserves the caller's current model, reasoning effort, provider,
-//! and service tier unless the role layer sets them. It does not decide when to spawn a sub-agent
-//! or which role to use; the multi-agent tool handler owns that orchestration.
+//! Roles may customize the child or reduce its capabilities, but never replace the parent
+//! session's authority. A projected layer keeps existing layer-based consumers in sync.
 
 use crate::config::AgentRoleConfig;
 use crate::config::Config;
-use crate::config::ConfigOverrides;
 use crate::config::agent_roles::parse_agent_role_file_contents;
 use crate::config::deserialize_config_toml_with_base;
 use anyhow::anyhow;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
-use codex_config::config_toml::ConfigToml;
+use codex_config::SkillsConfig;
 use codex_config::loader::resolve_relative_paths_in_config_toml;
-use codex_exec_server::LOCAL_FS;
+use codex_exec_server::read_sensitive_file_to_string;
 use codex_features::Feature;
+use codex_features::feature_for_key;
+use codex_protocol::config_types::Personality;
+use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::ServiceTier;
+use codex_protocol::config_types::Verbosity;
 use codex_protocol::models::BaseInstructionsProvenance;
+use codex_protocol::openai_models::ReasoningEffort;
+use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -30,50 +33,24 @@ use toml::Value as TomlValue;
 pub const DEFAULT_ROLE_NAME: &str = "default";
 const AGENT_TYPE_UNAVAILABLE_ERROR: &str = "agent type is currently not available";
 
-/// Applies a named role layer to `config` while preserving caller-owned provider settings.
-///
-/// The role layer is inserted at session-flag precedence so it can override persisted config, but
-/// the caller's current `model_provider` and `service_tier` remain sticky runtime choices unless
-/// the role explicitly sets the corresponding top-level config key. Rebuilding the config without
-/// those overrides would make a spawned agent silently fall back to default settings.
+#[derive(Default, Serialize)]
+struct AgentRoleOverrides {
+    developer_instructions: Option<String>,
+    model: Option<String>,
+    model_reasoning_effort: Option<ReasoningEffort>,
+    model_reasoning_summary: Option<ReasoningSummary>,
+    model_verbosity: Option<Verbosity>,
+    personality: Option<Personality>,
+    service_tier: Option<String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    features: BTreeMap<String, bool>,
+    skills: Option<SkillsConfig>,
+}
+
+/// Applies typed role overrides to the existing parent-derived configuration.
 pub(crate) async fn apply_role_to_config(
     config: &mut Config,
     role_name: Option<&str>,
-) -> Result<(), String> {
-    apply_role_to_config_with_developer_instructions(
-        config,
-        role_name,
-        RoleDeveloperInstructions::UseConfigLayers,
-    )
-    .await
-}
-
-/// Applies a v2 role without losing developer instructions selected by its caller.
-///
-/// A role's own top-level developer instructions still take precedence. When its role file omits
-/// that setting, rebuilding the config must not restore inherited instructions from older layers.
-pub(crate) async fn apply_role_to_config_for_multi_agent_v2(
-    config: &mut Config,
-    role_name: Option<&str>,
-) -> Result<(), String> {
-    apply_role_to_config_with_developer_instructions(
-        config,
-        role_name,
-        RoleDeveloperInstructions::PreserveCallerInstructions,
-    )
-    .await
-}
-
-#[derive(Clone, Copy)]
-enum RoleDeveloperInstructions {
-    UseConfigLayers,
-    PreserveCallerInstructions,
-}
-
-async fn apply_role_to_config_with_developer_instructions(
-    config: &mut Config,
-    role_name: Option<&str>,
-    developer_instructions: RoleDeveloperInstructions,
 ) -> Result<(), String> {
     let role_name = role_name.unwrap_or(DEFAULT_ROLE_NAME);
 
@@ -81,7 +58,7 @@ async fn apply_role_to_config_with_developer_instructions(
         .cloned()
         .ok_or_else(|| format!("unknown agent_type '{role_name}'"))?;
 
-    apply_role_to_config_inner(config, role_name, &role, developer_instructions)
+    apply_role_to_config_inner(config, role_name, &role)
         .await
         .map_err(|err| {
             tracing::warn!("failed to apply role to config: {err}");
@@ -93,30 +70,61 @@ async fn apply_role_to_config_inner(
     config: &mut Config,
     role_name: &str,
     role: &AgentRoleConfig,
-    developer_instructions: RoleDeveloperInstructions,
 ) -> anyhow::Result<()> {
     let is_built_in = !config.agent_roles.contains_key(role_name);
     let Some(config_file) = role.config_file.as_ref() else {
         return Ok(());
     };
     let role_layer_toml = load_role_layer_toml(config, config_file, is_built_in, role_name).await?;
+    let role_config = deserialize_config_toml_with_base(role_layer_toml, &config.codex_home)?;
+    let mut overrides = AgentRoleOverrides {
+        developer_instructions: role_config.developer_instructions,
+        model: role_config.model,
+        model_reasoning_effort: role_config.model_reasoning_effort,
+        model_reasoning_summary: role_config.model_reasoning_summary,
+        model_verbosity: role_config.model_verbosity,
+        personality: role_config.personality,
+        service_tier: role_config.service_tier,
+        ..Default::default()
+    };
+
+    if let Some(features) = role_config.features {
+        for (key, enabled) in features.entries() {
+            if !enabled
+                && let Some(
+                    feature @ (Feature::ShellTool
+                    | Feature::Apps
+                    | Feature::Personality
+                    | Feature::Plugins
+                    | Feature::MemoryTool
+                    | Feature::RequestPermissionsTool),
+                ) = feature_for_key(&key)
+            {
+                overrides.features.insert(feature.key().to_string(), false);
+            }
+        }
+    }
+    if let Some(mut skills) = role_config.skills {
+        skills.config.retain(|skill| !skill.enabled);
+        skills.bundled = skills.bundled.filter(|bundled| !bundled.enabled);
+        skills.include_instructions = skills.include_instructions.filter(|enabled| !enabled);
+        skills.max_context_tokens = None;
+        if !skills.config.is_empty()
+            || skills.bundled.is_some()
+            || skills.include_instructions.is_some()
+        {
+            overrides.skills = Some(skills);
+        }
+    }
+
+    let role_layer_toml = TomlValue::try_from(&overrides)?;
     if role_layer_toml
         .as_table()
         .is_some_and(toml::map::Map::is_empty)
     {
         return Ok(());
     }
-    let preserve_current_provider = role_layer_toml.get("model_provider").is_none();
-    let preserve_current_service_tier = role_layer_toml.get("service_tier").is_none();
-
-    *config = reload::build_next_config(
-        config,
-        role_layer_toml,
-        developer_instructions,
-        preserve_current_provider,
-        preserve_current_service_tier,
-    )
-    .await?;
+    *config = role_overrides::build_next_config(config, role_layer_toml, &overrides)?;
     Ok(())
 }
 
@@ -133,7 +141,7 @@ async fn load_role_layer_toml(
         let role_config_toml: TomlValue = toml::from_str(&role_config_contents)?;
         (role_config_toml, config.codex_home.as_path())
     } else {
-        let role_config_contents = tokio::fs::read_to_string(config_file).await?;
+        let role_config_contents = read_sensitive_file_to_string(config_file).await?;
         let role_config_base = config_file
             .parent()
             .ok_or(anyhow!("No corresponding config content"))?;
@@ -164,69 +172,67 @@ pub(crate) fn resolve_role_config<'a>(
         .or_else(|| built_in::configs().get(role_name))
 }
 
-mod reload {
+mod role_overrides {
     use super::*;
 
-    pub(super) async fn build_next_config(
+    pub(super) fn build_next_config(
         config: &Config,
         role_layer_toml: TomlValue,
-        developer_instructions: RoleDeveloperInstructions,
-        preserve_current_provider: bool,
-        preserve_current_service_tier: bool,
+        overrides: &AgentRoleOverrides,
     ) -> anyhow::Result<Config> {
-        let preserve_current_model = role_layer_toml.get("model").is_none();
-        let preserve_current_reasoning_effort =
-            role_layer_toml.get("model_reasoning_effort").is_none();
-        let preserve_current_base_instructions = role_layer_toml.get("instructions").is_none()
-            && role_layer_toml.get("model_instructions_file").is_none();
-        let mut overrides = reload_overrides(
-            config,
-            preserve_current_model,
-            preserve_current_provider,
-            preserve_current_service_tier,
-        );
-        if let (RoleDeveloperInstructions::PreserveCallerInstructions, Some(_), None) = (
-            developer_instructions,
-            &config.multi_agent_v2.subagent_developer_instructions,
-            role_layer_toml.get("developer_instructions"),
-        ) {
-            overrides
-                .developer_instructions
-                .clone_from(&config.developer_instructions);
+        let mut next_config = config.clone();
+        next_config.config_layer_stack = build_config_layer_stack(config, &role_layer_toml)?;
+        if let Some(model) = &overrides.model {
+            next_config.model = Some(model.clone());
         }
-        let config_layer_stack = build_config_layer_stack(config, &role_layer_toml)?;
-        let merged_config = deserialize_effective_config(config, &config_layer_stack)?;
-
-        let mut next_config = Config::load_config_with_layer_stack(
-            LOCAL_FS.as_ref(),
-            merged_config,
-            overrides,
-            config.codex_home.clone(),
-            config_layer_stack,
-        )
-        .await?;
-        if preserve_current_reasoning_effort {
-            next_config
-                .model_reasoning_effort
-                .clone_from(&config.model_reasoning_effort);
+        if let Some(instructions) = &overrides.developer_instructions {
+            next_config.developer_instructions = Some(instructions.clone());
         }
-        if preserve_current_base_instructions {
-            let personality_changed = config.personality != next_config.personality
-                || config.features.enabled(Feature::Personality)
-                    != next_config.features.enabled(Feature::Personality);
-            if personality_changed
-                && matches!(
-                    config.base_instructions_provenance,
-                    Some(BaseInstructionsProvenance::Model { .. })
-                )
-            {
-                next_config.base_instructions = None;
-                next_config.base_instructions_provenance = None;
-            } else {
-                next_config.base_instructions = config.base_instructions.clone();
-                next_config.base_instructions_provenance =
-                    config.base_instructions_provenance.clone();
+        if let Some(effort) = overrides.model_reasoning_effort.clone() {
+            next_config.model_reasoning_effort = Some(effort);
+        }
+        if let Some(summary) = overrides.model_reasoning_summary {
+            next_config.model_reasoning_summary = Some(summary);
+        }
+        if let Some(verbosity) = overrides.model_verbosity {
+            next_config.model_verbosity = Some(verbosity);
+        }
+        if let Some(personality) = overrides.personality {
+            next_config.personality = Some(personality);
+        }
+        if let Some(service_tier) = &overrides.service_tier {
+            next_config.service_tier = match ServiceTier::from_request_value(service_tier) {
+                Some(ServiceTier::Fast) => next_config
+                    .features
+                    .enabled(Feature::FastMode)
+                    .then(|| ServiceTier::Fast.request_value().to_string()),
+                Some(ServiceTier::Flex) => Some(ServiceTier::Flex.request_value().to_string()),
+                None => Some(service_tier.clone()),
+            };
+        }
+        for key in overrides.features.keys() {
+            if let Some(feature) = feature_for_key(key) {
+                next_config.features.disable(feature)?;
             }
+        }
+        if overrides
+            .skills
+            .as_ref()
+            .is_some_and(|skills| skills.include_instructions == Some(false))
+        {
+            next_config.include_skill_instructions = false;
+        }
+        let personality_changed = config.personality != next_config.personality
+            || config.features.enabled(Feature::Personality)
+                != next_config.features.enabled(Feature::Personality);
+        if personality_changed
+            && matches!(
+                config.base_instructions_provenance,
+                Some(BaseInstructionsProvenance::Model { .. })
+            )
+        {
+            next_config.base_instructions = None;
+            next_config.base_instructions_provenance = None;
         }
         Ok(next_config)
     }
@@ -235,60 +241,25 @@ mod reload {
         config: &Config,
         role_layer_toml: &TomlValue,
     ) -> anyhow::Result<ConfigLayerStack> {
-        let mut layers = existing_layers(config);
-        insert_layer(&mut layers, role_layer(role_layer_toml.clone()));
+        let mut layers: Vec<_> = config
+            .config_layer_stack
+            .all_layers_low_to_high()
+            .cloned()
+            .collect();
+        let role_layer =
+            ConfigLayerEntry::new(ConfigLayerSource::SessionFlags, role_layer_toml.clone());
+        let insertion_index = layers.partition_point(|layer| layer.name <= role_layer.name);
+        layers.insert(insertion_index, role_layer);
         Ok(ConfigLayerStack::new(
             layers,
             config.config_layer_stack.requirements().clone(),
             config.config_layer_stack.requirements_toml().clone(),
-        )?)
-    }
-
-    fn deserialize_effective_config(
-        config: &Config,
-        config_layer_stack: &ConfigLayerStack,
-    ) -> anyhow::Result<ConfigToml> {
-        Ok(deserialize_config_toml_with_base(
-            config_layer_stack.effective_config(),
-            &config.codex_home,
-        )?)
-    }
-
-    fn existing_layers(config: &Config) -> Vec<ConfigLayerEntry> {
-        config
-            .config_layer_stack
-            .all_layers_low_to_high()
-            .cloned()
-            .collect()
-    }
-
-    fn insert_layer(layers: &mut Vec<ConfigLayerEntry>, layer: ConfigLayerEntry) {
-        let insertion_index =
-            layers.partition_point(|existing_layer| existing_layer.name <= layer.name);
-        layers.insert(insertion_index, layer);
-    }
-
-    fn role_layer(role_layer_toml: TomlValue) -> ConfigLayerEntry {
-        ConfigLayerEntry::new(ConfigLayerSource::SessionFlags, role_layer_toml)
-    }
-
-    fn reload_overrides(
-        config: &Config,
-        preserve_current_model: bool,
-        preserve_current_provider: bool,
-        preserve_current_service_tier: bool,
-    ) -> ConfigOverrides {
-        ConfigOverrides {
-            cwd: Some(config.cwd.to_path_buf()),
-            model: preserve_current_model
-                .then(|| config.model.clone())
-                .flatten(),
-            model_provider: preserve_current_provider.then(|| config.model_provider_id.clone()),
-            service_tier: preserve_current_service_tier.then(|| config.service_tier.clone()),
-            codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
-            main_execve_wrapper_exe: config.main_execve_wrapper_exe.clone(),
-            ..Default::default()
-        }
+        )?
+        .with_user_and_project_exec_policy_rules_ignored(
+            config
+                .config_layer_stack
+                .ignore_user_and_project_exec_policy_rules(),
+        ))
     }
 }
 
