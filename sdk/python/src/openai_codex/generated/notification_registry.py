@@ -15,6 +15,7 @@ from .v2_all import CommandExecutionOutputDeltaNotification
 from .v2_all import ConfigWarningNotification
 from .v2_all import ContextCompactedNotification
 from .v2_all import DeprecationNoticeNotification
+from .v2_all import EnvironmentConnectionNotification
 from .v2_all import ErrorNotification
 from .v2_all import ExternalAgentConfigImportCompletedNotification
 from .v2_all import ExternalAgentConfigImportProgressNotification
@@ -119,6 +120,8 @@ NOTIFICATION_MODELS: dict[str, type[BaseModel]] = {
     "thread/closed": ThreadClosedNotification,
     "thread/compacted": ContextCompactedNotification,
     "thread/deleted": ThreadDeletedNotification,
+    "thread/environment/connected": EnvironmentConnectionNotification,
+    "thread/environment/disconnected": EnvironmentConnectionNotification,
     "thread/goal/cleared": ThreadGoalClearedNotification,
     "thread/goal/updated": ThreadGoalUpdatedNotification,
     "thread/name/updated": ThreadNameUpdatedNotification,

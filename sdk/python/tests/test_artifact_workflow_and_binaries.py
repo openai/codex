@@ -377,17 +377,17 @@ def test_schema_normalization_only_flattens_string_literal_oneofs(
         if isinstance(definition, dict) and script._flatten_string_enum_one_of(definition.copy())
     ]
 
-    assert flattened == [
-        "MessagePhase",
-        "TurnItemsView",
+    assert sorted(flattened) == [
         "AuthMode",
-        "PluginAvailability",
-        "InputModality",
-        "ExperimentalFeatureStage",
-        "ProcessOutputStream",
+        "AutoCompactTokenLimitScope",
         "CommandExecOutputStream",
         "ConsumeAccountRateLimitResetCreditOutcome",
-        "AutoCompactTokenLimitScope",
+        "ExperimentalFeatureStage",
+        "InputModality",
+        "MessagePhase",
+        "PluginAvailability",
+        "ProcessOutputStream",
+        "TurnItemsView",
     ]
 
 
@@ -515,10 +515,10 @@ def test_source_sdk_template_pins_published_runtime() -> None:
         "dependencies": pyproject["project"]["dependencies"],
     } == {
         "sdk_template_version": "0.0.0-dev",
-        "runtime_pin": "0.144.4",
+        "runtime_pin": "0.147.0",
         "dependencies": [
             "pydantic>=2.12",
-            "openai-codex-cli-bin==0.144.4",
+            "openai-codex-cli-bin==0.147.0",
         ],
     }
 
@@ -592,7 +592,7 @@ def test_runtime_setup_reads_independent_runtime_pin_and_release_tags() -> None:
     } == {
         "package_name": "openai-codex-cli-bin",
         "sdk_template_version": "0.0.0-dev",
-        "runtime_pin": "0.144.4",
+        "runtime_pin": "0.147.0",
         "normalized_release_version": "0.116.0a1",
         "normalized_alpha_hotfix_version": "0.116.0a1.post2",
         "release_tag": "rust-v0.116.0-alpha.1",
@@ -841,7 +841,7 @@ def test_stage_sdk_release_preserves_reviewed_runtime_pin(tmp_path: Path) -> Non
     script = _load_update_script_module()
     staged = script.stage_python_sdk_package(
         tmp_path / "sdk-stage",
-        "0.144.4",
+        "0.147.0",
     )
 
     pyproject = tomllib.loads((staged / "pyproject.toml").read_text())
@@ -851,18 +851,18 @@ def test_stage_sdk_release_preserves_reviewed_runtime_pin(tmp_path: Path) -> Non
         "dependencies": pyproject["project"]["dependencies"],
     } == {
         "name": "openai-codex",
-        "version": "0.144.4",
+        "version": "0.147.0",
         "dependencies": [
             "pydantic>=2.12",
-            "openai-codex-cli-bin==0.144.4",
+            "openai-codex-cli-bin==0.147.0",
         ],
     }
     assert (
-        '__version__ = "0.144.4"'
+        '__version__ = "0.147.0"'
         not in (staged / "src" / "openai_codex" / "__init__.py").read_text()
     )
     assert (
-        'client_version: str = "0.144.4"'
+        'client_version: str = "0.147.0"'
         not in (staged / "src" / "openai_codex" / "client.py").read_text()
     )
     assert not any((staged / "src" / "openai_codex").glob("bin/**"))
@@ -875,7 +875,7 @@ def test_stage_sdk_release_replaces_existing_staging_dir(tmp_path: Path) -> None
     old_file.parent.mkdir(parents=True)
     old_file.write_text("stale")
 
-    staged = script.stage_python_sdk_package(staging_dir, "0.144.4")
+    staged = script.stage_python_sdk_package(staging_dir, "0.147.0")
 
     assert staged == staging_dir
     assert not old_file.exists()
@@ -887,11 +887,11 @@ def test_sdk_release_matches_stable_runtime(tmp_path: Path) -> None:
 
     sdk_stage = script.stage_python_sdk_package(
         tmp_path / "sdk-stage",
-        "0.144.4",
+        "0.147.0",
     )
     runtime_stage = script.stage_python_runtime_package(
         tmp_path / "runtime-stage",
-        "0.144.4",
+        "0.147.0",
         package_archive,
     )
 
@@ -903,11 +903,11 @@ def test_sdk_release_matches_stable_runtime(tmp_path: Path) -> None:
         "runtime_version": runtime_pyproject["project"]["version"],
         "sdk_dependencies": sdk_pyproject["project"]["dependencies"],
     } == {
-        "sdk_version": "0.144.4",
-        "runtime_version": "0.144.4",
+        "sdk_version": "0.147.0",
+        "runtime_version": "0.147.0",
         "sdk_dependencies": [
             "pydantic>=2.12",
-            "openai-codex-cli-bin==0.144.4",
+            "openai-codex-cli-bin==0.147.0",
         ],
     }
 
@@ -920,7 +920,7 @@ def test_stage_sdk_runs_type_generation_before_staging(tmp_path: Path) -> None:
             "stage-sdk",
             str(tmp_path / "sdk-stage"),
             "--sdk-version",
-            "0.144.4",
+            "0.147.0",
         ]
     )
 
@@ -951,7 +951,7 @@ def test_stage_sdk_runs_type_generation_before_staging(tmp_path: Path) -> None:
 
     script.run_command(args, ops)
 
-    assert calls == ["generate_types", "stage_sdk:0.144.4"]
+    assert calls == ["generate_types", "stage_sdk:0.147.0"]
 
 
 def test_stage_runtime_stages_package_without_type_generation(tmp_path: Path) -> None:

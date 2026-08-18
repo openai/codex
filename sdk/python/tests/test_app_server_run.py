@@ -96,6 +96,7 @@ def test_run_params_and_usage_cross_app_server_boundary(tmp_path) -> None:
         "request_model": "mock-model-override",
         "usage": {
             "last": {
+                "cacheWriteInputTokens": 0,
                 "cachedInputTokens": 3,
                 "inputTokens": 11,
                 "outputTokens": 7,
@@ -103,6 +104,7 @@ def test_run_params_and_usage_cross_app_server_boundary(tmp_path) -> None:
                 "totalTokens": 18,
             },
             "total": {
+                "cacheWriteInputTokens": 0,
                 "cachedInputTokens": 3,
                 "inputTokens": 11,
                 "outputTokens": 7,
