@@ -188,6 +188,7 @@ pub use protocol::TerminateResponse;
 pub use protocol::WriteParams;
 pub use protocol::WriteResponse;
 pub use protocol::WriteStatus;
+pub use regular_file::read_sensitive_file_to_string;
 pub use remote::RemoteEnvironmentConfig;
 pub use remote::run_remote_environment;
 pub use remote::run_remote_environment_until_shutdown;
