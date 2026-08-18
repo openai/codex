@@ -49,6 +49,42 @@ async fn remote_plugin_list_routes_the_complete_query_url() {
 }
 
 #[tokio::test]
+async fn recommended_plugins_requests_codex_suggestions_endpoint() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/ps/plugins/suggested/codex"))
+        .and(query_param("scope", "GLOBAL"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "enabled": true,
+            "plugins": [],
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let (config, selected_urls) =
+        recording_remote_plugin_service_config(format!("{}/backend-api", server.uri()));
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+
+    let mode = fetch_recommended_plugins(&config, Some(&auth))
+        .await
+        .expect("recommended plugin request should succeed");
+
+    assert_eq!(
+        mode,
+        RecommendedPluginsMode::Endpoint {
+            plugins: Vec::new(),
+        }
+    );
+    assert_eq!(
+        recorded_http_client_urls(&selected_urls),
+        vec![format!(
+            "{}/backend-api/ps/plugins/suggested/codex?scope=GLOBAL",
+            server.uri()
+        )]
+    );
+}
+
+#[tokio::test]
 async fn remote_installed_plugins_paginate_across_all_scopes_without_download_urls() {
     let server = MockServer::start().await;
     let installed_plugin = |scope: RemotePluginScope, id: &str, name: &str| {
@@ -483,16 +519,11 @@ fn remote_plugin_interface_maps_dark_logo_url() {
         Some("https://example.com/linear/logo-dark.png".to_string())
     );
 }
-fn item(name: &str, display_name: &str) -> RecommendedPluginItem {
+fn item(name: &str) -> RecommendedPluginItem {
     RecommendedPluginItem {
         id: format!("plugin_{name}"),
         name: name.to_string(),
-        status: None,
-        installation_policy: None,
-        release: RecommendedPluginRelease {
-            display_name: display_name.to_string(),
-            app_ids: Vec::new(),
-        },
+        display_name: name.to_string(),
     }
 }
 
@@ -500,25 +531,13 @@ fn item(name: &str, display_name: &str) -> RecommendedPluginItem {
 fn recommended_plugins_enabled_flag_selects_endpoint_or_legacy_mode() {
     let disabled: RecommendedPluginsResponse = serde_json::from_value(serde_json::json!({
         "enabled": false,
-        "plugins": [{"id": "plugin_github", "name": "github", "release": {"display_name": "GitHub"}}]
+        "plugins": [{"id": "plugin_github", "name": "github", "display_name": "GitHub"}]
     }))
     .expect("response should deserialize");
     assert_eq!(
         recommended_plugins_mode(disabled),
         RecommendedPluginsMode::Legacy
     );
-
-    for response in [
-        serde_json::json!({"plugins": []}),
-        serde_json::json!({"enabled": null, "plugins": []}),
-    ] {
-        let response: RecommendedPluginsResponse =
-            serde_json::from_value(response).expect("response should deserialize");
-        assert_eq!(
-            recommended_plugins_mode(response),
-            RecommendedPluginsMode::Legacy
-        );
-    }
 
     let enabled: RecommendedPluginsResponse = serde_json::from_value(serde_json::json!({
         "enabled": true,
@@ -537,10 +556,7 @@ fn recommended_plugins_enabled_flag_selects_endpoint_or_legacy_mode() {
 fn recommended_plugins_require_remote_install_identity() {
     let response = serde_json::from_value::<RecommendedPluginsResponse>(serde_json::json!({
         "enabled": true,
-        "plugins": [{
-            "name": "github",
-            "release": {"display_name": "GitHub"}
-        }]
+        "plugins": [{"name": "github", "display_name": "GitHub"}]
     }));
 
     assert!(response.is_err());
@@ -550,33 +566,13 @@ fn recommended_plugins_require_remote_install_identity() {
 fn recommended_plugins_are_validated_deduplicated_sorted_and_capped() {
     let mut plugins = (0..=52)
         .rev()
-        .map(|index| item(&format!("plugin-{index:02}"), &format!("Plugin {index:02}")))
+        .map(|index| item(&format!("plugin-{index:02}")))
         .collect::<Vec<_>>();
-    plugins.push(item("plugin-00", "Duplicate"));
-    plugins.push(item("not/a/plugin", "Invalid"));
-    plugins.push(RecommendedPluginItem {
-        id: "plugin_disabled".to_string(),
-        name: "disabled".to_string(),
-        status: Some(PluginAvailability::DisabledByAdmin),
-        installation_policy: Some(PluginInstallPolicy::Available),
-        release: RecommendedPluginRelease {
-            display_name: "Disabled".to_string(),
-            app_ids: Vec::new(),
-        },
-    });
-    plugins.push(RecommendedPluginItem {
-        id: "plugin_not_available".to_string(),
-        name: "not-available".to_string(),
-        status: Some(PluginAvailability::Available),
-        installation_policy: Some(PluginInstallPolicy::NotAvailable),
-        release: RecommendedPluginRelease {
-            display_name: "Not Available".to_string(),
-            app_ids: Vec::new(),
-        },
-    });
+    plugins.push(item("plugin-00"));
+    plugins.push(item("not/a/plugin"));
 
     let mode = recommended_plugins_mode(RecommendedPluginsResponse {
-        enabled: Some(true),
+        enabled: true,
         plugins,
     });
     let RecommendedPluginsMode::Endpoint { plugins } = mode else {
@@ -589,8 +585,7 @@ fn recommended_plugins_are_validated_deduplicated_sorted_and_capped() {
         Some(&RecommendedPlugin {
             config_id: "plugin-00@openai-curated-remote".to_string(),
             remote_plugin_id: "plugin_plugin-00".to_string(),
-            display_name: "Plugin 00".to_string(),
-            app_connector_ids: Vec::new(),
+            display_name: "plugin-00".to_string(),
         })
     );
     assert_eq!(
@@ -598,8 +593,7 @@ fn recommended_plugins_are_validated_deduplicated_sorted_and_capped() {
         Some(&RecommendedPlugin {
             config_id: "plugin-49@openai-curated-remote".to_string(),
             remote_plugin_id: "plugin_plugin-49".to_string(),
-            display_name: "Plugin 49".to_string(),
-            app_connector_ids: Vec::new(),
+            display_name: "plugin-49".to_string(),
         })
     );
 }
@@ -609,55 +603,56 @@ fn recommended_plugins_bound_model_visible_fields() {
     let overlong_name = "n".repeat(MAX_RECOMMENDED_PLUGIN_NAME_LEN + 1);
     let overlong_display_name = "D".repeat(MAX_RECOMMENDED_PLUGIN_DISPLAY_NAME_LEN + 1);
     let mode = recommended_plugins_mode(RecommendedPluginsResponse {
-        enabled: Some(true),
+        enabled: true,
         plugins: vec![
-            item(&overlong_name, "Ignored"),
-            item("bounded", &overlong_display_name),
+            item(&overlong_name),
+            RecommendedPluginItem {
+                id: "plugin_bounded".to_string(),
+                name: "bounded".to_string(),
+                display_name: overlong_display_name,
+            },
+            RecommendedPluginItem {
+                id: "plugin_fallback".to_string(),
+                name: "fallback".to_string(),
+                display_name: String::new(),
+            },
         ],
     });
 
     assert_eq!(
         mode,
         RecommendedPluginsMode::Endpoint {
-            plugins: vec![RecommendedPlugin {
-                config_id: "bounded@openai-curated-remote".to_string(),
-                remote_plugin_id: "plugin_bounded".to_string(),
-                display_name: "D".repeat(MAX_RECOMMENDED_PLUGIN_DISPLAY_NAME_LEN),
-                app_connector_ids: Vec::new(),
-            }],
+            plugins: vec![
+                RecommendedPlugin {
+                    config_id: "bounded@openai-curated-remote".to_string(),
+                    remote_plugin_id: "plugin_bounded".to_string(),
+                    display_name: "D".repeat(MAX_RECOMMENDED_PLUGIN_DISPLAY_NAME_LEN),
+                },
+                RecommendedPlugin {
+                    config_id: "fallback@openai-curated-remote".to_string(),
+                    remote_plugin_id: "plugin_fallback".to_string(),
+                    display_name: "fallback".to_string(),
+                },
+            ],
         }
     );
 }
 
 #[test]
-fn recommended_plugins_preserve_install_identity_and_normalize_app_ids() {
-    let mode = recommended_plugins_mode(RecommendedPluginsResponse {
-        enabled: Some(true),
-        plugins: vec![RecommendedPluginItem {
-            id: "plugin_connector_sample".to_string(),
-            name: "sample".to_string(),
-            status: Some(PluginAvailability::Available),
-            installation_policy: Some(PluginInstallPolicy::Available),
-            release: RecommendedPluginRelease {
-                display_name: "Sample".to_string(),
-                app_ids: vec![
-                    "connector_one".to_string(),
-                    String::new(),
-                    "connector_two".to_string(),
-                    "connector_one".to_string(),
-                ],
-            },
-        }],
-    });
+fn recommended_plugins_accept_codex_suggestion_items() {
+    let response: RecommendedPluginsResponse = serde_json::from_value(serde_json::json!({
+        "enabled": true,
+        "plugins": [{"id": "plugin_box", "name": "box", "display_name": "Box"}]
+    }))
+    .expect("compact response should deserialize");
 
     assert_eq!(
-        mode,
+        recommended_plugins_mode(response),
         RecommendedPluginsMode::Endpoint {
             plugins: vec![RecommendedPlugin {
-                config_id: "sample@openai-curated-remote".to_string(),
-                remote_plugin_id: "plugin_connector_sample".to_string(),
-                display_name: "Sample".to_string(),
-                app_connector_ids: vec!["connector_one".to_string(), "connector_two".to_string(),],
+                config_id: "box@openai-curated-remote".to_string(),
+                remote_plugin_id: "plugin_box".to_string(),
+                display_name: "Box".to_string(),
             }],
         }
     );
@@ -666,16 +661,11 @@ fn recommended_plugins_preserve_install_identity_and_normalize_app_ids() {
 #[test]
 fn recommended_plugins_ignore_invalid_remote_plugin_ids() {
     let mode = recommended_plugins_mode(RecommendedPluginsResponse {
-        enabled: Some(true),
+        enabled: true,
         plugins: vec![RecommendedPluginItem {
             id: "not/a/plugin".to_string(),
             name: "sample".to_string(),
-            status: None,
-            installation_policy: None,
-            release: RecommendedPluginRelease {
-                display_name: "Sample".to_string(),
-                app_ids: Vec::new(),
-            },
+            display_name: "Sample".to_string(),
         }],
     });
 

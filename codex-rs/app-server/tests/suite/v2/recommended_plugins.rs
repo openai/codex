@@ -55,7 +55,7 @@ async fn recommended_plugins_after_external_login(
     let server = responses::start_mock_server().await;
     let apps_server = AppsTestServer::mount(&server).await?;
     Mock::given(method("GET"))
-        .and(path("/ps/plugins/suggested"))
+        .and(path("/ps/plugins/suggested/codex"))
         .and(query_param("scope", "GLOBAL"))
         .respond_with(
             ResponseTemplate::new(200)
@@ -65,9 +65,7 @@ async fn recommended_plugins_after_external_login(
                     "plugins": [{
                         "id": "plugin_github",
                         "name": "github",
-                        "status": "ENABLED",
-                        "installation_policy": "AVAILABLE",
-                        "release": {"display_name": "GitHub"}
+                        "display_name": "GitHub"
                     }]
                 })),
         )

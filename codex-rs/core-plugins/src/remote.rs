@@ -336,7 +336,6 @@ pub struct RecommendedPlugin {
     pub config_id: String,
     pub remote_plugin_id: String,
     pub display_name: String,
-    pub app_connector_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -749,9 +748,7 @@ struct RemotePluginListResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct RecommendedPluginsResponse {
-    #[serde(default)]
-    enabled: Option<bool>,
-    #[serde(default)]
+    enabled: bool,
     plugins: Vec<RecommendedPluginItem>,
 }
 
@@ -759,18 +756,7 @@ struct RecommendedPluginsResponse {
 struct RecommendedPluginItem {
     id: String,
     name: String,
-    #[serde(default)]
-    status: Option<PluginAvailability>,
-    #[serde(default)]
-    installation_policy: Option<PluginInstallPolicy>,
-    release: RecommendedPluginRelease,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-struct RecommendedPluginRelease {
     display_name: String,
-    #[serde(default)]
-    app_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -996,7 +982,7 @@ pub async fn fetch_recommended_plugins(
 ) -> Result<RecommendedPluginsMode, RemotePluginCatalogError> {
     let auth = ensure_chatgpt_auth(auth)?;
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
-    let mut url = Url::parse(&format!("{base_url}/ps/plugins/suggested"))
+    let mut url = Url::parse(&format!("{base_url}/ps/plugins/suggested/codex"))
         .map_err(RemotePluginCatalogError::InvalidBaseUrl)?;
     url.query_pairs_mut().append_pair("scope", "GLOBAL");
     let url = url.to_string();
@@ -1006,8 +992,48 @@ pub async fn fetch_recommended_plugins(
     Ok(recommended_plugins_mode(response))
 }
 
+#[instrument(level = "trace", skip_all)]
+pub(crate) async fn fetch_recommended_plugin_install_metadata(
+    config: &RemotePluginServiceConfig,
+    auth: Option<&CodexAuth>,
+    plugin_id: &str,
+) -> Result<Option<Vec<String>>, RemotePluginCatalogError> {
+    let auth = ensure_chatgpt_auth(auth)?;
+    let plugin = match fetch_plugin_detail_with_timeout(
+        config,
+        auth,
+        plugin_id,
+        /*include_download_urls*/ false,
+        RECOMMENDED_PLUGINS_TIMEOUT,
+    )
+    .await
+    {
+        Ok(plugin) => plugin,
+        Err(RemotePluginCatalogError::UnexpectedStatus {
+            status: StatusCode::NOT_FOUND,
+            ..
+        }) => return Ok(None),
+        Err(err) => return Err(err),
+    };
+    if plugin.id != plugin_id {
+        return Err(RemotePluginCatalogError::UnexpectedPluginId {
+            expected: plugin_id.to_string(),
+            actual: plugin.id,
+        });
+    }
+    if plugin.availability != PluginAvailability::Available
+        || plugin.installation_policy != PluginInstallPolicy::Available
+    {
+        return Ok(None);
+    }
+
+    let (app_connector_ids, _) =
+        effective_remote_plugin_apps_and_mcp_servers(&plugin.release, auth);
+    Ok(Some(app_connector_ids))
+}
+
 fn recommended_plugins_mode(response: RecommendedPluginsResponse) -> RecommendedPluginsMode {
-    if response.enabled != Some(true) {
+    if !response.enabled {
         return RecommendedPluginsMode::Legacy;
     }
 
@@ -1015,12 +1041,6 @@ fn recommended_plugins_mode(response: RecommendedPluginsResponse) -> Recommended
     for plugin in response.plugins {
         if !is_valid_remote_plugin_id(&plugin.id)
             || plugin.name.chars().count() > MAX_RECOMMENDED_PLUGIN_NAME_LEN
-            || plugin
-                .status
-                .is_some_and(|status| status != PluginAvailability::Available)
-            || plugin
-                .installation_policy
-                .is_some_and(|policy| policy != PluginInstallPolicy::Available)
         {
             continue;
         }
@@ -1038,19 +1058,10 @@ fn recommended_plugins_mode(response: RecommendedPluginsResponse) -> Recommended
                 continue;
             }
         };
-        let RecommendedPluginRelease {
-            display_name,
-            app_ids,
-        } = plugin.release;
-        let display_name = non_empty_string(Some(&display_name))
+        let display_name = non_empty_string(Some(&plugin.display_name))
             .unwrap_or_else(|| plugin.name.clone())
             .chars()
             .take(MAX_RECOMMENDED_PLUGIN_DISPLAY_NAME_LEN)
-            .collect();
-        let mut seen_app_ids = HashSet::new();
-        let app_connector_ids = app_ids
-            .into_iter()
-            .filter(|app_id| !app_id.is_empty() && seen_app_ids.insert(app_id.clone()))
             .collect();
         let config_id = plugin_id.as_key();
         plugins
@@ -1059,7 +1070,6 @@ fn recommended_plugins_mode(response: RecommendedPluginsResponse) -> Recommended
                 config_id,
                 remote_plugin_id: plugin.id,
                 display_name,
-                app_connector_ids,
             });
     }
 
@@ -1406,31 +1416,8 @@ async fn build_remote_plugin_detail(
             enabled: !disabled_skill_names.contains(&skill.name),
         })
         .collect();
-    let mut app_declarations = plugin
-        .release
-        .app_manifest
-        .as_ref()
-        .map(plugin_app_declarations_from_value)
-        .unwrap_or_else(|| app_declarations_from_remote_app_ids(&plugin.release.app_ids));
-    let mut mcp_servers = plugin
-        .release
-        .mcp_servers
-        .iter()
-        .map(|server| (server.key.clone(), ()))
-        .collect::<HashMap<_, _>>();
-    apply_app_mcp_routing_policy(
-        &mut app_declarations,
-        &mut mcp_servers,
-        Some(auth.api_auth_mode()),
-        /*plugin_active*/ true,
-    );
-    let app_ids = app_connector_ids_from_declarations(&app_declarations)
-        .into_iter()
-        .map(|app_id| app_id.0)
-        .collect();
-    let mut mcp_servers = mcp_servers.into_keys().collect::<Vec<_>>();
-    mcp_servers.sort_unstable();
-    mcp_servers.dedup();
+    let (app_ids, mcp_servers) =
+        effective_remote_plugin_apps_and_mcp_servers(&plugin.release, auth);
 
     Ok(RemotePluginDetail {
         marketplace_name,
@@ -1473,6 +1460,36 @@ fn app_declarations_from_remote_app_ids(app_ids: &[String]) -> Vec<AppDeclaratio
             category: None,
         })
         .collect()
+}
+
+fn effective_remote_plugin_apps_and_mcp_servers(
+    release: &RemotePluginReleaseResponse,
+    auth: &CodexAuth,
+) -> (Vec<String>, Vec<String>) {
+    let mut app_declarations = release
+        .app_manifest
+        .as_ref()
+        .map(plugin_app_declarations_from_value)
+        .unwrap_or_else(|| app_declarations_from_remote_app_ids(&release.app_ids));
+    let mut mcp_servers = release
+        .mcp_servers
+        .iter()
+        .map(|server| (server.key.clone(), ()))
+        .collect::<HashMap<_, _>>();
+    apply_app_mcp_routing_policy(
+        &mut app_declarations,
+        &mut mcp_servers,
+        Some(auth.api_auth_mode()),
+        /*plugin_active*/ true,
+    );
+    let app_ids = app_connector_ids_from_declarations(&app_declarations)
+        .into_iter()
+        .map(|app_id| app_id.0)
+        .collect();
+    let mut mcp_server_names = mcp_servers.into_keys().collect::<Vec<_>>();
+    mcp_server_names.sort_unstable();
+    mcp_server_names.dedup();
+    (app_ids, mcp_server_names)
 }
 
 #[derive(Serialize)]
@@ -2173,6 +2190,23 @@ async fn fetch_plugin_detail(
     plugin_id: &str,
     include_download_urls: bool,
 ) -> Result<RemotePluginDirectoryItem, RemotePluginCatalogError> {
+    fetch_plugin_detail_with_timeout(
+        config,
+        auth,
+        plugin_id,
+        include_download_urls,
+        REMOTE_PLUGIN_CATALOG_TIMEOUT,
+    )
+    .await
+}
+
+async fn fetch_plugin_detail_with_timeout(
+    config: &RemotePluginServiceConfig,
+    auth: &CodexAuth,
+    plugin_id: &str,
+    include_download_urls: bool,
+    timeout: Duration,
+) -> Result<RemotePluginDirectoryItem, RemotePluginCatalogError> {
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let mut url = Url::parse(&format!("{base_url}/ps/plugins/{plugin_id}"))
         .map_err(RemotePluginCatalogError::InvalidBaseUrl)?;
@@ -2181,7 +2215,8 @@ async fn fetch_plugin_detail(
             .append_pair("includeDownloadUrls", "true");
     }
     let url = url.to_string();
-    let request = authenticated_request(config.http_request(Method::GET, &url), auth);
+    let request =
+        authenticated_request(config.http_request(Method::GET, &url), auth).timeout(timeout);
     send_and_decode(request, &url).await
 }
 

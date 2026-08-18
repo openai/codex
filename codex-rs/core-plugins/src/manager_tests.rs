@@ -5618,7 +5618,7 @@ plugins = true
 
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/ps/plugins/suggested"))
+        .and(path("/ps/plugins/suggested/codex"))
         .and(query_param("scope", "GLOBAL"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "enabled": true,
@@ -5678,7 +5678,7 @@ plugins = true
 
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/ps/plugins/suggested"))
+        .and(path("/ps/plugins/suggested/codex"))
         .and(query_param("scope", "GLOBAL"))
         .and(header("authorization", "Bearer Access Token"))
         .and(header("chatgpt-account-id", "account_id"))
@@ -5691,15 +5691,12 @@ plugins = true
                         {
                             "id": "plugin_slack",
                             "name": "slack",
-                            "release": {
-                                "display_name": "Slack",
-                                "app_ids": ["connector_slack"]
-                            }
+                            "display_name": "Slack"
                         },
                         {
                             "id": "plugin_github",
                             "name": "github",
-                            "release": {"display_name": "GitHub"}
+                            "display_name": "GitHub"
                         }
                     ]
                 }))
@@ -5719,13 +5716,11 @@ plugins = true
                 config_id: "github@openai-curated-remote".to_string(),
                 remote_plugin_id: "plugin_github".to_string(),
                 display_name: "GitHub".to_string(),
-                app_connector_ids: Vec::new(),
             },
             RecommendedPlugin {
                 config_id: "slack@openai-curated-remote".to_string(),
                 remote_plugin_id: "plugin_slack".to_string(),
                 display_name: "Slack".to_string(),
-                app_connector_ids: vec!["connector_slack".to_string()],
             },
         ],
     };
@@ -5754,24 +5749,24 @@ plugins = true
     );
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/ps/plugins/suggested"))
+        .and(path("/ps/plugins/suggested/codex"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "enabled": true,
             "plugins": [
                 {
                     "id": "plugin_linear",
                     "name": "linear",
-                    "release": {"display_name": "Linear"}
+                    "display_name": "Linear"
                 },
                 {
                     "id": "plugin_github",
                     "name": "github",
-                    "release": {"display_name": "GitHub"}
+                    "display_name": "GitHub"
                 },
                 {
                     "id": "plugin_slack",
                     "name": "slack",
-                    "release": {"display_name": "Slack"}
+                    "display_name": "Slack"
                 }
             ]
         })))
@@ -5827,7 +5822,7 @@ plugins = true
 
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/ps/plugins/suggested"))
+        .and(path("/ps/plugins/suggested/codex"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "enabled": false,
             "plugins": []
@@ -5866,7 +5861,7 @@ plugins = true
 
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/ps/plugins/suggested"))
+        .and(path("/ps/plugins/suggested/codex"))
         .respond_with(ResponseTemplate::new(500).set_body_string("unavailable"))
         .expect(1)
         .mount(&server)
@@ -5885,7 +5880,7 @@ plugins = true
 
     server.reset().await;
     Mock::given(method("GET"))
-        .and(path("/ps/plugins/suggested"))
+        .and(path("/ps/plugins/suggested/codex"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "enabled": true,
             "plugins": []

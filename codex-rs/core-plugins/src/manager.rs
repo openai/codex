@@ -1373,7 +1373,7 @@ impl PluginsManager {
                     description: None,
                     has_skills: false,
                     mcp_server_names: Vec::new(),
-                    app_connector_ids: plugin.app_connector_ids,
+                    app_connector_ids: Vec::new(),
                 })
             })
             .collect();
