@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use std::time::SystemTime;
 
 use anyhow::Result;
 use codex_core::config::Config;
@@ -50,6 +51,7 @@ use serde_json::json;
 
 use super::CLASSIFICATION_DURATION_METRIC;
 use super::CLASSIFICATION_METRIC;
+use super::GuardianV2Extension;
 use super::GuardianV2ScoreProgress;
 use super::REVIEW_FALLBACK_METRIC;
 use super::StrictReviewReason;
@@ -221,6 +223,37 @@ impl ConversationHistorySnapshot for TestConversationHistory {
     fn items(&self) -> Box<dyn Iterator<Item = &ResponseItem> + Send + '_> {
         Box::new(self.0.iter())
     }
+}
+
+#[test]
+fn fail_closed_score_preserves_classification_order() {
+    let thread_store = ExtensionData::new("thread-1");
+    let newer_sampled_at = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
+    let newest_sampled_at = newer_sampled_at + Duration::from_secs(1);
+    let newer_score = SecurityRiskScore {
+        scores: BTreeMap::from([("action_risk".to_owned(), 0.25)]),
+        sampled_at: Some(newer_sampled_at.into()),
+    };
+    thread_store.insert(newer_score.clone());
+
+    GuardianV2Extension::record_fail_closed_score(&thread_store, SystemTime::UNIX_EPOCH);
+    assert_eq!(
+        thread_store.get::<SecurityRiskScore>().as_deref(),
+        Some(&newer_score)
+    );
+
+    GuardianV2Extension::record_fail_closed_score(&thread_store, newest_sampled_at);
+    let fail_closed_score = SecurityRiskScore {
+        scores: BTreeMap::from([("action_risk".to_owned(), 1.0)]),
+        sampled_at: Some(newest_sampled_at.into()),
+    };
+    assert!(!thread_store.insert_if(newer_score.clone(), |previous| {
+        previous.is_none_or(|previous| previous.sampled_at < newer_score.sampled_at)
+    }));
+    assert_eq!(
+        thread_store.get::<SecurityRiskScore>().as_deref(),
+        Some(&fail_closed_score)
+    );
 }
 
 #[test]
@@ -531,6 +564,186 @@ async fn sample_configured_conversation_history(
     )
     .await?;
     Ok((request.body_json(), test, registry))
+}
+
+struct GuardianFailureFixture {
+    test: TestCodex,
+    registry: ExtensionRegistry<Config>,
+    session_store: ExtensionData,
+}
+
+impl GuardianFailureFixture {
+    async fn new() -> Result<Self> {
+        let (_, test, registry) = sample_conversation_history(
+            Vec::new(),
+            r#"{"path":"README.md"}"#,
+            Some(TEST_GUARDIAN_POLICY),
+        )
+        .await?;
+        let thread_store = test.codex.thread_extension_data();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while thread_store.get::<SecurityRiskScore>().is_none() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+
+        Ok(Self {
+            test,
+            registry,
+            session_store: ExtensionData::new("session-1"),
+        })
+    }
+
+    async fn score_tool(&self, tool_name: ToolName) {
+        let thread_store = self.test.codex.thread_extension_data();
+        thread_store.insert(SecurityRiskScore {
+            scores: BTreeMap::from([("action_risk".to_owned(), 0.25)]),
+            sampled_at: None,
+        });
+        let turn_store = ExtensionData::new("turn-1");
+        let payload = ToolPayload::Function {
+            arguments: r#"{"path":"README.md"}"#.to_owned(),
+        };
+        self.registry.tool_lifecycle_contributors()[0]
+            .on_tool_start(ToolStartInput {
+                session_store: &self.session_store,
+                thread_store,
+                turn_store: &turn_store,
+                turn_id: "turn-1",
+                call_id: "call-1",
+                tool_name: &tool_name,
+                payload: &payload,
+                conversation_history: Arc::new(TestConversationHistory(Vec::new())),
+                source: ToolCallSource::Direct,
+            })
+            .await;
+    }
+
+    async fn assert_fails_closed(&self) -> Result<()> {
+        let thread_store = self.test.codex.thread_extension_data();
+        let score_progress = thread_store
+            .get::<GuardianV2ScoreProgress>()
+            .expect("Guardian v2 should track score progress per thread");
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while thread_store
+                .get::<SecurityRiskScore>()
+                .is_none_or(|score| score.scores.get("action_risk") != Some(&1.0))
+                && score_progress
+                    .latest_failed_tool_call
+                    .load(Ordering::Acquire)
+                    <= score_progress
+                        .latest_scored_tool_call
+                        .load(Ordering::Acquire)
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        assert_eq!(
+            self.registry
+                .approval_review(
+                    &self.session_store,
+                    thread_store,
+                    "review action",
+                    /*extension_metrics*/ None,
+                )
+                .await,
+            None
+        );
+        Ok(())
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn contributor_fails_closed_when_thread_lookup_fails() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let fixture = GuardianFailureFixture::new().await?;
+    fixture
+        .test
+        .thread_manager
+        .remove_thread(&fixture.test.session_configured.thread_id)
+        .await
+        .expect("the test thread should exist before simulating a failed lookup");
+
+    fixture.score_tool(ToolName::plain("read_file")).await;
+    fixture.assert_fails_closed().await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn contributor_fails_closed_when_model_configuration_is_invalid() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let fixture = GuardianFailureFixture::new().await?;
+    let mut parent_model = fixture
+        .test
+        .thread_manager
+        .get_models_manager()
+        .get_model_info("gpt-5.5", &fixture.test.config.to_models_manager_config())
+        .await;
+    parent_model
+        .model_messages
+        .as_mut()
+        .expect("test model should expose model messages")
+        .guardian_v2 = Some(GuardianV2ModelConfig {
+        max_action_tokens: Some(1),
+        ..Default::default()
+    });
+    fixture
+        .test
+        .codex
+        .thread_extension_data()
+        .insert(parent_model);
+
+    fixture.score_tool(ToolName::plain("read_file")).await;
+    fixture.assert_fails_closed().await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn contributor_fails_closed_when_action_serialization_fails() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let fixture = GuardianFailureFixture::new().await?;
+    let oversized_tool_name = ToolName::plain(
+        "x".repeat(TruncationPolicy::Tokens(DEFAULT_MODEL_CONTEXT_ITEM_TOKENS).byte_budget()),
+    );
+
+    fixture.score_tool(oversized_tool_name).await;
+    fixture.assert_fails_closed().await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn contributor_fails_closed_when_luna_classification_fails() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let fixture = GuardianFailureFixture::new().await?;
+    let invalid_score = vec![
+        ev_assistant_message("sample", r#"{"scores":{"action_risk":"invalid"}}"#),
+        ev_completed("response-invalid"),
+    ];
+    let server = responses::start_websocket_server(vec![Vec::new(), vec![invalid_score]]).await;
+    let mut config = fixture.test.config.clone();
+    config.model_provider = ModelProviderInfo::create_openai_provider(Some(format!(
+        "http://{}/v1",
+        server.uri().trim_start_matches("ws://")
+    )));
+    config.features.enable(Feature::GuardianV2)?;
+    fixture.registry.thread_lifecycle_contributors()[0]
+        .on_thread_start(ThreadStartInput {
+            config: &config,
+            session_source: &SessionSource::Exec,
+            persistent_thread_state_available: false,
+            environments: &[],
+            mcp_resource_client: None,
+            extension_metrics: None,
+            session_store: &fixture.session_store,
+            thread_store: fixture.test.codex.thread_extension_data(),
+        })
+        .await;
+
+    fixture.score_tool(ToolName::plain("read_file")).await;
+    fixture.assert_fails_closed().await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
