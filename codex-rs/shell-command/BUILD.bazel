@@ -2,6 +2,9 @@ load("//:defs.bzl", "codex_rust_crate")
 
 codex_rust_crate(
     name = "shell-command",
-    compile_data = ["src/command_safety/powershell_parser.ps1"],
+    compile_data = [
+        "src/command_safety/fixtures/powershell_lowering.json",
+        "src/command_safety/powershell_parser.ps1",
+    ],
     crate_name = "codex_shell_command",
 )

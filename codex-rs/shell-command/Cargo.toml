@@ -19,6 +19,7 @@ serde_json = { workspace = true }
 shlex = { workspace = true }
 tree-sitter = { workspace = true }
 tree-sitter-bash = { workspace = true }
+tree-sitter-powershell = { workspace = true }
 url = { workspace = true }
 which = { workspace = true }
 
