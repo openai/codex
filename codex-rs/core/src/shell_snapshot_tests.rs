@@ -128,7 +128,7 @@ fn snapshot_file_name_parser_supports_legacy_and_suffixed_names() {
 fn bash_snapshot_filters_invalid_exports() -> Result<()> {
     let output = Command::new("/bin/bash")
         .arg("-c")
-        .arg(bash_snapshot_script())
+        .arg(snapshot_script(ShellType::Bash).expect("bash supports snapshots"))
         .env("BASH_ENV", "/dev/null")
         .env("VALID_NAME", "ok")
         .env("PWD", "/tmp/stale")
@@ -153,7 +153,7 @@ fn bash_snapshot_preserves_multiline_exports() -> Result<()> {
     let multiline_cert = "-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----";
     let output = Command::new("/bin/bash")
         .arg("-c")
-        .arg(bash_snapshot_script())
+        .arg(snapshot_script(ShellType::Bash).expect("bash supports snapshots"))
         .env("BASH_ENV", "/dev/null")
         .env("MULTILINE_CERT", multiline_cert)
         .output()?;
@@ -209,7 +209,7 @@ fn zsh_snapshot_restores_tied_path() -> Result<()> {
     let snapshot = Command::new("/bin/zsh")
         .arg("-f")
         .arg("-c")
-        .arg(zsh_snapshot_script())
+        .arg(snapshot_script(ShellType::Zsh).expect("zsh supports snapshots"))
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
         .env("ZDOTDIR", dir.path())
@@ -246,7 +246,7 @@ fn zsh_snapshot_restores_tied_path() -> Result<()> {
     let readonly_snapshot = Command::new("/bin/zsh")
         .arg("-f")
         .arg("-c")
-        .arg(zsh_snapshot_script())
+        .arg(snapshot_script(ShellType::Zsh).expect("zsh supports snapshots"))
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
         .env("ZDOTDIR", dir.path())
@@ -376,7 +376,7 @@ async fn snapshot_shell_does_not_inherit_stdin() -> Result<()> {
     let home_display = home.display();
     let script = format!(
         "HOME=\"{home_display}\"; export HOME; {}",
-        bash_snapshot_script()
+        snapshot_script(ShellType::Bash).expect("bash supports snapshots")
     );
     let output = run_script_with_timeout(
         &shell,

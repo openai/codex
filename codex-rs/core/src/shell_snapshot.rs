@@ -17,6 +17,7 @@ use anyhow::bail;
 use codex_exec_server::Environment;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
+use codex_shell_command::shell_snapshot::snapshot_script;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use tokio::fs;
@@ -44,7 +45,6 @@ pub(crate) struct ShellSnapshotFile {
 const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(10);
 const SNAPSHOT_RETENTION: Duration = Duration::from_secs(60 * 60 * 24 * 3); // 3 days retention.
 const SNAPSHOT_DIR: &str = "shell_snapshots";
-const EXCLUDED_EXPORT_VARS: &[&str] = &["PWD", "OLDPWD"];
 
 impl ShellSnapshot {
     pub(crate) fn new(
@@ -229,13 +229,9 @@ async fn write_shell_snapshot(
 
 async fn capture_snapshot(shell: &Shell, cwd: &AbsolutePathBuf) -> Result<String> {
     let shell_type = shell.shell_type;
-    match shell_type {
-        ShellType::Zsh => run_shell_script(shell, &zsh_snapshot_script(), cwd).await,
-        ShellType::Bash => run_shell_script(shell, &bash_snapshot_script(), cwd).await,
-        ShellType::Sh => run_shell_script(shell, &sh_snapshot_script(), cwd).await,
-        ShellType::PowerShell => run_shell_script(shell, powershell_snapshot_script(), cwd).await,
-        ShellType::Cmd => bail!("Shell snapshotting is not yet supported for {shell_type:?}"),
-    }
+    let script = snapshot_script(shell_type)
+        .ok_or_else(|| anyhow!("Shell snapshotting is not yet supported for {shell_type:?}"))?;
+    run_shell_script(shell, &script, cwd).await
 }
 
 fn strip_snapshot_preamble(snapshot: &str) -> Result<String> {
@@ -313,196 +309,6 @@ async fn run_script_with_timeout(
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-}
-
-fn excluded_exports_regex() -> String {
-    EXCLUDED_EXPORT_VARS.join("|")
-}
-
-fn zsh_snapshot_script() -> String {
-    let excluded = excluded_exports_regex();
-    let script = r##"if [[ -n "$ZDOTDIR" ]]; then
-  rc="$ZDOTDIR/.zshrc"
-else
-  rc="$HOME/.zshrc"
-fi
-[[ -r "$rc" ]] && . "$rc"
-print '# Snapshot file'
-print '# Unset all aliases to avoid conflicts with functions'
-print 'unalias -a 2>/dev/null || true'
-print '# Functions'
-functions
-print ''
-setopt_count=$(setopt | wc -l | tr -d ' ')
-print "# setopts $setopt_count"
-setopt | sed 's/^/setopt /'
-print ''
-alias_count=$(alias -L | wc -l | tr -d ' ')
-print "# aliases $alias_count"
-alias -L
-print ''
-export_lines=$(export -p | awk '
-/^(export|declare -x|typeset -x) / {
-  line=$0
-  name=line
-  sub(/^(export|declare -x|typeset -x) /, "", name)
-  if (name ~ /^-[A-Za-z]*r[A-Za-z]* /) {
-    next
-  }
-  if (name ~ /^-[A-Za-z]*T[A-Za-z]* /) {
-    sub(/^-[A-Za-z]*T[A-Za-z]* /, "", name)
-    sub(/ [A-Za-z_][A-Za-z0-9_]*=.*/, "", name)
-  }
-  sub(/=.*/, "", name)
-  if (name ~ /^(EXCLUDED_EXPORTS)$/) {
-    next
-  }
-  if (name ~ /^[A-Za-z_][A-Za-z0-9_]*$/) {
-    print line
-  }
-}')
-export_count=$(printf '%s\n' "$export_lines" | sed '/^$/d' | wc -l | tr -d ' ')
-print "# exports $export_count"
-if [[ -n "$export_lines" ]]; then
-  print -r -- "$export_lines"
-fi
-"##;
-    script.replace("EXCLUDED_EXPORTS", &excluded)
-}
-
-fn bash_snapshot_script() -> String {
-    let excluded = excluded_exports_regex();
-    let script = r##"if [ -z "$BASH_ENV" ] && [ -r "$HOME/.bashrc" ]; then
-  . "$HOME/.bashrc"
-fi
-echo '# Snapshot file'
-echo '# Unset all aliases to avoid conflicts with functions'
-unalias -a 2>/dev/null || true
-echo '# Functions'
-declare -f
-echo ''
-bash_opts=$(set -o | awk '$2=="on"{print $1}')
-bash_opt_count=$(printf '%s\n' "$bash_opts" | sed '/^$/d' | wc -l | tr -d ' ')
-echo "# setopts $bash_opt_count"
-if [ -n "$bash_opts" ]; then
-  printf 'set -o %s\n' $bash_opts
-fi
-echo ''
-alias_count=$(alias -p | wc -l | tr -d ' ')
-echo "# aliases $alias_count"
-alias -p
-echo ''
-export_lines=$(
-  while IFS= read -r name; do
-    if [[ "$name" =~ ^(EXCLUDED_EXPORTS)$ ]]; then
-      continue
-    fi
-    if [[ ! "$name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
-      continue
-    fi
-    declare -xp "$name" 2>/dev/null || true
-  done < <(compgen -e)
-)
-export_count=$(printf '%s\n' "$export_lines" | sed '/^$/d' | wc -l | tr -d ' ')
-echo "# exports $export_count"
-if [ -n "$export_lines" ]; then
-  printf '%s\n' "$export_lines"
-fi
-"##;
-    script.replace("EXCLUDED_EXPORTS", &excluded)
-}
-
-fn sh_snapshot_script() -> String {
-    let excluded = excluded_exports_regex();
-    let script = r##"if [ -n "$ENV" ] && [ -r "$ENV" ]; then
-  . "$ENV"
-fi
-echo '# Snapshot file'
-echo '# Unset all aliases to avoid conflicts with functions'
-unalias -a 2>/dev/null || true
-echo '# Functions'
-if command -v typeset >/dev/null 2>&1; then
-  typeset -f
-elif command -v declare >/dev/null 2>&1; then
-  declare -f
-fi
-echo ''
-if set -o >/dev/null 2>&1; then
-  sh_opts=$(set -o | awk '$2=="on"{print $1}')
-  sh_opt_count=$(printf '%s\n' "$sh_opts" | sed '/^$/d' | wc -l | tr -d ' ')
-  echo "# setopts $sh_opt_count"
-  if [ -n "$sh_opts" ]; then
-    printf 'set -o %s\n' $sh_opts
-  fi
-else
-  echo '# setopts 0'
-fi
-echo ''
-if alias >/dev/null 2>&1; then
-  alias_count=$(alias | wc -l | tr -d ' ')
-  echo "# aliases $alias_count"
-  alias
-  echo ''
-else
-  echo '# aliases 0'
-fi
-if export -p >/dev/null 2>&1; then
-  export_lines=$(export -p | awk '
-/^(export|declare -x|typeset -x) / {
-  line=$0
-  name=line
-  sub(/^(export|declare -x|typeset -x) /, "", name)
-  sub(/=.*/, "", name)
-  if (name ~ /^(EXCLUDED_EXPORTS)$/) {
-    next
-  }
-  if (name ~ /^[A-Za-z_][A-Za-z0-9_]*$/) {
-    print line
-  }
-}')
-  export_count=$(printf '%s\n' "$export_lines" | sed '/^$/d' | wc -l | tr -d ' ')
-  echo "# exports $export_count"
-  if [ -n "$export_lines" ]; then
-    printf '%s\n' "$export_lines"
-  fi
-else
-  export_count=$(env | sort | awk -F= '$1 ~ /^[A-Za-z_][A-Za-z0-9_]*$/ { count++ } END { print count }')
-  echo "# exports $export_count"
-  env | sort | while IFS='=' read -r key value; do
-    case "$key" in
-      ""|[0-9]*|*[!A-Za-z0-9_]*|EXCLUDED_EXPORTS) continue ;;
-    esac
-    escaped=$(printf "%s" "$value" | sed "s/'/'\"'\"'/g")
-    printf "export %s='%s'\n" "$key" "$escaped"
-  done
-fi
-"##;
-    script.replace("EXCLUDED_EXPORTS", &excluded)
-}
-
-fn powershell_snapshot_script() -> &'static str {
-    r##"$ErrorActionPreference = 'Stop'
-Write-Output '# Snapshot file'
-Write-Output '# Unset all aliases to avoid conflicts with functions'
-Write-Output 'Remove-Item Alias:* -ErrorAction SilentlyContinue'
-Write-Output '# Functions'
-Get-ChildItem Function: | ForEach-Object {
-    "function {0} {{`n{1}`n}}" -f $_.Name, $_.Definition
-}
-Write-Output ''
-$aliases = Get-Alias
-Write-Output ("# aliases " + $aliases.Count)
-$aliases | ForEach-Object {
-    "Set-Alias -Name {0} -Value {1}" -f $_.Name, $_.Definition
-}
-Write-Output ''
-$envVars = Get-ChildItem Env:
-Write-Output ("# exports " + $envVars.Count)
-$envVars | ForEach-Object {
-    $escaped = $_.Value -replace "'", "''"
-    "`$env:{0}='{1}'" -f $_.Name, $escaped
-}
-"##
 }
 
 /// Removes shell snapshots that either lack a matching session rollout file or
