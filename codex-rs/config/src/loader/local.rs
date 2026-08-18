@@ -3,6 +3,7 @@ use super::layer_io;
 use super::load_config_toml_for_required_layer_raw;
 use super::load_requirements_toml;
 use super::load_root_checkout_project_config;
+use super::project_discovery;
 use super::project_root_markers_from_config;
 use super::project_trust_context;
 use super::requirements_layers_from_legacy_scheme;
@@ -86,8 +87,8 @@ pub struct LocalTomlLayer<S> {
 /// config reads.
 ///
 /// Cloud, selected profiles, session flags, and thread-provided layers are not
-/// included. Project discovery uses only the executor's system and base-user
-/// configuration.
+/// included. Project discovery uses the executor's system, base-user, and
+/// legacy managed configuration.
 pub async fn load_local_config_layers(
     fs: &dyn ExecutorFileSystem,
     codex_home: &Path,
@@ -121,6 +122,13 @@ pub(super) async fn load_local_config_layers_with_overrides(
     let mut discovery_config = TomlValue::Table(toml::map::Map::new());
     merge_toml_values(&mut discovery_config, &system.toml);
     merge_toml_values(&mut discovery_config, &user.toml);
+    // Managed file and MDM values also govern the project boundary and trust.
+    // Only this snapshot is resolved; the returned local layers stay raw.
+    project_discovery::merge_managed_config_for_discovery(
+        &mut discovery_config,
+        &loaded_managed,
+        codex_home.as_path(),
+    )?;
     let project_root_markers = project_root_markers_from_config(&discovery_config)?
         .unwrap_or_else(default_project_root_markers);
     let trust_context = project_trust_context(

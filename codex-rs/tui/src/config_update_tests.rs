@@ -1,4 +1,5 @@
 use super::*;
+use crate::history_cell::HistoryCell;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
 use codex_app_server_client::AppServerClient;
@@ -106,6 +107,39 @@ async fn remote_project_trust_guards_thread_start_and_preserves_repository_decis
     assert_eq!(
         read_remote_project_trust(app_server.request_handle(), &project_cwd).await?,
         None
+    );
+
+    let response: JsonValue = app_server
+        .request_typed(ClientRequest::ConfigRead {
+            request_id: RequestId::String("untrusted-project-warning".to_string()),
+            params: ConfigReadParams {
+                include_layers: true,
+                cwd: Some(project_cwd.to_string_lossy().into_owned()),
+            },
+        })
+        .await?;
+    let reason = response["layers"]
+        .as_array()
+        .expect("config layers")
+        .iter()
+        .find(|layer| layer["name"]["type"] == "project")
+        .and_then(|layer| layer["disabledReason"].as_str())
+        .expect("explicitly untrusted project warning");
+    let warning = crate::history_cell::new_warning_event(
+        reason.replace(&project_trust_key(&project_root), "<PROJECT>"),
+    );
+    insta::assert_snapshot!(
+        warning
+            .display_lines(/*width*/ 80)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n"),
+        @r"
+    ⚠ <PROJECT> is marked as untrusted in the effective configuration. To load
+      project-local config, hooks, and exec policies, update its trust setting. If
+      that setting is managed by your organization, contact your administrator.
+    "
     );
 
     std::fs::remove_file(project_cwd.join(".codex/config.toml"))?;

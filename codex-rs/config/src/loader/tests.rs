@@ -11,7 +11,7 @@ use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
 
-struct TestFileSystem;
+pub(super) struct TestFileSystem;
 
 impl ExecutorFileSystem for TestFileSystem {
     fn canonicalize<'a>(

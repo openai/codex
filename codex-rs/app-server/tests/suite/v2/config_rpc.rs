@@ -857,6 +857,79 @@ model_reasoning_effort = "high"
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_read_respects_managed_project_root_markers() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_config(&codex_home, "model_context_window = 16384\n")?;
+    let workspace = TempDir::new()?;
+    let ancestor_config = workspace.path().join(".codex");
+    let child = workspace.path().join("child");
+    let child_config = child.join(".codex");
+    for dir in [
+        workspace.path().join(".git"),
+        ancestor_config.clone(),
+        child_config.clone(),
+    ] {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::write(
+        ancestor_config.join("config.toml"),
+        "model_context_window = 32768\n",
+    )?;
+    std::fs::write(
+        child_config.join("config.toml"),
+        "model_reasoning_effort = \"high\"\n",
+    )?;
+    set_project_trust_level(codex_home.path(), workspace.path(), TrustLevel::Trusted)?;
+    let managed_path = codex_home.path().join("managed_config.toml");
+    std::fs::write(&managed_path, "project_root_markers = []\n")?;
+    let managed_path = managed_path.to_string_lossy().into_owned();
+
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("CODEX_APP_SERVER_MANAGED_CONFIG_PATH", Some(&managed_path))])
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+    let request_id = app_server
+        .send_config_read_request(ConfigReadParams {
+            include_layers: true,
+            cwd: Some(child.to_string_lossy().into_owned()),
+        })
+        .await?;
+    let ConfigReadResponse { config, layers, .. } =
+        timeout(DEFAULT_READ_TIMEOUT, app_server.read_response(request_id)).await??;
+
+    assert_eq!(
+        (
+            config.additional.get("project_root_markers"),
+            config.model_context_window,
+            config.model_reasoning_effort,
+        ),
+        (Some(&json!([])), Some(16384), Some(ReasoningEffort::High))
+    );
+    let project_layers = layers
+        .expect("layers present")
+        .into_iter()
+        .filter_map(|layer| {
+            if let ConfigLayerSource::Project { dot_codex_folder } = layer.name {
+                Some((dot_codex_folder, layer.config, layer.disabled_reason))
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        project_layers,
+        vec![(
+            AbsolutePathBuf::try_from(child_config)?,
+            json!({"model_reasoning_effort": "high"}),
+            None,
+        )]
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_read_includes_system_layer_and_overrides() -> Result<()> {
     let codex_home = TempDir::new()?;
     let user_dir = test_path_buf_with_windows("/user", Some(r"C:\Users\user"));

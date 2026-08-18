@@ -2,6 +2,7 @@ mod layer_io;
 mod local;
 #[cfg(target_os = "macos")]
 mod macos;
+mod project_discovery;
 #[cfg(test)]
 mod tests;
 
@@ -364,6 +365,13 @@ pub async fn load_config_layers_state(
         if let Some(cli_overrides_layer) = cli_overrides_layer.as_ref() {
             merge_toml_values(&mut merged_so_far, cli_overrides_layer);
         }
+        // Managed config wins over CLI config. Apply it before choosing the
+        // project root and trust, but keep its final layers above project config.
+        project_discovery::merge_managed_config_for_discovery(
+            &mut merged_so_far,
+            &loaded_config_layers,
+            codex_home,
+        )?;
 
         let project_root_markers = match project_root_markers_from_config(&merged_so_far) {
             Ok(markers) => markers.unwrap_or_else(default_project_root_markers),
@@ -1053,9 +1061,11 @@ impl ProjectTrustContext {
         let gated_features = "project-local config, hooks, and exec policies";
         let trust_key = decision.trust_key.as_str();
         let user_config_file = self.user_config_file.as_path().display();
+        // Trust may come from managed config. Keep the explicit-untrusted prefix
+        // stable because the remote TUI uses it to recognize existing decisions.
         match decision.trust_level {
             Some(TrustLevel::Untrusted) => Some(format!(
-                "{trust_key} is marked as untrusted in {user_config_file}. To load {gated_features}, mark it trusted."
+                "{trust_key} is marked as untrusted in the effective configuration. To load {gated_features}, update its trust setting. If that setting is managed by your organization, contact your administrator."
             )),
             _ => Some(format!(
                 "To load {gated_features}, add {trust_key} as a trusted project in {user_config_file}."

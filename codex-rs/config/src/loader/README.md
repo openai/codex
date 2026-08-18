@@ -39,6 +39,12 @@ precedence first, highest precedence last, so later layers override earlier
 layers when folded. Thread config entries supplied by `thread_config_loader` are
 inserted according to their translated `ConfigLayerSource` precedence.
 
+Project-root discovery and project trust use the applicable non-project layers,
+including legacy managed-file and MDM config at their normal precedence. The
+managed layers remain above project and session layers in the final stack.
+Executor-local reads use their own system, base-user, and legacy managed sources;
+they do not include cloud config, selected profiles, or session flags.
+
 Layers with a `disabled_reason` are still surfaced for UI, but are ignored when
 computing the effective config and origins metadata. This is what
 `ConfigLayerStack::effective_config()` implements.
@@ -77,6 +83,7 @@ Implementation is split by concern:
 
 - `state.rs`: public types (`ConfigLayerEntry`, `ConfigLayerStack`) + merge/origins convenience methods.
 - `layer_io.rs`: reading `config.toml`, managed config, and managed preferences inputs.
+- `project_discovery.rs`: shared managed-config composition for project-root and trust discovery.
 - `overrides.rs`: CLI dotted-path overrides → TOML “session flags” layer.
 - `merge.rs`: recursive TOML merge.
 - `fingerprint.rs`: stable per-layer hashing and per-key origins traversal.
