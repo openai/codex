@@ -108,6 +108,7 @@ mod persisted_resume_approval_policy_tests {
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             permission_profile: None,
+            active_permission_profile: None,
             network: None,
             file_system_sandbox_policy: None,
             model: "gpt-5".to_string(),

@@ -3497,6 +3497,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         approvals_reviewer: None,
         sandbox_policy: turn_context.sandbox_policy(),
         permission_profile: None,
+        active_permission_profile: None,
         network: None,
         file_system_sandbox_policy: None,
         model: previous_model.to_string(),
@@ -9546,6 +9547,27 @@ async fn turn_context_item_omits_legacy_equivalent_file_system_sandbox_policy() 
     assert_eq!(
         item.permission_profile,
         Some(turn_context.permission_profile())
+    );
+}
+
+#[tokio::test]
+async fn turn_context_item_stores_active_permission_profile() {
+    let (_session, mut turn_context) = make_session_and_context().await;
+    let active_permission_profile = ActivePermissionProfile::read_only();
+    let config = Arc::make_mut(&mut turn_context.config);
+    config
+        .permissions
+        .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::active(
+            PermissionProfile::read_only(),
+            active_permission_profile.clone(),
+        ))
+        .expect("test setup should allow updating permission profile");
+
+    assert_eq!(
+        turn_context
+            .to_turn_context_item()
+            .active_permission_profile,
+        Some(active_permission_profile)
     );
 }
 

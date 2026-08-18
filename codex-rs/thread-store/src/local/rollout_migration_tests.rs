@@ -1398,6 +1398,7 @@ async fn migration_compacts_subagent_prefix_and_does_not_project_it() {
                 approvals_reviewer: None,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 permission_profile: None,
+                active_permission_profile: None,
                 network: None,
                 file_system_sandbox_policy: None,
                 model: "test-model".to_string(),
