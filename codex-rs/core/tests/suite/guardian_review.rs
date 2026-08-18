@@ -5,6 +5,7 @@ use anyhow::Result;
 use chrono::DateTime;
 use chrono::Local;
 use chrono::Utc;
+use codex_config::types::McpServerConfig;
 use codex_core::SleepFuture;
 use codex_core::TimeFuture;
 use codex_core::TimeProvider;
@@ -47,6 +48,7 @@ use core_test_support::responses::assert_root_turn;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
+use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_response_once_match;
 use core_test_support::responses::mount_sse_once;
@@ -61,6 +63,7 @@ use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -76,6 +79,9 @@ use wiremock::ResponseTemplate;
 use wiremock::http::Method;
 use wiremock::matchers::method;
 use wiremock::matchers::path_regex;
+
+use super::rmcp_client::remote_aware_environment_id;
+use super::rmcp_client::remote_aware_stdio_server_bin;
 
 const CURRENT_TIME_AT: i64 = 1_781_717_655;
 
@@ -446,6 +452,149 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review(
         .collect::<Vec<_>>();
     assert_eq!(guardian_context_windows, vec![Some(258_400)]);
     server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[test_case("first_node"; "injects_policy_for_first_node_action")]
+#[test_case("shell_then_nodes"; "reuses_shell_reviewer_and_injects_policy_once")]
+#[test_case("ineligible_node"; "omits_policy_for_ineligible_parent_model")]
+async fn guardian_node_repl_policy_follows_production_approval_path(scenario: &str) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_wine_exec!(
+        Ok(()),
+        "Guardian MCP approvals require a host-native test stdio server"
+    );
+
+    let server = start_mock_server().await;
+    let mcp_server_bin = remote_aware_stdio_server_bin()?;
+    let node_repl_auto_review_required = scenario != "ineligible_node";
+    let mut builder = test_codex()
+        .with_model_info_override("gpt-5.4", move |model| {
+            model.node_repl_auto_review_required = node_repl_auto_review_required;
+        })
+        .with_config(move |config| {
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+            let node_repl: McpServerConfig = serde_json::from_value(json!({
+                "command": mcp_server_bin,
+                "environment_id": remote_aware_environment_id(),
+                "default_tools_approval_mode": "prompt",
+                "env": { "MCP_TEST_ENABLE_NODE_REPL_JS": "1" }
+            }))
+            .expect("valid Node REPL MCP test server");
+            config
+                .mcp_servers
+                .set(
+                    [(String::from("node_repl"), node_repl)]
+                        .into_iter()
+                        .collect(),
+                )
+                .expect("configure Node REPL MCP test server");
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    wait_for_mcp_server(&test.codex, "node_repl").await?;
+
+    let actions: &[&str] = if scenario == "shell_then_nodes" {
+        &["shell", "node-first", "node-second"]
+    } else {
+        &["node-first"]
+    };
+    let mut responses = Vec::new();
+    for action in actions {
+        let call_id = format!("call-{action}");
+        let tool_call = if *action == "shell" {
+            ev_function_call(
+                &call_id,
+                "exec_command",
+                &json!({
+                    "cmd": "true",
+                    "sandbox_permissions": "require_escalated",
+                    "justification": "Review a shell action before Node REPL."
+                })
+                .to_string(),
+            )
+        } else {
+            ev_function_call_with_namespace(
+                &call_id,
+                "mcp__node_repl",
+                "js",
+                r#"{"code":"nodeRepl.empty()"}"#,
+            )
+        };
+        responses.push(sse(vec![
+            ev_response_created(&format!("parent-{action}")),
+            tool_call,
+            ev_completed(&format!("parent-{action}")),
+        ]));
+        responses.push(sse(vec![
+            ev_response_created(&format!("guardian-{action}")),
+            ev_assistant_message(
+                &format!("guardian-message-{action}"),
+                r#"{"outcome":"allow"}"#,
+            ),
+            ev_completed(&format!("guardian-{action}")),
+        ]));
+    }
+    responses.push(sse(vec![ev_completed("parent-complete")]));
+    let response_mock = mount_sse_sequence(&server, responses).await;
+
+    test.submit_text_turn("Inspect the browser with Node REPL.")
+        .await?;
+
+    let requests = response_mock.requests();
+    let guardian_requests = requests
+        .iter()
+        .filter(|request| {
+            request.body_json()["client_metadata"]["x-openai-subagent"].as_str() == Some("guardian")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(guardian_requests.len(), actions.len());
+
+    let policy = include_str!("../../src/guardian/node_repl_policy.md");
+    let first_guardian_thread = guardian_requests[0].body_json()["client_metadata"]["thread_id"]
+        .as_str()
+        .expect("Guardian reviewer thread id")
+        .to_string();
+    for (index, request) in guardian_requests.iter().enumerate() {
+        assert_eq!(
+            request.body_json()["client_metadata"]["thread_id"].as_str(),
+            Some(first_guardian_thread.as_str()),
+            "shell and Node approvals must reuse the same Guardian reviewer"
+        );
+        let expected = usize::from(
+            node_repl_auto_review_required && !(scenario == "shell_then_nodes" && index == 0),
+        );
+        assert_eq!(
+            request
+                .message_input_texts("developer")
+                .iter()
+                .filter(|text| text.as_str() == policy)
+                .count(),
+            expected,
+            "Node REPL policy must appear exactly once on eligible Node reviews"
+        );
+        if expected == 1 && (index == 0 || scenario == "shell_then_nodes" && index == 1) {
+            let body = request.body_json();
+            let input = body["input"].as_array().expect("Guardian reviewer input");
+            let policy_index = input
+                .iter()
+                .position(|item| {
+                    item["role"] == "developer"
+                        && item["content"].as_array().is_some_and(|content| {
+                            content.iter().any(|span| span["text"] == policy)
+                        })
+                })
+                .expect("Node REPL developer policy");
+            let user_index = input
+                .iter()
+                .rposition(|item| item["role"] == "user")
+                .expect("Node REPL approval request");
+            assert_eq!(policy_index + 1, user_index);
+        }
+    }
+
     Ok(())
 }
 
