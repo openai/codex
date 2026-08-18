@@ -1,7 +1,12 @@
 use std::collections::HashMap;
+use std::ffi::OsStr;
+use std::ffi::OsString;
 #[cfg(windows)]
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStringExt;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_channel::Receiver;
@@ -27,6 +32,7 @@ use super::CommandHookRuntime;
 use super::CommandShell;
 use super::ConfiguredHandler;
 use super::MAX_CONCURRENT_ASYNC_HOOKS;
+use super::build_command;
 use super::run_command;
 use crate::events::user_prompt_submit::UserPromptSubmitRequest;
 
@@ -74,7 +80,12 @@ async fn cmd_shell_runs_quoted_hook_command_path() {
 
     for shell in shells {
         let (result_sender, _result_receiver) = async_channel::unbounded();
-        let runtime = CommandHookRuntime::new(shell, ThreadId::new(), result_sender);
+        let runtime = CommandHookRuntime::new(
+            shell,
+            Arc::new(std::env::vars_os().collect()),
+            ThreadId::new(),
+            result_sender,
+        );
         let result = run_command(&runtime, &handler, &command, &env, "{}", temp.path()).await;
 
         assert_eq!(result.exit_code, Some(0), "stderr: {}", result.stderr);
@@ -157,9 +168,107 @@ async fn command_hook_does_not_expose_configured_noise_auth_token() {
     assert_eq!(result.error, None);
 }
 
+#[test]
+fn build_command_replays_snapshot_before_hook_overrides_and_scrubbing() {
+    #[cfg(unix)]
+    let non_unicode_value = OsString::from_vec(vec![b'v', 0xff]);
+    let environment = vec![
+        (
+            OsString::from("CODEX_HOOK_SNAPSHOT"),
+            OsString::from("captured"),
+        ),
+        (
+            OsString::from("CODEX_HOOK_OVERRIDE"),
+            OsString::from("captured"),
+        ),
+        (
+            OsString::from(CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR),
+            OsString::from("captured-noise-token"),
+        ),
+        #[cfg(unix)]
+        (
+            OsString::from("CODEX_HOOK_NON_UNICODE"),
+            non_unicode_value.clone(),
+        ),
+    ];
+    let env = HashMap::from([
+        ("CODEX_HOOK_OVERRIDE".to_string(), "configured".to_string()),
+        ("CODEX_HOOK_SAFE_ENV".to_string(), "visible".to_string()),
+        (
+            CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR.to_string(),
+            "configured-noise-token".to_string(),
+        ),
+    ]);
+    let command = build_command(
+        &CommandShell {
+            program: "configured-shell".to_string(),
+            args: vec!["-c".to_string()],
+        },
+        "echo hook-ran",
+        &environment,
+        &env,
+    );
+
+    assert_eq!(
+        configured_environment_value(&command, "CODEX_HOOK_SNAPSHOT"),
+        Some(Some(OsString::from("captured")))
+    );
+    assert_eq!(
+        configured_environment_value(&command, "CODEX_HOOK_OVERRIDE"),
+        Some(Some(OsString::from("configured")))
+    );
+    assert_eq!(
+        configured_environment_value(&command, "CODEX_HOOK_SAFE_ENV"),
+        Some(Some(OsString::from("visible")))
+    );
+    assert_eq!(
+        configured_environment_value(&command, CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR),
+        None
+    );
+    #[cfg(unix)]
+    assert_eq!(
+        configured_environment_value(&command, "CODEX_HOOK_NON_UNICODE"),
+        Some(Some(non_unicode_value))
+    );
+}
+
+#[test]
+fn fallback_shell_uses_snapshot() {
+    #[cfg(windows)]
+    let (name, program) = ("comspec", r"C:\captured\cmd.exe");
+    #[cfg(not(windows))]
+    let (name, program) = ("SHELL", "/captured/shell");
+    let command = build_command(
+        &CommandShell {
+            program: String::new(),
+            args: Vec::new(),
+        },
+        "echo hook-ran",
+        &[(OsString::from(name), OsString::from(program))],
+        &HashMap::new(),
+    );
+
+    assert_eq!(command.as_std().get_program(), OsStr::new(program));
+    #[cfg(not(windows))]
+    assert_eq!(
+        command
+            .as_std()
+            .get_args()
+            .map(OsStr::to_os_string)
+            .collect::<Vec<_>>(),
+        vec![OsString::from("-lc"), OsString::from("echo hook-ran")]
+    );
+}
+
 const ASYNC_HOOK_TEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn runtime() -> (CommandHookRuntime, Receiver<HookCompletedEvent>) {
+    runtime_with_environment(Arc::new(std::env::vars_os().collect()))
+}
+
+fn runtime_with_environment(
+    environment: Arc<Vec<(OsString, OsString)>>,
+) -> (CommandHookRuntime, Receiver<HookCompletedEvent>) {
     let thread_id = ThreadId::new();
     let (result_sender, result_receiver) = async_channel::unbounded();
     let runtime = CommandHookRuntime::new(
@@ -167,10 +276,22 @@ fn runtime() -> (CommandHookRuntime, Receiver<HookCompletedEvent>) {
             program: String::new(),
             args: Vec::new(),
         },
+        environment,
         thread_id,
         result_sender,
     );
     (runtime, result_receiver)
+}
+
+fn configured_environment_value(
+    command: &tokio::process::Command,
+    name: &str,
+) -> Option<Option<OsString>> {
+    command
+        .as_std()
+        .get_envs()
+        .find(|(key, _)| *key == OsStr::new(name))
+        .map(|(_, value)| value.map(OsStr::to_os_string))
 }
 
 fn write_handler(temp: &TempDir, source: &str) -> ConfiguredHandler {
@@ -250,12 +371,18 @@ print('{"systemMessage": 123}')
 #[tokio::test]
 async fn async_hook_result_survives_runtime_reconfiguration() {
     let temp = TempDir::new().expect("async test directory");
-    let (previous, results) = runtime();
+    let mut environment = std::env::vars_os().collect::<Vec<_>>();
+    environment.push((
+        OsString::from("CODEX_HOOK_CAPTURED_ENV"),
+        OsString::from("captured"),
+    ));
+    let (previous, results) = runtime_with_environment(Arc::new(environment));
     let release_path = temp.path().join("release");
     let handler = write_handler(
         &temp,
         &format!(
             r#"import json
+import os
 from pathlib import Path
 import sys
 import time
@@ -263,7 +390,7 @@ import time
 json.load(sys.stdin)
 while not Path(r"{}").exists():
     time.sleep(0.01)
-print("survived reconfiguration")
+print(os.environ["CODEX_HOOK_CAPTURED_ENV"])
 "#,
             release_path.display()
         ),
@@ -274,6 +401,10 @@ print("survived reconfiguration")
         program: String::new(),
         args: Vec::new(),
     });
+    assert!(Arc::ptr_eq(
+        &previous.environment,
+        &reconfigured.environment
+    ));
     std::fs::write(release_path, "ready").expect("release async hook");
 
     let hook_result = timeout(ASYNC_HOOK_TEST_TIMEOUT, results.recv())
@@ -284,7 +415,7 @@ print("survived reconfiguration")
         hook_result.run.entries,
         vec![HookOutputEntry {
             kind: HookOutputEntryKind::Context,
-            text: "survived reconfiguration".to_string(),
+            text: "captured".to_string(),
         }]
     );
 

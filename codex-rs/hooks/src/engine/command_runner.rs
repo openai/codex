@@ -1,4 +1,7 @@
 use std::collections::HashMap;
+#[cfg(not(windows))]
+use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::process::Stdio;
@@ -44,6 +47,7 @@ const MAX_CONCURRENT_ASYNC_HOOKS: usize = 8;
 #[derive(Clone)]
 pub(crate) struct CommandHookRuntime {
     shell: CommandShell,
+    environment: Arc<Vec<(OsString, OsString)>>,
     result_sender: Sender<HookCompletedEvent>,
     state: Arc<Mutex<CommandHookRuntimeState>>,
     output_spiller: HookOutputSpiller,
@@ -66,11 +70,13 @@ impl Default for CommandHookRuntimeState {
 impl CommandHookRuntime {
     pub(crate) fn new(
         shell: CommandShell,
+        environment: Arc<Vec<(OsString, OsString)>>,
         thread_id: ThreadId,
         result_sender: Sender<HookCompletedEvent>,
     ) -> Self {
         Self {
             shell,
+            environment,
             result_sender,
             state: Arc::new(Mutex::new(CommandHookRuntimeState::default())),
             output_spiller: HookOutputSpiller::new(thread_id),
@@ -86,6 +92,7 @@ impl CommandHookRuntime {
     pub(crate) fn reconfigured(&self, shell: CommandShell) -> Self {
         Self {
             shell,
+            environment: Arc::clone(&self.environment),
             result_sender: self.result_sender.clone(),
             state: Arc::clone(&self.state),
             output_spiller: self.output_spiller.clone(),
@@ -195,7 +202,7 @@ pub(crate) async fn run_command(
     let started_at = chrono::Utc::now().timestamp();
     let started = Instant::now();
 
-    let mut command = build_command(&runtime.shell, command, env);
+    let mut command = build_command(&runtime.shell, command, &runtime.environment, env);
     command
         .current_dir(cwd)
         .stdin(Stdio::piped())
@@ -372,10 +379,11 @@ fn finish_command_run(
 fn build_command(
     shell: &CommandShell,
     command_line: &str,
+    environment: &[(OsString, OsString)],
     env: &HashMap<String, String>,
 ) -> Command {
     let mut command = if shell.program.is_empty() {
-        default_shell_command()
+        default_shell_command(environment)
     } else {
         Command::new(&shell.program)
     };
@@ -398,27 +406,41 @@ fn build_command(
         #[cfg(not(windows))]
         command.arg(command_line);
     }
+    // Replay the session snapshot instead of inheriting the live process environment.
+    command.env_clear();
+    command.envs(environment.iter().cloned());
     command.envs(env);
     scrub_non_inheritable_env_vars(command.as_std_mut());
     command
 }
 
-fn default_shell_command() -> Command {
+fn default_shell_command(environment: &[(OsString, OsString)]) -> Command {
     #[cfg(windows)]
-    {
-        let comspec = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string());
-        let mut command = Command::new(comspec);
-        command.arg("/C");
-        command
-    }
+    let (environment_variable, fallback_program, argument) = ("COMSPEC", "cmd.exe", "/C");
 
     #[cfg(not(windows))]
-    {
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-        let mut command = Command::new(shell);
-        command.arg("-lc");
-        command
-    }
+    let (environment_variable, fallback_program, argument) = ("SHELL", "/bin/sh", "-lc");
+
+    let program = environment
+        .iter()
+        .find(|(key, _)| {
+            #[cfg(windows)]
+            {
+                key.to_str()
+                    .is_some_and(|key| key.eq_ignore_ascii_case(environment_variable))
+            }
+
+            #[cfg(not(windows))]
+            {
+                key == OsStr::new(environment_variable)
+            }
+        })
+        .map(|(_, value)| value.clone())
+        .unwrap_or_else(|| OsString::from(fallback_program));
+
+    let mut command = Command::new(program);
+    command.arg(argument);
+    command
 }
 
 #[cfg(test)]

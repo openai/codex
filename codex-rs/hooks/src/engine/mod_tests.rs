@@ -51,7 +51,12 @@ fn cwd() -> AbsolutePathBuf {
 
 fn command_runtime(shell: CommandShell) -> CommandHookRuntime {
     let (result_sender, _result_receiver) = async_channel::unbounded();
-    CommandHookRuntime::new(shell, ThreadId::new(), result_sender)
+    CommandHookRuntime::new(
+        shell,
+        Arc::new(std::env::vars_os().collect()),
+        ThreadId::new(),
+        result_sender,
+    )
 }
 
 pub(crate) fn mcp_executor() -> Arc<dyn HookMcpExecutor> {
