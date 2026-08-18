@@ -261,19 +261,24 @@ impl FeedbackRequestProcessor {
         }
 
         let session_source = self.thread_manager.session_source();
+        let http_client_factory = self.config.http_client_factory();
+        let runtime_handle = tokio::runtime::Handle::current();
 
         let upload_result = tokio::task::spawn_blocking(move || {
             let tags = (!upload_tags.is_empty()).then_some(&upload_tags);
-            snapshot.upload_feedback(FeedbackUploadOptions {
-                classification: &classification,
-                reason: reason.as_deref(),
-                tags,
-                include_logs,
-                extra_attachments: &extra_attachments,
-                extra_attachment_paths: &attachment_paths,
-                session_source: Some(session_source),
-                logs_override: sqlite_feedback_logs,
-            })
+            runtime_handle.block_on(snapshot.upload_feedback(
+                FeedbackUploadOptions {
+                    classification: &classification,
+                    reason: reason.as_deref(),
+                    tags,
+                    include_logs,
+                    extra_attachments: &extra_attachments,
+                    extra_attachment_paths: &attachment_paths,
+                    session_source: Some(session_source),
+                    logs_override: sqlite_feedback_logs,
+                },
+                &http_client_factory,
+            ))
         })
         .await;
 
@@ -286,7 +291,8 @@ impl FeedbackRequestProcessor {
             }
         };
 
-        upload_result.map_err(|err| internal_error(format!("failed to upload feedback: {err}")))?;
+        upload_result
+            .map_err(|err| internal_error(format!("failed to upload feedback: {err:#}")))?;
         Ok(FeedbackUploadResponse { thread_id })
     }
 
