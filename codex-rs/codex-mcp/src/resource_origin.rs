@@ -8,6 +8,8 @@ use codex_connectors::AppToolPolicyInput;
 use codex_protocol::ThreadId;
 use codex_protocol::items::McpToolCallStatus;
 use codex_protocol::items::TurnItem;
+use codex_protocol::mcp::McpResourceOrigin;
+use codex_protocol::mcp::McpResourceOriginCheckpoint;
 use codex_protocol::protocol::EventMsg;
 use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
@@ -37,6 +39,69 @@ pub(crate) struct ResourceOrigin {
 }
 
 impl ResourceOrigins {
+    pub(crate) fn checkpoint(&self) -> Option<McpResourceOriginCheckpoint> {
+        (!self.origins.is_empty()).then(|| McpResourceOriginCheckpoint {
+            origins: self
+                .origins
+                .iter()
+                .map(|origin| McpResourceOrigin {
+                    call_id: origin.call_id.clone(),
+                    turn_id: origin.turn_id.clone(),
+                    tool: origin.tool.clone(),
+                    connector_id: origin.connector_id.clone(),
+                    link_id: origin.link_id.clone(),
+                    uri: origin.uri.clone(),
+                    ambiguous_account: origin.ambiguous_account,
+                })
+                .collect(),
+            turns: self.turns.iter().cloned().collect(),
+            current_turn_id: self.current_turn_id.clone(),
+        })
+    }
+
+    pub(crate) fn restore_checkpoint(&mut self, checkpoint: &McpResourceOriginCheckpoint) {
+        if checkpoint.origins.len() > MAX_ORIGINS
+            || checkpoint.turns.len() > MAX_ORIGINS
+            || checkpoint
+                .turns
+                .iter()
+                .any(|turn_id| turn_id.len() > MAX_ORIGIN_BYTES)
+            || checkpoint
+                .current_turn_id
+                .as_ref()
+                .is_some_and(|turn_id| turn_id.len() > MAX_ORIGIN_BYTES)
+        {
+            *self = Self::default();
+            return;
+        }
+
+        let origins = checkpoint
+            .origins
+            .iter()
+            .map(|origin| ResourceOrigin {
+                call_id: origin.call_id.clone(),
+                turn_id: origin.turn_id.clone(),
+                tool: origin.tool.clone(),
+                connector_id: origin.connector_id.clone(),
+                link_id: origin.link_id.clone(),
+                uri: origin.uri.clone(),
+                ambiguous_account: origin.ambiguous_account,
+            })
+            .collect::<VecDeque<_>>();
+        if origins.iter().any(|origin| {
+            origin.byte_len() > MAX_ORIGIN_BYTES || origin.connector_id.trim().is_empty()
+        }) {
+            *self = Self::default();
+            return;
+        }
+
+        *self = Self {
+            origins,
+            turns: checkpoint.turns.iter().cloned().collect(),
+            current_turn_id: checkpoint.current_turn_id.clone(),
+        };
+    }
+
     pub(crate) fn observe(&mut self, event: &EventMsg) {
         match event {
             EventMsg::TurnStarted(event) if event.turn_id.len() <= MAX_ORIGIN_BYTES => {

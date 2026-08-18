@@ -15,6 +15,8 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::items::ReasoningItem;
 use codex_protocol::items::TurnItem;
+use codex_protocol::mcp::McpResourceOrigin;
+use codex_protocol::mcp::McpResourceOriginCheckpoint;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentMessageEvent;
@@ -220,6 +222,7 @@ fn compacted(replacement_history: Vec<ResponseItem>) -> RolloutItem {
     RolloutItem::Compacted(CompactedItem {
         message: "checkpoint".to_string(),
         replacement_history: Some(replacement_history.into_iter().map(Into::into).collect()),
+        mcp_resource_origins: None,
         window_number: Some(1),
         first_window_id: None,
         previous_window_id: None,
@@ -1019,6 +1022,33 @@ async fn migration_rolls_back_inter_agent_metadata_with_its_delivery() {
 async fn migration_rolls_back_pre_compaction_turns_from_sqlite_history() {
     let home = TempDir::new().expect("create Codex home");
     let thread_id = ThreadId::new();
+    let RolloutItem::Compacted(mut checkpoint) = compacted(vec![
+        input_response_message("user", "old question"),
+        ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "old answer".to_string(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ]) else {
+        unreachable!("compacted helper always creates a compaction checkpoint");
+    };
+    checkpoint.mcp_resource_origins = Some(McpResourceOriginCheckpoint {
+        origins: vec![McpResourceOrigin {
+            call_id: "widget-call".to_string(),
+            turn_id: Some("keep-before-compaction".to_string()),
+            tool: "_product_search".to_string(),
+            connector_id: "shopping".to_string(),
+            link_id: None,
+            uri: "ui://shopping/widget".to_string(),
+            ambiguous_account: false,
+        }],
+        turns: vec!["keep-before-compaction".to_string()],
+        current_turn_id: Some("keep-before-compaction".to_string()),
+    });
     let path = write_rollout(
         home.path(),
         thread_id,
@@ -1027,18 +1057,7 @@ async fn migration_rolls_back_pre_compaction_turns_from_sqlite_history() {
             started("keep-before-compaction"),
             user_message("old question"),
             completed("keep-before-compaction"),
-            compacted(vec![
-                input_response_message("user", "old question"),
-                ResponseItem::Message {
-                    id: None,
-                    role: "assistant".to_string(),
-                    content: vec![ContentItem::OutputText {
-                        text: "old answer".to_string(),
-                    }],
-                    phase: None,
-                    internal_chat_message_metadata_passthrough: None,
-                },
-            ]),
+            RolloutItem::Compacted(checkpoint),
             started("remove-after-compaction"),
             user_message("new question"),
             completed("remove-after-compaction"),
@@ -1067,14 +1086,15 @@ async fn migration_rolls_back_pre_compaction_turns_from_sqlite_history() {
         .await
         .expect("read rollback-through-compaction turns");
     assert_eq!(turns.turns.len(), 1);
-    let replacement_history = read_rollout(&path)
+    let checkpoint = read_rollout(&path)
         .into_iter()
         .find_map(|line| match line.item {
-            RolloutItem::Compacted(item) => item.replacement_history,
+            RolloutItem::Compacted(item) => Some(item),
             _ => None,
         })
         .expect("retained compaction");
-    assert!(replacement_history.is_empty());
+    assert_eq!(checkpoint.replacement_history, Some(Vec::new()));
+    assert_eq!(checkpoint.mcp_resource_origins, None);
 }
 
 #[tokio::test]
@@ -1363,6 +1383,7 @@ async fn migration_compacts_subagent_prefix_and_does_not_project_it() {
             RolloutItem::Compacted(CompactedItem {
                 message: "superseded checkpoint".repeat(1024),
                 replacement_history: Some(Vec::new()),
+                mcp_resource_origins: None,
                 window_number: Some(1),
                 first_window_id: None,
                 previous_window_id: None,
@@ -1382,6 +1403,7 @@ async fn migration_compacts_subagent_prefix_and_does_not_project_it() {
                     }
                     .into(),
                 ]),
+                mcp_resource_origins: None,
                 window_number: Some(2),
                 first_window_id: None,
                 previous_window_id: None,

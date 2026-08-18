@@ -1225,8 +1225,20 @@ impl Session {
                 mcp_projection.config.prefix_mcp_tool_names,
             ));
             for item in initial_history.get_rollout_items() {
-                if let RolloutItem::EventMsg(event) = item {
-                    mcp_runtime.observe_event(event);
+                match item {
+                    RolloutItem::Compacted(compacted) => {
+                        if let Some(checkpoint) = &compacted.mcp_resource_origins {
+                            mcp_runtime.restore_resource_origin_checkpoint(checkpoint);
+                        }
+                    }
+                    RolloutItem::EventMsg(event) => mcp_runtime.observe_event(event),
+                    RolloutItem::SessionMeta(_)
+                    | RolloutItem::ResponseItem(_)
+                    | RolloutItem::InterAgentCommunication(_)
+                    | RolloutItem::InterAgentCommunicationMetadata { .. }
+                    | RolloutItem::TurnContext(_)
+                    | RolloutItem::WorldState(_)
+                    | RolloutItem::SecurityRiskScore(_) => {}
                 }
             }
             let session_extension_data =

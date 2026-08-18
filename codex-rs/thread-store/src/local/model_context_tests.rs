@@ -623,6 +623,7 @@ fn compacted(message: &str, replacement_history: Option<Vec<ResponseItem>>) -> R
         message: message.to_string(),
         replacement_history: replacement_history
             .map(|items| items.into_iter().map(Into::into).collect()),
+        mcp_resource_origins: None,
         window_number: Some(1),
         first_window_id: None,
         previous_window_id: None,

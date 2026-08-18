@@ -16,6 +16,30 @@ pub const OPENAI_STANDARD_FORM_INPUT_EXTENSION_ID: &str = "openai/standard-form-
 /// Extension ID for MCP App UI rendering.
 pub const MCP_APP_UI_EXTENSION_ID: &str = "io.modelcontextprotocol/ui";
 
+/// Bounded app-resource provenance retained across a compaction checkpoint.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct McpResourceOriginCheckpoint {
+    pub origins: Vec<McpResourceOrigin>,
+    pub turns: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_turn_id: Option<String>,
+}
+
+/// The original app, account, tool, and URI that authorize one widget read.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct McpResourceOrigin {
+    pub call_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+    pub tool: String,
+    pub connector_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_id: Option<String>,
+    pub uri: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ambiguous_account: bool,
+}
+
 /// Client extensions that must not be advertised to MCP servers.
 const MCP_CLIENT_ONLY_EXTENSION_IDS: [&str; 1] = [OPENAI_STANDARD_FORM_INPUT_EXTENSION_ID];
 

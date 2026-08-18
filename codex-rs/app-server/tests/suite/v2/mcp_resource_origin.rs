@@ -10,6 +10,8 @@ use codex_app_server_protocol::McpResourceContent;
 use codex_app_server_protocol::McpResourceReadParams;
 use codex_app_server_protocol::McpResourceReadResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ThreadCompactStartParams;
+use codex_app_server_protocol::ThreadCompactStartResponse;
 use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
@@ -25,7 +27,8 @@ use std::sync::atomic::Ordering;
 use tokio::time::timeout;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn widget_reads_survive_history_modes_restarts_and_app_only_visibility() -> Result<()> {
+async fn widget_reads_survive_history_modes_compaction_restarts_and_app_only_visibility()
+-> Result<()> {
     let responses_server = responses::start_mock_server().await;
     let (apps_server_url, calls, apps_server_handle) = start_resource_apps_mcp_server().await?;
     calls.tools_enabled.store(true, Ordering::Relaxed);
@@ -62,6 +65,22 @@ async fn widget_reads_survive_history_modes_restarts_and_app_only_visibility() -
     let mut model_responses = std::iter::repeat_n(response, 4)
         .flatten()
         .collect::<Vec<_>>();
+    model_responses.insert(
+        /*index*/ 4,
+        responses::sse(vec![
+            responses::ev_response_created("widget-compaction"),
+            responses::ev_assistant_message("widget-summary", "The apps found matching lamps."),
+            responses::ev_completed("widget-compaction"),
+        ]),
+    );
+    model_responses.insert(
+        /*index*/ 5,
+        responses::sse(vec![
+            responses::ev_response_created("after-widget-compaction"),
+            responses::ev_assistant_message("widget-follow-up", "The lamps are still available."),
+            responses::ev_completed("after-widget-compaction"),
+        ]),
+    );
     model_responses.push(responses::sse(vec![responses::ev_completed(
         "app-only-visibility",
     )]));
@@ -161,6 +180,41 @@ async fn widget_reads_survive_history_modes_restarts_and_app_only_visibility() -
             );
         }
         if !ephemeral {
+            if history_mode == ThreadHistoryMode::Paginated {
+                let compact_id = app_server
+                    .send_thread_compact_start_request(ThreadCompactStartParams {
+                        thread_id: thread.id.clone(),
+                    })
+                    .await?;
+                let _: ThreadCompactStartResponse =
+                    timeout(DEFAULT_READ_TIMEOUT, app_server.read_response(compact_id)).await??;
+                timeout(
+                    DEFAULT_READ_TIMEOUT,
+                    app_server.read_stream_until_notification_message("turn/completed"),
+                )
+                .await??;
+                let turn_id = app_server
+                    .send_turn_start_request(TurnStartParams {
+                        thread_id: thread.id.clone(),
+                        input: vec![UserInput::Text {
+                            text: "What did the apps find?".to_string(),
+                            text_elements: Vec::new(),
+                        }],
+                        ..Default::default()
+                    })
+                    .await?;
+                let _: TurnStartResponse =
+                    timeout(DEFAULT_READ_TIMEOUT, app_server.read_response(turn_id)).await??;
+                timeout(
+                    DEFAULT_READ_TIMEOUT,
+                    app_server.read_stream_until_notification_message("turn/completed"),
+                )
+                .await??;
+                for call_id in ["walmart-call", "best-buy-call"] {
+                    let response = read_widget(&mut app_server, &thread.id, call_id).await?;
+                    assert_eq!(response.origin_call_id.as_deref(), Some(call_id));
+                }
+            }
             persistent_thread_ids.push(thread.id);
         }
     }

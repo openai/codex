@@ -197,6 +197,7 @@ fn ignores_legacy_abort_without_turn_id_and_context_only_records() {
     let compacted = project(RolloutItem::Compacted(CompactedItem {
         message: String::new(),
         replacement_history: None,
+        mcp_resource_origins: None,
         window_number: None,
         first_window_id: None,
         previous_window_id: None,

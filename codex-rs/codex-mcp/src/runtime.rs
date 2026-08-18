@@ -28,6 +28,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::mcp::ClientMcpExtensions;
+use codex_protocol::mcp::McpResourceOriginCheckpoint;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -194,6 +195,22 @@ impl McpRuntime {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .observe(event);
+    }
+
+    /// Captures bounded widget provenance for the next compaction checkpoint.
+    pub fn resource_origin_checkpoint(&self) -> Option<McpResourceOriginCheckpoint> {
+        self.resource_origins
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .checkpoint()
+    }
+
+    /// Restores widget provenance retained by a compaction checkpoint.
+    pub fn restore_resource_origin_checkpoint(&self, checkpoint: &McpResourceOriginCheckpoint) {
+        self.resource_origins
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .restore_checkpoint(checkpoint);
     }
 
     /// Reads a widget through the current binding of the app tool that produced it.

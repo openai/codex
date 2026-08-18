@@ -4,6 +4,7 @@ use super::CodexHarnessMetadata;
 use super::CompactedItem;
 use super::EventMsg;
 use super::InterAgentCommunication;
+use super::McpResourceOriginCheckpoint;
 use super::ResponseItem;
 use super::ResponseItemEnvelope;
 use super::RolloutItem;
@@ -131,6 +132,8 @@ pub(super) struct CompactedItemWire<'a> {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     replacement_history_metadata: Option<Vec<Cow<'a, CodexHarnessMetadata>>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    mcp_resource_origins: Option<Cow<'a, McpResourceOriginCheckpoint>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     window_number: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     first_window_id: Option<Cow<'a, str>>,
@@ -166,6 +169,7 @@ impl<'a> From<&'a CompactedItem> for CompactedItemWire<'a> {
                     .collect()
             }),
             replacement_history_metadata,
+            mcp_resource_origins: item.mcp_resource_origins.as_ref().map(Cow::Borrowed),
             window_number: item.window_number,
             first_window_id: item.first_window_id.as_deref().map(Cow::Borrowed),
             previous_window_id: item.previous_window_id.as_deref().map(Cow::Borrowed),
@@ -229,6 +233,7 @@ impl TryFrom<CompactedItemWire<'_>> for CompactedItem {
         Ok(Self {
             message: item.message.into_owned(),
             replacement_history,
+            mcp_resource_origins: item.mcp_resource_origins.map(Cow::into_owned),
             window_number,
             first_window_id: item.first_window_id.map(Cow::into_owned),
             previous_window_id: item.previous_window_id.map(Cow::into_owned),
