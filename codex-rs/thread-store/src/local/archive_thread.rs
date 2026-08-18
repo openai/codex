@@ -100,7 +100,12 @@ async fn archive_thread_with_paths(
         if rollout_path == selected_rollout_path {
             archived_path = Some(destination.clone());
         }
-        rollout_moves.push((canonical_rollout_path, destination));
+        if !rollout_moves
+            .iter()
+            .any(|(source, _)| source == &canonical_rollout_path)
+        {
+            rollout_moves.push((canonical_rollout_path, destination));
+        }
     }
     let archived_path = archived_path.ok_or_else(|| ThreadStoreError::Internal {
         message: format!("failed to archive selected rollout for thread {thread_id}"),
@@ -301,13 +306,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn archive_thread_updates_sqlite_metadata_when_present() {
+    async fn archive_thread_deduplicates_rollout_paths_and_updates_sqlite_metadata() {
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());
         let uuid = Uuid::from_u128(202);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         let active_path =
             write_session_file(home.path(), "2025-01-03T12-00-00", uuid).expect("session file");
+        let alternate_directory = active_path
+            .parent()
+            .expect("session directory")
+            .join("alternate");
+        std::fs::create_dir(&alternate_directory).expect("alternate session directory");
+        let selected_rollout_path = alternate_directory
+            .join("..")
+            .join(active_path.file_name().expect("file name"));
         let runtime = codex_state::StateRuntime::init(
             codex_state::SqliteConfig::new_for_testing(home.path().abs()),
             config.default_model_provider_id.clone(),
@@ -321,7 +334,7 @@ mod tests {
             .expect("backfill should be complete");
         let mut builder = codex_state::ThreadMetadataBuilder::new(
             thread_id,
-            active_path.clone(),
+            selected_rollout_path,
             Utc::now(),
             SessionSource::Cli,
         );
