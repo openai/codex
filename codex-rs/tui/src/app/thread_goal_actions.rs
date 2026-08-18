@@ -56,6 +56,10 @@ impl App {
         app_server: &mut AppServerSession,
         thread_id: ThreadId,
     ) {
+        if self.chat_widget.has_misalignment_policy_violation() {
+            return;
+        }
+
         let result = app_server.thread_goal_get(thread_id).await;
         if self.current_displayed_thread_id() != Some(thread_id) {
             return;
