@@ -18,6 +18,7 @@ use codex_api::ResponsesWsRequest;
 use codex_api::TransportError;
 use codex_api::build_session_headers;
 use codex_api::create_text_param_for_request;
+use codex_extension_api::ExtensionMetrics;
 use codex_http_client::HttpClientFactory;
 use codex_login::AgentIdentityAuthPolicy;
 use codex_login::CodexAuth;
@@ -33,6 +34,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::TokenUsage;
 use http::HeaderValue;
 use http::StatusCode;
 use serde_json::Value;
@@ -43,6 +45,8 @@ use tokio::sync::Semaphore;
 use tokio::sync::oneshot;
 
 pub(crate) const MODEL: &str = "gpt-5.6-luna";
+pub(crate) const CLASSIFICATION_TOKEN_USAGE_METRIC: &str =
+    "codex.guardian_v2.classification.token_usage";
 const MAX_OUTPUT_BYTES: usize = 8 * 1024;
 const INITIAL_WEBSOCKET_CONNECTIONS: usize = 2;
 const MAX_WEBSOCKET_CONNECTIONS: usize = 16;
@@ -73,6 +77,8 @@ pub struct LunaSamplerConfig {
     pub service_tier: Option<String>,
     /// Luna model's host-resolved encrypted-compaction compatibility hash.
     pub luna_compaction_hash: Option<String>,
+    /// Host-provided metrics capability with the owning session's attribution.
+    pub metrics: Option<Arc<dyn ExtensionMetrics>>,
 }
 
 /// One tool-less structured Luna request over an already-open connection.
@@ -144,6 +150,34 @@ impl ConnectionLease {
 struct ActiveRequest {
     supersede: oneshot::Sender<()>,
     scored: Arc<AtomicBool>,
+}
+
+fn record_token_usage(metrics: Option<&dyn ExtensionMetrics>, token_usage: Option<&TokenUsage>) {
+    let (Some(metrics), Some(token_usage)) = (metrics, token_usage) else {
+        return;
+    };
+
+    for (token_type, value) in [
+        ("total", token_usage.total_tokens.max(0)),
+        ("input", token_usage.input_tokens.max(0)),
+        ("cached_input", token_usage.cached_input()),
+        (
+            "cache_write_input",
+            token_usage.cache_write_input_tokens.max(0),
+        ),
+        ("non_cached_input", token_usage.non_cached_input()),
+        ("output", token_usage.output_tokens.max(0)),
+        (
+            "reasoning_output",
+            token_usage.reasoning_output_tokens.max(0),
+        ),
+    ] {
+        metrics.histogram(
+            CLASSIFICATION_TOKEN_USAGE_METRIC,
+            value,
+            &[("token_type", token_type)],
+        );
+    }
 }
 
 /// A bounded pool of authenticated Responses WebSockets dedicated to Luna sampling.
@@ -568,7 +602,8 @@ impl LunaSampler {
                             }
                         }
                     }
-                    ResponseEvent::Completed { .. } => {
+                    ResponseEvent::Completed { token_usage, .. } => {
+                        record_token_usage(self.config.metrics.as_deref(), token_usage.as_ref());
                         lease.reuse();
                         if !output.is_empty() {
                             return Ok(output);
@@ -592,6 +627,7 @@ impl LunaSampler {
                 if serde_json::from_str::<serde_json::Map<String, Value>>(&deltas).is_ok() {
                     scored.store(true, Ordering::Relaxed);
                     let mut remaining_events = stream.rx_event;
+                    let metrics = self.config.metrics.clone();
                     tokio::spawn(async move {
                         while let Some(event) = tokio::select! {
                             biased;
@@ -599,7 +635,8 @@ impl LunaSampler {
                             event = remaining_events.recv() => event,
                         } {
                             match event {
-                                Ok(ResponseEvent::Completed { .. }) => {
+                                Ok(ResponseEvent::Completed { token_usage, .. }) => {
+                                    record_token_usage(metrics.as_deref(), token_usage.as_ref());
                                     lease.reuse();
                                     break;
                                 }

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use codex_extension_api::ExtensionMetrics;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
 use codex_login::AgentIdentityAuthPolicy;
@@ -18,6 +19,7 @@ use core_test_support::responses;
 use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_model_verification_metadata;
 use core_test_support::responses::ev_output_text_delta;
 use core_test_support::skip_if_no_network;
@@ -25,12 +27,14 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 
+use super::CLASSIFICATION_TOKEN_USAGE_METRIC;
 use super::LunaSampler;
 use super::LunaSamplerConfig;
 use super::LunaSamplingRequest;
@@ -124,6 +128,7 @@ fn sampler_config(base_url: String) -> LunaSamplerConfig {
         originator: Some("guardian-v2-test".to_owned()),
         service_tier: None,
         luna_compaction_hash: None,
+        metrics: None,
     }
 }
 
@@ -143,6 +148,74 @@ fn sample_request(turn_id: &str) -> LunaSamplingRequest {
         reasoning_effort: ReasoningEffort::None,
         turn_id: turn_id.to_owned(),
     }
+}
+
+type RecordedMetric = (String, i64, Vec<(String, String)>);
+
+#[derive(Default)]
+struct RecordingMetrics(Mutex<Vec<RecordedMetric>>);
+
+impl ExtensionMetrics for RecordingMetrics {
+    fn counter(&self, _name: &str, _inc: i64, _tags: &[(&str, &str)]) {}
+
+    fn histogram(&self, name: &str, value: i64, tags: &[(&str, &str)]) {
+        self.0.lock().unwrap().push((
+            name.to_owned(),
+            value,
+            tags.iter()
+                .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+                .collect(),
+        ));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sampler_records_token_usage_after_returning_an_early_score() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let events = vec![
+        ev_output_text_delta(r#"{"score":0.25}"#),
+        ev_completed_with_tokens("response-1", /*total_tokens*/ 37),
+    ];
+    let server = responses::start_websocket_server(vec![Vec::new(), vec![events]]).await;
+    let metrics = Arc::new(RecordingMetrics::default());
+    let mut config = sampler_config(format!(
+        "http://{}/v1",
+        server.uri().trim_start_matches("ws://")
+    ));
+    config.metrics = Some(metrics.clone());
+    let sampler = LunaSampler::connect(config).await?;
+
+    assert_eq!(
+        sampler.sample(sample_request("turn-1")).await?,
+        r#"{"score":0.25}"#
+    );
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while metrics.0.lock().unwrap().len() < 7 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+
+    assert_eq!(
+        *metrics.0.lock().unwrap(),
+        [
+            ("total", 37),
+            ("input", 37),
+            ("cached_input", 0),
+            ("cache_write_input", 0),
+            ("non_cached_input", 37),
+            ("output", 0),
+            ("reasoning_output", 0),
+        ]
+        .map(|(token_type, value)| (
+            CLASSIFICATION_TOKEN_USAGE_METRIC.to_owned(),
+            value,
+            vec![("token_type".to_owned(), token_type.to_owned())],
+        ))
+    );
+
+    Ok(())
 }
 
 struct RefreshableAuth(std::sync::Mutex<&'static str>);
@@ -200,6 +273,7 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_structured_requ
         originator: Some("guardian-v2-test".to_owned()),
         service_tier: None,
         luna_compaction_hash: None,
+        metrics: None,
     })
     .await?;
 
@@ -415,6 +489,7 @@ async fn sampler_returns_complete_json_before_terminal_response_events() -> Resu
         originator: None,
         service_tier: None,
         luna_compaction_hash: None,
+        metrics: None,
     })
     .await?;
 

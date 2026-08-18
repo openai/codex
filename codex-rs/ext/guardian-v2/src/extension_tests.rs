@@ -58,6 +58,7 @@ use super::TOOL_CALL_LAG_METRIC;
 use super::encrypted_parent_compaction;
 use crate::config::DEFAULT_MODEL_CONTEXT_ITEM_TOKENS;
 use crate::config::DEFAULT_PARENT_COMPACTION_TOKENS;
+use crate::sampler::CLASSIFICATION_TOKEN_USAGE_METRIC;
 use crate::sampler::MODEL;
 
 const TEST_GUARDIAN_POLICY: &str =
@@ -441,9 +442,17 @@ async fn sample_configured_conversation_history(
         builder
     };
     let test = builder.build_with_auto_env(&thread_server).await?;
+    let mut completed = ev_completed("response-1");
+    completed["response"]["usage"] = json!({
+        "input_tokens": 120,
+        "input_tokens_details": {"cached_tokens": 40, "cache_write_tokens": 20},
+        "output_tokens": 30,
+        "output_tokens_details": {"reasoning_tokens": 10},
+        "total_tokens": 150,
+    });
     let events = vec![
         ev_assistant_message("sample", r#"{"scores":{"action_risk":0.8}}"#),
-        ev_completed("response-1"),
+        completed,
     ];
     let server = responses::start_websocket_server(vec![Vec::new(), vec![events]]).await;
     let provider_info = ModelProviderInfo::create_openai_provider(Some(format!(
@@ -675,7 +684,7 @@ max_recent_non_user_entries = 8
             .latest_scored_tool_call
             .load(Ordering::Acquire)
             == 0
-            || metrics.0.lock().unwrap().len() < 2
+            || metrics.0.lock().unwrap().len() < 9
         {
             tokio::task::yield_now().await;
         }
@@ -785,7 +794,7 @@ max_recent_non_user_entries = 8
     );
 
     let samples = initial_metrics.0.lock().unwrap();
-    let classification_duration_ms = match &samples[1] {
+    let classification_duration_ms = match &samples[8] {
         RecordedMetric::Histogram(name, duration_ms, _)
             if name == CLASSIFICATION_DURATION_METRIC =>
         {
@@ -795,7 +804,24 @@ max_recent_non_user_entries = 8
     };
     assert_eq!(
         *samples,
-        vec![
+        [
+            ("total", 150),
+            ("input", 120),
+            ("cached_input", 40),
+            ("cache_write_input", 20),
+            ("non_cached_input", 80),
+            ("output", 30),
+            ("reasoning_output", 10),
+        ]
+        .into_iter()
+        .map(|(token_type, value)| {
+            RecordedMetric::Histogram(
+                CLASSIFICATION_TOKEN_USAGE_METRIC.to_owned(),
+                value,
+                vec![("token_type".to_owned(), token_type.to_owned())],
+            )
+        })
+        .chain([
             RecordedMetric::Counter(
                 CLASSIFICATION_METRIC.to_owned(),
                 1,
@@ -809,7 +835,8 @@ max_recent_non_user_entries = 8
             RecordedMetric::Histogram(TOOL_CALL_LAG_METRIC.to_owned(), 0, vec![]),
             RecordedMetric::Histogram(TOOL_CALL_LAG_METRIC.to_owned(), 0, vec![]),
             RecordedMetric::Histogram(TOOL_CALL_LAG_METRIC.to_owned(), 2, vec![]),
-        ]
+        ])
+        .collect::<Vec<_>>()
     );
     let metrics = thread_store.get::<RecordingMetrics>().unwrap();
     assert_eq!(
