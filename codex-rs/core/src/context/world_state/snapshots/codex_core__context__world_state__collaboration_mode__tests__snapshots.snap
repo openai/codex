@@ -5,17 +5,17 @@ expression: "render_section_cases(&[(Absent, Absent), (Absent, Known(&default)),
 Absent -> Absent
 None
 
-Absent -> {"mode":"default","model":"test-model"} (role - developer)
+Absent -> {"instructions":"90f8f6675171813762488f76c60b062fc8adeaec","mode":"default","model":"test-model"} (role - developer)
 <collaboration_mode>pair with the user</collaboration_mode>
 
-{"mode":"default","model":"test-model"} -> {"mode":"default","model":"test-model"}
+{"instructions":"90f8f6675171813762488f76c60b062fc8adeaec","mode":"default","model":"test-model"} -> {"instructions":"90f8f6675171813762488f76c60b062fc8adeaec","mode":"default","model":"test-model"}
 None
 
-{"mode":"default","model":"test-model"} -> {"mode":"default","model":"test-model"}
-None
+{"instructions":"1bfc0435f0536e09f08dbfe37c09920d3344e925","mode":"default","model":"test-model"} -> {"instructions":"8c3a0740268ef8f622810f31715b1924540de415","mode":"default","model":"test-model"} (role - developer)
+<collaboration_mode>new instructions</collaboration_mode>
 
-{"mode":"default","model":"test-model"} -> {"mode":"plan","model":"test-model"} (role - developer)
+{"instructions":"90f8f6675171813762488f76c60b062fc8adeaec","mode":"default","model":"test-model"} -> {"instructions":"bc50ed412c1138502df45ef1b6634a6ef618da4c","mode":"plan","model":"test-model"} (role - developer)
 <collaboration_mode>make a plan</collaboration_mode>
 
-Unknown -> {"mode":"default","model":"test-model"}
-None
+Unknown -> {"instructions":"90f8f6675171813762488f76c60b062fc8adeaec","mode":"default","model":"test-model"} (role - developer)
+<collaboration_mode>pair with the user</collaboration_mode>

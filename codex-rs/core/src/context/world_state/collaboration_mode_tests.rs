@@ -30,29 +30,44 @@ fn snapshots() {
 }
 
 #[test]
-fn persisted_instructions_are_restored_only_when_missing_from_history() {
-    let state = collaboration_mode_state(ModeKind::Default, "pair with the user");
-    let retained: ResponseItem = ContextualUserFragment::into(CollaborationModeInstructions {
-        instructions: state.instructions.clone().expect("test instructions"),
-    });
-    let mut world_state = WorldState::default();
-    world_state.add_section(state);
-    let snapshot = world_state.snapshot();
+fn instruction_updates_are_applied_once_in_retained_history() {
+    let mut history: Vec<ResponseItem> = vec![ContextualUserFragment::into(
+        CollaborationModeInstructions {
+            instructions: "old instructions".to_string(),
+        },
+    )];
+    let mut previous = None;
 
-    assert!(
-        world_state
-            .render_history_diff(/*previous*/ None, std::slice::from_ref(&retained))
-            .is_empty()
-    );
-    assert_eq!(
-        world_state.render_history_diff(Some(&snapshot), &[]).len(),
-        1,
-    );
-    assert!(
-        world_state
-            .render_history_diff(Some(&snapshot), &[retained])
-            .is_empty()
-    );
+    for instructions in [Some("old instructions"), Some("new instructions"), None] {
+        let mut world_state = WorldState::default();
+        world_state.add_section(CollaborationModeState::from_collaboration_mode(
+            &collaboration_mode(ModeKind::Default, instructions),
+            /*catalog_messages*/ None,
+        ));
+        let expected: ResponseItem = ContextualUserFragment::into(CollaborationModeInstructions {
+            instructions: instructions.unwrap_or_default().to_string(),
+        });
+        let updates = world_state
+            .render_history_diff(previous.as_ref(), &history)
+            .into_iter()
+            .map(ContextualUserFragment::into_boxed_response_item)
+            .collect::<Vec<_>>();
+        assert_eq!(updates, vec![expected]);
+        history.extend(updates);
+        previous = Some(world_state.snapshot());
+
+        assert!(
+            world_state
+                .render_history_diff(previous.as_ref(), &history)
+                .is_empty()
+        );
+        assert_eq!(
+            world_state
+                .render_history_diff(previous.as_ref(), &[])
+                .len(),
+            usize::from(instructions.is_some()),
+        );
+    }
 }
 
 #[test]
@@ -114,31 +129,35 @@ fn missing_catalog_collaboration_message_uses_legacy_instructions() {
 
 #[test]
 fn legacy_collaboration_mode_snapshots_refresh_catalog_messages_once() {
-    let previous = serde_json::from_str::<CollaborationModeSnapshot>("\"default\"")
-        .expect("legacy collaboration mode snapshot");
+    for serialized in ["\"default\"", r#"{"mode":"default","model":"test-model"}"#] {
+        let previous = serde_json::from_str::<CollaborationModeSnapshot>(serialized)
+            .expect("legacy collaboration mode snapshot");
 
-    for instructions in ["catalog instructions", ""] {
-        let messages = CollaborationModeMessages {
-            default: Some(instructions.to_string()),
-            plan: None,
-        };
-        let state = CollaborationModeState::from_collaboration_mode(
-            &collaboration_mode(ModeKind::Default, Some("stale legacy instructions")),
-            Some(&messages),
-        );
+        for instructions in ["catalog instructions", ""] {
+            let messages = CollaborationModeMessages {
+                default: Some(instructions.to_string()),
+                plan: None,
+            };
+            let state = CollaborationModeState::from_collaboration_mode(
+                &collaboration_mode(ModeKind::Default, Some("stale legacy instructions")),
+                Some(&messages),
+            );
 
-        assert_eq!(
-            state
-                .render_diff(PreviousSectionState::Known(&previous))
-                .expect("legacy snapshot should refresh collaboration instructions")
-                .render(),
-            format!("{COLLABORATION_MODE_OPEN_TAG}{instructions}{COLLABORATION_MODE_CLOSE_TAG}")
-        );
-        assert!(
-            state
-                .render_diff(PreviousSectionState::Known(&state.snapshot()))
-                .is_none()
-        );
+            assert_eq!(
+                state
+                    .render_diff(PreviousSectionState::Known(&previous))
+                    .expect("legacy snapshot should refresh collaboration instructions")
+                    .render(),
+                format!(
+                    "{COLLABORATION_MODE_OPEN_TAG}{instructions}{COLLABORATION_MODE_CLOSE_TAG}"
+                )
+            );
+            assert!(
+                state
+                    .render_diff(PreviousSectionState::Known(&state.snapshot()))
+                    .is_none()
+            );
+        }
     }
 }
 
