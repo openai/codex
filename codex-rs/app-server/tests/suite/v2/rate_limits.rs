@@ -24,6 +24,7 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::path::Path;
 use tempfile::TempDir;
+use test_case::test_case;
 use tokio::time::timeout;
 use wiremock::Mock;
 use wiremock::MockServer;
@@ -95,8 +96,14 @@ async fn get_account_rate_limits_requires_chatgpt_auth() -> Result<()> {
     Ok(())
 }
 
+#[test_case("enterprise_cbp_automation", AccountPlanType::EnterpriseCbpAutomation; "enterprise_automation")]
+#[test_case("edu_plus", AccountPlanType::EduPlus; "edu_plus")]
+#[test_case("edu_pro", AccountPlanType::EduPro; "edu_pro")]
 #[tokio::test]
-async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
+async fn get_account_rate_limits_returns_snapshot(
+    plan_type: &str,
+    expected_plan: AccountPlanType,
+) -> Result<()> {
     let codex_home = TempDir::new()?;
     write_chatgpt_auth(
         codex_home.path(),
@@ -127,7 +134,7 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
             .expect("parse second reset credit grant timestamp")
             .timestamp();
     let response_body = json!({
-        "plan_type": "enterprise_cbp_automation",
+        "plan_type": plan_type,
         "rate_limit": {
             "allowed": true,
             "limit_reached": false,
@@ -251,7 +258,7 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
                 resets_at: secondary_reset_timestamp,
             }),
             spend_control_reached: Some(false),
-            plan_type: Some(AccountPlanType::EnterpriseCbpAutomation),
+            plan_type: Some(expected_plan),
             rate_limit_reached_type: Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached),
         },
         rate_limits_by_limit_id: Some(
@@ -279,7 +286,7 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
                             resets_at: secondary_reset_timestamp,
                         }),
                         spend_control_reached: Some(false),
-                        plan_type: Some(AccountPlanType::EnterpriseCbpAutomation),
+                        plan_type: Some(expected_plan),
                         rate_limit_reached_type: Some(
                             RateLimitReachedType::WorkspaceMemberUsageLimitReached,
                         ),
@@ -299,7 +306,7 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
                         credits: None,
                         individual_limit: None,
                         spend_control_reached: None,
-                        plan_type: Some(AccountPlanType::EnterpriseCbpAutomation),
+                        plan_type: Some(expected_plan),
                         rate_limit_reached_type: None,
                     },
                 ),

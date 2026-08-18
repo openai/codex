@@ -719,8 +719,9 @@ impl std::fmt::Display for UsageLimitReachedError {
                 "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits{}",
                 retry_suffix_after_or(self.resets_at.as_ref())
             ),
-            Some(PlanType::Known(KnownPlan::Enterprise))
-            | Some(PlanType::Known(KnownPlan::Edu)) => format!(
+            Some(PlanType::Known(
+                KnownPlan::Enterprise | KnownPlan::Edu | KnownPlan::EduPlus | KnownPlan::EduPro,
+            )) => format!(
                 "You've hit your usage limit.{}",
                 retry_suffix(self.resets_at.as_ref())
             ),

@@ -706,6 +706,8 @@ impl Client {
             }
             crate::types::PlanType::Enterprise => AccountPlanType::Enterprise,
             crate::types::PlanType::Edu | crate::types::PlanType::Education => AccountPlanType::Edu,
+            crate::types::PlanType::EduPlus => AccountPlanType::EduPlus,
+            crate::types::PlanType::EduPro => AccountPlanType::EduPro,
             crate::types::PlanType::Guest
             | crate::types::PlanType::FreeWorkspace
             | crate::types::PlanType::Quorum

@@ -1,0 +1,7 @@
+---
+source: tui/src/status/helpers.rs
+expression: "[PlanType::Edu, PlanType::EduPlus,\nPlanType::EduPro].map(plan_type_display_name).join(\"\\n\")"
+---
+Edu
+Edu Plus
+Edu Pro

@@ -33,6 +33,12 @@ pub enum PlanType {
     EnterpriseCbpUsageBased,
     Enterprise,
     Edu,
+    #[serde(rename = "edu_plus")]
+    #[ts(rename = "edu_plus")]
+    EduPlus,
+    #[serde(rename = "edu_pro")]
+    #[ts(rename = "edu_pro")]
+    EduPro,
     #[serde(other)]
     Unknown,
 }
@@ -68,19 +74,16 @@ impl PlanType {
         )
     }
 
+    /// Groups education plans by workspace capabilities without losing their SKU identity.
+    pub fn is_education_like(self) -> bool {
+        matches!(self, Self::Edu | Self::EduPlus | Self::EduPro)
+    }
+
     pub fn is_workspace_account(self) -> bool {
-        matches!(
-            self,
-            Self::Team
-                | Self::SelfServeBusinessProLite
-                | Self::SelfServeBusinessUsageBased
-                | Self::Business
-                | Self::Ent26
-                | Self::EnterpriseCbpAutomation
-                | Self::EnterpriseCbpUsageBased
-                | Self::Enterprise
-                | Self::Edu
-        )
+        self.is_team_like()
+            || self.is_business_like()
+            || self.is_education_like()
+            || self == Self::Enterprise
     }
 }
 
@@ -110,6 +113,8 @@ impl From<KnownPlan> for PlanType {
             KnownPlan::EnterpriseCbpUsageBased => Self::EnterpriseCbpUsageBased,
             KnownPlan::Enterprise => Self::Enterprise,
             KnownPlan::Edu => Self::Edu,
+            KnownPlan::EduPlus => Self::EduPlus,
+            KnownPlan::EduPro => Self::EduPro,
         }
     }
 }
@@ -219,6 +224,8 @@ mod tests {
         );
         assert_eq!(PlanType::Enterprise.is_workspace_account(), true);
         assert_eq!(PlanType::Edu.is_workspace_account(), true);
+        assert_eq!(PlanType::EduPlus.is_workspace_account(), true);
+        assert_eq!(PlanType::EduPro.is_workspace_account(), true);
         assert_eq!(PlanType::Pro.is_workspace_account(), false);
     }
 
