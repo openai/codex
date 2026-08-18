@@ -4901,6 +4901,26 @@
           "properties": {
             "method": {
               "enum": [
+                "autoApprovalReview/strictReviewRequired"
+              ],
+              "title": "AutoApprovalReview/strictReviewRequiredNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/StrictReviewRequiredNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "AutoApprovalReview/strictReviewRequiredNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "item/completed"
               ],
               "title": "Item/completedNotificationMethod",
@@ -18763,6 +18783,29 @@
           "resetsAt",
           "used"
         ],
+        "type": "object"
+      },
+      "StrictReviewRequiredNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "startedAtMs": {
+            "description": "Unix timestamp (in milliseconds) when this review started.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "startedAtMs",
+          "threadId",
+          "turnId"
+        ],
+        "title": "StrictReviewRequiredNotification",
         "type": "object"
       },
       "SubAgentActivityKind": {

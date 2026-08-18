@@ -3611,6 +3611,27 @@
       ],
       "type": "object"
     },
+    "StrictReviewRequiredNotification": {
+      "properties": {
+        "startedAtMs": {
+          "description": "Unix timestamp (in milliseconds) when this review started.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "startedAtMs",
+        "threadId",
+        "turnId"
+      ],
+      "type": "object"
+    },
     "SubAgentActivityKind": {
       "enum": [
         "started",
@@ -6640,6 +6661,26 @@
         "params"
       ],
       "title": "Item/autoApprovalReview/completedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "autoApprovalReview/strictReviewRequired"
+          ],
+          "title": "AutoApprovalReview/strictReviewRequiredNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/StrictReviewRequiredNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "AutoApprovalReview/strictReviewRequiredNotification",
       "type": "object"
     },
     {

@@ -53,6 +53,7 @@ use codex_app_server_protocol::RawResponseItemCompletedNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
+use codex_app_server_protocol::StrictReviewRequiredNotification;
 use codex_app_server_protocol::ThreadGoalUpdatedNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadRealtimeClosedNotification;
@@ -89,6 +90,7 @@ use codex_app_server_protocol::guardian_auto_approval_review_notification;
 use codex_app_server_protocol::item_event_to_server_notification;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
+use codex_guardian_v2::StrictReviewReason;
 use codex_protocol::ThreadId;
 use codex_protocol::items::CollabAgentTool as CoreCollabAgentTool;
 use codex_protocol::items::TurnItem as CoreTurnItem;
@@ -321,6 +323,22 @@ pub(crate) async fn apply_bespoke_event_handling(
                 &assessment,
             );
             outgoing.send_server_notification(notification).await;
+            if assessment.status == codex_protocol::protocol::GuardianAssessmentStatus::InProgress
+                && conversation
+                    .thread_extension_data()
+                    .remove::<StrictReviewReason>()
+                    .is_some()
+            {
+                outgoing
+                    .send_server_notification(ServerNotification::StrictReviewRequired(
+                        StrictReviewRequiredNotification {
+                            thread_id: conversation_id.to_string(),
+                            turn_id: assessment_turn_id.clone(),
+                            started_at_ms: assessment.started_at_ms,
+                        },
+                    ))
+                    .await;
+            }
             let completion_status = match assessment.status {
                 codex_protocol::protocol::GuardianAssessmentStatus::Denied
                 | codex_protocol::protocol::GuardianAssessmentStatus::Aborted => {

@@ -44,6 +44,7 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 
 use super::GuardianV2ScoreProgress;
+use super::StrictReviewReason;
 use super::encrypted_parent_compaction;
 use crate::config::DEFAULT_MODEL_CONTEXT_ITEM_TOKENS;
 use crate::config::DEFAULT_PARENT_COMPACTION_TOKENS;
@@ -477,6 +478,7 @@ max_recent_non_user_entries = 8
         }
     })
     .await?;
+    assert_eq!(thread_store.get::<StrictReviewReason>(), None);
     thread_store.insert(SecurityRiskScore {
         scores: BTreeMap::from([("action_risk".to_owned(), 0.65)]),
         sampled_at: None,
@@ -486,6 +488,10 @@ max_recent_non_user_entries = 8
             .approval_review(&session_store, thread_store, "review action")
             .await,
         None
+    );
+    assert_eq!(
+        thread_store.remove::<StrictReviewReason>().as_deref(),
+        Some(&StrictReviewReason::ElevatedRisk)
     );
     thread_store.insert(SecurityRiskScore {
         scores: BTreeMap::from([("action_risk".to_owned(), 0.55)]),
@@ -522,6 +528,10 @@ max_recent_non_user_entries = 8
             .approval_review(&session_store, thread_store, "review action")
             .await,
         None
+    );
+    assert_eq!(
+        thread_store.remove::<StrictReviewReason>().as_deref(),
+        Some(&StrictReviewReason::StaleScore)
     );
 
     score_progress

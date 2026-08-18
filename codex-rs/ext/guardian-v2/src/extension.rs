@@ -181,6 +181,13 @@ fn truncate_action_value(value: &mut serde_json::Value, max_tokens: usize) {
         serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {}
     }
 }
+/// Explains why Guardian v2 requires synchronous approval review.
+#[derive(Debug, Eq, PartialEq)]
+pub enum StrictReviewReason {
+    ElevatedRisk,
+    StaleScore,
+}
+
 struct GuardianV2Enabled;
 
 #[derive(Default)]
@@ -291,14 +298,20 @@ impl ApprovalReviewContributor for GuardianV2Extension {
                         .load(Ordering::Acquire),
                 );
             if tool_call_lag > guardian_config.max_tool_call_lag {
+                thread_store.insert(StrictReviewReason::StaleScore);
                 return None;
             }
 
-            thread_store
+            let score = thread_store
                 .get::<SecurityRiskScore>()
-                .and_then(|score| score.scores.get("action_risk").copied())
-                .filter(|score| *score < guardian_config.review_threshold)
-                .map(|_| ReviewDecision::Approved)
+                .and_then(|score| score.scores.get("action_risk").copied())?;
+            if score < guardian_config.review_threshold {
+                return Some(ReviewDecision::Approved);
+            }
+            if score >= guardian_config.review_threshold {
+                thread_store.insert(StrictReviewReason::ElevatedRisk);
+            }
+            None
         })
     }
 }

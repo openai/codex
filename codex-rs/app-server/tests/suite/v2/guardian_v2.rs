@@ -21,6 +21,7 @@ use axum::routing::get;
 use codex_app_server_protocol::ApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ItemGuardianApprovalReviewStartedNotification;
+use codex_app_server_protocol::StrictReviewRequiredNotification;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadResumeParams;
@@ -368,6 +369,35 @@ async fn guardian_v2_routes_tool_approvals(
         responses_state.guardian_reviews.load(Ordering::SeqCst),
         expected_guardian_reviews
     );
+    let strict_review_count = app_server
+        .pending_notification_methods()
+        .into_iter()
+        .filter(|method| method == "autoApprovalReview/strictReviewRequired")
+        .count();
+    assert_eq!(
+        strict_review_count,
+        usize::from(matches!(risk, GuardianRisk::High))
+    );
+    if matches!(risk, GuardianRisk::High) {
+        let review_started: ItemGuardianApprovalReviewStartedNotification = timeout(
+            TIMEOUT,
+            app_server.read_notification("item/autoApprovalReview/started"),
+        )
+        .await??;
+        let strict_review: StrictReviewRequiredNotification = timeout(
+            TIMEOUT,
+            app_server.read_notification("autoApprovalReview/strictReviewRequired"),
+        )
+        .await??;
+        assert_eq!(
+            strict_review,
+            StrictReviewRequiredNotification {
+                thread_id: review_started.thread_id,
+                turn_id: review_started.turn_id,
+                started_at_ms: review_started.started_at_ms,
+            }
+        );
+    }
 
     mcp_server_handle.abort();
     responses_server.abort();

@@ -90,6 +90,9 @@ pub(super) fn server_notification_thread_target(
         ServerNotification::ItemGuardianApprovalReviewCompleted(notification) => {
             Some(notification.thread_id.as_str())
         }
+        ServerNotification::StrictReviewRequired(notification) => {
+            Some(notification.thread_id.as_str())
+        }
         ServerNotification::ItemCompleted(notification) => Some(notification.thread_id.as_str()),
         ServerNotification::RawResponseItemCompleted(notification) => {
             Some(notification.thread_id.as_str())
