@@ -13295,6 +13295,12 @@
       "McpResourceReadParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "connectorId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "originCallId": {
             "description": "Originating MCP tool call used to select the resource's app.",
             "type": [

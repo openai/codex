@@ -90,6 +90,8 @@ pub struct McpResourceReadParams {
     pub origin_call_id: Option<String>,
     pub server: String,
     pub uri: String,
+    #[ts(optional = nullable)]
+    pub connector_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

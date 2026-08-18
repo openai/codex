@@ -736,14 +736,14 @@ impl CodexThread {
     pub async fn read_mcp_resource(
         &self,
         server: &str,
-        uri: &str,
+        params: ReadResourceRequestParams,
     ) -> anyhow::Result<serde_json::Value> {
         self.session.refresh_mcp_if_dirty().await;
         let result = self
             .session
             .services
             .mcp_runtime
-            .latest_read_resource(server, ReadResourceRequestParams::new(uri))
+            .latest_read_resource(server, params)
             .await?;
 
         Ok(serde_json::to_value(result)?)

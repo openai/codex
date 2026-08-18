@@ -167,6 +167,7 @@ async fn widget_reads_survive_history_modes_compaction_restarts_and_app_only_vis
                     origin_call_id: Some(call_id.to_string()),
                     server: "codex_apps".to_string(),
                     uri: uri.to_string(),
+                    connector_id: None,
                 })
                 .await?;
             let error = timeout(
@@ -289,6 +290,7 @@ async fn read_widget(
                 origin_call_id: Some(call_id.to_string()),
                 server: "codex_apps".to_string(),
                 uri: TEST_WIDGET_RESOURCE_URI.to_string(),
+                connector_id: None,
             },
         })
         .await

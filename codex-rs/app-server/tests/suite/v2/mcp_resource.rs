@@ -124,6 +124,7 @@ async fn mcp_resource_read_returns_resource_contents() -> Result<()> {
                 origin_call_id: None,
                 server: "codex_apps".to_string(),
                 uri: TEST_RESOURCE_URI.to_string(),
+                connector_id: None,
             },
         })
         .await?;
@@ -597,6 +598,7 @@ apps = true
                 origin_call_id: None,
                 server: "codex_apps".to_string(),
                 uri: TEST_RESOURCE_URI.to_string(),
+                connector_id: None,
             },
         })
         .await?;
@@ -609,6 +611,7 @@ apps = true
                 origin_call_id: None,
                 server: "codex_apps".to_string(),
                 uri: TEST_ELICITATION_RESOURCE_URI.to_string(),
+                connector_id: None,
             },
         })
         .await?;
@@ -677,6 +680,7 @@ async fn mcp_resource_read_returns_error_for_unknown_thread() -> Result<()> {
                 origin_call_id: None,
                 server: "codex_apps".to_string(),
                 uri: TEST_RESOURCE_URI.to_string(),
+                connector_id: None,
             },
         })
         .await;
