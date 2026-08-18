@@ -2999,6 +2999,7 @@ async fn escalated_retry_bypasses_extension_approval_and_runs_guardian() -> anyh
             _session_store: &'a codex_extension_api::ExtensionData,
             _thread_store: &'a codex_extension_api::ExtensionData,
             _prompt: &'a str,
+            _extension_metrics: Option<Arc<dyn codex_extension_api::ExtensionMetrics>>,
         ) -> codex_extension_api::ExtensionFuture<'a, Option<ReviewDecision>> {
             Box::pin(async move { Some(ReviewDecision::Approved) })
         }

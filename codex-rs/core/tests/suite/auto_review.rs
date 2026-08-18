@@ -6,6 +6,7 @@ use anyhow::Result;
 use codex_extension_api::ApprovalReviewContributor;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionFuture;
+use codex_extension_api::ExtensionMetrics;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_features::Feature;
 use codex_login::CodexAuth;
@@ -64,8 +65,10 @@ impl ApprovalReviewContributor for ApprovedReviewContributor {
         _session_store: &'a ExtensionData,
         _thread_store: &'a ExtensionData,
         prompt: &'a str,
+        extension_metrics: Option<Arc<dyn ExtensionMetrics>>,
     ) -> ExtensionFuture<'a, Option<ReviewDecision>> {
         Box::pin(async move {
+            assert!(extension_metrics.is_some());
             assert!(prompt.contains("\"tool\":\"request_permissions\""));
             Some(ReviewDecision::Approved)
         })

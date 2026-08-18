@@ -330,6 +330,9 @@ async fn run_guardian_review(
                 &session.services.session_extension_data,
                 &session.services.thread_extension_data,
                 &action.to_string(),
+                Some(crate::session::extension_metrics::from_session_telemetry(
+                    turn.session_telemetry.clone(),
+                )),
             )
             .await
     {

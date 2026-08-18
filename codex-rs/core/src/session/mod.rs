@@ -204,7 +204,7 @@ use codex_protocol::exec_output::StreamOutput;
 mod code_mode_warning;
 pub(crate) mod context_window;
 mod environment;
-mod extension_metrics;
+pub(crate) mod extension_metrics;
 mod handlers;
 mod inject;
 mod input_queue;

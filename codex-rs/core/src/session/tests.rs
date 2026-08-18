@@ -402,8 +402,31 @@ fn extension_metrics_preserve_session_metadata_tags() {
         ],
     );
 
+    extension_metrics.counter(
+        "codex.test.extension.counter",
+        /*inc*/ 2,
+        &[("component", "skills"), ("model", "extension-model")],
+    );
+
     let snapshot = metrics.snapshot().expect("metrics snapshot");
     let attributes = single_histogram_attributes(&snapshot, "codex.test.extension");
+    let counter = find_metric(&snapshot, "codex.test.extension.counter");
+    let AggregatedMetrics::U64(MetricData::Sum(sum)) = counter.data() else {
+        panic!("expected counter");
+    };
+    let points = sum.data_points().collect::<Vec<_>>();
+    assert_eq!(points.len(), 1);
+    assert_eq!(points[0].value(), 2);
+    assert_eq!(
+        points[0]
+            .attributes()
+            .map(|attribute| (
+                attribute.key.as_str().to_string(),
+                attribute.value.as_str().to_string(),
+            ))
+            .collect::<BTreeMap<_, _>>(),
+        attributes,
+    );
     assert_eq!(
         attributes,
         BTreeMap::from([

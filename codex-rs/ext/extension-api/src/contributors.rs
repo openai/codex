@@ -318,11 +318,13 @@ pub trait ToolLifecycleContributor: Send + Sync {
 
 /// Extension contribution that can claim rendered approval-review prompts.
 pub trait ApprovalReviewContributor: Send + Sync {
+    /// Reviews one action using metrics bound to the active turn's model.
     fn contribute<'a>(
         &'a self,
         session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,
         prompt: &'a str,
+        extension_metrics: Option<Arc<dyn ExtensionMetrics>>,
     ) -> ExtensionFuture<'a, Option<ReviewDecision>>;
 }
 

@@ -11,6 +11,7 @@ use codex_extension_api::ApprovalReviewContributor;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionFuture;
+use codex_extension_api::ExtensionMetrics;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ExtensionWarning;
 use codex_extension_api::ResponseItem;
@@ -190,6 +191,10 @@ pub enum StrictReviewReason {
 
 struct GuardianV2Enabled;
 
+// Sampled when the approval contributor evaluates the cached Luna score.
+const TOOL_CALL_LAG_METRIC: &str = "codex.guardian_v2.tool_call_lag";
+const REVIEW_FALLBACK_METRIC: &str = "codex.guardian_v2.review_fallback";
+
 #[derive(Default)]
 struct GuardianV2ScoreProgress {
     latest_tool_call: AtomicUsize,
@@ -284,6 +289,7 @@ impl ApprovalReviewContributor for GuardianV2Extension {
         _session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,
         _prompt: &'a str,
+        extension_metrics: Option<Arc<dyn ExtensionMetrics>>,
     ) -> ExtensionFuture<'a, Option<ReviewDecision>> {
         Box::pin(async move {
             thread_store.get::<GuardianV2Enabled>()?;
@@ -297,8 +303,22 @@ impl ApprovalReviewContributor for GuardianV2Extension {
                         .latest_scored_tool_call
                         .load(Ordering::Acquire),
                 );
+            if let Some(metrics) = &extension_metrics {
+                metrics.histogram(
+                    TOOL_CALL_LAG_METRIC,
+                    i64::try_from(tool_call_lag).unwrap_or(i64::MAX),
+                    &[],
+                );
+            }
             if tool_call_lag > guardian_config.max_tool_call_lag {
                 thread_store.insert(StrictReviewReason::StaleScore);
+                if let Some(metrics) = &extension_metrics {
+                    metrics.counter(
+                        REVIEW_FALLBACK_METRIC,
+                        /*inc*/ 1,
+                        &[("fallback_reason", "score_lag")],
+                    );
+                }
                 return None;
             }
 

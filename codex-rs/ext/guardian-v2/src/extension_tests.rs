@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
@@ -7,6 +8,7 @@ use anyhow::Result;
 use codex_core::config::Config;
 use codex_extension_api::ConversationHistorySnapshot;
 use codex_extension_api::ExtensionData;
+use codex_extension_api::ExtensionMetrics;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ResponseItem;
@@ -47,7 +49,9 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 
 use super::GuardianV2ScoreProgress;
+use super::REVIEW_FALLBACK_METRIC;
 use super::StrictReviewReason;
+use super::TOOL_CALL_LAG_METRIC;
 use super::encrypted_parent_compaction;
 use crate::config::DEFAULT_MODEL_CONTEXT_ITEM_TOKENS;
 use crate::config::DEFAULT_PARENT_COMPACTION_TOKENS;
@@ -175,6 +179,37 @@ async fn installed_extension_reconnects_after_auth_refresh() -> Result<()> {
         vec![0, 1, 1]
     );
     Ok(())
+}
+
+#[derive(Debug, PartialEq)]
+enum RecordedMetric {
+    Histogram(String, i64, Vec<(String, String)>),
+    Counter(String, i64, Vec<(String, String)>),
+}
+
+#[derive(Default)]
+struct RecordingMetrics(Mutex<Vec<RecordedMetric>>);
+
+impl ExtensionMetrics for RecordingMetrics {
+    fn counter(&self, name: &str, inc: i64, tags: &[(&str, &str)]) {
+        self.0.lock().unwrap().push(RecordedMetric::Counter(
+            name.to_owned(),
+            inc,
+            tags.iter()
+                .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+                .collect(),
+        ));
+    }
+
+    fn histogram(&self, name: &str, value: i64, tags: &[(&str, &str)]) {
+        self.0.lock().unwrap().push(RecordedMetric::Histogram(
+            name.to_owned(),
+            value,
+            tags.iter()
+                .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+                .collect(),
+        ));
+    }
 }
 
 struct TestConversationHistory(Vec<ResponseItem>);
@@ -425,6 +460,8 @@ async fn sample_configured_conversation_history(
     let registry = builder.build();
     let session_store = ExtensionData::new("session-1");
     let thread_store = test.codex.thread_extension_data();
+    thread_store.insert(RecordingMetrics::default());
+    let metrics = thread_store.get::<RecordingMetrics>().unwrap();
     if has_model_defaults {
         let parent_model = test
             .thread_manager
@@ -435,7 +472,12 @@ async fn sample_configured_conversation_history(
     }
     assert_eq!(
         registry
-            .approval_review(&session_store, thread_store, "review action")
+            .approval_review(
+                &session_store,
+                thread_store,
+                "review action",
+                /*extension_metrics*/ None,
+            )
             .await,
         None
     );
@@ -446,7 +488,7 @@ async fn sample_configured_conversation_history(
             persistent_thread_state_available: false,
             environments: &[],
             mcp_resource_client: None,
-            extension_metrics: None,
+            extension_metrics: Some(metrics),
             session_store: &session_store,
             thread_store,
         })
@@ -607,7 +649,14 @@ max_recent_non_user_entries = 8
     });
     assert_eq!(
         registry
-            .approval_review(&session_store, thread_store, "review action")
+            .approval_review(
+                &session_store,
+                thread_store,
+                "review action",
+                thread_store
+                    .get::<RecordingMetrics>()
+                    .map(|metrics| metrics as Arc<dyn ExtensionMetrics>),
+            )
             .await,
         None
     );
@@ -621,7 +670,14 @@ max_recent_non_user_entries = 8
     });
     assert_eq!(
         registry
-            .approval_review(&session_store, thread_store, "review action")
+            .approval_review(
+                &session_store,
+                thread_store,
+                "review action",
+                thread_store
+                    .get::<RecordingMetrics>()
+                    .map(|metrics| metrics as Arc<dyn ExtensionMetrics>),
+            )
             .await,
         Some(ReviewDecision::Approved)
     );
@@ -637,17 +693,33 @@ max_recent_non_user_entries = 8
         .store(/*val*/ 3, Ordering::Release);
     assert_eq!(
         registry
-            .approval_review(&session_store, thread_store, "review action")
+            .approval_review(
+                &session_store,
+                thread_store,
+                "review action",
+                thread_store
+                    .get::<RecordingMetrics>()
+                    .map(|metrics| metrics as Arc<dyn ExtensionMetrics>),
+            )
             .await,
         Some(ReviewDecision::Approved)
     );
 
+    let initial_metrics = thread_store.get::<RecordingMetrics>().unwrap();
+    thread_store.insert(RecordingMetrics::default());
     score_progress
         .latest_tool_call
         .store(/*val*/ 4, Ordering::Release);
     assert_eq!(
         registry
-            .approval_review(&session_store, thread_store, "review action")
+            .approval_review(
+                &session_store,
+                thread_store,
+                "review action",
+                thread_store
+                    .get::<RecordingMetrics>()
+                    .map(|metrics| metrics as Arc<dyn ExtensionMetrics>),
+            )
             .await,
         None
     );
@@ -661,9 +733,38 @@ max_recent_non_user_entries = 8
         .store(/*val*/ 2, Ordering::Release);
     assert_eq!(
         registry
-            .approval_review(&session_store, thread_store, "review action")
+            .approval_review(
+                &session_store,
+                thread_store,
+                "review action",
+                thread_store
+                    .get::<RecordingMetrics>()
+                    .map(|metrics| metrics as Arc<dyn ExtensionMetrics>),
+            )
             .await,
         Some(ReviewDecision::Approved)
+    );
+
+    assert_eq!(
+        *initial_metrics.0.lock().unwrap(),
+        vec![
+            RecordedMetric::Histogram(TOOL_CALL_LAG_METRIC.to_owned(), 0, vec![]),
+            RecordedMetric::Histogram(TOOL_CALL_LAG_METRIC.to_owned(), 0, vec![]),
+            RecordedMetric::Histogram(TOOL_CALL_LAG_METRIC.to_owned(), 2, vec![]),
+        ]
+    );
+    let metrics = thread_store.get::<RecordingMetrics>().unwrap();
+    assert_eq!(
+        *metrics.0.lock().unwrap(),
+        vec![
+            RecordedMetric::Histogram(TOOL_CALL_LAG_METRIC.to_owned(), 3, vec![]),
+            RecordedMetric::Counter(
+                REVIEW_FALLBACK_METRIC.to_owned(),
+                1,
+                vec![("fallback_reason".to_owned(), "score_lag".to_owned())],
+            ),
+            RecordedMetric::Histogram(TOOL_CALL_LAG_METRIC.to_owned(), 2, vec![]),
+        ]
     );
 
     Ok(())
@@ -847,7 +948,12 @@ async fn contributor_uses_model_defaults_and_preserves_local_overrides() -> Resu
     });
     assert_eq!(
         registry
-            .approval_review(&session_store, thread_store, "review action")
+            .approval_review(
+                &session_store,
+                thread_store,
+                "review action",
+                /*extension_metrics*/ None,
+            )
             .await,
         Some(ReviewDecision::Approved)
     );
@@ -980,7 +1086,12 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
     assert!(score.sampled_at.is_some());
     assert_eq!(
         registry
-            .approval_review(&session_store, thread_store, "review action")
+            .approval_review(
+                &session_store,
+                thread_store,
+                "review action",
+                /*extension_metrics*/ None,
+            )
             .await,
         None
     );
@@ -1005,7 +1116,12 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
     });
     assert_eq!(
         registry
-            .approval_review(&session_store, thread_store, "review action")
+            .approval_review(
+                &session_store,
+                thread_store,
+                "review action",
+                /*extension_metrics*/ None,
+            )
             .await,
         Some(ReviewDecision::Approved)
     );
@@ -1017,7 +1133,12 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
     });
     assert_eq!(
         registry
-            .approval_review(&session_store, &disabled_thread_store, "review action")
+            .approval_review(
+                &session_store,
+                &disabled_thread_store,
+                "review action",
+                /*extension_metrics*/ None
+            )
             .await,
         None
     );
@@ -1309,7 +1430,12 @@ async fn contributor_reuses_the_latest_compatible_parent_compaction() -> Result<
     assert_eq!(previous_score.scores.get("action_risk"), Some(&0.25));
     assert_eq!(
         registry
-            .approval_review(&session_store, thread_store, "review action")
+            .approval_review(
+                &session_store,
+                thread_store,
+                "review action",
+                /*extension_metrics*/ None,
+            )
             .await,
         Some(ReviewDecision::Approved)
     );
@@ -1348,7 +1474,12 @@ async fn contributor_reuses_the_latest_compatible_parent_compaction() -> Result<
     );
     assert_eq!(
         registry
-            .approval_review(&session_store, thread_store, "review action")
+            .approval_review(
+                &session_store,
+                thread_store,
+                "review action",
+                /*extension_metrics*/ None,
+            )
             .await,
         None
     );
