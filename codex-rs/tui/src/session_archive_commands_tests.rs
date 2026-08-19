@@ -393,7 +393,7 @@ async fn trusts_sqlite_name_over_legacy_index_for_delete() -> color_eyre::Result
 }
 
 #[tokio::test]
-async fn queues_non_interactive_and_custom_sessions_and_rejects_ambiguous_name()
+async fn queues_non_interactive_and_custom_sessions_without_scanning_rollouts()
 -> color_eyre::Result<()> {
     let temp_dir = TempDir::new()?;
     let config = build_config(&temp_dir).await?;
@@ -460,20 +460,12 @@ async fn queues_non_interactive_and_custom_sessions_and_rejects_ambiguous_name()
         /*archived*/ false,
     );
     custom_metadata.source = serde_json::to_string(&custom_source)?;
+    custom_metadata.recency_at += chrono::Duration::hours(/*hours*/ 1);
+    custom_metadata.updated_at += chrono::Duration::hours(/*hours*/ 1);
     runtime
         .upsert_thread(&custom_metadata)
         .await
         .map_err(std::io::Error::other)?;
-    let (resolved_custom_thread_id, _) = run_session_queue_action_with_app_server(
-        &mut app_server,
-        config.codex_home.as_path(),
-        "atlas-session",
-        "do the thing",
-        "custom-client-message-id",
-    )
-    .await?;
-    assert_eq!(resolved_custom_thread_id, custom_thread_id);
-
     let legacy_thread_id = ThreadId::new();
     write_rollout(
         &config,
@@ -489,20 +481,48 @@ async fn queues_non_interactive_and_custom_sessions_and_rejects_ambiguous_name()
         "saved-session",
     )
     .await?;
-    let error = run_session_queue_action_with_app_server(
+    let (resolved_custom_thread_id, _) = run_session_queue_action_with_app_server(
+        &mut app_server,
+        config.codex_home.as_path(),
+        "atlas-session",
+        "do the thing",
+        "custom-client-message-id",
+    )
+    .await?;
+    assert_eq!(
+        (
+            resolved_custom_thread_id,
+            runtime
+                .get_thread(legacy_thread_id)
+                .await
+                .map_err(std::io::Error::other)?,
+        ),
+        (custom_thread_id, None),
+    );
+    runtime
+        .update_thread_title(custom_thread_id, "saved-session")
+        .await
+        .map_err(std::io::Error::other)?;
+
+    let (resolved_duplicate_id, _) = run_session_queue_action_with_app_server(
         &mut app_server,
         config.codex_home.as_path(),
         "saved-session",
         "do the thing",
-        "stable-client-message-id",
+        "duplicate-client-message-id",
     )
-    .await
-    .expect_err("ambiguous session names should be rejected");
+    .await?;
     app_server.shutdown().await?;
 
     assert_eq!(
-        error.to_string(),
-        "More than one active session is named 'saved-session'; use a session UUID instead."
+        (
+            resolved_duplicate_id,
+            runtime
+                .get_thread(legacy_thread_id)
+                .await
+                .map_err(std::io::Error::other)?,
+        ),
+        (custom_thread_id, None),
     );
     Ok(())
 }

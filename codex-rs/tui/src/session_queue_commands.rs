@@ -92,7 +92,7 @@ pub(super) async fn run_session_queue_action_with_app_server(
             codex_home,
             target,
             /*archived*/ false,
-            SessionNameMatch::Unique,
+            SessionNameMatch::FirstIncludingNonInteractive,
         )
         .await?
         .ok_or_else(|| eyre!("No active session found matching '{target}'."))?;

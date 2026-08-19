@@ -59,7 +59,7 @@ pub struct SessionArchiveCommandOptions {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum SessionNameMatch {
     First,
-    Unique,
+    FirstIncludingNonInteractive,
 }
 
 fn success_message(
@@ -201,7 +201,7 @@ pub(super) async fn lookup_session_by_exact_name(
             SessionNameLookupMode::ScanAndRepair,
         ][..]
     };
-    let source_kind_filters = if match_policy == SessionNameMatch::Unique {
+    let source_kind_filters = if match_policy == SessionNameMatch::FirstIncludingNonInteractive {
         // An empty filter includes Atlas/ChatGPT sessions; explicit kinds additionally include exec.
         vec![
             super::resume_source_kinds(/*include_non_interactive*/ true),
@@ -212,11 +212,13 @@ pub(super) async fn lookup_session_by_exact_name(
             /*include_non_interactive*/ false,
         )]
     };
-    let mut unique_match: Option<AppServerThread> = None;
-    for source_kinds in source_kind_filters {
-        for &lookup_mode in lookup_modes {
-            // Search is the fast path, but legacy stores attach renamed titles after filtering.
-            for search_term in [Some(name), None] {
+    for &lookup_mode in lookup_modes {
+        let sort_by_recency = lookup_mode == SessionNameLookupMode::StateDbOnly
+            && app_server.uses_embedded_app_server();
+        // Search is the fast path, but legacy stores attach renamed titles after filtering.
+        for search_term in [Some(name), None] {
+            let mut first_match: Option<AppServerThread> = None;
+            for source_kinds in &source_kind_filters {
                 let mut candidates = NamedSessionCandidates::new(
                     name,
                     codex_home,
@@ -234,7 +236,7 @@ pub(super) async fn lookup_session_by_exact_name(
                     .await
                     .wrap_err("failed to list sessions while resolving session name")?
                 {
-                    let thread = if match_policy == SessionNameMatch::Unique
+                    let thread = if match_policy == SessionNameMatch::FirstIncludingNonInteractive
                         && lookup_mode == SessionNameLookupMode::ScanAndRepair
                         && !app_server.uses_remote_workspace()
                     {
@@ -251,23 +253,25 @@ pub(super) async fn lookup_session_by_exact_name(
                     } else {
                         candidate.thread
                     };
-                    if match_policy == SessionNameMatch::First {
-                        return Ok(Some(thread));
+                    if first_match.as_ref().is_none_or(|existing| {
+                        if sort_by_recency {
+                            thread.recency_at.unwrap_or(thread.updated_at)
+                                > existing.recency_at.unwrap_or(existing.updated_at)
+                        } else {
+                            thread.updated_at > existing.updated_at
+                        }
+                    }) {
+                        first_match = Some(thread);
                     }
-                    if unique_match
-                        .as_ref()
-                        .is_some_and(|existing| existing.id != thread.id)
-                    {
-                        return Err(eyre!(
-                            "More than one active session is named '{name}'; use a session UUID instead."
-                        ));
-                    }
-                    unique_match = Some(thread);
+                    break;
                 }
+            }
+            if first_match.is_some() {
+                return Ok(first_match);
             }
         }
     }
-    Ok(unique_match)
+    Ok(None)
 }
 
 fn session_target_from_app_server_thread(thread: AppServerThread) -> Result<ResolvedSessionTarget> {
