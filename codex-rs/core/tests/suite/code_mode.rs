@@ -5310,8 +5310,7 @@ async fn code_mode_uses_the_first_dynamic_tool_for_a_normalized_name() -> Result
         test.codex = new_thread.thread;
         test.session_configured = new_thread.session_configured;
 
-        let first_mock = responses::mount_sse_once(
-            &server,
+        let first_response = if use_responses_lite {
             sse(vec![
                 ev_response_created("resp-1"),
                 ev_custom_tool_call(
@@ -5329,17 +5328,28 @@ text(JSON.stringify({
 "#,
                 ),
                 ev_completed("resp-1"),
-            ]),
-        )
-        .await;
-        let second_mock = responses::mount_sse_once(
-            &server,
+            ])
+        } else {
             sse(vec![
                 ev_assistant_message("msg-1", "done"),
-                ev_completed("resp-2"),
-            ]),
-        )
-        .await;
+                ev_completed("resp-1"),
+            ])
+        };
+        let first_mock = responses::mount_sse_once(&server, first_response).await;
+        let second_mock = if use_responses_lite {
+            Some(
+                responses::mount_sse_once(
+                    &server,
+                    sse(vec![
+                        ev_assistant_message("msg-1", "done"),
+                        ev_completed("resp-2"),
+                    ]),
+                )
+                .await,
+            )
+        } else {
+            None
+        };
 
         let cwd = test.config.cwd.clone();
         let (sandbox_policy, permission_profile) =
@@ -5376,25 +5386,27 @@ text(JSON.stringify({
             _ => None,
         })
         .await;
-        let request = wait_for_event_match(&test.codex, |event| match event {
-            EventMsg::DynamicToolCallRequest(request) => Some(request.clone()),
-            _ => None,
-        })
-        .await;
-        assert_eq!(request.namespace, None);
-        assert_eq!(request.tool, "foo-bar");
-        assert_eq!(request.arguments, serde_json::json!({}));
-        test.codex
-            .submit(Op::DynamicToolResponse {
-                id: request.call_id,
-                response: DynamicToolResponse {
-                    content_items: vec![DynamicToolCallOutputContentItem::InputText {
-                        text: "first-winner".to_string(),
-                    }],
-                    success: true,
-                },
+        if use_responses_lite {
+            let request = wait_for_event_match(&test.codex, |event| match event {
+                EventMsg::DynamicToolCallRequest(request) => Some(request.clone()),
+                _ => None,
             })
-            .await?;
+            .await;
+            assert_eq!(request.namespace, None);
+            assert_eq!(request.tool, "foo-bar");
+            assert_eq!(request.arguments, serde_json::json!({}));
+            test.codex
+                .submit(Op::DynamicToolResponse {
+                    id: request.call_id,
+                    response: DynamicToolResponse {
+                        content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                            text: "first-winner".to_string(),
+                        }],
+                        success: true,
+                    },
+                })
+                .await?;
+        }
         wait_for_event(&test.codex, |event| match event {
             EventMsg::TurnComplete(event) => event.turn_id == turn_id,
             _ => false,
@@ -5474,18 +5486,20 @@ text(JSON.stringify({
         assert!(!exec_description.contains("First normalized dynamic tool."));
         assert!(!exec_description.contains("Shadowed normalized dynamic tool."));
 
-        let request = second_mock.single_request();
-        let output = custom_tool_output_last_non_empty_text(&request, "call-1")
-            .expect("code mode should return normalized tool metadata");
-        let result: Value = serde_json::from_str(&output)?;
-        assert_eq!(result["count"], serde_json::json!(1));
-        assert_eq!(result["name"], serde_json::json!("foo_bar"));
-        assert_eq!(result["output"], serde_json::json!("first-winner"));
-        let description = result["description"]
-            .as_str()
-            .expect("the winning tool should have a description");
-        assert!(description.contains("First normalized dynamic tool."));
-        assert!(!description.contains("Shadowed normalized dynamic tool."));
+        if let Some(second_mock) = second_mock {
+            let request = second_mock.single_request();
+            let output = custom_tool_output_last_non_empty_text(&request, "call-1")
+                .expect("code mode should return normalized tool metadata");
+            let result: Value = serde_json::from_str(&output)?;
+            assert_eq!(result["count"], serde_json::json!(1));
+            assert_eq!(result["name"], serde_json::json!("foo_bar"));
+            assert_eq!(result["output"], serde_json::json!("first-winner"));
+            let description = result["description"]
+                .as_str()
+                .expect("the winning tool should have a description");
+            assert!(description.contains("First normalized dynamic tool."));
+            assert!(!description.contains("Shadowed normalized dynamic tool."));
+        }
     }
 
     Ok(())
