@@ -1,6 +1,7 @@
 use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_core::StartThreadOptions;
 use codex_core::TurnInputRequest;
 use core_test_support::responses::ev_apply_patch_custom_tool_call;
 use core_test_support::responses::ev_apply_patch_shell_command_call_via_heredoc;
@@ -67,6 +68,7 @@ use core_test_support::test_target_os;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_with_timeout;
 use serde_json::json;
+use test_case::test_case;
 use wiremock::Mock;
 use wiremock::Respond;
 use wiremock::ResponseTemplate;
@@ -1636,6 +1638,103 @@ async fn apply_patch_turn_diff_paths_stay_repo_relative_when_session_cwd_is_nest
     assert!(
         !diff.contains(repo_root.as_path().to_string_lossy().as_ref()),
         "diff should not leak absolute repo paths: {diff:?}"
+    );
+    Ok(())
+}
+
+#[test_case("codex_work_web", true, "work.txt"; "web work uses cwd when enabled")]
+#[test_case("codex_work_mobile", true, "work.txt"; "mobile work uses cwd when enabled")]
+#[test_case("codex_work_web", false, "subdir/work.txt"; "disabled feature keeps repository root")]
+#[test_case("codex_work_desktop", true, "work.txt"; "desktop uses cwd when enabled")]
+#[test_case("codex_work_cca", true, "work.txt"; "legacy cca uses cwd when enabled")]
+#[test_case("codex_cli_rs", true, "work.txt"; "coding originator uses cwd when enabled")]
+#[test_case("codex_cli_rs", false, "subdir/work.txt"; "coding originator keeps repository root when disabled")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_patch_turn_diff_skips_git_root_when_feature_is_enabled(
+    originator: &str,
+    cwd_relative_turn_diffs: bool,
+    expected_path: &str,
+) -> Result<()> {
+    skip_if_wine_exec!(Ok(()), "asserts POSIX repository paths");
+    skip_if_no_network!(Ok(()));
+
+    let harness = apply_patch_harness_with(|builder| {
+        builder
+            .with_model("gpt-5.4")
+            .with_config(move |config| {
+                config.cwd = config.cwd.join("subdir");
+                if cwd_relative_turn_diffs {
+                    config
+                        .features
+                        .enable(Feature::CwdRelativeTurnDiffs)
+                        .expect("enable turn diff root feature");
+                }
+            })
+            .with_workspace_setup(|cwd, fs| async move {
+                let cwd_uri = PathUri::from_host_native_path(&cwd)?;
+                fs.create_directory(
+                    &cwd_uri,
+                    CreateDirectoryOptions { recursive: true },
+                    /*sandbox*/ None,
+                )
+                .await?;
+                let repo_root = cwd.parent().expect("nested cwd should have parent");
+                let git_uri = PathUri::from_host_native_path(repo_root.join(".git"))?;
+                let work_file_uri = PathUri::from_host_native_path(cwd.join("work.txt"))?;
+                fs.write_file(
+                    &git_uri,
+                    b"gitdir: /tmp/fake-worktree\n".to_vec(),
+                    /*sandbox*/ None,
+                )
+                .await?;
+                fs.write_file(&work_file_uri, b"before\n".to_vec(), /*sandbox*/ None)
+                    .await?;
+                Ok(())
+            })
+    })
+    .await?;
+    let test = harness.test();
+    let codex = test
+        .thread_manager
+        .start_thread(StartThreadOptions {
+            metrics_service_name: Some(originator.to_string()),
+            environments: Some(test.codex.environment_selections().await),
+            ..StartThreadOptions::new(test.config.clone())
+        })
+        .await?
+        .thread;
+    let patch = "*** Begin Patch\n*** Update File: work.txt\n@@\n-before\n+after\n*** End Patch";
+    mount_apply_patch(&harness, "apply-work-diff-root", patch, "updated work file").await;
+
+    codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "update the work file".into(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
+                ..Default::default()
+            }),
+        )
+        .await?;
+
+    let mut last_diff = None;
+    wait_for_event(&codex, |event| match event {
+        EventMsg::TurnDiff(event) => {
+            last_diff = Some(event.unified_diff.clone());
+            false
+        }
+        EventMsg::TurnComplete(_) => true,
+        _ => false,
+    })
+    .await;
+
+    let diff = last_diff.expect("expected TurnDiff event after update");
+    assert!(
+        diff.contains(&format!("diff --git a/{expected_path} b/{expected_path}")),
+        "unexpected turn diff path for {originator}: {diff:?}",
     );
     Ok(())
 }

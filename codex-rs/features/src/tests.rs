@@ -60,6 +60,26 @@ fn executor_capability_discovery_is_an_opt_in_map_feature() {
 }
 
 #[test]
+fn cwd_relative_turn_diffs_is_an_opt_in_map_feature() {
+    let mut features = Features::with_defaults();
+    assert!(!features.enabled(Feature::CwdRelativeTurnDiffs));
+
+    features.apply_map(&BTreeMap::from([(
+        "cwd_relative_turn_diffs".to_string(),
+        true,
+    )]));
+
+    assert!(features.enabled(Feature::CwdRelativeTurnDiffs));
+
+    features.apply_map(&BTreeMap::from([(
+        "cwd_relative_turn_diffs".to_string(),
+        false,
+    )]));
+
+    assert!(!features.enabled(Feature::CwdRelativeTurnDiffs));
+}
+
+#[test]
 fn default_enabled_features_are_stable() {
     for spec in crate::FEATURES {
         if spec.default_enabled {

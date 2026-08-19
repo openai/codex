@@ -548,6 +548,9 @@
             "current_time_reminder": {
               "$ref": "#/definitions/FeatureToml_for_CurrentTimeReminderConfigToml"
             },
+            "cwd_relative_turn_diffs": {
+              "type": "boolean"
+            },
             "default_mode_request_user_input": {
               "type": "boolean"
             },
@@ -5417,6 +5420,9 @@
         },
         "current_time_reminder": {
           "$ref": "#/definitions/FeatureToml_for_CurrentTimeReminderConfigToml"
+        },
+        "cwd_relative_turn_diffs": {
+          "type": "boolean"
         },
         "default_mode_request_user_input": {
           "type": "boolean"
