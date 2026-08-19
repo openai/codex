@@ -612,7 +612,7 @@ fn git_ls_remote_head_sha(codex_home: &Path, git_binary: &Path) -> Result<String
     let _trusted_repository = crate::configure_trusted_git_repository(&mut command, codex_home)?;
     command
         .arg("ls-remote")
-        .arg("https://github.com/openai/plugins.git")
+        .arg(OPENAI_PLUGINS_GIT_URL)
         .arg("HEAD");
     let output = run_git_command_with_timeout(
         &mut command,

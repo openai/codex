@@ -115,6 +115,65 @@ fn git_command_sanitizes_ambient_repository_environment() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn pretrust_git_sync_ignores_repository_local_transport_config() {
+    let fixture = tempdir().expect("tempdir");
+    let codex_home = fixture.path().join("codex-home");
+    let repository = fixture.path().join("untrusted-project");
+    let marker = fixture.path().join("transport-config-ran");
+    std::fs::create_dir_all(&codex_home).expect("create Codex home");
+    std::fs::create_dir_all(&repository).expect("create repository");
+    run_git(&repository, &["init", "--quiet"]);
+
+    let transport = repository.join("synthetic-transport.sh");
+    write_executable_script(
+        &transport,
+        &format!(
+            "#!/bin/sh\nprintf ran > '{}'\nprintf '{}\\tHEAD\\n'\n",
+            marker.display(),
+            TEST_CURATED_PLUGIN_SHA
+        ),
+    );
+    run_git(
+        &repository,
+        &["config", "--local", "protocol.ext.allow", "always"],
+    );
+    let rewrite_key = format!("url.ext::{} %S .insteadOf", transport.display());
+    run_git(
+        &repository,
+        &["config", "--local", &rewrite_key, OPENAI_PLUGINS_GIT_URL],
+    );
+
+    let global_config = fixture.path().join("global-gitconfig");
+    std::fs::write(
+        &global_config,
+        format!(
+            "[url \"file://{}/\"]\n\tinsteadOf = https://github.com/\n",
+            fixture.path().join("missing-remotes").display()
+        ),
+    )
+    .expect("write global Git config");
+    let git_wrapper = fixture.path().join("git-from-untrusted-repository.sh");
+    write_executable_script(
+        &git_wrapper,
+        &format!(
+            "#!/bin/sh\ncd '{}' || exit 1\nGIT_CONFIG_GLOBAL='{}' GIT_CONFIG_SYSTEM=/dev/null GIT_TERMINAL_PROMPT=0 exec git \"$@\"\n",
+            repository.display(),
+            global_config.display()
+        ),
+    );
+
+    let err = sync_openai_plugins_repo_via_git(&codex_home, &git_wrapper)
+        .expect_err("isolated probe should use the missing global-config remote");
+
+    assert!(err.contains("git ls-remote curated plugins repo"));
+    assert!(
+        !marker.exists(),
+        "pre-trust sync must not execute repository-local transport configuration"
+    );
+}
+
 #[tokio::test]
 async fn ordinary_clone_rejects_tracked_embedded_bare_repository() {
     let temp_dir = tempdir().expect("create temporary directory");
