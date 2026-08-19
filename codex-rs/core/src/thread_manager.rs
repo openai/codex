@@ -327,6 +327,7 @@ pub(crate) struct ResumeThreadWithHistoryOptions {
     pub(crate) agent_control: AgentControl,
     pub(crate) session_source: SessionSource,
     pub(crate) parent_thread_id: Option<ThreadId>,
+    pub(crate) environment_selections: Option<Vec<TurnEnvironmentSelection>>,
     pub(crate) inherited_environments: Option<TurnEnvironmentSnapshot>,
     pub(crate) inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
 }
@@ -1684,15 +1685,17 @@ impl ThreadManagerState {
             agent_control,
             session_source,
             parent_thread_id,
+            environment_selections,
             inherited_environments,
             inherited_exec_policy,
         } = options;
         let client_mcp_extensions = self.client_mcp_extensions_for_child(parent_thread_id).await;
         let thread_source = initial_history.get_resumed_thread_source();
-        let environments = inherited_environments
-            .as_ref()
-            .filter(|_| initial_history.get_multi_agent_version() == Some(MultiAgentVersion::V2))
-            .map(TurnEnvironmentSnapshot::to_selections);
+        let environments = environment_selections.or_else(|| {
+            inherited_environments
+                .as_ref()
+                .map(TurnEnvironmentSnapshot::to_selections)
+        });
         let options = StartThreadOptions {
             initial_history,
             session_source: Some(session_source),

@@ -307,7 +307,7 @@ async fn shell_command_times_out_with_timeout_ms() -> anyhow::Result<()> {
     let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.4")).await?;
     let call_id = "shell-command-timeout";
     let command = if cfg!(windows) {
-        "timeout /t 5"
+        "Start-Sleep -Seconds 5"
     } else {
         "sleep 5"
     };

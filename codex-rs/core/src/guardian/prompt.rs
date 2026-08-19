@@ -14,7 +14,6 @@ use crate::context::NodeReplReviewEvidenceMode;
 use crate::context::node_repl_review_evidence_mode;
 use crate::event_mapping::is_contextual_user_message_content;
 use crate::session::session::Session;
-use crate::session::turn_context::TurnEnvironment;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::approx_bytes_for_tokens;
 use codex_utils_output_truncation::approx_token_count;
@@ -302,9 +301,9 @@ fn parent_turn_denied_reads_context(context: &GuardianReviewContext) -> Option<S
     let cwd = environment
         .and_then(|environment| environment.cwd().to_abs_path().ok())
         .unwrap_or_else(|| turn.cwd.clone());
-    let permission_profile = environment
-        .map(TurnEnvironment::permission_profile_with_workspace_roots)
-        .unwrap_or_else(|| turn.permission_profile());
+    let permission_profile = context
+        .environments()
+        .permission_profile_or_else(|| turn.permission_profile());
     let file_system_policy = permission_profile.file_system_sandbox_policy();
     let mut entries = file_system_policy
         .get_unreadable_roots_with_cwd(&cwd)

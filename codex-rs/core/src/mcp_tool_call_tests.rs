@@ -88,9 +88,7 @@ fn approval_metadata(
 }
 
 fn approval_config(turn_context: &TurnContext) -> codex_mcp::McpConfig {
-    let mut config = (*mcp_config_for_test(&turn_context.config)).clone();
-    config.permission_profile = turn_context.permission_profile();
-    config
+    (*mcp_config_for_test(&turn_context.config)).clone()
 }
 
 fn mcp_turn_metadata_context(turn_context: &TurnContext) -> McpTurnMetadataContext<'_> {

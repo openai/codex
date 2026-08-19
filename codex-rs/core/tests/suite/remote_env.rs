@@ -46,6 +46,7 @@ use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::PermissionProfileSnapshot;
@@ -464,6 +465,13 @@ async fn environment_permissions_follow_configuration_ownership() -> Result<()> 
     let test = builder.build_with_auto_env(&server).await?;
     let selection = test.executor_environment().selection().clone();
     let marker = selection.cwd.join(FILE_NAME)?;
+    let owner_active_profile = ActivePermissionProfile::new("owner-read-only");
+    let owner_profile_workspace_root = test.config.cwd.join("owner-profile-root");
+    let owner_permission_profile = PermissionProfileSnapshot::active_with_profile_workspace_roots(
+        PermissionProfile::read_only(),
+        owner_active_profile.clone(),
+        vec![owner_profile_workspace_root.clone()],
+    );
 
     let (shell, command) = match test_target_os() {
         TestTargetOs::Linux => (
@@ -549,30 +557,59 @@ async fn environment_permissions_follow_configuration_ownership() -> Result<()> 
                 vec![TurnEnvironmentSelection {
                     config: EnvironmentConfigState::Ready(EnvironmentConfig {
                         allow_login_shell: test.config.permissions.allow_login_shell,
-                        permission_profile: PermissionProfileSnapshot::legacy(
-                            PermissionProfile::read_only(),
-                        ),
+                        permission_profile: owner_permission_profile,
                         shell_environment_policy: Default::default(),
                         exec_policy: None,
                         mcp_policy: None,
                         network_policy: None,
                         selected_capability_roots: Vec::new(),
                     }),
-                    ..selection
+                    ..selection.clone()
                 }],
             )),
             ..Default::default()
         },
     )
     .await?;
-    submit_thread_settings(
-        &test.codex,
-        ThreadSettingsOverrides {
-            permission_profile: Some(PermissionProfile::workspace_write()),
-            ..Default::default()
-        },
-    )
-    .await?;
+    test.codex
+        .submit(Op::ThreadSettings {
+            thread_settings: ThreadSettingsOverrides {
+                permission_profile: Some(PermissionProfile::workspace_write()),
+                ..Default::default()
+            },
+        })
+        .await?;
+    let persisted_settings = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::ThreadSettingsApplied(event) => Some(event.thread_settings.clone()),
+        _ => None,
+    })
+    .await;
+    let snapshot = test.codex.config_snapshot().await;
+    assert_eq!(snapshot.permission_profile, PermissionProfile::read_only());
+    assert_eq!(
+        snapshot.active_permission_profile,
+        Some(owner_active_profile.clone())
+    );
+    assert_eq!(
+        snapshot.profile_workspace_roots,
+        vec![owner_profile_workspace_root.clone()]
+    );
+    assert_eq!(
+        persisted_settings,
+        test.codex.thread_settings_snapshot().await
+    );
+    assert_ne!(
+        persisted_settings.active_permission_profile,
+        snapshot.active_permission_profile
+    );
+    test.codex
+        .restore_thread_settings(test.codex.restorable_thread_settings().await)
+        .await?;
+    let (mcp_config, _) = test.codex.current_mcp_config_and_runtime_context().await;
+    assert_eq!(
+        mcp_config.permission_profile,
+        PermissionProfile::workspace_write()
+    );
     test.submit_text_turn("try to write a file with owner-provided permissions")
         .await?;
 
@@ -592,6 +629,34 @@ async fn environment_permissions_follow_configuration_ownership() -> Result<()> 
             .await
             .is_err(),
         "read-only attachment unexpectedly wrote {FILE_NAME}"
+    );
+    let turn_context = test
+        .codex
+        .load_history(/*include_archived*/ false)
+        .await?
+        .items
+        .into_iter()
+        .rev()
+        .find_map(|item| match item {
+            RolloutItem::TurnContext(context) => Some(context),
+            _ => None,
+        })
+        .context("owner turn context")?;
+    assert!(
+        turn_context
+            .workspace_roots
+            .as_ref()
+            .is_some_and(|roots| roots.contains(&owner_profile_workspace_root))
+    );
+    assert_eq!(
+        (
+            turn_context.permission_profile,
+            turn_context.active_permission_profile
+        ),
+        (
+            Some(PermissionProfile::read_only()),
+            Some(owner_active_profile)
+        )
     );
 
     Ok(())
@@ -1516,6 +1581,14 @@ async fn pending_attachment_installs_configuration_before_waiting_turn_resumes()
         .thread
         .environment_failed(&pending_selection, "configuration unavailable".to_string())
         .await?;
+    for (thread, configured) in [
+        (&waiting.thread, false),
+        (&independent.thread, true),
+        (&failed.thread, false),
+    ] {
+        let snapshot = thread.config_snapshot().await;
+        assert_eq!(snapshot.is_primary_environment_configured(), configured);
+    }
     assert_eq!(
         failed.thread.environment_selections().await,
         vec![TurnEnvironmentSelection {
@@ -2006,6 +2079,10 @@ async fn deferred_executor_spawn_agent_inherits_ready_step_environments(
         .with_exec_server_url(format!("ws://{}", listener.local_addr()?))
         .with_config(move |config| {
             config.project_doc_max_bytes = 0;
+            config
+                .permissions
+                .set_permission_profile(PermissionProfile::workspace_write())
+                .expect("thread should allow workspace writes");
             assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
             assert!(config.features.enable(Feature::Collab).is_ok());
             if multi_agent_v2 {
@@ -2028,11 +2105,25 @@ async fn deferred_executor_spawn_agent_inherits_ready_step_environments(
     )
     .await
     .context("thread startup should not wait for the remote environment")??;
+    let owner_active_profile = ActivePermissionProfile::new("owner-read-only");
+    let owner_profile_workspace_root = test.config.cwd.join("owner-profile-root");
     let remote_selection = TurnEnvironmentSelection {
         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
         cwd: PathUri::from_abs_path(&test.config.cwd),
         workspace_roots: vec![PathUri::from_abs_path(&test.config.cwd)],
-        config: EnvironmentConfigState::FromThread,
+        config: EnvironmentConfigState::Ready(EnvironmentConfig {
+            allow_login_shell: test.config.permissions.allow_login_shell,
+            permission_profile: PermissionProfileSnapshot::active_with_profile_workspace_roots(
+                PermissionProfile::read_only(),
+                owner_active_profile.clone(),
+                vec![owner_profile_workspace_root.clone()],
+            ),
+            shell_environment_policy: Default::default(),
+            exec_policy: None,
+            mcp_policy: None,
+            network_policy: None,
+            selected_capability_roots: Vec::new(),
+        }),
     };
     let expected_environments = vec![remote_selection, local(test.config.cwd.clone())];
     let mut created_threads = test.thread_manager.subscribe_thread_created();
@@ -2067,6 +2158,24 @@ async fn deferred_executor_spawn_agent_inherits_ready_step_environments(
     assert_eq!(
         child_thread.environment_selections().await,
         expected_environments
+    );
+    let child_snapshot = child_thread.config_snapshot().await;
+    let child_settings = child_thread.thread_settings_snapshot().await;
+    assert_ne!(
+        child_settings.permission_profile,
+        child_snapshot.permission_profile
+    );
+    assert_eq!(
+        (
+            child_snapshot.permission_profile,
+            child_snapshot.active_permission_profile,
+            child_snapshot.profile_workspace_roots,
+        ),
+        (
+            PermissionProfile::read_only(),
+            Some(owner_active_profile),
+            vec![owner_profile_workspace_root],
+        )
     );
     assert!(
         response_mock.requests()[1]

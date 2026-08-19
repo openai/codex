@@ -4,6 +4,7 @@ use crate::ThreadManager;
 use crate::config::AgentRoleConfig;
 use crate::config::DEFAULT_AGENT_MAX_DEPTH;
 use crate::config::PermissionProfileSnapshot;
+use crate::environment_selection::EnvironmentConfigOrigin;
 use crate::environment_selection::TurnEnvironmentState;
 use crate::function_tool::FunctionCallError;
 use crate::init_state_db;
@@ -2301,6 +2302,7 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
     };
     environment.config_mut().permission_profile =
         PermissionProfileSnapshot::legacy(expected_permission_profile.clone());
+    environment.config_origin = EnvironmentConfigOrigin::Owner;
     assert_ne!(
         role_config.permissions.effective_permission_profile(),
         expected_permission_profile,
@@ -2308,7 +2310,7 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
     );
     assert_ne!(
         expected_permission_profile,
-        turn.permission_profile(),
+        turn.config.permissions.effective_permission_profile(),
         "test requires an environment profile that differs from the thread profile"
     );
 
@@ -2360,6 +2362,10 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
         expected_network_sandbox_policy
     );
     assert_eq!(child_turn.permission_profile(), expected_permission_profile);
+    assert_ne!(
+        child_turn.config.permissions.permission_profile(),
+        &expected_permission_profile
+    );
 }
 
 #[tokio::test]
@@ -4241,6 +4247,10 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
     let mut config = turn.config.as_ref().clone();
     config.agent_max_depth = 3;
     config
+        .permissions
+        .set_permission_profile(PermissionProfile::workspace_write())
+        .expect("test config should allow workspace writes");
+    config
         .features
         .enable(Feature::Sqlite)
         .expect("test config should allow sqlite");
@@ -4269,6 +4279,22 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
         .expect("parent thread should start");
     let parent_thread_id = parent.thread_id;
     let parent_session = parent.thread.session.clone();
+    let parent_turn = parent_session.new_default_turn().await;
+    let mut owner_config = parent_turn
+        .environments
+        .primary()
+        .expect("parent should have an environment")
+        .config()
+        .clone();
+    let owner_permission_profile = PermissionProfile::read_only();
+    owner_config.permission_profile =
+        PermissionProfileSnapshot::legacy(owner_permission_profile.clone());
+    let parent_environment = parent.thread.environment_selections().await.remove(0);
+    parent
+        .thread
+        .environment_ready(&parent_environment, owner_config)
+        .await
+        .expect("owner environment should be installed");
 
     let child_turn = parent_session.new_default_turn().await;
     let child_spawn_output = SpawnAgentHandler::default()
@@ -4359,6 +4385,16 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
     assert_ne!(
         manager.agent_control().get_status(child_thread_id).await,
         AgentStatus::NotFound
+    );
+    assert_eq!(
+        manager
+            .get_thread(child_thread_id)
+            .await
+            .expect("resumed child thread should exist")
+            .config_snapshot()
+            .await
+            .permission_profile,
+        owner_permission_profile
     );
     assert_ne!(
         manager
@@ -4519,8 +4555,7 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
         .set(AskForApproval::OnRequest)
         .expect("approval policy set");
 
-    let config = build_agent_spawn_config(&base_instructions, &turn, turn.environments.primary())
-        .expect("spawn config");
+    let config = build_agent_spawn_config(&base_instructions, &turn).expect("spawn config");
     let mut expected = (*turn.config).clone();
     expected.base_instructions_provenance = base_instructions.provenance.clone();
     expected.base_instructions = Some(base_instructions.text);
@@ -4538,10 +4573,6 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
         .approval_policy
         .set(AskForApproval::OnRequest)
         .expect("approval policy set");
-    expected
-        .permissions
-        .set_permission_profile(turn.permission_profile())
-        .expect("permission profile set");
     assert_eq!(config, expected);
 }
 
@@ -4574,10 +4605,9 @@ async fn build_agent_resume_config_clears_base_instructions() {
         panic!("parent environment should be ready");
     };
     environment.config_mut().permission_profile =
-        PermissionProfileSnapshot::legacy(environment_permission_profile.clone());
+        PermissionProfileSnapshot::legacy(environment_permission_profile);
 
-    let config =
-        build_agent_resume_config(&turn, turn.environments.primary()).expect("resume config");
+    let config = build_agent_resume_config(&turn).expect("resume config");
 
     let mut expected = (*turn.config).clone();
     expected.base_instructions = None;
@@ -4596,9 +4626,5 @@ async fn build_agent_resume_config_clears_base_instructions() {
         .approval_policy
         .set(AskForApproval::OnRequest)
         .expect("approval policy set");
-    expected
-        .permissions
-        .set_permission_profile(environment_permission_profile)
-        .expect("permission profile set");
     assert_eq!(config, expected);
 }

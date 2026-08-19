@@ -452,6 +452,7 @@ async fn memories_startup_phase1_uses_live_thread_service_tier_and_detached_meta
         &test.codex,
         codex_protocol::protocol::ThreadSettingsOverrides {
             service_tier: Some(Some(ServiceTier::Fast.request_value().to_string())),
+            permission_profile: Some(codex_protocol::models::PermissionProfile::workspace_write()),
             ..Default::default()
         },
     )
@@ -507,7 +508,7 @@ async fn memories_startup_phase1_uses_live_thread_service_tier_and_detached_meta
     let metadata: serde_json::Value =
         serde_json::from_str(&metadata_header).expect("turn metadata json");
     assert_eq!(metadata["request_kind"].as_str(), Some("memory"));
-    assert_eq!(metadata["sandbox_mode"].as_str(), Some("read-only"));
+    assert_eq!(metadata["sandbox_mode"].as_str(), Some("workspace-write"));
     assert!(metadata.get("session_id").is_none());
     assert!(metadata.get("thread_id").is_none());
     assert!(metadata.get("turn_id").is_none());

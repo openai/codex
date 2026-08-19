@@ -28,6 +28,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EnvironmentConfig;
+use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
@@ -104,45 +105,23 @@ impl ThreadConfigSnapshot {
         &self.environments.environments
     }
 
+    /// Whether the primary environment has resolved configuration, if one is selected.
+    pub fn is_primary_environment_configured(&self) -> bool {
+        self.environment_selections()
+            .first()
+            .is_none_or(|selection| {
+                matches!(
+                    selection.config,
+                    EnvironmentConfigState::FromThread | EnvironmentConfigState::Ready(_)
+                )
+            })
+    }
+
     pub fn sandbox_policy(&self) -> SandboxPolicy {
         codex_sandboxing::compatibility_sandbox_policy_for_permission_profile(
             &self.permission_profile,
             self.cwd().as_path(),
         )
-    }
-
-    pub fn into_thread_settings_snapshot(self) -> ThreadSettingsSnapshot {
-        let cwd = self.cwd().clone();
-        ThreadSettingsSnapshot {
-            model: self.model,
-            model_provider_id: self.model_provider_id,
-            service_tier: self.service_tier,
-            approval_policy: self.approval_policy,
-            approvals_reviewer: self.approvals_reviewer,
-            permission_profile: self.permission_profile,
-            active_permission_profile: self.active_permission_profile,
-            cwd,
-            reasoning_effort: self.reasoning_effort,
-            reasoning_summary: self.reasoning_summary,
-            personality: self.personality,
-            collaboration_mode: self.collaboration_mode,
-        }
-    }
-
-    fn into_thread_settings_overrides(self) -> CodexThreadSettingsOverrides {
-        CodexThreadSettingsOverrides {
-            environments: Some(self.environments),
-            profile_workspace_roots: Some(self.profile_workspace_roots),
-            approval_policy: Some(self.approval_policy),
-            approvals_reviewer: Some(self.approvals_reviewer),
-            permission_profile: Some(self.permission_profile),
-            active_permission_profile: self.active_permission_profile,
-            summary: self.reasoning_summary,
-            service_tier: Some(self.service_tier),
-            collaboration_mode: Some(self.collaboration_mode),
-            personality: self.personality,
-            ..Default::default()
-        }
     }
 }
 
@@ -425,17 +404,15 @@ impl CodexThread {
         self.session.preview_settings(&updates).await
     }
 
-    /// Restores effective mutable settings captured from another loaded runtime.
+    /// Restores thread-owned mutable settings captured from another loaded runtime.
     ///
     /// Runtime replacement uses this after resume so clients keep their current thread settings
     /// rather than reverting to the original layer-backed config.
     pub async fn restore_thread_settings(
         &self,
-        snapshot: ThreadConfigSnapshot,
+        settings: CodexThreadSettingsOverrides,
     ) -> ConstraintResult<()> {
-        let updates = self
-            .thread_settings_update(snapshot.into_thread_settings_overrides())
-            .await;
+        let updates = self.thread_settings_update(settings).await;
         self.session.update_settings(updates).await
     }
 
@@ -648,6 +625,16 @@ impl CodexThread {
 
     pub async fn config_snapshot(&self) -> ThreadConfigSnapshot {
         self.session.thread_config_snapshot().await
+    }
+
+    /// Returns thread-owned settings suitable for rollout persistence and resume.
+    pub async fn thread_settings_snapshot(&self) -> ThreadSettingsSnapshot {
+        self.session.thread_settings_snapshot().await
+    }
+
+    /// Captures thread-owned settings and environment selections for runtime restoration.
+    pub async fn restorable_thread_settings(&self) -> CodexThreadSettingsOverrides {
+        self.session.restorable_thread_settings().await
     }
 
     /// Returns the MCP extensions declared by the client that created this runtime.

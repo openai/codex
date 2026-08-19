@@ -83,7 +83,7 @@ pub(super) async fn prepare_update(
     }
 }
 
-/// Applies persistent settings and emits the resulting effective snapshot.
+/// Applies persistent settings and emits the resulting thread-owned snapshot.
 pub(super) async fn apply_update(
     session: &Session,
     submission_id: String,
@@ -94,7 +94,7 @@ pub(super) async fn apply_update(
     Ok(())
 }
 
-/// Emits the effective thread settings after a successful update.
+/// Emits the thread-owned settings after a successful update.
 pub(super) async fn emit_applied(session: &Session, submission_id: String) {
     let msg = applied_event(session).await;
     session
@@ -105,11 +105,10 @@ pub(super) async fn emit_applied(session: &Session, submission_id: String) {
         .await;
 }
 
-/// Builds the effective thread-settings event used by live updates and
+/// Builds the thread-owned settings event used by live updates and
 /// synthesized fork history.
 pub(super) async fn applied_event(session: &Session) -> EventMsg {
-    let snapshot = session.thread_config_snapshot().await;
     EventMsg::ThreadSettingsApplied(ThreadSettingsAppliedEvent {
-        thread_settings: snapshot.into_thread_settings_snapshot(),
+        thread_settings: session.thread_settings_snapshot().await,
     })
 }

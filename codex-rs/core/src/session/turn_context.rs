@@ -278,21 +278,49 @@ impl TurnContext {
         }
     }
 
+    /// Returns the selected environment's permissions, or the thread's permissions when none is ready.
     pub(crate) fn permission_profile(&self) -> PermissionProfile {
-        self.config.permissions.effective_permission_profile()
+        self.environments
+            .permission_profile_or_else(|| self.config.permissions.effective_permission_profile())
     }
 
     pub(crate) fn file_system_sandbox_policy(&self) -> FileSystemSandboxPolicy {
-        self.config.permissions.file_system_sandbox_policy()
+        self.permission_profile().file_system_sandbox_policy()
     }
 
     pub(crate) fn network_sandbox_policy(&self) -> NetworkSandboxPolicy {
-        self.config.permissions.network_sandbox_policy()
+        self.permission_profile().network_sandbox_policy()
     }
 
     pub(crate) fn sandbox_policy(&self) -> SandboxPolicy {
         #[allow(deprecated)]
-        self.config.permissions.legacy_sandbox_policy(&self.cwd)
+        codex_sandboxing::compatibility_sandbox_policy_for_permission_profile(
+            &self.permission_profile(),
+            &self.cwd,
+        )
+    }
+
+    /// Combines the selected environment's workspace roots with its permission profile roots.
+    pub(crate) fn effective_workspace_roots(&self) -> Vec<AbsolutePathBuf> {
+        let Some(environment) = self.environments.primary() else {
+            return self.config.effective_workspace_roots();
+        };
+
+        let mut workspace_roots = environment
+            .workspace_roots()
+            .iter()
+            .filter_map(|root| root.to_abs_path().ok())
+            .collect::<Vec<_>>();
+        for root in environment
+            .config()
+            .permission_profile
+            .profile_workspace_roots()
+        {
+            if !workspace_roots.contains(root) {
+                workspace_roots.push(root.clone());
+            }
+        }
+        workspace_roots
     }
 
     pub(crate) fn effective_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
@@ -465,7 +493,7 @@ impl TurnContext {
     }
 
     pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
-        let workspace_roots = self.config.effective_workspace_roots();
+        let workspace_roots = self.effective_workspace_roots();
         #[allow(deprecated)]
         let cwd = self.cwd.clone();
         TurnContextItem {
@@ -478,7 +506,10 @@ impl TurnContext {
             approvals_reviewer: Some(self.config.approvals_reviewer),
             sandbox_policy: self.sandbox_policy(),
             permission_profile: Some(self.permission_profile()),
-            active_permission_profile: self.config.permissions.active_permission_profile(),
+            active_permission_profile: self.environments.primary().map_or_else(
+                || self.config.permissions.active_permission_profile(),
+                TurnEnvironment::active_permission_profile,
+            ),
             network: self.turn_context_network_item(),
             file_system_sandbox_policy: self.non_legacy_file_system_sandbox_policy(),
             model: self.model_info.slug.clone(),
@@ -629,7 +660,9 @@ impl Session {
             per_turn_config.features.enabled(Feature::FastMode),
             &model_info,
         );
-        let permission_profile = per_turn_config.permissions.effective_permission_profile();
+        let permission_profile = environments.permission_profile_or_else(|| {
+            per_turn_config.permissions.effective_permission_profile()
+        });
         let auto_review_enabled = crate::guardian::routes_approval_policy_to_guardian(
             per_turn_config.permissions.approval_policy.value(),
             per_turn_config.approvals_reviewer,
@@ -837,6 +870,10 @@ impl Session {
             .and_then(|turn_environment| turn_environment.cwd().to_abs_path().ok())
             .unwrap_or_else(|| session_configuration.cwd().clone());
         let per_turn_config = self.build_per_turn_config(&session_configuration, cwd.clone());
+        let network_permission_profile = primary_turn_environment
+            .map(TurnEnvironment::permission_profile)
+            .cloned()
+            .unwrap_or_else(|| session_configuration.permission_profile());
         let model_info = self
             .services
             .models_manager
@@ -902,7 +939,7 @@ impl Session {
                 .as_ref()
                 .and_then(|started_proxy| {
                     Self::managed_network_proxy_active_for_permission_profile(
-                        &session_configuration.permission_profile(),
+                        &network_permission_profile,
                     )
                     .then(|| started_proxy.proxy())
                 }),

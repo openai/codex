@@ -161,10 +161,7 @@ impl ThreadGoalRequestProcessor {
                 Some(path) if codex_rollout::existing_rollout_path(&path).await.is_none() => {
                     // Goal-first threads need their settings captured when the goal creates the
                     // rollout. Once materialized, normal settings updates own this event.
-                    let persisted_settings = thread
-                        .config_snapshot()
-                        .await
-                        .into_thread_settings_snapshot();
+                    let persisted_settings = thread.thread_settings_snapshot().await;
                     let items = [
                         thread_settings_applied_item(persisted_settings.clone()),
                         outcome.thread_goal_updated_item(),
@@ -173,10 +170,7 @@ impl ThreadGoalRequestProcessor {
                         Err(err) => Err(err),
                         Ok(()) => {
                             // Catch up a settings update queued while the rollout materialized.
-                            let current_settings = thread
-                                .config_snapshot()
-                                .await
-                                .into_thread_settings_snapshot();
+                            let current_settings = thread.thread_settings_snapshot().await;
                             if current_settings == persisted_settings {
                                 Ok(())
                             } else {

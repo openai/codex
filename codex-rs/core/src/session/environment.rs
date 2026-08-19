@@ -139,6 +139,12 @@ impl Session {
         };
 
         environment.config = config;
+        if matches!(environment.config, EnvironmentConfigState::Ready(_)) {
+            state
+                .session_configuration
+                .validate(&environments)
+                .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
+        }
 
         // Invalidate MCP before installed configuration can wake a waiting turn.
         self.mark_mcp_runtime_dirty();

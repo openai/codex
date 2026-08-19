@@ -1,5 +1,9 @@
 use anyhow::Result;
 use codex_features::Feature;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::PermissionProfileSnapshot;
+use codex_protocol::protocol::EnvironmentConfig;
+use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::EventMsg;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ev_assistant_message;
@@ -236,12 +240,7 @@ async fn v2_residency_reload_preserves_inherited_environment_and_tools() -> Resu
         .with_model("gpt-5.6-sol")
         .with_exec_server_url("none")
         .with_config(|config| {
-            for feature in [
-                Feature::Collab,
-                Feature::MultiAgentV2,
-                Feature::UnifiedExec,
-                Feature::DeferredExecutor,
-            ] {
+            for feature in [Feature::Collab, Feature::MultiAgentV2, Feature::UnifiedExec] {
                 config
                     .features
                     .enable(feature)
@@ -249,9 +248,22 @@ async fn v2_residency_reload_preserves_inherited_environment_and_tools() -> Resu
             }
             config.use_experimental_unified_exec_tool = true;
             config.multi_agent_v2.max_concurrent_threads_per_session = 2;
+            config
+                .permissions
+                .set_permission_profile(PermissionProfile::workspace_write())
+                .expect("thread permissions should allow workspace writes");
         });
     let test = builder.build_with_remote_and_local_env(&server).await?;
-    let child_environment = test.executor_environment().selection().clone();
+    let mut child_environment = test.executor_environment().selection().clone();
+    child_environment.config = EnvironmentConfigState::Ready(EnvironmentConfig {
+        allow_login_shell: test.config.permissions.allow_login_shell,
+        permission_profile: PermissionProfileSnapshot::legacy(PermissionProfile::read_only()),
+        shell_environment_policy: Default::default(),
+        exec_policy: None,
+        mcp_policy: None,
+        network_policy: None,
+        selected_capability_roots: Vec::new(),
+    });
     if let Some(exec_server_url) = test.executor_environment().exec_server_url() {
         test.thread_manager
             .environment_manager()
@@ -272,7 +284,14 @@ async fn v2_residency_reload_preserves_inherited_environment_and_tools() -> Resu
     })
     .await;
 
-    test.submit_text_turn(EVICT_PROMPT).await?;
+    let mut sender_environment = child_environment.clone();
+    let EnvironmentConfigState::Ready(sender_config) = &mut sender_environment.config else {
+        unreachable!("child environment config should be ready");
+    };
+    sender_config.permission_profile =
+        PermissionProfileSnapshot::legacy(PermissionProfile::workspace_write());
+    test.submit_turn_with_environments(EVICT_PROMPT, Some(vec![sender_environment]))
+        .await?;
     let replacement_thread_id = created_threads.recv().await?;
     let replacement_thread = test
         .thread_manager
@@ -302,6 +321,10 @@ async fn v2_residency_reload_preserves_inherited_environment_and_tools() -> Resu
             .environments
             .environments,
         vec![child_environment]
+    );
+    assert_eq!(
+        reloaded_worker.config_snapshot().await.permission_profile,
+        PermissionProfile::read_only()
     );
 
     let worker_tools = |response_mock: &ResponseMock| {

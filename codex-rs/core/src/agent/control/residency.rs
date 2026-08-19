@@ -144,6 +144,13 @@ impl V2Residency {
                 self.touch(candidate_thread_id);
                 continue;
             }
+            let environments = candidate_thread.environment_selections().await;
+            candidate_thread
+                .session
+                .services
+                .agent_control
+                .state
+                .save_evicted_environments(candidate_thread_id, environments);
             let _ = manager.remove_thread(&candidate_thread_id).await;
             return true;
         }

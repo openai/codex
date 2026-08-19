@@ -82,7 +82,7 @@ struct ThreadListFilters {
 
 struct ThreadRevertRuntimeSnapshot {
     config: Config,
-    settings: ThreadConfigSnapshot,
+    settings: CodexThreadSettingsOverrides,
     client_mcp_extensions: ClientMcpExtensions,
 }
 
@@ -2019,7 +2019,7 @@ impl ThreadRequestProcessor {
         }
         let runtime_snapshot = ThreadRevertRuntimeSnapshot {
             config: thread.config().await.as_ref().clone(),
-            settings: config_snapshot,
+            settings: thread.restorable_thread_settings().await,
             client_mcp_extensions: thread.client_mcp_extensions(),
         };
 
@@ -4662,7 +4662,7 @@ impl ThreadRequestProcessor {
             restore_approval_policy || restore_approvals_reviewer || restore_permission_profile;
         let loaded_parent_settings = if paginated_source && needs_latest_settings {
             if let Ok(parent) = self.thread_manager.get_thread(source_thread_id).await {
-                let snapshot = parent.config_snapshot().await;
+                let snapshot = parent.thread_settings_snapshot().await;
                 Some(PersistedResumeSettings {
                     approval_policy: snapshot.approval_policy,
                     approvals_reviewer: Some(snapshot.approvals_reviewer),

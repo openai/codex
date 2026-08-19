@@ -5,7 +5,6 @@ use crate::config::HARD_MAX_MULTI_AGENT_V2_TIMEOUT_MS;
 use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
-use crate::session::turn_context::TurnEnvironment;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -170,36 +169,29 @@ pub(crate) fn parse_collab_input(
 /// Builds the base config snapshot for a newly spawned sub-agent.
 ///
 /// The returned config starts from the parent's effective config and then refreshes the
-/// runtime-owned fields carried by the turn and selected environment, including model selection,
-/// reasoning settings, approval policy, sandbox, and cwd. Role-specific overrides are layered
+/// runtime-owned fields carried by the turn, including model selection, reasoning settings,
+/// approval policy, sandbox, and cwd. Role-specific overrides are layered
 /// after this step; skipping this helper and cloning stale config state directly can send the child
 /// agent out with the wrong provider or runtime policy.
 pub(crate) fn build_agent_spawn_config(
     base_instructions: &BaseInstructions,
     turn: &TurnContext,
-    environment: Option<&TurnEnvironment>,
 ) -> Result<Config, FunctionCallError> {
-    let mut config = build_agent_shared_config(turn, environment)?;
+    let mut config = build_agent_shared_config(turn)?;
     config.base_instructions = Some(base_instructions.text.clone());
     config.base_instructions_provenance = base_instructions.provenance.clone();
     Ok(config)
 }
 
-pub(crate) fn build_agent_resume_config(
-    turn: &TurnContext,
-    environment: Option<&TurnEnvironment>,
-) -> Result<Config, FunctionCallError> {
-    let mut config = build_agent_shared_config(turn, environment)?;
+pub(crate) fn build_agent_resume_config(turn: &TurnContext) -> Result<Config, FunctionCallError> {
+    let mut config = build_agent_shared_config(turn)?;
     // For resume, keep base instructions sourced from rollout/session metadata.
     config.base_instructions = None;
     config.base_instructions_provenance = None;
     Ok(config)
 }
 
-fn build_agent_shared_config(
-    turn: &TurnContext,
-    environment: Option<&TurnEnvironment>,
-) -> Result<Config, FunctionCallError> {
+fn build_agent_shared_config(turn: &TurnContext) -> Result<Config, FunctionCallError> {
     let base_config = turn.config.clone();
     let mut config = (*base_config).clone();
     config.model = Some(turn.model_info.slug.clone());
@@ -219,7 +211,7 @@ fn build_agent_shared_config(
     {
         config.developer_instructions = Some(developer_instructions);
     }
-    apply_spawn_agent_runtime_overrides(&mut config, turn, environment)?;
+    apply_spawn_agent_runtime_overrides(&mut config, turn)?;
 
     Ok(config)
 }
@@ -237,13 +229,11 @@ pub(crate) fn reject_full_fork_agent_type_override(
 
 /// Copies runtime-only turn state onto a child config before it is handed to `AgentControl`.
 ///
-/// These values are chosen by the live turn and selected environment rather than persisted config,
-/// so leaving them stale can make a child agent disagree with its parent about approval policy,
-/// cwd, or sandboxing.
+/// These values are chosen by the live turn rather than persisted config, so leaving them stale can
+/// make a child agent disagree with its parent about approval policy, cwd, or sandboxing.
 pub(crate) fn apply_spawn_agent_runtime_overrides(
     config: &mut Config,
     turn: &TurnContext,
-    environment: Option<&TurnEnvironment>,
 ) -> Result<(), FunctionCallError> {
     config
         .permissions
@@ -256,12 +246,14 @@ pub(crate) fn apply_spawn_agent_runtime_overrides(
     #[allow(deprecated)]
     let turn_cwd = turn.cwd.clone();
     config.cwd = turn_cwd;
-    let permission_profile = environment
-        .map(|environment| environment.permission_profile().clone())
-        .unwrap_or_else(|| turn.permission_profile());
     config
         .permissions
-        .set_permission_profile(permission_profile)
+        .set_permission_profile_from_session_snapshot(
+            turn.config
+                .permissions
+                .permission_profile_state()
+                .snapshot(),
+        )
         .map_err(|err| {
             FunctionCallError::RespondToModel(format!("permission_profile is invalid: {err}"))
         })?;
