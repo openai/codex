@@ -239,6 +239,11 @@ fn write_permissions_for_paths(
 ) -> Option<AdditionalPermissionProfile> {
     let write_paths = file_paths
         .iter()
+        // Skip already-writable targets before deriving parent permissions.
+        // Otherwise, a writable directory could grant access to its parent.
+        .filter(|path| {
+            !file_system_sandbox_policy.can_write_path_with_cwd(path.as_path(), cwd.as_path())
+        })
         .map(|path| {
             path.parent()
                 .unwrap_or_else(|| path.clone())

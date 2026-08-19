@@ -1,6 +1,8 @@
 use super::*;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_exec_server::LOCAL_FS;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::FileChange;
 use core_test_support::PathBufExt;
@@ -311,4 +313,36 @@ fn write_permissions_for_paths_keep_dirs_outside_workspace_root() {
             .and_then(|roots| roots.write),
         Some(vec![expected_outside])
     );
+}
+
+#[test]
+fn write_permissions_for_paths_do_not_widen_workspace_root_target() {
+    let tmp = TempDir::new().expect("tmp");
+    let cwd = tmp.path().join("workspace").abs();
+    std::fs::create_dir_all(&cwd).expect("create workspace");
+    let sandbox_policy = FileSystemSandboxPolicy::workspace_write(
+        &[],
+        /*exclude_tmpdir_env_var*/ true,
+        /*exclude_slash_tmp*/ true,
+    );
+
+    let permissions =
+        write_permissions_for_paths(std::slice::from_ref(&cwd), &sandbox_policy, &cwd);
+
+    assert_eq!(permissions, None);
+}
+
+#[test]
+fn write_permissions_for_paths_do_not_regrant_an_already_writable_parent() {
+    let tmp = TempDir::new().expect("tmp");
+    let cwd = tmp.path().abs();
+    let file_path = cwd.join("protected.txt");
+    let sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry::new(cwd.clone().into(), FileSystemAccessMode::Write),
+        FileSystemSandboxEntry::new(file_path.clone().into(), FileSystemAccessMode::Read),
+    ]);
+
+    let permissions = write_permissions_for_paths(&[file_path], &sandbox_policy, &cwd);
+
+    assert_eq!(permissions, None);
 }

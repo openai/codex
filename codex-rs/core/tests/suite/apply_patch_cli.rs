@@ -986,6 +986,71 @@ async fn apply_patch_cli_does_not_write_through_symlink_escape_outside_workspace
     Ok(())
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_patch_cli_does_not_widen_permissions_for_workspace_directory_target() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_remote!(
+        Ok(()),
+        "link escape setup needs local filesystem link creation"
+    );
+
+    let test_root = tempfile::tempdir_in(std::env::current_dir()?)?;
+    let work_dir = AbsolutePathBuf::try_from(test_root.path().join("work"))?;
+    std::fs::create_dir_all(work_dir.as_path())?;
+    let outside_file = test_root.path().join("victim.txt");
+    let original_contents = "original outside content\n";
+    std::fs::write(&outside_file, original_contents)?;
+
+    let harness_work_dir = work_dir.clone();
+    let harness = apply_patch_harness_with(move |builder| {
+        builder.with_config(move |config| {
+            config.approvals_reviewer = codex_protocol::config_types::ApprovalsReviewer::User;
+            config.workspace_roots = vec![harness_work_dir.clone()];
+            config
+                .permissions
+                .set_workspace_roots(config.workspace_roots.clone());
+            config.cwd = harness_work_dir;
+        })
+    })
+    .await?;
+    let link_path = harness.path("link.txt");
+    create_file_symlink(&outside_file, &link_path)?;
+
+    // The second hunk names the already-writable workspace directory. It must
+    // not grant access to that directory's parent before the first hunk runs.
+    let patch = r#"*** Begin Patch
+*** Update File: link.txt
+@@
+-original outside content
++pwned
+*** Add File: ../work
++decoy
+*** End Patch"#;
+    let call_id = "apply-workspace-directory-decoy";
+    mount_apply_patch(&harness, call_id, patch, "fail").await;
+
+    harness
+        .submit_with_permission_profile(
+            "attempt to widen apply_patch permissions with a directory target",
+            restrictive_workspace_write_profile(),
+        )
+        .await?;
+
+    let out = harness.apply_patch_output(call_id).await;
+    assert_eq!(
+        std::fs::read_to_string(&outside_file)?,
+        original_contents,
+        "directory target must not make the outside victim writable; tool output: {out}",
+    );
+    assert!(
+        std::fs::symlink_metadata(&link_path)?
+            .file_type()
+            .is_symlink()
+    );
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_cli_preserves_existing_hard_link_outside_workspace() -> Result<()> {
     skip_if_no_network!(Ok(()));
