@@ -37,12 +37,12 @@ use codex_protocol::protocol::TruncationPolicy;
 use codex_protocol::security_risk::SecurityRiskScore;
 use serde_json::json;
 
-use crate::LunaSampler;
-use crate::LunaSamplerConfig;
-use crate::LunaSamplerError;
-use crate::LunaSamplingRequest;
-use crate::config::GuardianV2Config;
-use crate::sampler::MODEL;
+use super::config::GuardianV2Config;
+use super::sampler::LunaSampler;
+use super::sampler::LunaSamplerConfig;
+use super::sampler::LunaSamplerError;
+use super::sampler::LunaSamplingRequest;
+use super::sampler::MODEL;
 
 struct GuardianAction {
     tool_name: ToolName,
@@ -165,7 +165,7 @@ fn render_action_with_limit(
 fn truncate_action_value(value: &mut serde_json::Value, max_tokens: usize) {
     match value {
         serde_json::Value::String(text) => {
-            let truncated = crate::transcript::truncate_entry(text, max_tokens);
+            let truncated = super::transcript::truncate_entry(text, max_tokens);
             if truncated.len() < text.len() {
                 *text = truncated;
             }

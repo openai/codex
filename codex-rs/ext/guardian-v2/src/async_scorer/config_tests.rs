@@ -6,7 +6,7 @@ use pretty_assertions::assert_eq;
 
 use super::DEFAULT_CLASSIFIER_INSTRUCTIONS;
 use super::GuardianV2Config;
-use crate::transcript::truncate_entry;
+use crate::async_scorer::transcript::truncate_entry;
 
 #[test]
 fn template_policy_is_substituted_before_the_single_truncation() {

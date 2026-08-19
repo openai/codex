@@ -5,14 +5,14 @@ use codex_features::GuardianV2TranscriptConfigToml;
 use codex_protocol::openai_models::GuardianV2ModelConfig;
 use codex_protocol::openai_models::ReasoningEffort;
 
-use crate::transcript::MAX_MESSAGE_ENTRY_TOKENS;
-use crate::transcript::MAX_MESSAGE_TRANSCRIPT_TOKENS;
-use crate::transcript::MAX_RECENT_NON_USER_ENTRIES;
-use crate::transcript::MAX_TOOL_ENTRY_TOKENS;
-use crate::transcript::MAX_TOOL_TRANSCRIPT_TOKENS;
-use crate::transcript::TranscriptConfig;
-use crate::transcript::TranscriptSource;
-use crate::transcript::truncate_entry;
+use super::transcript::MAX_MESSAGE_ENTRY_TOKENS;
+use super::transcript::MAX_MESSAGE_TRANSCRIPT_TOKENS;
+use super::transcript::MAX_RECENT_NON_USER_ENTRIES;
+use super::transcript::MAX_TOOL_ENTRY_TOKENS;
+use super::transcript::MAX_TOOL_TRANSCRIPT_TOKENS;
+use super::transcript::TranscriptConfig;
+use super::transcript::TranscriptSource;
+use super::transcript::truncate_entry;
 
 pub(crate) const DEFAULT_MODEL_CONTEXT_ITEM_TOKENS: usize = 10_000;
 pub(crate) const DEFAULT_PARENT_COMPACTION_TOKENS: usize = 25_000;

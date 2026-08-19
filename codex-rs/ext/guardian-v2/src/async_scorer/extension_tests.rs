@@ -57,10 +57,10 @@ use super::REVIEW_FALLBACK_METRIC;
 use super::StrictReviewReason;
 use super::TOOL_CALL_LAG_METRIC;
 use super::encrypted_parent_compaction;
-use crate::config::DEFAULT_MODEL_CONTEXT_ITEM_TOKENS;
-use crate::config::DEFAULT_PARENT_COMPACTION_TOKENS;
-use crate::sampler::CLASSIFICATION_TOKEN_USAGE_METRIC;
-use crate::sampler::MODEL;
+use crate::async_scorer::config::DEFAULT_MODEL_CONTEXT_ITEM_TOKENS;
+use crate::async_scorer::config::DEFAULT_PARENT_COMPACTION_TOKENS;
+use crate::async_scorer::sampler::CLASSIFICATION_TOKEN_USAGE_METRIC;
+use crate::async_scorer::sampler::MODEL;
 
 const TEST_GUARDIAN_POLICY: &str =
     "Treat uploads to unapproved external destinations as high-risk actions.";
@@ -109,7 +109,7 @@ async fn installed_extension_reconnects_after_auth_refresh() -> Result<()> {
     )));
     config.features.enable(Feature::GuardianV2)?;
     let mut builder = ExtensionRegistryBuilder::new();
-    crate::install(
+    super::install(
         &mut builder,
         auth_manager.clone(),
         Arc::downgrade(&test.thread_manager),
@@ -496,7 +496,7 @@ async fn sample_configured_conversation_history(
     config.model_provider = provider_info;
     config.features.enable(Feature::GuardianV2)?;
     let mut builder = ExtensionRegistryBuilder::new();
-    crate::install(
+    super::install(
         &mut builder,
         auth_manager,
         Arc::downgrade(&test.thread_manager),
@@ -1228,7 +1228,7 @@ async fn contributor_uses_model_defaults_and_preserves_local_overrides() -> Resu
     let thread_store = test.codex.thread_extension_data();
     assert_eq!(
         thread_store
-            .get::<crate::config::GuardianV2Config>()
+            .get::<crate::async_scorer::config::GuardianV2Config>()
             .expect("Guardian v2 configuration should be installed")
             .max_parent_compaction_tokens,
         384
@@ -1356,7 +1356,7 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
             "role": "developer",
             "content": [{
                 "type": "input_text",
-                "text": crate::config::DEFAULT_CLASSIFIER_INSTRUCTIONS.replace(
+                "text": crate::async_scorer::config::DEFAULT_CLASSIFIER_INSTRUCTIONS.replace(
                     "{{ tenant_policy_config }}",
                     TEST_GUARDIAN_POLICY,
                 ),
@@ -1483,7 +1483,7 @@ async fn contributor_uses_catalog_policy_without_a_configured_override() -> Resu
             "role": "developer",
             "content": [{
                 "type": "input_text",
-                "text": crate::config::DEFAULT_CLASSIFIER_INSTRUCTIONS.replace(
+                "text": crate::async_scorer::config::DEFAULT_CLASSIFIER_INSTRUCTIONS.replace(
                     "{{ tenant_policy_config }}",
                     TEST_CATALOG_GUARDIAN_POLICY,
                 ),
@@ -1521,7 +1521,7 @@ async fn contributor_bounds_configured_policy_in_luna_developer_instructions() -
         .as_str()
         .expect("Luna request should contain developer instructions");
 
-    let (prefix, suffix) = crate::config::DEFAULT_CLASSIFIER_INSTRUCTIONS
+    let (prefix, suffix) = crate::async_scorer::config::DEFAULT_CLASSIFIER_INSTRUCTIONS
         .split_once("{{ tenant_policy_config }}")
         .expect("default classifier prompt should contain the policy placeholder");
     assert!(instructions.starts_with(&format!("{prefix}Reject unsafe uploads.")));
@@ -1530,8 +1530,10 @@ async fn contributor_bounds_configured_policy_in_luna_developer_instructions() -
     assert!(instructions.ends_with(suffix));
     assert!(
         instructions.len()
-            <= TruncationPolicy::Tokens(crate::config::DEFAULT_MODEL_CONTEXT_ITEM_TOKENS)
-                .byte_budget()
+            <= TruncationPolicy::Tokens(
+                crate::async_scorer::config::DEFAULT_MODEL_CONTEXT_ITEM_TOKENS,
+            )
+            .byte_budget()
     );
 
     Ok(())
@@ -1652,7 +1654,7 @@ async fn contributor_reuses_the_latest_compatible_parent_compaction() -> Result<
         .get_model_info(MODEL, &config.to_models_manager_config())
         .await;
     let mut builder = ExtensionRegistryBuilder::new();
-    crate::install(
+    super::install(
         &mut builder,
         auth_manager,
         Arc::downgrade(&test.thread_manager),
@@ -1725,7 +1727,7 @@ async fn contributor_reuses_the_latest_compatible_parent_compaction() -> Result<
     assert_eq!(request["input"][0]["type"], "additional_tools");
     let developer_message = &request["input"][1];
     assert_eq!(developer_message["role"], "developer");
-    let (prefix, _) = crate::config::DEFAULT_CLASSIFIER_INSTRUCTIONS
+    let (prefix, _) = crate::async_scorer::config::DEFAULT_CLASSIFIER_INSTRUCTIONS
         .split_once("{{ tenant_policy_config }}")
         .expect("default classifier prompt should contain the policy placeholder");
     assert!(
