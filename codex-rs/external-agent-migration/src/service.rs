@@ -485,8 +485,7 @@ impl ExternalAgentConfigService {
         scope: &MigrationScope,
     ) -> io::Result<Option<JsonValue>> {
         let source_settings = self.source_settings(scope);
-        self.source
-            .effective_settings(self.source_config_dir(scope).as_path(), &source_settings)
+        self.source.effective_settings(&source_settings)
     }
 
     pub(crate) fn build_mcp_config(

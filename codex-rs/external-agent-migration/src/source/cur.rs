@@ -7,7 +7,6 @@ use crate::build_mcp_config_from_json_file;
 use crate::hook_migration_event_names_cur;
 use crate::import_hooks_cur;
 use crate::import_subagents_with_rewrite_profile;
-use crate::invalid_data_error;
 use serde_json::Value as JsonValue;
 use std::fs;
 use std::io;
@@ -22,97 +21,16 @@ impl CurSource {
     pub const LEGACY_RULES_FILE: &'static str = ".cursorrules";
     pub const HOME_CONFIG_FILE: &'static str = "cli-config.json";
     pub const PROJECT_CONFIG_FILE: &'static str = "cli.json";
-    pub const SANDBOX_CONFIG_FILE: &'static str = "sandbox.json";
     pub const HOOKS_CONFIG_FILE: &'static str = "hooks.json";
-    pub const SANDBOX_SETTINGS_KEY: &'static str = "__cursorSandbox";
     pub const REWRITE_PROFILE: RewriteProfile = RewriteProfile::new(Self::LEGACY_RULES_FILE, &[])
         .with_case_sensitive_term_variants(&["Cursor"]);
 
-    pub fn effective_settings(
-        source_dir: &Path,
-        source_settings: &Path,
-    ) -> io::Result<Option<JsonValue>> {
-        let mut effective = read_json_file(source_settings)?;
-        let sandbox_settings = read_json_file(&source_dir.join(Self::SANDBOX_CONFIG_FILE))?;
-        if let Some(sandbox_settings) = sandbox_settings {
-            let effective =
-                effective.get_or_insert_with(|| JsonValue::Object(serde_json::Map::new()));
-            let Some(effective) = effective.as_object_mut() else {
-                return Err(invalid_data_error(
-                    "external agent settings root must be an object",
-                ));
-            };
-            effective.insert(Self::SANDBOX_SETTINGS_KEY.to_string(), sandbox_settings);
-        }
-        Ok(effective)
+    pub fn effective_settings(source_settings: &Path) -> io::Result<Option<JsonValue>> {
+        read_json_file(source_settings)
     }
 
     pub fn build_config(settings: &JsonValue) -> io::Result<TomlValue> {
-        build_config(settings, Self::append_config)
-    }
-
-    pub fn append_config(
-        root: &mut toml::map::Map<String, TomlValue>,
-        settings: &serde_json::Map<String, JsonValue>,
-    ) {
-        let Some(sandbox) = settings
-            .get(Self::SANDBOX_SETTINGS_KEY)
-            .and_then(JsonValue::as_object)
-        else {
-            return;
-        };
-        let sandbox_mode = match sandbox.get("type").and_then(JsonValue::as_str) {
-            Some("workspace_readwrite") => Some("workspace-write"),
-            Some("read_only") => Some("read-only"),
-            _ => None,
-        };
-        if let Some(sandbox_mode) = sandbox_mode {
-            root.insert(
-                "sandbox_mode".to_string(),
-                TomlValue::String(sandbox_mode.to_string()),
-            );
-        }
-        if sandbox_mode != Some("workspace-write") {
-            return;
-        }
-
-        let mut workspace_write = toml::map::Map::new();
-        if let Some(paths) = sandbox
-            .get("additionalReadwritePaths")
-            .and_then(JsonValue::as_array)
-        {
-            let paths = paths
-                .iter()
-                .filter_map(JsonValue::as_str)
-                .filter(|path| Path::new(path).is_absolute())
-                .map(|path| TomlValue::String(path.to_string()))
-                .collect::<Vec<_>>();
-            if !paths.is_empty() {
-                workspace_write.insert("writable_roots".to_string(), TomlValue::Array(paths));
-            }
-        }
-        if sandbox.get("disableTmpWrite").and_then(JsonValue::as_bool) == Some(true) {
-            workspace_write.insert("exclude_slash_tmp".to_string(), TomlValue::Boolean(true));
-            workspace_write.insert(
-                "exclude_tmpdir_env_var".to_string(),
-                TomlValue::Boolean(true),
-            );
-        }
-        if sandbox
-            .get("networkPolicy")
-            .and_then(JsonValue::as_object)
-            .and_then(|network| network.get("default"))
-            .and_then(JsonValue::as_str)
-            == Some("allow")
-        {
-            workspace_write.insert("network_access".to_string(), TomlValue::Boolean(true));
-        }
-        if !workspace_write.is_empty() {
-            root.insert(
-                "sandbox_workspace_write".to_string(),
-                TomlValue::Table(workspace_write),
-            );
-        }
+        build_config(settings, |_, _| {})
     }
 
     pub fn build_mcp_config(source_dir: &Path) -> io::Result<TomlValue> {

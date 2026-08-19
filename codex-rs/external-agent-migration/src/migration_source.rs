@@ -98,12 +98,11 @@ impl ExternalAgentSource {
 
     pub(super) fn effective_settings(
         self,
-        source_config_dir: &Path,
         source_settings: &Path,
     ) -> io::Result<Option<JsonValue>> {
         match self {
             Self::Cla => ClaSource::effective_settings(source_settings),
-            Self::Cur => CurSource::effective_settings(source_config_dir, source_settings),
+            Self::Cur => CurSource::effective_settings(source_settings),
         }
     }
 
