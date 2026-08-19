@@ -161,12 +161,48 @@ def _git_sparse_checkout(repo_url: str, ref: str, paths: list[str], dest_dir: st
     return repo_dir
 
 
-def _validate_skill(path: str) -> None:
+def _validate_skill(path: str, repo_root: str) -> None:
+    resolved_repo_root = os.path.realpath(repo_root)
+    resolved_path = os.path.realpath(path)
+    try:
+        inside_repo = os.path.commonpath([resolved_repo_root, resolved_path]) == resolved_repo_root
+    except ValueError:
+        inside_repo = False
+    if not inside_repo:
+        raise InstallError("Skill path must be inside the repo.")
+
+    relative_path = os.path.relpath(path, repo_root)
+    current_path = repo_root
+    for component in relative_path.split(os.path.sep):
+        current_path = os.path.join(current_path, component)
+        if os.path.islink(current_path):
+            raise InstallError(
+                f"Symbolic links are not allowed in skills: {os.path.relpath(current_path, repo_root)}"
+            )
+
     if not os.path.isdir(path):
         raise InstallError(f"Skill path not found: {path}")
     skill_md = os.path.join(path, "SKILL.md")
     if not os.path.isfile(skill_md):
         raise InstallError("SKILL.md not found in selected skill directory.")
+
+    for root, directories, files in os.walk(path):
+        for name in directories + files:
+            entry_path = os.path.join(root, name)
+            relative_entry = os.path.relpath(entry_path, repo_root)
+            if os.path.islink(entry_path):
+                resolved_entry = os.path.realpath(entry_path)
+                try:
+                    inside_skill = (
+                        os.path.commonpath([resolved_path, resolved_entry]) == resolved_path
+                    )
+                except ValueError:
+                    inside_skill = False
+                if not inside_skill or not os.path.isfile(resolved_entry):
+                    raise InstallError(f"Unsupported symbolic link in skill: {relative_entry}")
+                continue
+            if not os.path.isdir(entry_path) and not os.path.isfile(entry_path):
+                raise InstallError(f"Unsupported file type in skill: {relative_entry}")
 
 
 def _copy_skill(src: str, dest_dir: str) -> None:
@@ -290,7 +326,7 @@ def main(argv: list[str]) -> int:
                 if os.path.exists(dest_dir):
                     raise InstallError(f"Destination already exists: {dest_dir}")
                 skill_src = os.path.join(repo_root, path)
-                _validate_skill(skill_src)
+                _validate_skill(skill_src, repo_root)
                 _copy_skill(skill_src, dest_dir)
                 installed.append((skill_name, dest_dir))
         finally:
