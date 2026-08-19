@@ -1,6 +1,5 @@
 use anyhow::Result;
 use codex_core::TurnInputRequest;
-use codex_features::Feature;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageDelivery;
 use codex_protocol::items::AgentMessageItem;
@@ -56,12 +55,6 @@ async fn send_user_message_async_emits_item_and_does_not_end_the_turn() -> Resul
             model
                 .experimental_supported_tools
                 .push("send_user_message_async".to_string());
-        })
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::SendAsyncMessage)
-                .expect("test config should allow enabling async messages");
         })
         .build_with_auto_env(&server)
         .await?;

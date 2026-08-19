@@ -262,7 +262,7 @@ pub enum Feature {
     MentionsV2,
     /// Allow request_user_input in Default collaboration mode.
     DefaultModeRequestUserInput,
-    /// Allow sending a user-visible message without ending the current turn.
+    /// Removed compatibility flag for model-enabled async user messaging.
     SendAsyncMessage,
     /// Enable automatic review for approval prompts.
     GuardianApproval,
@@ -1355,7 +1355,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::SendAsyncMessage,
         key: "send_async_message",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {
