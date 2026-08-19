@@ -13,14 +13,21 @@ use ratatui::widgets::Widget;
 use std::cell::RefCell;
 use std::time::Instant;
 
+use crate::key_hint;
 use crate::key_hint::has_ctrl_or_alt;
+use crate::keymap::KeymapContextSet;
+use crate::keymap::RuntimeKeymap;
+use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::render::renderable::Renderable;
 
+use super::popup_consts::accept_cancel_hint_line;
 use super::popup_consts::standard_popup_hint_line;
 
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
 use super::bottom_pane_view::ViewCompletion;
+use super::footer::max_left_width_for_right;
+use super::footer::render_context_right;
 use super::paste_burst::PasteBurst;
 use super::textarea::TextArea;
 use super::textarea::TextAreaState;
@@ -68,19 +75,42 @@ impl CustomPromptView {
         }
     }
 
+    /// Apply the same editor and Vim bindings used by the main composer.
+    pub(crate) fn set_keymap_bindings(&mut self, keymap: &RuntimeKeymap) {
+        self.textarea.set_keymap_bindings(keymap);
+    }
+
+    /// Enable Vim editing while keeping the prompt ready for immediate input.
+    pub(crate) fn enable_vim_in_insert_mode(&mut self) {
+        self.textarea.set_vim_enabled(/*enabled*/ true);
+        self.textarea.enter_vim_insert_mode();
+    }
+
     fn handle_key_event_at(&mut self, key_event: KeyEvent, now: Instant) {
+        if self.textarea.is_vim_operator_pending() {
+            self.textarea.input(key_event);
+            return;
+        }
+
         match key_event {
             KeyEvent {
                 code: KeyCode::Esc, ..
             } => {
-                self.on_ctrl_c();
+                if self.textarea.should_handle_vim_insert_escape(key_event) {
+                    self.textarea.input(key_event);
+                    self.paste_burst.clear_after_explicit_paste();
+                } else {
+                    self.on_ctrl_c();
+                }
             }
             KeyEvent {
                 code: KeyCode::Enter,
                 modifiers,
                 ..
             } => {
-                if self.paste_burst.direct_insert_newline_should_insert(now) {
+                if self.textarea.allows_paste_burst()
+                    && self.paste_burst.direct_insert_newline_should_insert(now)
+                {
                     self.paste_burst.extend_window(now);
                     self.textarea.insert_str("\n");
                     return;
@@ -126,6 +156,10 @@ impl CustomPromptView {
 }
 
 impl BottomPaneView for CustomPromptView {
+    fn keymap_contexts(&self) -> KeymapContextSet {
+        KeymapContextSet::new(self.textarea.keymap_context())
+    }
+
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         self.handle_key_event_at(key_event, Instant::now());
     }
@@ -133,6 +167,10 @@ impl BottomPaneView for CustomPromptView {
     fn on_ctrl_c(&mut self) -> CancellationEvent {
         self.completion = Some(ViewCompletion::Cancelled);
         CancellationEvent::Handled
+    }
+
+    fn prefer_esc_to_handle_key_event(&self) -> bool {
+        self.textarea.uses_vim_insert_cursor() || self.textarea.is_vim_operator_pending()
     }
 
     fn is_complete(&self) -> bool {
@@ -253,15 +291,37 @@ impl Renderable for CustomPromptView {
 
         let hint_y = hint_blank_y.saturating_add(1);
         if hint_y < area.y.saturating_add(area.height) {
-            Paragraph::new(standard_popup_hint_line()).render(
-                Rect {
-                    x: area.x,
-                    y: hint_y,
-                    width: area.width,
-                    height: 1,
-                },
-                buf,
-            );
+            let mut hint_line = if self.textarea.uses_vim_insert_cursor() {
+                accept_cancel_hint_line(
+                    Some(key_hint::plain(KeyCode::Enter).into()),
+                    "to confirm",
+                    Some(key_hint::plain(KeyCode::Esc).into()),
+                    "to enter normal mode",
+                )
+            } else {
+                standard_popup_hint_line()
+            };
+            let hint_area = Rect {
+                x: area.x,
+                y: hint_y,
+                width: area.width,
+                height: 1,
+            };
+            let mut vim_mode = self.textarea.vim_mode_indicator_span().map(Line::from);
+            let available_hint_width = vim_mode
+                .as_ref()
+                .and_then(|line| max_left_width_for_right(hint_area, line.width() as u16))
+                .filter(|width| *width > 0);
+            if vim_mode.is_some() && available_hint_width.is_none() {
+                vim_mode = None;
+            }
+            if let Some(width) = available_hint_width {
+                hint_line = truncate_line_with_ellipsis_if_overflow(hint_line, width as usize);
+            }
+            Paragraph::new(hint_line).render(hint_area, buf);
+            if let Some(line) = vim_mode {
+                render_context_right(hint_area, buf, &line);
+            }
         }
     }
 
@@ -283,6 +343,14 @@ impl Renderable for CustomPromptView {
         };
         let state = *self.textarea_state.borrow();
         self.textarea.cursor_pos_with_state(textarea_rect, state)
+    }
+
+    fn cursor_style(&self, _area: Rect) -> crossterm::cursor::SetCursorStyle {
+        if self.textarea.uses_vim_insert_cursor() {
+            crossterm::cursor::SetCursorStyle::SteadyBar
+        } else {
+            crossterm::cursor::SetCursorStyle::DefaultUserShape
+        }
     }
 }
 

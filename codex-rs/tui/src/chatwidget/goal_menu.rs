@@ -33,7 +33,7 @@ impl ChatWidget {
                 });
             }),
         );
-        self.bottom_pane.show_view(Box::new(view));
+        self.bottom_pane.show_text_prompt(view);
     }
 
     pub(crate) fn show_resume_paused_goal_prompt(

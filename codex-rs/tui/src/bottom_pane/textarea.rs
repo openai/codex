@@ -33,6 +33,8 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::style::Style;
+use ratatui::style::Stylize;
+use ratatui::text::Span;
 use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::WidgetRef;
 use std::borrow::Cow;
@@ -356,6 +358,7 @@ impl TextArea {
     /// `None` means Vim editing is disabled, so callers should omit the mode
     /// indicator rather than rendering an insert-mode label for normal
     /// non-modal editing.
+    #[cfg(test)]
     pub(crate) fn vim_mode_label(&self) -> Option<&'static str> {
         if !self.vim_enabled {
             return None;
@@ -363,6 +366,17 @@ impl TextArea {
         Some(match self.vim_mode {
             VimMode::Normal => "Normal",
             VimMode::Insert => "Insert",
+        })
+    }
+
+    /// Return the styled footer indicator for the active Vim editing mode.
+    pub(crate) fn vim_mode_indicator_span(&self) -> Option<Span<'static>> {
+        if !self.vim_enabled {
+            return None;
+        }
+        Some(match self.vim_mode {
+            VimMode::Normal => "Vim: Normal".magenta(),
+            VimMode::Insert => "Vim: Insert".green(),
         })
     }
 

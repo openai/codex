@@ -357,8 +357,7 @@ impl ChatWidget {
                 tx.set_thread_name(name);
             }),
         );
-
-        self.bottom_pane.show_view(Box::new(view));
+        self.bottom_pane.show_text_prompt(view);
     }
 
     pub(super) fn ensure_thread_rename_allowed(&mut self) -> bool {
