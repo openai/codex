@@ -4452,7 +4452,7 @@ async fn code_mode_node_repl_text_evidence_is_visible_only_to_guardian(
     let check_detail = enhanced_transcripts && transcript_images && reviewer_constraint.is_none();
     let mut large_image = Cursor::new(Vec::new());
     if check_detail {
-        DynamicImage::new_rgba8(/*w*/ 2048, /*h*/ 2048)
+        DynamicImage::new_rgba8(/*w*/ 2049, /*h*/ 32)
             .write_to(&mut large_image, ImageFormat::Png)?;
     }
     let mut builder = test_codex()
@@ -4642,7 +4642,7 @@ await tools.exec_command({ cmd: "printf second", sandbox_permissions: "require_e
             let payload = reviewer_image_urls[1].split_once(',').unwrap().1;
             let dimensions =
                 image::load_from_memory(&BASE64_STANDARD.decode(payload)?)?.dimensions();
-            assert_eq!(dimensions, (1600, 1600));
+            assert_eq!(dimensions, (2048, 32));
         }
         for (index, marker) in [(image_index - 1, "before"), (image_index + 1, "after")] {
             let text = reviewer_user_content[index]["text"].as_str().unwrap();
