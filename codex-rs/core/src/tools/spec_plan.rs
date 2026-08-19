@@ -1069,7 +1069,7 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
             .iter()
             .any(|tool| tool == "send_user_message_async")
     {
-        registry.add(SendUserMessageAsyncHandler);
+        registry.add_with_exposure(SendUserMessageAsyncHandler, ToolExposure::DirectModelOnly);
     }
 
     if environment_mode.has_environment() && features.enabled(Feature::RequestPermissionsTool) {
