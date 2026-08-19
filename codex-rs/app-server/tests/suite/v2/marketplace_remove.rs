@@ -18,8 +18,6 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
 fn configured_marketplace_update() -> MarketplaceConfigUpdate<'static> {
     MarketplaceConfigUpdate {
-        last_updated: "2026-04-13T00:00:00Z",
-        last_revision: None,
         source_type: "git",
         source: "https://github.com/owner/repo.git",
         ref_name: Some("main"),

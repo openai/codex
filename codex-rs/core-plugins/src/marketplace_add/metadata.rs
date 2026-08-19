@@ -9,8 +9,6 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct MarketplaceInstallMetadata {
@@ -35,10 +33,7 @@ pub(super) fn record_added_marketplace_entry(
     install_metadata: &MarketplaceInstallMetadata,
 ) -> Result<(), MarketplaceAddError> {
     let source = install_metadata.config_source();
-    let timestamp = utc_timestamp_now()?;
     let update = MarketplaceConfigUpdate {
-        last_updated: &timestamp,
-        last_revision: None,
         source_type: install_metadata.config_source_type(),
         source: &source,
         ref_name: install_metadata.ref_name(),
@@ -204,58 +199,11 @@ fn config_sparse_paths(marketplace: &toml::Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn utc_timestamp_now() -> Result<String, MarketplaceAddError> {
-    let duration = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|err| {
-            MarketplaceAddError::Internal(format!("system clock is before Unix epoch: {err}"))
-        })?;
-    Ok(format_utc_timestamp(duration.as_secs() as i64))
-}
-
-fn format_utc_timestamp(seconds_since_epoch: i64) -> String {
-    const SECONDS_PER_DAY: i64 = 86_400;
-    let days = seconds_since_epoch.div_euclid(SECONDS_PER_DAY);
-    let seconds_of_day = seconds_since_epoch.rem_euclid(SECONDS_PER_DAY);
-    let (year, month, day) = civil_from_days(days);
-    let hour = seconds_of_day / 3_600;
-    let minute = (seconds_of_day % 3_600) / 60;
-    let second = seconds_of_day % 60;
-    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
-}
-
-fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
-    let days = days_since_epoch + 719_468;
-    let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
-    let day_of_era = days - era * 146_097;
-    let year_of_era =
-        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let mut year = year_of_era + era * 400;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let month_prime = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
-    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
-    year += if month <= 2 { 1 } else { 0 };
-    (year, month, day)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
-
-    #[test]
-    fn utc_timestamp_formats_unix_epoch_as_rfc3339_utc() {
-        assert_eq!(
-            format_utc_timestamp(/*seconds_since_epoch*/ 0),
-            "1970-01-01T00:00:00Z"
-        );
-        assert_eq!(
-            format_utc_timestamp(/*seconds_since_epoch*/ 1_775_779_200),
-            "2026-04-10T00:00:00Z"
-        );
-    }
 
     #[test]
     fn installed_marketplace_root_for_source_propagates_config_read_errors() {

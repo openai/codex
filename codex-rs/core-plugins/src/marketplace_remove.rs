@@ -119,8 +119,6 @@ mod tests {
             codex_home.path(),
             "debug",
             &MarketplaceConfigUpdate {
-                last_updated: "2026-04-13T00:00:00Z",
-                last_revision: None,
                 source_type: "git",
                 source: "https://github.com/owner/repo.git",
                 ref_name: Some("main"),
@@ -180,8 +178,6 @@ mod tests {
             codex_home.path(),
             "debug",
             &MarketplaceConfigUpdate {
-                last_updated: "2026-04-13T00:00:00Z",
-                last_revision: None,
                 source_type: "git",
                 source: "https://github.com/owner/repo.git",
                 ref_name: Some("main"),
@@ -243,8 +239,6 @@ mod tests {
             codex_home.path(),
             "debug",
             &MarketplaceConfigUpdate {
-                last_updated: "2026-04-13T00:00:00Z",
-                last_revision: None,
                 source_type: "git",
                 source: "https://github.com/owner/repo.git",
                 ref_name: Some("main"),

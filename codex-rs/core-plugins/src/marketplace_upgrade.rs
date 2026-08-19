@@ -3,6 +3,7 @@ mod git;
 
 use self::activation::activate_marketplace_root;
 use self::activation::installed_marketplace_metadata_matches;
+use self::activation::read_installed_marketplace_snapshot;
 use self::activation::write_installed_marketplace_metadata;
 use self::git::clone_git_source;
 use self::git::git_remote_revision;
@@ -14,8 +15,6 @@ use crate::marketplace_policy::MarketplacePolicy;
 use crate::marketplace_policy::validate_marketplace_name_for_add;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerStack;
-use codex_config::MarketplaceConfigUpdate;
-use codex_config::record_user_marketplace;
 use codex_config::types::MarketplaceConfig;
 use codex_config::types::MarketplaceSourceType;
 use codex_plugin::validate_plugin_segment;
@@ -44,7 +43,6 @@ struct ConfiguredGitMarketplace {
     source: String,
     ref_name: Option<String>,
     sparse_paths: Vec<String>,
-    last_revision: Option<String>,
 }
 
 #[derive(Default)]
@@ -200,7 +198,7 @@ fn parse_configured_git_marketplace(
         .map_err(|err| format!("invalid configured Git marketplace: {err}"))?;
     let MarketplaceConfig {
         last_updated: _,
-        last_revision,
+        last_revision: _,
         source_type,
         source,
         ref_name,
@@ -216,7 +214,6 @@ fn parse_configured_git_marketplace(
         source,
         ref_name,
         sparse_paths: sparse_paths.unwrap_or_default(),
-        last_revision,
     }))
 }
 
@@ -243,10 +240,10 @@ fn upgrade_configured_git_marketplace(
         mode,
     )?;
     let destination = install_root.join(&marketplace.name);
+    let previous_snapshot = read_installed_marketplace_snapshot(&destination, &marketplace.name);
     if validate_marketplace_root(&destination)
         .is_ok_and(|marketplace_name| marketplace_name == marketplace.name)
-        && marketplace.last_revision.as_deref() == Some(remote_revision.as_str())
-        && installed_marketplace_metadata_matches(&destination, marketplace, &remote_revision)
+        && installed_marketplace_metadata_matches(&previous_snapshot, marketplace, &remote_revision)
     {
         return Ok(None);
     }
@@ -286,24 +283,8 @@ fn upgrade_configured_git_marketplace(
         ));
     }
     write_installed_marketplace_metadata(staged_dir.path(), marketplace, &activated_revision)?;
-
-    let last_updated = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let update = MarketplaceConfigUpdate {
-        last_updated: &last_updated,
-        last_revision: Some(&activated_revision),
-        source_type: "git",
-        source: &marketplace.source,
-        ref_name: marketplace.ref_name.as_deref(),
-        sparse_paths: &marketplace.sparse_paths,
-    };
-    activate_marketplace_root(&destination, staged_dir, || {
-        ensure_configured_git_marketplace_unchanged(codex_home, marketplace)?;
-        record_user_marketplace(codex_home, &marketplace.name, &update).map_err(|err| {
-            format!(
-                "failed to record upgraded marketplace `{}` in user config.toml: {err}",
-                marketplace.name
-            )
-        })
+    activate_marketplace_root(&destination, staged_dir, &previous_snapshot, || {
+        ensure_configured_git_marketplace_unchanged(codex_home, marketplace)
     })?;
 
     AbsolutePathBuf::try_from(destination)

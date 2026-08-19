@@ -69,12 +69,9 @@ fn commit_marketplace_marker(root: &Path, marker: &str) -> Result<String> {
 
 fn configured_git_marketplace_update<'a>(
     source: &'a str,
-    last_revision: Option<&'a str>,
     ref_name: Option<&'a str>,
 ) -> MarketplaceConfigUpdate<'a> {
     MarketplaceConfigUpdate {
-        last_updated: "2026-04-13T00:00:00Z",
-        last_revision,
         source_type: "git",
         source,
         ref_name,
@@ -84,8 +81,6 @@ fn configured_git_marketplace_update<'a>(
 
 fn configured_local_marketplace_update(source: &str) -> MarketplaceConfigUpdate<'_> {
     MarketplaceConfigUpdate {
-        last_updated: "2026-04-13T00:00:00Z",
-        last_revision: None,
         source_type: "local",
         source,
         ref_name: None,
@@ -97,14 +92,13 @@ fn record_git_marketplace(
     codex_home: &Path,
     marketplace_name: &str,
     source: &Path,
-    last_revision: &str,
     ref_name: Option<&str>,
 ) -> Result<()> {
     let source = source.display().to_string();
     record_user_marketplace(
         codex_home,
         marketplace_name,
-        &configured_git_marketplace_update(&source, Some(last_revision), ref_name),
+        &configured_git_marketplace_update(&source, ref_name),
     )?;
     Ok(())
 }
@@ -148,25 +142,24 @@ async fn marketplace_upgrade_all_configured_git_marketplaces() -> Result<()> {
     let codex_home = TempDir::new()?;
     let debug_source = TempDir::new()?;
     let tools_source = TempDir::new()?;
-    let debug_old_revision = init_marketplace_repo(debug_source.path(), "debug", "debug old")?;
-    let tools_old_revision = init_marketplace_repo(tools_source.path(), "tools", "tools old")?;
+    init_marketplace_repo(debug_source.path(), "debug", "debug old")?;
+    init_marketplace_repo(tools_source.path(), "tools", "tools old")?;
     let debug_new_revision = commit_marketplace_marker(debug_source.path(), "debug new")?;
     let tools_new_revision = commit_marketplace_marker(tools_source.path(), "tools new")?;
     record_git_marketplace(
         codex_home.path(),
         "debug",
         debug_source.path(),
-        &debug_old_revision,
         Some(&debug_new_revision),
     )?;
     record_git_marketplace(
         codex_home.path(),
         "tools",
         tools_source.path(),
-        &tools_old_revision,
         Some(&tools_new_revision),
     )?;
     disable_plugin_startup_tasks(codex_home.path())?;
+    let config_before = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -195,8 +188,19 @@ async fn marketplace_upgrade_all_configured_git_marketplaces() -> Result<()> {
         "tools new"
     );
     let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-    assert!(config.contains(&debug_new_revision));
-    assert!(config.contains(&tools_new_revision));
+    assert_eq!(config, config_before);
+    for (root, expected_revision) in [
+        (debug_root, debug_new_revision),
+        (tools_root, tools_new_revision),
+    ] {
+        let metadata: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(
+            root.as_path().join(".codex-marketplace-install.json"),
+        )?)?;
+        assert_eq!(
+            metadata.get("revision").and_then(serde_json::Value::as_str),
+            Some(expected_revision.as_str())
+        );
+    }
     Ok(())
 }
 
@@ -206,7 +210,7 @@ async fn automatic_upgrade_isolates_git_while_explicit_install_preserves_configu
     let codex_home = TempDir::new()?;
     let source = TempDir::new()?;
     let plugin_source = TempDir::new()?;
-    let old_revision = init_marketplace_repo(source.path(), "trusted", "old")?;
+    init_marketplace_repo(source.path(), "trusted", "old")?;
 
     init_marketplace_repo(plugin_source.path(), "plugin", "plugin")?;
     let plugin_root = plugin_source.path().join(".codex-plugin");
@@ -237,7 +241,6 @@ async fn automatic_upgrade_isolates_git_while_explicit_install_preserves_configu
         codex_home.path(),
         "trusted",
         source.path(),
-        &old_revision,
         /*ref_name*/ None,
     )?;
     let config_path = codex_home.path().join("config.toml");
@@ -340,26 +343,21 @@ async fn marketplace_upgrade_named_marketplace_only() -> Result<()> {
     let codex_home = TempDir::new()?;
     let debug_source = TempDir::new()?;
     let tools_source = TempDir::new()?;
-    let debug_old_revision = init_marketplace_repo(debug_source.path(), "debug", "debug old")?;
-    let tools_old_revision = init_marketplace_repo(tools_source.path(), "tools", "tools old")?;
+    init_marketplace_repo(debug_source.path(), "debug", "debug old")?;
+    init_marketplace_repo(tools_source.path(), "tools", "tools old")?;
     commit_marketplace_marker(debug_source.path(), "debug new")?;
     commit_marketplace_marker(tools_source.path(), "tools new")?;
     record_git_marketplace(
         codex_home.path(),
         "debug",
         debug_source.path(),
-        &debug_old_revision,
         /*ref_name*/ None,
     )?;
     let tools_source_alias = "manual:tools";
     record_user_marketplace(
         codex_home.path(),
         "tools",
-        &configured_git_marketplace_update(
-            tools_source_alias,
-            Some(&tools_old_revision),
-            /*ref_name*/ None,
-        ),
+        &configured_git_marketplace_update(tools_source_alias, /*ref_name*/ None),
     )?;
     disable_plugin_startup_tasks(codex_home.path())?;
     let tools_rewrite = format!("url.{}.insteadOf", tools_source.path().display());
@@ -402,13 +400,12 @@ async fn marketplace_upgrade_named_marketplace_only() -> Result<()> {
 async fn marketplace_upgrade_returns_empty_roots_when_already_up_to_date() -> Result<()> {
     let codex_home = TempDir::new()?;
     let source = TempDir::new()?;
-    let old_revision = init_marketplace_repo(source.path(), "debug", "debug old")?;
+    init_marketplace_repo(source.path(), "debug", "debug old")?;
     commit_marketplace_marker(source.path(), "debug new")?;
     record_git_marketplace(
         codex_home.path(),
         "debug",
         source.path(),
-        &old_revision,
         /*ref_name*/ None,
     )?;
     disable_plugin_startup_tasks(codex_home.path())?;

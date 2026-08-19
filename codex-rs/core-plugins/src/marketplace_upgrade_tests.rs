@@ -38,7 +38,6 @@ last_revision = "abc123"
             source: "https://github.com/example/good.git".to_string(),
             ref_name: Some("main".to_string()),
             sparse_paths: vec!["plugins".to_string()],
-            last_revision: Some("abc123".to_string()),
         })
     );
 }
@@ -86,6 +85,10 @@ source = {good_url:?}
             AbsolutePathBuf::try_from(marketplace_install_root(codex_home.path()).join("good"))
                 .expect("installed marketplace root")
         ]
+    );
+    assert_eq!(
+        std::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).unwrap(),
+        config
     );
 }
 
@@ -241,7 +244,6 @@ ref = "missing-ref"
         source: raw_source,
         ref_name: Some("missing-ref".to_string()),
         sparse_paths: Vec::new(),
-        last_revision: None,
     };
     let normalized_source = MarketplaceSource::Git {
         url: normalized_url,
@@ -285,7 +287,6 @@ fn up_to_date_fast_path_validates_marketplace_name() {
         source: missing_source.clone(),
         ref_name: Some(REVISION.to_string()),
         sparse_paths: Vec::new(),
-        last_revision: Some(REVISION.to_string()),
     };
     super::activation::write_installed_marketplace_metadata(&destination, &marketplace, REVISION)
         .expect("write installed marketplace metadata");
@@ -304,6 +305,79 @@ fn up_to_date_fast_path_validates_marketplace_name() {
     .expect_err("mismatched marketplace name must not use the up-to-date fast path");
 
     assert!(err.contains("git clone marketplace source failed"));
+}
+
+#[test]
+fn stale_activation_restores_newer_concurrently_installed_marketplace() {
+    const INITIAL_REVISION: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const STALE_REVISION: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const NEWER_REVISION: &str = "cccccccccccccccccccccccccccccccccccccccc";
+
+    let codex_home = TempDir::new().expect("create Codex home");
+    let install_root = marketplace_install_root(codex_home.path());
+    let destination = install_root.join("good");
+    std::fs::create_dir_all(&destination).expect("create installed marketplace root");
+    let marketplace = ConfiguredGitMarketplace {
+        name: "good".to_string(),
+        source: "https://github.com/example/good.git".to_string(),
+        ref_name: Some("main".to_string()),
+        sparse_paths: Vec::new(),
+    };
+    super::activation::write_installed_marketplace_metadata(
+        &destination,
+        &marketplace,
+        INITIAL_REVISION,
+    )
+    .expect("write initial installed marketplace metadata");
+    let previous_snapshot =
+        super::activation::read_installed_marketplace_snapshot(&destination, &marketplace.name);
+
+    std::fs::write(destination.join("marker.txt"), "newer snapshot")
+        .expect("write newer installed marketplace snapshot");
+    super::activation::write_installed_marketplace_metadata(
+        &destination,
+        &marketplace,
+        NEWER_REVISION,
+    )
+    .expect("write newer installed marketplace metadata");
+
+    let staged_dir = tempfile::Builder::new()
+        .prefix("marketplace-upgrade-")
+        .tempdir_in(&install_root)
+        .expect("create stale upgrade staging directory");
+    std::fs::write(staged_dir.path().join("marker.txt"), "stale snapshot")
+        .expect("write stale staged marketplace snapshot");
+    super::activation::write_installed_marketplace_metadata(
+        staged_dir.path(),
+        &marketplace,
+        STALE_REVISION,
+    )
+    .expect("write stale staged marketplace metadata");
+
+    let err = super::activation::activate_marketplace_root(
+        &destination,
+        staged_dir,
+        &previous_snapshot,
+        || Ok(()),
+    )
+    .expect_err("stale upgrade must not replace a newer installed snapshot");
+
+    assert_eq!(
+        err,
+        "installed marketplace `good` changed while auto-upgrade was in flight"
+    );
+    assert_eq!(
+        std::fs::read_to_string(destination.join("marker.txt"))
+            .expect("read restored marketplace snapshot"),
+        "newer snapshot"
+    );
+    let restored_snapshot =
+        super::activation::read_installed_marketplace_snapshot(&destination, &marketplace.name);
+    assert!(super::activation::installed_marketplace_metadata_matches(
+        &restored_snapshot,
+        &marketplace,
+        NEWER_REVISION
+    ));
 }
 
 fn config_layer_stack(codex_home: &Path, config: &str) -> ConfigLayerStack {

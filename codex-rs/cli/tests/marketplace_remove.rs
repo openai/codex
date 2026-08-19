@@ -17,8 +17,6 @@ fn codex_command(codex_home: &Path) -> Result<assert_cmd::Command> {
 
 fn configured_marketplace_update() -> MarketplaceConfigUpdate<'static> {
     MarketplaceConfigUpdate {
-        last_updated: "2026-04-13T00:00:00Z",
-        last_revision: None,
         source_type: "git",
         source: "https://github.com/owner/repo.git",
         ref_name: Some("main"),

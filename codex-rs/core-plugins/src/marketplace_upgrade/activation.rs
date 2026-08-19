@@ -19,27 +19,58 @@ struct InstalledMarketplaceMetadata {
     revision: String,
 }
 
-pub(super) fn installed_marketplace_metadata_matches(
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct InstalledMarketplaceSnapshot {
+    marketplace_name: String,
+    exists: bool,
+    metadata: Option<InstalledMarketplaceMetadata>,
+}
+
+pub(super) fn read_installed_marketplace_snapshot(
     root: &Path,
-    marketplace: &ConfiguredGitMarketplace,
-    revision: &str,
-) -> bool {
+    marketplace_name: &str,
+) -> InstalledMarketplaceSnapshot {
+    if !root.exists() {
+        return InstalledMarketplaceSnapshot {
+            marketplace_name: marketplace_name.to_string(),
+            exists: false,
+            metadata: None,
+        };
+    }
     let metadata = match std::fs::read_to_string(installed_marketplace_metadata_path(root)) {
         Ok(metadata) => metadata,
-        Err(_) => return false,
+        Err(_) => {
+            return InstalledMarketplaceSnapshot {
+                marketplace_name: marketplace_name.to_string(),
+                exists: true,
+                metadata: None,
+            };
+        }
     };
     let metadata = match serde_json::from_str::<InstalledMarketplaceMetadata>(&metadata) {
-        Ok(metadata) => metadata,
+        Ok(metadata) => Some(metadata),
         Err(err) => {
             warn!(
-                marketplace = marketplace.name,
+                marketplace = marketplace_name,
                 error = %err,
                 "failed to parse activated marketplace metadata"
             );
-            return false;
+            None
         }
     };
-    metadata == installed_marketplace_metadata(marketplace, revision)
+    InstalledMarketplaceSnapshot {
+        marketplace_name: marketplace_name.to_string(),
+        exists: true,
+        metadata,
+    }
+}
+
+pub(super) fn installed_marketplace_metadata_matches(
+    snapshot: &InstalledMarketplaceSnapshot,
+    marketplace: &ConfiguredGitMarketplace,
+    revision: &str,
+) -> bool {
+    snapshot.metadata.as_ref() == Some(&installed_marketplace_metadata(marketplace, revision))
 }
 
 pub(super) fn write_installed_marketplace_metadata(
@@ -57,6 +88,7 @@ pub(super) fn write_installed_marketplace_metadata(
 pub(super) fn activate_marketplace_root(
     destination: &Path,
     staged_dir: TempDir,
+    previous_snapshot: &InstalledMarketplaceSnapshot,
     after_activate: impl FnOnce() -> Result<(), String>,
 ) -> Result<(), String> {
     let staged_root = staged_dir.path();
@@ -109,7 +141,18 @@ pub(super) fn activate_marketplace_root(
             };
         }
 
-        if let Err(err) = after_activate() {
+        let activation_result = if read_installed_marketplace_snapshot(
+            &backup_root,
+            &previous_snapshot.marketplace_name,
+        ) != *previous_snapshot
+        {
+            Err(installed_marketplace_snapshot_changed_error(
+                previous_snapshot,
+            ))
+        } else {
+            after_activate()
+        };
+        if let Err(err) = activation_result {
             let remove_result = std::fs::remove_dir_all(destination);
             let rollback_result =
                 remove_result.and_then(|()| std::fs::rename(&backup_root, destination));
@@ -135,7 +178,14 @@ pub(super) fn activate_marketplace_root(
             destination.display()
         )
     })?;
-    if let Err(err) = after_activate() {
+    let activation_result = if previous_snapshot.exists {
+        Err(installed_marketplace_snapshot_changed_error(
+            previous_snapshot,
+        ))
+    } else {
+        after_activate()
+    };
+    if let Err(err) = activation_result {
         let remove_result = std::fs::remove_dir_all(destination);
         return match remove_result {
             Ok(()) => Err(err),
@@ -147,6 +197,13 @@ pub(super) fn activate_marketplace_root(
     }
 
     Ok(())
+}
+
+fn installed_marketplace_snapshot_changed_error(snapshot: &InstalledMarketplaceSnapshot) -> String {
+    format!(
+        "installed marketplace `{}` changed while auto-upgrade was in flight",
+        snapshot.marketplace_name
+    )
 }
 
 fn installed_marketplace_metadata(

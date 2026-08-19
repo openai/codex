@@ -11,8 +11,6 @@ use toml_edit::value;
 use crate::CONFIG_TOML_FILE;
 
 pub struct MarketplaceConfigUpdate<'a> {
-    pub last_updated: &'a str,
-    pub last_revision: Option<&'a str>,
     pub source_type: &'a str,
     pub source: &'a str,
     pub ref_name: Option<&'a str>,
@@ -100,10 +98,6 @@ fn upsert_marketplace(
     };
     let mut entry = TomlTable::new();
     entry.set_implicit(false);
-    entry["last_updated"] = value(update.last_updated.to_string());
-    if let Some(last_revision) = update.last_revision {
-        entry["last_revision"] = value(last_revision.to_string());
-    }
     entry["source_type"] = value(update.source_type.to_string());
     entry["source"] = value(update.source.to_string());
     if let Some(ref_name) = update.ref_name {
@@ -187,11 +181,44 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
+    fn record_user_marketplace_omits_runtime_update_metadata() {
+        let codex_home = TempDir::new().unwrap();
+        let update = MarketplaceConfigUpdate {
+            source_type: "git",
+            source: "https://github.com/owner/repo.git",
+            ref_name: Some("main"),
+            sparse_paths: &[],
+        };
+
+        record_user_marketplace(codex_home.path(), "debug", &update).unwrap();
+
+        let config: toml::Value =
+            toml::from_str(&fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).unwrap())
+                .unwrap();
+        let marketplace = config
+            .get("marketplaces")
+            .and_then(|marketplaces| marketplaces.get("debug"))
+            .expect("marketplace declaration");
+        assert_eq!(
+            marketplace.get("source_type").and_then(toml::Value::as_str),
+            Some("git")
+        );
+        assert_eq!(
+            marketplace.get("source").and_then(toml::Value::as_str),
+            Some("https://github.com/owner/repo.git")
+        );
+        assert_eq!(
+            marketplace.get("ref").and_then(toml::Value::as_str),
+            Some("main")
+        );
+        assert!(marketplace.get("last_updated").is_none());
+        assert!(marketplace.get("last_revision").is_none());
+    }
+
+    #[test]
     fn remove_user_marketplace_removes_requested_entry() {
         let codex_home = TempDir::new().unwrap();
         let update = MarketplaceConfigUpdate {
-            last_updated: "2026-04-13T00:00:00Z",
-            last_revision: None,
             source_type: "git",
             source: "https://github.com/owner/repo.git",
             ref_name: Some("main"),
@@ -227,8 +254,6 @@ mod tests {
     fn remove_user_marketplace_config_reports_case_mismatch() {
         let codex_home = TempDir::new().unwrap();
         let update = MarketplaceConfigUpdate {
-            last_updated: "2026-04-13T00:00:00Z",
-            last_revision: None,
             source_type: "git",
             source: "https://github.com/owner/repo.git",
             ref_name: Some("main"),
