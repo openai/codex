@@ -93,16 +93,6 @@ impl<const MAX_BYTES: usize> HeadTailBuffer<MAX_BYTES> {
         out
     }
 
-    /// Drain the retained output and omission metadata, resetting this buffer's
-    /// contents while preserving its configured capacity.
-    pub(crate) fn drain(&mut self) -> Self {
-        Self {
-            head: std::mem::take(&mut self.head),
-            tail: std::mem::take(&mut self.tail),
-            omitted_bytes: std::mem::take(&mut self.omitted_bytes),
-        }
-    }
-
     /// Append a later buffer with the same budget. This preserves the summary
     /// of the original concatenated output, including its omission count.
     pub(crate) fn push_buffer(&mut self, mut buffer: Self) {

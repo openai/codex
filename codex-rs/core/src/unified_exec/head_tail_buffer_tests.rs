@@ -43,24 +43,6 @@ fn head_budget_zero_keeps_only_last_byte_in_tail() {
 }
 
 #[test]
-fn draining_resets_state_and_push_buffer_preserves_omissions() {
-    let mut buf = HeadTailBuffer::<10>::default();
-    buf.push_chunk(b"0123456789".to_vec());
-    buf.push_chunk(b"ab".to_vec());
-
-    let drained = buf.drain();
-    let mut collected = HeadTailBuffer::<10>::default();
-    collected.push_buffer(drained);
-
-    assert_eq!(buf.retained_bytes(), 0);
-    assert_eq!(buf.omitted_bytes(), 0);
-    assert_eq!(buf.to_bytes(), b"".to_vec());
-    assert_eq!(collected.to_bytes(), b"01234789ab".to_vec());
-    assert_eq!(collected.omitted_bytes(), 2);
-    assert_eq!(collected.total_bytes(), 12);
-}
-
-#[test]
 fn chunk_larger_than_tail_budget_keeps_only_tail_end() {
     let mut buf = HeadTailBuffer::<10>::default();
     buf.push_chunk(b"0123456789".to_vec());
