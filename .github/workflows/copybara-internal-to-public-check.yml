@@ -327,20 +327,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Stage npm package
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          CODEX_VERSION=0.133.0-alpha.4
-          WORKFLOW_URL="https://github.com/openai/codex/actions/runs/26201494185"
-          OUTPUT_DIR="${RUNNER_TEMP}"
-          python3 ./scripts/stage_npm_packages.py \
-            --release-version "$CODEX_VERSION" \
-            --workflow-url "$WORKFLOW_URL" \
-            --package codex \
-            --output-dir "$OUTPUT_DIR"
-
       - name: Prettier (run `pnpm run format:fix` to fix)
         run: pnpm run format
 
