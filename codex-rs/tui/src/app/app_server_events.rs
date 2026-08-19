@@ -116,16 +116,22 @@ impl App {
         }
         match &notification {
             ServerNotification::ServerRequestResolved(notification) => {
+                let notification_thread_id =
+                    codex_protocol::ThreadId::from_string(&notification.thread_id).ok();
                 self.pending_primary_events.retain(|event| {
                     !matches!(event, ThreadBufferedEvent::Request(request)
-                        if request.id() == &notification.request_id)
+                        if request.id() == &notification.request_id
+                            && server_request_thread_id(request) == notification_thread_id)
                 });
-                for requests in self.agents_overview.dispatched_requests.values_mut() {
+                if let Some(thread_id) = notification_thread_id
+                    && let Some(requests) =
+                        self.agents_overview.dispatched_requests.get_mut(&thread_id)
+                {
                     requests.retain(|request| request.id() != &notification.request_id);
                 }
                 if let Some(request) = self
                     .pending_app_server_requests
-                    .resolve_notification(&notification.request_id)
+                    .resolve_notification(&notification.thread_id, &notification.request_id)
                 {
                     self.chat_widget.dismiss_app_server_request(&request);
                     if self.startup_pending_protected_request {

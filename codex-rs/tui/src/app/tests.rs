@@ -377,7 +377,30 @@ async fn enqueue_primary_thread_session_replays_buffered_approval_after_attach()
             .note_server_request(&approval_request),
         None
     );
-    app.enqueue_primary_thread_request(approval_request).await?;
+    app.agents_overview
+        .dispatched_requests
+        .insert(thread_id, vec![approval_request.clone()]);
+    app.enqueue_primary_thread_request(approval_request.clone())
+        .await?;
+    let (mut app_server, requests, proxy) = session_lifecycle_requests::start_recording_app_server(
+        &app.config,
+        /*blocked_thread_list*/ None,
+        /*failed_thread_name*/ None,
+    )
+    .await?;
+    app.handle_app_server_event(
+        &app_server,
+        codex_app_server_client::AppServerEvent::ServerNotification(Box::new(
+            ServerNotification::ServerRequestResolved(
+                codex_app_server_protocol::ServerRequestResolvedNotification {
+                    thread_id: ThreadId::new().to_string(),
+                    request_id: AppServerRequestId::Integer(1),
+                },
+            ),
+        )),
+    )
+    .await;
+    assert_eq!(app.agents_overview.dispatched_requests[&thread_id].len(), 1);
     app.enqueue_primary_thread_session(
         test_thread_session(thread_id, test_path_buf("/tmp/project")),
         Vec::new(),
@@ -404,21 +427,49 @@ async fn enqueue_primary_thread_session_replays_buffered_approval_after_attach()
     ));
 
     app.handle_thread_event_now(event);
-    app.chat_widget
-        .handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+    let background_thread_id = ThreadId::new();
+    let mut background_request = approval_request;
+    let ServerRequest::CommandExecutionRequestApproval { request_id, params } =
+        &mut background_request
+    else {
+        unreachable!("expected a command approval request");
+    };
+    *request_id = AppServerRequestId::Integer(2);
+    params.thread_id = background_thread_id.to_string();
+    app.pending_app_server_requests
+        .note_server_request(&background_request);
+    app.enqueue_thread_request(background_thread_id, background_request)
+        .await?;
 
-    while let Ok(app_event) = app_event_rx.try_recv() {
-        if let AppEvent::SubmitThreadOp {
-            thread_id: op_thread_id,
-            ..
-        } = app_event
-        {
-            assert_eq!(op_thread_id, thread_id);
-            return Ok(());
-        }
+    for expected_thread_id in [thread_id, background_thread_id] {
+        assert!(app.chat_widget.has_active_view());
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        let (actual_thread_id, op) = std::iter::from_fn(|| app_event_rx.try_recv().ok())
+            .find_map(|event| match event {
+                AppEvent::SubmitThreadOp { thread_id, op } => Some((thread_id, op)),
+                _ => None,
+            })
+            .expect("approval should submit a thread-scoped operation");
+        assert_eq!(actual_thread_id, expected_thread_id);
+        app.submit_thread_op(&mut app_server, expected_thread_id, op)
+            .await?;
     }
+    assert!(!app.chat_widget.has_active_view());
 
-    panic!("expected approval action to submit a thread-scoped op");
+    app_server.shutdown().await?;
+    proxy.await??;
+    assert_eq!(
+        requests
+            .lock()
+            .expect("request recorder lock")
+            .iter()
+            .filter(|request| request.method == "server/request/response")
+            .map(|request| request.id.clone())
+            .collect::<Vec<_>>(),
+        (1..=2).map(AppServerRequestId::Integer).collect::<Vec<_>>()
+    );
+    Ok(())
 }
 
 #[tokio::test]
@@ -445,7 +496,7 @@ async fn resolved_buffered_approval_does_not_become_actionable_after_drain() -> 
 
     let resolved = app
         .pending_app_server_requests
-        .resolve_notification(&AppServerRequestId::Integer(1))
+        .resolve_notification(&thread_id.to_string(), &AppServerRequestId::Integer(1))
         .expect("matching app-server request should resolve");
     app.chat_widget.dismiss_app_server_request(&resolved);
     while app_event_rx.try_recv().is_ok() {}
@@ -4874,11 +4925,14 @@ async fn background_side_cleanup_removes_local_state_and_ignores_late_events() -
     .await;
     let resolution = app
         .pending_app_server_requests
-        .take_resolution(Op::ExecApproval {
-            id: "approval-1".to_string(),
-            turn_id: None,
-            decision: codex_app_server_protocol::CommandExecutionApprovalDecision::Accept,
-        })
+        .take_resolution(
+            &side_thread_id.to_string(),
+            Op::ExecApproval {
+                id: "approval-1".to_string(),
+                turn_id: None,
+                decision: codex_app_server_protocol::CommandExecutionApprovalDecision::Accept,
+            },
+        )
         .expect("approval resolution should serialize");
     assert_eq!(resolution, None);
     Ok(())

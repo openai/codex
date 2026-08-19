@@ -1032,7 +1032,19 @@ impl ChatWidget {
     pub(crate) fn dismiss_app_server_request(&mut self, request: &ResolvedAppServerRequest) {
         // A remotely resolved request must not remain user-actionable. It may be
         // materialized in the bottom pane or still deferred behind active streaming.
-        let removed_deferred = self.interrupts.remove_resolved_prompt(request);
+        let request_thread_id = match request {
+            ResolvedAppServerRequest::ExecApproval { thread_id, .. }
+            | ResolvedAppServerRequest::FileChangeApproval { thread_id, .. }
+            | ResolvedAppServerRequest::PermissionsApproval { thread_id, .. } => {
+                Some(thread_id.as_str())
+            }
+            ResolvedAppServerRequest::UserInput { .. }
+            | ResolvedAppServerRequest::McpElicitation { .. } => None,
+        };
+        let removed_deferred = request_thread_id.is_none_or(|request_thread_id| {
+            self.thread_id
+                .is_some_and(|thread_id| thread_id.to_string() == request_thread_id)
+        }) && self.interrupts.remove_resolved_prompt(request);
         let removed_visible = self.bottom_pane.dismiss_app_server_request(request);
         if removed_deferred || removed_visible {
             self.request_redraw();

@@ -120,7 +120,7 @@ pub(crate) struct McpElicitationApprovalRequest {
 }
 
 impl ApprovalRequest {
-    fn thread_id(&self) -> ThreadId {
+    pub(super) fn thread_id(&self) -> ThreadId {
         match self {
             ApprovalRequest::Exec(request) => request.thread_id,
             ApprovalRequest::Permissions(request) => request.thread_id,
@@ -142,16 +142,16 @@ impl ApprovalRequest {
         match (self, request) {
             (
                 ApprovalRequest::Exec(request),
-                ResolvedAppServerRequest::ExecApproval { id: resolved_id },
-            ) => request.id == *resolved_id,
+                ResolvedAppServerRequest::ExecApproval { thread_id, id },
+            ) => request.thread_id.to_string() == *thread_id && request.id == *id,
             (
                 ApprovalRequest::Permissions(request),
-                ResolvedAppServerRequest::PermissionsApproval { id },
-            ) => request.call_id == *id,
+                ResolvedAppServerRequest::PermissionsApproval { thread_id, id },
+            ) => request.thread_id.to_string() == *thread_id && request.call_id == *id,
             (
                 ApprovalRequest::ApplyPatch(request),
-                ResolvedAppServerRequest::FileChangeApproval { id: resolved_id },
-            ) => request.id == *resolved_id,
+                ResolvedAppServerRequest::FileChangeApproval { thread_id, id },
+            ) => request.thread_id.to_string() == *thread_id && request.id == *id,
             (
                 ApprovalRequest::McpElicitation(request),
                 ResolvedAppServerRequest::McpElicitation {
@@ -1475,10 +1475,20 @@ mod tests {
     fn resolved_request_dismisses_overlay_without_emitting_abort() {
         let (tx, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
-        let mut view = make_overlay(make_exec_request(), tx, Features::with_defaults());
+        let request = make_exec_request();
+        let thread_id = request.thread_id();
+        let mut view = make_overlay(request, tx, Features::with_defaults());
 
         assert!(
+            !view.dismiss_app_server_request(&ResolvedAppServerRequest::ExecApproval {
+                thread_id: ThreadId::new().to_string(),
+                id: "test".to_string(),
+            })
+        );
+        assert!(!view.is_complete());
+        assert!(
             view.dismiss_app_server_request(&ResolvedAppServerRequest::ExecApproval {
+                thread_id: thread_id.to_string(),
                 id: "test".to_string(),
             })
         );

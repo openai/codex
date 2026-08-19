@@ -126,11 +126,11 @@ impl QueuedInterrupt {
     fn matches_resolved_prompt(&self, request: &ResolvedAppServerRequest) -> bool {
         match self {
             QueuedInterrupt::ExecApproval(ev) => {
-                matches!(request, ResolvedAppServerRequest::ExecApproval { id }
+                matches!(request, ResolvedAppServerRequest::ExecApproval { id, .. }
                     if ev.effective_approval_id() == id.as_str())
             }
             QueuedInterrupt::ApplyPatchApproval(ev) => {
-                matches!(request, ResolvedAppServerRequest::FileChangeApproval { id }
+                matches!(request, ResolvedAppServerRequest::FileChangeApproval { id, .. }
                     if ev.call_id == id.as_str())
             }
             QueuedInterrupt::Elicitation { request_id, params } => {
@@ -140,7 +140,7 @@ impl QueuedInterrupt {
                 } if params.server_name == server_name.as_str() && request_id == resolved_request_id)
             }
             QueuedInterrupt::RequestPermissions(ev) => {
-                matches!(request, ResolvedAppServerRequest::PermissionsApproval { id }
+                matches!(request, ResolvedAppServerRequest::PermissionsApproval { id, .. }
                     if ev.call_id == id.as_str())
             }
             QueuedInterrupt::RequestUserInput(ev) => {
@@ -242,6 +242,7 @@ mod tests {
 
         assert!(
             !manager.remove_resolved_prompt(&ResolvedAppServerRequest::ExecApproval {
+                thread_id: "thread-1".to_string(),
                 id: "call".to_string(),
             })
         );
@@ -249,6 +250,7 @@ mod tests {
 
         assert!(
             manager.remove_resolved_prompt(&ResolvedAppServerRequest::ExecApproval {
+                thread_id: "thread-1".to_string(),
                 id: "approval".to_string(),
             })
         );
@@ -263,6 +265,7 @@ mod tests {
 
         assert!(
             !manager.remove_resolved_prompt(&ResolvedAppServerRequest::ExecApproval {
+                thread_id: "thread-1".to_string(),
                 id: "call".to_string(),
             })
         );
