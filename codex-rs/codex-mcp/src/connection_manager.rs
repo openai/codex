@@ -53,6 +53,7 @@ use crate::tools::filter_tools;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use anyhow::bail;
 use codex_config::McpServerTransportConfig;
 use codex_diagnostics::Gauge;
 use codex_diagnostics::GaugeGuard;
@@ -862,6 +863,8 @@ impl McpConnectionSet {
         tool: &str,
         arguments: Option<serde_json::Value>,
         meta: Option<serde_json::Value>,
+        requested_timeout: Option<Duration>,
+        wait_for_server: bool,
     ) -> Result<CallToolResult> {
         let view = self
             .servers
@@ -872,14 +875,32 @@ impl McpConnectionSet {
                 "tool '{tool}' is disabled for MCP server '{server}'"
             ));
         }
-        let client = view
-            .connection
-            .client()
-            .await
-            .context("failed to get client")?;
+        let client = if wait_for_server {
+            view.connection
+                .client()
+                .await
+                .context("failed to get client")?
+        } else {
+            let client = view
+                .connection
+                .client
+                .ready_client()
+                .ok_or_else(|| anyhow!("MCP server '{server}' is not connected"))?;
+            if client.client.is_closed().await {
+                bail!("MCP server '{server}' is not connected");
+            }
+            client
+        };
+
+        let effective_timeout = match (view.tool_timeout, requested_timeout) {
+            (Some(server_timeout), Some(requested_timeout)) => {
+                Some(server_timeout.min(requested_timeout))
+            }
+            (server_timeout, requested_timeout) => server_timeout.or(requested_timeout),
+        };
         let result: rmcp::model::CallToolResult = client
             .client
-            .call_tool(tool.to_string(), arguments, meta, view.tool_timeout)
+            .call_tool(tool.to_string(), arguments, meta, effective_timeout)
             .await
             .with_context(|| format!("tool call failed for `{server}/{tool}`"))?;
 

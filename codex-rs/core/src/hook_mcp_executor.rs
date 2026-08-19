@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use anyhow::Context;
 use anyhow::bail;
 use codex_hooks::HookMcpCall;
 use codex_hooks::HookMcpExecutor;
@@ -19,22 +18,15 @@ pub(crate) struct CoreHookMcpExecutor {
 impl HookMcpExecutor for CoreHookMcpExecutor {
     fn execute(&self, call: HookMcpCall) -> BoxFuture<'_, anyhow::Result<String>> {
         async move {
-            let prepared_call = self
+            let result = self
                 .runtime
-                .prepare_call_if_connected(&call.server, &call.tool)
-                .await
-                .with_context(|| {
-                    format!(
-                        "MCP server `{}` or tool `{}` is not connected and available",
-                        call.server, call.tool
-                    )
-                })?;
-
-            let result = prepared_call
-                .call(
+                .latest_call_tool(
+                    &call.server,
+                    &call.tool,
                     Some(Value::Object(call.input)),
                     Some(serde_json::json!({ "threadId": self.thread_id.to_string() })),
                     Some(call.timeout),
+                    /*wait_for_server*/ false,
                 )
                 .await?;
             let text = result

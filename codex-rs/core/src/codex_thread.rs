@@ -777,7 +777,10 @@ impl CodexThread {
         self.session
             .services
             .mcp_runtime
-            .latest_call_tool(server, tool, arguments, meta)
+            .latest_call_tool(
+                server, tool, arguments, meta, /*requested_timeout*/ None,
+                /*wait_for_server*/ true,
+            )
             .await
     }
 
