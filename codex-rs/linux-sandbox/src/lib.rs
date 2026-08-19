@@ -12,6 +12,8 @@ mod bwrap;
 #[cfg(target_os = "linux")]
 mod exec_util;
 #[cfg(target_os = "linux")]
+mod fd_mount;
+#[cfg(target_os = "linux")]
 mod landlock;
 #[cfg(target_os = "linux")]
 mod launcher;

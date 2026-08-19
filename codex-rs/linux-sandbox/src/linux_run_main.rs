@@ -131,6 +131,10 @@ pub struct LandlockCommand {
     #[arg(long = "proxy-route-spec", hide = true)]
     pub proxy_route_spec: Option<String>,
 
+    /// Inherited fallback mounts that must be authenticated before sandboxed code runs.
+    #[arg(long = "verify-fd-mount", hide = true)]
+    pub verify_fd_mounts: Vec<String>,
+
     /// When set, skip mounting a fresh `/proc` even though PID isolation is
     /// still enabled. This is primarily intended for restrictive container
     /// environments that deny `--proc /proc`.
@@ -158,12 +162,16 @@ pub fn run_main() -> ! {
         apply_seccomp_then_exec,
         allow_network_for_proxy,
         proxy_route_spec,
+        verify_fd_mounts,
         no_proc,
         command,
     } = LandlockCommand::parse();
 
     if command.is_empty() {
         panic!("No command specified to execute.");
+    }
+    if !apply_seccomp_then_exec && !verify_fd_mounts.is_empty() {
+        panic!("--verify-fd-mount is only supported in the inner sandbox stage");
     }
     ensure_inner_stage_mode_is_valid(apply_seccomp_then_exec, use_legacy_landlock);
     let EffectivePermissions {
@@ -181,6 +189,10 @@ pub fn run_main() -> ! {
     // Inner stage: apply seccomp/no_new_privs after bubblewrap has already
     // established the filesystem view.
     if apply_seccomp_then_exec {
+        if let Err(err) = crate::fd_mount::verify_fd_mounts(&verify_fd_mounts) {
+            panic!("failed to verify descriptor-backed bubblewrap mount: {err}");
+        }
+
         let mut capability_header = [LINUX_CAPABILITY_VERSION_3, 0];
         let mut capability_sets = [[0_u32; 3]; 2];
         // SAFETY: capability ABI version 3 uses a [version, pid] header and
