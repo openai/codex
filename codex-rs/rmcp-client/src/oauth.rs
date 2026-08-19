@@ -51,6 +51,7 @@ use sha2::Sha256;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::ErrorKind;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -983,6 +984,30 @@ fn read_fallback_file_unlocked() -> Result<Option<FallbackFile>> {
     }
 }
 
+fn open_fallback_file_for_write(path: &std::path::Path) -> Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options.open(path)?;
+    anyhow::ensure!(
+        file.metadata()?.is_file(),
+        "credentials path is not a regular file"
+    );
+    Ok(file)
+}
+
 fn write_fallback_file(store: &FallbackFile) -> Result<()> {
     let path = fallback_file_path()?;
 
@@ -993,19 +1018,20 @@ fn write_fallback_file(store: &FallbackFile) -> Result<()> {
         return Ok(());
     }
 
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
+    let parent = path
+        .parent()
+        .context("credentials file path has no parent directory")?;
+    fs::create_dir_all(parent)?;
 
     let serialized = serde_json::to_string(store)?;
-    fs::write(&path, serialized)?;
-
+    let mut file = open_fallback_file_for_write(&path)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let perms = fs::Permissions::from_mode(0o600);
-        fs::set_permissions(&path, perms)?;
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
     }
+    file.set_len(/*size*/ 0)?;
+    file.write_all(serialized.as_bytes())?;
 
     Ok(())
 }
@@ -1228,6 +1254,91 @@ mod tests {
             tokens.token_response.0.access_token().secret().as_str()
         );
         assert!(store.saved_value(&key).is_none());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fallback_file_is_private_at_creation() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        const CHILD: &str = "CODEX_TEST_OAUTH_PERMISSIVE_UMASK";
+
+        if std::env::var_os(CHILD).is_none() {
+            // Change umask only in the child running this one test.
+            let status = std::process::Command::new("/bin/sh")
+                .args(["-c", "umask 000; exec \"$@\"", "sh"])
+                .arg(std::env::current_exe()?)
+                .args([
+                    "--exact",
+                    "oauth::tests::fallback_file_is_private_at_creation",
+                ])
+                .env(CHILD, "1")
+                .status()?;
+            anyhow::ensure!(status.success(), "creation-permissions test failed");
+            return Ok(());
+        }
+
+        let _env = TempCodexHome::new();
+        let path = fallback_file_path()?;
+        let file = open_fallback_file_for_write(&path)?;
+        assert_eq!(file.metadata()?.permissions().mode() & 0o777, 0o600);
+        Ok(())
+    }
+
+    #[test]
+    fn fallback_file_updates_the_existing_file() -> Result<()> {
+        #[cfg(unix)]
+        use std::os::unix::fs::PermissionsExt;
+
+        let env = TempCodexHome::new();
+        save_oauth_tokens_to_file(&sample_tokens())?;
+        let path = fallback_file_path()?;
+        let original = env.path().join("original-file");
+        fs::hard_link(&path, &original)?;
+        #[cfg(unix)]
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644))?;
+
+        let mut store = read_fallback_file_unlocked()?.expect("saved credentials");
+        store.values_mut().next().unwrap().access_token = "new".to_string();
+        write_fallback_file(&store)?;
+
+        let expected = serde_json::to_vec(&store)?;
+        assert_eq!(
+            [fs::read(original)?, fs::read(&path)?],
+            [expected.clone(), expected]
+        );
+        #[cfg(unix)]
+        assert_eq!(fs::metadata(&path)?.permissions().mode() & 0o777, 0o600);
+        Ok(())
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn fallback_file_write_does_not_follow_symlinks() -> Result<()> {
+        #[cfg(unix)]
+        use std::os::unix::fs::symlink;
+        #[cfg(windows)]
+        use std::os::windows::fs::symlink_file as symlink;
+
+        let env = TempCodexHome::new();
+        let path = fallback_file_path()?;
+        let target = env.path().join("symlink-target");
+        fs::write(&target, "synthetic credentials")?;
+        let linked = symlink(&target, &path);
+        #[cfg(windows)]
+        if linked
+            .as_ref()
+            .is_err_and(|error| error.raw_os_error() == Some(1314))
+        {
+            eprintln!("Skipping symlink test: Windows symlink privilege unavailable");
+            return Ok(());
+        }
+        linked?;
+
+        assert!(open_fallback_file_for_write(&path).is_err());
+
+        assert_eq!(fs::read_to_string(target)?, "synthetic credentials");
+        assert!(fs::symlink_metadata(path)?.file_type().is_symlink());
         Ok(())
     }
 
