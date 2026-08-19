@@ -163,6 +163,13 @@ async fn guardian_approved_exec_is_hidden_from_history() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.show_welcome_banner = false;
 
+    chat.handle_server_notification(
+        ServerNotification::GuardianWarning(GuardianWarningNotification {
+            thread_id: "thread-1".to_string(),
+            message: "Automatic approval review approved (risk: low, authorization: high): Narrowly scoped to the requested file.".to_string(),
+        }),
+        /*replay_kind*/ None,
+    );
     chat.on_guardian_assessment(GuardianAssessmentEvent {
         id: "thread:child-thread:guardian-1".into(),
         target_item_id: Some("guardian-approved-target".into()),
