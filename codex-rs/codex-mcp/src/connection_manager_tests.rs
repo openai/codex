@@ -1441,18 +1441,37 @@ fn test_normalize_tools_duplicated_names_skipped() {
 }
 
 #[test]
+fn test_normalize_tools_respects_responses_api_name_length_boundaries() {
+    let namespace = "mcp__codex_apps";
+    let namespace_len = namespace.len() + "__".len();
+
+    for total_len in [128, 129] {
+        let tool_name = "a".repeat(total_len - namespace_len);
+        let model_tools = normalize_tools_for_model_with_prefix(
+            vec![create_test_tool("codex_apps", &tool_name)],
+            /*prefix_mcp_tool_names*/ true,
+            &[],
+        );
+        let model_name = model_tools[0].canonical_tool_name();
+
+        assert_eq!(model_tool_name_len(&model_name), 128);
+        if total_len == 128 {
+            assert_eq!(model_name, ToolName::namespaced(namespace, tool_name));
+        } else {
+            assert_ne!(model_name.name, tool_name);
+        }
+    }
+}
+
+#[test]
 fn test_normalize_tools_long_names_same_server() {
     let server_name = "my_server";
+    let first_name = "a".repeat(128);
+    let second_name = "b".repeat(128);
 
     let tools = vec![
-        create_test_tool(
-            server_name,
-            "extremely_lengthy_function_name_that_absolutely_surpasses_all_reasonable_limits",
-        ),
-        create_test_tool(
-            server_name,
-            "yet_another_extremely_lengthy_function_name_that_absolutely_surpasses_all_reasonable_limits",
-        ),
+        create_test_tool(server_name, &first_name),
+        create_test_tool(server_name, &second_name),
     ];
 
     let model_tools =
@@ -1462,7 +1481,7 @@ fn test_normalize_tools_long_names_same_server() {
 
     let names = model_tool_names(&model_tools);
 
-    assert!(names.iter().all(|name| model_tool_name_len(name) == 64));
+    assert!(names.iter().all(|name| model_tool_name_len(name) == 128));
     assert!(
         names
             .iter()
