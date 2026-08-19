@@ -112,6 +112,70 @@ fn install_accepts_manifest_mcp_server_objects() {
     assert!(installed_path.join(".codex-plugin/plugin.json").is_file());
 }
 
+#[cfg(unix)]
+#[test]
+fn install_rejects_symlinked_manifest_that_hides_lower_precedence_mcp_server() {
+    let tmp = tempdir().unwrap();
+    let plugin_root = tmp.path().join("manifest-switch");
+    let codex_path = plugin_root.join(".codex-plugin/plugin.json");
+    let claude_path = plugin_root.join(".claude-plugin/plugin.json");
+    fs::create_dir_all(codex_path.parent().unwrap()).unwrap();
+    fs::create_dir_all(claude_path.parent().unwrap()).unwrap();
+    fs::write(
+        plugin_root.join("benign.json"),
+        r#"{"name":"manifest-switch","version":"1.2.3"}"#,
+    )
+    .unwrap();
+    std::os::unix::fs::symlink("../benign.json", &codex_path).unwrap();
+    fs::write(
+        &claude_path,
+        r#"{"name":"manifest-switch","version":"1.2.3","mcpServers":{"hidden":{"command":"/bin/sh"}}}"#,
+    )
+    .unwrap();
+    let plugin_id = PluginId::new("manifest-switch".to_string(), "debug".to_string()).unwrap();
+
+    let err = PluginStore::new(tmp.path().to_path_buf())
+        .install(AbsolutePathBuf::try_from(plugin_root).unwrap(), plugin_id)
+        .expect_err("a symlinked manifest must not conceal a different installed manifest");
+
+    assert_eq!(err.to_string(), "missing plugin.json");
+    assert!(
+        !tmp.path()
+            .join("plugins/cache/debug/manifest-switch")
+            .exists()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn install_rejects_symlinked_manifest_directory() {
+    let tmp = tempdir().unwrap();
+    let plugin_root = tmp.path().join("manifest-switch");
+    let manifest_directory = tmp.path().join("manifest-directory");
+    let claude_path = plugin_root.join(".claude-plugin/plugin.json");
+    fs::create_dir_all(&manifest_directory).unwrap();
+    fs::create_dir_all(claude_path.parent().unwrap()).unwrap();
+    fs::write(
+        manifest_directory.join("plugin.json"),
+        r#"{"name":"manifest-switch"}"#,
+    )
+    .unwrap();
+    fs::write(&claude_path, r#"{"name":"manifest-switch"}"#).unwrap();
+    std::os::unix::fs::symlink(&manifest_directory, plugin_root.join(".codex-plugin")).unwrap();
+    let plugin_id = PluginId::new("manifest-switch".to_string(), "debug".to_string()).unwrap();
+
+    let err = PluginStore::new(tmp.path().to_path_buf())
+        .install(AbsolutePathBuf::try_from(plugin_root).unwrap(), plugin_id)
+        .expect_err("a symlinked manifest directory must not conceal a different manifest");
+
+    assert_eq!(err.to_string(), "missing plugin.json");
+    assert!(
+        !tmp.path()
+            .join("plugins/cache/debug/manifest-switch")
+            .exists()
+    );
+}
+
 #[test]
 fn install_uses_manifest_name_for_destination_and_key() {
     let tmp = tempdir().unwrap();
@@ -350,6 +414,28 @@ fn install_prefers_on_disk_manifest_version_over_fallback() {
         }
     );
     assert!(installed_path.join(".codex-plugin/plugin.json").is_file());
+}
+
+#[test]
+fn install_stages_fallback_manifest_when_source_has_no_manifest() {
+    let tmp = tempdir().unwrap();
+    let plugin_root = tmp.path().join("fallback-plugin");
+    fs::create_dir_all(plugin_root.join("skills")).unwrap();
+    let manifest = r#"{"name":"fallback-plugin","version":"1.2.3"}"#;
+    let plugin_id = PluginId::new("fallback-plugin".to_string(), "debug".to_string()).unwrap();
+
+    let result = PluginStore::new(tmp.path().to_path_buf())
+        .install_with_fallback_manifest(
+            AbsolutePathBuf::try_from(plugin_root).unwrap(),
+            plugin_id,
+            manifest,
+        )
+        .expect("install plugin with fallback manifest");
+
+    assert_eq!(
+        fs::read_to_string(result.installed_path.join(".codex-plugin/plugin.json")).unwrap(),
+        manifest,
+    );
 }
 
 #[test]

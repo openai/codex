@@ -632,6 +632,27 @@ fn replace_plugin_root_atomically(
         })?;
     let staged_root = staged_dir.path().join(plugin_dir_name);
     let staged_version_root = staged_root.join(plugin_version);
+    let (source_manifest_relative_path, source_manifest_contents) = match manifest {
+        InstallManifest::OnDisk => {
+            let manifest_path = find_plugin_manifest_path(source)
+                .ok_or_else(|| PluginStoreError::Invalid("missing plugin.json".to_string()))?;
+            let relative_path = manifest_path
+                .strip_prefix(source)
+                .map_err(|_| {
+                    PluginStoreError::Invalid(
+                        "plugin manifest is outside the plugin source".to_string(),
+                    )
+                })?
+                .to_path_buf();
+            let contents = fs::read(&manifest_path)
+                .map_err(|err| PluginStoreError::io("failed to read plugin.json", err))?;
+            (relative_path, contents)
+        }
+        InstallManifest::Fallback(contents) => (
+            PathBuf::from(".codex-plugin/plugin.json"),
+            contents.as_bytes().to_vec(),
+        ),
+    };
     copy_dir_recursive(source, &staged_version_root)?;
     if let InstallManifest::Fallback(contents) = manifest {
         // Inject the generated manifest into Store's existing atomic copy so install does not
@@ -647,6 +668,24 @@ fn replace_plugin_root_atomically(
         })?;
         fs::write(&manifest_path, contents)
             .map_err(|err| PluginStoreError::io("failed to write fallback plugin manifest", err))?;
+    }
+    let staged_manifest_path =
+        find_plugin_manifest_path(&staged_version_root).ok_or_else(|| {
+            PluginStoreError::Invalid(
+                "plugin manifest is missing after installation staging".to_string(),
+            )
+        })?;
+    if staged_manifest_path != staged_version_root.join(&source_manifest_relative_path) {
+        return Err(PluginStoreError::Invalid(
+            "plugin manifest changed during installation staging".to_string(),
+        ));
+    }
+    let staged_manifest_contents = fs::read(&staged_manifest_path)
+        .map_err(|err| PluginStoreError::io("failed to read staged plugin.json", err))?;
+    if staged_manifest_contents != source_manifest_contents {
+        return Err(PluginStoreError::Invalid(
+            "plugin manifest contents changed during installation staging".to_string(),
+        ));
     }
     let is_agent_plugin = fs::read_to_string(staged_version_root.join("plugin.json"))
         .ok()
