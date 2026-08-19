@@ -1,6 +1,7 @@
 use super::*;
 use crate::shell::ShellType;
 use crate::shell::default_user_shell;
+use crate::shell::get_shell;
 use codex_exec_server::Environment;
 use codex_tools::UnifiedExecShellMode;
 use codex_tools::ZshForkConfig;
@@ -95,7 +96,7 @@ fn test_get_command_respects_explicit_bash_shell() -> anyhow::Result<()> {
 }
 
 #[test]
-fn test_get_command_respects_explicit_powershell_shell() -> anyhow::Result<()> {
+fn test_get_command_resolves_powershell_by_type() -> anyhow::Result<()> {
     let temp_dir = tempfile::tempdir()?;
     let powershell_path = temp_dir.path().join(if cfg!(windows) {
         "powershell.exe"
@@ -123,10 +124,13 @@ fn test_get_command_respects_explicit_powershell_shell() -> anyhow::Result<()> {
         /*allow_login_shell*/ true,
     )
     .map_err(anyhow::Error::msg)?;
-    let command = resolved.command;
-
-    assert_eq!(command[2], "echo hello");
-    assert_eq!(resolved.shell_type, ShellType::PowerShell);
+    let expected_shell = get_shell(ShellType::PowerShell)
+        .unwrap_or_else(|| codex_shell_command::shell_detect::ultimate_fallback_shell().into());
+    assert_eq!(
+        resolved.command,
+        expected_shell.derive_exec_args("echo hello", /*use_login_shell*/ true)
+    );
+    assert_eq!(resolved.shell_type, expected_shell.shell_type);
     Ok(())
 }
 

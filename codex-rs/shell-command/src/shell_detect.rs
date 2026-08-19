@@ -134,14 +134,9 @@ fn file_exists(path: &std::path::Path) -> Option<PathBuf> {
 
 fn get_shell_path(
     shell_type: ShellType,
-    provided_path: Option<&PathBuf>,
     binary_name: &str,
     fallback_paths: &[&str],
 ) -> Option<PathBuf> {
-    if let Some(path) = provided_path.and_then(|path| file_exists(path)) {
-        return Some(path);
-    }
-
     let default_shell_path = get_user_shell_path();
     if let Some(default_shell_path) = default_shell_path
         && detect_shell_type(&default_shell_path) == Some(shell_type)
@@ -165,8 +160,8 @@ fn get_shell_path(
 
 const ZSH_FALLBACK_PATHS: &[&str] = &["/bin/zsh"];
 
-fn get_zsh_shell(path: Option<&PathBuf>) -> Option<DetectedShell> {
-    let shell_path = get_shell_path(ShellType::Zsh, path, "zsh", ZSH_FALLBACK_PATHS);
+fn get_zsh_shell() -> Option<DetectedShell> {
+    let shell_path = get_shell_path(ShellType::Zsh, "zsh", ZSH_FALLBACK_PATHS);
 
     shell_path.map(|shell_path| DetectedShell {
         shell_type: ShellType::Zsh,
@@ -176,8 +171,8 @@ fn get_zsh_shell(path: Option<&PathBuf>) -> Option<DetectedShell> {
 
 const BASH_FALLBACK_PATHS: &[&str] = &["/bin/bash", "/usr/bin/bash"];
 
-fn get_bash_shell(path: Option<&PathBuf>) -> Option<DetectedShell> {
-    let shell_path = get_shell_path(ShellType::Bash, path, "bash", BASH_FALLBACK_PATHS);
+fn get_bash_shell() -> Option<DetectedShell> {
+    let shell_path = get_shell_path(ShellType::Bash, "bash", BASH_FALLBACK_PATHS);
 
     shell_path.map(|shell_path| DetectedShell {
         shell_type: ShellType::Bash,
@@ -187,8 +182,8 @@ fn get_bash_shell(path: Option<&PathBuf>) -> Option<DetectedShell> {
 
 const SH_FALLBACK_PATHS: &[&str] = &["/bin/sh"];
 
-fn get_sh_shell(path: Option<&PathBuf>) -> Option<DetectedShell> {
-    let shell_path = get_shell_path(ShellType::Sh, path, "sh", SH_FALLBACK_PATHS);
+fn get_sh_shell() -> Option<DetectedShell> {
+    let shell_path = get_shell_path(ShellType::Sh, "sh", SH_FALLBACK_PATHS);
 
     shell_path.map(|shell_path| DetectedShell {
         shell_type: ShellType::Sh,
@@ -212,12 +207,11 @@ const POWERSHELL_FALLBACK_PATHS: &[&str] =
 #[cfg(not(windows))]
 const POWERSHELL_FALLBACK_PATHS: &[&str] = &[];
 
-fn get_powershell_shell(path: Option<&PathBuf>) -> Option<DetectedShell> {
-    let shell_path = get_shell_path(ShellType::PowerShell, path, "pwsh", PWSH_FALLBACK_PATHS)
-        .or_else(|| {
+fn get_powershell_shell() -> Option<DetectedShell> {
+    let shell_path =
+        get_shell_path(ShellType::PowerShell, "pwsh", PWSH_FALLBACK_PATHS).or_else(|| {
             get_shell_path(
                 ShellType::PowerShell,
-                path,
                 "powershell",
                 POWERSHELL_FALLBACK_PATHS,
             )
@@ -229,8 +223,8 @@ fn get_powershell_shell(path: Option<&PathBuf>) -> Option<DetectedShell> {
     })
 }
 
-fn get_cmd_shell(path: Option<&PathBuf>) -> Option<DetectedShell> {
-    let shell_path = get_shell_path(ShellType::Cmd, path, "cmd", &[]);
+fn get_cmd_shell() -> Option<DetectedShell> {
+    let shell_path = get_shell_path(ShellType::Cmd, "cmd", &[]);
 
     shell_path.map(|shell_path| DetectedShell {
         shell_type: ShellType::Cmd,
@@ -252,19 +246,20 @@ pub fn ultimate_fallback_shell() -> DetectedShell {
     }
 }
 
+/// Uses the model-provided path only to select a shell type, then discovers its executable.
 pub fn get_shell_by_model_provided_path(shell_path: &PathBuf) -> DetectedShell {
     detect_shell_type(shell_path)
-        .and_then(|shell_type| get_shell(shell_type, Some(shell_path)))
+        .and_then(get_shell)
         .unwrap_or_else(ultimate_fallback_shell)
 }
 
-pub fn get_shell(shell_type: ShellType, path: Option<&PathBuf>) -> Option<DetectedShell> {
+pub fn get_shell(shell_type: ShellType) -> Option<DetectedShell> {
     match shell_type {
-        ShellType::Zsh => get_zsh_shell(path),
-        ShellType::Bash => get_bash_shell(path),
-        ShellType::PowerShell => get_powershell_shell(path),
-        ShellType::Sh => get_sh_shell(path),
-        ShellType::Cmd => get_cmd_shell(path),
+        ShellType::Zsh => get_zsh_shell(),
+        ShellType::Bash => get_bash_shell(),
+        ShellType::PowerShell => get_powershell_shell(),
+        ShellType::Sh => get_sh_shell(),
+        ShellType::Cmd => get_cmd_shell(),
     }
 }
 
@@ -274,20 +269,20 @@ pub fn default_user_shell() -> DetectedShell {
 
 pub fn default_user_shell_from_path(user_shell_path: Option<PathBuf>) -> DetectedShell {
     if cfg!(windows) {
-        get_shell(ShellType::PowerShell, /*path*/ None).unwrap_or_else(ultimate_fallback_shell)
+        get_shell(ShellType::PowerShell).unwrap_or_else(ultimate_fallback_shell)
     } else {
         let user_default_shell = user_shell_path
             .and_then(|shell| detect_shell_type(&shell))
-            .and_then(|shell_type| get_shell(shell_type, /*path*/ None));
+            .and_then(get_shell);
 
         let shell_with_fallback = if cfg!(target_os = "macos") {
             user_default_shell
-                .or_else(|| get_shell(ShellType::Zsh, /*path*/ None))
-                .or_else(|| get_shell(ShellType::Bash, /*path*/ None))
+                .or_else(|| get_shell(ShellType::Zsh))
+                .or_else(|| get_shell(ShellType::Bash))
         } else {
             user_default_shell
-                .or_else(|| get_shell(ShellType::Bash, /*path*/ None))
-                .or_else(|| get_shell(ShellType::Zsh, /*path*/ None))
+                .or_else(|| get_shell(ShellType::Bash))
+                .or_else(|| get_shell(ShellType::Zsh))
         };
 
         shell_with_fallback.unwrap_or_else(ultimate_fallback_shell)

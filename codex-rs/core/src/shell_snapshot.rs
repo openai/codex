@@ -206,8 +206,8 @@ async fn write_shell_snapshot(
     if shell_type == ShellType::PowerShell || shell_type == ShellType::Cmd {
         bail!("Shell snapshot not supported yet for {shell_type:?}");
     }
-    let shell = get_shell(shell_type, /*path*/ None)
-        .with_context(|| format!("No available shell for {shell_type:?}"))?;
+    let shell =
+        get_shell(shell_type).with_context(|| format!("No available shell for {shell_type:?}"))?;
 
     let raw_snapshot = capture_snapshot(&shell, cwd).await?;
     let snapshot = strip_snapshot_preamble(&raw_snapshot)?;

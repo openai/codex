@@ -1131,13 +1131,19 @@ impl Session {
                         "zsh fork feature enabled, but no packaged zsh fork is available for this install"
                     )
                 })?;
-                let zsh_path = zsh_path.to_path_buf();
-                shell::get_shell(shell::ShellType::Zsh, Some(&zsh_path)).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "zsh fork feature enabled, but packaged zsh fork `{}` is not usable",
-                        zsh_path.display()
-                    )
-                })?
+                if zsh_path.is_file() {
+                    shell::Shell {
+                        shell_type: shell::ShellType::Zsh,
+                        shell_path: zsh_path.clone(),
+                    }
+                } else {
+                    shell::get_shell(shell::ShellType::Zsh).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "zsh fork feature enabled, but packaged zsh fork `{}` is not usable",
+                            zsh_path.display()
+                        )
+                    })?
+                }
             } else {
                 shell::default_user_shell()
             };

@@ -85,8 +85,8 @@ pub fn get_shell_by_model_provided_path(shell_path: &PathBuf) -> Shell {
     codex_shell_command::shell_detect::get_shell_by_model_provided_path(shell_path).into()
 }
 
-pub fn get_shell(shell_type: ShellType, path: Option<&PathBuf>) -> Option<Shell> {
-    codex_shell_command::shell_detect::get_shell(shell_type, path).map(Into::into)
+pub fn get_shell(shell_type: ShellType) -> Option<Shell> {
+    codex_shell_command::shell_detect::get_shell(shell_type).map(Into::into)
 }
 
 pub fn default_user_shell() -> Shell {

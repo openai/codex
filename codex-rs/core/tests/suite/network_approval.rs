@@ -3,6 +3,8 @@ use anyhow::Result;
 use codex_config::types::ApprovalsReviewer;
 use codex_core::TurnInputRequest;
 use codex_core::config::Constrained;
+use codex_core::shell::ShellType;
+use codex_core::shell::get_shell;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_exec_server::REMOTE_ENVIRONMENT_ID;
@@ -96,6 +98,9 @@ async fn guardian_network_approval_preserves_action_and_outcome_routing() -> Res
         .context("expected network command")?
         .to_string();
     let second_command = first_command.clone();
+    let expected_command = get_shell(ShellType::Sh)
+        .context("expected local sh")?
+        .derive_exec_args(&first_command, /*use_login_shell*/ false);
     let denial = "The destination is outside the approved test boundary.";
     let responses = mount_sse_sequence(
         &server,
@@ -178,7 +183,7 @@ async fn guardian_network_approval_preserves_action_and_outcome_routing() -> Res
             "tool": "network_access",
             "trigger": {
                 "callId": first_call_id,
-                "command": ["/bin/sh", "-c", first_command],
+                "command": expected_command,
                 "cwd": test.config.cwd,
                 "sandboxPermissions": "use_default",
                 "toolName": "exec_command",
@@ -1869,12 +1874,18 @@ async fn remote_guardian_network_decisions_are_scoped_to_each_request_and_enviro
     .await
     .context("remote session approval should bypass another network prompt")?;
 
+    let local_shell = get_shell(ShellType::Sh).context("expected local sh")?;
     let mut expected_actions = Vec::with_capacity(cases.len());
     for (call_id, command, environment, _, _) in &cases {
         let cwd = environment
             .cwd
             .to_abs_path()
             .with_context(|| format!("resolve the environment cwd for {call_id}"))?;
+        let command = if environment.environment_id == LOCAL_ENVIRONMENT_ID {
+            local_shell.derive_exec_args(command, /*use_login_shell*/ false)
+        } else {
+            vec!["/bin/sh".to_string(), "-c".to_string(), command.clone()]
+        };
         expected_actions.push(json!({
             "host": NETWORK_TEST_HOST,
             "port": 80,
@@ -1883,7 +1894,7 @@ async fn remote_guardian_network_decisions_are_scoped_to_each_request_and_enviro
             "tool": "network_access",
             "trigger": {
                 "callId": call_id,
-                "command": ["/bin/sh", "-c", command],
+                "command": command,
                 "cwd": cwd,
                 "sandboxPermissions": "use_default",
                 "toolName": "exec_command",
