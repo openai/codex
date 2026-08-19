@@ -1560,7 +1560,7 @@ fn is_valid_sed_n_arg(arg: Option<&str>) -> bool {
 
 fn sed_read_path(args: &[String]) -> Option<String> {
     let args_no_connector = trim_at_connector(args);
-    if !args_no_connector.iter().any(|arg| arg == "-n") {
+    if has_in_place_flag(&args_no_connector) || !args_no_connector.iter().any(|arg| arg == "-n") {
         return None;
     }
     let mut has_range_script = false;
@@ -2200,16 +2200,20 @@ fn xargs_is_mutating_subcommand(tokens: &[String]) -> bool {
         return false;
     };
     match head.as_str() {
-        "perl" | "ruby" => xargs_has_in_place_flag(tail),
-        "sed" => xargs_has_in_place_flag(tail) || tail.iter().any(|token| token == "--in-place"),
+        "perl" | "ruby" | "sed" => has_in_place_flag(tail),
         "rg" => tail.iter().any(|token| token == "--replace"),
         _ => false,
     }
 }
 
-fn xargs_has_in_place_flag(tokens: &[String]) -> bool {
+fn has_in_place_flag(tokens: &[String]) -> bool {
     tokens.iter().any(|token| {
-        token == "-i" || token.starts_with("-i") || token == "-pi" || token.starts_with("-pi")
+        token == "-i"
+            || token.starts_with("-i")
+            || token == "-pi"
+            || token.starts_with("-pi")
+            || token == "--in-place"
+            || token.starts_with("--in-place=")
     })
 }
 

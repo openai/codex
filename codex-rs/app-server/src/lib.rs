@@ -8,6 +8,7 @@ use codex_code_mode::WebSocketCodeModeSessionProvider;
 use codex_config::LoaderOverrides;
 use codex_config::NoopThreadConfigLoader;
 use codex_core::config::Config;
+use codex_core::config::UnsupportedUntrustedApprovalPolicyError;
 use codex_core::resolve_installation_id;
 use codex_login::AuthManager;
 #[cfg(debug_assertions)]
@@ -504,11 +505,19 @@ pub async fn run_main_with_transport_options(
                 config.http_client_factory(),
             );
         }
+        Err(err)
+            if err.get_ref().is_some_and(
+                <dyn std::error::Error + Send + Sync + 'static>::is::<
+                    UnsupportedUntrustedApprovalPolicyError,
+                >,
+            ) =>
+        {
+            return Err(err);
+        }
         Err(err) => {
             warn!(error = %err, "Failed to preload config for cloud config bundle");
-            // TODO: Decide whether bootstrap config preload failures should block startup.
             // If this fails, we cannot install cloud/thread config loaders, so non-strict
-            // startup may continue without managed cloud config.
+            // startup continues without managed cloud config.
         }
     };
     let mut config_warnings = Vec::new();

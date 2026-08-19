@@ -720,7 +720,7 @@ async fn start_resource_test_app_server_with_extra_config(
 ) -> Result<(TempDir, TestAppServer)> {
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(responses_server_uri)
-        .with_approval_policy("untrusted")
+        .with_approval_policy("on-request")
         .with_root_config(&format!(
             "chatgpt_base_url = \"{apps_server_url}\"\nmcp_oauth_credentials_store = \"file\""
         ))

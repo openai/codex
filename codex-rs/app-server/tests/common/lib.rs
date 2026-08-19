@@ -37,6 +37,7 @@ pub use mock_model_server::create_mock_responses_server_sequence_unchecked;
 pub use models_cache::write_models_cache;
 pub use models_cache::write_models_cache_with_models;
 pub use responses::create_apply_patch_sse_response;
+pub use responses::create_escalated_shell_command_sse_response;
 pub use responses::create_exec_command_sse_response;
 pub use responses::create_final_assistant_message_sse_response;
 pub use responses::create_request_permissions_sse_response;

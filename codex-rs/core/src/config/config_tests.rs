@@ -9319,7 +9319,7 @@ async fn model_catalog_json_rejects_empty_catalog() -> std::io::Result<()> {
 fn create_test_fixture() -> std::io::Result<PrecedenceTestFixture> {
     let toml = r#"
 model = "o3"
-approval_policy = "untrusted"
+approval_policy = "on-request"
 
 [analytics]
 enabled = true
@@ -10405,7 +10405,7 @@ async fn test_untrusted_project_gets_unless_trusted_approval_policy() -> anyhow:
     )
     .await?;
 
-    // Verify that untrusted projects get UnlessTrusted approval policy
+    // Verify that untrusted projects get the internal always-prompt policy.
     assert_eq!(
         config.permissions.approval_policy.value(),
         AskForApproval::UnlessTrusted,
@@ -10805,8 +10805,7 @@ trust_level = "untrusted"
 }
 
 #[tokio::test]
-async fn explicit_approval_policy_falls_back_when_disallowed_by_requirements() -> std::io::Result<()>
-{
+async fn explicit_untrusted_approval_policy_is_rejected() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
@@ -10814,19 +10813,17 @@ async fn explicit_approval_policy_falls_back_when_disallowed_by_requirements() -
 "#,
     )?;
 
-    let config = ConfigBuilder::without_managed_config_for_tests()
+    let error = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
-                r#"allowed_approval_policies = ["on-request"]"#,
-            ),
-        )
         .build()
-        .await?;
-    assert_eq!(
-        config.permissions.approval_policy.value(),
-        AskForApproval::OnRequest
+        .await
+        .expect_err("untrusted approval policy should be rejected");
+    assert!(
+        error
+            .to_string()
+            .contains("approval_policy = \"untrusted\" is no longer supported"),
+        "unexpected error: {error}"
     );
     Ok(())
 }

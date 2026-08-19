@@ -26,7 +26,6 @@ use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::protocol::AskForApproval;
 use codex_shell_command::is_dangerous_command::DangerousCommandMatch;
 use codex_shell_command::is_dangerous_command::dangerous_command_match;
-use codex_shell_command::is_safe_command::is_known_safe_command;
 use thiserror::Error;
 use tokio::fs;
 use tokio::sync::Semaphore;
@@ -150,7 +149,7 @@ pub(crate) static BANNED_PREFIX_SUGGESTIONS: &[&[&str]] = &[
 ///
 /// The command tokens may be the original argv or a shell-specific lowering of
 /// a wrapper such as `bash -lc ...` or `powershell.exe -Command ...`. We only
-/// need to distinguish the PowerShell case because its safelist and dangerous
+/// need to distinguish the PowerShell case because its dangerous-command
 /// heuristics operate on PowerShell-flavored inner command words rather than
 /// the generic command classifier.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -740,17 +739,9 @@ pub(crate) fn render_decision_for_unmatched_command(
         permission_profile,
         windows_sandbox_level,
         sandbox_permissions,
-        command_origin,
+        command_origin: _,
     } = context;
     let file_system_sandbox_policy = permission_profile.file_system_sandbox_policy();
-    let is_known_safe = match command_origin {
-        ExecPolicyCommandOrigin::Generic => is_known_safe_command(command),
-        #[cfg(windows)]
-        ExecPolicyCommandOrigin::PowerShell => {
-            codex_shell_command::is_safe_command::is_safe_powershell_words(command)
-        }
-    };
-
     // When the Windows sandbox backend is disabled, managed filesystem
     // restrictions are only a policy shape; there is no platform sandbox to
     // enforce the boundary. Keep that legacy case conservative while still
@@ -758,13 +749,6 @@ pub(crate) fn render_decision_for_unmatched_command(
     let windows_managed_fs_restrictions_without_sandbox_backend = cfg!(windows)
         && windows_sandbox_level == WindowsSandboxLevel::Disabled
         && profile_has_managed_filesystem_restrictions(permission_profile);
-
-    if is_known_safe
-        && (approval_policy == AskForApproval::UnlessTrusted
-            || windows_managed_fs_restrictions_without_sandbox_backend)
-    {
-        return Decision::Allow;
-    }
 
     // If the command is flagged as dangerous or we have no sandbox protection,
     // we should never allow it to run without approval.
@@ -789,8 +773,8 @@ pub(crate) fn render_decision_for_unmatched_command(
             Decision::Allow
         }
         AskForApproval::UnlessTrusted => {
-            // We already checked the unmatched-command safelist and it
-            // returned false, so we must prompt.
+            // Projects marked untrusted require approval for every command
+            // that is not explicitly allowed by an exec policy rule.
             Decision::Prompt
         }
         AskForApproval::OnRequest => {

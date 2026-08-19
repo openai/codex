@@ -3214,21 +3214,15 @@ allowed_approvals_reviewers = ["user"]
     #[test]
     fn deserialize_allowed_approval_policies() -> Result<()> {
         let toml_str = r#"
-            allowed_approval_policies = ["untrusted", "on-request"]
+            allowed_approval_policies = ["on-request", "never"]
         "#;
         let config: ConfigRequirementsToml = from_str(toml_str)?;
         let requirements: ConfigRequirements = with_unknown_source(config).try_into()?;
 
         assert_eq!(
             requirements.approval_policy.value(),
-            AskForApproval::UnlessTrusted,
+            AskForApproval::OnRequest,
             "currently, there is no way to specify the default value for approval policy in the toml, so it picks the first allowed value"
-        );
-        assert!(
-            requirements
-                .approval_policy
-                .can_set(&AskForApproval::UnlessTrusted)
-                .is_ok()
         );
         assert!(
             requirements
@@ -3237,11 +3231,13 @@ allowed_approvals_reviewers = ["user"]
                 .is_ok()
         );
         assert_eq!(
-            requirements.approval_policy.can_set(&AskForApproval::Never),
+            requirements
+                .approval_policy
+                .can_set(&AskForApproval::UnlessTrusted),
             Err(ConstraintError::InvalidValue {
                 field_name: "approval_policy",
-                candidate: "Never".into(),
-                allowed: "[UnlessTrusted, OnRequest]".into(),
+                candidate: "UnlessTrusted".into(),
+                allowed: "[OnRequest, Never]".into(),
                 requirement_source: RequirementSource::Unknown,
             })
         );

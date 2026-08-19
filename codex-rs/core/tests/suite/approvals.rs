@@ -569,24 +569,24 @@ impl Expectation {
                 assert_eq!(
                     result.exit_code,
                     Some(0),
-                    "expected successful trusted command exit: {}",
+                    "expected successful command exit: {}",
                     result.stdout
                 );
                 assert!(
                     result.stdout.contains(stdout_contains),
-                    "trusted command stdout missing {stdout_contains:?}: {}",
+                    "command stdout missing {stdout_contains:?}: {}",
                     result.stdout
                 );
             }
             Expectation::CommandSuccessNoExitCode { stdout_contains } => {
                 assert!(
                     result.exit_code.is_none() || result.exit_code == Some(0),
-                    "expected no exit code for trusted command: {}",
+                    "expected no exit code for command: {}",
                     result.stdout
                 );
                 assert!(
                     result.stdout.contains(stdout_contains),
-                    "trusted command stdout missing {stdout_contains:?}: {}",
+                    "command stdout missing {stdout_contains:?}: {}",
                     result.stdout
                 );
             }
@@ -980,7 +980,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             },
         },
         ScenarioSpec {
-            name: "trusted_command_unless_trusted_runs_without_prompt",
+            name: "simple_command_unless_trusted_requires_approval",
             approval_policy: UnlessTrusted,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             action: ActionKind::RunCommand {
@@ -989,13 +989,16 @@ fn scenarios() -> Vec<ScenarioSpec> {
             sandbox_permissions: SandboxPermissions::UseDefault,
             features: vec![],
             model_override: Some("gpt-5.2"),
-            outcome: Outcome::Auto,
-            expectation: Expectation::CommandSuccess {
-                stdout_contains: "trusted-unless",
+            outcome: Outcome::ExecApproval {
+                decision: ReviewDecision::denied("blocked in untrusted project"),
+                expected_reason: None,
+            },
+            expectation: Expectation::CommandFailure {
+                output_contains: "blocked in untrusted project",
             },
         },
         ScenarioSpec {
-            name: "trusted_command_unless_trusted_runs_without_prompt_gpt_5_1_no_exit",
+            name: "simple_command_unless_trusted_requires_approval_gpt_5_1_no_exit",
             approval_policy: UnlessTrusted,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             action: ActionKind::RunCommand {
@@ -1004,9 +1007,12 @@ fn scenarios() -> Vec<ScenarioSpec> {
             sandbox_permissions: SandboxPermissions::UseDefault,
             features: vec![],
             model_override: Some("gpt-5.4"),
-            outcome: Outcome::Auto,
-            expectation: Expectation::CommandSuccessNoExitCode {
-                stdout_contains: "trusted-unless",
+            outcome: Outcome::ExecApproval {
+                decision: ReviewDecision::denied("blocked in untrusted project"),
+                expected_reason: None,
+            },
+            expectation: Expectation::CommandFailure {
+                output_contains: "blocked in untrusted project",
             },
         },
         ScenarioSpec {
@@ -1046,7 +1052,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             },
         },
         ScenarioSpec {
-            name: "known_safe_escalation_on_request_requires_approval",
+            name: "simple_command_escalation_on_request_requires_approval",
             approval_policy: OnRequest,
             sandbox_policy: workspace_write(false),
             action: ActionKind::RunCommand {
@@ -1068,7 +1074,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             },
         },
         ScenarioSpec {
-            name: "known_safe_escalation_granular_sandbox_disabled_rejects",
+            name: "simple_command_escalation_granular_sandbox_disabled_rejects",
             approval_policy: Granular(GranularApprovalConfig {
                 sandbox_approval: false,
                 rules: true,
@@ -1287,7 +1293,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             },
         },
         ScenarioSpec {
-            name: "trusted_command_on_request_read_only_runs_without_prompt",
+            name: "simple_command_on_request_read_only_runs_without_prompt",
             approval_policy: OnRequest,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             action: ActionKind::RunCommand {
@@ -1302,7 +1308,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             },
         },
         ScenarioSpec {
-            name: "trusted_command_on_request_read_only_runs_without_prompt_gpt_5_1_no_exit",
+            name: "simple_command_on_request_read_only_runs_without_prompt_gpt_5_1_no_exit",
             approval_policy: OnRequest,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             action: ActionKind::RunCommand {
@@ -1606,7 +1612,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             },
         },
         ScenarioSpec {
-            name: "trusted_command_never_runs_without_prompt",
+            name: "simple_command_never_runs_without_prompt",
             approval_policy: Never,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             action: ActionKind::RunCommand {
@@ -1732,7 +1738,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             },
         },
         ScenarioSpec {
-            name: "unified exec on request no approval for safe command",
+            name: "unified exec on request no approval for simple command",
             approval_policy: OnRequest,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             action: ActionKind::RunUnifiedExecCommand {
@@ -1788,7 +1794,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             },
         },
         ScenarioSpec {
-            name: "safe command with heredoc and redirect still requires approval",
+            name: "heredoc with redirect still requires approval",
             approval_policy: AskForApproval::OnRequest,
             sandbox_policy: workspace_write(false),
             action: ActionKind::RunUnifiedExecCommand {
@@ -1975,7 +1981,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             },
         },
         ScenarioSpec {
-            name: "quoted_shell_metacharacters_unless_trusted_run_without_prompt",
+            name: "quoted_shell_metacharacters_unless_trusted_require_approval",
             approval_policy: UnlessTrusted,
             sandbox_policy: workspace_write(false),
             action: ActionKind::RunCommand {
@@ -1984,9 +1990,12 @@ fn scenarios() -> Vec<ScenarioSpec> {
             sandbox_permissions: SandboxPermissions::UseDefault,
             features: vec![],
             model_override: Some("gpt-5.2"),
-            outcome: Outcome::Auto,
-            expectation: Expectation::CommandSuccess {
-                stdout_contains: "-g*.py -{delete,print}",
+            outcome: Outcome::ExecApproval {
+                decision: ReviewDecision::denied("blocked in untrusted project"),
+                expected_reason: None,
+            },
+            expectation: Expectation::CommandFailure {
+                output_contains: "blocked in untrusted project",
             },
         },
     ]

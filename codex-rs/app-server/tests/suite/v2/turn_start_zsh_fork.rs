@@ -9,6 +9,7 @@
 use anyhow::Result;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
+use app_test_support::create_escalated_shell_command_sse_response;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
@@ -191,7 +192,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
     eprintln!("using zsh path for zsh-fork test: {}", zsh_path.display());
 
     let responses = vec![
-        create_shell_command_sse_response(
+        create_escalated_shell_command_sse_response(
             vec![
                 "python3".to_string(),
                 "-c".to_string(),
@@ -207,7 +208,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
     create_config_toml(
         &codex_home,
         &server.uri(),
-        "untrusted",
+        "on-request",
         &BTreeMap::from([
             (Feature::ShellZshFork, true),
             (Feature::UnifiedExec, false),
@@ -322,7 +323,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_cancel_v2() -> Result<()> {
     };
     eprintln!("using zsh path for zsh-fork test: {}", zsh_path.display());
 
-    let responses = vec![create_shell_command_sse_response(
+    let responses = vec![create_escalated_shell_command_sse_response(
         vec![
             "python3".to_string(),
             "-c".to_string(),
@@ -336,7 +337,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_cancel_v2() -> Result<()> {
     create_config_toml(
         &codex_home,
         &server.uri(),
-        "untrusted",
+        "on-request",
         &BTreeMap::from([
             (Feature::ShellZshFork, true),
             (Feature::UnifiedExec, false),
@@ -491,7 +492,7 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
     create_config_toml(
         &codex_home,
         &server.uri(),
-        "untrusted",
+        "on-request",
         &BTreeMap::from([
             (Feature::ShellZshFork, true),
             (Feature::UnifiedExec, false),

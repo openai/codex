@@ -22,6 +22,27 @@ pub fn create_shell_command_sse_response(
     ]))
 }
 
+pub fn create_escalated_shell_command_sse_response(
+    command: Vec<String>,
+    workdir: Option<&Path>,
+    timeout_ms: Option<u64>,
+    call_id: &str,
+) -> anyhow::Result<String> {
+    let command_str = shlex::try_join(command.iter().map(String::as_str))?;
+    let tool_call_arguments = serde_json::to_string(&json!({
+        "command": command_str,
+        "workdir": workdir.map(|w| w.to_string_lossy()),
+        "timeout_ms": timeout_ms,
+        "sandbox_permissions": "require_escalated",
+        "justification": "Test approval request."
+    }))?;
+    Ok(responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_function_call(call_id, "shell_command", &tool_call_arguments),
+        responses::ev_completed("resp-1"),
+    ]))
+}
+
 pub fn create_final_assistant_message_sse_response(message: &str) -> anyhow::Result<String> {
     Ok(responses::sse(vec![
         responses::ev_response_created("resp-1"),

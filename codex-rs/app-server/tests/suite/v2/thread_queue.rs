@@ -4,10 +4,10 @@ use anyhow::Context;
 use anyhow::Result;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
+use app_test_support::create_escalated_shell_command_sse_response;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
-use app_test_support::create_shell_command_sse_response;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
@@ -863,7 +863,7 @@ async fn queue_app(responses: Vec<String>) -> Result<(TestAppServer, TempDir, Mo
 async fn queue_app_with_server(server: MockServer) -> Result<(TestAppServer, TempDir, MockServer)> {
     let codex_home = TempDir::new()?;
     let config = MockResponsesConfig::new(&server.uri())
-        .with_approval_policy("untrusted")
+        .with_approval_policy("on-request")
         .with_root_config(r#"approvals_reviewer = "user""#);
     config.write(codex_home.path())?;
     let app = TestAppServer::builder()
@@ -888,7 +888,7 @@ fn blocked_turn_response() -> Result<String> {
         "import time; time.sleep(10)".to_string(),
     ];
 
-    create_shell_command_sse_response(
+    create_escalated_shell_command_sse_response(
         shell_command,
         /*workdir*/ None,
         /*timeout_ms*/ Some(10_000),

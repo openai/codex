@@ -30,6 +30,7 @@ use codex_core::path_utils;
 use codex_core::path_utils::SymlinkWritePaths;
 use codex_core::path_utils::resolve_symlink_write_paths;
 use codex_core::path_utils::write_atomically;
+use codex_protocol::protocol::AskForApproval;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Value as JsonValue;
 use std::borrow::Cow;
@@ -734,8 +735,13 @@ fn toml_value_to_value(value: &TomlValue) -> anyhow::Result<toml_edit::Value> {
     }
 }
 
-fn validate_config(value: &TomlValue) -> Result<(), toml::de::Error> {
-    let _: ConfigToml = value.clone().try_into()?;
+fn validate_config(value: &TomlValue) -> anyhow::Result<()> {
+    let config: ConfigToml = value.clone().try_into()?;
+    if config.approval_policy == Some(AskForApproval::UnlessTrusted) {
+        anyhow::bail!(
+            "approval_policy = \"untrusted\" is no longer supported; remove this setting"
+        );
+    }
     Ok(())
 }
 

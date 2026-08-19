@@ -2,6 +2,8 @@ use crate::config_toml::ConfigToml;
 use crate::types::RawMcpServerConfig;
 use codex_features::FEATURES;
 use codex_features::legacy_feature_keys;
+use codex_protocol::protocol::GranularApprovalConfig;
+use schemars::JsonSchema;
 use schemars::r#gen::SchemaGenerator;
 use schemars::r#gen::SchemaSettings;
 use schemars::schema::InstanceType;
@@ -13,6 +15,28 @@ use schemars::schema::SubschemaValidation;
 use serde_json::Map;
 use serde_json::Value;
 use std::path::Path;
+
+/// Determines the conditions under which the user is consulted to approve
+/// running the command proposed by Codex.
+#[allow(dead_code)]
+#[derive(JsonSchema)]
+#[schemars(rename = "AskForApproval")]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum ConfigAskForApproval {
+    /// The model decides when to ask the user for approval.
+    OnRequest,
+
+    /// Fine-grained controls for individual approval flows.
+    ///
+    /// When a field is `true`, commands in that category are allowed. When it
+    /// is `false`, those requests are automatically rejected instead of shown
+    /// to the user.
+    Granular(GranularApprovalConfig),
+
+    /// Never ask the user to approve commands. Failures are immediately returned
+    /// to the model, and never escalated to the user for approval.
+    Never,
+}
 
 /// Schema for the `[features]` map with known + legacy keys only.
 pub fn features_schema(schema_gen: &mut SchemaGenerator) -> Schema {

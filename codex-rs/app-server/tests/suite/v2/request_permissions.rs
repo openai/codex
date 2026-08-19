@@ -36,7 +36,7 @@ async fn request_permissions_round_trip() -> Result<()> {
     ];
     let server = create_mock_responses_server_sequence(responses).await;
     MockResponsesConfig::new(&server.uri())
-        .with_approval_policy("untrusted")
+        .with_approval_policy("on-request")
         .enable_feature(Feature::RequestPermissionsTool)
         .write(codex_home.path())?;
 

@@ -77,7 +77,7 @@ async fn request_user_input_round_trip_for_mode(
     ];
     let server = create_mock_responses_server_sequence(responses).await;
     MockResponsesConfig::new(&server.uri())
-        .with_approval_policy("untrusted")
+        .with_approval_policy("on-request")
         .write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()

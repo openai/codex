@@ -226,7 +226,7 @@ async fn turn_interrupt_resolves_pending_command_approval_request() -> Result<()
     )?])
     .await;
     MockResponsesConfig::new(&server.uri())
-        .with_approval_policy("untrusted")
+        .with_approval_policy("on-request")
         .with_root_config(r#"approvals_reviewer = "user""#)
         .write(&codex_home)?;
 

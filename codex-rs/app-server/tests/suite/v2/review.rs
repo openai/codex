@@ -212,7 +212,7 @@ async fn review_start_exec_approval_item_id_matches_command_execution_item() -> 
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&server.uri())
         .with_provider_name("Mock provider")
-        .with_approval_policy("untrusted")
+        .with_approval_policy("on-request")
         .disable_feature(Feature::ShellSnapshot)
         .write(codex_home.path())?;
 

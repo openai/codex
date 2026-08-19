@@ -72,9 +72,8 @@ pub fn extract_powershell_command(command: &[String]) -> Option<(&str, &str)> {
 
 /// Parse the script body from a top-level PowerShell wrapper into argv-like commands.
 ///
-/// This is intentionally narrower than the Windows safe-command parser: it only unwraps the
-/// `-Command`/`-c` body from a PowerShell invocation we already recognize, then lowers the
-/// script in-process.
+/// This only unwraps the `-Command`/`-c` body from a PowerShell invocation we
+/// already recognize, then lowers the script in-process.
 pub fn parse_powershell_command_into_plain_commands(
     command: &[String],
 ) -> Option<Vec<Vec<String>>> {

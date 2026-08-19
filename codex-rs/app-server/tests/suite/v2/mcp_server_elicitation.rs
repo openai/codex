@@ -1354,7 +1354,7 @@ fn write_config_toml(
         format!(
             r#"
 model = "mock-model"
-approval_policy = "untrusted"
+approval_policy = "on-request"
 sandbox_mode = "read-only"
 
 model_provider = "mock_provider"

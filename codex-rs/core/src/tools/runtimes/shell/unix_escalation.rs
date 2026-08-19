@@ -385,7 +385,7 @@ struct CoreShellActionProvider {
 #[allow(clippy::large_enum_variant)]
 enum DecisionSource {
     PrefixRule,
-    /// Often, this is `is_safe_command()`.
+    /// Derived from the unmatched-command sandbox fallback.
     UnmatchedCommandFallback,
 }
 

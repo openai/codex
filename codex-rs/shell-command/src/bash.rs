@@ -315,7 +315,6 @@ fn parse_raw_string(node: Node, src: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::is_safe_command::is_known_safe_command;
     use pretty_assertions::assert_eq;
 
     fn parse_seq(src: &str) -> Option<Vec<Vec<String>>> {
@@ -444,7 +443,6 @@ mod tests {
                 for flag in ["-c", "-lc"] {
                     let command = [shell, flag, script].map(str::to_owned);
                     assert_eq!(parse_shell_lc_plain_commands(&command), None, "{command:?}");
-                    assert!(!is_known_safe_command(&command), "{command:?}");
                 }
             }
         }
@@ -485,7 +483,7 @@ mod tests {
             assert_eq!(parse_seq(script), None, "{script:?}");
             for shell in ["bash", "zsh"] {
                 let command = [shell, "-lc", script].map(str::to_owned);
-                assert!(!is_known_safe_command(&command), "{command:?}");
+                assert_eq!(parse_shell_lc_plain_commands(&command), None, "{command:?}");
             }
         }
     }

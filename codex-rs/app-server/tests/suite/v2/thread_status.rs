@@ -27,7 +27,7 @@ async fn thread_status_changed_emits_runtime_updates() -> Result<()> {
     let responses = vec![create_final_assistant_message_sse_response("done")?];
     let server = create_mock_responses_server_sequence(responses).await;
     MockResponsesConfig::new(&server.uri())
-        .with_approval_policy("untrusted")
+        .with_approval_policy("on-request")
         .enable_feature(Feature::CollaborationModes)
         .write(codex_home.path())?;
 
@@ -131,7 +131,7 @@ async fn thread_status_changed_can_be_opted_out() -> Result<()> {
     let responses = vec![create_final_assistant_message_sse_response("done")?];
     let server = create_mock_responses_server_sequence(responses).await;
     MockResponsesConfig::new(&server.uri())
-        .with_approval_policy("untrusted")
+        .with_approval_policy("on-request")
         .enable_feature(Feature::CollaborationModes)
         .write(codex_home.path())?;
 

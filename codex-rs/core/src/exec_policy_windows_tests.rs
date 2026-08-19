@@ -67,11 +67,11 @@ fn commands_for_exec_policy_parses_powershell_shell_wrapper() {
 }
 
 #[test]
-fn unmatched_safe_powershell_words_are_allowed() {
+fn unmatched_powershell_read_requires_approval_without_sandbox() {
     let command = vec!["Get-Content".to_string(), "Cargo.toml".to_string()];
 
     assert_eq!(
-        Decision::Allow,
+        Decision::Prompt,
         render_decision_for_unmatched_command(
             &command,
             UnmatchedCommandContext {

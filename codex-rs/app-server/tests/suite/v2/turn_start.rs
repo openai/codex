@@ -3,6 +3,7 @@ use anyhow::Result;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use app_test_support::create_apply_patch_sse_response;
+use app_test_support::create_escalated_shell_command_sse_response;
 use app_test_support::create_exec_command_sse_response;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_repeating_assistant;
@@ -2253,7 +2254,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
     // Mock server: first turn requests a shell call (elicitation), then completes.
     // Second turn same, but we'll set approval_policy=never to avoid elicitation.
     let responses = vec![
-        create_shell_command_sse_response(
+        create_escalated_shell_command_sse_response(
             first_shell_command,
             /*workdir*/ None,
             Some(5000),
@@ -2273,9 +2274,9 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
         create_final_assistant_message_sse_response("done 2")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
-    // Default approval is untrusted to force elicitation on first turn.
+    // The first tool call explicitly requests escalation to force elicitation.
     MockResponsesConfig::new(&server.uri())
-        .with_approval_policy("untrusted")
+        .with_approval_policy("on-request")
         .write(codex_home.as_path())?;
 
     let mut mcp = TestAppServer::builder()
@@ -2467,7 +2468,7 @@ async fn run_turn_start_exec_approval_rejection_v2(
         expected_approval_command.replace(bearer_token, "[REDACTED_SECRET]");
 
     let responses = vec![
-        create_shell_command_sse_response(
+        create_escalated_shell_command_sse_response(
             shell_command,
             /*workdir*/ None,
             Some(5000),
@@ -2477,7 +2478,7 @@ async fn run_turn_start_exec_approval_rejection_v2(
     ];
     let server = create_mock_responses_server_sequence(responses).await;
     MockResponsesConfig::new(&server.uri())
-        .with_approval_policy("untrusted")
+        .with_approval_policy("on-request")
         .write(codex_home.as_path())?;
 
     let mut mcp = TestAppServer::builder()
@@ -2638,7 +2639,7 @@ async fn turn_start_explicit_local_environment_updates_legacy_cwd_between_turns(
     ];
     let server = create_mock_responses_server_sequence(responses).await;
     MockResponsesConfig::new(&server.uri())
-        .with_approval_policy("untrusted")
+        .with_approval_policy("on-request")
         .write(&codex_home)?;
 
     let mut mcp = TestAppServer::builder()
@@ -3077,7 +3078,8 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
     ];
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
     MockResponsesConfig::new(&server.uri())
-        .with_approval_policy("untrusted")
+        .with_approval_policy("on-request")
+        .with_sandbox_mode("read-only")
         // Snapshot startup is unrelated to the file-approval behavior under test.
         .disable_feature(Feature::ShellSnapshot)
         .write(&codex_home)?;
@@ -4048,7 +4050,8 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
     ];
     let server = create_mock_responses_server_sequence(responses).await;
     MockResponsesConfig::new(&server.uri())
-        .with_approval_policy("untrusted")
+        .with_approval_policy("on-request")
+        .with_sandbox_mode("read-only")
         .write(&codex_home)?;
 
     let mut mcp = TestAppServer::builder()
@@ -4276,7 +4279,8 @@ async fn run_turn_start_file_change_approval_rejection_v2(
     ];
     let server = create_mock_responses_server_sequence(responses).await;
     MockResponsesConfig::new(&server.uri())
-        .with_approval_policy("untrusted")
+        .with_approval_policy("on-request")
+        .with_sandbox_mode("read-only")
         .write(&codex_home)?;
 
     let mut mcp = TestAppServer::builder()
@@ -4568,7 +4572,7 @@ async fn command_execution_notifications_include_trusted_plugin_id() -> Result<(
     ];
     let server = create_mock_responses_server_sequence(responses).await;
     MockResponsesConfig::new(&server.uri())
-        .with_approval_policy("untrusted")
+        .with_approval_policy("on-request")
         .with_sandbox_mode("danger-full-access")
         .enable_feature(Feature::Plugins)
         .disable_feature(Feature::RemotePlugin)
@@ -4630,25 +4634,9 @@ async fn command_execution_notifications_include_trusted_plugin_id() -> Result<(
         })
         .await??;
         if method == "item/started" {
-            let server_req = timeout(
-                DEFAULT_READ_TIMEOUT,
-                mcp.read_stream_until_request_message(),
-            )
-            .await??;
-            let ServerRequest::CommandExecutionRequestApproval { request_id, params } = server_req
-            else {
-                panic!("expected CommandExecutionRequestApproval request");
-            };
-            assert_eq!(params.item_id, "plugin-command");
-            mcp.send_response(
-                request_id,
-                serde_json::to_value(CommandExecutionRequestApprovalResponse {
-                    decision: CommandExecutionApprovalDecision::Decline,
-                })?,
-            )
-            .await?;
+            assert_eq!(status, CommandExecutionStatus::InProgress);
         } else {
-            assert_eq!(status, CommandExecutionStatus::Declined);
+            assert_eq!(status, CommandExecutionStatus::Completed);
         }
     }
 
