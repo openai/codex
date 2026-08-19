@@ -26,6 +26,7 @@ use super::WrappedOAuthTokenResponse;
 use super::compute_expires_at_millis;
 use super::refresh_lock::RefreshCredentialLock;
 use super::token_needs_refresh;
+use super::validate_refresh_token_issuer;
 
 const REFRESH_REQUEST_TIMEOUT: Duration = Duration::from_secs(45);
 
@@ -136,19 +137,27 @@ impl OAuthPersistor {
             debug!("adopting newer MCP OAuth credentials without contacting the provider");
             let manager = self.inner.authorization_manager.clone();
             let mut guard = manager.lock().await;
-            install_tokens_in_manager_guard(&mut guard, &latest).await?;
+            if latest.has_refresh_token() {
+                let previous = self.inner.last_credentials.lock().await;
+                let expected_issuer = previous.as_ref().and_then(StoredOAuthTokens::bound_issuer);
+                let latest_issuer = latest.bound_issuer();
+                if latest_issuer.is_none() || latest_issuer != expected_issuer {
+                    return Err(AuthError::AuthorizationRequired).with_context(|| {
+                        format!(
+                            "OAuth refresh credentials for server {} could not be bound to the previously validated issuer; authorization required",
+                            self.inner.server_name
+                        )
+                    });
+                }
+            }
+            install_tokens_in_manager(&mut guard, &latest).await?;
             *self.inner.last_credentials.lock().await = Some(latest);
             return Ok(());
         }
 
         // Preserve RMCP's `AuthorizationRequired` marker only for credentials known to be
         // unrefreshable. Network and provider failures below remain ordinary errors.
-        if latest
-            .token_response
-            .0
-            .refresh_token()
-            .is_none_or(|refresh_token| refresh_token.secret().trim().is_empty())
-        {
+        if !latest.has_refresh_token() {
             return Err(AuthError::AuthorizationRequired).with_context(|| {
                 format!(
                     "OAuth tokens for server {} cannot be refreshed; authorization required",
@@ -161,7 +170,14 @@ impl OAuthPersistor {
         // The provider uses a separate HTTP client and cannot re-enter `AuthClient`. Retain this
         // async guard so requests cannot observe credentials while they are staged and committed.
         let mut guard = manager.lock().await;
-        install_tokens_in_manager_guard(&mut guard, &latest)
+        let metadata = guard
+            .resolve_metadata()
+            .await
+            .context("failed to resolve OAuth metadata before using stored refresh credentials")?
+            .metadata;
+        validate_refresh_token_issuer(&metadata, &latest)?;
+        guard.set_metadata(metadata);
+        install_tokens_in_manager(&mut guard, &latest)
             .await
             .context("failed to stage OAuth credentials for refresh")?;
         // The owned task prevents caller deadlines from canceling after possible token rotation;
@@ -230,7 +246,7 @@ impl OAuthPersistor {
                 error = %error,
                 "failed to persist refreshed MCP OAuth credentials; returning the error and restoring the previous in-process credentials"
             );
-            install_tokens_in_manager_guard(&mut guard, &latest)
+            install_tokens_in_manager(&mut guard, &latest)
                 .await
                 .context(
                     "failed to restore previous OAuth credentials after refresh persistence failed",
@@ -241,7 +257,7 @@ impl OAuthPersistor {
         // This layer retains RMCP's legacy persistence hook. Install the same merged response
         // (including carried-forward refresh token/scopes) so that hook cannot overwrite durable
         // credentials with the provider's partial response.
-        install_tokens_in_manager_guard(&mut guard, &refreshed)
+        install_tokens_in_manager(&mut guard, &refreshed)
             .await
             .context(
                 "refreshed OAuth tokens were persisted but could not be installed in the authorization manager",
@@ -253,7 +269,8 @@ impl OAuthPersistor {
     }
 }
 
-async fn install_tokens_in_manager_guard(
+/// Installs tokens without resolving metadata again, so callers can pin the validated snapshot.
+pub(crate) async fn install_tokens_in_manager(
     authorization_manager: &mut AuthorizationManager,
     tokens: &StoredOAuthTokens,
 ) -> Result<()> {
@@ -268,12 +285,15 @@ async fn install_tokens_in_manager_guard(
         .ok()
         .map(|duration| duration.as_secs());
     store
-        .save(StoredCredentials::new(
-            tokens.client_id.clone(),
-            Some(token_response),
-            granted_scopes,
-            token_received_at,
-        ))
+        .save(
+            StoredCredentials::new(
+                tokens.client_id.clone(),
+                Some(token_response),
+                granted_scopes,
+                token_received_at,
+            )
+            .with_issuer(tokens.issuer.clone()),
+        )
         .await
         .context("failed to stage OAuth tokens for authorization manager")?;
 
@@ -301,6 +321,7 @@ fn refreshed_tokens(
     StoredOAuthTokens {
         server_name: inner.server_name.clone(),
         url: inner.url.clone(),
+        issuer: previous.issuer.clone(),
         client_id: previous.client_id.clone(),
         expires_at: compute_expires_at_millis(&token_response),
         token_response: WrappedOAuthTokenResponse(token_response),

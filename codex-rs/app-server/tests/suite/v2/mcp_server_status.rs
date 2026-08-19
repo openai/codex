@@ -251,7 +251,6 @@ async fn oauth_login_automatically_selects_callback_specific_cimd_without_metada
     });
     let registrations = Arc::new(AtomicUsize::new(0));
     let registration_count = Arc::clone(&registrations);
-    let token_count = Arc::new(AtomicUsize::new(0));
     let (token_request_tx, mut token_request_rx) = mpsc::unbounded_channel();
     let (mcp_authorization_tx, mut mcp_authorization_rx) = mpsc::unbounded_channel();
     let tool_name = Arc::new("cimd".to_string());
@@ -304,7 +303,6 @@ async fn oauth_login_automatically_selects_callback_specific_cimd_without_metada
             "/token",
             post(move |headers: HeaderMap, body: Bytes| {
                 let token_request_tx = token_request_tx.clone();
-                let token_count = Arc::clone(&token_count);
                 async move {
                     let _ = token_request_tx.send((
                         String::from_utf8_lossy(&body).into_owned(),
@@ -313,21 +311,12 @@ async fn oauth_login_automatically_selects_callback_specific_cimd_without_metada
                             .and_then(|value| value.to_str().ok())
                             .map(str::to_string),
                     ));
-                    if token_count.fetch_add(1, Ordering::SeqCst) == 0 {
-                        Json(json!({
-                            "access_token": "expired-cimd-access-token",
-                            "token_type": "Bearer",
-                            "expires_in": 0,
-                            "refresh_token": "test-refresh-token",
-                        }))
-                    } else {
-                        Json(json!({
-                            "access_token": "refreshed-cimd-access-token",
-                            "token_type": "Bearer",
-                            "expires_in": 3600,
-                            "refresh_token": "test-refresh-token",
-                        }))
-                    }
+                    Json(json!({
+                        "access_token": "cimd-access-token",
+                        "token_type": "Bearer",
+                        "expires_in": 3600,
+                        "refresh_token": "test-refresh-token",
+                    }))
                 }
             }),
         )
@@ -431,29 +420,11 @@ async fn oauth_login_automatically_selects_callback_specific_cimd_without_metada
             },
         })
         .await?;
-    let (refresh_request, refresh_authorization) =
-        timeout(DEFAULT_READ_TIMEOUT, token_request_rx.recv())
-            .await?
-            .expect("expired CIMD token should be refreshed");
-    let refresh_parameters = url::form_urlencoded::parse(refresh_request.as_bytes())
-        .into_owned()
-        .collect::<BTreeMap<String, String>>();
-    assert_eq!(
-        refresh_parameters.get("grant_type").map(String::as_str),
-        Some("refresh_token")
-    );
-    assert_eq!(
-        refresh_parameters.get("refresh_token").map(String::as_str),
-        Some("test-refresh-token")
-    );
-    assert_eq!(refresh_parameters.get("client_id"), Some(&client_id));
-    assert!(!refresh_parameters.contains_key("client_secret"));
-    assert_eq!(refresh_authorization, None);
     assert_eq!(
         timeout(DEFAULT_READ_TIMEOUT, mcp_authorization_rx.recv())
             .await?
-            .expect("MCP startup should use the refreshed token"),
-        "Bearer refreshed-cimd-access-token"
+            .expect("MCP startup should use the access token"),
+        "Bearer cimd-access-token"
     );
     assert_eq!(registrations.load(Ordering::SeqCst), 0);
 

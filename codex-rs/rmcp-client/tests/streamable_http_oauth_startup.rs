@@ -1,6 +1,9 @@
 mod streamable_http_test_support;
 
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -51,7 +54,9 @@ const MCP_USER_AGENT: &str = concat!("codex-mcp-client/", env!("CARGO_PKG_VERSIO
 const CHILD_SERVER_URL_ENV: &str = "MCP_TEST_OAUTH_STARTUP_SERVER_URL";
 const CHILD_HELPER_COMMAND_ENV: &str = "MCP_TEST_OAUTH_STARTUP_HELPER_COMMAND";
 const CHILD_RESOURCE_API_KEY_ENV: &str = "MCP_TEST_OAUTH_STARTUP_RESOURCE_API_KEY";
-const UNREFRESHABLE_SERVER_URL: &str = "https://unrefreshable.example/mcp";
+const CHILD_STORED_ISSUER_ENV: &str = "MCP_TEST_OAUTH_STARTUP_STORED_ISSUER";
+const CHILD_ACCESS_TOKEN_EXPIRY_ENV: &str = "MCP_TEST_OAUTH_STARTUP_ACCESS_TOKEN_EXPIRY";
+const LEGACY_REFRESHABLE_SERVER_URL: &str = "https://legacy-refreshable.example/mcp";
 const UNEXPIRED_SERVER_URL: &str = "https://unexpired.example/mcp";
 const REFRESHABLE_SERVER_URL: &str = "https://refreshable.example/mcp";
 
@@ -60,6 +65,12 @@ enum OAuthStartupScenario {
     DirectAuthorizationMetadata,
     GatewayHeadersHelper,
     ProtectedResourceMetadata,
+}
+
+#[derive(Clone, Copy)]
+enum IssuerMismatchAccessToken {
+    Expired,
+    Unexpired,
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -103,7 +114,7 @@ async fn assert_expired_token_refresh(scenario: OAuthStartupScenario) -> anyhow:
                 "www-authenticate",
                 format!("Bearer resource_metadata=\"{resource_metadata_url}\""),
             ))
-            .expect(1)
+            .expect(2)
             .mount(&server)
             .await;
         Mock::given(method("GET"))
@@ -112,12 +123,13 @@ async fn assert_expired_token_refresh(scenario: OAuthStartupScenario) -> anyhow:
                 "resource": resource_url,
                 "authorization_servers": [server.uri()],
             })))
-            .expect(1)
+            .expect(2)
             .mount(&server)
             .await;
     }
 
     let mut authorization_metadata = json!({
+        "issuer": server_url.clone(),
         "authorization_endpoint": format!("{}/oauth/authorize", authorization_server.uri()),
         "token_endpoint": format!("{}/oauth/token", authorization_server.uri()),
         "scopes_supported": [""],
@@ -125,13 +137,17 @@ async fn assert_expired_token_refresh(scenario: OAuthStartupScenario) -> anyhow:
     if matches!(scenario, OAuthStartupScenario::ProtectedResourceMetadata) {
         authorization_metadata["issuer"] = json!(server.uri());
     }
+    let authorization_server_issuer = authorization_metadata["issuer"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("authorization metadata should include issuer"))?
+        .to_string();
 
     Mock::given(method("GET"))
         .and(path(authorization_metadata_path))
         .and(header("user-agent", RESOURCE_USER_AGENT))
         .and(header("x-api-key", RESOURCE_API_KEY))
         .respond_with(ResponseTemplate::new(200).set_body_json(authorization_metadata))
-        .expect(1)
+        .expect(2)
         .mount(&server)
         .await;
     Mock::given(method("POST"))
@@ -208,6 +224,7 @@ async fn assert_expired_token_refresh(scenario: OAuthStartupScenario) -> anyhow:
         .args(["oauth_startup_child", "--exact", "--ignored", "--nocapture"])
         .env("CODEX_HOME", codex_home.path())
         .env(CHILD_SERVER_URL_ENV, server_url)
+        .env(CHILD_STORED_ISSUER_ENV, authorization_server_issuer)
         .env(CHILD_RESOURCE_API_KEY_ENV, RESOURCE_API_KEY)
         .env("MCP_TEST_AMBIENT_SECRET", "must-not-reach-helper");
     if with_headers_helper {
@@ -249,6 +266,226 @@ async fn assert_expired_token_refresh(scenario: OAuthStartupScenario) -> anyhow:
     );
     server.verify().await;
     authorization_server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn rejects_refresh_when_authorization_server_issuer_changes_before_startup()
+-> anyhow::Result<()> {
+    assert_issuer_mismatch_startup(IssuerMismatchAccessToken::Expired).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn does_not_refresh_unexpired_token_after_issuer_change_401() -> anyhow::Result<()> {
+    assert_issuer_mismatch_startup(IssuerMismatchAccessToken::Unexpired).await
+}
+
+async fn assert_issuer_mismatch_startup(
+    access_token: IssuerMismatchAccessToken,
+) -> anyhow::Result<()> {
+    let issuer_a = MockServer::start().await;
+    let issuer_b = MockServer::start().await;
+    let mcp_server = MockServer::start().await;
+    let server_url = format!("{}/mcp", mcp_server.uri());
+    let resource_metadata_url = format!("{}/resource-metadata", mcp_server.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/mcp"))
+        .respond_with(ResponseTemplate::new(401).insert_header(
+            "www-authenticate",
+            format!("Bearer resource_metadata=\"{resource_metadata_url}\""),
+        ))
+        .expect(1)
+        .mount(&mcp_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/resource-metadata"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "resource": server_url,
+            "authorization_servers": [issuer_b.uri()],
+        })))
+        .expect(1)
+        .mount(&mcp_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/.well-known/oauth-authorization-server"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "issuer": issuer_b.uri(),
+            "authorization_endpoint": format!("{}/oauth/authorize", issuer_b.uri()),
+            "token_endpoint": format!("{}/oauth/token", issuer_b.uri()),
+            "scopes_supported": [""],
+        })))
+        .expect(1)
+        .mount(&issuer_b)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/mcp"))
+        .and(header(
+            "authorization",
+            format!("Bearer {EXPIRED_ACCESS_TOKEN}"),
+        ))
+        .respond_with(ResponseTemplate::new(401).insert_header(
+            "www-authenticate",
+            format!("Bearer resource_metadata=\"{resource_metadata_url}\""),
+        ))
+        .expect(match access_token {
+            IssuerMismatchAccessToken::Expired => 0,
+            IssuerMismatchAccessToken::Unexpired => 1,
+        })
+        .mount(&mcp_server)
+        .await;
+
+    let stored_issuer = issuer_a.uri();
+    let status = run_issuer_startup_child(
+        &server_url,
+        &stored_issuer,
+        match access_token {
+            IssuerMismatchAccessToken::Expired => "expired",
+            IssuerMismatchAccessToken::Unexpired => "unexpired",
+        },
+    )
+    .await?;
+
+    assert!(
+        status.success(),
+        "issuer mismatch startup child failed: {status}"
+    );
+    let issuer_b_requests = issuer_b.received_requests().await.unwrap_or_default();
+    assert!(
+        issuer_b_requests
+            .iter()
+            .all(|request| request.url.path() != "/oauth/token"),
+        "stored refresh token must not be posted to the replacement issuer"
+    );
+    mcp_server.verify().await;
+    issuer_b.verify().await;
+    Ok(())
+}
+
+async fn run_issuer_startup_child(
+    server_url: &str,
+    stored_issuer: &str,
+    access_token_expiry: &str,
+) -> anyhow::Result<std::process::ExitStatus> {
+    let codex_home = TempDir::new()?;
+    Ok(Command::new(std::env::current_exe()?)
+        .args([
+            "issuer_startup_child",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env("CODEX_HOME", codex_home.path())
+        .env(CHILD_SERVER_URL_ENV, server_url)
+        .env(CHILD_STORED_ISSUER_ENV, stored_issuer)
+        .env(CHILD_ACCESS_TOKEN_EXPIRY_ENV, access_token_expiry)
+        .status()
+        .await?)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn does_not_refresh_against_metadata_from_second_discovery() -> anyhow::Result<()> {
+    let issuer_a = MockServer::start().await;
+    let issuer_b = MockServer::start().await;
+    let mcp_server = MockServer::start().await;
+    let server_url = format!("{}/mcp", mcp_server.uri());
+    let resource_metadata_url = format!("{}/resource-metadata", mcp_server.uri());
+    let discovery_count = Arc::new(AtomicUsize::new(0));
+    let issuer_a_url = issuer_a.uri();
+    let issuer_b_url = issuer_b.uri();
+
+    Mock::given(method("GET"))
+        .and(path("/mcp"))
+        .respond_with(ResponseTemplate::new(401).insert_header(
+            "www-authenticate",
+            format!("Bearer resource_metadata=\"{resource_metadata_url}\""),
+        ))
+        .expect(1)
+        .mount(&mcp_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/resource-metadata"))
+        .respond_with({
+            let discovery_count = Arc::clone(&discovery_count);
+            let issuer_a_url = issuer_a_url.clone();
+            let issuer_b_url = issuer_b_url.clone();
+            let metadata_resource_url = server_url.clone();
+            move |_request: &Request| {
+                let issuer = if discovery_count.fetch_add(1, Ordering::SeqCst) == 0 {
+                    &issuer_a_url
+                } else {
+                    &issuer_b_url
+                };
+                ResponseTemplate::new(200).set_body_json(json!({
+                    "resource": metadata_resource_url,
+                    "authorization_servers": [issuer],
+                }))
+            }
+        })
+        .expect(1)
+        .mount(&mcp_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/.well-known/oauth-authorization-server"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "issuer": issuer_a.uri(),
+            "authorization_endpoint": format!("{}/oauth/authorize", issuer_a.uri()),
+            "token_endpoint": format!("{}/oauth/token", issuer_a.uri()),
+            "scopes_supported": [""],
+        })))
+        .expect(1)
+        .mount(&issuer_a)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/.well-known/oauth-authorization-server"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "issuer": issuer_b.uri(),
+            "authorization_endpoint": format!("{}/oauth/authorize", issuer_b.uri()),
+            "token_endpoint": format!("{}/oauth/token", issuer_b.uri()),
+            "scopes_supported": [""],
+        })))
+        .mount(&issuer_b)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/mcp"))
+        .and(header(
+            "authorization",
+            format!("Bearer {EXPIRED_ACCESS_TOKEN}"),
+        ))
+        .respond_with(ResponseTemplate::new(401).insert_header(
+            "www-authenticate",
+            format!("Bearer resource_metadata=\"{resource_metadata_url}\""),
+        ))
+        .expect(1)
+        .mount(&mcp_server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .and(body_string_contains(format!(
+            "refresh_token={REFRESH_TOKEN}"
+        )))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "error": "invalid_grant",
+        })))
+        .expect(1)
+        .mount(&issuer_a)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&issuer_b)
+        .await;
+
+    let status = run_issuer_startup_child(&server_url, &issuer_a_url, "unexpired").await?;
+
+    assert!(
+        status.success(),
+        "metadata swap startup child failed: {status}"
+    );
+    mcp_server.verify().await;
+    issuer_a.verify().await;
+    issuer_b.verify().await;
     Ok(())
 }
 
@@ -326,14 +563,16 @@ async fn persisted_credentials_auth_status_child() -> anyhow::Result<()> {
     assert_eq!(status, McpAuthState::LoggedOut(McpLoginRequirement::Login));
     first_login_server.verify().await;
 
-    let response = OAuthTokenResponse::new(
+    let mut response = OAuthTokenResponse::new(
         AccessToken::new(EXPIRED_ACCESS_TOKEN.to_string()),
         BasicTokenType::Bearer,
         VendorExtraTokenFields::default(),
     );
+    response.set_refresh_token(Some(RefreshToken::new(REFRESH_TOKEN.to_string())));
     let tokens = StoredOAuthTokens {
         server_name: SERVER_NAME.to_string(),
-        url: UNREFRESHABLE_SERVER_URL.to_string(),
+        url: LEGACY_REFRESHABLE_SERVER_URL.to_string(),
+        issuer: None,
         client_id: "test-client-id".to_string(),
         token_response: WrappedOAuthTokenResponse(response),
         expires_at: Some(0),
@@ -345,7 +584,7 @@ async fn persisted_credentials_auth_status_child() -> anyhow::Result<()> {
         AuthKeyringBackendKind::default(),
     )?;
 
-    let status = auth_status(UNREFRESHABLE_SERVER_URL).await?;
+    let status = auth_status(LEGACY_REFRESHABLE_SERVER_URL).await?;
     assert_eq!(
         status,
         McpAuthState::LoggedOut(McpLoginRequirement::Reauthentication)
@@ -363,6 +602,7 @@ async fn persisted_credentials_auth_status_child() -> anyhow::Result<()> {
     let tokens = StoredOAuthTokens {
         server_name: SERVER_NAME.to_string(),
         url: UNEXPIRED_SERVER_URL.to_string(),
+        issuer: None,
         client_id: "test-client-id".to_string(),
         token_response: WrappedOAuthTokenResponse(response),
         expires_at: Some(now.saturating_add(/*rhs*/ 60_000)),
@@ -386,6 +626,7 @@ async fn persisted_credentials_auth_status_child() -> anyhow::Result<()> {
     let tokens = StoredOAuthTokens {
         server_name: SERVER_NAME.to_string(),
         url: REFRESHABLE_SERVER_URL.to_string(),
+        issuer: Some("https://issuer.example.test".to_string()),
         client_id: "test-client-id".to_string(),
         token_response: WrappedOAuthTokenResponse(response),
         expires_at: Some(0),
@@ -435,6 +676,7 @@ async fn oauth_startup_child() -> anyhow::Result<()> {
     let tokens = StoredOAuthTokens {
         server_name: SERVER_NAME.to_string(),
         url: server_url.clone(),
+        issuer: Some(std::env::var(CHILD_STORED_ISSUER_ENV)?),
         client_id: "test-client-id".to_string(),
         token_response: WrappedOAuthTokenResponse(response),
         expires_at: Some(0),
@@ -493,6 +735,7 @@ async fn expired_unrefreshable_startup_child() -> anyhow::Result<()> {
     let tokens = StoredOAuthTokens {
         server_name: SERVER_NAME.to_string(),
         url: server_url.clone(),
+        issuer: None,
         client_id: "test-client-id".to_string(),
         token_response: WrappedOAuthTokenResponse(response),
         expires_at: Some(0),
@@ -521,5 +764,68 @@ async fn expired_unrefreshable_startup_child() -> anyhow::Result<()> {
         .await
         .expect_err("expired token without a refresh token should fail startup");
     assert!(is_authentication_required_error(&error));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[ignore = "spawned by issuer startup tests"]
+async fn issuer_startup_child() -> anyhow::Result<()> {
+    let server_url = std::env::var(CHILD_SERVER_URL_ENV)?;
+    let mut response = OAuthTokenResponse::new(
+        AccessToken::new(EXPIRED_ACCESS_TOKEN.to_string()),
+        BasicTokenType::Bearer,
+        VendorExtraTokenFields::default(),
+    );
+    response.set_refresh_token(Some(RefreshToken::new(REFRESH_TOKEN.to_string())));
+    response.set_expires_in(Some(&Duration::from_secs(7200)));
+    let expires_at = match std::env::var(CHILD_ACCESS_TOKEN_EXPIRY_ENV).as_deref() {
+        Ok("expired") | Err(_) => Some(0),
+        Ok("unexpired") => {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_else(|_| Duration::from_secs(0))
+                .as_millis() as u64;
+            Some(now.saturating_add(/*rhs*/ 60_000))
+        }
+        Ok(value) => anyhow::bail!("unexpected access token expiry fixture: {value}"),
+    };
+    let tokens = StoredOAuthTokens {
+        server_name: SERVER_NAME.to_string(),
+        url: server_url.clone(),
+        issuer: Some(std::env::var(CHILD_STORED_ISSUER_ENV)?),
+        client_id: "test-client-id".to_string(),
+        token_response: WrappedOAuthTokenResponse(response),
+        expires_at,
+    };
+    save_oauth_tokens(
+        SERVER_NAME,
+        &tokens,
+        OAuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )?;
+
+    let client = RmcpClient::new_streamable_http_client(
+        SERVER_NAME,
+        &server_url,
+        /*bearer_token*/ None,
+        /*http_headers*/ None,
+        /*env_http_headers*/ None,
+        OAuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+        Environment::default_for_tests().get_http_client(),
+        /*auth_provider*/ None,
+    )
+    .await;
+
+    let error = match client {
+        Ok(client) => initialize_client(&client)
+            .await
+            .expect_err("stored refresh token must fail when startup cannot refresh safely"),
+        Err(error) => error,
+    };
+    assert!(
+        is_authentication_required_error(&error),
+        "unexpected issuer startup error: {error:#}"
+    );
     Ok(())
 }

@@ -16,6 +16,7 @@
 //!
 //! If the keyring is not available or fails, we fall back to CODEX_HOME/.credentials.json which is consistent with other coding CLI agents.
 
+mod issuer_binding;
 mod refresh_lock;
 mod refresh_transaction;
 mod resolved_store;
@@ -23,7 +24,7 @@ mod store_lock;
 
 #[cfg(test)]
 #[path = "oauth/test_support.rs"]
-mod test_support;
+pub(crate) mod test_support;
 
 use anyhow::Context;
 use anyhow::Error;
@@ -70,6 +71,8 @@ use tokio::sync::Mutex;
 
 use codex_utils_home_dir::find_codex_home;
 
+pub(crate) use self::issuer_binding::validate_refresh_token_issuer;
+pub(crate) use self::refresh_transaction::install_tokens_in_manager;
 pub(crate) use self::resolved_store::ResolvedOAuthCredentialStore;
 pub(crate) use self::resolved_store::ResolvedOAuthTokens;
 pub(crate) use self::resolved_store::resolve_oauth_tokens_from_store_policy;
@@ -83,10 +86,38 @@ const REFRESH_SKEW_MILLIS: u64 = 30_000;
 pub struct StoredOAuthTokens {
     pub server_name: String,
     pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issuer: Option<String>,
     pub client_id: String,
     pub token_response: WrappedOAuthTokenResponse,
     #[serde(default)]
     pub expires_at: Option<u64>,
+}
+
+impl StoredOAuthTokens {
+    pub(crate) fn has_refresh_token(&self) -> bool {
+        self.token_response
+            .0
+            .refresh_token()
+            .is_some_and(|refresh_token| !refresh_token.secret().trim().is_empty())
+    }
+
+    pub(crate) fn bound_issuer(&self) -> Option<&str> {
+        self.issuer
+            .as_deref()
+            .filter(|issuer| !issuer.trim().is_empty())
+    }
+
+    pub(crate) fn access_token_is_usable_without_refresh(&self) -> bool {
+        !token_needs_refresh(self.expires_at)
+            && !self
+                .token_response
+                .0
+                .access_token()
+                .secret()
+                .trim()
+                .is_empty()
+    }
 }
 
 /// OAuth credentials paired with the concrete store selected for their client lifecycle.
@@ -281,14 +312,11 @@ fn oauth_tokens_are_usable(tokens: &StoredOAuthTokens) -> bool {
         return false;
     }
 
-    let token_response = &tokens.token_response.0;
     if token_needs_refresh(tokens.expires_at) {
-        return token_response
-            .refresh_token()
-            .is_some_and(|token| !token.secret().trim().is_empty());
+        return tokens.bound_issuer().is_some() && tokens.has_refresh_token();
     }
 
-    !token_response.access_token().secret().trim().is_empty()
+    tokens.access_token_is_usable_without_refresh()
 }
 
 fn refresh_expires_in_from_timestamp(tokens: &mut StoredOAuthTokens) {
@@ -702,6 +730,9 @@ impl OAuthPersistor {
                 let stored = StoredOAuthTokens {
                     server_name: self.inner.server_name.clone(),
                     url: self.inner.url.clone(),
+                    issuer: last_credentials
+                        .as_ref()
+                        .and_then(|previous| previous.issuer.clone()),
                     client_id,
                     token_response: new_token_response,
                     expires_at,
@@ -746,6 +777,8 @@ type FallbackFile = BTreeMap<String, FallbackTokenEntry>;
 struct FallbackTokenEntry {
     server_name: String,
     server_url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    issuer: Option<String>,
     client_id: String,
     access_token: String,
     #[serde(default)]
@@ -810,6 +843,7 @@ fn load_oauth_tokens_from_file_with_lock_held(
         let mut stored = StoredOAuthTokens {
             server_name: entry.server_name.clone(),
             url: entry.server_url.clone(),
+            issuer: entry.issuer.clone(),
             client_id: entry.client_id.clone(),
             token_response: WrappedOAuthTokenResponse(token_response),
             expires_at: entry.expires_at,
@@ -852,6 +886,7 @@ fn save_oauth_tokens_to_file_with_lock_held(tokens: &StoredOAuthTokens) -> Resul
     let entry = FallbackTokenEntry {
         server_name: tokens.server_name.clone(),
         server_url: tokens.url.clone(),
+        issuer: tokens.issuer.clone(),
         client_id: tokens.client_id.clone(),
         access_token: token_response.access_token().secret().to_string(),
         expires_at,
@@ -1673,6 +1708,7 @@ mod tests {
     ) {
         assert_eq!(actual.server_name, expected.server_name);
         assert_eq!(actual.url, expected.url);
+        assert_eq!(actual.issuer, expected.issuer);
         assert_eq!(actual.client_id, expected.client_id);
         assert_eq!(actual.expires_at, expected.expires_at);
         assert_token_response_match_without_expiry(
@@ -1726,6 +1762,7 @@ mod tests {
         StoredOAuthTokens {
             server_name: "test-server".to_string(),
             url: "https://example.test".to_string(),
+            issuer: Some("https://issuer.example.test".to_string()),
             client_id: "client-id".to_string(),
             token_response: WrappedOAuthTokenResponse(response),
             expires_at,

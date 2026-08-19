@@ -29,6 +29,7 @@ use crate::WrappedOAuthTokenResponse;
 use crate::http_client_adapter::StreamableHttpRedirectMode;
 use crate::oauth::compute_expires_at_millis;
 use crate::oauth_client_registration::McpOAuthClientRegistration;
+use crate::oauth_client_registration::PreparedOAuthLogin;
 use crate::oauth_client_registration::start_authorization as start_client_registration;
 use crate::oauth_http_client::OAuthHttpClientAdapter;
 use crate::save_oauth_tokens;
@@ -396,6 +397,7 @@ impl OauthLoginHandle {
 struct OauthLoginFlow {
     auth_url: String,
     oauth_state: OAuthState,
+    authorization_server_issuer: Option<String>,
     rx: oneshot::Receiver<CallbackResult>,
     guard: CallbackServerGuard,
     server_name: String,
@@ -554,7 +556,10 @@ impl OauthLoginFlow {
         )?);
 
         let scope_refs: Vec<&str> = scopes.iter().map(String::as_str).collect();
-        let oauth_state = if let Some(oauth_client_id) =
+        let PreparedOAuthLogin {
+            oauth_state,
+            authorization_server_issuer,
+        } = if let Some(oauth_client_id) =
             oauth_client_id.filter(|client_id| !client_id.trim().is_empty())
         {
             start_authorization(
@@ -587,6 +592,7 @@ impl OauthLoginFlow {
         Ok(Self {
             auth_url,
             oauth_state,
+            authorization_server_issuer,
             rx,
             guard,
             server_name: server_name.to_string(),
@@ -653,6 +659,7 @@ impl OauthLoginFlow {
             let stored = StoredOAuthTokens {
                 server_name: self.server_name.clone(),
                 url: self.server_url.clone(),
+                issuer: self.authorization_server_issuer.clone(),
                 client_id,
                 token_response: WrappedOAuthTokenResponse(credentials),
                 expires_at,
@@ -698,11 +705,12 @@ async fn start_authorization(
     scopes: &[&str],
     redirect_uri: &str,
     oauth_client_id: &str,
-) -> Result<OAuthState> {
+) -> Result<PreparedOAuthLogin> {
     let mut auth_manager =
         AuthorizationManager::new_with_oauth_http_client(server_url, http_client).await?;
     auth_manager.set_allow_missing_issuer(true);
     let metadata = auth_manager.resolve_metadata().await?.metadata;
+    let authorization_server_issuer = metadata.issuer.clone();
     auth_manager.set_metadata(metadata);
     auth_manager.configure_client(
         OAuthClientConfig::new(oauth_client_id, redirect_uri)
@@ -710,9 +718,14 @@ async fn start_authorization(
     )?;
     let auth_url = auth_manager.get_authorization_url(scopes).await?;
 
-    Ok(OAuthState::Session(
-        AuthorizationSession::for_scope_upgrade(auth_manager, auth_url, redirect_uri),
-    ))
+    Ok(PreparedOAuthLogin {
+        oauth_state: OAuthState::Session(AuthorizationSession::for_scope_upgrade(
+            auth_manager,
+            auth_url,
+            redirect_uri,
+        )),
+        authorization_server_issuer,
+    })
 }
 
 fn append_query_param(url: &str, key: &str, value: Option<&str>) -> String {
@@ -735,6 +748,9 @@ fn append_query_param(url: &str, key: &str, value: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::io::Read;
+    use std::io::Write;
+    use std::net::TcpStream;
     use std::sync::Arc;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
@@ -763,7 +779,9 @@ mod tests {
     use super::CallbackOutcome;
     use super::McpOAuthClientRegistration;
     use super::OAuthHttpClientAdapter;
+    use super::OAuthHttpContext;
     use super::OAuthProviderError;
+    use super::OauthLoginFlow;
     use super::StreamableHttpRedirectMode;
     use super::append_callback_id_to_redirect_uri;
     use super::append_query_param;
@@ -773,6 +791,8 @@ mod tests {
     use super::perform_oauth_login;
     use super::perform_oauth_login_silent;
     use super::start_authorization;
+    use crate::oauth::stored_oauth_credentials;
+    use crate::oauth::test_support::TempCodexHome;
 
     #[derive(Default)]
     struct RecordingHttpClient {
@@ -845,6 +865,16 @@ mod tests {
                         Json(json!({"client_id": "unexpected-dynamic-client"}))
                     }
                 }),
+            )
+            .route(
+                "/oauth/token",
+                post(|| async {
+                    Json(json!({
+                        "access_token": "test-access-token",
+                        "token_type": "Bearer",
+                        "refresh_token": "test-refresh-token",
+                    }))
+                }),
             );
 
         tokio::spawn(async move {
@@ -856,12 +886,96 @@ mod tests {
         (base_url, registration_requests)
     }
 
+    async fn send_oauth_callback(callback_url: Url) -> anyhow::Result<()> {
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let host = callback_url
+                .host_str()
+                .ok_or_else(|| anyhow::anyhow!("callback URL should include a host"))?;
+            let port = callback_url
+                .port()
+                .ok_or_else(|| anyhow::anyhow!("callback URL should include a port"))?;
+            let mut stream = TcpStream::connect((host, port))?;
+            let mut path = callback_url.path().to_string();
+            if let Some(query) = callback_url.query() {
+                path.push('?');
+                path.push_str(query);
+            }
+            write!(
+                stream,
+                "GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n"
+            )?;
+            let mut response = String::new();
+            stream.read_to_string(&mut response)?;
+            anyhow::ensure!(
+                response.starts_with("HTTP/1.1 200"),
+                "OAuth callback failed: {response}"
+            );
+            Ok(())
+        })
+        .await?
+    }
+
+    #[tokio::test]
+    async fn oauth_login_persists_discovered_issuer() -> anyhow::Result<()> {
+        let _env = TempCodexHome::new();
+        let (base_url, _registration_requests) = spawn_oauth_metadata_server().await;
+        let server_url = format!("{base_url}/mcp");
+        let flow = OauthLoginFlow::new(
+            "issuer-persistence-test",
+            &server_url,
+            OAuthCredentialsStoreMode::File,
+            AuthKeyringBackendKind::Direct,
+            OAuthHttpContext {
+                http_headers: None,
+                env_http_headers: None,
+                http_client: Arc::new(RouteAwareHttpClient::new(HttpClientFactory::new(
+                    OutboundProxyPolicy::ReqwestDefault,
+                ))),
+                redirect_mode: StreamableHttpRedirectMode::Legacy,
+            },
+            &[],
+            Some("test-client"),
+            McpOAuthClientRegistration::Auto,
+            /*oauth_resource*/ None,
+            /*launch_browser*/ false,
+            /*callback_port*/ None,
+            /*callback_url*/ None,
+            Some(/*timeout_secs*/ 5),
+        )
+        .await?;
+        let authorization_url = Url::parse(&flow.authorization_url())?;
+        let query = authorization_url.query_pairs().collect::<HashMap<_, _>>();
+        let redirect_uri = query
+            .get("redirect_uri")
+            .ok_or_else(|| anyhow::anyhow!("authorization URL should include redirect_uri"))?;
+        let state = query
+            .get("state")
+            .ok_or_else(|| anyhow::anyhow!("authorization URL should include state"))?;
+        let mut callback_url = Url::parse(redirect_uri)?;
+        callback_url
+            .query_pairs_mut()
+            .append_pair("code", "test-code")
+            .append_pair("state", state);
+        send_oauth_callback(callback_url).await?;
+        flow.finish(/*emit_browser_url*/ false).await?;
+
+        let stored = stored_oauth_credentials(
+            "issuer-persistence-test",
+            &server_url,
+            OAuthCredentialsStoreMode::File,
+            AuthKeyringBackendKind::Direct,
+        )?
+        .expect("OAuth login should persist credentials");
+        assert_eq!(stored.issuer.as_deref(), Some(server_url.as_str()));
+        Ok(())
+    }
+
     #[tokio::test]
     async fn configured_client_preserves_exact_scopes_and_redirect_without_registration() {
         for (scopes, expected_scope) in [(&[][..], None), (&["read"][..], Some("read"))] {
             let (base_url, registration_requests) = spawn_oauth_metadata_server().await;
             let redirect_uri = "http://127.0.0.1:43123/callback/configured-client";
-            let oauth_state = start_authorization(
+            let prepared = start_authorization(
                 &format!("{base_url}/mcp"),
                 Arc::new(OAuthHttpClientAdapter::new(
                     Arc::new(RouteAwareHttpClient::new(HttpClientFactory::new(
@@ -876,6 +990,7 @@ mod tests {
             )
             .await
             .expect("start pre-registered OAuth authorization");
+            let oauth_state = prepared.oauth_state;
 
             let authorization_url = oauth_state
                 .get_authorization_url()
@@ -955,7 +1070,7 @@ mod tests {
                     .await
                     .expect("serve authorization metadata fixture");
             });
-            let mut state = start_authorization(
+            let prepared = start_authorization(
                 &format!("{issuer}/mcp"),
                 Arc::new(OAuthHttpClientAdapter::new(
                     Arc::new(RouteAwareHttpClient::new(HttpClientFactory::new(
@@ -970,6 +1085,7 @@ mod tests {
             )
             .await
             .expect("start issuer-aware authorization");
+            let mut state = prepared.oauth_state;
             let csrf_state = Url::parse(
                 &state
                     .get_authorization_url()

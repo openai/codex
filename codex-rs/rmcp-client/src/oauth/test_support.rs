@@ -10,13 +10,13 @@ use tempfile::tempdir;
 ///
 /// Keep OAuth tests on this one guard instead of defining per-module helpers; otherwise
 /// concurrently running test modules can point File/Secrets storage at different homes.
-pub(super) struct TempCodexHome {
+pub(crate) struct TempCodexHome {
     _guard: MutexGuard<'static, ()>,
     _dir: tempfile::TempDir,
 }
 
 impl TempCodexHome {
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         let guard = LOCK
             .get_or_init(Mutex::default)

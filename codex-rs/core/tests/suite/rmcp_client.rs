@@ -4108,6 +4108,7 @@ fn write_fallback_oauth_tokens(
         "server_name": server_name,
         "url": server_url,
         "client_id": client_id,
+        "issuer": server_url,
         "token_response": {
             "access_token": access_token,
             "token_type": "Bearer",

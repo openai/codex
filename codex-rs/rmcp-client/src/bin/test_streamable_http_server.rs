@@ -179,6 +179,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .header(CONTENT_TYPE, "application/json")
                         .body(Body::from(
                             serde_json::to_vec(&json!({
+                                "issuer": format!("{metadata_base}/mcp"),
                                 "authorization_endpoint": format!("{metadata_base}/oauth/authorize"),
                                 "token_endpoint": format!("{metadata_base}/oauth/token"),
                                 "scopes_supported": [""],

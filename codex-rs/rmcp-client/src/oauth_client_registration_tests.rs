@@ -101,7 +101,7 @@ async fn authorization(
     redirect_uri: &str,
     registration: McpOAuthClientRegistration,
 ) -> Result<(OAuthState, HashMap<String, String>)> {
-    let state = start_authorization(
+    let prepared = start_authorization(
         &format!("{}/mcp", server.uri()),
         Arc::new(OAuthHttpClientAdapter::new(
             Arc::new(RouteAwareHttpClient::new(HttpClientFactory::new(
@@ -116,6 +116,7 @@ async fn authorization(
         registration,
     )
     .await?;
+    let state = prepared.oauth_state;
     let query = Url::parse(&state.get_authorization_url().await?)?
         .query_pairs()
         .into_owned()
@@ -306,7 +307,7 @@ async fn resource_headers_follow_same_origin_registration_redirect_and_sdk_auth_
         ])),
         /*env_http_headers*/ None,
     )?;
-    let mut state = start_authorization(
+    let prepared = start_authorization(
         &resource_url,
         Arc::new(OAuthHttpClientAdapter::new(
             Arc::new(RouteAwareHttpClient::new(HttpClientFactory::new(
@@ -321,6 +322,11 @@ async fn resource_headers_follow_same_origin_registration_redirect_and_sdk_auth_
         McpOAuthClientRegistration::Dcr,
     )
     .await?;
+    assert_eq!(
+        prepared.authorization_server_issuer.as_deref(),
+        Some(authorization_server.uri().as_str())
+    );
+    let mut state = prepared.oauth_state;
     let csrf_state = Url::parse(&state.get_authorization_url().await?)?
         .query_pairs()
         .find(|(name, _)| name == "state")

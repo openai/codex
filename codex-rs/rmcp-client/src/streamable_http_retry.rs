@@ -35,7 +35,8 @@ impl RmcpClient {
         let should_retry = match &initial_transport {
             PendingTransport::InProcess { .. } | PendingTransport::Stdio { .. } => false,
             PendingTransport::StreamableHttp { .. }
-            | PendingTransport::StreamableHttpWithOAuth { .. } => true,
+            | PendingTransport::StreamableHttpWithOAuth { .. }
+            | PendingTransport::StreamableHttpWithAccessTokenOnly { .. } => true,
         };
         let mut retry_deadline = timeout.map(|duration| Instant::now() + duration);
         let mut pending_transport = Some(initial_transport);

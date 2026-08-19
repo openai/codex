@@ -308,6 +308,7 @@ fn stored_tokens(server_url: &str, access_token: &str) -> StoredOAuthTokens {
     StoredOAuthTokens {
         server_name: SERVER_NAME.to_string(),
         url: server_url.to_string(),
+        issuer: None,
         client_id: "test-client-id".to_string(),
         token_response: WrappedOAuthTokenResponse(OAuthTokenResponse::new(
             AccessToken::new(access_token.to_string()),
