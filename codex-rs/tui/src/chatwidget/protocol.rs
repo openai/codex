@@ -161,6 +161,15 @@ impl ChatWidget {
                     self.on_warning(notification.message);
                 }
             }
+            ServerNotification::StrictReviewRequired(_) => {
+                self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                    history_cell::new_warning_event(
+                        "This request requires additional safety checks, some tool calls might take extra time"
+                            .to_string(),
+                    ),
+                )));
+                self.request_redraw();
+            }
             ServerNotification::DeprecationNotice(notification) => {
                 self.on_deprecation_notice(notification.summary, notification.details)
             }
@@ -208,7 +217,6 @@ impl ChatWidget {
             | ServerNotification::ThreadArchived(_)
             | ServerNotification::ThreadDeleted(_)
             | ServerNotification::ThreadUnarchived(_)
-            | ServerNotification::StrictReviewRequired(_)
             | ServerNotification::RawResponseItemCompleted(_)
             | ServerNotification::RawResponseCompleted(_)
             | ServerNotification::CommandExecOutputDelta(_)

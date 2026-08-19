@@ -752,6 +752,39 @@ async fn live_app_server_guardian_warning_notification_renders_message() {
 }
 
 #[tokio::test]
+async fn live_app_server_strict_review_required_notification_renders_message() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    handle_turn_started(&mut chat, "turn-1");
+    begin_exec(&mut chat, "cmd-1", "printf 'streamed output\\n'");
+    drain_insert_history(&mut rx);
+
+    chat.handle_server_notification(
+        ServerNotification::StrictReviewRequired(
+            codex_app_server_protocol::StrictReviewRequiredNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                started_at_ms: 1_000,
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one warning history cell");
+    assert_chatwidget_snapshot!("strict_review_required", lines_to_single_string(&cells[0]));
+    chat.on_exec_command_output_delta("cmd-1", "streamed output\n");
+    assert!(
+        lines_to_single_string(
+            &chat
+                .active_cell_transcript_lines(/*width*/ 80)
+                .expect("strict review should preserve the active command")
+        )
+        .contains("streamed output")
+    );
+    assert!(chat.bottom_pane.is_task_running());
+}
+
+#[tokio::test]
 async fn live_app_server_config_warning_prefixes_summary() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
