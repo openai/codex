@@ -4186,6 +4186,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shlex",
+ "tempfile",
  "tree-sitter",
  "tree-sitter-bash",
  "tree-sitter-powershell",

@@ -1,5 +1,9 @@
 use crate::shell_detect::ShellType;
 
+#[cfg(all(test, unix))]
+#[path = "shell_snapshot_tests.rs"]
+mod tests;
+
 const EXCLUDED_EXPORT_VARS: &[&str] = &["PWD", "OLDPWD"];
 
 /// Returns the shell-native script used to capture restorable shell state.
