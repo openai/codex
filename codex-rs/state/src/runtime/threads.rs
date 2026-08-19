@@ -1382,7 +1382,7 @@ fn push_thread_filters_with_preview<'a>(
     } else {
         builder.push(" AND threads.archived = 0");
     }
-    if !include_empty_preview {
+    if !include_empty_preview && !matches!(section, Some(Some(_))) {
         builder.push(" AND threads.preview <> ''");
     }
     match section {
@@ -1674,6 +1674,10 @@ mod tests {
         ] {
             let mut metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
             metadata.recency_at = DateTime::<Utc>::from_timestamp(recency_at, 0).unwrap();
+            if thread_id == oldest_pinned {
+                metadata.preview = Some(String::new());
+                metadata.first_user_message = None;
+            }
             metadata.section = section.map(|id| crate::ThreadSection {
                 id: id.to_string(),
                 name: crate::PINNED_THREAD_SECTION_NAME.to_string(),
@@ -1748,12 +1752,7 @@ mod tests {
                 .iter()
                 .map(|thread| thread.id)
                 .collect::<Vec<_>>(),
-            vec![
-                newest_unpinned,
-                newest_pinned,
-                oldest_pinned,
-                oldest_unpinned,
-            ]
+            vec![newest_unpinned, newest_pinned, oldest_unpinned,]
         );
 
         let mut builder = QueryBuilder::<Sqlite>::new("EXPLAIN QUERY PLAN ");
@@ -1806,6 +1805,10 @@ mod tests {
 
         for (thread_id, position) in [(first, 1_000_000), (tied, 1_000_000), (last, 2_000_000)] {
             let mut metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
+            if thread_id == tied {
+                metadata.preview = Some(String::new());
+                metadata.first_user_message = None;
+            }
             metadata.section = Some(crate::ThreadSection {
                 id: CUSTOM_THREAD_SECTION_ID.to_string(),
                 name: "Custom section".to_string(),

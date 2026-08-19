@@ -49,6 +49,94 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 
 #[tokio::test]
+async fn thread_section_move_pins_before_first_turn() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    mock_responses_config(&server.uri()).write(codex_home.path())?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let started: ThreadStartResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(start_id)).await??;
+    let thread_id = started.thread.id;
+    assert_eq!(started.thread.preview, "");
+
+    let move_id = mcp
+        .send_thread_section_move_request(ThreadSectionMoveParams {
+            thread_id: thread_id.clone(),
+            section_id: Some(PINNED_THREAD_SECTION_ID.to_string()),
+            before_thread_id: None,
+        })
+        .await?;
+    let _: ThreadSectionMoveResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(move_id)).await??;
+
+    let list_params = ThreadListParams {
+        cursor: None,
+        limit: Some(100),
+        sort_key: None,
+        sort_direction: None,
+        model_providers: None,
+        source_kinds: None,
+        archived: None,
+        section_id: Some(Some(PINNED_THREAD_SECTION_ID.to_string())),
+        project_id: None,
+        cwd: None,
+        use_state_db_only: true,
+        search_term: None,
+        parent_thread_id: None,
+        ancestor_thread_id: None,
+    };
+    for sort_key in [ThreadSortKey::SectionPosition, ThreadSortKey::RecencyAt] {
+        let list_id = mcp
+            .send_thread_list_request(ThreadListParams {
+                sort_key: Some(sort_key),
+                ..list_params.clone()
+            })
+            .await?;
+        let listed: ThreadListResponse =
+            timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(list_id)).await??;
+        assert_eq!(
+            listed
+                .data
+                .iter()
+                .map(|thread| thread.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![thread_id.as_str()]
+        );
+    }
+
+    let move_id = mcp
+        .send_thread_section_move_request(ThreadSectionMoveParams {
+            thread_id,
+            section_id: None,
+            before_thread_id: None,
+        })
+        .await?;
+    let _: ThreadSectionMoveResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(move_id)).await??;
+    let list_id = mcp
+        .send_thread_list_request(ThreadListParams {
+            section_id: None,
+            ..list_params
+        })
+        .await?;
+    let listed: ThreadListResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(list_id)).await??;
+    assert_eq!(listed.data, vec![]);
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_section_move_pins_and_unpins_with_filtered_recency_pagination() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;

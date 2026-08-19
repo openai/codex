@@ -649,7 +649,7 @@ to load the containing turn.
 
 ### Example: Update stored thread metadata
 
-Use `thread/metadata/update` to patch sqlite-backed `gitInfo` without resuming a thread. Omitted fields are left unchanged, while explicit `null` clears a stored value. Use `thread/section/move` to enter, reorder, or leave a section; section positions remain server-owned, and `thread/list` returns threads in their manual order when `sortKey` is `section_position`.
+Use `thread/metadata/update` to patch sqlite-backed `gitInfo` without resuming a thread. Omitted fields are left unchanged, while explicit `null` clears a stored value. Use `thread/section/move` to enter, reorder, or leave a section; an explicit move persists a newly started non-ephemeral thread even before its first turn. Section positions remain server-owned, and `thread/list` returns threads in their manual order when `sortKey` is `section_position`. A non-null `sectionId` filter includes explicitly placed threads whose preview is still empty.
 
 ```json
 { "method": "thread/metadata/update", "id": 24, "params": {

@@ -837,19 +837,22 @@ impl ThreadManager {
         }
     }
 
-    /// Moves a persisted thread to, within, or out of a server-ordered section.
+    /// Moves a thread to, within, or out of a server-ordered section.
     pub async fn move_thread_to_section(
         &self,
         thread_id: ThreadId,
         section: Option<&str>,
         before_thread_id: Option<ThreadId>,
     ) -> CodexResult<()> {
-        if let Ok(thread) = self.get_thread(thread_id).await
-            && thread.config_snapshot().await.ephemeral
-        {
-            return Err(CodexErr::InvalidRequest(format!(
-                "ephemeral thread does not support section moves: {thread_id}"
-            )));
+        if let Ok(thread) = self.get_thread(thread_id).await {
+            if thread.config_snapshot().await.ephemeral {
+                return Err(CodexErr::InvalidRequest(format!(
+                    "ephemeral thread does not support section moves: {thread_id}"
+                )));
+            }
+            // Explicit placement must work before the first turn materializes the thread.
+            thread.ensure_rollout_materialized().await;
+            thread.flush_rollout().await?;
         }
 
         self.state
