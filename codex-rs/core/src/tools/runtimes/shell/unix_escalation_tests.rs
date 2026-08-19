@@ -257,13 +257,24 @@ fn commands_for_intercepted_exec_policy_parses_plain_shell_wrappers() {
     );
 
     assert_eq!(
-        candidate_commands.commands,
+        candidate_commands,
         vec![
             vec!["git".to_string(), "status".to_string()],
             vec!["pwd".to_string()],
         ]
     );
-    assert!(!candidate_commands.used_complex_parsing);
+}
+
+#[test]
+fn commands_for_intercepted_exec_policy_preserves_unparsed_shell_wrappers() {
+    let program = AbsolutePathBuf::try_from(host_absolute_path(&["bin", "bash"])).unwrap();
+    for script in ["", "  \n\t", "cat <<'EOF'\nhello\nEOF"] {
+        let argv = ["not-bash".into(), "-lc".into(), script.into()];
+        assert_eq!(
+            commands_for_intercepted_exec_policy(&program, &argv),
+            vec![join_program_and_argv(&program, &argv)]
+        );
+    }
 }
 
 #[test]

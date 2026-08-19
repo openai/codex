@@ -34,7 +34,6 @@ impl ExecPolicyManager {
             Some((_, script)) => ExecPolicyCommands {
                 commands: parse_powershell_script_into_plain_commands(script)
                     .unwrap_or_else(|| vec![command.to_vec()]),
-                used_complex_parsing: false,
                 command_origin: ExecPolicyCommandOrigin::PowerShell,
             },
             None => commands_for_exec_policy(command),

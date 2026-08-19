@@ -609,6 +609,12 @@ impl Expectation {
 }
 
 #[derive(Clone)]
+enum ExpectedExecPolicyAmendment {
+    Prefix(&'static [&'static str]),
+    FullCommand,
+}
+
+#[derive(Clone)]
 enum Outcome {
     Auto,
     ExecApproval {
@@ -618,7 +624,7 @@ enum Outcome {
     ExecApprovalWithAmendment {
         decision: ReviewDecision,
         expected_reason: Option<&'static str>,
-        expected_execpolicy_amendment: Option<&'static [&'static str]>,
+        expected_execpolicy_amendment: Option<ExpectedExecPolicyAmendment>,
     },
     PatchApproval {
         decision: ReviewDecision,
@@ -1052,7 +1058,10 @@ fn scenarios() -> Vec<ScenarioSpec> {
             outcome: Outcome::ExecApprovalWithAmendment {
                 decision: ReviewDecision::denied("rejected by user"),
                 expected_reason: None,
-                expected_execpolicy_amendment: Some(&["echo", "known-safe-escalation"]),
+                expected_execpolicy_amendment: Some(ExpectedExecPolicyAmendment::Prefix(&[
+                    "echo",
+                    "known-safe-escalation",
+                ])),
             },
             expectation: Expectation::CommandFailure {
                 output_contains: "rejected by user",
@@ -1077,6 +1086,26 @@ fn scenarios() -> Vec<ScenarioSpec> {
             outcome: Outcome::Auto,
             expectation: Expectation::CommandFailure {
                 output_contains: "you should not ask for escalated permissions",
+            },
+        },
+        ScenarioSpec {
+            name: "cat_heredoc_inner_allow_rule_requires_escalation_approval",
+            approval_policy: OnRequest,
+            sandbox_policy: workspace_write(false),
+            action: ActionKind::RunCommandWithPolicy {
+                command: "cat <<'EOF'\nhello\nEOF",
+                policy_src: r#"prefix_rule(pattern=["cat"], decision="allow")"#,
+            },
+            sandbox_permissions: SandboxPermissions::RequireEscalated,
+            features: vec![],
+            model_override: Some("gpt-5.2"),
+            outcome: Outcome::ExecApprovalWithAmendment {
+                decision: ReviewDecision::denied("rejected by user"),
+                expected_reason: None,
+                expected_execpolicy_amendment: Some(ExpectedExecPolicyAmendment::FullCommand),
+            },
+            expectation: Expectation::CommandFailure {
+                output_contains: "rejected by user",
             },
         },
         ScenarioSpec {
@@ -1122,7 +1151,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             },
         },
         ScenarioSpec {
-            name: "python_heredoc_requested_prefix_rule_omits_amendment",
+            name: "python_heredoc_requested_prefix_rule_proposes_full_command",
             approval_policy: OnRequest,
             sandbox_policy: workspace_write(false),
             action: ActionKind::RunCommandWithPrefixRule {
@@ -1137,7 +1166,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             outcome: Outcome::ExecApprovalWithAmendment {
                 decision: ReviewDecision::denied("rejected by user"),
                 expected_reason: None,
-                expected_execpolicy_amendment: None,
+                expected_execpolicy_amendment: Some(ExpectedExecPolicyAmendment::FullCommand),
             },
             expectation: Expectation::CommandFailure {
                 output_contains: "rejected by user",
@@ -2130,9 +2159,15 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
                     scenario.name
                 );
             }
-            let expected_execpolicy_amendment = expected_execpolicy_amendment.map(|command| {
-                ExecPolicyAmendment::new(command.iter().map(|part| (*part).to_string()).collect())
-            });
+            let expected_execpolicy_amendment =
+                expected_execpolicy_amendment.as_ref().map(|expected| {
+                    ExecPolicyAmendment::new(match expected {
+                        ExpectedExecPolicyAmendment::Prefix(command) => {
+                            command.iter().map(|part| (*part).to_string()).collect()
+                        }
+                        ExpectedExecPolicyAmendment::FullCommand => approval.command.clone(),
+                    })
+                });
             assert_eq!(
                 approval.proposed_execpolicy_amendment, expected_execpolicy_amendment,
                 "unexpected execpolicy amendment for {}",

@@ -687,7 +687,6 @@ fn commands_for_exec_policy_falls_back_for_empty_shell_script() {
         commands_for_exec_policy(&command),
         ExecPolicyCommands {
             commands: vec![command],
-            used_complex_parsing: false,
             command_origin: ExecPolicyCommandOrigin::Generic,
         }
     );
@@ -705,7 +704,6 @@ fn commands_for_exec_policy_falls_back_for_whitespace_shell_script() {
         commands_for_exec_policy(&command),
         ExecPolicyCommands {
             commands: vec![command],
-            used_complex_parsing: false,
             command_origin: ExecPolicyCommandOrigin::Generic,
         }
     );
@@ -751,7 +749,7 @@ async fn ignore_user_config_keeps_user_policy_files() -> std::io::Result<()> {
 }
 
 #[tokio::test]
-async fn evaluates_heredoc_script_against_prefix_rules() {
+async fn heredoc_script_stays_in_sandbox_despite_inner_allow_rule() {
     let command = vec![
         "bash".to_string(),
         "-lc".to_string(),
@@ -768,15 +766,19 @@ async fn evaluates_heredoc_script_against_prefix_rules() {
             prefix_rule: None,
         },
         ExecApprovalRequirement::Skip {
-            bypass_sandbox: true,
-            proposed_execpolicy_amendment: None,
+            bypass_sandbox: false,
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+                "bash".to_string(),
+                "-lc".to_string(),
+                "python3 <<'PY'\nprint('hello')\nPY".to_string(),
+            ])),
         },
     )
     .await;
 }
 
 #[tokio::test]
-async fn omits_auto_amendment_for_heredoc_fallback_prompts() {
+async fn proposes_full_command_amendment_for_heredoc_prompts() {
     assert_exec_approval_requirement_for_command(
         ExecApprovalRequirementScenario {
             policy_src: None,
@@ -792,14 +794,18 @@ async fn omits_auto_amendment_for_heredoc_fallback_prompts() {
         },
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
-            proposed_execpolicy_amendment: None,
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+                "bash".to_string(),
+                "-lc".to_string(),
+                "python3 <<'PY'\nprint('hello')\nPY".to_string(),
+            ])),
         },
     )
     .await;
 }
 
 #[tokio::test]
-async fn drops_requested_amendment_for_heredoc_fallback_prompts_when_it_wont_match() {
+async fn heredoc_prompt_replaces_unrelated_requested_prefix_with_full_command() {
     assert_exec_approval_requirement_for_command(
         ExecApprovalRequirementScenario {
             policy_src: None,
@@ -819,14 +825,18 @@ async fn drops_requested_amendment_for_heredoc_fallback_prompts_when_it_wont_mat
         },
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
-            proposed_execpolicy_amendment: None,
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+                "bash".to_string(),
+                "-lc".to_string(),
+                "python3 <<'PY'\nprint('hello')\nPY".to_string(),
+            ])),
         },
     )
     .await;
 }
 
 #[tokio::test]
-async fn drops_requested_amendment_for_heredoc_fallback_prompts_when_it_matches() {
+async fn heredoc_prompt_replaces_inner_requested_prefix_with_full_command() {
     assert_exec_approval_requirement_for_command(
         ExecApprovalRequirementScenario {
             policy_src: None,
@@ -842,7 +852,11 @@ async fn drops_requested_amendment_for_heredoc_fallback_prompts_when_it_matches(
         },
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
-            proposed_execpolicy_amendment: None,
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+                "bash".to_string(),
+                "-lc".to_string(),
+                "python3 <<'PY'\nprint('hello')\nPY".to_string(),
+            ])),
         },
     )
     .await;
@@ -1164,7 +1178,6 @@ fn unmatched_granular_policy_still_prompts_for_restricted_sandbox_escalation() {
                 permission_profile: &PermissionProfile::read_only(),
                 windows_sandbox_level: WindowsSandboxLevel::Disabled,
                 sandbox_permissions: SandboxPermissions::RequireEscalated,
-                used_complex_parsing: false,
                 command_origin: ExecPolicyCommandOrigin::Generic,
             },
         )
@@ -1184,7 +1197,6 @@ fn unmatched_on_request_uses_permission_profile_file_system_policy_for_escalatio
                 permission_profile: &PermissionProfile::read_only(),
                 windows_sandbox_level: WindowsSandboxLevel::Disabled,
                 sandbox_permissions: SandboxPermissions::RequireEscalated,
-                used_complex_parsing: false,
                 command_origin: ExecPolicyCommandOrigin::Generic,
             },
         )
@@ -1204,7 +1216,6 @@ fn known_safe_on_request_still_prompts_for_restricted_sandbox_escalation() {
                 permission_profile: &PermissionProfile::workspace_write(),
                 windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
                 sandbox_permissions: SandboxPermissions::RequireEscalated,
-                used_complex_parsing: false,
                 command_origin: ExecPolicyCommandOrigin::Generic,
             },
         )
