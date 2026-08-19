@@ -767,7 +767,7 @@ fn find_ancestor_git_entry(base_dir: &Path) -> Option<(PathBuf, PathBuf)> {
 
     loop {
         let dot_git = dir.join(".git");
-        if dot_git.exists() {
+        if dot_git.exists() && (!dot_git.is_dir() || dot_git.join("HEAD").exists()) {
             return Some((dir, dot_git));
         }
 

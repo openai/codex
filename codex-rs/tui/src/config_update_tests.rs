@@ -41,6 +41,7 @@ async fn remote_project_trust_guards_thread_start_and_preserves_repository_decis
     std::fs::create_dir_all(&codex_home)?;
     std::fs::create_dir_all(&project_cwd)?;
     std::fs::create_dir(project_root.join(".git"))?;
+    std::fs::write(project_root.join(".git/HEAD"), "ref: refs/heads/main\n")?;
     std::fs::create_dir(project_cwd.join(".codex"))?;
     let undecided_config = format!(
         "[{}]\n",

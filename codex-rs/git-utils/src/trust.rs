@@ -19,15 +19,35 @@ pub async fn resolve_root_git_project_for_trust(
         Ok(metadata) if metadata.is_directory => cwd.clone(),
         _ => cwd.parent()?,
     };
-    let repo_root = find_nearest_native_ancestor_with_markers(
-        fs,
-        &base,
-        vec![".git".to_string()],
-        FindUpErrorPolicy::Ignore,
-        /*sandbox*/ None,
-    )
-    .await
-    .ok()??;
+    let mut base = base;
+    let repo_root = loop {
+        let candidate = find_nearest_native_ancestor_with_markers(
+            fs,
+            &base,
+            vec![".git".to_string()],
+            FindUpErrorPolicy::Ignore,
+            /*sandbox*/ None,
+        )
+        .await
+        .ok()??;
+        let dot_git = candidate.join(".git");
+        let metadata = fs
+            .get_metadata(&PathUri::from_abs_path(&dot_git), /*sandbox*/ None)
+            .await
+            .ok()?;
+        if !metadata.is_directory
+            || fs
+                .get_metadata(
+                    &PathUri::from_abs_path(&dot_git.join("HEAD")),
+                    /*sandbox*/ None,
+                )
+                .await
+                .is_ok()
+        {
+            break candidate;
+        }
+        base = candidate.parent()?;
+    };
     let dot_git = repo_root.join(".git");
     let dot_git_uri = PathUri::from_abs_path(&dot_git);
     let dot_git_metadata = fs.get_metadata(&dot_git_uri, /*sandbox*/ None).await.ok()?;

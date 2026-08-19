@@ -1315,13 +1315,22 @@ async fn find_project_root(
         for marker in project_root_markers {
             let marker_path = ancestor.join(marker);
             let marker_path_uri = PathUri::from_abs_path(&marker_path);
-            if fs
-                .get_metadata(&marker_path_uri, /*sandbox*/ None)
-                .await
-                .is_ok()
+            let Ok(metadata) = fs.get_metadata(&marker_path_uri, /*sandbox*/ None).await else {
+                continue;
+            };
+            if marker == ".git"
+                && metadata.is_directory
+                && fs
+                    .get_metadata(
+                        &PathUri::from_abs_path(&marker_path.join("HEAD")),
+                        /*sandbox*/ None,
+                    )
+                    .await
+                    .is_err()
             {
-                return Ok(ancestor);
+                continue;
             }
+            return Ok(ancestor);
         }
     }
     Ok(cwd.clone())
@@ -1340,13 +1349,21 @@ async fn find_git_checkout_root(
     for dir in base.ancestors() {
         let dot_git = dir.join(".git");
         let dot_git_uri = PathUri::from_abs_path(&dot_git);
-        if fs
-            .get_metadata(&dot_git_uri, /*sandbox*/ None)
-            .await
-            .is_ok()
+        let Ok(metadata) = fs.get_metadata(&dot_git_uri, /*sandbox*/ None).await else {
+            continue;
+        };
+        if metadata.is_directory
+            && fs
+                .get_metadata(
+                    &PathUri::from_abs_path(&dot_git.join("HEAD")),
+                    /*sandbox*/ None,
+                )
+                .await
+                .is_err()
         {
-            return Some(dir);
+            continue;
         }
+        return Some(dir);
     }
     None
 }

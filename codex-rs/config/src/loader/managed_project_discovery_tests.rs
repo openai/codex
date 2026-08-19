@@ -33,6 +33,7 @@ impl Fixture {
         let cwd = project.join("child");
         std::fs::create_dir_all(&home)?;
         std::fs::create_dir_all(repo.join(".git"))?;
+        std::fs::write(repo.join(".git/HEAD"), "ref: refs/heads/main\n")?;
         for (dir, model) in [(&repo, "ancestor"), (&project, "project"), (&cwd, "child")] {
             std::fs::create_dir_all(dir.join(".codex"))?;
             std::fs::write(
@@ -178,6 +179,35 @@ async fn managed_project_discovery_uses_file_markers_without_changing_precedence
             )
         );
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn managed_project_discovery_ignores_incomplete_nested_git_directory() -> anyhow::Result<()> {
+    let fixture = Fixture::new()?;
+    std::fs::create_dir(fixture.cwd.join(".git"))?;
+    std::fs::write(&fixture.managed, "project_root_markers = [\".git\"]\n")?;
+
+    let (canonical, local) = fixture.load().await?;
+    assert_discovery(
+        &canonical,
+        &local,
+        &[&fixture.repo, &fixture.project, &fixture.cwd],
+        &[".git"],
+    )?;
+
+    std::fs::write(fixture.home.join("config.toml"), fixture.trust("untrusted"))?;
+    let (canonical, local) = fixture.load().await?;
+    assert_discovery(&canonical, &local, &[], &[".git"])?;
+    let trust_key = project_trust_key(fixture.repo.as_path());
+    assert!(
+        canonical
+            .all_layers_low_to_high()
+            .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
+            .all(|layer| layer.disabled_reason.as_deref().is_some_and(
+                |reason| reason.starts_with(&format!("{trust_key} is marked as untrusted"))
+            ))
+    );
     Ok(())
 }
 

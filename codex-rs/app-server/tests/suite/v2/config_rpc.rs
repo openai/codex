@@ -871,6 +871,7 @@ async fn config_read_respects_managed_project_root_markers() -> Result<()> {
     ] {
         std::fs::create_dir_all(dir)?;
     }
+    std::fs::write(workspace.path().join(".git/HEAD"), "ref: refs/heads/main\n")?;
     std::fs::write(
         ancestor_config.join("config.toml"),
         "model_context_window = 32768\n",

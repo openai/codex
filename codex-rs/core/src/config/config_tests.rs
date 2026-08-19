@@ -8285,6 +8285,7 @@ async fn agent_role_file_without_developer_instructions_is_dropped_with_warning(
     let repo_root = TempDir::new()?;
     let nested_cwd = repo_root.path().join("packages").join("app");
     std::fs::create_dir_all(repo_root.path().join(".git"))?;
+    std::fs::write(repo_root.path().join(".git/HEAD"), "ref: refs/heads/main\n")?;
     std::fs::create_dir_all(&nested_cwd)?;
 
     let workspace_key = repo_root.path().to_string_lossy().replace('\\', "\\\\");
@@ -8456,6 +8457,7 @@ async fn discovered_agent_role_file_without_name_is_dropped_with_warning() -> st
     let repo_root = TempDir::new()?;
     let nested_cwd = repo_root.path().join("packages").join("app");
     std::fs::create_dir_all(repo_root.path().join(".git"))?;
+    std::fs::write(repo_root.path().join(".git/HEAD"), "ref: refs/heads/main\n")?;
     std::fs::create_dir_all(&nested_cwd)?;
 
     let workspace_key = repo_root.path().to_string_lossy().replace('\\', "\\\\");
@@ -8656,6 +8658,7 @@ async fn discovers_multiple_standalone_agent_role_files() -> std::io::Result<()>
     let repo_root = TempDir::new()?;
     let nested_cwd = repo_root.path().join("packages").join("app");
     std::fs::create_dir_all(repo_root.path().join(".git"))?;
+    std::fs::write(repo_root.path().join(".git/HEAD"), "ref: refs/heads/main\n")?;
     std::fs::create_dir_all(&nested_cwd)?;
 
     let workspace_key = repo_root.path().to_string_lossy().replace('\\', "\\\\");
@@ -8787,6 +8790,7 @@ async fn mixed_legacy_and_standalone_agent_role_sources_merge_with_precedence()
     let repo_root = TempDir::new()?;
     let nested_cwd = repo_root.path().join("packages").join("app");
     std::fs::create_dir_all(repo_root.path().join(".git"))?;
+    std::fs::write(repo_root.path().join(".git/HEAD"), "ref: refs/heads/main\n")?;
     std::fs::create_dir_all(&nested_cwd)?;
 
     let workspace_key = repo_root.path().to_string_lossy().replace('\\', "\\\\");
@@ -8933,6 +8937,7 @@ async fn higher_precedence_agent_role_can_inherit_description_from_lower_layer()
     let repo_root = TempDir::new()?;
     let nested_cwd = repo_root.path().join("packages").join("app");
     std::fs::create_dir_all(repo_root.path().join(".git"))?;
+    std::fs::write(repo_root.path().join(".git/HEAD"), "ref: refs/heads/main\n")?;
     std::fs::create_dir_all(&nested_cwd)?;
 
     let workspace_key = repo_root.path().to_string_lossy().replace('\\', "\\\\");
@@ -10337,6 +10342,41 @@ mcp_oauth_callback_url = "https://example.com/callback"
     assert_eq!(
         config.mcp_oauth_callback_url.as_deref(),
         Some("https://example.com/callback")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn untrusted_parent_repo_with_incomplete_child_git_keeps_unless_trusted_approval_policy()
+-> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    let repo = TempDir::new()?;
+    let cwd = repo.path().join("sub");
+    std::fs::create_dir_all(repo.path().join(".git"))?;
+    std::fs::write(repo.path().join(".git/HEAD"), "ref: refs/heads/main\n")?;
+    std::fs::create_dir_all(cwd.join(".git"))?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            projects: Some(HashMap::from([(
+                repo.path().to_string_lossy().to_string(),
+                ProjectConfig {
+                    trust_level: Some(TrustLevel::Untrusted),
+                },
+            )])),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.permissions.approval_policy.value(),
+        AskForApproval::UnlessTrusted
     );
     Ok(())
 }

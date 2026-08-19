@@ -1109,6 +1109,11 @@ async fn turn_metadata_state_git_enrichment_cancellation_is_retryable_and_errors
 
     let invalid_repo = TempDir::new().expect("invalid repo");
     std::fs::create_dir(invalid_repo.path().join(".git")).expect("invalid git directory");
+    std::fs::write(
+        invalid_repo.path().join(".git/HEAD"),
+        "ref: refs/heads/main\n",
+    )
+    .expect("invalid git HEAD");
     let invalid_state = Arc::new(TurnMetadataState::new(
         "session-a".to_string(),
         "thread-a".to_string(),
