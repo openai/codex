@@ -24,6 +24,15 @@ runs:
       shell: bash
       run: echo "CI_BUILD_ROOT=$HOME/.cache/codex-ci" >> "$GITHUB_ENV"
 
+    - name: Enable unprivileged user namespaces (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo sysctl -w kernel.unprivileged_userns_clone=1
+        if sudo sysctl -a 2>/dev/null | grep -q '^kernel.apparmor_restrict_unprivileged_userns'; then
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        fi
+
     - name: Configure CI build paths
       id: configure_ci_build_paths
       shell: bash
