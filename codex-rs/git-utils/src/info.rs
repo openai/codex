@@ -1,14 +1,8 @@
 use std::collections::BTreeMap;
 use std::collections::HashSet;
-use std::ffi::OsStr;
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_file_system::ExecutorFileSystem;
-use codex_file_system::FindUpErrorPolicy;
-use codex_file_system::find_nearest_native_ancestor_with_markers;
-use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_utils_path_uri::PathUri;
 use futures::future::join_all;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -766,58 +760,6 @@ async fn diff_against_sha(cwd: &Path, sha: &GitSha) -> Option<String> {
     }
 
     Some(diff)
-}
-
-/// Resolve the path that should be used for trust checks. Similar to
-/// `[get_git_repo_root]`, but resolves to the root of the main
-/// repository. Handles worktrees via filesystem inspection without invoking
-/// the `git` executable.
-pub async fn resolve_root_git_project_for_trust(
-    fs: &dyn ExecutorFileSystem,
-    cwd: &AbsolutePathBuf,
-) -> Option<AbsolutePathBuf> {
-    let cwd_uri = PathUri::from_abs_path(cwd);
-    let base = match fs.get_metadata(&cwd_uri, /*sandbox*/ None).await {
-        Ok(metadata) if metadata.is_directory => cwd.clone(),
-        _ => cwd.parent()?,
-    };
-    let repo_root = find_nearest_native_ancestor_with_markers(
-        fs,
-        &base,
-        vec![".git".to_string()],
-        FindUpErrorPolicy::Ignore,
-        /*sandbox*/ None,
-    )
-    .await
-    .ok()??;
-    let dot_git = repo_root.join(".git");
-    let dot_git_uri = PathUri::from_abs_path(&dot_git);
-    if fs
-        .get_metadata(&dot_git_uri, /*sandbox*/ None)
-        .await
-        .ok()?
-        .is_directory
-    {
-        return Some(repo_root);
-    }
-
-    let git_dir_s = fs
-        .read_file_text(&dot_git_uri, /*sandbox*/ None)
-        .await
-        .ok()?;
-    let git_dir_rel = git_dir_s.trim().strip_prefix("gitdir:")?.trim();
-    if git_dir_rel.is_empty() {
-        return None;
-    }
-
-    let git_dir_path = AbsolutePathBuf::resolve_path_against_base(git_dir_rel, repo_root.as_path());
-    let worktrees_dir = git_dir_path.parent()?;
-    if worktrees_dir.as_path().file_name() != Some(OsStr::new("worktrees")) {
-        return None;
-    }
-
-    let common_dir = worktrees_dir.parent()?;
-    common_dir.parent()
 }
 
 fn find_ancestor_git_entry(base_dir: &Path) -> Option<(PathBuf, PathBuf)> {

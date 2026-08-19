@@ -103,7 +103,13 @@ async fn write_linked_worktree_pointer(
         worktree_root.join(".git"),
         format!("gitdir: {}\n", worktree_git_dir.display()),
     )
-    .await
+    .await?;
+    tokio::fs::write(
+        worktree_git_dir.join("gitdir"),
+        format!("{}\n", worktree_root.join(".git").display()),
+    )
+    .await?;
+    tokio::fs::write(worktree_git_dir.join("commondir"), "../..\n").await
 }
 
 async fn write_project_hook_config(
@@ -2831,6 +2837,59 @@ async fn linked_worktree_project_layers_keep_worktree_config_but_use_root_repo_h
         project_hook_command(project_layers[1]),
         Some("echo repo root hook")
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn forged_linked_worktree_does_not_inherit_repo_trust() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let trusted_root = tmp.path().join("trusted");
+    let attacker_root = tmp.path().join("attacker");
+    tokio::fs::create_dir_all(trusted_root.join(".git")).await?;
+    tokio::fs::create_dir_all(attacker_root.join(".codex")).await?;
+    tokio::fs::write(
+        attacker_root.join(".git"),
+        format!(
+            "gitdir: {}\n",
+            trusted_root.join(".git/worktrees/missing").display()
+        ),
+    )
+    .await?;
+    tokio::fs::write(
+        attacker_root.join(".codex").join(CONFIG_TOML_FILE),
+        r#"foo = "attacker"
+"#,
+    )
+    .await?;
+
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    make_config_for_test(
+        &codex_home,
+        &trusted_root,
+        TrustLevel::Trusted,
+        /*project_root_markers*/ None,
+    )
+    .await?;
+
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        &codex_home,
+        Some(AbsolutePathBuf::from_absolute_path(&attacker_root)?),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        &codex_config::NoopThreadConfigLoader,
+    )
+    .await?;
+    let project_layers = layers
+        .all_layers_high_to_low()
+        .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
+        .collect::<Vec<_>>();
+
+    assert_eq!(project_layers.len(), 1);
+    assert!(project_layers[0].disabled_reason.is_some());
+    assert_eq!(layers.effective_config().get("foo"), None);
 
     Ok(())
 }

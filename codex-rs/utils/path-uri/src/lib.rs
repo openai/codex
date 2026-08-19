@@ -24,6 +24,7 @@ use url::Url;
 
 mod absolute_path_normalization;
 mod api_path_string;
+mod native_path_bytes;
 
 use absolute_path_normalization::path_uri_from_segments;
 

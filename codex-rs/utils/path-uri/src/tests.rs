@@ -9,6 +9,32 @@ use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 
 #[test]
+fn native_byte_joins_preserve_foreign_posix_filenames() {
+    let base = PathUri::parse("file:///root/%FE/admin").unwrap();
+    for (path, expected) in [
+        (
+            b"../\xff/%2e?#\\".as_slice(),
+            "file:///root/%FE/%FF/%252e%3F%23%5C",
+        ),
+        (
+            b"//other/./x/../\xff/.git".as_slice(),
+            "file:///other/%FF/.git",
+        ),
+        (b"../../../../\xff".as_slice(), "file:///%FF"),
+        (b"../plain".as_slice(), "file:///root/%FE/plain"),
+    ] {
+        assert_eq!(base.join_native_bytes(path).unwrap().to_string(), expected);
+    }
+    assert!(base.join_native_bytes(b"bad\0\xff").is_err());
+    assert!(
+        PathUri::parse("file:///C:/repo")
+            .unwrap()
+            .join_native_bytes(b"\xff")
+            .is_err()
+    );
+}
+
+#[test]
 fn file_uri_round_trips_an_absolute_path() {
     let path = AbsolutePathBuf::current_dir()
         .expect("current directory")
