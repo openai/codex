@@ -24,4 +24,8 @@ codex_rust_crate(
         "app-server-unit-tests": 8,
     },
     test_tags = ["no-sandbox"],
+    test_threads = select({
+        "@platforms//os:macos": 1,
+        "//conditions:default": 0,
+    }),
 )

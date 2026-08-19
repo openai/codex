@@ -87,6 +87,8 @@ def _workspace_root_test_impl(ctx):
         key: ctx.expand_location(value, targets = location_targets.values())
         for key, value in ctx.attr.env.items()
     }
+    if ctx.attr.test_threads:
+        env["RUST_TEST_THREADS"] = str(ctx.attr.test_threads)
 
     return [
         DefaultInfo(
@@ -159,6 +161,7 @@ workspace_root_test = rule(
             executable = True,
             mandatory = True,
         ),
+        "test_threads": attr.int(),
         "workspace_root_marker": attr.label(
             allow_single_file = True,
             mandatory = True,
@@ -203,6 +206,7 @@ def codex_rust_crate(
         test_data_extra = [],
         test_shard_counts = {},
         test_tags = [],
+        test_threads = 0,
         unit_test_timeout = None,
         extra_binaries = [],
         extra_binaries_non_windows = [],
@@ -254,6 +258,7 @@ def codex_rust_crate(
             them Bazel's default three attempts.
         test_tags: Tags applied to unit + integration test targets.
             Typically used to disable the sandbox, but see https://bazel.build/reference/be/common-definitions#common.tags
+        test_threads: Optional Rust test thread limit for sharded integration tests.
         unit_test_timeout: Optional Bazel timeout for the unit-test target
             generated from `src/**/*.rs`.
         extra_binaries: Additional binary labels to surface as test data and
@@ -564,6 +569,7 @@ def codex_rust_crate(
                 # manifest-only platforms.
                 runfile_env = integration_test_cargo_env_runfiles,
                 test_bin = ":" + integration_test_binary,
+                test_threads = test_threads,
                 workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
                 target_compatible_with = WINDOWS_GNULLVM_INCOMPATIBLE,
                 tags = test_tags,

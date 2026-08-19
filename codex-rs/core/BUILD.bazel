@@ -50,5 +50,9 @@ codex_rust_crate(
         "core-unit-tests": 8,
     },
     test_tags = ["no-sandbox"],
+    test_threads = select({
+        "@platforms//os:macos": 1,
+        "//conditions:default": 0,
+    }),
     unit_test_timeout = "long",
 )
