@@ -50,7 +50,10 @@ impl ThreadLifecycleContributor<Config> for PersistentModeExtension {
                     return;
                 }
             };
-            let continue_without_message = stored_thread.model.as_deref() == Some("nathree");
+            let continue_without_message = matches!(
+                stored_thread.model.as_deref(),
+                Some("nathree" | "nathree-aeon")
+            );
             let Some(message) = stored_thread
                 .extra_config
                 .and_then(|extra_config| extra_config.persistent_mode_message)
