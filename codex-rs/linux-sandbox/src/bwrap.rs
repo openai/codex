@@ -282,6 +282,7 @@ fn create_bwrap_flags_full_filesystem(command: Vec<String>, options: BwrapOption
         // not need ambient CAP_SYS_ADMIN to create the remaining namespaces.
         "--unshare-user".to_string(),
         "--unshare-pid".to_string(),
+        "--unshare-ipc".to_string(),
     ];
     if options.network_mode.should_unshare_network() {
         args.push("--unshare-net".to_string());
@@ -331,6 +332,7 @@ fn create_bwrap_flags(
     // auto-enable behavior, which is skipped when the caller runs as uid 0.
     args.push("--unshare-user".to_string());
     args.push("--unshare-pid".to_string());
+    args.push("--unshare-ipc".to_string());
     if options.network_mode.should_unshare_network() {
         args.push("--unshare-net".to_string());
     }
@@ -1422,6 +1424,7 @@ mod tests {
                 "/dev/shm".to_string(),
                 "--unshare-user".to_string(),
                 "--unshare-pid".to_string(),
+                "--unshare-ipc".to_string(),
                 "--unshare-net".to_string(),
                 "--proc".to_string(),
                 "/proc".to_string(),

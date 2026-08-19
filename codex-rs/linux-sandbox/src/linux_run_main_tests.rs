@@ -81,6 +81,7 @@ fn inserts_bwrap_argv0_before_command_separator() {
             "/dev".to_string(),
             "--unshare-user".to_string(),
             "--unshare-pid".to_string(),
+            "--unshare-ipc".to_string(),
             "--proc".to_string(),
             "/proc".to_string(),
             "--cap-drop".to_string(),
