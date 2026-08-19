@@ -9,8 +9,11 @@ use codex_aws_auth::AwsRequestToSign;
 use codex_http_client::Request;
 use codex_http_client::RequestBody;
 use codex_http_client::RequestCompression;
+use codex_login::AuthManager;
+use codex_login::CodexAuth;
 use codex_login::auth::BedrockApiKeyAuth;
 use codex_model_provider_info::ModelProviderAwsAuthInfo;
+use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
 use http::HeaderMap;
@@ -22,14 +25,48 @@ use super::mantle::aws_auth_config;
 use super::mantle::region_from_config;
 use super::runtime;
 
-const AWS_BEARER_TOKEN_BEDROCK_ENV_VAR: &str = "AWS_BEARER_TOKEN_BEDROCK";
+pub(super) const AWS_BEARER_TOKEN_BEDROCK_ENV_VAR: &str = "AWS_BEARER_TOKEN_BEDROCK";
+const AWS_ACCESS_KEY_ID_ENV_VAR: &str = "AWS_ACCESS_KEY_ID";
+const AWS_SECRET_ACCESS_KEY_ENV_VAR: &str = "AWS_SECRET_ACCESS_KEY";
 const AWS_REGION_ENV_VAR: &str = "AWS_REGION";
 const AWS_DEFAULT_REGION_ENV_VAR: &str = "AWS_DEFAULT_REGION";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum BedrockAuthSource {
+    CommandBearerToken,
+    ManagedBearerToken,
+    EnvBearerToken,
+    EnvAwsCredentials,
+    AwsSdk,
+}
 
 pub(super) enum BedrockAuthMethod {
     ManagedBearerToken { token: String, region: String },
     EnvBearerToken { token: String, region: String },
     AwsSdkAuth { context: AwsAuthContext },
+}
+
+pub(super) fn auth_source(
+    provider_info: &ModelProviderInfo,
+    auth_manager: Option<&AuthManager>,
+    env_var: impl Fn(&'static str) -> std::result::Result<String, std::env::VarError> + Copy,
+) -> BedrockAuthSource {
+    if provider_info.has_command_auth() {
+        BedrockAuthSource::CommandBearerToken
+    } else if matches!(
+        auth_manager.and_then(AuthManager::auth_cached),
+        Some(CodexAuth::BedrockApiKey(_))
+    ) {
+        BedrockAuthSource::ManagedBearerToken
+    } else if non_empty_env_var_from(AWS_BEARER_TOKEN_BEDROCK_ENV_VAR, env_var).is_some() {
+        BedrockAuthSource::EnvBearerToken
+    } else if non_empty_env_var_from(AWS_ACCESS_KEY_ID_ENV_VAR, env_var).is_some()
+        && non_empty_env_var_from(AWS_SECRET_ACCESS_KEY_ENV_VAR, env_var).is_some()
+    {
+        BedrockAuthSource::EnvAwsCredentials
+    } else {
+        BedrockAuthSource::AwsSdk
+    }
 }
 
 pub(super) async fn resolve_auth_method(
@@ -200,12 +237,39 @@ mod tests {
     }
 
     #[test]
+    fn bedrock_auth_source_distinguishes_static_environment_credentials() {
+        let provider = ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None);
+        let cases: &[(&[&str], BedrockAuthSource)] = &[
+            (
+                &[AWS_ACCESS_KEY_ID_ENV_VAR, AWS_SECRET_ACCESS_KEY_ENV_VAR],
+                BedrockAuthSource::EnvAwsCredentials,
+            ),
+            (&[AWS_ACCESS_KEY_ID_ENV_VAR], BedrockAuthSource::AwsSdk),
+            (
+                &["AWS_PROFILE", AWS_REGION_ENV_VAR],
+                BedrockAuthSource::AwsSdk,
+            ),
+        ];
+
+        for (variables, expected) in cases {
+            let actual = auth_source(&provider, /*auth_manager*/ None, |name| {
+                variables
+                    .contains(&name)
+                    .then(|| "configured".to_string())
+                    .ok_or(std::env::VarError::NotPresent)
+            });
+            assert_eq!(actual, *expected, "{variables:?}");
+        }
+    }
+
+    #[test]
     fn bedrock_bearer_auth_prefers_configured_region_and_uses_header() {
         let token = "bedrock-api-key-test".to_string();
         let region = bearer_token_region(
             &ModelProviderAwsAuthInfo {
                 profile: None,
                 region: Some(" us-west-2 ".to_string()),
+                auth_refresh: None,
             },
             |name| match name {
                 AWS_REGION_ENV_VAR => Ok("eu-west-1".to_string()),
@@ -237,6 +301,7 @@ mod tests {
             &ModelProviderAwsAuthInfo {
                 profile: None,
                 region: None,
+                auth_refresh: None,
             },
             |name| match name {
                 AWS_REGION_ENV_VAR => Ok(" eu-central-1 ".to_string()),
@@ -254,6 +319,7 @@ mod tests {
             &ModelProviderAwsAuthInfo {
                 profile: None,
                 region: None,
+                auth_refresh: None,
             },
             |name| match name {
                 AWS_DEFAULT_REGION_ENV_VAR => Ok("ap-northeast-1".to_string()),
@@ -271,6 +337,7 @@ mod tests {
             &ModelProviderAwsAuthInfo {
                 profile: None,
                 region: None,
+                auth_refresh: None,
             },
             missing_env_var,
         )

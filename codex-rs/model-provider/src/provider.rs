@@ -494,6 +494,7 @@ mod tests {
     use codex_http_client::OutboundProxyPolicy;
     use codex_login::auth::AgentIdentityAuthPolicy;
     use codex_login::auth::BedrockApiKeyAuth;
+    use codex_model_provider_info::AwsAuthRefreshConfig;
     use codex_model_provider_info::ModelProviderAwsAuthInfo;
     use codex_model_provider_info::WireApi;
     use codex_model_provider_info::create_oss_provider_with_base_url;
@@ -515,6 +516,7 @@ mod tests {
 
     use super::*;
     use crate::auth::AgentIdentitySessionFallback;
+    use crate::shared_state::process_shared_state;
 
     fn provider_info_with_command_auth() -> ModelProviderInfo {
         ModelProviderInfo {
@@ -731,6 +733,7 @@ mod tests {
             ModelProviderInfo::create_amazon_bedrock_provider(Some(ModelProviderAwsAuthInfo {
                 profile: Some("codex-bedrock".to_string()),
                 region: None,
+                auth_refresh: None,
             })),
             Some(AuthManager::from_auth_for_testing(CodexAuth::from_api_key(
                 "openai-api-key",
@@ -738,6 +741,150 @@ mod tests {
         );
 
         assert!(provider.auth_manager().is_none());
+    }
+
+    #[tokio::test]
+    async fn shared_bedrock_auth_refresh_is_reused_only_for_matching_configuration() {
+        const TEST_NAME: &str = "provider::tests::shared_bedrock_auth_refresh_is_reused_only_for_matching_configuration";
+        const HELPER_ARG: &str = "CODEX_BEDROCK_SHARED_AUTH_REFRESH_COMMAND";
+        const SUBPROCESS_ARG: &str = "CODEX_BEDROCK_SHARED_AUTH_REFRESH_SUBPROCESS";
+        let arguments = std::env::args().collect::<Vec<_>>();
+        if let Some(index) = arguments.iter().position(|argument| argument == HELPER_ARG) {
+            let counter = &arguments[index + 2];
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            let mut counter = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(counter)
+                .expect("refresh invocation counter should open");
+            std::io::Write::write_all(&mut counter, b"1").expect("write invocation counter");
+            return;
+        }
+
+        let counter = std::env::temp_dir().join(format!("bedrock-refresh-{}", std::process::id()));
+        if !arguments.iter().any(|argument| argument == SUBPROCESS_ARG) {
+            std::fs::create_dir(&counter).expect("AWS command directory should be created");
+            let executable = std::env::current_exe().expect("test executable should be available");
+            let aws = counter.join(format!("aws{}", std::env::consts::EXE_SUFFIX));
+            std::fs::hard_link(&executable, &aws)
+                .or_else(|_| std::fs::copy(&executable, &aws).map(|_| ()))
+                .expect("test executable should be installed as aws");
+            let existing_path = std::env::var_os("PATH").unwrap_or_default();
+            let path = std::env::join_paths(
+                std::iter::once(counter.clone()).chain(std::env::split_paths(&existing_path)),
+            )
+            .expect("test executable PATH should be valid");
+            let output = tokio::process::Command::new(executable)
+                .args(["--exact", TEST_NAME, "--skip", SUBPROCESS_ARG])
+                .env("PATH", path)
+                .env_remove("AWS_ACCESS_KEY_ID")
+                .env_remove("AWS_SECRET_ACCESS_KEY")
+                .output()
+                .await
+                .expect("isolated AWS refresh test should run");
+            std::fs::remove_dir_all(&counter).expect("AWS command directory should be removed");
+            assert!(output.status.success(), "{output:?}");
+            return;
+        }
+        let _ = std::fs::remove_file(&counter);
+        let aws = ModelProviderAwsAuthInfo {
+            profile: Some("codex-bedrock".to_string()),
+            region: Some("us-west-2".to_string()),
+            auth_refresh: Some(AwsAuthRefreshConfig {
+                command: "aws".to_string(),
+                args: Vec::from(
+                    [
+                        "--exact",
+                        TEST_NAME,
+                        "--skip",
+                        HELPER_ARG,
+                        "--skip",
+                        counter.to_str().expect("counter path should be UTF-8"),
+                    ]
+                    .map(str::to_string),
+                ),
+                timeout_ms: NonZeroU64::new(10_000).expect("timeout should be non-zero"),
+            }),
+        };
+        let provider_info = ModelProviderInfo::create_amazon_bedrock_provider(Some(aws.clone()));
+
+        let first = create_model_provider(
+            provider_info.clone(),
+            Some(AuthManager::from_auth_for_testing(CodexAuth::from_api_key(
+                "openai-api-key",
+            ))),
+        );
+        let second = create_model_provider(provider_info.clone(), /*auth_manager*/ None);
+        let shared_state = process_shared_state();
+        let shared_recovery = shared_state
+            .aws_auth_recovery(&aws)
+            .expect("test provider should have refresh configured");
+        assert_eq!(Arc::strong_count(&shared_recovery), 3);
+        assert!(first.auth_manager().is_none() && second.auth_manager().is_none());
+
+        for provider in [&first, &second] {
+            for (status, body, recoverable) in [
+                (http::StatusCode::UNAUTHORIZED, "ExpiredToken", true),
+                (http::StatusCode::FORBIDDEN, "InvalidClientTokenId", true),
+                (http::StatusCode::FORBIDDEN, "AccessDeniedException", false),
+            ] {
+                let error = TransportError::Http {
+                    status,
+                    url: None,
+                    headers: None,
+                    body: Some(body.to_string()),
+                };
+                assert_eq!(provider.is_recoverable_auth_error(&error), recoverable);
+            }
+        }
+
+        let mut invalid_aws = aws.clone();
+        invalid_aws.auth_refresh.as_mut().expect("refresh").command = "not-aws".into();
+        let invalid_provider = create_model_provider(
+            ModelProviderInfo::create_amazon_bedrock_provider(Some(invalid_aws)),
+            /*auth_manager*/ None,
+        );
+        let error = invalid_provider
+            .recover_from_unauthorized()
+            .await
+            .expect_err("non-aws command should be rejected");
+        assert!(!error.is_retryable());
+        assert_eq!(error.to_string(), "AWS auth refresh command must be `aws`");
+
+        let (first_result, second_result) = tokio::join!(
+            first.recover_from_unauthorized(),
+            second.recover_from_unauthorized()
+        );
+        assert_eq!(
+            [first_result, second_result].map(|result| result.expect("provider should recover")),
+            [ProviderUnauthorizedRecovery::Recovered; 2]
+        );
+        let read_counter = || std::fs::read_to_string(&counter).expect("read counter");
+        assert_eq!(read_counter(), "1");
+
+        assert_eq!(
+            first
+                .recover_from_unauthorized()
+                .await
+                .expect("later generation should recover"),
+            ProviderUnauthorizedRecovery::Recovered
+        );
+        assert_eq!(read_counter(), "11");
+        std::fs::remove_file(&counter).expect("refresh invocation counter should be removed");
+
+        let different_profile = ModelProviderAwsAuthInfo {
+            profile: Some("another-bedrock-profile".to_string()),
+            ..aws.clone()
+        };
+        let other_recovery = shared_state
+            .aws_auth_recovery(&different_profile)
+            .expect("test provider should have refresh configured");
+        assert!(!Arc::ptr_eq(&shared_recovery, &other_recovery));
+
+        let released_recovery = Arc::downgrade(&shared_recovery);
+        drop((first, second, shared_recovery));
+        assert!(released_recovery.upgrade().is_none());
+        assert!(shared_state.aws_auth_recovery(&aws).is_some());
     }
 
     #[tokio::test]

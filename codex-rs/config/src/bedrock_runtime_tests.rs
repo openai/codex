@@ -23,6 +23,7 @@ region = "us-west-2"
         Some(ModelProviderAwsAuthInfo {
             profile: Some("runtime-profile".to_string()),
             region: Some("us-west-2".to_string()),
+            auth_refresh: None,
         })
     );
 }

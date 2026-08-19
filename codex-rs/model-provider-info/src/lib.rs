@@ -20,11 +20,13 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fmt;
+use std::num::NonZeroU64;
 use std::time::Duration;
 
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS: u64 = 300_000;
 const DEFAULT_STREAM_MAX_RETRIES: u64 = 5;
 const DEFAULT_REQUEST_MAX_RETRIES: u64 = 4;
+const DEFAULT_AWS_AUTH_REFRESH_TIMEOUT_MS: u64 = 300_000;
 pub const DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS: u64 = 15_000;
 /// Hard cap for user-configured `stream_max_retries`.
 const MAX_STREAM_MAX_RETRIES: u64 = 100;
@@ -155,6 +157,35 @@ pub struct ModelProviderAwsAuthInfo {
     pub profile: Option<String>,
     /// AWS region to use for provider-specific endpoints.
     pub region: Option<String>,
+    /// Optional command used to reauthenticate after a refreshable AWS auth failure.
+    pub auth_refresh: Option<AwsAuthRefreshConfig>,
+}
+
+/// Command used to refresh AWS credentials for a model provider.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AwsAuthRefreshConfig {
+    /// Executable to invoke directly, without a shell.
+    pub command: String,
+    /// Arguments passed to the refresh command.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Maximum time to wait for the refresh command to complete.
+    #[serde(default = "default_aws_auth_refresh_timeout_ms")]
+    pub timeout_ms: NonZeroU64,
+}
+
+impl AwsAuthRefreshConfig {
+    pub fn timeout(&self) -> Duration {
+        Duration::from_millis(self.timeout_ms.get())
+    }
+}
+
+fn default_aws_auth_refresh_timeout_ms() -> NonZeroU64 {
+    match NonZeroU64::new(DEFAULT_AWS_AUTH_REFRESH_TIMEOUT_MS) {
+        Some(timeout_ms) => timeout_ms,
+        None => panic!("AWS auth refresh timeout must be non-zero"),
+    }
 }
 
 impl ModelProviderInfo {
@@ -186,6 +217,16 @@ impl ModelProviderInfo {
                     "provider aws cannot be combined with {}",
                     conflicts.join(", ")
                 ));
+            }
+
+            if let Some(auth_refresh) = self.aws.as_ref().and_then(|aws| aws.auth_refresh.as_ref())
+            {
+                if auth_refresh.command.trim().is_empty() {
+                    return Err("provider aws.auth_refresh.command must not be empty".to_string());
+                }
+                if auth_refresh.command != "aws" {
+                    return Err("provider aws.auth_refresh.command must be `aws`".to_string());
+                }
             }
         }
 
@@ -387,6 +428,7 @@ impl ModelProviderInfo {
             aws: Some(aws.unwrap_or(ModelProviderAwsAuthInfo {
                 profile: None,
                 region: None,
+                auth_refresh: None,
             })),
             wire_api: WireApi::Responses,
             query_params: None,
@@ -504,8 +546,8 @@ pub fn merge_configured_model_providers(
             if provider != ModelProviderInfo::default() {
                 return Err(format!(
                     "model_providers.{key} only supports changing \
-`base_url`, `auth`, `http_headers`, `aws.profile`, and `aws.region`; other non-default \
-provider fields are not supported"
+`base_url`, `auth`, `http_headers`, `aws.profile`, `aws.region`, and `aws.auth_refresh`; \
+other non-default provider fields are not supported"
                 ));
             }
 

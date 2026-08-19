@@ -738,6 +738,7 @@ async fn status_model_provider_uses_bedrock_runtime_base_url_and_gates_usage_lin
         ModelProviderInfo::create_amazon_bedrock_provider(Some(ModelProviderAwsAuthInfo {
             profile: None,
             region: Some("eu-west-1".to_string()),
+            auth_refresh: None,
         }));
     config.model_provider.base_url =
         Some("https://bedrock-mantle.us-east-1.api.aws/openai/v1".to_string());

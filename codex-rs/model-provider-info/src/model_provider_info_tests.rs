@@ -216,6 +216,10 @@ base_url = "https://bedrock.example.com/v1"
 [aws]
 profile = "codex-bedrock"
 region = "us-west-2"
+
+[aws.auth_refresh]
+command = "aws"
+args = ["login", "--profile", "codex-bedrock"]
         "#;
 
     let provider: ModelProviderInfo = toml::from_str(provider_toml).unwrap();
@@ -225,6 +229,15 @@ region = "us-west-2"
         Some(ModelProviderAwsAuthInfo {
             profile: Some("codex-bedrock".to_string()),
             region: Some("us-west-2".to_string()),
+            auth_refresh: Some(AwsAuthRefreshConfig {
+                command: "aws".to_string(),
+                args: vec![
+                    "login".to_string(),
+                    "--profile".to_string(),
+                    "codex-bedrock".to_string(),
+                ],
+                timeout_ms: NonZeroU64::new(300_000).expect("timeout should be non-zero"),
+            }),
         })
     );
 }
@@ -243,6 +256,7 @@ fn test_create_amazon_bedrock_provider() {
             aws: Some(ModelProviderAwsAuthInfo {
                 profile: None,
                 region: None,
+                auth_refresh: None,
             }),
             wire_api: WireApi::Responses,
             query_params: None,
@@ -280,6 +294,7 @@ fn test_create_amazon_bedrock_runtime_provider_with_aws_configuration() {
         ModelProviderInfo::create_amazon_bedrock_runtime_provider(Some(ModelProviderAwsAuthInfo {
             profile: Some("runtime-profile".to_string()),
             region: Some("us-west-2".to_string()),
+            auth_refresh: None,
         }));
 
     assert_eq!(
@@ -294,6 +309,7 @@ fn test_create_amazon_bedrock_runtime_provider_with_aws_configuration() {
             Some(ModelProviderAwsAuthInfo {
                 profile: Some("runtime-profile".to_string()),
                 region: Some("us-west-2".to_string()),
+                auth_refresh: None,
             }),
             None,
             false,
@@ -389,13 +405,23 @@ fn test_merge_configured_model_providers_adds_custom_provider() {
 }
 
 #[test]
-fn test_merge_configured_model_providers_applies_amazon_bedrock_profile_override() {
+fn test_merge_configured_model_providers_applies_amazon_bedrock_aws_override() {
+    let auth_refresh = AwsAuthRefreshConfig {
+        command: "aws".to_string(),
+        args: vec![
+            "login".to_string(),
+            "--profile".to_string(),
+            "codex-bedrock".to_string(),
+        ],
+        timeout_ms: NonZeroU64::new(10_000).expect("timeout should be non-zero"),
+    };
     let configured_model_providers = std::collections::HashMap::from([(
         AMAZON_BEDROCK_PROVIDER_ID.to_string(),
         ModelProviderInfo {
             aws: Some(ModelProviderAwsAuthInfo {
                 profile: Some("codex-bedrock".to_string()),
                 region: Some("us-west-2".to_string()),
+                auth_refresh: Some(auth_refresh.clone()),
             }),
             ..ModelProviderInfo::default()
         },
@@ -408,6 +434,7 @@ fn test_merge_configured_model_providers_applies_amazon_bedrock_profile_override
         .aws = Some(ModelProviderAwsAuthInfo {
         profile: Some("codex-bedrock".to_string()),
         region: Some("us-west-2".to_string()),
+        auth_refresh: Some(auth_refresh),
     });
 
     assert_eq!(
@@ -424,6 +451,7 @@ fn test_merge_configured_model_providers_applies_runtime_overrides_independently
     let runtime_aws = ModelProviderAwsAuthInfo {
         profile: Some("runtime-profile".to_string()),
         region: Some("eu-west-1".to_string()),
+        auth_refresh: None,
     };
     let configured_model_providers = std::collections::HashMap::from([(
         AMAZON_BEDROCK_RUNTIME_PROVIDER_ID.to_string(),
@@ -460,6 +488,7 @@ fn test_merge_configured_model_providers_applies_amazon_bedrock_transport_overri
             aws: Some(ModelProviderAwsAuthInfo {
                 profile: Some("codex-bedrock".to_string()),
                 region: Some("us-west-2".to_string()),
+                auth_refresh: None,
             }),
             http_headers: Some(maplit::hashmap! {
                 "x-example-header".to_string() => "value".to_string(),
@@ -477,6 +506,7 @@ fn test_merge_configured_model_providers_applies_amazon_bedrock_transport_overri
     expected_provider.aws = Some(ModelProviderAwsAuthInfo {
         profile: Some("codex-bedrock".to_string()),
         region: Some("us-west-2".to_string()),
+        auth_refresh: None,
     });
     expected_provider
         .http_headers
@@ -501,6 +531,7 @@ fn test_merge_configured_model_providers_rejects_amazon_bedrock_non_default_fiel
             aws: Some(ModelProviderAwsAuthInfo {
                 profile: Some("codex-bedrock".to_string()),
                 region: None,
+                auth_refresh: None,
             }),
             ..ModelProviderInfo::default()
         },
@@ -512,7 +543,7 @@ fn test_merge_configured_model_providers_rejects_amazon_bedrock_non_default_fiel
             configured_model_providers,
         ),
         Err(
-            "model_providers.amazon-bedrock only supports changing `base_url`, `auth`, `http_headers`, `aws.profile`, and `aws.region`; other non-default provider fields are not supported"
+            "model_providers.amazon-bedrock only supports changing `base_url`, `auth`, `http_headers`, `aws.profile`, `aws.region`, and `aws.auth_refresh`; other non-default provider fields are not supported"
                 .to_string()
         )
     );
@@ -526,6 +557,7 @@ fn test_merge_configured_model_providers_allows_amazon_bedrock_default_fields() 
             aws: Some(ModelProviderAwsAuthInfo {
                 profile: None,
                 region: None,
+                auth_refresh: None,
             }),
             wire_api: WireApi::Responses,
             ..ModelProviderInfo::default()
@@ -547,6 +579,7 @@ fn test_validate_provider_aws_rejects_conflicting_auth() {
         aws: Some(ModelProviderAwsAuthInfo {
             profile: None,
             region: None,
+            auth_refresh: None,
         }),
         env_key: Some("AWS_BEARER_TOKEN_BEDROCK".to_string()),
         supports_websockets: false,
@@ -565,6 +598,7 @@ fn test_validate_provider_aws_rejects_websockets() {
         aws: Some(ModelProviderAwsAuthInfo {
             profile: None,
             region: None,
+            auth_refresh: None,
         }),
         requires_openai_auth: false,
         supports_websockets: true,
@@ -575,6 +609,34 @@ fn test_validate_provider_aws_rejects_websockets() {
         provider.validate(),
         Err("provider aws cannot be combined with supports_websockets".to_string())
     );
+}
+
+#[test]
+fn test_validate_provider_aws_auth_refresh_command() {
+    for (command, expected) in [
+        (
+            "  ",
+            Err("provider aws.auth_refresh.command must not be empty".to_string()),
+        ),
+        (
+            "other-command",
+            Err("provider aws.auth_refresh.command must be `aws`".to_string()),
+        ),
+        ("aws", Ok(())),
+    ] {
+        let provider =
+            ModelProviderInfo::create_amazon_bedrock_provider(Some(ModelProviderAwsAuthInfo {
+                profile: None,
+                region: None,
+                auth_refresh: Some(AwsAuthRefreshConfig {
+                    command: command.to_string(),
+                    args: Vec::new(),
+                    timeout_ms: NonZeroU64::new(300_000).expect("timeout should be non-zero"),
+                }),
+            }));
+
+        assert_eq!(provider.validate(), expected);
+    }
 }
 
 #[test]

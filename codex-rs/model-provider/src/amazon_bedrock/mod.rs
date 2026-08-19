@@ -1,4 +1,5 @@
 mod auth;
+mod auth_refresh;
 mod catalog;
 mod error;
 mod mantle;
@@ -11,6 +12,7 @@ use std::sync::Arc;
 use codex_api::ApiError;
 use codex_api::Provider;
 use codex_api::SharedAuthProvider;
+use codex_api::TransportError;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::auth::BedrockApiKeyAuth;
@@ -34,8 +36,11 @@ use crate::provider::ModelProviderFuture;
 use crate::provider::ProviderAccountResult;
 use crate::provider::ProviderAccountState;
 use crate::provider::ProviderCapabilities;
+use crate::provider::ProviderUnauthorizedRecovery;
 use crate::provider::RemoteCompactionSupport;
+use crate::shared_state::process_shared_state;
 use auth::resolve_provider_auth as resolve_bedrock_provider_auth;
+pub(crate) use auth_refresh::AwsAuthRecovery;
 use catalog::normalize_bedrock_catalog;
 pub(crate) use catalog::static_model_catalog;
 use mantle::bedrock_mantle_runtime_base_url;
@@ -53,9 +58,10 @@ pub(super) enum BedrockEndpoint {
 #[derive(Clone, Debug)]
 pub(crate) struct AmazonBedrockModelProvider {
     pub(crate) info: ModelProviderInfo,
-    pub(crate) aws: ModelProviderAwsAuthInfo,
+    aws: ModelProviderAwsAuthInfo,
     endpoint: BedrockEndpoint,
     auth_manager: Option<Arc<AuthManager>>,
+    auth_recovery: Option<Arc<AwsAuthRecovery>>,
 }
 
 impl AmazonBedrockModelProvider {
@@ -63,7 +69,6 @@ impl AmazonBedrockModelProvider {
         provider_info: ModelProviderInfo,
         auth_manager: Option<Arc<AuthManager>>,
     ) -> Self {
-        let auth_manager = auth_manager_for_provider(auth_manager, &provider_info);
         let endpoint = if provider_info.is_amazon_bedrock_runtime() {
             BedrockEndpoint::Runtime
         } else {
@@ -75,12 +80,23 @@ impl AmazonBedrockModelProvider {
             .unwrap_or(ModelProviderAwsAuthInfo {
                 profile: None,
                 region: None,
+                auth_refresh: None,
             });
+        let uses_aws_sdk_auth =
+            auth::auth_source(&provider_info, auth_manager.as_deref(), std::env::var)
+                == auth::BedrockAuthSource::AwsSdk;
+        let auth_recovery = if uses_aws_sdk_auth && aws.auth_refresh.is_some() {
+            process_shared_state().aws_auth_recovery(&aws)
+        } else {
+            None
+        };
+        let auth_manager = auth_manager_for_provider(auth_manager, &provider_info);
         Self {
             info: provider_info,
             aws,
             endpoint,
             auth_manager,
+            auth_recovery,
         }
     }
 
@@ -97,6 +113,12 @@ impl AmazonBedrockModelProvider {
                 | CodexAuth::AgentIdentity(_)
                 | CodexAuth::PersonalAccessToken(_) => None,
             })
+    }
+
+    fn uses_aws_auth_recovery(&self) -> bool {
+        self.auth_recovery.is_some()
+            && auth::auth_source(&self.info, self.auth_manager.as_deref(), std::env::var)
+                == auth::BedrockAuthSource::AwsSdk
     }
 
     async fn auth(&self) -> Option<CodexAuth> {
@@ -193,6 +215,36 @@ impl ModelProvider for AmazonBedrockModelProvider {
         }
     }
 
+    fn is_recoverable_auth_error(&self, error: &TransportError) -> bool {
+        matches!(
+            error,
+            TransportError::Http { status, .. } if *status == http::StatusCode::UNAUTHORIZED
+        ) || (self.uses_aws_auth_recovery() && error::is_refreshable_auth_error(error))
+    }
+
+    fn recover_from_unauthorized(
+        &self,
+    ) -> ModelProviderFuture<'_, Result<ProviderUnauthorizedRecovery>> {
+        Box::pin(async move {
+            let Some(recovery) = self
+                .auth_recovery
+                .as_ref()
+                .filter(|_| self.uses_aws_auth_recovery())
+            else {
+                return Ok(ProviderUnauthorizedRecovery::NotConfigured);
+            };
+
+            recovery.refresh().await.map_err(|error| {
+                if error.kind() == std::io::ErrorKind::InvalidInput {
+                    CodexErr::InvalidRequest(error.to_string())
+                } else {
+                    CodexErr::Io(error)
+                }
+            })?;
+            Ok(ProviderUnauthorizedRecovery::Recovered)
+        })
+    }
+
     fn auth(&self) -> ModelProviderFuture<'_, Option<CodexAuth>> {
         Box::pin(AmazonBedrockModelProvider::auth(self))
     }
@@ -254,6 +306,7 @@ mod error_tests;
 mod tests {
     use std::num::NonZeroU64;
 
+    use codex_model_provider_info::AwsAuthRefreshConfig;
     use codex_protocol::config_types::ModelProviderAuthInfo;
     use http::HeaderValue;
     use pretty_assertions::assert_eq;
@@ -298,6 +351,11 @@ mod tests {
         provider_info.aws = Some(ModelProviderAwsAuthInfo {
             profile: Some("aws-profile-that-should-not-be-loaded".to_string()),
             region: Some("us-west-2".to_string()),
+            auth_refresh: Some(AwsAuthRefreshConfig {
+                command: "aws".to_string(),
+                args: vec!["login".to_string()],
+                timeout_ms: NonZeroU64::new(1_000).expect("timeout should be non-zero"),
+            }),
         });
         let provider = AmazonBedrockModelProvider::new(provider_info, /*auth_manager*/ None);
 
@@ -337,6 +395,11 @@ mod tests {
             ModelProviderInfo::create_amazon_bedrock_provider(Some(ModelProviderAwsAuthInfo {
                 profile: Some("aws-profile-that-should-not-be-loaded".to_string()),
                 region: Some("us-west-2".to_string()),
+                auth_refresh: Some(AwsAuthRefreshConfig {
+                    command: "aws".to_string(),
+                    args: vec!["login".to_string()],
+                    timeout_ms: NonZeroU64::new(1_000).expect("timeout should be non-zero"),
+                }),
             })),
             Some(auth_manager.clone()),
         );

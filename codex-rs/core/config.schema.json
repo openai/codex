@@ -352,6 +352,35 @@
       },
       "type": "object"
     },
+    "AwsAuthRefreshConfig": {
+      "additionalProperties": false,
+      "description": "Command used to refresh AWS credentials for a model provider.",
+      "properties": {
+        "args": {
+          "default": [],
+          "description": "Arguments passed to the refresh command.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "command": {
+          "description": "Executable to invoke directly, without a shell.",
+          "type": "string"
+        },
+        "timeout_ms": {
+          "default": 300000,
+          "description": "Maximum time to wait for the refresh command to complete.",
+          "format": "uint64",
+          "minimum": 1.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    },
     "BundledSkillsConfig": {
       "additionalProperties": false,
       "properties": {
@@ -1871,6 +1900,14 @@
       "additionalProperties": false,
       "description": "AWS SigV4 auth configuration for a model provider.",
       "properties": {
+        "auth_refresh": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AwsAuthRefreshConfig"
+            }
+          ],
+          "description": "Optional command used to reauthenticate after a refreshable AWS auth failure."
+        },
         "profile": {
           "description": "AWS profile name to use. When unset, the AWS SDK default chain decides.",
           "type": "string"

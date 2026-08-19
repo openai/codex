@@ -92,6 +92,7 @@ mod tests {
             aws_auth_config(&ModelProviderAwsAuthInfo {
                 profile: Some("codex-bedrock".to_string()),
                 region: None,
+                auth_refresh: None,
             }),
             AwsAuthConfig {
                 profile: Some("codex-bedrock".to_string()),
@@ -107,6 +108,7 @@ mod tests {
             aws_auth_config(&ModelProviderAwsAuthInfo {
                 profile: None,
                 region: Some(" us-west-2 ".to_string()),
+                auth_refresh: None,
             }),
             AwsAuthConfig {
                 profile: None,
