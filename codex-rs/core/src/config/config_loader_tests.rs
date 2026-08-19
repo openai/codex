@@ -29,6 +29,7 @@ use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::loader::load_config_layers_state;
 use codex_config::loader::load_requirements_toml;
+use codex_config::permissions_toml::PermissionProfileToml;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
@@ -1762,6 +1763,48 @@ async fn load_config_layers_includes_cloud_config_bundle() -> anyhow::Result<()>
 }
 
 #[tokio::test]
+async fn resolve_permission_profile_from_effective_configuration() -> anyhow::Result<()> {
+    let codex_home = tempdir()?;
+    tokio::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+default_permissions = "configured-profile"
+
+[permissions.configured-profile]
+description = "Configured profile"
+extends = ":read-only"
+
+[permissions.configured-profile.network]
+enabled = true
+"#,
+    )
+    .await?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert_eq!(
+        config.resolve_permission_profile("configured-profile")?,
+        toml::from_str::<PermissionProfileToml>(
+            r#"
+description = "Configured profile"
+extends = ":read-only"
+
+[filesystem]
+":root" = "read"
+
+[network]
+enabled = true
+"#
+        )?
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn system_requirements_define_managed_permission_profiles() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     let codex_home = tmp.path().join("home");
@@ -1813,6 +1856,27 @@ enable_socks5 = false
             .allowed_permission_profiles,
         Some(BTreeMap::from([("managed-standard".to_string(), true)]))
     );
+    assert_eq!(
+        config.resolve_permission_profile("managed-standard")?,
+        toml::from_str::<PermissionProfileToml>(
+            r#"
+extends = ":workspace"
+
+[filesystem]
+":root" = "read"
+":slash_tmp" = "write"
+":tmpdir" = "write"
+
+[filesystem.":workspace_roots"]
+"." = "write"
+
+[network]
+enabled = true
+proxy_url = "http://127.0.0.1:43128"
+enable_socks5 = false
+"#
+        )?
+    );
     let active_permission_profile = config
         .permissions
         .active_permission_profile()
@@ -1825,8 +1889,159 @@ enable_socks5 = false
             config.permissions.permission_profile(),
         )?
         .expect("managed profile should retain its network proxy configuration");
+    assert_eq!(Some(&network), config.permissions.network.as_ref());
     assert_eq!(network.proxy_host_and_port(), "127.0.0.1:43128");
     assert!(!network.socks_enabled());
+    Ok(())
+}
+
+#[tokio::test]
+async fn resolve_permission_profile_inherits_across_configured_and_managed_profiles()
+-> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    tokio::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        r#"
+default_permissions = "configured-child"
+
+[permissions.configured-parent]
+extends = ":read-only"
+
+[permissions.configured-parent.network]
+enabled = true
+proxy_url = "http://127.0.0.1:43128"
+
+[permissions.configured-child]
+description = "Configured child"
+extends = "managed-parent"
+
+[permissions.configured-child.network]
+enable_socks5 = false
+"#,
+    )
+    .await?;
+    let requirements_path = tmp.path().join("requirements.toml");
+    tokio::fs::write(
+        &requirements_path,
+        r#"
+[permissions.managed-parent]
+extends = ":read-only"
+
+[permissions.managed-parent.network]
+enabled = true
+proxy_url = "http://127.0.0.1:43129"
+
+[permissions.managed-child]
+description = "Managed child"
+extends = "configured-parent"
+
+[permissions.managed-child.network]
+enable_socks5 = false
+"#,
+    )
+    .await?;
+
+    let mut overrides = LoaderOverrides::without_managed_config_for_tests();
+    overrides.system_requirements_path = Some(requirements_path);
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home)
+        .fallback_cwd(Some(tmp.path().to_path_buf()))
+        .loader_overrides(overrides)
+        .build()
+        .await?;
+
+    for (profile_name, expected) in [
+        (
+            "configured-child",
+            r#"
+description = "Configured child"
+extends = "managed-parent"
+
+[filesystem]
+":root" = "read"
+
+[network]
+enabled = true
+proxy_url = "http://127.0.0.1:43129"
+enable_socks5 = false
+"#,
+        ),
+        (
+            "managed-child",
+            r#"
+description = "Managed child"
+extends = "configured-parent"
+
+[filesystem]
+":root" = "read"
+
+[network]
+enabled = true
+proxy_url = "http://127.0.0.1:43128"
+enable_socks5 = false
+"#,
+        ),
+    ] {
+        assert_eq!(
+            config.resolve_permission_profile(profile_name)?,
+            toml::from_str::<PermissionProfileToml>(expected)?,
+            "{profile_name}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn resolve_permission_profile_rejects_duplicate_configured_and_managed_profiles()
+-> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    tokio::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        "default_permissions = \":read-only\"\n",
+    )
+    .await?;
+    let requirements_path = tmp.path().join("requirements.toml");
+    tokio::fs::write(
+        &requirements_path,
+        r#"
+[permissions.duplicate-profile]
+extends = ":read-only"
+"#,
+    )
+    .await?;
+
+    let mut overrides = LoaderOverrides::without_managed_config_for_tests();
+    overrides.system_requirements_path = Some(requirements_path);
+    let mut config = ConfigBuilder::default()
+        .codex_home(codex_home.clone())
+        .fallback_cwd(Some(tmp.path().to_path_buf()))
+        .loader_overrides(overrides)
+        .build()
+        .await?;
+    let config_toml = AbsolutePathBuf::from_absolute_path(codex_home.join(CONFIG_TOML_FILE))?;
+    config.config_layer_stack = config.config_layer_stack.with_user_config(
+        &config_toml,
+        toml::from_str::<TomlValue>(
+            r#"
+default_permissions = ":read-only"
+
+[permissions.duplicate-profile]
+extends = ":workspace"
+"#,
+        )?,
+    )?;
+
+    let error = config
+        .resolve_permission_profile("duplicate-profile")
+        .expect_err("duplicate configured and managed profiles should be rejected");
+    assert_eq!(
+        error.to_string(),
+        "requirements.toml permissions profile `duplicate-profile` conflicts with a config-defined profile of the same name"
+    );
     Ok(())
 }
 
