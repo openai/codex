@@ -95,6 +95,7 @@ use wiremock::ResponseTemplate;
 
 use super::analytics::mount_analytics_capture;
 use super::analytics::wait_for_analytics_event;
+use super::analytics::wait_for_matching_analytics_event;
 
 #[cfg(windows)]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
@@ -1109,18 +1110,50 @@ async fn code_mode_exec_emits_correlated_production_analytics() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn turn_profile_tracks_blocking_tool_and_follow_up_sampling() -> Result<()> {
-    let responses = vec![
+    let control_tools = [
+        ("call1", "request_user_input", json!({})),
+        (
+            "plan-call",
+            "update_plan",
+            json!({"plan": [{"step": "PRIVATE_PLAN", "status": "in_progress"}]}),
+        ),
+        (
+            "image-call",
+            "view_image",
+            json!({"path": "PRIVATE_IMAGE_PATH.png"}),
+        ),
+        ("get-goal-call", "get_goal", json!({})),
+        (
+            "create-goal-call",
+            "create_goal",
+            json!({"objective": "PRIVATE_GOAL"}),
+        ),
+        (
+            "update-goal-call",
+            "update_goal",
+            json!({"status": "complete"}),
+        ),
+    ];
+    let mut responses = vec![
         create_request_user_input_sse_response("call1")?,
         create_final_assistant_message_sse_response("Done")?,
     ];
+    responses.extend(control_tools.iter().skip(1).map(|(call_id, tool, args)| {
+        let response_id = format!("resp-{call_id}");
+        responses::sse(vec![
+            responses::ev_response_created(&response_id),
+            responses::ev_function_call(call_id, tool, &args.to_string()),
+            responses::ev_completed(&response_id),
+        ])
+    }));
+    responses.push(create_final_assistant_message_sse_response("Done")?);
     let server = create_mock_responses_server_sequence(responses).await;
 
     let codex_home = TempDir::new()?;
-    write_mock_responses_config_toml_with_chatgpt_base_url(
-        codex_home.path(),
-        &server.uri(),
-        &server.uri(),
-    )?;
+    MockResponsesConfig::new(&server.uri())
+        .enable_feature(Feature::Goals)
+        .with_root_config(&format!("chatgpt_base_url = \"{}\"", server.uri()))
+        .write(codex_home.path())?;
     mount_analytics_capture(&server, codex_home.path()).await?;
 
     let mut mcp = TestAppServer::builder()
@@ -1193,14 +1226,88 @@ async fn turn_profile_tracks_blocking_tool_and_follow_up_sampling() -> Result<()
                 .is_some_and(|duration| duration > 0),
             "samplingRequestCount": params["sampling_request_count"],
             "samplingRetryCount": params["sampling_retry_count"],
+            "totalToolCalls": params["total_tool_call_count"],
+            "dynamicToolCalls": params["dynamic_tool_call_count"],
             "status": params["status"],
         }),
         json!({
             "toolBlockingIsPositive": true,
             "samplingRequestCount": 2,
             "samplingRetryCount": 0,
+            "totalToolCalls": 1,
+            "dynamicToolCalls": 0,
             "status": "completed",
         })
+    );
+
+    let second_turn = mcp
+        .start_turn_and_wait_for_completion(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "run the other control tools".to_string(),
+                text_elements: Vec::new(),
+            }],
+            collaboration_mode: Some(CollaborationMode {
+                mode: ModeKind::Default,
+                settings: Settings {
+                    model: "mock-model".to_string(),
+                    reasoning_effort: Some(ReasoningEffort::Medium),
+                    developer_instructions: None,
+                },
+            }),
+            ..Default::default()
+        })
+        .await?;
+
+    for (call_id, tool_name, _) in control_tools {
+        let event = wait_for_matching_analytics_event(&server, DEFAULT_READ_TIMEOUT, |event| {
+            event["event_type"] == "codex_control_tool_call_event"
+                && event["event_params"]["item_id"] == call_id
+        })
+        .await?;
+        let success = tool_name != "view_image";
+        assert_eq!(
+            json!({
+                "tool": event["event_params"]["tool_name"],
+                "success": event["event_params"]["success"],
+                "status": event["event_params"]["terminal_status"],
+                "hasOrigin": event["event_params"]["originating_response_id"]
+                    .as_str()
+                    .is_some(),
+            }),
+            json!({
+                "tool": tool_name,
+                "success": success,
+                "status": if success { "completed" } else { "failed" },
+                "hasOrigin": true,
+            })
+        );
+        let serialized = event.to_string();
+        assert!(
+            ![
+                "PRIVATE_PLAN",
+                "PRIVATE_IMAGE_PATH",
+                "PRIVATE_GOAL",
+                "Proceed with the plan?"
+            ]
+            .iter()
+            .any(|private_input| serialized.contains(private_input)),
+            "tool-call analytics must not contain private tool arguments: {serialized}"
+        );
+    }
+
+    let second_turn_event =
+        wait_for_matching_analytics_event(&server, DEFAULT_READ_TIMEOUT, |event| {
+            event["event_type"] == "codex_turn_event"
+                && event["event_params"]["turn_id"] == second_turn.turn.id
+        })
+        .await?;
+    assert_eq!(
+        json!({
+            "total": second_turn_event["event_params"]["total_tool_call_count"],
+            "dynamic": second_turn_event["event_params"]["dynamic_tool_call_count"],
+        }),
+        json!({"total": 5, "dynamic": 0})
     );
 
     Ok(())

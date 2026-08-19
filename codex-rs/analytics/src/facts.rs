@@ -107,6 +107,26 @@ pub enum CodeModeToolCallStatus {
     Failed,
     Interrupted,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ControlToolCallFact {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub call_id: String,
+    pub cell_id: Option<String>,
+    pub tool_name: String,
+    pub started_at_ms: u64,
+    pub completed_at_ms: u64,
+    pub status: ControlToolCallStatus,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ControlToolCallStatus {
+    Completed,
+    Failed,
+    Rejected,
+    Interrupted,
+}
 // copybara:strip-for-public begin
 pub const INTERNAL_TOOL_INPUT_MAX_COMMANDS: usize = 16;
 pub const INTERNAL_TOOL_INPUT_MAX_FLAGS: usize = 32;
@@ -580,6 +600,7 @@ impl From<InternalToolInputLog> for AnalyticsFact {
 pub(crate) enum CustomAnalyticsFact {
     ArtifactOperation(ArtifactOperationInput),
     CodeModeToolCall(CodeModeToolCallFact),
+    ControlToolCall(ControlToolCallFact),
     SubAgentThreadStarted(SubAgentThreadStartedInput),
     Compaction(Box<CodexCompactionEvent>),
     Goal(Box<CodexGoalEvent>),

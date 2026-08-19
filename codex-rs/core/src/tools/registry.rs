@@ -19,6 +19,7 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::control_tool_analytics::ControlToolCallGuard;
 use crate::tools::flat_tool_name;
 use crate::tools::handlers::multi_agents_spec::MULTI_AGENT_V1_NAMESPACE;
 use crate::tools::hook_names::HookToolName;
@@ -27,6 +28,7 @@ use crate::tools::lifecycle::notify_tool_start;
 use crate::tools::router::tool_log_payload;
 use crate::tools::tool_dispatch_trace::ToolDispatchTrace;
 use crate::util::error_or_panic;
+use codex_analytics::ControlToolCallStatus;
 use codex_extension_api::ToolCallOutcome;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
@@ -59,6 +61,11 @@ pub use codex_tools::ToolExposure;
 /// Implementers provide the shared `ToolExecutor` behavior plus optional
 /// core-owned metadata for hooks, telemetry, tool search, and argument diffs.
 pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
+    /// Whether this built-in control tool needs a structured tool-call event.
+    fn is_builtin_control_tool(&self) -> bool {
+        false
+    }
+
     /// Returns a shared spec when both the spec and search metadata are immutable.
     fn immutable_spec(&self) -> Option<&Arc<ToolSpec>> {
         None
@@ -644,6 +651,10 @@ impl ToolRegistry {
             .await
             {
                 PreToolUseHookResult::Blocked(message) => {
+                    if tool.is_builtin_control_tool() {
+                        let mut analytics = ControlToolCallGuard::new(&invocation);
+                        analytics.finish(ControlToolCallStatus::Rejected);
+                    }
                     // copybara:strip-for-public begin
                     if let Some(mut log) = internal_tool_input_log.take() {
                         log.hook_outcome = InternalToolHookOutcome::Blocked;
@@ -676,6 +687,10 @@ impl ToolRegistry {
                         invocation = updated_invocation;
                     }
                     Err(err) => {
+                        if tool.is_builtin_control_tool() {
+                            let mut analytics = ControlToolCallGuard::new(&invocation);
+                            analytics.finish(ControlToolCallStatus::Failed);
+                        }
                         // copybara:strip-for-public begin
                         if let Some(mut log) = internal_tool_input_log.take() {
                             log.hook_outcome = InternalToolHookOutcome::RewriteFailed;
@@ -705,6 +720,9 @@ impl ToolRegistry {
         }
 
         notify_tool_start(&invocation).await;
+        let mut control_tool_analytics = tool
+            .is_builtin_control_tool()
+            .then(|| ControlToolCallGuard::new(&invocation));
 
         // copybara:strip-for-public begin
         if let Some(mut log) = internal_tool_input_log {
@@ -765,6 +783,13 @@ impl ToolRegistry {
             Ok((_, success)) => *success,
             Err(_) => false,
         };
+        if let Some(analytics) = control_tool_analytics.as_mut() {
+            analytics.finish(if success {
+                ControlToolCallStatus::Completed
+            } else {
+                ControlToolCallStatus::Failed
+            });
+        }
         emit_metric_for_tool_read(&invocation, success);
         let post_tool_use_payload = if success {
             let guard = response_cell.lock().await;

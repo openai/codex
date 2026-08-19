@@ -475,6 +475,12 @@ impl AnalyticsEventsClient {
         ));
     }
 
+    pub fn track_control_tool_call(&self, input: crate::facts::ControlToolCallFact) {
+        self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::ControlToolCall(
+            input,
+        )));
+    }
+
     pub fn track_guardian_review(
         &self,
         tracking: &GuardianReviewTrackContext,

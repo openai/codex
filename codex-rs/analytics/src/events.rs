@@ -82,6 +82,7 @@ pub(crate) enum TrackEventRequest {
     FileChange(CodexFileChangeEventRequest),
     McpToolCall(CodexMcpToolCallEventRequest),
     DynamicToolCall(CodexDynamicToolCallEventRequest),
+    ControlToolCall(CodexControlToolCallEventRequest),
     CollabAgentToolCall(CodexCollabAgentToolCallEventRequest),
     WebSearch(CodexWebSearchEventRequest),
     ImageGeneration(CodexImageGenerationEventRequest),
@@ -862,6 +863,19 @@ pub(crate) struct CodexDynamicToolCallEventParams {
 pub(crate) struct CodexDynamicToolCallEventRequest {
     pub(crate) event_type: &'static str,
     pub(crate) event_params: CodexDynamicToolCallEventParams,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexControlToolCallEventParams {
+    #[serde(flatten)]
+    pub(crate) base: CodexToolItemEventBase,
+    pub(crate) success: bool,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexControlToolCallEventRequest {
+    pub(crate) event_type: &'static str,
+    pub(crate) event_params: CodexControlToolCallEventParams,
 }
 
 #[derive(Serialize)]
