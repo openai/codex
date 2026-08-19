@@ -1,5 +1,6 @@
 use super::LoadedPlugin;
 use super::PluginLoadOutcome;
+use crate::PluginGitMode;
 use crate::app_mcp_routing::apply_app_mcp_routing_policy;
 use crate::installed_marketplaces::installed_marketplace_roots_from_layer_stack;
 use crate::is_openai_curated_marketplace_name;
@@ -43,7 +44,7 @@ use crate::marketplace_policy::MarketplacePolicy;
 use crate::marketplace_policy::configured_plugins_from_stack;
 use crate::marketplace_upgrade::ConfiguredMarketplaceUpgradeError;
 use crate::marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome;
-use crate::marketplace_upgrade::upgrade_configured_git_marketplaces;
+use crate::marketplace_upgrade::upgrade_configured_git_marketplaces_with_mode;
 use crate::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use crate::remote::RecommendedPluginsMode;
 use crate::remote::RemoteInstalledPlugin;
@@ -263,6 +264,7 @@ struct NonCuratedCacheRefreshRequest {
     configured_plugin_keys: Vec<String>,
     configured_plugin_sources: Vec<NonCuratedPluginSource>,
     mode: NonCuratedCacheRefreshMode,
+    git_mode: PluginGitMode,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -2157,8 +2159,10 @@ impl PluginsManager {
                 if let Err(err) = std::thread::Builder::new()
                     .name("plugins-marketplace-auto-upgrade".to_string())
                     .spawn(move || {
-                        let outcome = manager.upgrade_configured_marketplaces_for_config(
-                            &config, /*marketplace_name*/ None,
+                        let outcome = manager.upgrade_configured_marketplaces_for_config_with_mode(
+                            &config,
+                            /*marketplace_name*/ None,
+                            PluginGitMode::Automatic,
                         );
                         match outcome {
                             Ok(outcome) => {
@@ -2255,10 +2259,25 @@ impl PluginsManager {
         config: &PluginsConfigInput,
         marketplace_name: Option<&str>,
     ) -> Result<ConfiguredMarketplaceUpgradeOutcome, String> {
-        let mut outcome = upgrade_configured_git_marketplaces(
+        self.upgrade_configured_marketplaces_for_config_with_mode(
+            config,
+            marketplace_name,
+            PluginGitMode::Manual,
+        )
+    }
+
+    /// Carries the initiating Git trust policy through marketplace and plugin refreshes.
+    fn upgrade_configured_marketplaces_for_config_with_mode(
+        &self,
+        config: &PluginsConfigInput,
+        marketplace_name: Option<&str>,
+        mode: PluginGitMode,
+    ) -> Result<ConfiguredMarketplaceUpgradeOutcome, String> {
+        let mut outcome = upgrade_configured_git_marketplaces_with_mode(
             self.codex_home.as_path(),
             &config.config_layer_stack,
             marketplace_name,
+            mode,
         );
         if let Some(marketplace_name) = marketplace_name
             && outcome.selected_marketplaces.is_empty()
@@ -2279,6 +2298,7 @@ impl PluginsManager {
                 self.codex_home.as_path(),
                 &outcome.upgraded_roots,
                 &configured_plugin_keys,
+                mode,
             ) {
                 Ok(refresh_outcome) => {
                     self.clear_caches_after_marketplace_source_refresh(
@@ -2319,9 +2339,11 @@ impl PluginsManager {
             config,
             roots,
             NonCuratedCacheRefreshMode::IfVersionChanged,
+            PluginGitMode::Automatic,
         );
     }
 
+    /// Runs an explicitly requested refresh using the caller's normal Git configuration.
     pub async fn refresh_non_curated_plugin_cache_for_config(
         self: &Arc<Self>,
         config: &PluginsConfigInput,
@@ -2332,7 +2354,12 @@ impl PluginsManager {
         };
         let mut completion = self.non_curated_cache_refresh_completion.subscribe();
         let changed_sequence = completion.borrow_and_update().changed_sequence;
-        self.maybe_start_non_curated_plugin_cache_refresh(config, roots);
+        self.schedule_non_curated_plugin_cache_refresh(
+            config,
+            roots,
+            NonCuratedCacheRefreshMode::IfVersionChanged,
+            PluginGitMode::Manual,
+        );
 
         loop {
             let in_flight = match self.non_curated_cache_refresh_state.read() {
@@ -2466,6 +2493,7 @@ impl PluginsManager {
         config: &PluginsConfigInput,
         roots: &[AbsolutePathBuf],
         mode: NonCuratedCacheRefreshMode,
+        git_mode: PluginGitMode,
     ) {
         let marketplace_roots =
             self.marketplace_roots(config, roots, /*include_openai_curated*/ false);
@@ -2535,6 +2563,7 @@ impl PluginsManager {
             configured_plugin_keys,
             configured_plugin_sources,
             mode,
+            git_mode,
         };
 
         let should_spawn = {
@@ -2568,16 +2597,24 @@ impl PluginsManager {
                 request.mode = NonCuratedCacheRefreshMode::ForceReinstall;
             }
             // Reconcile each canonical plugin generation once before publishing its resource.
-            if state.requested.as_ref() == Some(&request)
-                || (request.mode == NonCuratedCacheRefreshMode::IfVersionChanged
-                    && !state.in_flight
-                    && state.last_refreshed.as_ref().is_some_and(|last_refreshed| {
-                        last_refreshed.roots == request.roots
-                            && last_refreshed.configured_plugin_keys
-                                == request.configured_plugin_keys
-                            && last_refreshed.configured_plugin_sources
-                                == request.configured_plugin_sources
-                    }))
+            if state.requested.as_ref().is_some_and(|requested| {
+                requested == &request
+                    || (requested.git_mode == PluginGitMode::Manual
+                        && request.git_mode == PluginGitMode::Automatic
+                        && requested.roots == request.roots
+                        && requested.configured_plugin_keys == request.configured_plugin_keys
+                        && requested.configured_plugin_sources == request.configured_plugin_sources
+                        && requested.mode == request.mode)
+            }) || (request.mode == NonCuratedCacheRefreshMode::IfVersionChanged
+                && !state.in_flight
+                && state.last_refreshed.as_ref().is_some_and(|last_refreshed| {
+                    last_refreshed.roots == request.roots
+                        && last_refreshed.configured_plugin_keys == request.configured_plugin_keys
+                        && last_refreshed.configured_plugin_sources
+                            == request.configured_plugin_sources
+                        && (last_refreshed.git_mode == request.git_mode
+                            || last_refreshed.git_mode == PluginGitMode::Manual)
+                }))
             {
                 return;
             }
@@ -2819,6 +2856,7 @@ impl PluginsManager {
                         self.codex_home.as_path(),
                         &request.roots,
                         &request.configured_plugin_keys,
+                        request.git_mode,
                     )
                 }
                 NonCuratedCacheRefreshMode::ForceReinstall => {
@@ -2826,6 +2864,7 @@ impl PluginsManager {
                         self.codex_home.as_path(),
                         &request.roots,
                         &request.configured_plugin_keys,
+                        request.git_mode,
                     )
                 }
             };

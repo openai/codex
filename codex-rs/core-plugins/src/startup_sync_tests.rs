@@ -1,4 +1,5 @@
 use super::*;
+use crate::git_policy::REPOSITORY_LOCAL_GIT_ENVIRONMENT_VARIABLES;
 use crate::test_support::RecordingHttpClientSelector;
 use crate::test_support::recorded_http_client_urls;
 use pretty_assertions::assert_eq;

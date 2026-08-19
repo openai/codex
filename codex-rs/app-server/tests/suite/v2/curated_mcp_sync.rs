@@ -38,6 +38,7 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 struct CuratedMcpSyncFixture {
     mcp: TestAppServer,
     sync_barrier: PathBuf,
+    malicious_git_helper_marker: PathBuf,
     mcp_server_handle: JoinHandle<()>,
     _fixture_root: TempDir,
     _responses_server: MockServer,
@@ -49,10 +50,11 @@ impl CuratedMcpSyncFixture {
         let (mcp_server_url, mcp_server_handle) = start_mcp_server().await?;
         let fixture_root = TempDir::new()?;
         let codex_home = fixture_root.path().join("codex-home");
-        let curated_repo = fixture_root.path().join("curated-repo");
+        let curated_repo = fixture_root.path().join("plugins.git");
         let git_wrapper_dir = fixture_root.path().join("bin");
         let git_config = fixture_root.path().join("gitconfig");
         let sync_barrier = fixture_root.path().join("allow-curated-sync");
+        let malicious_git_helper_marker = fixture_root.path().join("malicious-git-helper-ran");
         std::fs::create_dir_all(&codex_home)?;
         std::fs::create_dir_all(&curated_repo)?;
         std::fs::create_dir_all(&git_wrapper_dir)?;
@@ -91,7 +93,7 @@ impl CuratedMcpSyncFixture {
             &["commit", "-m", "test curated plugins"],
         )?;
 
-        let curated_repo_url = format!("file://{}", curated_repo.display());
+        let curated_repo_url = format!("file://{}/", fixture_root.path().display());
         let rewrite_key = format!("url.{curated_repo_url}.insteadOf");
         run_git(
             &real_git,
@@ -103,10 +105,34 @@ impl CuratedMcpSyncFixture {
                     .to_str()
                     .context("git config path should be UTF-8")?,
                 &rewrite_key,
-                GITHUB_PLUGINS_GIT_URL,
+                "https://github.com/openai/",
             ],
         )?;
 
+        let malicious_git_helper = fixture_root.path().join("malicious-git-helper.sh");
+        std::fs::write(
+            &malicious_git_helper,
+            format!(
+                "#!/bin/sh\nprintf ran > '{}'\nexit 73\n",
+                malicious_git_helper_marker.display()
+            ),
+        )?;
+        let mut helper_permissions = std::fs::metadata(&malicious_git_helper)?.permissions();
+        helper_permissions.set_mode(0o755);
+        std::fs::set_permissions(&malicious_git_helper, helper_permissions)?;
+        run_git(&real_git, &codex_home, &["init", "-b", "main"])?;
+        run_git(
+            &real_git,
+            &codex_home,
+            &["config", "protocol.ext.allow", "always"],
+        )?;
+        let malicious_rewrite_key =
+            format!("url.ext::{}.insteadOf", malicious_git_helper.display());
+        run_git(
+            &real_git,
+            &codex_home,
+            &["config", &malicious_rewrite_key, GITHUB_PLUGINS_GIT_URL],
+        )?;
         let git_wrapper = git_wrapper_dir.join("git");
         std::fs::write(
             &git_wrapper,
@@ -168,6 +194,7 @@ url = "{mcp_server_url}/mcp""#
         Ok(Self {
             mcp,
             sync_barrier,
+            malicious_git_helper_marker,
             mcp_server_handle,
             _fixture_root: fixture_root,
             _responses_server: responses_server,
@@ -208,6 +235,10 @@ async fn existing_thread_loads_api_curated_mcp_after_auth_switch_sync() -> Resul
     // Let sync materialize the bundle; its completion callback must refresh this same thread.
     std::fs::write(&fixture.sync_barrier, "continue")?;
     wait_for_mcp_ready(&mut fixture.mcp, TEST_SERVER_NAME).await?;
+    ensure!(
+        !fixture.malicious_git_helper_marker.exists(),
+        "curated startup synchronization executed repository-local Git configuration"
+    );
 
     let response: McpServerToolCallResponse = fixture
         .mcp

@@ -38,28 +38,6 @@ const CURATED_PLUGINS_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const CURATED_PLUGINS_BACKUP_ARCHIVE_TIMEOUT: Duration = Duration::from_secs(30);
 // Keep this comfortably above a normal sync attempt so we do not race another Codex process.
 const CURATED_PLUGINS_STALE_TEMP_DIR_MAX_AGE: Duration = Duration::from_secs(10 * 60);
-// These variables can redirect Git away from the repository selected by `-C`,
-// or inject command-scoped configuration into the sync commands.
-const REPOSITORY_LOCAL_GIT_ENVIRONMENT_VARIABLES: &[&str] = &[
-    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-    "GIT_CEILING_DIRECTORIES",
-    "GIT_COMMON_DIR",
-    "GIT_CONFIG",
-    "GIT_CONFIG_COUNT",
-    "GIT_CONFIG_PARAMETERS",
-    "GIT_DIR",
-    "GIT_DISCOVERY_ACROSS_FILESYSTEM",
-    "GIT_GRAFT_FILE",
-    "GIT_IMPLICIT_WORK_TREE",
-    "GIT_INDEX_FILE",
-    "GIT_NAMESPACE",
-    "GIT_OBJECT_DIRECTORY",
-    "GIT_PREFIX",
-    "GIT_REPLACE_REF_BASE",
-    "GIT_SHALLOW_FILE",
-    "GIT_WORK_TREE",
-];
-
 #[derive(Debug, Deserialize)]
 struct GitHubRepositorySummary {
     default_branch: String,
@@ -210,7 +188,7 @@ fn sync_openai_plugins_repo_via_git(
 ) -> Result<String, String> {
     let repo_path = curated_plugins_repo_path(codex_home);
     let sha_path = codex_home.join(CURATED_PLUGINS_SHA_FILE);
-    let remote_sha = git_ls_remote_head_sha(git_binary)?;
+    let remote_sha = git_ls_remote_head_sha(codex_home, git_binary)?;
     let local_sha = read_local_git_or_sha_file(&repo_path, &sha_path, git_binary);
 
     if local_sha.as_deref() == Some(remote_sha.as_str()) && repo_path.join(".git").is_dir() {
@@ -629,8 +607,9 @@ fn read_local_git_or_sha_file(
     read_sha_file(sha_path)
 }
 
-fn git_ls_remote_head_sha(git_binary: &Path) -> Result<String, String> {
+fn git_ls_remote_head_sha(codex_home: &Path, git_binary: &Path) -> Result<String, String> {
     let mut command = git_command(git_binary);
+    let _trusted_repository = crate::configure_trusted_git_repository(&mut command, codex_home)?;
     command
         .arg("ls-remote")
         .arg("https://github.com/openai/plugins.git")
@@ -683,14 +662,7 @@ fn git_head_sha(repo_path: &Path, git_binary: &Path) -> Result<String, String> {
 }
 
 fn git_command(git_binary: &Path) -> Command {
-    let mut command = Command::new(git_binary);
-    command
-        .args(["-c", codex_git_utils::SAFE_BARE_REPOSITORY_CONFIG])
-        .env("GIT_OPTIONAL_LOCKS", "0");
-    for name in REPOSITORY_LOCAL_GIT_ENVIRONMENT_VARIABLES {
-        command.env_remove(name);
-    }
-    command
+    crate::PluginGitMode::Automatic.command(git_binary)
 }
 
 #[cfg(any(target_os = "macos", test))]

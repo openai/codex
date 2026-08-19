@@ -6197,6 +6197,106 @@ enabled = true
     );
 }
 
+#[tokio::test]
+async fn non_curated_plugin_cache_refresh_preserves_manual_priority() {
+    let codex_home = TempDir::new().unwrap();
+    let marketplace_root = codex_home.path().join("marketplace");
+    fs::create_dir_all(marketplace_root.join(".git")).unwrap();
+    write_plugin_with_version(
+        &marketplace_root,
+        "sample-plugin",
+        "sample-plugin",
+        Some("1.0.0"),
+    );
+    write_file(
+        &marketplace_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "debug",
+  "plugins": [{
+    "name": "sample-plugin",
+    "source": { "source": "local", "path": "./sample-plugin" }
+  }]
+}"#,
+    );
+    write_file(
+        &codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+
+[plugins."sample-plugin@debug"]
+enabled = true
+"#,
+    );
+    let config = load_plugins_config_input(codex_home.path(), &marketplace_root).await;
+    let roots = [AbsolutePathBuf::try_from(marketplace_root.clone()).unwrap()];
+    let manager = Arc::new(test_plugins_manager(codex_home.path().to_path_buf()));
+    manager
+        .non_curated_cache_refresh_state
+        .write()
+        .expect("refresh state lock")
+        .in_flight = true;
+
+    for git_mode in [
+        PluginGitMode::Automatic,
+        PluginGitMode::Manual,
+        PluginGitMode::Automatic,
+    ] {
+        manager.schedule_non_curated_plugin_cache_refresh(
+            &config,
+            &roots,
+            NonCuratedCacheRefreshMode::IfVersionChanged,
+            git_mode,
+        );
+    }
+
+    {
+        let mut state = manager
+            .non_curated_cache_refresh_state
+            .write()
+            .expect("refresh state lock");
+        assert!(matches!(
+            state.requested.as_ref().map(|request| request.git_mode),
+            Some(PluginGitMode::Manual)
+        ));
+        state.last_refreshed = state.requested.take();
+        state.in_flight = false;
+    }
+
+    manager.maybe_start_non_curated_plugin_cache_refresh(&config, &roots);
+
+    {
+        let mut state = manager
+            .non_curated_cache_refresh_state
+            .write()
+            .expect("refresh state lock");
+        assert!(!state.in_flight);
+        assert!(state.requested.is_none());
+        state.requested = state.last_refreshed.clone();
+        state.in_flight = true;
+    }
+
+    write_plugin_with_version(
+        &marketplace_root,
+        "sample-plugin",
+        "sample-plugin",
+        Some("2.0.0"),
+    );
+    manager.maybe_start_non_curated_plugin_cache_refresh(&config, &roots);
+
+    let state = manager
+        .non_curated_cache_refresh_state
+        .read()
+        .expect("refresh state lock");
+    let request = state.requested.as_ref().expect("pending refresh");
+    assert!(matches!(request.git_mode, PluginGitMode::Automatic));
+    assert_eq!(
+        request.configured_plugin_sources[0]
+            .local_version
+            .as_deref(),
+        Some("2.0.0")
+    );
+}
+
 #[test]
 fn refresh_non_curated_plugin_cache_reinstalls_missing_configured_plugin_with_manifest_version() {
     let tmp = tempfile::tempdir().unwrap();

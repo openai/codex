@@ -630,6 +630,9 @@ fn load_plugin_hooks_supports_inline_manifest_hook_list() {
 
 #[test]
 fn materialize_git_subdir_uses_sparse_checkout() {
+    let run_git = |args: &[&str], cwd| super::run_git(args, cwd, PluginGitMode::Manual);
+    let run_git_output =
+        |args: &[&str], cwd| super::run_git_output(args, cwd, PluginGitMode::Manual);
     let codex_home = tempfile::tempdir().expect("create codex home");
     let repo = tempfile::tempdir().expect("create git repo");
     let plugin_dir = repo.path().join("plugins/toolkit");
@@ -678,6 +681,9 @@ fn materialize_git_subdir_uses_sparse_checkout() {
 
 #[test]
 fn materialize_git_source_rejects_sha_that_resolves_to_hostile_default_branch() {
+    let run_git = |args: &[&str], cwd| super::run_git(args, cwd, PluginGitMode::Manual);
+    let run_git_output =
+        |args: &[&str], cwd| super::run_git_output(args, cwd, PluginGitMode::Manual);
     let codex_home = tempfile::tempdir().expect("create codex home");
     let repo = tempfile::tempdir().expect("create git repo");
     run_git(&["init"], Some(repo.path())).expect("init git repo");

@@ -8,6 +8,11 @@ use app_test_support::TestAppServer;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::MarketplaceUpgradeParams;
 use codex_app_server_protocol::MarketplaceUpgradeResponse;
+use codex_app_server_protocol::PluginInstallParams;
+use codex_app_server_protocol::PluginInstallResponse;
+use codex_app_server_protocol::PluginListMarketplaceKind;
+use codex_app_server_protocol::PluginListParams;
+use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::RequestId;
 use codex_config::MarketplaceConfigUpdate;
 use codex_config::record_user_marketplace;
@@ -196,6 +201,141 @@ async fn marketplace_upgrade_all_configured_git_marketplaces() -> Result<()> {
 }
 
 #[tokio::test]
+async fn automatic_upgrade_isolates_git_while_explicit_install_preserves_configuration()
+-> Result<()> {
+    let codex_home = TempDir::new()?;
+    let source = TempDir::new()?;
+    let plugin_source = TempDir::new()?;
+    let old_revision = init_marketplace_repo(source.path(), "trusted", "old")?;
+
+    init_marketplace_repo(plugin_source.path(), "plugin", "plugin")?;
+    let plugin_root = plugin_source.path().join(".codex-plugin");
+    std::fs::create_dir_all(&plugin_root)?;
+    std::fs::write(
+        plugin_root.join("plugin.json"),
+        r#"{"name":"toolkit","version":"1.0.0","interface":{"displayName":"Toolkit"}}"#,
+    )?;
+    run_git(plugin_source.path(), &["add", "."])?;
+    run_git(plugin_source.path(), &["commit", "-qm", "add plugin"])?;
+    let plugin_url = url::Url::from_directory_path(plugin_source.path())
+        .map_err(|()| anyhow::anyhow!("invalid plugin source path"))?
+        .to_string();
+    std::fs::write(
+        source.path().join(".agents/plugins/marketplace.json"),
+        serde_json::json!({
+            "name": "trusted",
+            "plugins": [{
+                "name": "toolkit",
+                "source": {"source": "url", "url": plugin_url},
+            }],
+        })
+        .to_string(),
+    )?;
+    run_git(source.path(), &["add", ".agents/plugins/marketplace.json"])?;
+    commit_marketplace_marker(source.path(), "new")?;
+    record_git_marketplace(
+        codex_home.path(),
+        "trusted",
+        source.path(),
+        &old_revision,
+        /*ref_name*/ None,
+    )?;
+    let config_path = codex_home.path().join("config.toml");
+    std::fs::write(
+        &config_path,
+        format!(
+            "{}\n[plugins.\"toolkit@trusted\"]\nenabled = true\n",
+            std::fs::read_to_string(&config_path)?
+        ),
+    )?;
+
+    run_git(codex_home.path(), &["init", "--quiet"])?;
+    let source_path = source.path().display().to_string();
+    let missing_path = codex_home.path().join("missing").display().to_string();
+    let rewrite_key = format!("url.{missing_path}.insteadOf");
+    for untrusted_source in [&source_path, &plugin_url] {
+        run_git(
+            codex_home.path(),
+            &["config", "--add", &rewrite_key, untrusted_source],
+        )?;
+        assert!(run_git(codex_home.path(), &["ls-remote", untrusted_source, "HEAD"]).is_err());
+    }
+
+    let manual_plugin_alias = "https://manual.example/plugin.git";
+    let manual_plugin_rewrite = format!("url.{}.insteadOf", plugin_source.path().display());
+    let mut server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .with_plugin_startup_tasks()
+        .with_env_overrides(&[
+            ("GIT_CONFIG_COUNT", Some("1")),
+            ("GIT_CONFIG_KEY_0", Some(&manual_plugin_rewrite)),
+            ("GIT_CONFIG_VALUE_0", Some(manual_plugin_alias)),
+        ])
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+    let plugin_root = codex_home
+        .path()
+        .join("plugins/cache/trusted/toolkit/1.0.0/.codex-plugin/plugin.json");
+    timeout(DEFAULT_TIMEOUT, async {
+        while !plugin_root.exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+
+    let marketplace_path = marketplace_install_root(codex_home.path())
+        .join("trusted/.agents/plugins/marketplace.json");
+    std::fs::write(
+        &marketplace_path,
+        serde_json::json!({
+            "name": "trusted",
+            "plugins": [{
+                "name": "toolkit",
+                "source": {"source": "url", "url": manual_plugin_alias},
+            }],
+        })
+        .to_string(),
+    )?;
+    let marketplace_path = AbsolutePathBuf::try_from(marketplace_path)?;
+    let _: PluginInstallResponse = server
+        .request(|request_id| ClientRequest::PluginInstall {
+            request_id,
+            params: PluginInstallParams {
+                marketplace_path: Some(marketplace_path),
+                remote_marketplace_name: None,
+                install_attempt_id: None,
+                plugin_name: "toolkit".to_string(),
+            },
+        })
+        .await?;
+
+    std::fs::write(
+        plugin_source.path().join(".codex-plugin/plugin.json"),
+        r#"{"name":"toolkit","version":"1.1.0","interface":{"displayName":"Toolkit"}}"#,
+    )?;
+    run_git(plugin_source.path(), &["add", "."])?;
+    run_git(plugin_source.path(), &["commit", "-qm", "upgrade plugin"])?;
+    let _: PluginListResponse = server
+        .request(|request_id| ClientRequest::PluginList {
+            request_id,
+            params: PluginListParams {
+                cwds: None,
+                marketplace_kinds: Some(vec![PluginListMarketplaceKind::Local]),
+                force_refetch: true,
+            },
+        })
+        .await?;
+    assert!(
+        codex_home
+            .path()
+            .join("plugins/cache/trusted/toolkit/1.1.0/.codex-plugin/plugin.json")
+            .is_file(),
+        "explicit plugin/list refresh must preserve command-scoped Git configuration"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn marketplace_upgrade_named_marketplace_only() -> Result<()> {
     let codex_home = TempDir::new()?;
     let debug_source = TempDir::new()?;
@@ -211,17 +351,26 @@ async fn marketplace_upgrade_named_marketplace_only() -> Result<()> {
         &debug_old_revision,
         /*ref_name*/ None,
     )?;
-    record_git_marketplace(
+    let tools_source_alias = "manual:tools";
+    record_user_marketplace(
         codex_home.path(),
         "tools",
-        tools_source.path(),
-        &tools_old_revision,
-        /*ref_name*/ None,
+        &configured_git_marketplace_update(
+            tools_source_alias,
+            Some(&tools_old_revision),
+            /*ref_name*/ None,
+        ),
     )?;
     disable_plugin_startup_tasks(codex_home.path())?;
+    let tools_rewrite = format!("url.{}.insteadOf", tools_source.path().display());
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
+        .with_env_overrides(&[
+            ("GIT_CONFIG_COUNT", Some("1")),
+            ("GIT_CONFIG_KEY_0", Some(&tools_rewrite)),
+            ("GIT_CONFIG_VALUE_0", Some(tools_source_alias)),
+        ])
         .without_auto_env()
         .build_initialized()
         .await?;

@@ -3,6 +3,7 @@ mod artifact_operation;
 mod command_migration;
 mod discoverable;
 mod error_subtype;
+mod git_policy;
 mod http_client_selector;
 pub mod installed_marketplaces;
 pub mod loader;
@@ -31,6 +32,9 @@ pub mod store;
 mod test_support;
 pub mod toggles;
 mod tool_suggest_metadata;
+
+pub(crate) use git_policy::PluginGitMode;
+pub(crate) use git_policy::configure_trusted_git_repository;
 
 pub const OPENAI_CURATED_MARKETPLACE_NAME: &str = "openai-curated";
 pub const OPENAI_API_CURATED_MARKETPLACE_NAME: &str = "openai-api-curated";
