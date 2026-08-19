@@ -1,5 +1,4 @@
-use crate::command_safety::powershell_parser::PowershellParseOutcome;
-use crate::command_safety::powershell_parser::parse_with_powershell_ast;
+use crate::command_safety::try_parse_powershell_commands;
 use std::path::Path;
 
 /// On Windows, we conservatively allow only clearly read-only PowerShell invocations
@@ -92,14 +91,8 @@ fn parse_powershell_invocation(executable: &str, args: &[String]) -> Option<Vec<
 
 /// Tokenizes an inline PowerShell script and delegates to the command splitter.
 /// Examples of when this is called: pwsh.exe -Command '<script>' or pwsh.exe -Command:<script>
-fn parse_powershell_script(executable: &str, script: &str) -> Option<Vec<Vec<String>>> {
-    if let PowershellParseOutcome::Commands(commands) =
-        parse_with_powershell_ast(executable, script)
-    {
-        Some(commands)
-    } else {
-        None
-    }
+fn parse_powershell_script(_executable: &str, script: &str) -> Option<Vec<Vec<String>>> {
+    try_parse_powershell_commands(script)
 }
 
 /// Returns true when the executable name is one of the supported PowerShell binaries.
@@ -306,12 +299,6 @@ mod tests {
         ]));
 
         assert!(is_safe_command_windows(&[
-            pwsh.clone(),
-            "-Command".to_string(),
-            "(Get-Content foo.rs -Raw)".to_string()
-        ]));
-
-        assert!(is_safe_command_windows(&[
             pwsh,
             "-Command".to_string(),
             "Get-Item foo.rs | Select-Object Length".to_string()
@@ -469,13 +456,6 @@ mod tests {
             "ls @(calc.exe)"
         ])));
 
-        // Unsupported constructs that the AST parser refuses (no fallback to manual splitting).
-        assert!(!is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
-            "-Command",
-            "ls && pwd"
-        ])));
-
         // Sub-expressions are rejected even if they contain otherwise safe commands.
         assert!(!is_safe_command_windows(&vec_str(&[
             "powershell.exe",
@@ -519,35 +499,5 @@ mod tests {
             "-Command",
             "Write-Output \"foo $bar\""
         ])));
-    }
-
-    #[test]
-    fn uses_invoked_powershell_variant_for_parsing() {
-        if !cfg!(windows) {
-            return;
-        }
-
-        let chain = "pwd && ls";
-        assert!(
-            !is_safe_command_windows(&vec_str(&[
-                "powershell.exe",
-                "-NoProfile",
-                "-Command",
-                chain,
-            ])),
-            "`{chain}` is not recognized by powershell.exe"
-        );
-
-        if let Some(pwsh) = try_find_pwsh_executable_blocking() {
-            assert!(
-                is_safe_command_windows(&[
-                    pwsh.as_path().to_str().unwrap().into(),
-                    "-NoProfile".to_string(),
-                    "-Command".to_string(),
-                    chain.to_string(),
-                ]),
-                "`{chain}` should be considered safe to pwsh.exe"
-            );
-        }
     }
 }
