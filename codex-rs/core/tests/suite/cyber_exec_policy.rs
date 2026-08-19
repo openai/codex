@@ -91,9 +91,9 @@ fn configure_saved_prefix_and_guardian(config: &mut Config) {
 }
 
 fn command_response(response_id: &str, call_id: &str, command_tool: CommandTool) -> Result<String> {
-    let (tool_name, command_key, timeout_key) = match command_tool {
-        CommandTool::ShellCommand => ("shell_command", "command", "timeout_ms"),
-        CommandTool::UnifiedExec => ("exec_command", "cmd", "yield_time_ms"),
+    let (tool_name, command_key) = match command_tool {
+        CommandTool::ShellCommand => ("shell_command", "command"),
+        CommandTool::UnifiedExec => ("exec_command", "cmd"),
     };
     let mut args = json!({
         "sandbox_permissions": SandboxPermissions::RequireEscalated,
@@ -101,8 +101,6 @@ fn command_response(response_id: &str, call_id: &str, command_tool: CommandTool)
         "prefix_rule": ["git", "version"],
     });
     args[command_key] = json!(TEST_COMMAND);
-    args[timeout_key] = json!(1_000);
-
     Ok(sse(vec![
         ev_response_created(response_id),
         ev_function_call(call_id, tool_name, &serde_json::to_string(&args)?),
