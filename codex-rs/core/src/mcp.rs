@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::config::Config;
+use crate::environment_selection::ThreadEnvironments;
+use codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID;
 use codex_config::McpServerConfig;
 use codex_connectors::ConnectorRuntimeManager;
 use codex_connectors::ConnectorSnapshot;
@@ -19,6 +21,7 @@ use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::EffectiveMcpServer;
 use codex_mcp::McpConfig;
+use codex_mcp::McpEnvironmentAuthority;
 use codex_mcp::McpPluginAttribution;
 use codex_mcp::McpServerRegistration;
 use codex_mcp::McpToolCatalogCache;
@@ -28,7 +31,9 @@ use codex_mcp::configured_mcp_servers;
 use codex_mcp::effective_mcp_servers;
 use codex_plugin::AppConnectorId;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
+use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 
 const LEGACY_CODEX_APPS_REGISTRATION_ID: &str = "legacy_codex_apps";
 
@@ -40,18 +45,23 @@ pub(crate) struct McpRuntimeProjection {
     pub(crate) selected_plugins: SelectedPluginSnapshot,
 }
 
+pub(crate) enum McpEnvironmentScope<'a> {
+    /// Controller-level operations without an associated thread.
+    HostOnly,
+    /// Initial thread selections before the live environment store exists.
+    Initial(&'a [TurnEnvironmentSelection]),
+    /// Current attachment state for an existing thread.
+    Live(&'a ThreadEnvironments),
+}
+
 pub(crate) struct McpThreadIdentity<'a> {
     pub(crate) session_source: &'a SessionSource,
     pub(crate) originator: &'a str,
+    pub(crate) environments: McpEnvironmentScope<'a>,
 }
 
 enum OrderedMcpOverlay {
-    Set {
-        contributor_id: &'static str,
-        contribution_order: usize,
-        name: String,
-        config: Box<McpServerConfig>,
-    },
+    Set(Box<McpServerRegistration>),
     Remove {
         contributor_id: &'static str,
         contribution_order: usize,
@@ -107,6 +117,7 @@ impl McpManager {
             // originator; active-thread tool calls use runtime_config_for_step below.
             /*originator*/
             None,
+            McpEnvironmentScope::HostOnly,
         )
         .await
         .config
@@ -133,6 +144,7 @@ impl McpManager {
             )
             .with_session_source(identity.session_source),
             Some(identity.originator),
+            identity.environments,
         )
         .await
     }
@@ -141,6 +153,7 @@ impl McpManager {
         &self,
         context: McpServerContributionContext<'_, Config>,
         originator: Option<&str>,
+        environment_scope: McpEnvironmentScope<'_>,
     ) -> McpRuntimeProjection {
         let config = context.config();
         let mut selected_plugin_available = false;
@@ -155,12 +168,23 @@ impl McpManager {
             for contribution in contributor.contribute(context).await {
                 match contribution {
                     McpServerContribution::Set { name, config } => {
-                        overlays.push(OrderedMcpOverlay::Set {
-                            contributor_id: contributor.id(),
-                            contribution_order,
-                            name,
-                            config,
-                        });
+                        overlays.push(OrderedMcpOverlay::Set(Box::new(
+                            McpServerRegistration::from_extension(
+                                name,
+                                contributor.id(),
+                                contribution_order,
+                                *config,
+                            ),
+                        )));
+                    }
+                    McpServerContribution::HostedApps { config } => {
+                        overlays.push(OrderedMcpOverlay::Set(Box::new(
+                            McpServerRegistration::from_hosted_apps(
+                                contributor.id(),
+                                contribution_order,
+                                *config,
+                            ),
+                        )));
                     }
                     McpServerContribution::SelectedPlugin {
                         name,
@@ -237,17 +261,7 @@ impl McpManager {
 
         for overlay in overlays {
             match overlay {
-                OrderedMcpOverlay::Set {
-                    contributor_id,
-                    contribution_order,
-                    name,
-                    config,
-                } => catalog.register(McpServerRegistration::from_extension(
-                    name,
-                    contributor_id,
-                    contribution_order,
-                    *config,
-                )),
+                OrderedMcpOverlay::Set(registration) => catalog.register(*registration),
                 OrderedMcpOverlay::Remove {
                     contributor_id,
                     contribution_order,
@@ -255,7 +269,39 @@ impl McpManager {
                 } => catalog.remove_extension(name, contributor_id, contribution_order),
             }
         }
-        let catalog = catalog.build();
+        let selections = match environment_scope {
+            McpEnvironmentScope::HostOnly => None,
+            McpEnvironmentScope::Initial(selections) => Some(selections.to_vec()),
+            McpEnvironmentScope::Live(environments) => Some(environments.selections()),
+        };
+        let catalog = catalog.build_with_environment_authority(|environment_id| {
+            let Some(selections) = selections.as_ref() else {
+                return McpEnvironmentAuthority::Unrestricted;
+            };
+            let Some(selection) = selections
+                .iter()
+                .find(|selection| selection.environment_id == environment_id)
+            else {
+                return if environment_id == DEFAULT_MCP_SERVER_ENVIRONMENT_ID {
+                    McpEnvironmentAuthority::Unrestricted
+                } else {
+                    McpEnvironmentAuthority::SelectedPluginsOnly
+                };
+            };
+
+            match &selection.config {
+                EnvironmentConfigState::FromThread => McpEnvironmentAuthority::Unrestricted,
+                EnvironmentConfigState::Pending | EnvironmentConfigState::Failed(_) => {
+                    McpEnvironmentAuthority::Unavailable
+                }
+                EnvironmentConfigState::Ready(config) => config
+                    .mcp_policy
+                    .as_ref()
+                    .map_or(McpEnvironmentAuthority::Unrestricted, |policy| {
+                        McpEnvironmentAuthority::Restricted(policy)
+                    }),
+            }
+        });
         for conflict in catalog.conflicts() {
             tracing::warn!(
                 server = conflict.name,

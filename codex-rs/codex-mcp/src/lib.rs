@@ -32,6 +32,7 @@ pub type CodexAppsToolsCache = codex_connectors::ConnectorRuntimeManager<ToolInf
 pub type CodexAppsToolsCacheKey = codex_connectors::ConnectorRuntimeContextKey;
 
 pub use catalog::McpCatalogBuilder;
+pub use catalog::McpEnvironmentAuthority;
 pub use catalog::McpPluginAttribution;
 pub use catalog::McpServerConflict;
 pub use catalog::McpServerConflictAction;

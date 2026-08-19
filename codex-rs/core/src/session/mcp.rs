@@ -128,6 +128,7 @@ impl Session {
                 McpThreadIdentity {
                     session_source: &session_source,
                     originator: &originator,
+                    environments: McpEnvironmentScope::Live(&self.services.turn_environments),
                 },
                 &ready_selected_capability_roots,
                 executor_capability_discovery.as_deref(),
@@ -200,6 +201,7 @@ impl Session {
                     McpThreadIdentity {
                         session_source: &desired.session_source,
                         originator: &desired.originator,
+                        environments: McpEnvironmentScope::Live(&self.services.turn_environments),
                     },
                     &ready_selected_capability_roots,
                     executor_capability_discovery.as_deref(),
@@ -254,6 +256,7 @@ impl Session {
                 McpThreadIdentity {
                     session_source: &desired.session_source,
                     originator: &desired.originator,
+                    environments: McpEnvironmentScope::Live(&self.services.turn_environments),
                 },
                 &ready_selected_capability_roots,
                 executor_capability_discovery.as_deref(),
@@ -645,6 +648,7 @@ impl Session {
                 McpThreadIdentity {
                     session_source: &turn_context.session_source,
                     originator: &turn_context.originator,
+                    environments: McpEnvironmentScope::Live(&self.services.turn_environments),
                 },
                 &ready_selected_capability_roots,
                 executor_capability_discovery.as_deref(),

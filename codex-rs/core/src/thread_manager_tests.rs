@@ -3,6 +3,7 @@ use crate::agent::control::SpawnAgentOptions;
 use crate::config::test_config;
 use crate::init_state_db;
 use crate::installation_id::INSTALLATION_ID_FILENAME;
+use crate::mcp::McpEnvironmentScope;
 use crate::mcp::McpThreadIdentity;
 use crate::rollout::RolloutRecorder;
 use crate::session::session::SessionSettingsUpdate;
@@ -1033,6 +1034,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             McpThreadIdentity {
                 session_source: &SessionSource::Exec,
                 originator: &first_originator,
+                environments: McpEnvironmentScope::Live(&first_session.services.turn_environments),
             },
             /*ready_selected_capability_roots*/ &[],
             /*executor_capability_discovery*/ None,
@@ -1050,6 +1052,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             McpThreadIdentity {
                 session_source: &second_session_source,
                 originator: &second_originator,
+                environments: McpEnvironmentScope::Live(&second_session.services.turn_environments),
             },
             /*ready_selected_capability_roots*/ &[],
             /*executor_capability_discovery*/ None,

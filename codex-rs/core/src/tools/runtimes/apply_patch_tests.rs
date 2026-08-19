@@ -32,6 +32,7 @@ fn test_turn_environment(environment_id: &str) -> crate::session::turn_context::
                 ),
                 shell_environment_policy: Default::default(),
                 exec_policy: None,
+                mcp_policy: None,
                 network_policy: None,
                 selected_capability_roots: Vec::new(),
             }),

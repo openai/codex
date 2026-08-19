@@ -154,12 +154,19 @@ impl McpServerContributor<Config> for AppsMcpServerContributor {
             {
                 root_resolved.add_permits(1);
             }
-            let config = serde_json::from_value(json!({ "url": self.url }))
-                .expect("test Apps MCP server config should be valid");
-            vec![McpServerContribution::Set {
-                name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
-                config: Box::new(config),
-            }]
+            let config = Box::new(
+                serde_json::from_value(json!({ "url": self.url }))
+                    .expect("test Apps MCP server config should be valid"),
+            );
+            let contribution = if self.id == "hosted_plugin_runtime" {
+                McpServerContribution::HostedApps { config }
+            } else {
+                McpServerContribution::Set {
+                    name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                    config,
+                }
+            };
+            vec![contribution]
         })
     }
 }
@@ -485,6 +492,7 @@ async fn root_reconciliation_reuses_pending_apps_startup() -> Result<()> {
                 ),
                 shell_environment_policy: Default::default(),
                 exec_policy: None,
+                mcp_policy: None,
                 network_policy: None,
                 selected_capability_roots: vec![SelectedCapabilityRoot {
                     id: "calendar-root".to_string(),

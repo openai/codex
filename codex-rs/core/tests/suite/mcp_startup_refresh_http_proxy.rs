@@ -1,4 +1,7 @@
+use codex_core::EnvironmentConfig;
+use codex_core::EnvironmentMcpPolicy;
 use codex_core::TurnInputRequest;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -9,8 +12,12 @@ use codex_config::McpServerOAuthConfig;
 use codex_config::McpServerTransportConfig;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_features::Feature;
+use codex_protocol::mcp_policy::McpServerIdentity;
+use codex_protocol::mcp_policy::McpServerRequirement;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::PermissionProfileSnapshot;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
@@ -43,6 +50,8 @@ const SKILL_TEST_NAME: &str =
     "suite::mcp_startup_refresh_http_proxy::skill_mcp_dependency_oauth_uses_configured_http_client";
 const SERVER_NAME: &str = "proxied_mcp";
 const SERVER_URL: &str = "http://mcp-proxy.invalid/api/codex/ps/mcp";
+const DENIED_SERVER_NAME: &str = "denied_mcp";
+const DENIED_SERVER_URL: &str = "http://mcp-proxy.invalid/denied-mcp";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn local_mcp_startup_and_refresh_use_configured_http_client() -> Result<()> {
@@ -271,6 +280,12 @@ async fn skill_mcp_dependency_oauth_uses_configured_http_client() -> Result<()> 
                 .expect("OAuth client registration redirect URI"),
         )?;
         assert_eq!(redirect_uri.port(), Some(skill_callback_port));
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.url.path() != "/denied-mcp"),
+            "denied skill dependency must not perform OAuth discovery: {requests:#?}"
+        );
         return Ok(());
     }
 
@@ -308,7 +323,7 @@ async fn skill_mcp_dependency_oauth_uses_configured_http_client() -> Result<()> 
             )
             .await?;
             let metadata = format!(
-                "dependencies:\n  tools:\n    - type: mcp\n      value: {SERVER_NAME}\n      transport: streamable_http\n      url: {SERVER_URL}\n      oauth:\n        callbackPort: {skill_callback_port}\n"
+                "dependencies:\n  tools:\n    - type: mcp\n      value: {SERVER_NAME}\n      transport: streamable_http\n      url: {SERVER_URL}\n      oauth:\n        callbackPort: {skill_callback_port}\n    - type: mcp\n      value: {DENIED_SERVER_NAME}\n      transport: streamable_http\n      url: {DENIED_SERVER_URL}\n"
             );
             fs.write_file(
                 &PathUri::from_host_native_path(agents_dir.join("openai.yaml"))?,
@@ -342,6 +357,26 @@ async fn skill_mcp_dependency_oauth_uses_configured_http_client() -> Result<()> 
         });
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::Disabled, fixture.config.cwd.as_path());
+    let mut environments = local_selections(fixture.config.cwd.clone());
+    environments.environments[0].config = EnvironmentConfigState::Ready(EnvironmentConfig {
+        allow_login_shell: fixture.config.permissions.allow_login_shell,
+        permission_profile: PermissionProfileSnapshot::legacy(PermissionProfile::Disabled),
+        shell_environment_policy: Default::default(),
+        exec_policy: None,
+        mcp_policy: Some(EnvironmentMcpPolicy {
+            servers: Some(BTreeMap::from([(
+                SERVER_NAME.to_string(),
+                McpServerRequirement::Identity {
+                    identity: McpServerIdentity::Url {
+                        url: SERVER_URL.to_string(),
+                    },
+                },
+            )])),
+            plugins: None,
+        }),
+        network_policy: None,
+        selected_capability_roots: Vec::new(),
+    });
     fixture
         .codex
         .start_or_steer_turn(
@@ -356,7 +391,7 @@ async fn skill_mcp_dependency_oauth_uses_configured_http_client() -> Result<()> 
                 },
             ])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(local_selections(fixture.config.cwd.clone())),
+                environments: Some(environments),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -379,5 +414,6 @@ async fn skill_mcp_dependency_oauth_uses_configured_http_client() -> Result<()> 
             callback_port: Some(skill_callback_port),
         })
     );
+    assert!(!servers.contains_key(DENIED_SERVER_NAME));
     Ok(())
 }

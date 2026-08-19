@@ -147,6 +147,7 @@ impl SessionConfiguration {
             permission_profile: self.permission_profile_state.snapshot(),
             shell_environment_policy: self.shell_environment_policy.clone(),
             exec_policy: None,
+            mcp_policy: None,
             network_policy: None,
             selected_capability_roots: Vec::new(),
         }
@@ -894,6 +895,7 @@ impl Session {
                     McpThreadIdentity {
                         session_source: &mcp_session_source,
                         originator: &mcp_originator,
+                        environments: McpEnvironmentScope::Initial(environment_selections),
                     },
                     /*ready_selected_capability_roots*/ &[],
                     /*executor_capability_discovery*/ None,
@@ -1047,7 +1049,8 @@ impl Session {
                     &mcp_projection.config,
                     auth.as_ref(),
                 )
-                    .into_keys()
+                    .into_iter()
+                    .filter_map(|(name, server)| server.enabled().then_some(name))
                     .collect::<Vec<_>>();
             session_telemetry.conversation_starts(
                 config.model_provider.name.as_str(),
@@ -1443,6 +1446,9 @@ impl Session {
                         McpThreadIdentity {
                             session_source: &session_configuration.session_source,
                             originator: &session_configuration.originator,
+                            environments: McpEnvironmentScope::Live(
+                                &sess.services.turn_environments,
+                            ),
                         },
                         /*ready_selected_capability_roots*/ &[],
                         /*executor_capability_discovery*/ None,

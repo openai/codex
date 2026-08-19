@@ -133,6 +133,8 @@ pub enum McpServerContribution {
         name: String,
         config: Box<McpServerConfig>,
     },
+    /// Registers the controller-owned Apps server under its reserved name.
+    HostedApps { config: Box<McpServerConfig> },
     /// Registers a server declared by a plugin selected for this thread.
     SelectedPlugin {
         name: String,

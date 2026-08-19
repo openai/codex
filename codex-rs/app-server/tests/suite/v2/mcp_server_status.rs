@@ -49,6 +49,7 @@ use rmcp::transport::StreamableHttpService;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use serde_json::json;
 use tempfile::TempDir;
+use test_case::test_case;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -151,16 +152,22 @@ async fn oauth_login_uses_http_headers_helper() -> Result<()> {
     Ok(())
 }
 
+#[test_case(false; "plain HTTP")]
+#[test_case(true; "HTTP headers helper")]
 #[tokio::test]
-async fn oauth_login_does_not_run_helper_disabled_by_managed_requirements() -> Result<()> {
+async fn oauth_login_rejects_servers_disabled_by_managed_requirements(
+    with_headers_helper: bool,
+) -> Result<()> {
     let codex_home = TempDir::new()?;
     let marker = codex_home.path().join("helper-ran");
-    let helper = toml::Value::String(format!("echo invoked > \"{}\"", marker.display()));
+    let helper = with_headers_helper
+        .then(|| toml::Value::String(format!("echo invoked > \"{}\"", marker.display())))
+        .map_or_else(String::new, |command| {
+            format!("http_headers_helper = {command}\n")
+        });
     std::fs::write(
         codex_home.path().join("config.toml"),
-        format!(
-            "[mcp_servers.blocked]\nurl = \"https://example.com/mcp\"\nhttp_headers_helper = {helper}\n"
-        ),
+        format!("[mcp_servers.blocked]\nurl = \"https://example.com/mcp\"\n{helper}"),
     )?;
     std::fs::write(
         codex_home.path().join("requirements.toml"),

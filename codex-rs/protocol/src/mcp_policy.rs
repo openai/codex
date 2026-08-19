@@ -1,6 +1,13 @@
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
+/// Additional managed MCP restrictions supplied by an environment owner.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EnvironmentMcpPolicy {
+    pub servers: Option<BTreeMap<String, McpServerRequirement>>,
+    pub plugins: Option<BTreeMap<String, PluginMcpRequirements>>,
+}
+
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum McpServerIdentity {

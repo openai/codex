@@ -27,7 +27,6 @@ use std::sync::OnceLock;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use crate::McpServerSource;
 use crate::binding::call_tool_result_from_rmcp;
 use crate::elicitation::ElicitationRequestManager;
 use crate::elicitation::ElicitationRequestRouter;
@@ -276,16 +275,14 @@ impl McpConnectionSet {
             .into_iter()
             .filter(|(_, server)| server.enabled())
         {
-            let is_host_owned_codex_apps = server_name == CODEX_APPS_MCP_SERVER_NAME
-                && config.mcp_server_catalog.server(&server_name).is_some_and(
-                    |server| match server.source() {
-                        McpServerSource::Compatibility { .. } => true,
-                        McpServerSource::Extension { id } => id == "hosted_plugin_runtime",
-                        McpServerSource::Plugin(_)
-                        | McpServerSource::SelectedPlugin(_)
-                        | McpServerSource::Config => false,
-                    },
-                );
+            let is_host_owned_codex_apps = config
+                .mcp_server_catalog
+                .server(&server_name)
+                .is_some_and(|server| {
+                    server
+                        .source()
+                        .is_host_owned_apps(&server_name, server.config())
+                });
             let catalog_item_limit = if is_host_owned_codex_apps {
                 MAX_CODEX_APPS_TOOL_CATALOG_ITEMS
             } else {

@@ -304,7 +304,9 @@ async fn selected_plugin_contributions(
                 enabled: config.enabled,
             }),
             McpServerContribution::SelectedPluginPackage { .. } => None,
-            McpServerContribution::Set { .. } | McpServerContribution::Remove { .. } => {
+            McpServerContribution::Set { .. }
+            | McpServerContribution::HostedApps { .. }
+            | McpServerContribution::Remove { .. } => {
                 panic!("expected selected plugin contribution")
             }
         })

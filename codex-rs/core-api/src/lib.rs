@@ -28,6 +28,7 @@ pub use codex_config::types::UriBasedFileOpener;
 pub use codex_core::CodexAppsToolsCache;
 pub use codex_core::CodexThread;
 pub use codex_core::EnvironmentConfig;
+pub use codex_core::EnvironmentMcpPolicy;
 pub use codex_core::EnvironmentNetworkPolicy;
 pub use codex_core::ForkSnapshot;
 pub use codex_core::LoadedAgentsMd;

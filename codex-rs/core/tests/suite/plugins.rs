@@ -88,7 +88,7 @@ fn sample_plugin_root(home: &TempDir) -> std::path::PathBuf {
     home.path().join("plugins/cache/test/sample/local")
 }
 
-fn write_sample_plugin_manifest_and_config(home: &TempDir) -> std::path::PathBuf {
+pub(super) fn write_sample_plugin_manifest_and_config(home: &TempDir) -> std::path::PathBuf {
     write_sample_plugin_manifest_and_config_at_root(
         home,
         sample_plugin_root(home),

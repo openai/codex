@@ -37,6 +37,7 @@ pub use codex_network_proxy::NetworkDomainPermissionEntry;
 pub use codex_network_proxy::NetworkDomainPermissions;
 pub use codex_network_proxy::NetworkUnixSocketPermission;
 pub use codex_network_proxy::NetworkUnixSocketPermissions;
+pub use codex_protocol::mcp_policy::EnvironmentMcpPolicy;
 pub use codex_protocol::protocol::EnvironmentConfig;
 pub use codex_thread::BackgroundTerminalInfo;
 pub use codex_thread::CodexThread;

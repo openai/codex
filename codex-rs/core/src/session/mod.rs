@@ -264,6 +264,7 @@ pub(crate) struct PreviousTurnSettings {
 
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::guardian::GuardianReviewSessionManager;
+use crate::mcp::McpEnvironmentScope;
 use crate::mcp::McpManager;
 use crate::mcp::McpThreadIdentity;
 use crate::network_policy_decision::execpolicy_network_rule_amendment;

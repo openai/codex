@@ -27,8 +27,7 @@ impl McpServerContributor<Config> for HostedPluginRuntimeExtension {
                 return vec![McpServerContribution::Remove { name }];
             }
 
-            vec![McpServerContribution::Set {
-                name,
+            vec![McpServerContribution::HostedApps {
                 config: Box::new(hosted_plugin_runtime_mcp_server_config(
                     &config.chatgpt_base_url,
                     config.apps_mcp_product_sku.as_deref(),
