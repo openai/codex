@@ -149,7 +149,13 @@ impl ChatWidget {
         self.transcript.saw_copy_source_this_turn = false;
         self.refresh_skills_for_current_cwd(/*force_reload*/ true);
         self.refresh_connector_mentions(/*force_refresh*/ false);
+        let initial_user_message_pending = self.initial_user_message.is_some();
         self.submit_initial_user_message_if_pending();
+        if self.mcp_startup_status.is_none()
+            && (!initial_user_message_pending || self.is_user_turn_pending_or_running())
+        {
+            self.maybe_send_next_queued_input();
+        }
         if display == SessionConfiguredDisplay::Normal
             && let Some(forked_from_id) = forked_from_id
         {

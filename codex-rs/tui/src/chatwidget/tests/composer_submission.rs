@@ -9,6 +9,177 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use pretty_assertions::assert_eq;
 use std::collections::VecDeque;
 
+fn paste_hidden_shell_payload(chat: &mut ChatWidget) -> String {
+    let payload = format!("!echo {}", "x".repeat(1000));
+    chat.handle_paste(payload.clone());
+    assert_eq!(
+        chat.bottom_pane.composer_text(),
+        format!("[Pasted Content {} chars]", payload.len())
+    );
+    payload
+}
+
+fn assert_hidden_shell_payload_is_literal(op: Result<Op, TryRecvError>, payload: String) {
+    match op {
+        Ok(Op::UserTurn { items, .. }) => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: payload,
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected hidden shell payload as literal input, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn hidden_shell_paste_submits_literal_prompt() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    let payload = paste_hidden_shell_payload(&mut chat);
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_hidden_shell_payload_is_literal(op_rx.try_recv(), payload);
+}
+
+#[tokio::test]
+async fn hidden_shell_paste_recalled_from_history_submits_literal_prompt() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    let payload = paste_hidden_shell_payload(&mut chat);
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    assert_hidden_shell_payload_is_literal(op_rx.try_recv(), payload.clone());
+    handle_turn_started(&mut chat, "turn-1");
+    handle_turn_completed(&mut chat, "turn-1", /*duration_ms*/ None);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Up));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_hidden_shell_payload_is_literal(op_rx.try_recv(), payload);
+}
+
+#[tokio::test]
+async fn hidden_shell_paste_queued_during_turn_submits_literal_prompt() {
+    for key in [KeyCode::Tab, KeyCode::Enter] {
+        let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.thread_id = Some(ThreadId::new());
+        handle_turn_started(&mut chat, "turn-1");
+        let payload = paste_hidden_shell_payload(&mut chat);
+
+        chat.handle_key_event(KeyEvent::new(key, KeyModifiers::NONE));
+        if key == KeyCode::Tab {
+            assert_chatwidget_snapshot!(
+                "hidden_shell_paste_queued_preview",
+                normalize_snapshot_paths(render_bottom_popup(&chat, /*width*/ 80))
+            );
+        }
+        handle_turn_completed(&mut chat, "turn-1", /*duration_ms*/ None);
+
+        assert_hidden_shell_payload_is_literal(op_rx.try_recv(), payload);
+    }
+}
+
+#[tokio::test]
+async fn hidden_shell_paste_restored_by_queue_edit_submits_literal_prompt() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.chat_keymap.edit_queued_message = vec![crate::key_hint::alt(KeyCode::Up)];
+    handle_turn_started(&mut chat, "turn-1");
+    let payload = paste_hidden_shell_payload(&mut chat);
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Tab));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    handle_turn_completed(&mut chat, "turn-1", /*duration_ms*/ None);
+
+    assert_hidden_shell_payload_is_literal(op_rx.try_recv(), payload);
+}
+
+#[tokio::test]
+async fn hidden_shell_paste_restored_by_interrupt_submits_literal_prompt() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    handle_turn_started(&mut chat, "turn-1");
+    let payload = paste_hidden_shell_payload(&mut chat);
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Tab));
+    chat.on_interrupted_turn(TurnAbortReason::Interrupted);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_hidden_shell_payload_is_literal(op_rx.try_recv(), payload);
+}
+
+#[tokio::test]
+async fn hidden_shell_paste_restored_after_image_rejection_submits_literal_prompt() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    let current_model = chat.current_model().to_string();
+    let mut models = chat.model_catalog.try_list_models().expect("model catalog");
+    models
+        .iter_mut()
+        .find(|model| model.model == current_model)
+        .expect("current model")
+        .input_modalities
+        .retain(|modality| *modality != InputModality::Image);
+    chat.model_catalog = Arc::new(ModelCatalog::new(models));
+    chat.set_remote_image_urls(vec!["https://example.com/image.png".to_string()]);
+    let payload = paste_hidden_shell_payload(&mut chat);
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    chat.set_remote_image_urls(Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_hidden_shell_payload_is_literal(op_rx.try_recv(), payload);
+}
+
+#[tokio::test]
+async fn hidden_shell_paste_restored_after_unavailable_model_submits_literal_prompt() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    let model = chat.current_model().to_string();
+    chat.set_model("");
+    let payload = paste_hidden_shell_payload(&mut chat);
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    chat.set_model(&model);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_hidden_shell_payload_is_literal(op_rx.try_recv(), payload);
+}
+
+#[tokio::test]
+async fn rejected_hidden_shell_paste_preserves_colliding_draft_paste() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    let model = chat.current_model().to_string();
+    handle_turn_started(&mut chat, "turn-1");
+    let payload = paste_hidden_shell_payload(&mut chat);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Tab));
+    let draft_payload = format!("draft {}", "y".repeat(1000));
+    chat.handle_paste(draft_payload.clone());
+    chat.set_model("");
+
+    handle_turn_completed(&mut chat, "turn-1", /*duration_ms*/ None);
+    chat.set_model(&model);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_hidden_shell_payload_is_literal(op_rx.try_recv(), format!("{payload}\n{draft_payload}"));
+}
+
+#[tokio::test]
+async fn hidden_shell_paste_queued_before_session_submits_literal_prompt() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_queue_submissions_until_session_configured(/*queue*/ true);
+    let payload = paste_hidden_shell_payload(&mut chat);
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    chat.thread_id = Some(ThreadId::new());
+    chat.maybe_send_next_queued_input();
+
+    assert_hidden_shell_payload_is_literal(op_rx.try_recv(), payload);
+}
+
 #[tokio::test]
 async fn parent_owned_thread_blocks_all_direct_input_entry_points() {
     let (mut chat, mut rx, mut op_rx) =

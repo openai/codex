@@ -1,0 +1,13 @@
+---
+source: tui/src/chatwidget/tests/composer_submission.rs
+expression: normalize_snapshot_paths(render_bottom_popup(&chat, 80))
+---
+• Working (0s • esc to interrupt)
+
+• Queued follow-up inputs
+  ↳ [Pasted Content 1006 chars]
+    ⌥ + ↑ edit last queued message
+
+› Ask Codex to do anything
+
+  gpt-5.6-sol default · /tmp/project

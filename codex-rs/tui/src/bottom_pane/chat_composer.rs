@@ -77,6 +77,7 @@
 //!
 //! - Expands pending paste placeholders so element ranges align with the final text.
 //! - Trims whitespace and rebases text elements accordingly.
+//! - Treats a leading `!` revealed only by paste expansion as literal model input, not shell input.
 //! - Prunes local attached images so only placeholders that survive expansion are sent.
 //! - Preserves remote image URLs as separate attachments even when text is empty.
 //!
@@ -424,6 +425,8 @@ fn parent_owned_command_is_allowed(command: SlashCommand, args: &str) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueuedInputAction {
     Plain,
+    /// Preserve model-input provenance when paste expansion reveals a leading shell sigil.
+    Literal,
     ParseSlash,
     RunShell,
 }
@@ -3007,13 +3010,29 @@ impl ChatComposer {
         }
         self.draft.recent_submission_mention_bindings = original_mention_bindings.clone();
         if record_history && (!text.is_empty() || !self.attachments.is_empty()) {
+            let preserve_literal_paste = self.slash_commands_enabled()
+                && text.starts_with('!')
+                && !original_input.trim_start().starts_with('!');
+            let (history_text, history_text_elements) = if preserve_literal_paste {
+                let history_text = original_input.trim().to_string();
+                let history_text_elements = Self::trim_text_elements(
+                    &original_input,
+                    &history_text,
+                    original_text_elements,
+                );
+                (history_text, history_text_elements)
+            } else {
+                (text.clone(), text_elements.clone())
+            };
             self.history.record_local_submission(HistoryEntry {
-                text: text.clone(),
-                text_elements: text_elements.clone(),
+                text: history_text,
+                text_elements: history_text_elements,
                 local_image_paths: self.attachments.local_image_paths(),
                 remote_image_urls: self.attachments.remote_image_urls(),
                 mention_bindings: original_mention_bindings,
-                pending_pastes: if pending_paste_handling == PendingPasteHandling::Preserve {
+                pending_pastes: if pending_paste_handling == PendingPasteHandling::Preserve
+                    || preserve_literal_paste
+                {
                     original_pending_pastes.clone()
                 } else {
                     Vec::new()
@@ -3091,6 +3110,10 @@ impl ChatComposer {
             if let Some(pasted) = self.draft.paste_burst.flush_before_modified_input() {
                 self.handle_paste(pasted);
             }
+            let visible_shell_command = self.is_bang_shell_command();
+            let original_input = self.current_text();
+            let original_text_elements = self.current_text_elements();
+            let original_pending_pastes = self.draft.pending_pastes.clone();
             let raw_text = self.draft.textarea.text();
             let defer_slash_validation = self.slash_input().should_parse_on_dequeue(raw_text);
             let preserve_pending_pastes = defer_slash_validation
@@ -3115,7 +3138,20 @@ impl ChatComposer {
                     PendingPasteHandling::Expand
                 },
             ) {
-                let action = slash_input::queued_input_action(&text, defer_slash_validation);
+                let action = if text.starts_with('!') && !visible_shell_command {
+                    QueuedInputAction::Literal
+                } else {
+                    slash_input::queued_input_action(&text, defer_slash_validation)
+                };
+                let (text, text_elements, pending_pastes) = if action == QueuedInputAction::Literal
+                {
+                    let text = original_input.trim().to_string();
+                    let text_elements =
+                        Self::trim_text_elements(&original_input, &text, original_text_elements);
+                    (text, text_elements, original_pending_pastes)
+                } else {
+                    (text, text_elements, pending_pastes)
+                };
                 return (
                     InputResult::Queued {
                         text,
@@ -3152,13 +3188,19 @@ impl ChatComposer {
         if let Some((text, text_elements)) =
             self.prepare_submission_text(/*record_history*/ true)
         {
-            if should_queue {
+            if self.slash_commands_enabled()
+                && text.starts_with('!')
+                && !original_input.trim_start().starts_with('!')
+            {
+                let text = original_input.trim().to_string();
+                let text_elements =
+                    Self::trim_text_elements(&original_input, &text, original_text_elements);
                 (
                     InputResult::Queued {
                         text,
                         text_elements,
-                        action: QueuedInputAction::Plain,
-                        pending_pastes: Vec::new(),
+                        action: QueuedInputAction::Literal,
+                        pending_pastes: original_pending_pastes,
                     },
                     true,
                 )

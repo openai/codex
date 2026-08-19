@@ -7,6 +7,67 @@ fn set_composer_text(chat: &mut ChatWidget, text: &str) {
     chat.refresh_plan_mode_nudge();
 }
 
+fn paste_hidden_plan_shell_payload(chat: &mut ChatWidget) -> String {
+    let payload = format!("!echo {}", "x".repeat(1000));
+    chat.bottom_pane
+        .set_composer_text("/plan ".to_string(), Vec::new(), Vec::new());
+    chat.handle_paste(payload.clone());
+    assert_eq!(
+        chat.bottom_pane.composer_text(),
+        format!("/plan [Pasted Content {} chars]", payload.len())
+    );
+    payload
+}
+
+fn plan_test_session(thread_id: ThreadId) -> crate::session_state::ThreadSessionState {
+    crate::session_state::ThreadSessionState {
+        thread_id,
+        forked_from_id: None,
+        fork_parent_title: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        service_tier: None,
+        approval_policy: AskForApproval::Never,
+        approvals_reviewer: ApprovalsReviewer::User,
+        permission_profile: PermissionProfile::read_only(),
+        active_permission_profile: None,
+        cwd: test_path_buf("/home/user/project").abs(),
+        runtime_workspace_roots: Vec::new(),
+        instruction_source_paths: Vec::new(),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        collaboration_mode: None,
+        personality: None,
+        message_history: None,
+        network_proxy: None,
+        rollout_path: None,
+    }
+}
+
+fn assert_literal_plan_prompt(chat: &ChatWidget, op: Result<Op, TryRecvError>, payload: String) {
+    match op {
+        Ok(Op::UserTurn {
+            items,
+            collaboration_mode,
+            ..
+        }) => {
+            assert_eq!(
+                items,
+                vec![UserInput::Text {
+                    text: payload,
+                    text_elements: Vec::new(),
+                }]
+            );
+            assert_eq!(
+                collaboration_mode.map(|mode| mode.mode),
+                Some(ModeKind::Plan)
+            );
+        }
+        other => panic!("expected literal plan prompt, got {other:?}"),
+    }
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+}
+
 #[test]
 fn plan_mode_nudge_matches_only_standalone_plain_text_keyword() {
     assert!(contains_plan_keyword("plan"));
@@ -1475,29 +1536,7 @@ async fn plan_slash_command_with_args_submits_prompt_in_plan_mode() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
 
-    let configured = crate::session_state::ThreadSessionState {
-        thread_id: ThreadId::new(),
-        forked_from_id: None,
-        fork_parent_title: None,
-        thread_name: None,
-        model: "test-model".to_string(),
-        model_provider_id: "test-provider".to_string(),
-        service_tier: None,
-        approval_policy: AskForApproval::Never,
-        approvals_reviewer: ApprovalsReviewer::User,
-        permission_profile: PermissionProfile::read_only(),
-        active_permission_profile: None,
-        cwd: test_path_buf("/home/user/project").abs(),
-        runtime_workspace_roots: Vec::new(),
-        instruction_source_paths: Vec::new(),
-        reasoning_effort: Some(ReasoningEffortConfig::default()),
-        collaboration_mode: None,
-        personality: None,
-        message_history: None,
-        network_proxy: None,
-        rollout_path: None,
-    };
-    chat.handle_thread_session(configured);
+    chat.handle_thread_session(plan_test_session(ThreadId::new()));
 
     chat.bottom_pane
         .set_composer_text("/plan build the plan".to_string(), Vec::new(), Vec::new());
@@ -1516,6 +1555,123 @@ async fn plan_slash_command_with_args_submits_prompt_in_plan_mode() {
         }
     );
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+}
+
+#[tokio::test]
+async fn plan_slash_command_with_hidden_shell_paste_submits_literal_prompt() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    let payload = paste_hidden_plan_shell_payload(&mut chat);
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_literal_plan_prompt(&chat, op_rx.try_recv(), payload);
+}
+
+#[tokio::test]
+async fn plan_slash_command_with_hidden_shell_paste_rejected_image_remains_literal() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    let current_model = chat.current_model().to_string();
+    let mut models = chat.model_catalog.try_list_models().expect("model catalog");
+    models
+        .iter_mut()
+        .find(|model| model.model == current_model)
+        .expect("current model")
+        .input_modalities
+        .retain(|modality| *modality != InputModality::Image);
+    chat.model_catalog = Arc::new(ModelCatalog::new(models));
+    let payload = paste_hidden_plan_shell_payload(&mut chat);
+    chat.set_remote_image_urls(vec!["https://example.com/image.png".to_string()]);
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    chat.set_remote_image_urls(Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_literal_plan_prompt(&chat, op_rx.try_recv(), payload);
+}
+
+#[tokio::test]
+async fn plan_slash_command_with_hidden_shell_paste_unavailable_model_remains_literal() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    let model = chat.current_model().to_string();
+    chat.set_model("");
+    let payload = paste_hidden_plan_shell_payload(&mut chat);
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    chat.set_model(&model);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_literal_plan_prompt(&chat, op_rx.try_recv(), payload);
+}
+
+#[tokio::test]
+async fn plan_slash_command_with_hidden_shell_paste_queued_during_turn_submits_literal_prompt() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    handle_turn_started(&mut chat, "turn-1");
+    let payload = paste_hidden_plan_shell_payload(&mut chat);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    assert_eq!(
+        chat.input_queue
+            .queued_user_messages
+            .front()
+            .unwrap()
+            .action,
+        QueuedInputAction::ParseSlash
+    );
+    handle_turn_completed(&mut chat, "turn-1", /*duration_ms*/ None);
+
+    assert_literal_plan_prompt(&chat, op_rx.try_recv(), payload);
+}
+
+#[tokio::test]
+async fn plan_slash_command_with_hidden_shell_paste_queued_before_session_submits_literal_prompt() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let payload = paste_hidden_plan_shell_payload(&mut chat);
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    chat.queue_user_message(UserMessage::from("queued follow-up"));
+    chat.finish_mcp_startup(Vec::new(), Vec::new());
+    assert_eq!(
+        chat.queued_user_message_texts(),
+        vec![format!("/plan {payload}"), "queued follow-up".to_string()]
+    );
+    chat.handle_thread_session(plan_test_session(ThreadId::new()));
+
+    assert_literal_plan_prompt(&chat, Ok(next_submit_op(&mut op_rx)), payload);
+}
+
+#[tokio::test]
+async fn rejected_initial_image_does_not_submit_later_queued_prompt() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let current_model = chat.current_model().to_string();
+    let mut models = chat.model_catalog.try_list_models().expect("model catalog");
+    models
+        .iter_mut()
+        .find(|model| model.model == current_model)
+        .expect("current model")
+        .input_modalities
+        .retain(|modality| *modality != InputModality::Image);
+    chat.model_catalog = Arc::new(ModelCatalog::new(models));
+    let mut initial_message = UserMessage::from("initial prompt");
+    initial_message.remote_image_urls = vec!["https://example.com/image.png".to_string()];
+    chat.initial_user_message = Some(initial_message);
+    chat.queue_user_message(UserMessage::from("queued follow-up"));
+    chat.finish_mcp_startup(Vec::new(), Vec::new());
+
+    let mut session = plan_test_session(ThreadId::new());
+    session.model = current_model;
+    chat.handle_thread_session(session);
+
+    assert_no_submit_op(&mut op_rx);
+    assert_eq!(chat.bottom_pane.composer_text(), "initial prompt");
+    assert_eq!(
+        chat.queued_user_message_texts(),
+        vec!["queued follow-up".to_string()]
+    );
 }
 
 #[tokio::test]

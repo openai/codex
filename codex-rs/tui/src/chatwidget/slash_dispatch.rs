@@ -784,7 +784,7 @@ impl ChatWidget {
                 if !self.apply_plan_slash_command() {
                     return;
                 }
-                let user_message = self.prepared_inline_user_message(
+                let mut user_message = self.prepared_inline_user_message(
                     args,
                     text_elements,
                     local_images,
@@ -792,14 +792,34 @@ impl ChatWidget {
                     mention_bindings,
                     source,
                 );
+                if !self.is_session_configured()
+                    || self.current_model().trim().is_empty()
+                    || (!self.current_model_supports_images()
+                        && (!user_message.local_images.is_empty()
+                            || !user_message.remote_image_urls.is_empty()))
+                {
+                    const PLAN_PREFIX: &str = "/plan ";
+                    user_message.text.insert_str(0, PLAN_PREFIX);
+                    for element in &mut user_message.text_elements {
+                        element.byte_range.start += PLAN_PREFIX.len();
+                        element.byte_range.end += PLAN_PREFIX.len();
+                    }
+                }
                 if self.is_session_configured() {
                     self.reasoning_buffer.clear();
                     self.reasoning_header = None;
                     self.reasoning_summary_parts.clear();
                     self.set_status_header(String::from("Working"));
-                    self.submit_user_message(user_message);
+                    self.submit_user_message_with_shell_escape_policy(
+                        user_message,
+                        ShellEscapePolicy::Disallow,
+                    );
                 } else {
-                    self.queue_user_message(user_message);
+                    self.queue_user_message_with_options(
+                        user_message,
+                        QueuedInputAction::ParseSlash,
+                        Vec::new(),
+                    );
                 }
             }
             SlashCommand::Goal if !trimmed.is_empty() => {

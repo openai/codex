@@ -138,7 +138,10 @@ impl ChatWidget {
 
     /// If idle and there are queued inputs, submit exactly one to start the next turn.
     pub(crate) fn maybe_send_next_queued_input(&mut self) -> bool {
-        if self.misalignment_policy_violation || self.input_queue.suppress_queue_autosend {
+        if !self.is_session_configured()
+            || self.misalignment_policy_violation
+            || self.input_queue.suppress_queue_autosend
+        {
             return false;
         }
         if self.blocks_direct_input {
@@ -158,6 +161,48 @@ impl ChatWidget {
                         queued_message.into_user_message(),
                         history_record,
                     );
+                    break;
+                }
+                QueuedInputAction::Literal => {
+                    let QueuedUserMessage {
+                        user_message,
+                        pending_pastes,
+                        ..
+                    } = queued_message;
+                    let mut restored_pending_pastes = self.bottom_pane.composer_pending_pastes();
+                    let mut used_paste_placeholders = restored_pending_pastes
+                        .iter()
+                        .map(|(placeholder, _)| placeholder.clone())
+                        .collect();
+                    let (mut user_message, pending_pastes) =
+                        super::user_messages::remap_colliding_paste_placeholders(
+                            user_message,
+                            pending_pastes,
+                            &mut used_paste_placeholders,
+                        );
+                    if !self.current_model().trim().is_empty()
+                        && (self.current_model_supports_images()
+                            || (user_message.local_images.is_empty()
+                                && user_message.remote_image_urls.is_empty()))
+                    {
+                        (user_message.text, user_message.text_elements) =
+                            crate::bottom_pane::ChatComposer::expand_pending_pastes(
+                                &user_message.text,
+                                user_message.text_elements,
+                                &pending_pastes,
+                            );
+                    }
+                    submitted_follow_up = self
+                        .submit_user_message_with_shell_escape_policy(
+                            user_message,
+                            ShellEscapePolicy::Disallow,
+                        )
+                        .is_some();
+                    if !submitted_follow_up {
+                        restored_pending_pastes.extend(pending_pastes);
+                        self.bottom_pane
+                            .set_composer_pending_pastes(restored_pending_pastes);
+                    }
                     break;
                 }
                 QueuedInputAction::ParseSlash => {
