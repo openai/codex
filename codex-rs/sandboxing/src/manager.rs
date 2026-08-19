@@ -207,6 +207,8 @@ pub enum SandboxTransformError {
     },
     MissingLinuxSandboxExecutable,
     EnvironmentNetworkProxy(String),
+    #[cfg(target_os = "macos")]
+    SeatbeltPreparation(String),
     #[cfg(target_os = "linux")]
     Wsl1UnsupportedForBubblewrap,
     #[cfg(not(target_os = "macos"))]
@@ -234,6 +236,10 @@ impl std::fmt::Display for SandboxTransformError {
             Self::EnvironmentNetworkProxy(err) => {
                 write!(f, "failed to prepare environment network proxy: {err}")
             }
+            #[cfg(target_os = "macos")]
+            Self::SeatbeltPreparation(err) => {
+                write!(f, "failed to prepare Seatbelt sandbox: {err}")
+            }
             #[cfg(target_os = "linux")]
             Self::Wsl1UnsupportedForBubblewrap => write!(f, "{WSL1_BWRAP_WARNING}"),
             #[cfg(not(target_os = "macos"))]
@@ -253,6 +259,8 @@ impl std::error::Error for SandboxTransformError {
             | Self::InvalidSandboxPolicyCwd { source, .. } => Some(source),
             Self::MissingLinuxSandboxExecutable => None,
             Self::EnvironmentNetworkProxy(_) => None,
+            #[cfg(target_os = "macos")]
+            Self::SeatbeltPreparation(_) => None,
             #[cfg(target_os = "linux")]
             Self::Wsl1UnsupportedForBubblewrap => None,
             #[cfg(not(target_os = "macos"))]
@@ -360,6 +368,7 @@ impl SandboxManager {
             SandboxType::MacosSeatbelt => {
                 use crate::seatbelt::CreateSeatbeltCommandArgsParams;
                 use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
+                use crate::seatbelt::SeatbeltPreparationError;
                 use crate::seatbelt::create_seatbelt_command_args_with_profile;
 
                 let pending = pending_sandboxed_request?;
@@ -380,7 +389,14 @@ impl SandboxManager {
                     },
                     self.seatbelt_profile,
                 )
-                .map_err(SandboxTransformError::EnvironmentNetworkProxy)?;
+                .map_err(|err| match err {
+                    SeatbeltPreparationError::FileSystem(message) => {
+                        SandboxTransformError::SeatbeltPreparation(message)
+                    }
+                    SeatbeltPreparationError::EnvironmentNetworkProxy(message) => {
+                        SandboxTransformError::EnvironmentNetworkProxy(message)
+                    }
+                })?;
                 let mut full_command = Vec::with_capacity(1 + args.len());
                 full_command.push(MACOS_PATH_TO_SEATBELT_EXECUTABLE.to_string());
                 full_command.append(&mut args);

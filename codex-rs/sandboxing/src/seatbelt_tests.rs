@@ -63,6 +63,25 @@ fn seatbelt_policy_arg(args: &[String]) -> &str {
         .expect("seatbelt args should include policy text")
 }
 
+#[cfg(target_os = "macos")]
+fn restricted_write_policy(paths: &[&Path]) -> FileSystemSandboxPolicy {
+    let mut entries = vec![FileSystemSandboxEntry::new(
+        FileSystemPath::Special {
+            value: FileSystemSpecialPath::Root,
+        },
+        FileSystemAccessMode::Read,
+    )];
+    entries.extend(paths.iter().map(|path| {
+        FileSystemSandboxEntry::new(
+            AbsolutePathBuf::from_absolute_path(path)
+                .expect("absolute writable path")
+                .into(),
+            FileSystemAccessMode::Write,
+        )
+    }));
+    FileSystemSandboxPolicy::restricted(entries)
+}
+
 fn seatbelt_protected_metadata_name_requirements(root: &Path) -> String {
     let mut root = root.to_string_lossy().to_string();
     while root.len() > 1 && root.ends_with('/') {
@@ -1198,6 +1217,226 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
         String::from_utf8_lossy(&fs::read(&allowed_file).expect("read allowed.txt")),
         "{} should contain the written text",
         allowed_file.display()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn create_seatbelt_args_rejects_symlinked_writable_root() {
+    use std::os::unix::fs::symlink;
+
+    let tmp = TempDir::new().expect("tempdir");
+    let target = tmp.path().join("target");
+    let workspace = tmp.path().join("workspace");
+    fs::create_dir(&target).expect("create target");
+    symlink(&target, &workspace).expect("create symlinked workspace");
+    let policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: Vec::new(),
+        network_access: false,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+
+    let error = create_seatbelt_command_args_for_legacy_policy(
+        vec!["/usr/bin/true".to_string()],
+        &policy,
+        &workspace,
+        /*enforce_managed_network*/ false,
+        /*network*/ None,
+    )
+    .expect_err("symlinked workspace should be rejected");
+
+    assert!(
+        error.contains("symlinked writable roots are not supported"),
+        "unexpected error: {error}"
+    );
+    assert!(
+        error.contains(&workspace.display().to_string()),
+        "error should identify the rejected workspace: {error}"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn seatbelt_prevents_writable_root_replacement() {
+    let tmp = TempDir::new().expect("tempdir");
+    let workspace = tmp.path().join("workspace");
+    let target = tmp.path().join("target");
+    fs::create_dir(&workspace).expect("create workspace");
+    fs::create_dir(&target).expect("create target");
+    let policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: Vec::new(),
+        network_access: false,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+    let shell_command = vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        "rm -rf \"$PWD\" && ln -s \"$1\" \"$PWD\"".to_string(),
+        "sh".to_string(),
+        target.display().to_string(),
+    ];
+    let args = create_seatbelt_command_args_for_legacy_policy(
+        shell_command,
+        &policy,
+        &workspace,
+        /*enforce_managed_network*/ false,
+        /*network*/ None,
+    )
+    .expect("build seatbelt command");
+
+    let policy_text = seatbelt_policy_arg(&args);
+    assert!(
+        policy_text.contains(
+            "(deny file-write-unlink (require-all (literal (param \"WRITABLE_ROOT_0\")) (vnode-type DIRECTORY)))"
+        ),
+        "expected writable-root anchor protection in policy:\n{policy_text}"
+    );
+
+    let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
+        .args(&args)
+        .current_dir(&workspace)
+        .output()
+        .expect("execute seatbelt command");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    let workspace_metadata = fs::symlink_metadata(&workspace).expect("workspace should remain");
+    assert!(
+        workspace_metadata.is_dir() && !workspace_metadata.file_type().is_symlink(),
+        "sandboxed command replaced {}: {stderr}",
+        workspace.display()
+    );
+    assert!(
+        !output.status.success(),
+        "workspace replacement should fail under Seatbelt"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn seatbelt_allows_file_root_replacement_and_deletion() {
+    let tmp = TempDir::new().expect("tempdir");
+    let target = tmp.path().join("target.txt");
+    let replacement = tmp.path().join("replacement.txt");
+    fs::write(&target, "before").expect("write target");
+    fs::write(&replacement, "after").expect("write replacement");
+    let policy = restricted_write_policy(&[target.as_path(), replacement.as_path()]);
+    let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
+        command: vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "mv \"$1\" \"$2\" && test \"$(cat \"$2\")\" = after && rm \"$2\"".to_string(),
+            "sh".to_string(),
+            replacement.display().to_string(),
+            target.display().to_string(),
+        ],
+        file_system_sandbox_policy: &policy,
+        network_sandbox_policy: NetworkSandboxPolicy::Restricted,
+        sandbox_policy_cwd: tmp.path(),
+        enforce_managed_network: false,
+        managed_network: None,
+        environment_id: None,
+        network: None,
+        extra_allow_unix_sockets: &[],
+    })
+    .expect("build seatbelt command");
+
+    let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
+        .args(&args)
+        .current_dir(tmp.path())
+        .output()
+        .expect("execute seatbelt command");
+
+    assert!(
+        output.status.success(),
+        "file replacement and deletion should succeed under Seatbelt: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!target.exists(), "target should have been deleted");
+    assert!(!replacement.exists(), "replacement should have been moved");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn seatbelt_prevents_writable_directory_root_rename() {
+    let tmp = TempDir::new().expect("tempdir");
+    let source = tmp.path().join("source");
+    let destination = tmp.path().join("destination");
+    fs::create_dir(&source).expect("create source");
+    let policy = restricted_write_policy(&[source.as_path(), destination.as_path()]);
+    let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
+        command: vec![
+            "/bin/mv".to_string(),
+            source.display().to_string(),
+            destination.display().to_string(),
+        ],
+        file_system_sandbox_policy: &policy,
+        network_sandbox_policy: NetworkSandboxPolicy::Restricted,
+        sandbox_policy_cwd: tmp.path(),
+        enforce_managed_network: false,
+        managed_network: None,
+        environment_id: None,
+        network: None,
+        extra_allow_unix_sockets: &[],
+    })
+    .expect("build seatbelt command");
+
+    let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
+        .args(&args)
+        .current_dir(tmp.path())
+        .output()
+        .expect("execute seatbelt command");
+
+    assert!(
+        !output.status.success(),
+        "directory-root rename should fail under Seatbelt"
+    );
+    assert!(source.is_dir(), "source directory should remain in place");
+    assert!(
+        !destination.exists(),
+        "destination should not have been created"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn seatbelt_protects_writable_root_created_as_directory() {
+    let tmp = TempDir::new().expect("tempdir");
+    let writable_root = tmp.path().join("writable-root");
+    let policy = restricted_write_policy(&[writable_root.as_path()]);
+    let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
+        command: vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "mkdir \"$1\" && rmdir \"$1\"".to_string(),
+            "sh".to_string(),
+            writable_root.display().to_string(),
+        ],
+        file_system_sandbox_policy: &policy,
+        network_sandbox_policy: NetworkSandboxPolicy::Restricted,
+        sandbox_policy_cwd: tmp.path(),
+        enforce_managed_network: false,
+        managed_network: None,
+        environment_id: None,
+        network: None,
+        extra_allow_unix_sockets: &[],
+    })
+    .expect("build seatbelt command");
+
+    let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
+        .args(&args)
+        .current_dir(tmp.path())
+        .output()
+        .expect("execute seatbelt command");
+
+    assert!(
+        !output.status.success(),
+        "removing a newly created directory root should fail under Seatbelt"
+    );
+    assert!(
+        writable_root.is_dir(),
+        "newly created directory root should remain protected"
     );
 }
 

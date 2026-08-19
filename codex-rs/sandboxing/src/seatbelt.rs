@@ -9,6 +9,7 @@ use codex_protocol::permissions::PROTECTED_METADATA_PATH_NAMES;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::WritableRoot;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_absolute_path::canonicalize_preserving_symlinks;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
@@ -30,6 +31,22 @@ pub(crate) enum MacosSeatbeltProfile {
     #[default]
     Process,
     FileSystemHelper,
+}
+
+#[derive(Debug)]
+pub(crate) enum SeatbeltPreparationError {
+    FileSystem(String),
+    EnvironmentNetworkProxy(String),
+}
+
+impl std::fmt::Display for SeatbeltPreparationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::FileSystem(message) | Self::EnvironmentNetworkProxy(message) => {
+                f.write_str(message)
+            }
+        }
+    }
 }
 
 /// When working with `sandbox-exec`, only consider `sandbox-exec` in `/usr/bin`
@@ -358,19 +375,76 @@ struct SeatbeltAccessRoot {
     protected_metadata_names: Vec<String>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SeatbeltAccessKind {
+    Read,
+    Write,
+}
+
+fn nested_symlink_component(path: &Path) -> Option<&Path> {
+    // Keep top-level macOS aliases such as `/tmp -> /private/tmp` compatible,
+    // but reject symlinks in user-controlled path components.
+    path.ancestors().find(|ancestor| {
+        let Ok(metadata) = std::fs::symlink_metadata(ancestor) else {
+            return false;
+        };
+        metadata.file_type().is_symlink() && ancestor.parent().and_then(Path::parent).is_some()
+    })
+}
+
+fn normalize_writable_root_for_sandbox(
+    root: AbsolutePathBuf,
+) -> Result<AbsolutePathBuf, SeatbeltPreparationError> {
+    if let Some(symlink) = nested_symlink_component(root.as_path()) {
+        return Err(SeatbeltPreparationError::FileSystem(format!(
+            "writable root {} contains symlink component {}; symlinked writable roots are not supported",
+            root.display(),
+            symlink.display()
+        )));
+    }
+
+    let normalized = canonicalize_preserving_symlinks(root.as_path()).map_err(|err| {
+        SeatbeltPreparationError::FileSystem(format!(
+            "failed to normalize writable root {} for Seatbelt: {err}",
+            root.display()
+        ))
+    })?;
+    AbsolutePathBuf::from_absolute_path(normalized).map_err(|err| {
+        SeatbeltPreparationError::FileSystem(format!(
+            "failed to normalize writable root {} for Seatbelt: {err}",
+            root.display()
+        ))
+    })
+}
+
 fn build_seatbelt_access_policy(
-    action: &str,
-    param_prefix: &str,
+    access_kind: SeatbeltAccessKind,
     roots: Vec<SeatbeltAccessRoot>,
-) -> (String, Vec<(String, PathBuf)>) {
+) -> Result<(String, Vec<(String, PathBuf)>), SeatbeltPreparationError> {
     let mut policy_components = Vec::new();
+    let mut root_anchor_denies = Vec::new();
     let mut params = Vec::new();
+    let (action, param_prefix) = match access_kind {
+        SeatbeltAccessKind::Read => ("file-read*", "READABLE_ROOT"),
+        SeatbeltAccessKind::Write => ("file-write*", "WRITABLE_ROOT"),
+    };
 
     for (index, access_root) in roots.into_iter().enumerate() {
-        let root =
-            normalize_path_for_sandbox(access_root.root.as_path()).unwrap_or(access_root.root);
+        let root = match access_kind {
+            SeatbeltAccessKind::Read => {
+                normalize_path_for_sandbox(access_root.root.as_path()).unwrap_or(access_root.root)
+            }
+            SeatbeltAccessKind::Write => normalize_writable_root_for_sandbox(access_root.root)?,
+        };
         let root_param = format!("{param_prefix}_{index}");
         params.push((root_param.clone(), root.clone().into_path_buf()));
+        if access_kind == SeatbeltAccessKind::Write {
+            // A sandboxed process must not be able to replace an authority
+            // boundary that will be reused to build the next sandbox policy.
+            root_anchor_denies.push(format!(
+                "(deny file-write-unlink (require-all (literal (param \"{root_param}\")) (vnode-type DIRECTORY)))"
+            ));
+        }
 
         if access_root.excluded_subpaths.is_empty()
             && access_root.protected_metadata_names.is_empty()
@@ -406,12 +480,14 @@ fn build_seatbelt_access_policy(
     }
 
     if policy_components.is_empty() {
-        (String::new(), Vec::new())
+        Ok((String::new(), Vec::new()))
     } else {
-        (
-            format!("(allow {action}\n{}\n)", policy_components.join(" ")),
-            params,
-        )
+        let mut policies = vec![format!(
+            "(allow {action}\n{}\n)",
+            policy_components.join(" ")
+        )];
+        policies.extend(root_anchor_denies);
+        Ok((policies.join("\n"), params))
     }
 }
 
@@ -633,12 +709,13 @@ pub fn create_seatbelt_command_args(
     args: CreateSeatbeltCommandArgsParams<'_>,
 ) -> Result<Vec<String>, String> {
     create_seatbelt_command_args_with_profile(args, MacosSeatbeltProfile::Process)
+        .map_err(|err| err.to_string())
 }
 
 pub(crate) fn create_seatbelt_command_args_with_profile(
     args: CreateSeatbeltCommandArgsParams<'_>,
     profile: MacosSeatbeltProfile,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, SeatbeltPreparationError> {
     let CreateSeatbeltCommandArgsParams {
         command,
         file_system_sandbox_policy,
@@ -663,19 +740,17 @@ pub(crate) fn create_seatbelt_command_args_with_profile(
                 )
             } else {
                 build_seatbelt_access_policy(
-                    "file-write*",
-                    "WRITABLE_ROOT",
+                    SeatbeltAccessKind::Write,
                     vec![SeatbeltAccessRoot {
                         root: root_absolute_path(),
                         excluded_subpaths: unreadable_roots.clone(),
                         protected_metadata_names: Vec::new(),
                     }],
-                )
+                )?
             }
         } else {
             build_seatbelt_access_policy(
-                "file-write*",
-                "WRITABLE_ROOT",
+                SeatbeltAccessKind::Write,
                 file_system_sandbox_policy
                     .get_writable_roots_with_cwd(sandbox_policy_cwd)
                     .into_iter()
@@ -689,7 +764,7 @@ pub(crate) fn create_seatbelt_command_args_with_profile(
                         excluded_subpaths: root.read_only_subpaths,
                     })
                     .collect(),
-            )
+            )?
         };
 
     let (file_read_policy, file_read_dir_params) =
@@ -701,14 +776,13 @@ pub(crate) fn create_seatbelt_command_args_with_profile(
                 )
             } else {
                 let (policy, params) = build_seatbelt_access_policy(
-                    "file-read*",
-                    "READABLE_ROOT",
+                    SeatbeltAccessKind::Read,
                     vec![SeatbeltAccessRoot {
                         root: root_absolute_path(),
                         excluded_subpaths: unreadable_roots,
                         protected_metadata_names: Vec::new(),
                     }],
-                );
+                )?;
                 (
                     format!("; allow read-only file operations\n{policy}"),
                     params,
@@ -716,8 +790,7 @@ pub(crate) fn create_seatbelt_command_args_with_profile(
             }
         } else {
             let (policy, params) = build_seatbelt_access_policy(
-                "file-read*",
-                "READABLE_ROOT",
+                SeatbeltAccessKind::Read,
                 file_system_sandbox_policy
                     .get_readable_roots_with_cwd(sandbox_policy_cwd)
                     .into_iter()
@@ -731,7 +804,7 @@ pub(crate) fn create_seatbelt_command_args_with_profile(
                         root,
                     })
                     .collect(),
-            );
+            )?;
             if policy.is_empty() {
                 (String::new(), params)
             } else {
@@ -747,7 +820,8 @@ pub(crate) fn create_seatbelt_command_args_with_profile(
         network,
         environment_id,
         extra_allow_unix_sockets,
-    )?;
+    )
+    .map_err(SeatbeltPreparationError::EnvironmentNetworkProxy)?;
     let network_policy =
         dynamic_network_policy_for_network(network_sandbox_policy, enforce_managed_network, &proxy);
 
