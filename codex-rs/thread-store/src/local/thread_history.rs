@@ -328,7 +328,10 @@ SET
             FROM thread_items
             WHERE thread_id = ?
               AND turn_id = ?
-              AND json_extract(item_json, '$.type') = 'userMessage'
+              AND (
+                item_type = 'userMessage'
+                OR (item_type = '' AND json_extract(item_json, '$.type') = 'userMessage')
+              )
             ORDER BY rollout_ordinal
             LIMIT 1
         )
@@ -339,7 +342,10 @@ SET
             FROM thread_items
             WHERE thread_id = ?
               AND turn_id = ?
-              AND json_extract(item_json, '$.type') = 'agentMessage'
+              AND (
+                item_type = 'agentMessage'
+                OR (item_type = '' AND json_extract(item_json, '$.type') = 'agentMessage')
+              )
               AND json_extract(item_json, '$.phase') = 'final_answer'
             ORDER BY rollout_ordinal DESC
             LIMIT 1
@@ -350,7 +356,10 @@ SET
                 FROM thread_items
                 WHERE thread_id = ?
                   AND turn_id = ?
-                  AND json_extract(item_json, '$.type') = 'agentMessage'
+                  AND (
+                    item_type = 'agentMessage'
+                    OR (item_type = '' AND json_extract(item_json, '$.type') = 'agentMessage')
+                  )
                   AND json_extract(item_json, '$.phase') IS NULL
                 ORDER BY rollout_ordinal DESC
                 LIMIT 1
