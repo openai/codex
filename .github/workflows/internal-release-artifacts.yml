@@ -1,0 +1,278 @@
+name: internal-release-artifacts
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build internal release artifacts - ${{ matrix.target }}
+    runs-on: ${{ matrix.runs_on || matrix.runner }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      BASE_BINARIES: "codex codex-app-server codex-code-mode-host"
+      WINDOWS_ONLY_BINARIES: "codex-command-runner codex-windows-sandbox-setup"
+      # macOS symbol extraction needs packed dSYM bundles before binaries are stripped.
+      CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO: ${{ contains(matrix.target, 'apple-darwin') && 'packed' || 'off' }}
+
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - runner: macos-15-xlarge
+            target: aarch64-apple-darwin
+          - runner: macos-15-xlarge
+            target: x86_64-apple-darwin
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            runs_on:
+              group: ${{ github.event.repository.name }}-runners
+              labels: ${{ github.event.repository.name }}-linux-x64
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            runs_on:
+              group: ${{ github.event.repository.name }}-runners
+              labels: ${{ github.event.repository.name }}-linux-arm64
+          - runner: windows-x64
+            target: x86_64-pc-windows-msvc
+            runs_on:
+              group: ${{ github.event.repository.name }}-runners
+              labels: ${{ github.event.repository.name }}-windows-x64
+          # TODO(anp): Restore Windows ARM64 once faster native builders are provisioned.
+          # - runner: windows-11-arm
+          #   target: aarch64-pc-windows-msvc
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Select release binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          needed_binaries="$BASE_BINARIES"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            needed_binaries+=" $WINDOWS_ONLY_BINARIES"
+          fi
+          echo "NEEDED_BINARIES=$needed_binaries" >> "$GITHUB_ENV"
+
+      - uses: ./.github/actions/setup-ci
+
+      - name: Set up Python 3.12 (Linux ARM64)
+        if: ${{ matrix.target == 'aarch64-unknown-linux-musl' }}
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Install Linux build dependencies
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends binutils make pkg-config libcap-dev
+
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Use hermetic Cargo home (musl)
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo_home="${GITHUB_WORKSPACE}/.cargo-home"
+          mkdir -p "${cargo_home}/bin"
+          echo "CARGO_HOME=${cargo_home}" >> "$GITHUB_ENV"
+          echo "${cargo_home}/bin" >> "$GITHUB_PATH"
+          : > "${cargo_home}/config.toml"
+
+      - name: Install Zig
+        if: ${{ runner.os == 'Linux' }}
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.14.0
+          use-cache: false
+
+      - name: Install musl build tools
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
+
+      - name: Disable aws-lc jitter entropy (musl)
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Match public releases: aws-lc's jitter entropy path does not work
+          # reliably on musl builders, so disable it globally and per target.
+          echo "AWS_LC_SYS_NO_JITTER_ENTROPY=1" >> "$GITHUB_ENV"
+          target_no_jitter="AWS_LC_SYS_NO_JITTER_ENTROPY_${{ matrix.target }}"
+          target_no_jitter="${target_no_jitter//-/_}"
+          echo "${target_no_jitter}=1" >> "$GITHUB_ENV"
+
+      - name: Configure rusty_v8 artifact overrides and verify checksums
+        uses: ./public/.github/actions/setup-rusty-v8
+        with:
+          target: ${{ matrix.target }}
+
+      - name: Configure MSVC environment
+        if: ${{ runner.os == 'Windows' }}
+        uses: ./public/.github/actions/setup-msvc-env
+        with:
+          target: ${{ matrix.target }}
+
+      - name: Build bwrap and export digest
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --target "${{ matrix.target }}" --release --timings --bin bwrap
+
+          bwrap_path="${CARGO_TARGET_DIR}/${{ matrix.target }}/release/bwrap"
+          # Codex embeds this digest at build time and verifies the packaged
+          # bwrap at runtime, so hash its final stripped bytes first.
+          strip --strip-debug --strip-unneeded "$bwrap_path"
+          digest="$(sha256sum "$bwrap_path" | awk '{print $1}')"
+          echo "CODEX_BWRAP_SHA256=${digest}" >> "$GITHUB_ENV"
+
+      - name: Build Codex package binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          build_args=()
+          for binary in $NEEDED_BINARIES; do
+            build_args+=(--bin "$binary")
+          done
+          # SQLite intrinsics can emit instructions unsupported by older x64
+          # CPUs, causing Windows release binaries to crash during startup.
+          if [[ "${{ matrix.target }}" == "x86_64-pc-windows-msvc" ]]; then
+            export LIBSQLITE3_FLAGS=SQLITE_DISABLE_INTRINSIC
+          fi
+          cargo build --target "${{ matrix.target }}" --release --timings "${build_args[@]}"
+
+      - name: Normalize Windows PDB filenames
+        if: ${{ runner.os == 'Windows' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_dir="${CARGO_TARGET_DIR}/${{ matrix.target }}/release"
+          for binary in $NEEDED_BINARIES; do
+            expected_pdb="${release_dir}/${binary}.pdb"
+            if [[ -f "$expected_pdb" ]]; then
+              continue
+            fi
+
+            underscored_pdb="${release_dir}/${binary//-/_}.pdb"
+            if [[ ! -f "$underscored_pdb" ]]; then
+              echo "PDB for ${binary} not found at ${expected_pdb} or ${underscored_pdb}" >&2
+              exit 1
+            fi
+            cp "$underscored_pdb" "$expected_pdb"
+          done
+
+      - name: Download packaged zsh manifest
+        if: ${{ runner.os != 'Windows' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL \
+            "https://github.com/openai/codex/releases/download/codex-zsh-v0.1.0/codex-zsh" \
+            -o "${RUNNER_TEMP}/codex-zsh"
+
+      - name: Archive symbols and strip binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash "${CODEX_REPO_ROOT}/public/.github/scripts/archive-release-symbols-and-strip-binaries.sh" \
+            --target "${{ matrix.target }}" \
+            --artifact-name "${{ matrix.target }}" \
+            --release-dir "${CARGO_TARGET_DIR}/${{ matrix.target }}/release" \
+            --archive-dir "../symbols-dist/${{ matrix.target }}" \
+            --binaries "$NEEDED_BINARIES"
+
+      - name: Build Codex package archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="${{ matrix.target }}"
+          release_dir="${CARGO_TARGET_DIR}/${target}/release"
+          archive_dir="${GITHUB_WORKSPACE}/dist/${target}"
+          exe_suffix=""
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            exe_suffix=".exe"
+          fi
+
+          # Branch names can contain characters that package manifest SemVer rejects.
+          branch_slug="$(printf '%s' "$GITHUB_REF_NAME" | LC_ALL=C sed -E 's/[^A-Za-z0-9]+/-/g; s/^-+//; s/-+$//')"
+          branch_slug="${branch_slug:0:48}"
+          branch_slug="${branch_slug%-}"
+          branch_slug="${branch_slug:-unknown}"
+
+          package_args=(
+            --target "$target"
+            --code-mode-host-bin "${release_dir}/codex-code-mode-host${exe_suffix}"
+            --cargo-profile release
+            --package-version "0.0.0-internal.${branch_slug}-${GITHUB_SHA}"
+            --force
+          )
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            package_args+=(--bwrap-bin "${release_dir}/bwrap")
+          fi
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            package_args+=(
+              --codex-command-runner-bin "${release_dir}/codex-command-runner.exe"
+              --codex-windows-sandbox-setup-bin "${release_dir}/codex-windows-sandbox-setup.exe"
+            )
+          else
+            package_args+=(--zsh-manifest "${RUNNER_TEMP}/codex-zsh")
+          fi
+
+          python3 "${CODEX_REPO_ROOT}/public/scripts/build_codex_package.py" \
+            "${package_args[@]}" \
+            --variant codex \
+            --entrypoint-bin "${release_dir}/codex${exe_suffix}" \
+            --package-dir "${RUNNER_TEMP}/codex-package-${target}" \
+            --archive-output "${archive_dir}/codex-package-${target}.tar.gz" \
+            --archive-output "${archive_dir}/codex-package-${target}.tar.zst"
+
+          python3 "${CODEX_REPO_ROOT}/public/scripts/build_codex_package.py" \
+            "${package_args[@]}" \
+            --variant codex-app-server \
+            --entrypoint-bin "${release_dir}/codex-app-server${exe_suffix}" \
+            --package-dir "${RUNNER_TEMP}/codex-app-server-package-${target}" \
+            --archive-output "${archive_dir}/codex-app-server-package-${target}.tar.gz" \
+            --archive-output "${archive_dir}/codex-app-server-package-${target}.tar.zst"
+
+      - name: Upload Codex symbols archive
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: internal-codex-symbols-${{ matrix.target }}-internal-${{ github.sha }}
+          path: ${{ github.workspace }}/symbols-dist/${{ matrix.target }}/codex-symbols-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
+      - name: Upload Codex package archives
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: internal-codex-package-${{ matrix.target }}-internal-${{ github.sha }}
+          path: |
+            ${{ github.workspace }}/dist/${{ matrix.target }}/codex-package-${{ matrix.target }}.tar.gz
+            ${{ github.workspace }}/dist/${{ matrix.target }}/codex-package-${{ matrix.target }}.tar.zst
+          if-no-files-found: error
+
+      - name: Upload Codex app-server package archives
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: internal-codex-app-server-package-${{ matrix.target }}-internal-${{ github.sha }}
+          path: |
+            ${{ github.workspace }}/dist/${{ matrix.target }}/codex-app-server-package-${{ matrix.target }}.tar.gz
+            ${{ github.workspace }}/dist/${{ matrix.target }}/codex-app-server-package-${{ matrix.target }}.tar.zst
+          if-no-files-found: error
