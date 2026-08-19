@@ -33,6 +33,7 @@ pub(crate) struct GuardianV2Config {
     pub(crate) max_action_tokens: usize,
     pub(crate) max_classifier_instruction_tokens: usize,
     pub(crate) max_parent_compaction_tokens: usize,
+    pub(crate) sandboxed_exec_commands: bool,
     pub(crate) transcript: TranscriptConfig,
 }
 
@@ -233,6 +234,11 @@ impl GuardianV2Config {
             max_action_tokens,
             max_classifier_instruction_tokens,
             max_parent_compaction_tokens,
+            sandboxed_exec_commands: configured
+                .review_scope
+                .as_ref()
+                .and_then(|review_scope| review_scope.sandboxed_exec_commands)
+                .unwrap_or(false),
             transcript: TranscriptConfig {
                 sources: transcript_config
                     .and_then(|transcript| transcript.sources.clone())

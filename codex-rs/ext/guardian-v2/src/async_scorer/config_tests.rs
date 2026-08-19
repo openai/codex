@@ -1,4 +1,5 @@
 use codex_features::GuardianV2ConfigToml;
+use codex_features::GuardianV2ReviewScopeConfigToml;
 use codex_protocol::openai_models::GuardianV2ModelConfig;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::TruncationPolicy;
@@ -7,6 +8,26 @@ use pretty_assertions::assert_eq;
 use super::DEFAULT_CLASSIFIER_INSTRUCTIONS;
 use super::GuardianV2Config;
 use crate::async_scorer::transcript::truncate_entry;
+
+#[test]
+fn sandboxed_exec_commands_are_excluded_by_default() {
+    let config = GuardianV2Config::from_overrides(GuardianV2ConfigToml::default()).unwrap();
+
+    assert!(!config.sandboxed_exec_commands);
+}
+
+#[test]
+fn sandboxed_exec_commands_can_be_included() {
+    let config = GuardianV2Config::from_overrides(GuardianV2ConfigToml {
+        review_scope: Some(GuardianV2ReviewScopeConfigToml {
+            sandboxed_exec_commands: Some(true),
+        }),
+        ..Default::default()
+    })
+    .unwrap();
+
+    assert!(config.sandboxed_exec_commands);
+}
 
 #[test]
 fn template_policy_is_substituted_before_the_single_truncation() {

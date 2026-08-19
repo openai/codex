@@ -49,6 +49,32 @@ struct GuardianAction {
     payload: ToolPayload,
 }
 
+fn should_classify_tool(
+    tool_name: &ToolName,
+    payload: &ToolPayload,
+    sandboxed_exec_commands: bool,
+) -> bool {
+    if sandboxed_exec_commands
+        || !tool_name.is_default_namespace()
+        || !matches!(tool_name.name.as_str(), "exec_command" | "shell_command")
+    {
+        return true;
+    }
+
+    matches!(
+        payload,
+        ToolPayload::Function { arguments }
+            if serde_json::from_str::<serde_json::Value>(arguments)
+                .ok()
+                .is_some_and(|arguments| {
+                    arguments
+                        .get("sandbox_permissions")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("require_escalated")
+                })
+    )
+}
+
 impl GuardianAction {
     fn render(self, max_action_tokens: usize) -> serde_json::Result<String> {
         let arguments = match self.payload {
@@ -401,6 +427,16 @@ impl GuardianV2Extension {
         let Some(score_progress) = input.thread_store.get::<GuardianV2ScoreProgress>() else {
             return;
         };
+        if !should_classify_tool(
+            input.tool_name,
+            input.payload,
+            guardian_config.sandboxed_exec_commands,
+        ) {
+            score_progress
+                .latest_tool_call
+                .fetch_add(/*val*/ 1, Ordering::Relaxed);
+            return;
+        }
         let metrics = score_progress.metrics.clone();
         let sampled_at = SystemTime::now();
         let parent_model = input.thread_store.get::<ModelInfo>();

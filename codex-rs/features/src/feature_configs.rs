@@ -108,6 +108,15 @@ pub struct GuardianV2TranscriptConfigToml {
     pub max_recent_non_user_entries: Option<usize>,
 }
 
+/// Optional tool-call categories available to the Guardian v2 classifier.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GuardianV2ReviewScopeConfigToml {
+    /// Include sandboxed shell command calls in Guardian v2 classification.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sandboxed_exec_commands: Option<bool>,
+}
+
 /// User-configurable prompt, approval, and context settings for Guardian v2.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -132,6 +141,8 @@ pub struct GuardianV2ConfigToml {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 100, max = 100000))]
     pub max_parent_compaction_tokens: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_scope: Option<GuardianV2ReviewScopeConfigToml>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transcript: Option<GuardianV2TranscriptConfigToml>,
 }

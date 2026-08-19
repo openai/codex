@@ -57,6 +57,7 @@ use super::REVIEW_FALLBACK_METRIC;
 use super::StrictReviewReason;
 use super::TOOL_CALL_LAG_METRIC;
 use super::encrypted_parent_compaction;
+use super::should_classify_tool;
 use crate::async_scorer::config::DEFAULT_MODEL_CONTEXT_ITEM_TOKENS;
 use crate::async_scorer::config::DEFAULT_PARENT_COMPACTION_TOKENS;
 use crate::async_scorer::sampler::CLASSIFICATION_TOKEN_USAGE_METRIC;
@@ -254,6 +255,91 @@ fn fail_closed_score_preserves_classification_order() {
         thread_store.get::<SecurityRiskScore>().as_deref(),
         Some(&fail_closed_score)
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sandboxed_shell_classification_respects_review_scope() -> Result<()> {
+    let sandboxed = ToolPayload::Function {
+        arguments: r#"{"cmd":"pwd"}"#.to_owned(),
+    };
+    let additional_permissions = ToolPayload::Function {
+        arguments: r#"{"cmd":"pwd","sandbox_permissions":"with_additional_permissions"}"#
+            .to_owned(),
+    };
+    let unsandboxed = ToolPayload::Function {
+        arguments: r#"{"cmd":"pwd","sandbox_permissions":"require_escalated"}"#.to_owned(),
+    };
+
+    for tool_name in ["exec_command", "shell_command"] {
+        let tool_name = ToolName::plain(tool_name);
+        assert!(!should_classify_tool(
+            &tool_name, &sandboxed, /*sandboxed_exec_commands*/ false
+        ));
+        assert!(!should_classify_tool(
+            &tool_name,
+            &additional_permissions,
+            /*sandboxed_exec_commands*/ false
+        ));
+        assert!(should_classify_tool(
+            &tool_name,
+            &unsandboxed,
+            /*sandboxed_exec_commands*/ false
+        ));
+        assert!(should_classify_tool(
+            &tool_name, &sandboxed, /*sandboxed_exec_commands*/ true
+        ));
+    }
+    assert!(should_classify_tool(
+        &ToolName::plain("read_file"),
+        &sandboxed,
+        /*sandboxed_exec_commands*/ false
+    ));
+    assert!(should_classify_tool(
+        &ToolName::namespaced("mcp", "exec_command"),
+        &sandboxed,
+        /*sandboxed_exec_commands*/ false
+    ));
+    skip_if_no_network!(Ok(()));
+
+    let fixture = GuardianFailureFixture::new().await?;
+    let thread_store = fixture.test.codex.thread_extension_data();
+    let score_progress = thread_store
+        .get::<GuardianV2ScoreProgress>()
+        .expect("Guardian v2 should track score progress per thread");
+    let latest_scored_tool_call = score_progress
+        .latest_scored_tool_call
+        .load(Ordering::Acquire);
+    let turn_store = ExtensionData::new("turn-1");
+    let tool_name = ToolName::plain("exec_command");
+    let payload = ToolPayload::Function {
+        arguments: r#"{"cmd":"pwd"}"#.to_owned(),
+    };
+
+    fixture.registry.tool_lifecycle_contributors()[0]
+        .on_tool_start(ToolStartInput {
+            session_store: &fixture.session_store,
+            thread_store,
+            turn_store: &turn_store,
+            turn_id: "turn-1",
+            call_id: "call-2",
+            tool_name: &tool_name,
+            payload: &payload,
+            conversation_history: Arc::new(TestConversationHistory(Vec::new())),
+            source: ToolCallSource::Direct,
+        })
+        .await;
+
+    assert_eq!(
+        score_progress.latest_tool_call.load(Ordering::Acquire),
+        latest_scored_tool_call + 1
+    );
+    assert_eq!(
+        score_progress
+            .latest_scored_tool_call
+            .load(Ordering::Acquire),
+        latest_scored_tool_call
+    );
+    Ok(())
 }
 
 #[test]

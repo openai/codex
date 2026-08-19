@@ -1299,6 +1299,9 @@
         "reasoning_effort": {
           "$ref": "#/definitions/ReasoningEffort"
         },
+        "review_scope": {
+          "$ref": "#/definitions/GuardianV2ReviewScopeConfigToml"
+        },
         "review_threshold": {
           "format": "double",
           "maximum": 1.0,
@@ -1307,6 +1310,17 @@
         },
         "transcript": {
           "$ref": "#/definitions/GuardianV2TranscriptConfigToml"
+        }
+      },
+      "type": "object"
+    },
+    "GuardianV2ReviewScopeConfigToml": {
+      "additionalProperties": false,
+      "description": "Optional tool-call categories available to the Guardian v2 classifier.",
+      "properties": {
+        "sandboxed_exec_commands": {
+          "description": "Include sandboxed shell command calls in Guardian v2 classification.",
+          "type": "boolean"
         }
       },
       "type": "object"

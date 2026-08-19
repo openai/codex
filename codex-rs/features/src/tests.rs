@@ -162,6 +162,9 @@ max_action_tokens = 512
 max_classifier_instruction_tokens = 256
 max_parent_compaction_tokens = 384
 
+[guardianv2.review_scope]
+sandboxed_exec_commands = true
+
 [guardianv2.transcript]
 sources = ["tool_outputs", "reasoning"]
 include_images = true
@@ -185,6 +188,9 @@ max_recent_non_user_entries = 12
             max_action_tokens: Some(512),
             max_classifier_instruction_tokens: Some(256),
             max_parent_compaction_tokens: Some(384),
+            review_scope: Some(crate::GuardianV2ReviewScopeConfigToml {
+                sandboxed_exec_commands: Some(true),
+            }),
             transcript: Some(crate::GuardianV2TranscriptConfigToml {
                 sources: Some(vec![
                     crate::GuardianV2TranscriptSource::ToolOutputs,
