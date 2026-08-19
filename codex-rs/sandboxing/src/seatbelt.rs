@@ -528,29 +528,38 @@ fn build_seatbelt_unreadable_glob_policy(
     cwd: &Path,
 ) -> String {
     // Seatbelt does not understand the filesystem policy's glob syntax directly.
-    // Convert each unreadable pattern into an anchored regex deny rule and apply
-    // it to both reads and unlink-style writes so a denied path cannot be probed
-    // through destructive filesystem operations.
+    // Convert each unreadable pattern into anchored read/write denies. Also deny
+    // renaming directories that could contain matches so the protected files
+    // cannot be moved beyond the path where the glob applies.
     let unreadable_globs = file_system_sandbox_policy.get_unreadable_globs_with_cwd(cwd);
     if unreadable_globs.is_empty() {
         return String::new();
     }
-
     let mut policy_components = Vec::new();
     for pattern in unreadable_globs {
-        let mut regexes = BTreeSet::new();
-        if let Some(regex) = seatbelt_regex_for_unreadable_glob(&pattern) {
-            regexes.insert(regex);
+        let mut patterns = BTreeSet::from([pattern.clone()]);
+        if let Some(pattern) = canonicalize_glob_static_prefix_for_sandbox(&pattern) {
+            patterns.insert(pattern);
         }
-        if let Some(pattern) = canonicalize_glob_static_prefix_for_sandbox(&pattern)
-            && let Some(regex) = seatbelt_regex_for_unreadable_glob(&pattern)
-        {
-            regexes.insert(regex);
-        }
-        for regex in regexes {
+        for pattern in patterns {
+            let Some(regex) = seatbelt_regex_for_unreadable_glob(&pattern) else {
+                continue;
+            };
             let regex = regex.replace('"', "\\\"");
             policy_components.push(format!(r#"(deny file-read* (regex #"{regex}"))"#));
-            policy_components.push(format!(r#"(deny file-write-unlink (regex #"{regex}"))"#));
+            policy_components.push(format!(r#"(deny file-write* (regex #"{regex}"))"#));
+            for ancestor in Path::new(&pattern).ancestors().skip(1) {
+                let Some(regex) = ancestor
+                    .to_str()
+                    .and_then(|path| seatbelt_regex_for_glob(path, GlobMatch::Exact))
+                else {
+                    continue;
+                };
+                let regex = regex.replace('"', "\\\"");
+                policy_components.push(format!(
+                    r#"(deny file-write-unlink (require-all (vnode-type DIRECTORY) (regex #"{regex}")))"#
+                ));
+            }
         }
     }
 
@@ -560,7 +569,7 @@ fn build_seatbelt_unreadable_glob_policy(
 fn canonicalize_glob_static_prefix_for_sandbox(pattern: &str) -> Option<String> {
     let first_glob_index = pattern
         .char_indices()
-        .find_map(|(index, ch)| matches!(ch, '*' | '?' | '[' | ']').then_some(index));
+        .find_map(|(index, ch)| matches!(ch, '*' | '?' | '[' | ']' | '{' | '\\').then_some(index));
     let Some(first_glob_index) = first_glob_index else {
         return normalize_path_for_sandbox(Path::new(pattern))
             .map(|path| path.to_string_lossy().to_string());
@@ -583,18 +592,30 @@ fn canonicalize_glob_static_prefix_for_sandbox(pattern: &str) -> Option<String> 
     (normalized_pattern != pattern).then_some(normalized_pattern)
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum GlobMatch {
+    Exact,
+    Subtree,
+}
+
 fn seatbelt_regex_for_unreadable_glob(pattern: &str) -> Option<String> {
+    seatbelt_regex_for_glob(pattern, GlobMatch::Subtree)
+}
+
+fn seatbelt_regex_for_glob(pattern: &str, glob_match: GlobMatch) -> Option<String> {
     if pattern.is_empty() {
         return None;
     }
 
     // Translate the supported git-style glob subset into a Seatbelt regex:
     // `*` and `?` stay within one path component, `**/` can consume zero or
-    // more components, and closed character classes remain character classes.
-    // A pattern with no glob metacharacters is treated as exact path plus subtree.
+    // more components, closed character classes remain character classes,
+    // brace groups become alternations, and backslashes escape metacharacters.
+    // Literal patterns also match descendants unless exact matching is requested.
     let mut regex = String::from("^");
     let mut chars = pattern.chars().collect::<VecDeque<_>>();
     let mut saw_glob = false;
+    let mut alternate_depth = 0;
 
     while let Some(ch) = chars.pop_front() {
         match ch {
@@ -616,6 +637,23 @@ fn seatbelt_regex_for_unreadable_glob(pattern: &str) -> Option<String> {
                 saw_glob = true;
                 regex.push_str("[^/]");
             }
+            '\\' => {
+                if let Some(escaped) = chars.pop_front() {
+                    regex.push_str(&regex_lite::escape(&escaped.to_string()));
+                } else {
+                    regex.push_str("\\\\");
+                }
+            }
+            '{' => {
+                saw_glob = true;
+                alternate_depth += 1;
+                regex.push('(');
+            }
+            '}' if alternate_depth > 0 => {
+                alternate_depth -= 1;
+                regex.push(')');
+            }
+            ',' if alternate_depth > 0 => regex.push('|'),
             '[' => {
                 saw_glob = true;
                 let mut class = Vec::new();
@@ -660,7 +698,14 @@ fn seatbelt_regex_for_unreadable_glob(pattern: &str) -> Option<String> {
         }
     }
 
-    if !saw_glob {
+    // Path ancestors can end inside a brace alternative when a branch contains
+    // a separator, such as `/repo/{private/nested,other}` -> `/repo/{private`.
+    // Close those partial groups so their directory prefixes remain protected.
+    for _ in 0..alternate_depth {
+        regex.push(')');
+    }
+
+    if !saw_glob && glob_match == GlobMatch::Subtree {
         regex.push_str("(/.*)?");
     }
     regex.push('$');
@@ -730,6 +775,31 @@ pub(crate) fn create_seatbelt_command_args_with_profile(
 
     let unreadable_roots =
         file_system_sandbox_policy.get_unreadable_roots_with_cwd(sandbox_policy_cwd);
+    let writable_roots = file_system_sandbox_policy.get_writable_roots_with_cwd(sandbox_policy_cwd);
+    // Protect ancestors of read-only paths so renaming a writable directory
+    // cannot move its descendants outside their policy carveouts.
+    let mut protected_ancestors = BTreeSet::new();
+    for writable_root in &writable_roots {
+        let root = normalize_path_for_sandbox(writable_root.root.as_path())
+            .unwrap_or_else(|| writable_root.root.clone());
+        for protected_directory in writable_root.read_only_subpaths.iter().filter_map(|path| {
+            normalize_path_for_sandbox(path.as_path())
+                .unwrap_or_else(|| path.clone())
+                .parent()
+        }) {
+            for ancestor in protected_directory.ancestors() {
+                if !ancestor.as_path().starts_with(root.as_path()) {
+                    break;
+                }
+                protected_ancestors.insert(ancestor);
+            }
+        }
+    }
+    let protected_ancestor_params: Vec<(String, PathBuf)> = protected_ancestors
+        .into_iter()
+        .enumerate()
+        .map(|(index, path)| (format!("PROTECTED_ANCESTOR_{index}"), path.into_path_buf()))
+        .collect();
     let (file_write_policy, file_write_dir_params) =
         if file_system_sandbox_policy.has_full_disk_write_access() {
             if unreadable_roots.is_empty() {
@@ -751,8 +821,7 @@ pub(crate) fn create_seatbelt_command_args_with_profile(
         } else {
             build_seatbelt_access_policy(
                 SeatbeltAccessKind::Write,
-                file_system_sandbox_policy
-                    .get_writable_roots_with_cwd(sandbox_policy_cwd)
+                writable_roots
                     .into_iter()
                     .map(|root| SeatbeltAccessRoot {
                         protected_metadata_names: protected_metadata_names_for_writable_root(
@@ -832,7 +901,6 @@ pub(crate) fn create_seatbelt_command_args_with_profile(
         MACOS_SEATBELT_BASE_POLICY.to_string(),
         file_read_policy,
         file_write_policy,
-        deny_read_policy,
         network_policy,
     ];
     if include_platform_defaults {
@@ -841,12 +909,24 @@ pub(crate) fn create_seatbelt_command_args_with_profile(
             policy_sections.push(MACOS_PROCESS_APPLICATIONS_READ_POLICY.to_string());
         }
     }
+    policy_sections.push(deny_read_policy);
+    // Renaming an allowed ancestor relocates its protected descendants past
+    // their pathname carveouts. Keep these denies last so no broader allowance
+    // can reopen the unlink operation used by rename.
+    policy_sections.extend(
+        protected_ancestor_params.iter().map(|(key, _)| {
+            format!(
+                "(deny file-write-unlink (require-all (vnode-type DIRECTORY) (literal (param \"{key}\"))))"
+            )
+        }),
+    );
 
     let full_policy = policy_sections.join("\n");
 
     let dir_params = [
         file_read_dir_params,
         file_write_dir_params,
+        protected_ancestor_params,
         unix_socket_dir_params(&proxy),
     ]
     .concat();

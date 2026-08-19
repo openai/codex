@@ -1,4 +1,5 @@
 use super::CreateSeatbeltCommandArgsParams;
+use super::GlobMatch;
 use super::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
 use super::MACOS_SEATBELT_BASE_POLICY;
 use super::MacosSeatbeltProfile;
@@ -10,6 +11,7 @@ use super::create_seatbelt_command_args_for_legacy_policy;
 use super::create_seatbelt_command_args_with_profile;
 use super::dynamic_network_policy;
 use super::normalize_path_for_sandbox;
+use super::seatbelt_regex_for_glob;
 use super::seatbelt_regex_for_unreadable_glob;
 use super::unix_socket_dir_params;
 use super::unix_socket_policy;
@@ -358,6 +360,207 @@ fn explicit_unreadable_paths_are_excluded_from_full_disk_read_and_write_access()
 }
 
 #[test]
+fn nested_protected_paths_cannot_be_bypassed_by_renaming_ancestors() {
+    #[derive(Clone, Copy, Debug)]
+    enum Protection {
+        Deny,
+        Read,
+        DenyGlob(&'static str),
+        DenyGlobAboveRoot,
+    }
+
+    for protection in [
+        Protection::DenyGlobAboveRoot,
+        Protection::DenyGlob(".githu?"),
+        Protection::DenyGlob("{.github,.gitlab}"),
+        Protection::DenyGlob(r".githu\b"),
+        Protection::DenyGlob("*"),
+        Protection::Deny,
+        Protection::Read,
+    ] {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let workspace = temp_dir.path().join("workspace");
+        let github = workspace.join(".github");
+        let workflows = github.join("workflows");
+        let protected_file = workflows.join("release.yml");
+        fs::create_dir_all(&workflows).expect("create workflows directory");
+        fs::write(&protected_file, "original workflow").expect("write protected workflow");
+        let workspace = workspace.canonicalize().expect("canonicalize workspace");
+        let destination = workspace.with_file_name("destination");
+        fs::create_dir(&destination).expect("create destination");
+        let github = github
+            .canonicalize()
+            .expect("canonicalize github directory");
+        let workflows = workflows
+            .canonicalize()
+            .expect("canonicalize workflows directory");
+        let protected_file = protected_file
+            .canonicalize()
+            .expect("canonicalize protected workflow");
+        let workspace_root =
+            AbsolutePathBuf::from_absolute_path(&workspace).expect("absolute workspace");
+        let protected_path =
+            AbsolutePathBuf::from_absolute_path(&protected_file).expect("absolute protected path");
+        let (protected_path, protected_access) = match protection {
+            Protection::Deny => (
+                FileSystemPath::Path {
+                    path: protected_path.into(),
+                },
+                FileSystemAccessMode::Deny,
+            ),
+            Protection::Read => (
+                FileSystemPath::Path {
+                    path: protected_path.into(),
+                },
+                FileSystemAccessMode::Read,
+            ),
+            Protection::DenyGlob(component) => (
+                FileSystemPath::GlobPattern {
+                    pattern: format!("{}/{component}/workflows/*.yml", workspace.display()),
+                },
+                FileSystemAccessMode::Deny,
+            ),
+            Protection::DenyGlobAboveRoot => (
+                FileSystemPath::GlobPattern {
+                    pattern: format!(
+                        "{}/*/.github/workflows/*.yml",
+                        workspace.parent().expect("workspace parent").display()
+                    ),
+                },
+                FileSystemAccessMode::Deny,
+            ),
+        };
+        let glob_pattern = match &protected_path {
+            FileSystemPath::GlobPattern { pattern } => Some(pattern.clone()),
+            _ => None,
+        };
+        let mut file_system_policy = FileSystemSandboxPolicy::read_only();
+        for root in [&workspace, &destination] {
+            file_system_policy.entries.push(FileSystemSandboxEntry::new(
+                AbsolutePathBuf::from_absolute_path(root)
+                    .expect("absolute writable root")
+                    .into(),
+                FileSystemAccessMode::Write,
+            ));
+        }
+        file_system_policy
+            .entries
+            .extend(PROTECTED_METADATA_PATH_NAMES.iter().map(|name| {
+                FileSystemSandboxEntry::new(
+                    workspace_root.join(*name).into(),
+                    FileSystemAccessMode::Write,
+                )
+            }));
+        let unprotected_policy = file_system_policy.clone();
+        file_system_policy.entries.push(FileSystemSandboxEntry::new(
+            protected_path,
+            protected_access,
+        ));
+
+        for protected_ancestor in [&workspace, &github, &workflows] {
+            let renamed_ancestor = if protected_ancestor == &workspace {
+                destination.join("moved")
+            } else {
+                protected_ancestor.with_extension("renamed")
+            };
+            let seatbelt_args = |policy| {
+                create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
+                    command: vec![
+                        "/bin/mv".to_string(),
+                        protected_ancestor.display().to_string(),
+                        renamed_ancestor.display().to_string(),
+                    ],
+                    file_system_sandbox_policy: policy,
+                    network_sandbox_policy: NetworkSandboxPolicy::Restricted,
+                    sandbox_policy_cwd: &workspace,
+                    enforce_managed_network: false,
+                    managed_network: None,
+                    environment_id: None,
+                    network: None,
+                    extra_allow_unix_sockets: &[],
+                })
+                .expect("create seatbelt policy")
+            };
+            let args = seatbelt_args(&file_system_policy);
+            let policy = seatbelt_policy_arg(&args);
+            let ancestor_deny = match protection {
+                Protection::Deny | Protection::Read => {
+                    let parameter = args
+                        .iter()
+                        .find_map(|arg| {
+                            let (name, path) = arg.strip_prefix("-D")?.split_once('=')?;
+                            (name.starts_with("PROTECTED_ANCESTOR_")
+                                && Path::new(path) == protected_ancestor)
+                                .then_some(name)
+                        })
+                        .expect("protected ancestor should have a policy parameter");
+                    format!(
+                        "(deny file-write-unlink (require-all (vnode-type DIRECTORY) (literal (param \"{parameter}\"))))"
+                    )
+                }
+                Protection::DenyGlob(_) | Protection::DenyGlobAboveRoot => {
+                    let pattern = Path::new(glob_pattern.as_deref().expect("deny glob pattern"))
+                        .ancestors()
+                        .find(|path| {
+                            path.components().count() == protected_ancestor.components().count()
+                        })
+                        .and_then(Path::to_str)
+                        .expect("ancestor glob pattern");
+                    let regex = seatbelt_regex_for_glob(pattern, GlobMatch::Exact)
+                        .expect("ancestor glob should produce a regex");
+                    format!(
+                        r#"(deny file-write-unlink (require-all (vnode-type DIRECTORY) (regex #"{regex}")))"#
+                    )
+                }
+            };
+            assert!(
+                policy
+                    .find(&ancestor_deny)
+                    .expect("protected ancestor deny should be present")
+                    > policy
+                        .rfind("(allow file-write*")
+                        .expect("writable root allowance should be present"),
+                "protected ancestor denies must follow broader allowances: {policy}"
+            );
+
+            let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
+                .args(args)
+                .current_dir(temp_dir.path())
+                .output()
+                .expect("execute seatbelt command");
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !output.status.success()
+                && stderr.contains("sandbox-exec: sandbox_apply: Operation not permitted")
+            {
+                return;
+            }
+            assert!(
+                !output.status.success(),
+                "{protection:?} path must not become accessible by renaming {}",
+                protected_ancestor.display()
+            );
+            assert_eq!(
+                fs::read_to_string(&protected_file).expect("read protected workflow"),
+                "original workflow"
+            );
+
+            if matches!(
+                protection,
+                Protection::DenyGlob(_) | Protection::DenyGlobAboveRoot
+            ) && protected_ancestor == &workflows
+            {
+                let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
+                    .args(seatbelt_args(&unprotected_policy))
+                    .current_dir(temp_dir.path())
+                    .output()
+                    .expect("execute control seatbelt command");
+                assert!(output.status.success(), "unprotected ancestor: {output:?}");
+            }
+        }
+    }
+}
+
+#[test]
 fn prepared_managed_network_context_allows_only_its_proxy_ports() {
     let file_system_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
         &SandboxPolicy::new_read_only_policy(),
@@ -474,6 +677,40 @@ fn unreadable_globs_use_git_style_component_matching() {
 }
 
 #[test]
+fn unreadable_globs_support_brace_alternation() {
+    let regex = seatbelt_regex_for_unreadable_glob("/tmp/repo/{.env,secrets.yml}");
+    assert_eq!(regex.as_deref(), Some(r"^/tmp/repo/(\.env|secrets\.yml)$"));
+    let regex = regex_lite::Regex::new(regex.as_deref().expect("glob should compile"))
+        .expect("regex should compile");
+
+    assert!(regex.is_match("/tmp/repo/.env"));
+    assert!(regex.is_match("/tmp/repo/secrets.yml"));
+    assert!(!regex.is_match("/tmp/repo/notes.txt"));
+}
+
+#[test]
+fn glob_ancestors_close_brace_alternatives_split_by_path_separators() {
+    let regex = seatbelt_regex_for_glob("/tmp/repo/{private", GlobMatch::Exact);
+    assert_eq!(regex.as_deref(), Some(r"^/tmp/repo/(private)$"));
+    let regex = regex_lite::Regex::new(regex.as_deref().expect("ancestor glob should compile"))
+        .expect("ancestor regex should compile");
+
+    assert!(regex.is_match("/tmp/repo/private"));
+    assert!(!regex.is_match("/tmp/repo/other"));
+}
+
+#[test]
+fn unreadable_globs_support_backslash_escapes() {
+    let regex = seatbelt_regex_for_unreadable_glob(r"/tmp/repo/config\?.env");
+    assert_eq!(regex.as_deref(), Some(r"^/tmp/repo/config\?\.env(/.*)?$"));
+    let regex = regex_lite::Regex::new(regex.as_deref().expect("glob should compile"))
+        .expect("regex should compile");
+
+    assert!(regex.is_match("/tmp/repo/config?.env"));
+    assert!(!regex.is_match("/tmp/repo/config1.env"));
+}
+
+#[test]
 fn unreadable_globs_treat_unclosed_character_classes_as_literals() {
     let regex = seatbelt_regex_for_unreadable_glob("/tmp/repo/[*.env");
     assert_eq!(regex.as_deref(), Some(r"^/tmp/repo/\[[^/]*\.env$"));
@@ -496,29 +733,32 @@ fn unreadable_glob_policy_includes_canonicalized_static_prefix() {
     fs::create_dir(&real_root).expect("create real root");
     symlink(&real_root, &link_root).expect("create symlinked root");
 
-    let pattern = format!("{}/**/*.env", link_root.display());
-    let canonical_pattern = format!(
-        "{}/**/*.env",
-        real_root
-            .canonicalize()
-            .expect("canonicalize real root")
-            .display()
-    );
-    let expected_regex = seatbelt_regex_for_unreadable_glob(&canonical_pattern)
-        .expect("canonical glob should compile");
-    let mut policy = FileSystemSandboxPolicy::default();
-    policy.entries.push(FileSystemSandboxEntry {
-        path: FileSystemPath::GlobPattern { pattern },
-        access: FileSystemAccessMode::Deny,
-        missing_path_behavior: None,
-    });
+    let canonical_root = real_root.canonicalize().expect("canonicalize real root");
+    for suffix in ["**/*.env", "{app,service}/*.env", r"secret\?.env"] {
+        let pattern = format!("{}/{suffix}", link_root.display());
+        let canonical_pattern = format!("{}/{suffix}", canonical_root.display());
+        let expected_regex = seatbelt_regex_for_unreadable_glob(&canonical_pattern)
+            .expect("canonical glob should compile");
+        let mut policy = FileSystemSandboxPolicy::default();
+        policy.entries.push(FileSystemSandboxEntry {
+            path: FileSystemPath::GlobPattern { pattern },
+            access: FileSystemAccessMode::Deny,
+            missing_path_behavior: None,
+        });
 
-    let seatbelt_policy = build_seatbelt_unreadable_glob_policy(&policy, temp_dir.path());
+        let seatbelt_policy = build_seatbelt_unreadable_glob_policy(&policy, temp_dir.path());
 
-    assert!(
-        seatbelt_policy.contains(&format!(r#"(deny file-read* (regex #"{expected_regex}"))"#)),
-        "expected canonicalized glob regex in policy:\n{seatbelt_policy}"
-    );
+        assert!(
+            seatbelt_policy.contains(&format!(r#"(deny file-read* (regex #"{expected_regex}"))"#)),
+            "expected canonicalized glob regex in policy:\n{seatbelt_policy}"
+        );
+        assert!(
+            seatbelt_policy.contains(&format!(
+                r#"(deny file-write* (regex #"{expected_regex}"))"#
+            )),
+            "expected canonicalized glob write deny in policy:\n{seatbelt_policy}"
+        );
+    }
 }
 
 #[test]
