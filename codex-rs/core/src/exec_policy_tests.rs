@@ -993,6 +993,52 @@ async fn exec_approval_requirement_prefers_execpolicy_match() {
 }
 
 #[tokio::test]
+async fn git_status_obeys_approval_policy_and_explicit_rules() {
+    let command = vec_str(&["git", "status"]);
+    let amendment = Some(ExecPolicyAmendment::new(command.clone()));
+
+    for (approval_policy, policy_src, expected_requirement) in [
+        (
+            AskForApproval::UnlessTrusted,
+            None,
+            ExecApprovalRequirement::NeedsApproval {
+                reason: None,
+                proposed_execpolicy_amendment: amendment.clone(),
+            },
+        ),
+        (
+            AskForApproval::OnRequest,
+            None,
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: false,
+                proposed_execpolicy_amendment: amendment,
+            },
+        ),
+        (
+            AskForApproval::UnlessTrusted,
+            Some(r#"prefix_rule(pattern=["git", "status"], decision="allow")"#.to_string()),
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: true,
+                proposed_execpolicy_amendment: None,
+            },
+        ),
+    ] {
+        assert_exec_approval_requirement_for_command(
+            ExecApprovalRequirementScenario {
+                policy_src,
+                command: command.clone(),
+                approval_policy,
+                permission_profile: PermissionProfile::workspace_write(),
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                prefix_rule: None,
+            },
+            expected_requirement,
+        )
+        .await;
+    }
+}
+
+#[tokio::test]
 async fn absolute_path_exec_approval_requirement_matches_host_executable_rules() {
     let git_path = host_program_path("git");
     let git_path_literal = starlark_string(&git_path);
@@ -1044,8 +1090,8 @@ prefix_rule(pattern=["git"], decision="prompt")
             sandbox_permissions: SandboxPermissions::UseDefault,
             prefix_rule: None,
         },
-        ExecApprovalRequirement::Skip {
-            bypass_sandbox: false,
+        ExecApprovalRequirement::NeedsApproval {
+            reason: None,
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
                 disallowed_git_path,
                 "status".to_string(),
