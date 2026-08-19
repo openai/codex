@@ -1219,10 +1219,7 @@ fn validate_auth_restrictions(
     let Some(expected_workspaces) = expected_workspaces else {
         return Ok(());
     };
-    if matches!(
-        auth,
-        CodexAuth::ApiKey(_) | CodexAuth::Headers(_) | CodexAuth::BedrockApiKey(_)
-    ) {
+    if matches!(auth, CodexAuth::ApiKey(_) | CodexAuth::BedrockApiKey(_)) {
         return Ok(());
     }
 
@@ -1317,12 +1314,12 @@ async fn enforce_login_restrictions_with_agent_identity_authapi_base_url(
 
     if let Some(expected_account_ids) = config.forced_chatgpt_workspace_id.as_deref() {
         let chatgpt_account_id = match &auth {
-            CodexAuth::ApiKey(_) | CodexAuth::Headers(_) | CodexAuth::BedrockApiKey(_) => {
+            CodexAuth::ApiKey(_) | CodexAuth::BedrockApiKey(_) => {
                 return Ok(());
             }
-            CodexAuth::AgentIdentity(_) | CodexAuth::PersonalAccessToken(_) => {
-                auth.get_account_id()
-            }
+            CodexAuth::Headers(_)
+            | CodexAuth::AgentIdentity(_)
+            | CodexAuth::PersonalAccessToken(_) => auth.get_account_id(),
             CodexAuth::Chatgpt(_) | CodexAuth::ChatgptAuthTokens(_) => {
                 let token_data = match auth.get_token_data() {
                     Ok(data) => data,

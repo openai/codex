@@ -6,6 +6,8 @@ use http::HeaderMap;
 ///
 /// The provider owns credential validation, rotation, and persistence. Codex
 /// keeps the resolved headers in memory and attaches them to backend requests.
+/// Identity headers must be derived from and bound to the validated credentials;
+/// Codex may use them to enforce managed authentication policy.
 #[derive(Clone, PartialEq, Eq)]
 pub struct AuthHeaders {
     headers: HeaderMap,
