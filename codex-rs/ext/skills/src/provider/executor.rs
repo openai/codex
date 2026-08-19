@@ -302,51 +302,31 @@ async fn read_bounded_text(
             "failed to read executor skill resource {resource}: {err}"
         ))
     };
-    let contents = if sandbox.is_some_and(FileSystemSandboxContext::should_run_in_sandbox) {
-        if path.infer_path_convention() == Some(PathConvention::Windows)
-            && sandbox.is_some_and(|context| {
-                context.windows_sandbox_level
-                    == codex_protocol::config_types::WindowsSandboxLevel::Disabled
-            })
-        {
-            return Err(SkillProviderError::new(
-                "executor skill resource requires an unavailable filesystem sandbox",
-            ));
-        }
-        let metadata = file_system
-            .get_metadata(path, sandbox)
-            .await
-            .map_err(&read_error)?;
-        if metadata.size > MAX_SKILL_RESOURCE_CONTENT_BYTES as u64 {
+    if sandbox.is_some_and(FileSystemSandboxContext::should_run_in_sandbox)
+        && path.infer_path_convention() == Some(PathConvention::Windows)
+        && sandbox.is_some_and(|context| {
+            context.windows_sandbox_level
+                == codex_protocol::config_types::WindowsSandboxLevel::Disabled
+        })
+    {
+        return Err(SkillProviderError::new(
+            "executor skill resource requires an unavailable filesystem sandbox",
+        ));
+    }
+
+    let mut stream = file_system
+        .read_file_stream(path, sandbox)
+        .await
+        .map_err(&read_error)?;
+    let mut contents = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(&read_error)?;
+        if contents.len().saturating_add(chunk.len()) > MAX_SKILL_RESOURCE_CONTENT_BYTES {
             return Err(SkillProviderError::new(format!(
                 "executor skill resource {resource} exceeds {MAX_SKILL_RESOURCE_CONTENT_BYTES} bytes"
             )));
         }
-        file_system
-            .read_file(path, sandbox)
-            .await
-            .map_err(&read_error)?
-    } else {
-        let mut stream = file_system
-            .read_file_stream(path, sandbox)
-            .await
-            .map_err(&read_error)?;
-        let mut contents = Vec::new();
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(&read_error)?;
-            if contents.len().saturating_add(chunk.len()) > MAX_SKILL_RESOURCE_CONTENT_BYTES {
-                return Err(SkillProviderError::new(format!(
-                    "executor skill resource {resource} exceeds {MAX_SKILL_RESOURCE_CONTENT_BYTES} bytes"
-                )));
-            }
-            contents.extend_from_slice(&chunk);
-        }
-        contents
-    };
-    if contents.len() > MAX_SKILL_RESOURCE_CONTENT_BYTES {
-        return Err(SkillProviderError::new(format!(
-            "executor skill resource {resource} exceeds {MAX_SKILL_RESOURCE_CONTENT_BYTES} bytes"
-        )));
+        contents.extend_from_slice(&chunk);
     }
     String::from_utf8(contents).map_err(|_| {
         SkillProviderError::new(format!(
