@@ -55,6 +55,9 @@ pub fn default_filter() -> Targets {
         .with_default(LevelFilter::TRACE)
         .with_target("hyper_util", LevelFilter::WARN)
         .with_target("log", LevelFilter::OFF)
+        // SQLite warnings must not feed back into the same SQLite log writer.
+        .with_target("sqlx::query", LevelFilter::OFF)
+        .with_target("sqlx::pool::acquire", LevelFilter::OFF)
         .with_target("codex_rmcp_client", LevelFilter::INFO)
         .with_target("codex_otel.log_only", LevelFilter::OFF)
         .with_target("codex_otel.trace_safe", LevelFilter::OFF)
