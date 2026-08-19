@@ -6,40 +6,17 @@ use std::collections::VecDeque;
 /// dropping the middle once it exceeds the configured maximum. The buffer is
 /// symmetric meaning 50% of the capacity is allocated to the head and 50% is
 /// allocated to the tail.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 #[cfg_attr(test, derive(Eq, PartialEq))]
-pub(crate) struct HeadTailBuffer {
-    max_bytes: usize,
-    head_budget: usize,
-    tail_budget: usize,
+pub(crate) struct HeadTailBuffer<const MAX_BYTES: usize = UNIFIED_EXEC_OUTPUT_MAX_BYTES> {
     head: Vec<u8>,
     tail: VecDeque<u8>,
     omitted_bytes: usize,
 }
 
-impl Default for HeadTailBuffer {
-    fn default() -> Self {
-        Self::new(UNIFIED_EXEC_OUTPUT_MAX_BYTES)
-    }
-}
-
-impl HeadTailBuffer {
-    /// Create a new buffer that retains at most `max_bytes` of output.
-    ///
-    /// The retained output is split across a prefix ("head") and suffix ("tail")
-    /// budget, dropping bytes from the middle once the limit is exceeded.
-    pub(crate) fn new(max_bytes: usize) -> Self {
-        let head_budget = max_bytes / 2;
-        let tail_budget = max_bytes.saturating_sub(head_budget);
-        Self {
-            max_bytes,
-            head_budget,
-            tail_budget,
-            head: Vec::new(),
-            tail: VecDeque::new(),
-            omitted_bytes: 0,
-        }
-    }
+impl<const MAX_BYTES: usize> HeadTailBuffer<MAX_BYTES> {
+    const HEAD_BUDGET: usize = MAX_BYTES / 2;
+    const TAIL_BUDGET: usize = MAX_BYTES.saturating_sub(Self::HEAD_BUDGET);
 
     // Used for tests.
     #[allow(dead_code)]
@@ -69,13 +46,13 @@ impl HeadTailBuffer {
         if chunk.is_empty() {
             return;
         }
-        if self.max_bytes == 0 {
+        if MAX_BYTES == 0 {
             self.omitted_bytes = self.omitted_bytes.saturating_add(chunk.len());
             return;
         }
 
         // Fill the head budget first, then keep a capped tail.
-        let remaining_head = self.head_budget.saturating_sub(self.head.len());
+        let remaining_head = Self::HEAD_BUDGET.saturating_sub(self.head.len());
         let head_len = remaining_head.min(chunk.len());
         if head_len > 0 {
             self.head.extend_from_slice(&chunk[..head_len]);
@@ -120,17 +97,14 @@ impl HeadTailBuffer {
     /// contents while preserving its configured capacity.
     pub(crate) fn drain(&mut self) -> Self {
         Self {
-            max_bytes: self.max_bytes,
-            head_budget: self.head_budget,
-            tail_budget: self.tail_budget,
             head: std::mem::take(&mut self.head),
             tail: std::mem::take(&mut self.tail),
             omitted_bytes: std::mem::take(&mut self.omitted_bytes),
         }
     }
 
-    /// Append retained output from another buffer and preserve any omissions it
-    /// already recorded.
+    /// Append a later buffer with the same budget. This preserves the summary
+    /// of the original concatenated output, including its omission count.
     pub(crate) fn push_buffer(&mut self, mut buffer: Self) {
         self.push_chunk(std::mem::take(&mut buffer.head));
         self.push_chunk(buffer.tail.drain(..).collect());
@@ -141,15 +115,15 @@ impl HeadTailBuffer {
         if chunk.is_empty() {
             return;
         }
-        if self.tail_budget == 0 {
+        if Self::TAIL_BUDGET == 0 {
             self.omitted_bytes = self.omitted_bytes.saturating_add(chunk.len());
             return;
         }
 
-        if chunk.len() >= self.tail_budget {
+        if chunk.len() >= Self::TAIL_BUDGET {
             // This single chunk is larger than the whole tail budget. Keep only the last
             // tail_budget bytes and drop everything else.
-            let start = chunk.len().saturating_sub(self.tail_budget);
+            let start = chunk.len().saturating_sub(Self::TAIL_BUDGET);
             let kept = &chunk[start..];
             let dropped = chunk.len().saturating_sub(kept.len());
             self.omitted_bytes = self
@@ -166,7 +140,7 @@ impl HeadTailBuffer {
     }
 
     fn trim_tail_to_budget(&mut self) {
-        let excess = self.tail.len().saturating_sub(self.tail_budget);
+        let excess = self.tail.len().saturating_sub(Self::TAIL_BUDGET);
         if excess > 0 {
             drop(self.tail.drain(..excess));
             self.omitted_bytes = self.omitted_bytes.saturating_add(excess);

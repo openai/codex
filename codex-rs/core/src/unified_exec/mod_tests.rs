@@ -324,7 +324,7 @@ async fn write_stdin(
 
 #[test]
 fn push_chunk_preserves_prefix_and_suffix() {
-    let mut buffer = HeadTailBuffer::default();
+    let mut buffer: HeadTailBuffer = Default::default();
     buffer.push_chunk(vec![b'a'; UNIFIED_EXEC_OUTPUT_MAX_BYTES]);
     buffer.push_chunk(vec![b'b']);
     buffer.push_chunk(vec![b'c']);
@@ -341,7 +341,7 @@ fn push_chunk_preserves_prefix_and_suffix() {
 
 #[test]
 fn head_tail_buffer_default_preserves_prefix_and_suffix() {
-    let mut buffer = HeadTailBuffer::default();
+    let mut buffer: HeadTailBuffer = Default::default();
     buffer.push_chunk(vec![b'a'; UNIFIED_EXEC_OUTPUT_MAX_BYTES]);
     buffer.push_chunk(b"bc".to_vec());
 
