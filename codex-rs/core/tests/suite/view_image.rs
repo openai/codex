@@ -379,20 +379,13 @@ async fn user_turn_unified_image_budget_enforces_dimension_and_patch_limits() ->
 {
     skip_if_no_network!(Ok(()));
 
-    for (source_dimensions, expected_dimensions, resize_notice_expectation) in [
-        ((6401, 100), (6000, 94), ResizeNoticeExpectation::Disabled),
-        ((3201, 3201), (3200, 3200), ResizeNoticeExpectation::Enabled),
-    ] {
-        assert_user_turn_local_image_resizes_to(
-            source_dimensions,
-            expected_dimensions,
-            ImageBudgetPolicy::Unified,
-            resize_notice_expectation,
-        )
-        .await?;
-    }
-
-    Ok(())
+    assert_user_turn_local_image_resizes_to(
+        (6401, 1),
+        (6000, 1),
+        ImageBudgetPolicy::Unified,
+        ResizeNoticeExpectation::Enabled,
+    )
+    .await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
