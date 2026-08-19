@@ -938,6 +938,47 @@ text(JSON.stringify(returnsUndefined));
 }
 
 #[tokio::test]
+async fn text_helper_surfaces_stringify_errors() {
+    let service = InProcessCodeModeSession::new();
+
+    let response = execute(
+        &service,
+        ExecuteRequest {
+            source: r#"
+const circular = {};
+circular.self = circular;
+text(circular);
+"#
+            .to_string(),
+            yield_time_ms: None,
+            ..execute_request("")
+        },
+    )
+    .await;
+
+    let RuntimeResponse::Result {
+        error_text: Some(error_text),
+        ..
+    } = &response
+    else {
+        panic!("circular stringify unexpectedly succeeded: {response:?}");
+    };
+    assert!(
+        error_text.contains("Converting circular structure to JSON"),
+        "unexpected circular stringify error: {error_text}"
+    );
+    let error_text = error_text.clone();
+    assert_eq!(
+        response,
+        RuntimeResponse::Result {
+            cell_id: cell_id("1"),
+            content_items: Vec::new(),
+            error_text: Some(error_text),
+        }
+    );
+}
+
+#[tokio::test]
 async fn audio_helper_accepts_audio_url_object_and_raw_mcp_audio_block() {
     let service = InProcessCodeModeSession::new();
 

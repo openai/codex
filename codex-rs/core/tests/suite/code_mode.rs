@@ -3687,46 +3687,6 @@ text("after");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_surfaces_text_stringify_errors() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = responses::start_mock_server().await;
-    let (_test, second_mock) = run_code_mode_turn(
-        &server,
-        "use exec to return circular text",
-        r#"
-const circular = {};
-circular.self = circular;
-text(circular);
-"#,
-    )
-    .await?;
-
-    let req = second_mock.single_request();
-    let items = custom_tool_output_items(&req, "call-1");
-    let (_, success) = req
-        .custom_tool_call_output_content_and_success("call-1")
-        .expect("custom tool output should be present");
-    assert_ne!(
-        success,
-        Some(true),
-        "circular stringify unexpectedly succeeded"
-    );
-    assert_eq!(items.len(), 2);
-    assert_regex_match(
-        concat!(
-            r"(?s)\A",
-            r"Script failed\nWall time \d+\.\d seconds\nOutput:\n\z"
-        ),
-        text_item(&items, /*index*/ 0),
-    );
-    assert!(text_item(&items, /*index*/ 1).contains("Script error:"));
-    assert!(text_item(&items, /*index*/ 1).contains("Converting circular structure to JSON"));
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_can_output_images_via_global_helper() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
