@@ -4,6 +4,14 @@ This package contains the implementation behind `scripts/build_codex_package.py`
 The top-level script is the stable executable entry point; these modules keep the
 package-building logic split by responsibility.
 
+Run the builder through `just`:
+
+```bash
+just assemble-codex-package --help
+just assemble-codex-package --variant codex-app-server
+just assemble-codex-package --target x86_64-unknown-linux-gnu
+```
+
 The builder creates a canonical Codex package directory:
 
 ```text

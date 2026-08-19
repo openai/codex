@@ -15,6 +15,7 @@ on:
       - "rust-v*.*.*"
 
 env:
+  CODEX_REPO_ROOT: ${{ github.workspace }}
   CODEX_ZSH_RELEASE_TAG: codex-zsh-v0.1.0
   CODEX_ZSH_MANIFEST_SHA256: c534eab89dcea7e3d8a5e5b3f49c025c7c64cd4e4d9814ee24871de58a9359a1
 

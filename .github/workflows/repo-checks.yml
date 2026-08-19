@@ -27,7 +27,7 @@ jobs:
         run: python3 .github/scripts/verify_bazel_clippy_lints.py
 
       - name: Test Codex package builder
-        run: python3 -m unittest discover -s scripts/codex_package -p 'test_*.py'
+        run: python3 -m unittest discover -s public/scripts/codex_package -p 'test_*.py'
 
       - name: Test standalone installer
         run: python3 -m unittest discover -s scripts/install -p 'test_*.py'

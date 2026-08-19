@@ -1,5 +1,6 @@
 set working-directory := "codex-rs"
 set positional-arguments
+export CODEX_REPO_ROOT := justfile_directory()
 export JUST_SHELL := justfile_directory() / "scripts/just-shell.py"
 # Backticks run before just exports JUST_SHELL, so keep a relative bootstrap path.
 set shell := ["python3", "-c", 'import os, runpy; runpy.run_path(os.environ.get("JUST_SHELL", "../scripts/just-shell.py"), run_name="__main__")']
@@ -37,6 +38,11 @@ file-search *args:
 # Run the standalone code-mode host from source.
 code-mode-host *args:
     cargo run --bin codex-code-mode-host -- {args}
+
+# Assemble a local Codex package.
+[no-cd]
+assemble-codex-package *args:
+    {{ python }} {{ justfile_directory() }}/public/scripts/build_codex_package.py {args}
 
 # Build the CLI and run the app-server test client
 app-server-test-client *args:

@@ -237,6 +237,8 @@ jobs:
     needs: prepare_projection
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      CODEX_REPO_ROOT: ${{ github.workspace }}
     steps:
       - name: Download public projection
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -281,7 +283,7 @@ jobs:
           just test-github-scripts
 
       - name: Test Codex package builder
-        run: python3 -m unittest discover -s scripts/codex_package -p 'test_*.py'
+        run: python3 -m unittest discover -s public/scripts/codex_package -p 'test_*.py'
 
       - name: Ensure root README.md contains only ASCII and certain Unicode code points
         run: ./scripts/asciicheck.py README.md

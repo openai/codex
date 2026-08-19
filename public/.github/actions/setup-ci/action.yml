@@ -53,6 +53,7 @@ runs:
         echo "cargo-target-dir=$cargo_target_dir" >> "$GITHUB_OUTPUT"
 
         {
+          echo "CODEX_REPO_ROOT=$GITHUB_WORKSPACE"
           echo "BAZEL_OUTPUT_BASE=$bazel_output_base"
           echo "BAZEL_OUTPUT_USER_ROOT=$bazel_output_user_root"
           echo "BAZEL_REPOSITORY_CACHE=$bazel_repository_cache"
