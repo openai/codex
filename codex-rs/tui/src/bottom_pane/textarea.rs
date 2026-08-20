@@ -45,6 +45,7 @@ use std::sync::Arc;
 use unicode_segmentation::UnicodeSegmentation;
 
 mod vim;
+mod vim_commands;
 mod wrapping;
 use self::vim::VimMode;
 use self::vim::VimMotion;
@@ -295,6 +296,7 @@ impl TextArea {
         }
         match self.vim_pending {
             VimPending::None => KeymapContext::VimNormal,
+            VimPending::Replace => KeymapContext::Editor,
             VimPending::Operator(_) => KeymapContext::VimOperator,
             VimPending::TextObject { .. } => KeymapContext::VimTextObject,
         }
@@ -342,12 +344,11 @@ impl TextArea {
 
     /// Return whether Escape should be intercepted before composer-level routing.
     ///
-    /// In Vim insert mode, Escape is an editing transition rather than a popup
-    /// cancel/backtrack shortcut. Letting the composer handle it first would
-    /// close UI surfaces while leaving the textarea in insert mode.
+    /// In Vim insert mode or while a command is pending, Escape is an editing
+    /// transition rather than a popup cancel/backtrack or turn-interrupt shortcut.
     pub(crate) fn should_handle_vim_insert_escape(&self, event: KeyEvent) -> bool {
         self.vim_enabled
-            && self.vim_mode == VimMode::Insert
+            && (self.vim_mode == VimMode::Insert || !matches!(self.vim_pending, VimPending::None))
             && event.code == KeyCode::Esc
             && event.modifiers == KeyModifiers::NONE
             && matches!(event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
@@ -693,6 +694,10 @@ impl TextArea {
                 self.handle_vim_text_object(operator, scope, event);
                 return;
             }
+            VimPending::Replace => {
+                self.handle_vim_pending_command(pending, event);
+                return;
+            }
         }
 
         if self.vim_normal_keymap.enter_insert.is_pressed(event) {
@@ -822,7 +827,9 @@ impl TextArea {
         }
         if self.vim_normal_keymap.cancel_operator.is_pressed(event) {
             self.vim_pending = VimPending::None;
+            return;
         }
+        self.handle_vim_extra_command(event);
     }
 
     fn handle_vim_operator(&mut self, op: VimOperator, event: KeyEvent) -> bool {
@@ -845,10 +852,19 @@ impl TextArea {
             return true;
         }
 
-        if op != VimOperator::Change
-            && let Some(motion) = self.vim_motion_for_event(event)
-        {
+        if let Some(motion) = self.vim_motion_for_event(event) {
             self.apply_vim_operator(op, motion);
+            return true;
+        }
+        if op == VimOperator::Change
+            && self
+                .vim_normal_keymap
+                .start_change_operator
+                .is_pressed(event)
+        {
+            let range = self.beginning_of_current_line()..self.end_of_current_line();
+            self.kill_line_range(range);
+            self.vim_mode = VimMode::Insert;
             return true;
         }
         false
@@ -912,14 +928,48 @@ impl TextArea {
     }
 
     fn apply_vim_operator(&mut self, op: VimOperator, motion: VimMotion) {
+        if op == VimOperator::Change && motion == VimMotion::WordForward {
+            let target = if self.text[self.cursor_pos..]
+                .chars()
+                .next()
+                .is_some_and(|ch| !ch.is_whitespace())
+            {
+                self.end_of_next_word()
+            } else {
+                self.beginning_of_next_word()
+                    .min(self.end_of_current_line())
+            };
+            if target > self.cursor_pos {
+                self.apply_vim_operator_to_range(op, self.cursor_pos..target);
+            } else {
+                self.vim_mode = VimMode::Insert;
+            }
+            return;
+        }
         let Some(range) = self.range_for_motion(motion) else {
+            if op == VimOperator::Change && motion == VimMotion::LineEnd {
+                self.vim_mode = VimMode::Insert;
+            }
             return;
         };
-        match op {
-            VimOperator::Delete => self.kill_range(range),
-            VimOperator::Yank => self.yank_range(range),
-            VimOperator::Change => {}
+        if op == VimOperator::Change && matches!(motion, VimMotion::Up | VimMotion::Down) {
+            if motion == VimMotion::Up && self.beginning_of_current_line() == 0
+                || motion == VimMotion::Down && self.end_of_current_line() == self.text.len()
+            {
+                return;
+            }
+            let retain_newline =
+                range.end < self.text.len() && self.text[range.clone()].ends_with('\n');
+            let start = range.start;
+            self.kill_line_range(range);
+            if retain_newline {
+                self.insert_str_at(start, "\n");
+                self.set_cursor(start);
+            }
+            self.vim_mode = VimMode::Insert;
+            return;
         }
+        self.apply_vim_operator_to_range(op, range);
     }
 
     fn apply_vim_operator_to_range(&mut self, op: VimOperator, range: Range<usize>) {
@@ -2741,18 +2791,10 @@ mod tests {
     }
 
     #[test]
-    fn vim_text_object_cancellation_and_unsupported_change_motions_do_not_edit() {
+    fn vim_text_object_cancellation_does_not_edit() {
         let mut t = ta_with("hello world");
         t.set_cursor(/*pos*/ 1);
         t.set_vim_enabled(/*enabled*/ true);
-
-        t.input(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
-        t.input(KeyEvent::new(KeyCode::Char('$'), KeyModifiers::NONE));
-
-        assert_eq!(t.text(), "hello world");
-        assert_eq!(t.kill_buffer, "");
-        assert_eq!(t.vim_mode_label(), Some("Normal"));
-        assert!(!t.is_vim_operator_pending());
 
         t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
         t.input(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));

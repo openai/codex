@@ -27,6 +27,7 @@ pub(super) enum VimPending {
         operator: VimOperator,
         scope: VimTextObjectScope,
     },
+    Replace,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

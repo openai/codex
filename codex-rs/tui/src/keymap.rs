@@ -161,7 +161,7 @@ pub(crate) struct EditorKeymap {
 ///
 /// Normal mode is the resting state when Vim is enabled. Pressing a movement
 /// or editing key here either moves the cursor, triggers an operator-pending
-/// state (via `start_delete_operator` / `start_yank_operator`), or transitions
+/// state (via `start_delete_operator`, `start_yank_operator`, or `start_change_operator`), or transitions
 /// to insert mode. Default bindings include both `shift(letter)` and
 /// `plain(UPPERCASE)` variants for uppercase commands like `A`, `I`, `O` to
 /// handle cross-terminal shift-reporting inconsistencies.
@@ -183,6 +183,7 @@ pub(crate) struct VimNormalKeymap {
     pub(crate) move_line_start: Vec<KeyBinding>,
     pub(crate) move_line_end: Vec<KeyBinding>,
     pub(crate) delete_char: Vec<KeyBinding>,
+    pub(crate) replace_char: Vec<KeyBinding>,
     pub(crate) substitute_char: Vec<KeyBinding>,
     pub(crate) delete_to_line_end: Vec<KeyBinding>,
     pub(crate) change_to_line_end: Vec<KeyBinding>,
@@ -194,9 +195,9 @@ pub(crate) struct VimNormalKeymap {
     pub(crate) cancel_operator: Vec<KeyBinding>,
 }
 
-/// Vim operator-pending keybindings active after `d` or `y` in normal mode.
+/// Vim operator-pending keybindings active after `d`, `y`, or `c` in normal mode.
 ///
-/// When an operator (`start_delete_operator` or `start_yank_operator`) is
+/// When a delete, yank, or change operator is
 /// pressed, the next keypress is matched against this context to determine the
 /// motion range. Repeating the operator key (`dd`, `yy`) acts on the whole
 /// line. `Esc` cancels the pending operator and returns to normal mode.
@@ -704,6 +705,7 @@ impl RuntimeKeymap {
             move_line_start: resolve_local!(keymap, defaults, vim_normal, move_line_start),
             move_line_end: resolve_local!(keymap, defaults, vim_normal, move_line_end),
             delete_char: resolve_local!(keymap, defaults, vim_normal, delete_char),
+            replace_char: resolve_local!(keymap, defaults, vim_normal, replace_char),
             substitute_char: resolve_local!(keymap, defaults, vim_normal, substitute_char),
             delete_to_line_end: resolve_local!(keymap, defaults, vim_normal, delete_to_line_end),
             change_to_line_end: resolve_local!(keymap, defaults, vim_normal, change_to_line_end),
@@ -791,6 +793,14 @@ impl RuntimeKeymap {
                 vim_normal.delete_char.as_slice(),
             ),
             (
+                keymap.vim_normal.replace_char.as_ref(),
+                vim_normal.replace_char.as_slice(),
+            ),
+            (
+                keymap.vim_normal.substitute_char.as_ref(),
+                vim_normal.substitute_char.as_slice(),
+            ),
+            (
                 keymap.vim_normal.change_to_line_end.as_ref(),
                 vim_normal.change_to_line_end.as_slice(),
             ),
@@ -833,6 +843,15 @@ impl RuntimeKeymap {
             vim_normal
                 .substitute_char
                 .retain(|binding| !configured_vim_normal_bindings_to_preserve.contains(binding));
+        }
+        if keymap.vim_normal.replace_char.is_none() {
+            vim_normal.replace_char.retain(|binding| {
+                !configured_vim_normal_bindings_to_preserve.contains(binding)
+                    && !chords.bindings.iter().any(|chord| {
+                        chord.action.context == KeymapContext::VimNormal
+                            && chord.chord.prefix.parts() == binding.parts()
+                    })
+            });
         }
 
         let mut vim_operator = VimOperatorKeymap {
@@ -1294,6 +1313,7 @@ impl RuntimeKeymap {
                     shift(KeyCode::Char('$'))
                 ],
                 delete_char: default_bindings![plain(KeyCode::Char('x'))],
+                replace_char: default_bindings![plain(KeyCode::Char('r'))],
                 substitute_char: default_bindings![plain(KeyCode::Char('s'))],
                 delete_to_line_end: default_bindings![
                     shift(KeyCode::Char('d')),
@@ -1786,6 +1806,7 @@ impl RuntimeKeymap {
                 ),
                 ("move_line_end", self.vim_normal.move_line_end.as_slice()),
                 ("delete_char", self.vim_normal.delete_char.as_slice()),
+                ("replace_char", self.vim_normal.replace_char.as_slice()),
                 (
                     "substitute_char",
                     self.vim_normal.substitute_char.as_slice(),
@@ -2804,6 +2825,57 @@ mod tests {
         keymap.vim_normal.substitute_char = Some(one("s"));
 
         expect_conflict(&keymap, "move_left", "substitute_char");
+    }
+
+    #[test]
+    fn configured_legacy_vim_normal_bindings_prune_new_replace_default() {
+        let mut keymap = TuiKeymap::default();
+        keymap.vim_normal.move_left = Some(one("r"));
+
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("config should parse");
+
+        assert_eq!(
+            runtime.vim_normal.move_left,
+            vec![key_hint::plain(KeyCode::Char('r'))]
+        );
+        assert_eq!(runtime.vim_normal.replace_char, Vec::new());
+    }
+
+    #[test]
+    fn configured_substitute_binding_prunes_new_replace_default() {
+        let mut keymap = TuiKeymap::default();
+        keymap.vim_normal.substitute_char = Some(one("r"));
+
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("config should parse");
+
+        assert_eq!(
+            runtime.vim_normal.substitute_char,
+            vec![key_hint::plain(KeyCode::Char('r'))]
+        );
+        assert!(runtime.vim_normal.replace_char.is_empty());
+    }
+
+    #[test]
+    fn configured_vim_normal_chord_prefix_prunes_new_replace_default() {
+        let mut keymap = TuiKeymap::default();
+        keymap.vim_normal.move_line_start = Some(one("r g"));
+
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("config should parse");
+
+        assert!(runtime.vim_normal.replace_char.is_empty());
+        assert!(runtime.chords.bindings.iter().any(|binding| {
+            binding.action.context == KeymapContext::VimNormal
+                && binding.chord.prefix == key_hint::plain(KeyCode::Char('r'))
+        }));
+    }
+
+    #[test]
+    fn explicit_new_vim_normal_replace_binding_still_conflicts_with_legacy_binding() {
+        let mut keymap = TuiKeymap::default();
+        keymap.vim_normal.move_left = Some(one("r"));
+        keymap.vim_normal.replace_char = Some(one("r"));
+
+        expect_conflict(&keymap, "move_left", "replace_char");
     }
 
     #[test]

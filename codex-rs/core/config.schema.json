@@ -3627,6 +3627,7 @@
               "open_line_above": null,
               "open_line_below": null,
               "paste_after": null,
+              "replace_char": null,
               "start_change_operator": null,
               "start_delete_operator": null,
               "start_yank_operator": null,
@@ -4406,6 +4407,7 @@
             "open_line_above": null,
             "open_line_below": null,
             "paste_after": null,
+            "replace_char": null,
             "start_change_operator": null,
             "start_delete_operator": null,
             "start_yank_operator": null,
@@ -4812,6 +4814,14 @@
             }
           ],
           "description": "Paste after cursor (`p`)."
+        },
+        "replace_char": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Replace the character under the cursor (`r`)."
         },
         "start_change_operator": {
           "allOf": [
