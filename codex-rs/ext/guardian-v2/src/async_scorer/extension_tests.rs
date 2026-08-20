@@ -7,6 +7,7 @@ use std::time::SystemTime;
 
 use anyhow::Result;
 use codex_core::config::Config;
+use codex_core::context::NodeReplReviewEvidence;
 use codex_extension_api::ConversationHistorySnapshot;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionMetrics;
@@ -1231,15 +1232,18 @@ async fn contributor_uses_model_defaults_and_preserves_local_overrides() -> Resu
     let model_defaults = GuardianV2ModelConfig {
         classifier_instructions: Some("Use the experimental model-owned prompt.".to_owned()),
         review_threshold_basis_points: Some(6_000),
+        max_tool_call_lag: Some(2),
         reasoning_effort: Some(ReasoningEffort::Minimal),
         transcript: Some(GuardianV2TranscriptModelConfig {
             sources: Some(vec!["reasoning".to_owned()]),
+            include_images: Some(true),
             max_message_entry_tokens: Some(128),
             max_message_transcript_tokens: Some(256),
             ..Default::default()
         }),
         max_action_tokens: Some(128),
         max_classifier_instruction_tokens: Some(256),
+        reuse_parent_compaction: Some(false),
         max_parent_compaction_tokens: Some(384),
     };
     let conversation_history = vec![
@@ -1312,13 +1316,19 @@ async fn contributor_uses_model_defaults_and_preserves_local_overrides() -> Resu
 
     let session_store = ExtensionData::new("session-1");
     let thread_store = test.codex.thread_extension_data();
+    let guardian_config = thread_store
+        .get::<crate::async_scorer::config::GuardianV2Config>()
+        .expect("Guardian v2 configuration should be installed");
     assert_eq!(
-        thread_store
-            .get::<crate::async_scorer::config::GuardianV2Config>()
-            .expect("Guardian v2 configuration should be installed")
-            .max_parent_compaction_tokens,
-        384
+        (
+            guardian_config.max_tool_call_lag,
+            guardian_config.reuse_parent_compaction,
+            guardian_config.max_parent_compaction_tokens,
+            guardian_config.transcript.include_images,
+        ),
+        (2, false, 384, true)
     );
+    assert!(thread_store.get::<NodeReplReviewEvidence>().is_some());
     tokio::time::timeout(Duration::from_secs(5), async {
         while thread_store.get::<SecurityRiskScore>().is_none() {
             tokio::task::yield_now().await;

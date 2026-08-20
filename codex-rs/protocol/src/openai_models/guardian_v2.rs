@@ -13,6 +13,8 @@ pub struct GuardianV2ModelConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review_threshold_basis_points: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tool_call_lag: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<ReasoningEffort>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript: Option<GuardianV2TranscriptModelConfig>,
@@ -20,6 +22,8 @@ pub struct GuardianV2ModelConfig {
     pub max_action_tokens: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_classifier_instruction_tokens: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reuse_parent_compaction: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_parent_compaction_tokens: Option<usize>,
 }
@@ -29,6 +33,8 @@ pub struct GuardianV2ModelConfig {
 pub struct GuardianV2TranscriptModelConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sources: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_images: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_message_entry_tokens: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

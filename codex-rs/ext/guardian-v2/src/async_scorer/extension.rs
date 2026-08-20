@@ -461,6 +461,12 @@ impl GuardianV2Extension {
                 return;
             }
         };
+        if guardian_config.transcript.include_images {
+            input
+                .thread_store
+                .get_or_init(NodeReplReviewEvidence::default)
+                .enable_image_capture();
+        }
         input.thread_store.insert(guardian_config.clone());
         let tool_call_index = score_progress
             .latest_tool_call
