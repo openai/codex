@@ -56,7 +56,7 @@ pub(super) fn wrapped_lines(text: &str, width: u16) -> Vec<Range<usize>> {
     let width = usize::from(width);
     let options = Options::new(width).wrap_algorithm(textwrap::WrapAlgorithm::FirstFit);
     let wrapped_lines = crate::wrapping::wrap_ranges(text, &options);
-    if width == 0 {
+    if width == 0 || (wrapped_lines.len() == 1 && text.len() < width) {
         return wrapped_lines;
     }
 
