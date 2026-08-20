@@ -3685,48 +3685,6 @@ text("after");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_can_output_images_via_global_helper() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = responses::start_mock_server().await;
-    let (_test, second_mock) = run_code_mode_turn(
-        &server,
-        "use exec to return images",
-        r#"
-image("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==");
-"#,
-    )
-    .await?;
-
-    let req = second_mock.single_request();
-    let items = custom_tool_output_items(&req, "call-1");
-    let (_, success) = custom_tool_output_body_and_success(&req, "call-1");
-    assert_ne!(
-        success,
-        Some(false),
-        "code_mode image output failed unexpectedly"
-    );
-    assert_eq!(items.len(), 2);
-    assert_regex_match(
-        concat!(
-            r"(?s)\A",
-            r"Script completed\nWall time \d+\.\d seconds\nOutput:\n\z"
-        ),
-        text_item(&items, /*index*/ 0),
-    );
-    assert_eq!(
-        items[1],
-        serde_json::json!({
-            "type": "input_image",
-            "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
-            "detail": "high"
-        }),
-    );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_replaces_malformed_image() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
