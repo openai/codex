@@ -9,6 +9,10 @@ use winapi_util::sysinfo::ComputerNameKind;
 use winapi_util::sysinfo::get_computer_name;
 
 static HOST_NAME: LazyLock<Option<String>> = LazyLock::new(compute_host_name);
+static OS_HOST_NAME: LazyLock<Option<String>> = LazyLock::new(|| {
+    let kernel_hostname = gethostname::gethostname();
+    normalize_host_name(&kernel_hostname.to_string_lossy())
+});
 
 /// Returns a process-cached canonical hostname, falling back to the normalized
 /// kernel hostname. The first call on Unix may perform blocking DNS resolution.
@@ -16,9 +20,13 @@ pub fn host_name() -> Option<String> {
     HOST_NAME.clone()
 }
 
+/// Returns the process-cached operating-system hostname without DNS resolution.
+pub fn os_host_name() -> Option<String> {
+    OS_HOST_NAME.clone()
+}
+
 fn compute_host_name() -> Option<String> {
-    let kernel_hostname = gethostname::gethostname();
-    let kernel_hostname = normalize_host_name(&kernel_hostname.to_string_lossy())?;
+    let kernel_hostname = os_host_name()?;
 
     // Remote sandbox requirements are meant to target remote hosts by DNS name,
     // so prefer the canonical FQDN when the local resolver can provide one.
@@ -74,7 +82,19 @@ fn normalize_fqdn_candidate(hostname: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::normalize_fqdn_candidate;
+    use super::normalize_host_name;
+    use super::os_host_name;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn os_host_name_matches_normalized_kernel_hostname() {
+        let kernel_hostname = gethostname::gethostname();
+
+        assert_eq!(
+            os_host_name(),
+            normalize_host_name(&kernel_hostname.to_string_lossy())
+        );
+    }
 
     #[test]
     fn normalize_fqdn_candidate_accepts_dns_qualified_name() {
