@@ -238,6 +238,21 @@ pub struct FileSystemSandboxPolicy {
     pub entries: Vec<FileSystemSandboxEntry>,
 }
 
+#[derive(Clone, Copy)]
+enum WritableRootPathResolution {
+    Effective,
+    PreserveMutableComponents,
+}
+
+impl WritableRootPathResolution {
+    fn resolve(self, path: AbsolutePathBuf) -> AbsolutePathBuf {
+        match self {
+            Self::Effective => normalize_effective_absolute_path(path),
+            Self::PreserveMutableComponents => normalize_trusted_top_level_alias(path),
+        }
+    }
+}
+
 /// Serialized filesystem policy used at legacy string-based seams.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[schemars(rename = "FileSystemSandboxPolicy")]
@@ -1149,6 +1164,30 @@ impl FileSystemSandboxPolicy {
     /// Returns the writable roots together with read-only carveouts resolved
     /// against the provided cwd.
     pub fn get_writable_roots_with_cwd(&self, cwd: &Path) -> Vec<WritableRoot> {
+        self.get_writable_roots_with_cwd_impl(cwd, WritableRootPathResolution::Effective)
+    }
+
+    /// Returns writable roots without following attacker-mutable path components.
+    ///
+    /// Trusted top-level aliases such as `/tmp -> /private/tmp` are still
+    /// normalized so roots and carveouts are compared in the same namespace.
+    /// Deeper components remain exactly as configured until the platform
+    /// sandbox binds them.
+    pub fn get_writable_roots_with_cwd_preserving_mutable_paths(
+        &self,
+        cwd: &Path,
+    ) -> Vec<WritableRoot> {
+        self.get_writable_roots_with_cwd_impl(
+            cwd,
+            WritableRootPathResolution::PreserveMutableComponents,
+        )
+    }
+
+    fn get_writable_roots_with_cwd_impl(
+        &self,
+        cwd: &Path,
+        path_resolution: WritableRootPathResolution,
+    ) -> Vec<WritableRoot> {
         if self.has_full_disk_write_access() {
             return Vec::new();
         }
@@ -1162,8 +1201,12 @@ impl FileSystemSandboxPolicy {
             .collect();
 
         dedup_absolute_paths(
-            writable_entries.clone(),
-            /*normalize_effective_paths*/ true,
+            writable_entries
+                .iter()
+                .cloned()
+                .map(|root| path_resolution.resolve(root))
+                .collect(),
+            /*normalize_effective_paths*/ false,
         )
         .into_iter()
         .map(|root| {
@@ -1177,13 +1220,13 @@ impl FileSystemSandboxPolicy {
             let preserve_raw_carveout_paths = root.as_path().parent().is_some();
             let raw_writable_roots: Vec<&AbsolutePathBuf> = writable_entries
                 .iter()
-                .filter(|path| normalize_effective_absolute_path((*path).clone()) == root)
+                .filter(|path| path_resolution.resolve((*path).clone()) == root)
                 .collect();
             let protected_metadata_names =
                 protected_metadata_names_for_writable_root(self, &root, &raw_writable_roots, cwd);
             let protect_missing_dot_codex = AbsolutePathBuf::from_absolute_path(cwd)
                 .ok()
-                .is_some_and(|cwd| normalize_effective_absolute_path(cwd) == root);
+                .is_some_and(|cwd| path_resolution.resolve(cwd) == root);
             let mut read_only_subpaths: Vec<AbsolutePathBuf> =
                 default_read_only_subpaths_for_writable_root(&root, protect_missing_dot_codex)
                     .into_iter()
@@ -1202,7 +1245,7 @@ impl FileSystemSandboxPolicy {
                     .filter(|entry| !entry.access.can_write())
                     .filter(|entry| !self.can_write_path_with_cwd(entry.path.as_path(), cwd))
                     .filter_map(|entry| {
-                        let effective_path = normalize_effective_absolute_path(entry.path.clone());
+                        let effective_path = path_resolution.resolve(entry.path.clone());
                         // Preserve the literal in-root path whenever the
                         // carveout itself lives under this writable root, even
                         // if following symlinks would resolve back to the root
@@ -1754,6 +1797,27 @@ fn normalize_effective_absolute_path(path: AbsolutePathBuf) -> AbsolutePathBuf {
     path
 }
 
+fn normalize_trusted_top_level_alias(path: AbsolutePathBuf) -> AbsolutePathBuf {
+    let Some(top_level) = path.as_path().ancestors().find(|ancestor| {
+        ancestor.parent().is_some() && ancestor.parent().and_then(Path::parent).is_none()
+    }) else {
+        return path;
+    };
+    let Ok(metadata) = std::fs::symlink_metadata(top_level) else {
+        return path;
+    };
+    if !metadata.file_type().is_symlink() {
+        return path;
+    }
+    let Ok(canonical_top_level) = top_level.canonicalize() else {
+        return path;
+    };
+    let Ok(suffix) = path.as_path().strip_prefix(top_level) else {
+        return path;
+    };
+    AbsolutePathBuf::from_absolute_path(canonical_top_level.join(suffix)).unwrap_or(path)
+}
+
 pub(crate) fn default_read_only_subpaths_for_writable_root(
     writable_root: &AbsolutePathBuf,
     protect_missing_dot_codex: bool,
@@ -2294,6 +2358,94 @@ mod tests {
                 .read_only_subpaths
                 .contains(&expected_dot_codex)
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn preserving_mutable_paths_normalizes_top_level_aliases_consistently() {
+        let root = TempDir::new_in("/tmp").expect("tempdir under /tmp");
+        let logical_root =
+            AbsolutePathBuf::from_absolute_path(root.path()).expect("absolute logical root");
+        let canonical_root = AbsolutePathBuf::from_absolute_path(
+            root.path().canonicalize().expect("canonicalize root"),
+        )
+        .expect("absolute canonical root");
+        let protected = canonical_root.join("protected");
+        fs::create_dir(&protected).expect("create protected path");
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry::new(logical_root.into(), FileSystemAccessMode::Write),
+            FileSystemSandboxEntry::new(protected.clone().into(), FileSystemAccessMode::Read),
+        ]);
+
+        let roots = policy.get_writable_roots_with_cwd_preserving_mutable_paths(root.path());
+
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].root, canonical_root);
+        assert!(roots[0].read_only_subpaths.contains(&protected));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preserving_writable_roots_cannot_be_rebound_during_projection() {
+        use std::sync::Arc;
+        use std::sync::atomic::AtomicBool;
+        use std::sync::atomic::AtomicUsize;
+        use std::sync::atomic::Ordering;
+        use std::thread;
+
+        let tmp = TempDir::new().expect("tempdir");
+        let active_ancestor = tmp.path().join("active");
+        let parked_ancestor = tmp.path().join("parked");
+        let outside_ancestor = tmp.path().join("outside");
+        let writable_root = active_ancestor.join("workspace");
+        let outside_root = outside_ancestor.join("workspace");
+        fs::create_dir_all(&writable_root).expect("create writable root");
+        fs::create_dir_all(&outside_root).expect("create outside root");
+        let writable_root =
+            AbsolutePathBuf::from_absolute_path(writable_root).expect("absolute writable root");
+        let outside_root =
+            AbsolutePathBuf::from_absolute_path(outside_root).expect("absolute outside root");
+        let expected_writable_root = normalize_trusted_top_level_alias(writable_root.clone());
+        let expected_outside_root = normalize_trusted_top_level_alias(outside_root);
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry::new(
+            writable_root.into(),
+            FileSystemAccessMode::Write,
+        )]);
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let swaps = Arc::new(AtomicUsize::new(0));
+        let racer_stop = Arc::clone(&stop);
+        let racer_swaps = Arc::clone(&swaps);
+        let racer = thread::spawn(move || {
+            while !racer_stop.load(Ordering::Relaxed) {
+                if fs::rename(&active_ancestor, &parked_ancestor).is_err() {
+                    thread::yield_now();
+                    continue;
+                }
+                if symlink_dir(&outside_ancestor, &active_ancestor).is_ok() {
+                    racer_swaps.fetch_add(1, Ordering::Relaxed);
+                    thread::yield_now();
+                    let _ = fs::remove_file(&active_ancestor);
+                }
+                fs::rename(&parked_ancestor, &active_ancestor).expect("restore writable ancestor");
+            }
+        });
+
+        let mut rebound_root = None;
+        for _ in 0..2_000 {
+            let roots = policy.get_writable_roots_with_cwd_preserving_mutable_paths(tmp.path());
+            if roots.len() != 1 || roots[0].root != expected_writable_root {
+                rebound_root = roots.first().map(|root| root.root.clone());
+                break;
+            }
+            assert_ne!(roots[0].root, expected_outside_root);
+            thread::yield_now();
+        }
+        stop.store(true, Ordering::Relaxed);
+        racer.join().expect("join path racer");
+
+        assert!(swaps.load(Ordering::Relaxed) > 0, "racer did not run");
+        assert_eq!(rebound_root, None);
     }
 
     #[test]

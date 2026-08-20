@@ -9,7 +9,6 @@ use codex_protocol::permissions::PROTECTED_METADATA_PATH_NAMES;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::WritableRoot;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_utils_absolute_path::canonicalize_preserving_symlinks;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
@@ -381,6 +380,18 @@ enum SeatbeltAccessKind {
     Write,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SeatbeltPathMatch {
+    Literal,
+    Subpath,
+}
+
+#[derive(Debug)]
+enum NormalizedWritableRoot {
+    Subpath(AbsolutePathBuf),
+    Literal(AbsolutePathBuf),
+}
+
 fn nested_symlink_component(path: &Path) -> Option<&Path> {
     // Keep top-level macOS aliases such as `/tmp -> /private/tmp` compatible,
     // but reject symlinks in user-controlled path components.
@@ -392,9 +403,43 @@ fn nested_symlink_component(path: &Path) -> Option<&Path> {
     })
 }
 
+fn normalize_top_level_alias_for_sandbox(
+    path: AbsolutePathBuf,
+) -> Result<AbsolutePathBuf, SeatbeltPreparationError> {
+    let Some(top_level) = path.as_path().ancestors().find(|ancestor| {
+        ancestor.parent().is_some() && ancestor.parent().and_then(Path::parent).is_none()
+    }) else {
+        return Ok(path);
+    };
+    if !std::fs::symlink_metadata(top_level).is_ok_and(|metadata| metadata.file_type().is_symlink())
+    {
+        return Ok(path);
+    }
+
+    let canonical_top_level = top_level.canonicalize().map_err(|err| {
+        SeatbeltPreparationError::FileSystem(format!(
+            "failed to normalize top-level alias {} for Seatbelt: {err}",
+            top_level.display()
+        ))
+    })?;
+    let suffix = path.as_path().strip_prefix(top_level).map_err(|err| {
+        SeatbeltPreparationError::FileSystem(format!(
+            "failed to preserve path {} after normalizing {}: {err}",
+            path.display(),
+            top_level.display()
+        ))
+    })?;
+    AbsolutePathBuf::from_absolute_path(canonical_top_level.join(suffix)).map_err(|err| {
+        SeatbeltPreparationError::FileSystem(format!(
+            "failed to normalize top-level alias for path {}: {err}",
+            path.display()
+        ))
+    })
+}
+
 fn normalize_writable_root_for_sandbox(
     root: AbsolutePathBuf,
-) -> Result<AbsolutePathBuf, SeatbeltPreparationError> {
+) -> Result<NormalizedWritableRoot, SeatbeltPreparationError> {
     if let Some(symlink) = nested_symlink_component(root.as_path()) {
         return Err(SeatbeltPreparationError::FileSystem(format!(
             "writable root {} contains symlink component {}; symlinked writable roots are not supported",
@@ -403,18 +448,28 @@ fn normalize_writable_root_for_sandbox(
         )));
     }
 
-    let normalized = canonicalize_preserving_symlinks(root.as_path()).map_err(|err| {
-        SeatbeltPreparationError::FileSystem(format!(
-            "failed to normalize writable root {} for Seatbelt: {err}",
-            root.display()
-        ))
-    })?;
-    AbsolutePathBuf::from_absolute_path(normalized).map_err(|err| {
-        SeatbeltPreparationError::FileSystem(format!(
-            "failed to normalize writable root {} for Seatbelt: {err}",
-            root.display()
-        ))
-    })
+    // Resolve only top-level system aliases such as `/tmp -> /private/tmp`.
+    // Deeper components can be mutated by an already-running sandboxed process,
+    // so following them here would turn a path check into a new authority grant.
+    let normalized = normalize_top_level_alias_for_sandbox(root)?;
+
+    let metadata = match std::fs::symlink_metadata(normalized.as_path()) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(NormalizedWritableRoot::Subpath(normalized));
+        }
+        Err(err) => {
+            return Err(SeatbeltPreparationError::FileSystem(format!(
+                "failed to inspect Seatbelt writable root {}: {err}",
+                normalized.display()
+            )));
+        }
+    };
+    if metadata.is_dir() {
+        return Ok(NormalizedWritableRoot::Subpath(normalized));
+    }
+
+    Ok(NormalizedWritableRoot::Literal(normalized))
 }
 
 fn build_seatbelt_access_policy(
@@ -430,11 +485,18 @@ fn build_seatbelt_access_policy(
     };
 
     for (index, access_root) in roots.into_iter().enumerate() {
-        let root = match access_kind {
+        let (root, path_match) = match access_kind {
             SeatbeltAccessKind::Read => {
-                normalize_path_for_sandbox(access_root.root.as_path()).unwrap_or(access_root.root)
+                let root = normalize_path_for_sandbox(access_root.root.as_path())
+                    .unwrap_or(access_root.root);
+                (root, SeatbeltPathMatch::Subpath)
             }
-            SeatbeltAccessKind::Write => normalize_writable_root_for_sandbox(access_root.root)?,
+            SeatbeltAccessKind::Write => {
+                match normalize_writable_root_for_sandbox(access_root.root)? {
+                    NormalizedWritableRoot::Subpath(root) => (root, SeatbeltPathMatch::Subpath),
+                    NormalizedWritableRoot::Literal(root) => (root, SeatbeltPathMatch::Literal),
+                }
+            }
         };
         let root_param = format!("{param_prefix}_{index}");
         params.push((root_param.clone(), root.clone().into_path_buf()));
@@ -445,31 +507,52 @@ fn build_seatbelt_access_policy(
                 "(deny file-write-unlink (require-all (literal (param \"{root_param}\")) (vnode-type DIRECTORY)))"
             ));
         }
+        let root_filter = match path_match {
+            SeatbeltPathMatch::Literal => format!("(literal (param \"{root_param}\"))"),
+            SeatbeltPathMatch::Subpath => format!("(subpath (param \"{root_param}\"))"),
+        };
 
         if access_root.excluded_subpaths.is_empty()
             && access_root.protected_metadata_names.is_empty()
         {
-            policy_components.push(format!("(subpath (param \"{root_param}\"))"));
+            policy_components.push(root_filter);
             continue;
         }
 
-        let mut require_parts = vec![format!("(subpath (param \"{root_param}\"))")];
+        let mut require_parts = vec![root_filter];
         for (excluded_index, excluded_subpath) in
             access_root.excluded_subpaths.into_iter().enumerate()
         {
-            let excluded_subpath =
-                normalize_path_for_sandbox(excluded_subpath.as_path()).unwrap_or(excluded_subpath);
             let excluded_param = format!("{param_prefix}_{index}_EXCLUDED_{excluded_index}");
-            params.push((excluded_param.clone(), excluded_subpath.into_path_buf()));
-            // Exclude both the exact protected path and anything beneath it.
-            // `subpath` alone leaves a gap for first-time creation of the
-            // protected directory itself, such as `mkdir .codex`.
-            require_parts.push(format!(
-                "(require-not (literal (param \"{excluded_param}\")))"
-            ));
-            require_parts.push(format!(
-                "(require-not (subpath (param \"{excluded_param}\")))"
-            ));
+            let excluded_subpaths = match access_kind {
+                SeatbeltAccessKind::Read => vec![(
+                    excluded_param.clone(),
+                    normalize_path_for_sandbox(excluded_subpath.as_path())
+                        .unwrap_or(excluded_subpath),
+                )],
+                SeatbeltAccessKind::Write => {
+                    let logical = normalize_top_level_alias_for_sandbox(excluded_subpath)?;
+                    let resolved = normalize_path_for_sandbox(logical.as_path())
+                        .filter(|resolved| resolved != &logical);
+                    let mut paths = vec![(excluded_param.clone(), logical)];
+                    if let Some(resolved) = resolved {
+                        paths.push((format!("{excluded_param}_RESOLVED"), resolved));
+                    }
+                    paths
+                }
+            };
+            for (excluded_param, excluded_subpath) in excluded_subpaths {
+                params.push((excluded_param.clone(), excluded_subpath.into_path_buf()));
+                // Exclude both the exact protected path and anything beneath it.
+                // `subpath` alone leaves a gap for first-time creation of the
+                // protected directory itself, such as `mkdir .codex`.
+                require_parts.push(format!(
+                    "(require-not (literal (param \"{excluded_param}\")))"
+                ));
+                require_parts.push(format!(
+                    "(require-not (subpath (param \"{excluded_param}\")))"
+                ));
+            }
         }
         for metadata_name in access_root.protected_metadata_names {
             let regex =
@@ -775,7 +858,8 @@ pub(crate) fn create_seatbelt_command_args_with_profile(
 
     let unreadable_roots =
         file_system_sandbox_policy.get_unreadable_roots_with_cwd(sandbox_policy_cwd);
-    let writable_roots = file_system_sandbox_policy.get_writable_roots_with_cwd(sandbox_policy_cwd);
+    let writable_roots = file_system_sandbox_policy
+        .get_writable_roots_with_cwd_preserving_mutable_paths(sandbox_policy_cwd);
     // Protect ancestors of read-only paths so renaming a writable directory
     // cannot move its descendants outside their policy carveouts.
     let mut protected_ancestors = BTreeSet::new();
