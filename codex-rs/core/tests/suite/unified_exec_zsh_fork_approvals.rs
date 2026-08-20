@@ -40,7 +40,7 @@ use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_with_timeout;
-use core_test_support::zsh_fork::build_unified_exec_zsh_fork_test;
+use core_test_support::zsh_fork::build_zsh_fork_test;
 use core_test_support::zsh_fork::restrictive_workspace_write_profile;
 use core_test_support::zsh_fork::zsh_fork_runtime;
 use pretty_assertions::assert_eq;
@@ -619,7 +619,7 @@ where
     };
 
     let server = start_mock_server().await;
-    let test = build_unified_exec_zsh_fork_test(
+    let test = build_zsh_fork_test(
         &server,
         runtime,
         approval_policy,
