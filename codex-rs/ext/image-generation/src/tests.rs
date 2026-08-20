@@ -138,10 +138,10 @@ async fn recent_image_fallback_selects_newest_images_in_chronological_order() {
         },
         ResponseItem::FunctionCallOutput {
             id: None,
-            call_id: Some("orphan-call".to_string()),
-            name: None,
-            namespace: None,
-            output: image_output("orphan"),
+            call_id: None,
+            name: Some("notifications".to_string()),
+            namespace: Some("slack".to_string()),
+            output: image_output("standalone"),
             internal_chat_message_metadata_passthrough: None,
         },
     ];
@@ -151,7 +151,7 @@ async fn recent_image_fallback_selects_newest_images_in_chronological_order() {
             &ImagegenArgs {
                 prompt: "change the lighting".to_string(),
                 referenced_image_paths: None,
-                num_last_images_to_include: Some(4),
+                num_last_images_to_include: Some(5),
             },
             &history,
             &[],
@@ -160,7 +160,7 @@ async fn recent_image_fallback_selects_newest_images_in_chronological_order() {
         .expect("history-backed edit request should build"),
         ImageRequest::Edit(expected_edit_request(
             "change the lighting",
-            &["user-2", "mcp", "code-mode", "generated"],
+            &["user-2", "mcp", "code-mode", "generated", "standalone"],
         ))
     );
 }

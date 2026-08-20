@@ -70,6 +70,14 @@ fn external_context_pollution_items_include_web_search_and_tool_search() {
             tools: Vec::new(),
             internal_chat_message_metadata_passthrough: None,
         },
+        ResponseItem::FunctionCallOutput {
+            id: None,
+            call_id: None,
+            name: Some("notifications".to_string()),
+            namespace: Some("slack".to_string()),
+            output: FunctionCallOutputPayload::from_text("new message".to_string()),
+            internal_chat_message_metadata_passthrough: None,
+        },
     ];
 
     assert!(

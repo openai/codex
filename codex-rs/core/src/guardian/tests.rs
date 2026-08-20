@@ -40,6 +40,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
@@ -1044,6 +1045,44 @@ fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
         collect_guardian_transcript_entries(&items)[2].kind,
         GuardianTranscriptEntryKind::NodeReplToolResult(_)
     ));
+}
+
+#[test]
+fn collect_guardian_transcript_entries_preserves_named_unpaired_tool_sources() {
+    let mut items = vec![ResponseItem::FunctionCallOutput {
+        id: None,
+        call_id: None,
+        name: Some("notifications".to_string()),
+        namespace: Some("slack".to_string()),
+        output: codex_protocol::models::FunctionCallOutputPayload::from_text(
+            "new message".to_string(),
+        ),
+        internal_chat_message_metadata_passthrough: None,
+    }];
+
+    assert_eq!(
+        collect_guardian_transcript_entries(&items),
+        vec![GuardianTranscriptEntry {
+            kind: GuardianTranscriptEntryKind::Tool("tool slack.notifications result".to_string()),
+            text: "new message".to_string(),
+        }]
+    );
+
+    if let ResponseItem::FunctionCallOutput { output, .. } = &mut items[0] {
+        *output = codex_protocol::models::FunctionCallOutputPayload::from_content_items(vec![
+            FunctionCallOutputContentItem::InputImage {
+                image_url: "data:image/png;base64,image".to_string(),
+                detail: None,
+            },
+        ]);
+    }
+    assert_eq!(
+        collect_guardian_transcript_entries(&items),
+        vec![GuardianTranscriptEntry {
+            kind: GuardianTranscriptEntryKind::Tool("tool slack.notifications result".to_string()),
+            text: "[non-text output]".to_string(),
+        }]
+    );
 }
 
 #[test]

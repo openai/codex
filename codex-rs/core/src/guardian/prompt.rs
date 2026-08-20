@@ -595,6 +595,26 @@ pub(crate) fn collect_guardian_transcript_entries<'a>(
                 };
                 non_empty_entry(kind, text)
             }),
+            ResponseItem::FunctionCallOutput {
+                call_id: None,
+                name: Some(name),
+                namespace,
+                output,
+                ..
+            } => {
+                let text = output
+                    .body
+                    .to_text()
+                    .unwrap_or_else(|| "[non-text output]".into());
+                let name = match namespace {
+                    Some(namespace) => format!("{namespace}.{name}"),
+                    None => name.to_string(),
+                };
+                non_empty_entry(
+                    GuardianTranscriptEntryKind::Tool(format!("tool {name} result")),
+                    text,
+                )
+            }
             _ => None,
         };
 

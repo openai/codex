@@ -247,6 +247,29 @@ impl TranscriptConfig {
                     );
                     (role, output)
                 }
+                ResponseItem::FunctionCallOutput {
+                    call_id: None,
+                    name,
+                    namespace,
+                    output,
+                    ..
+                } => {
+                    if !self.sources.contains(&TranscriptSource::ToolOutputs) {
+                        continue;
+                    }
+                    let output = output
+                        .body
+                        .to_text()
+                        .unwrap_or_else(|| "[non-text output]".into());
+                    let role = match (name.as_deref(), namespace.as_deref()) {
+                        (Some(name), Some(namespace)) => {
+                            format!("tool {namespace}.{name} result")
+                        }
+                        (Some(name), None) => format!("tool {name} result"),
+                        (None, _) => "tool result".to_owned(),
+                    };
+                    (role, output)
+                }
                 ResponseItem::Reasoning {
                     summary, content, ..
                 } => {
@@ -289,7 +312,6 @@ impl TranscriptConfig {
                     ("tool web_search call".to_owned(), text)
                 }
                 ResponseItem::AdditionalTools { .. }
-                | ResponseItem::FunctionCallOutput { call_id: None, .. }
                 | ResponseItem::ImageGenerationCall { .. }
                 | ResponseItem::ToolSearchCall { .. }
                 | ResponseItem::ToolSearchOutput { .. }

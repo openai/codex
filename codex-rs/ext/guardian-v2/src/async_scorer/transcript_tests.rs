@@ -486,6 +486,36 @@ fn transcript_truncates_tool_results_using_standard_budget() {
 }
 
 #[test]
+fn transcript_preserves_named_unpaired_tool_source() {
+    let mut items = vec![ResponseItem::FunctionCallOutput {
+        id: None,
+        call_id: None,
+        name: Some("notifications".to_owned()),
+        namespace: Some("slack".to_owned()),
+        output: FunctionCallOutputPayload::from_text("new message".to_owned()),
+        internal_chat_message_metadata_passthrough: None,
+    }];
+
+    assert_eq!(
+        TranscriptConfig::default().build(&items),
+        vec!["[1] tool slack.notifications result: new message\n"]
+    );
+
+    if let ResponseItem::FunctionCallOutput { output, .. } = &mut items[0] {
+        *output = FunctionCallOutputPayload::from_content_items(vec![
+            FunctionCallOutputContentItem::InputImage {
+                image_url: "data:image/png;base64,image".to_owned(),
+                detail: None,
+            },
+        ]);
+    }
+    assert_eq!(
+        TranscriptConfig::default().build(&items),
+        vec!["[1] tool slack.notifications result: [non-text output]\n"]
+    );
+}
+
+#[test]
 fn configured_reasoning_counts_against_message_budget() {
     let mut items = (0..8)
         .map(|index| ResponseItem::Message {

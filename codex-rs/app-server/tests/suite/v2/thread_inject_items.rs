@@ -13,10 +13,13 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_core::RolloutRecorder;
 use codex_features::Feature;
+use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_rollout::InitialHistory;
 use codex_rollout::RolloutItem;
+use codex_state::StateRuntime;
+use codex_utils_absolute_path::test_support::PathExt;
 use core_test_support::responses;
 use core_test_support::responses::strip_response_item_id;
 use core_test_support::responses::strip_response_item_ids_from_json;
@@ -40,8 +43,15 @@ async fn thread_inject_items_adds_raw_response_items_to_thread_history() -> Resu
 
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&server.uri())
+        .enable_feature(Feature::Sqlite)
         .enable_feature(Feature::RetainClientDeveloperMessages)
+        .with_extra_config("[memories]\ndisable_on_external_context = true")
         .write(codex_home.path())?;
+    let state_db = StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
+        "mock_provider".into(),
+    )
+    .await?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -100,6 +110,13 @@ async fn thread_inject_items_adds_raw_response_items_to_thread_history() -> Resu
         .await?;
     let _response: ThreadInjectItemsResponse =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(inject_req)).await??;
+    assert_eq!(
+        state_db
+            .get_thread_memory_mode(ThreadId::from_string(&thread.id)?)
+            .await?
+            .as_deref(),
+        Some("polluted")
+    );
 
     let rollout_path = thread.path.as_ref().context("thread path missing")?;
     let history = RolloutRecorder::get_rollout_history(rollout_path).await?;
