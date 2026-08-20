@@ -9,6 +9,7 @@ use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::WebSearchToolType;
+use codex_protocol::protocol::MultiAgentVersion;
 
 const GPT_5_BEDROCK_CONTEXT_WINDOW: i64 = 272_000;
 const GPT_5_6_SOL_OPENAI_MODEL_ID: &str = "gpt-5.6-sol";
@@ -62,6 +63,8 @@ pub(crate) fn normalize_bedrock_catalog(mut catalog: ModelsResponse) -> ModelsRe
         model.default_service_tier = None;
         // Bedrock rejects the `search_content_types` field used by multimodal search.
         model.web_search_tool_type = WebSearchToolType::Text;
+        // Bedrock does not support the response items used by multi-agent V2.
+        model.multi_agent_version = Some(MultiAgentVersion::V1);
     }
     catalog
 }
@@ -199,6 +202,7 @@ mod tests {
         expected.service_tiers.clear();
         expected.default_service_tier = None;
         expected.web_search_tool_type = WebSearchToolType::Text;
+        expected.multi_agent_version = Some(MultiAgentVersion::V1);
 
         assert_eq!(
             normalize_bedrock_catalog(ModelsResponse {
@@ -268,6 +272,7 @@ mod tests {
             expected.service_tiers.clear();
             expected.default_service_tier = None;
             expected.web_search_tool_type = WebSearchToolType::Text;
+            expected.multi_agent_version = Some(MultiAgentVersion::V1);
 
             assert_eq!(
                 catalog.models.iter().find(|model| model.slug == slug),
