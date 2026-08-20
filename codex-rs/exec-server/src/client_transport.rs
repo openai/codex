@@ -5,6 +5,7 @@ use std::time::Duration;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
 use tokio::process::Command;
+use tokio::sync::OwnedSemaphorePermit;
 use tokio::time::Instant;
 use tokio::time::sleep;
 use tokio::time::timeout;
@@ -21,6 +22,7 @@ use codex_websocket_client::WebSocketTlsMode;
 
 use crate::ExecServerClient;
 use crate::ExecServerError;
+use crate::client::accepted::AcceptedConnectionSource;
 use crate::client::is_retryable_registry_error;
 use crate::client::registry_recovery_retry_delay;
 use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT;
@@ -46,6 +48,51 @@ const INITIAL_REGISTRY_MAX_RETRIES: u32 = 4;
 const INITIAL_REGISTRY_REQUEST_TIMEOUT: Duration = Duration::from_secs(6);
 const INITIAL_REGISTRY_OPERATION_TIMEOUT: Duration = Duration::from_secs(14);
 
+/// Everything the recovery loop needs for one connection attempt.
+///
+/// An attempt may also carry a permit whose lifetime must extend until the
+/// attempt finishes.
+pub(crate) struct ReconnectAttempt {
+    connection: JsonRpcConnection,
+    options: ExecServerClientConnectOptions,
+    attempt_permit: Option<OwnedSemaphorePermit>,
+}
+
+impl ReconnectAttempt {
+    pub(crate) fn new(
+        connection: JsonRpcConnection,
+        options: ExecServerClientConnectOptions,
+    ) -> Self {
+        Self {
+            connection,
+            options,
+            attempt_permit: None,
+        }
+    }
+
+    pub(crate) fn with_attempt_permit(
+        connection: JsonRpcConnection,
+        options: ExecServerClientConnectOptions,
+        attempt_permit: OwnedSemaphorePermit,
+    ) -> Self {
+        Self {
+            connection,
+            options,
+            attempt_permit: Some(attempt_permit),
+        }
+    }
+
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        JsonRpcConnection,
+        ExecServerClientConnectOptions,
+        Option<OwnedSemaphorePermit>,
+    ) {
+        (self.connection, self.options, self.attempt_permit)
+    }
+}
+
 /// Reopens the transport for one logical exec-server client session.
 ///
 /// URL connections reuse their configured endpoint. Noise connections retain
@@ -53,6 +100,7 @@ const INITIAL_REGISTRY_OPERATION_TIMEOUT: Duration = Duration::from_secs(14);
 /// every physical connection attempt.
 #[derive(Clone)]
 pub(crate) enum ExecServerReconnectStrategy {
+    Accepted(AcceptedConnectionSource),
     WebSocket(RemoteExecServerConnectArgs),
     NoiseRendezvous {
         provider: Arc<dyn NoiseRendezvousConnectProvider>,
@@ -68,13 +116,14 @@ impl ExecServerReconnectStrategy {
     pub(crate) async fn resume(
         &self,
         session_id: &str,
-    ) -> Result<(JsonRpcConnection, ExecServerClientConnectOptions), ExecServerError> {
+    ) -> Result<ReconnectAttempt, ExecServerError> {
         match self {
+            Self::Accepted(source) => source.next_connection(session_id).await,
             Self::WebSocket(args) => {
                 let mut args = args.clone();
                 args.resume_session_id = Some(session_id.to_string());
                 let connection = ExecServerClient::open_websocket_connection(&args).await?;
-                Ok((connection, args.into()))
+                Ok(ReconnectAttempt::new(connection, args.into()))
             }
             Self::NoiseRendezvous {
                 provider,
@@ -85,16 +134,19 @@ impl ExecServerReconnectStrategy {
                 http_client_factory,
             } => {
                 let bundle = provider.connect_bundle(identity.public_key()).await?;
-                ExecServerClient::open_noise_rendezvous_connection(NoiseRendezvousConnectArgs {
-                    bundle,
-                    harness_identity: identity.clone(),
-                    client_name: client_name.clone(),
-                    connect_timeout: *connect_timeout,
-                    initialize_timeout: *initialize_timeout,
-                    resume_session_id: Some(session_id.to_string()),
-                    http_client_factory: http_client_factory.clone(),
-                })
-                .await
+                let (connection, options) = ExecServerClient::open_noise_rendezvous_connection(
+                    NoiseRendezvousConnectArgs {
+                        bundle,
+                        harness_identity: identity.clone(),
+                        client_name: client_name.clone(),
+                        connect_timeout: *connect_timeout,
+                        initialize_timeout: *initialize_timeout,
+                        resume_session_id: Some(session_id.to_string()),
+                        http_client_factory: http_client_factory.clone(),
+                    },
+                )
+                .await?;
+                Ok(ReconnectAttempt::new(connection, options))
             }
         }
     }

@@ -125,6 +125,8 @@ use crate::rpc::RpcClient;
 use crate::rpc_server_requests::MAX_IN_FLIGHT_SERVER_CALLS;
 use codex_http_client::HttpClientFactory;
 
+#[path = "client/accepted.rs"]
+pub(crate) mod accepted;
 pub(crate) mod http_client;
 mod network_policy_audit;
 #[path = "client_recovery.rs"]
@@ -347,7 +349,7 @@ type ConnectionAttempt = OnceCell<ConnectionResult>;
 
 #[derive(Clone)]
 pub(crate) struct LazyRemoteExecServerClient {
-    pub(crate) transport_params: ExecServerTransportParams,
+    transport_params: Option<ExecServerTransportParams>,
     http_client_factory: HttpClientFactory,
     recovery_policy: RecoveryPolicy,
     // Saves the first startup result so callers share it; retryable failures use reconnect.
@@ -364,7 +366,7 @@ impl LazyRemoteExecServerClient {
         http_client_factory: HttpClientFactory,
     ) -> Self {
         Self {
-            transport_params,
+            transport_params: Some(transport_params),
             http_client_factory,
             recovery_policy: RecoveryPolicy::Wait,
             startup: Arc::new(ConnectionAttempt::new()),
@@ -385,7 +387,7 @@ impl LazyRemoteExecServerClient {
         // Stdio starts a process, so keep it lazy until the environment is used.
         if matches!(
             self.transport_params,
-            ExecServerTransportParams::StdioCommand { .. }
+            Some(ExecServerTransportParams::StdioCommand { .. })
         ) {
             return None;
         }
@@ -567,16 +569,23 @@ impl LazyRemoteExecServerClient {
     fn can_reconnect(&self) -> bool {
         matches!(
             self.transport_params,
-            ExecServerTransportParams::Deferred(_)
-                | ExecServerTransportParams::WebSocketUrl { .. }
-                | ExecServerTransportParams::NoiseRendezvous { .. }
+            Some(
+                ExecServerTransportParams::Deferred(_)
+                    | ExecServerTransportParams::WebSocketUrl { .. }
+                    | ExecServerTransportParams::NoiseRendezvous { .. }
+            )
         )
     }
 
     #[tracing::instrument(name = "codex.exec_server.remote.connect", skip_all)]
     async fn connect_once(&self) -> ConnectionResult {
+        let transport_params = self.transport_params.as_ref().ok_or_else(|| {
+            Arc::new(ExecServerError::Protocol(
+                "missing transport params for lazy exec-server connection".to_string(),
+            ))
+        })?;
         let result = ExecServerClient::connect_for_transport(
-            self.transport_params.clone(),
+            transport_params.clone(),
             self.http_client_factory.clone(),
         )
         .await

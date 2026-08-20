@@ -322,7 +322,7 @@ impl Inner {
         }
     }
 
-    fn request_recovery(
+    pub(super) fn request_recovery(
         self: &Arc<Self>,
         failed_rpc_client: Arc<RpcClient>,
         disconnect_message: String,
@@ -388,8 +388,8 @@ impl Inner {
         let mut registry_retry_attempt = 0;
         let last_error = loop {
             match timeout_at(deadline, self.resume_once(&session_id)).await {
-                Ok(Ok(candidate)) => {
-                    if !candidate.is_disconnected() && self.install_recovered_client(candidate) {
+                Ok(Ok((rpc_client, _attempt))) => {
+                    if !rpc_client.is_disconnected() && self.install_recovered_client(rpc_client) {
                         return;
                     }
                 }
@@ -466,12 +466,13 @@ impl Inner {
     async fn resume_once(
         self: &Arc<Self>,
         session_id: &str,
-    ) -> Result<Arc<RpcClient>, ExecServerError> {
+    ) -> Result<(Arc<RpcClient>, Option<tokio::sync::OwnedSemaphorePermit>), ExecServerError> {
         let reconnect_strategy = self
             .reconnect_strategy
             .as_ref()
             .ok_or_else(|| ExecServerError::Protocol("missing reconnect strategy".to_string()))?;
-        let (connection, options) = reconnect_strategy.resume(session_id).await?;
+        let attempt = reconnect_strategy.resume(session_id).await?;
+        let (connection, options, attempt_permit) = attempt.into_parts();
         let (rpc_client, events_rx) = RpcClient::new(connection);
         let rpc_client = Arc::new(rpc_client);
         let client = ExecServerClient {
@@ -486,7 +487,7 @@ impl Inner {
         client.initialize_rpc(&rpc_client, options).await?;
 
         self.recover_processes(&rpc_client).await?;
-        Ok(rpc_client)
+        Ok((rpc_client, attempt_permit))
     }
 
     async fn recover_processes(
