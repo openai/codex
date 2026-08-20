@@ -2060,6 +2060,7 @@ fn config_requirements_granular_allowed_approval_policy_is_marked_experimental()
             allow_remote_control: None,
             computer_use: None,
             browser_use: None,
+            in_app_browser: None,
             feature_requirements: None,
             hooks: None,
             enforce_residency: None,

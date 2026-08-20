@@ -271,6 +271,16 @@
             }
           ]
         },
+        "inAppBrowser": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/InAppBrowserRequirements"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "logDir": {
           "type": [
             "string",
@@ -463,6 +473,17 @@
     "FeedbackRequirements": {
       "properties": {
         "enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "InAppBrowserRequirements": {
+      "properties": {
+        "allowExternalBrowserSettingsImport": {
           "type": [
             "boolean",
             "null"

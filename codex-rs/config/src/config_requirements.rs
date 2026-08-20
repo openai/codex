@@ -21,6 +21,7 @@ use wildmatch::WildMatchPattern;
 use super::requirements_exec_policy::RequirementsExecPolicyToml;
 use crate::Constrained;
 use crate::ConstraintError;
+use crate::InAppBrowserRequirementsToml;
 use crate::ManagedAuthPolicy;
 use crate::ManagedHooksRequirementsToml;
 use crate::McpServerRequirement;
@@ -942,6 +943,7 @@ pub struct ConfigRequirementsToml {
     pub allow_remote_control: Option<bool>,
     pub computer_use: Option<ComputerUseRequirementsToml>,
     pub browser_use: Option<BrowserUseRequirementsToml>,
+    pub in_app_browser: Option<InAppBrowserRequirementsToml>,
     pub windows: Option<WindowsRequirementsToml>,
     #[serde(rename = "features", alias = "feature_requirements")]
     pub feature_requirements: Option<FeatureRequirementsToml>,
@@ -1043,6 +1045,7 @@ pub struct ConfigRequirementsWithSources {
     pub allow_remote_control: Option<Sourced<bool>>,
     pub computer_use: Option<Sourced<ComputerUseRequirementsToml>>,
     pub browser_use: Option<Sourced<BrowserUseRequirementsToml>>,
+    pub in_app_browser: Option<Sourced<InAppBrowserRequirementsToml>>,
     pub windows: Option<Sourced<WindowsRequirementsToml>>,
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
     pub hooks: Option<Sourced<ManagedHooksRequirementsToml>>,
@@ -1100,6 +1103,7 @@ impl ConfigRequirementsWithSources {
             allow_remote_control: _,
             computer_use: _,
             browser_use: _,
+            in_app_browser: _,
             windows: _,
             feature_requirements: _,
             hooks: _,
@@ -1150,6 +1154,7 @@ impl ConfigRequirementsWithSources {
                 allow_remote_control,
                 computer_use,
                 browser_use,
+                in_app_browser,
                 windows,
                 feature_requirements,
                 hooks,
@@ -1229,6 +1234,7 @@ impl ConfigRequirementsWithSources {
             allow_remote_control,
             computer_use,
             browser_use,
+            in_app_browser,
             windows,
             feature_requirements,
             hooks,
@@ -1267,6 +1273,7 @@ impl ConfigRequirementsWithSources {
             allow_remote_control: allow_remote_control.map(|sourced| sourced.value),
             computer_use: computer_use.map(|sourced| sourced.value),
             browser_use: browser_use.map(|sourced| sourced.value),
+            in_app_browser: in_app_browser.map(|sourced| sourced.value),
             windows: windows.map(|sourced| sourced.value),
             feature_requirements: feature_requirements.map(|sourced| sourced.value),
             hooks: hooks.map(|sourced| sourced.value),
@@ -1380,6 +1387,10 @@ impl ConfigRequirementsToml {
                 .browser_use
                 .as_ref()
                 .is_none_or(BrowserUseRequirementsToml::is_empty)
+            && self
+                .in_app_browser
+                .as_ref()
+                .is_none_or(|requirements| requirements == &InAppBrowserRequirementsToml::default())
             && self
                 .windows
                 .as_ref()
@@ -1581,6 +1592,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             allow_remote_control,
             computer_use,
             browser_use: _,
+            in_app_browser: _,
             windows,
             feature_requirements,
             hooks,
@@ -2108,6 +2120,7 @@ mod tests {
             allow_remote_control,
             computer_use,
             browser_use,
+            in_app_browser,
             windows,
             feature_requirements,
             hooks,
@@ -2161,6 +2174,8 @@ mod tests {
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             computer_use: computer_use.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             browser_use: browser_use.map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            in_app_browser: in_app_browser
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             windows: windows.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             feature_requirements: feature_requirements
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
@@ -2457,6 +2472,7 @@ mod tests {
             allow_remote_control: Some(false),
             computer_use: Some(computer_use.clone()),
             browser_use: None,
+            in_app_browser: None,
             windows: Some(windows.clone()),
             feature_requirements: Some(feature_requirements.clone()),
             hooks: None,
@@ -2532,6 +2548,7 @@ mod tests {
                 )),
                 computer_use: Some(Sourced::new(computer_use, enforce_source.clone())),
                 browser_use: None,
+                in_app_browser: None,
                 windows: Some(Sourced::new(windows, enforce_source.clone())),
                 feature_requirements: Some(Sourced::new(
                     feature_requirements,
@@ -2585,6 +2602,7 @@ mod tests {
                 allow_remote_control: None,
                 computer_use: None,
                 browser_use: None,
+                in_app_browser: None,
                 windows: None,
                 feature_requirements: None,
                 hooks: None,
@@ -2643,6 +2661,7 @@ mod tests {
                 allow_remote_control: None,
                 computer_use: None,
                 browser_use: None,
+                in_app_browser: None,
                 windows: None,
                 feature_requirements: None,
                 hooks: None,

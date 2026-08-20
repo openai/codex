@@ -5122,6 +5122,16 @@
             }
           ]
         },
+        "inAppBrowser": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/InAppBrowserRequirements"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "logDir": {
           "type": [
             "string",
@@ -8587,6 +8597,17 @@
           "type": "object"
         }
       ]
+    },
+    "InAppBrowserRequirements": {
+      "properties": {
+        "allowExternalBrowserSettingsImport": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
     },
     "InitializeCapabilities": {
       "description": "Client-declared capabilities negotiated during initialize.",

@@ -399,6 +399,7 @@ pub struct ConfigRequirements {
     pub allow_remote_control: Option<bool>,
     pub computer_use: Option<ComputerUseRequirements>,
     pub browser_use: Option<BrowserUseRequirements>,
+    pub in_app_browser: Option<InAppBrowserRequirements>,
     pub feature_requirements: Option<BTreeMap<String, bool>>,
     #[experimental("configRequirements/read.hooks")]
     pub hooks: Option<ManagedHooksRequirements>,
@@ -472,6 +473,13 @@ pub struct ComputerUseRequirements {
 #[ts(export_to = "v2/")]
 pub struct BrowserUseRequirements {
     pub disable_auto_review: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct InAppBrowserRequirements {
+    pub allow_external_browser_settings_import: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

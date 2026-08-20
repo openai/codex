@@ -25,6 +25,7 @@ use codex_app_server_protocol::ConfiguredHookMatcherGroup;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetParams;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetResponse;
 use codex_app_server_protocol::FeedbackRequirements;
+use codex_app_server_protocol::InAppBrowserRequirements;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ManagedHooksRequirements;
 use codex_app_server_protocol::ModelProviderCapabilitiesReadResponse;
@@ -426,6 +427,12 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
         browser_use: requirements
             .browser_use
             .map(map_browser_use_requirements_to_api),
+        in_app_browser: requirements.in_app_browser.map(|in_app_browser| {
+            InAppBrowserRequirements {
+                allow_external_browser_settings_import: in_app_browser
+                    .allow_external_browser_settings_import,
+            }
+        }),
         feature_requirements: requirements
             .feature_requirements
             .map(|requirements| requirements.entries),

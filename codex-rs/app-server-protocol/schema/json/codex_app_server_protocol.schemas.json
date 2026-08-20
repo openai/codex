@@ -9064,6 +9064,16 @@
               }
             ]
           },
+          "inAppBrowser": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/InAppBrowserRequirements"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "logDir": {
             "type": [
               "string",
@@ -12418,6 +12428,17 @@
             "type": "object"
           }
         ]
+      },
+      "InAppBrowserRequirements": {
+        "properties": {
+          "allowExternalBrowserSettingsImport": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
       },
       "InputModality": {
         "description": "Canonical user-input modality tags advertised by a model.",
