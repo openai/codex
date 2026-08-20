@@ -1,5 +1,6 @@
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
+use crate::context::world_state::validate_managed_developer_instructions;
 use crate::guardian::BUNDLED_GUARDIAN_POLICY;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::unified_exec::DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS;
@@ -3108,6 +3109,12 @@ impl Config {
                 std::io::Error::new(std::io::ErrorKind::InvalidInput, message)
             })?;
         }
+        validate_managed_developer_instructions(
+            config_layer_stack
+                .requirements()
+                .additional_developer_instructions
+                .as_ref(),
+        )?;
         let orchestrator = cfg.orchestrator.as_ref();
         let orchestrator_skills_enabled =
             resolve_orchestrator_feature_enabled(orchestrator.and_then(|value| value.skills.as_ref()));
@@ -3156,6 +3163,7 @@ impl Config {
             enforce_residency,
             network: network_requirements,
             filesystem: filesystem_requirements,
+            additional_developer_instructions: _,
             guardian_policy_config_source: _,
         } = config_layer_stack.requirements().clone();
 

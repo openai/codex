@@ -278,12 +278,17 @@ in_app_updates = false
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn config_requirements_read_includes_model_auto_review_and_new_thread_defaults() -> Result<()>
-{
+async fn config_requirements_read_includes_managed_model_policy_and_instructions() -> Result<()> {
     let codex_home = TempDir::new()?;
+    write_config(
+        &codex_home,
+        "developer_instructions = \"ordinary instructions\"\n",
+    )?;
     std::fs::write(
         codex_home.path().join("requirements.toml"),
         r#"
+additional_developer_instructions = "Follow the managed policy.\nPreserve its formatting."
+
 [auto_review]
 required_on_models = ["gpt-protected", "gpt-sensitive"]
 ignore_rules = ["gpt-protected"]
@@ -305,6 +310,10 @@ service_tier = "fast"
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
 
     let requirements = response.requirements.expect("managed requirements");
+    assert_eq!(
+        requirements.additional_developer_instructions.as_deref(),
+        Some("Follow the managed policy.\nPreserve its formatting.")
+    );
     let auto_review = requirements
         .auto_review
         .expect("managed automatic-review requirements");
@@ -327,6 +336,25 @@ service_tier = "fast"
         Some(ReasoningEffort::Medium)
     );
     assert_eq!(defaults.service_tier.as_deref(), Some("fast"));
+
+    let config_id = mcp
+        .send_config_read_request(ConfigReadParams {
+            include_layers: false,
+            cwd: None,
+        })
+        .await?;
+    let config: ConfigReadResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(config_id)).await??;
+    assert_eq!(
+        (
+            config.config.developer_instructions.as_deref(),
+            config
+                .config
+                .additional
+                .get("additional_developer_instructions"),
+        ),
+        (Some("ordinary instructions"), None),
+    );
     Ok(())
 }
 

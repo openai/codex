@@ -93,3 +93,4 @@ pub(crate) use token_budget_context::TokenBudgetReminder;
 pub(crate) use turn_aborted::TurnAborted;
 pub(crate) use user_instructions::UserInstructions;
 pub(crate) use user_shell_command::UserShellCommand;
+pub(crate) use world_state::ManagedDeveloperInstructions;

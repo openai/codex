@@ -4,6 +4,7 @@ use crate::agent::role::apply_role_to_config;
 use crate::config::PermissionProfileSnapshot;
 use crate::context::ContextualUserFragment;
 use crate::context::CurrentTimeReminder;
+use crate::context::ManagedDeveloperInstructions;
 use crate::context::MultiAgentModeInstructions;
 use crate::context::MultiAgentRoleInstructions;
 use crate::session::multi_agents::resolve_usage_hints;
@@ -737,14 +738,26 @@ impl AgentControl {
                 return false;
             }
 
-            if let Some(parent_developer_instructions) = parent_developer_instructions.as_ref()
-                && let Some(subagent_developer_instructions) =
-                    subagent_developer_instructions.as_ref()
-                && let ResponseItem::Message { role, content, .. } = response_item
+            if let ResponseItem::Message { role, content, .. } = response_item
                 && role == "developer"
             {
                 content.retain_mut(|content_item| {
                     let ContentItem::InputText { text } = content_item else {
+                        return true;
+                    };
+                    if ManagedDeveloperInstructions::matches_text(text) {
+                        // If the child will rebuild its initial context, drop the inherited
+                        // managed instructions; startup will add the current requirements once.
+                        return preserve_reference_context_item;
+                    }
+                    let (
+                        Some(parent_developer_instructions),
+                        Some(subagent_developer_instructions),
+                    ) = (
+                        parent_developer_instructions.as_ref(),
+                        subagent_developer_instructions.as_ref(),
+                    )
+                    else {
                         return true;
                     };
                     // TODO(anp) track better message fragment provenance in rollouts.

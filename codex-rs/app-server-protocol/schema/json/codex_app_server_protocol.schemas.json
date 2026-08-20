@@ -8908,6 +8908,12 @@
       },
       "ConfigRequirements": {
         "properties": {
+          "additionalDeveloperInstructions": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "allowAppshots": {
             "type": [
               "boolean",

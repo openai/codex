@@ -21,6 +21,7 @@ use crate::compact::CompactedHistoryMetadata;
 use crate::config::ManagedFeatures;
 use crate::config::resolve_tool_suggest_config_from_layer_stack;
 use crate::context::ContextualUserFragment;
+use crate::context::ManagedDeveloperInstructions;
 use crate::context::ModelSwitchInstructions;
 use crate::context::MultiAgentRoleInstructions;
 use crate::context::NetworkRuleSaved;
@@ -3646,6 +3647,7 @@ impl Session {
         }
         // Render the active mode after the usage hint so it can override that hint.
         let mut initial_multi_agent_mode = None;
+        let mut managed_developer_instructions = None;
         for fragment in world_state.render_full() {
             match fragment.role() {
                 "developer"
@@ -3656,6 +3658,11 @@ impl Session {
                 }
                 "developer" if fragment.markers().0 == MULTI_AGENT_MODE_OPEN_TAG => {
                     initial_multi_agent_mode = Some(fragment);
+                }
+                "developer"
+                    if fragment.markers().0 == ManagedDeveloperInstructions::type_markers().0 =>
+                {
+                    managed_developer_instructions = Some(fragment);
                 }
                 "developer"
                     if fragment.markers().0 == MultiAgentRoleInstructions::type_markers().0 =>
@@ -3705,6 +3712,9 @@ impl Session {
                 ])
         {
             items.push(guardian_developer_message);
+        }
+        if let Some(managed_developer_instructions) = managed_developer_instructions {
+            items.push(managed_developer_instructions.into_boxed_response_item());
         }
         // New context windows and compaction install these items directly into replacement history.
         for item in &mut items {

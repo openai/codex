@@ -9858,6 +9858,7 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
         permissions: None,
         auto_review: None,
         models: None,
+        additional_developer_instructions: None,
         guardian_policy_config: None,
     };
     let requirement_source = codex_config::RequirementSource::Unknown;
@@ -10515,6 +10516,38 @@ async fn test_untrusted_project_gets_unless_trusted_approval_policy() -> anyhow:
         );
     }
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn oversized_managed_developer_instructions_are_rejected_during_config_load()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    // The policy text alone fits; rendering its required context markers must not.
+    let instructions = "x".repeat(codex_utils_string::approx_bytes_for_tokens(
+        /*tokens*/ 10_000,
+    ));
+
+    let error = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(format!(
+                "additional_developer_instructions = {instructions:?}"
+            )),
+        )
+        .build()
+        .await
+        .expect_err("oversized managed instructions must fail during config loading");
+
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    let message = error.to_string();
+    assert!(
+        message.starts_with(
+            "`additional_developer_instructions` from enterprise-managed requirements Base requirements (req_1) exceeds the model-context limit of 10000 estimated tokens"
+        ),
+        "unexpected config-load error: {message}"
+    );
     Ok(())
 }
 

@@ -1,3 +1,4 @@
+use codex_config::test_support::CloudConfigBundleFixture;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::ModelClient;
 use codex_core::NewThread;
@@ -72,6 +73,7 @@ use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::sse_failed;
+use core_test_support::responses::start_mock_server;
 use core_test_support::responses::strip_metadata_from_json;
 use core_test_support::responses::strip_response_item_ids_from_json;
 use core_test_support::responses_metadata as test_responses_metadata;
@@ -2891,6 +2893,48 @@ async fn includes_developer_instructions_message_in_request() {
                 && text.ends_with("</environment_context>")),
         "expected environment context in contextual user message, got {user_context_texts:?}"
     );
+}
+
+#[tokio::test]
+async fn includes_managed_developer_instructions_once_per_request() -> anyhow::Result<()> {
+    const CLIENT_INSTRUCTIONS: &str = "client developer instructions";
+    const MANAGED_INSTRUCTIONS: &str = "managed requirements instructions";
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex()
+        .with_cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(format!(
+                "additional_developer_instructions = {MANAGED_INSTRUCTIONS:?}"
+            )),
+        )
+        .with_config(|config| {
+            config.developer_instructions = Some(CLIENT_INSTRUCTIONS.to_string());
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    let managed_message = format!(
+        "<managed_developer_instructions>\n{MANAGED_INSTRUCTIONS}\n</managed_developer_instructions>"
+    );
+
+    for (response_id, prompt) in [("resp-1", "first turn"), ("resp-2", "second turn")] {
+        let response = mount_sse_once(&server, sse(vec![ev_completed(response_id)])).await;
+        test.submit_text_turn(prompt).await?;
+
+        let developer_messages = response.single_request().message_input_texts("developer");
+        assert!(
+            developer_messages
+                .iter()
+                .any(|message| message.contains(CLIENT_INSTRUCTIONS))
+        );
+        assert_eq!(
+            developer_messages
+                .iter()
+                .filter(|message| message.contains("<managed_developer_instructions>"))
+                .collect::<Vec<_>>(),
+            vec![&managed_message]
+        );
+    }
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

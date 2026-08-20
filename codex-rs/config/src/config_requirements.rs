@@ -187,6 +187,8 @@ pub struct ConfigRequirements {
     pub network: Option<Sourced<NetworkConstraints>>,
     /// Managed filesystem constraints derived from requirements.
     pub filesystem: Option<Sourced<FilesystemConstraints>>,
+    /// Managed instructions included independently of ordinary developer instructions.
+    pub additional_developer_instructions: Option<Sourced<String>>,
     /// Source for the managed guardian policy config, when one is configured.
     pub guardian_policy_config_source: Option<RequirementSource>,
 }
@@ -242,6 +244,7 @@ impl Default for ConfigRequirements {
             ),
             network: None,
             filesystem: None,
+            additional_developer_instructions: None,
             guardian_policy_config_source: None,
         }
     }
@@ -959,6 +962,7 @@ pub struct ConfigRequirementsToml {
     pub permissions: Option<PermissionsRequirementsToml>,
     pub auto_review: Option<AutoReviewRequirementsToml>,
     pub models: Option<ModelsRequirementsToml>,
+    pub additional_developer_instructions: Option<String>,
     pub guardian_policy_config: Option<String>,
 }
 
@@ -1059,6 +1063,7 @@ pub struct ConfigRequirementsWithSources {
     pub permissions: Option<Sourced<PermissionsRequirementsToml>>,
     pub auto_review: Option<Sourced<AutoReviewRequirementsToml>>,
     pub models: Option<Sourced<ModelsRequirementsToml>>,
+    pub additional_developer_instructions: Option<Sourced<String>>,
     pub guardian_policy_config: Option<Sourced<String>>,
 }
 
@@ -1117,6 +1122,7 @@ impl ConfigRequirementsWithSources {
             permissions: _,
             auto_review: _,
             models: _,
+            additional_developer_instructions: _,
             guardian_policy_config: _,
         } = &other;
 
@@ -1166,6 +1172,7 @@ impl ConfigRequirementsWithSources {
                 network,
                 permissions,
                 models,
+                additional_developer_instructions,
                 guardian_policy_config,
             }
         );
@@ -1248,6 +1255,7 @@ impl ConfigRequirementsWithSources {
             permissions,
             auto_review,
             models,
+            additional_developer_instructions,
             guardian_policy_config,
         } = self;
         ConfigRequirementsToml {
@@ -1287,6 +1295,8 @@ impl ConfigRequirementsWithSources {
             permissions: permissions.map(|sourced| sourced.value),
             auto_review: auto_review.map(|sourced| sourced.value),
             models: models.map(|sourced| sourced.value),
+            additional_developer_instructions: additional_developer_instructions
+                .map(|sourced| sourced.value),
             guardian_policy_config: guardian_policy_config.map(|sourced| sourced.value),
         }
     }
@@ -1431,6 +1441,7 @@ impl ConfigRequirementsToml {
                 .models
                 .as_ref()
                 .is_none_or(ModelsRequirementsToml::is_empty)
+            && self.additional_developer_instructions.is_none()
             && self
                 .guardian_policy_config
                 .as_deref()
@@ -1606,6 +1617,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             permissions,
             auto_review,
             models: _,
+            additional_developer_instructions,
             guardian_policy_config,
         } = toml;
 
@@ -1962,6 +1974,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             enforce_residency,
             network,
             filesystem,
+            additional_developer_instructions,
             guardian_policy_config_source,
         })
     }
@@ -2134,6 +2147,7 @@ mod tests {
             permissions,
             auto_review,
             models,
+            additional_developer_instructions,
             guardian_policy_config,
         } = toml;
         ConfigRequirementsWithSources {
@@ -2191,6 +2205,8 @@ mod tests {
             permissions: permissions.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             auto_review: auto_review.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             models: models.map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            additional_developer_instructions: additional_developer_instructions
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             guardian_policy_config: guardian_policy_config
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
         }
@@ -2445,6 +2461,7 @@ mod tests {
         };
         let enforce_residency = ResidencyRequirement::Us;
         let enforce_source = source.clone();
+        let additional_developer_instructions = "Follow the company policy.".to_string();
         let guardian_policy_config = "Use the company-managed guardian policy.".to_string();
 
         // Intentionally constructed without `..Default::default()` so adding a new field to
@@ -2486,6 +2503,7 @@ mod tests {
             permissions: None,
             auto_review: Some(auto_review.clone()),
             models: Some(models.clone()),
+            additional_developer_instructions: Some(additional_developer_instructions.clone()),
             guardian_policy_config: Some(guardian_policy_config.clone()),
         };
 
@@ -2565,6 +2583,10 @@ mod tests {
                 permissions: None,
                 auto_review: Some(Sourced::new(auto_review, source.clone())),
                 models: Some(Sourced::new(models, source.clone())),
+                additional_developer_instructions: Some(Sourced::new(
+                    additional_developer_instructions,
+                    source.clone(),
+                )),
                 guardian_policy_config: Some(Sourced::new(guardian_policy_config, source)),
             }
         );

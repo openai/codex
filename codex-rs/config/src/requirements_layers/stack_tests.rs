@@ -96,6 +96,7 @@ allowed_approval_policies = ["on-request"]
 allowed_sandbox_modes = ["workspace-write"]
 default_permissions = ":workspace"
 allow_remote_control = true
+additional_developer_instructions = "Lower-priority instructions."
 
 [allowed_permission_profiles]
 ":read-only" = true
@@ -110,6 +111,7 @@ allowed_approval_policies = ["never"]
 allowed_sandbox_modes = ["read-only"]
 default_permissions = ":read-only"
 allow_remote_control = false
+additional_developer_instructions = ""
 
 [allowed_permission_profiles]
 ":danger-full-access" = false
@@ -128,6 +130,7 @@ allowed_approval_policies = ["never"]
 allowed_sandbox_modes = ["read-only"]
 default_permissions = ":read-only"
 allow_remote_control = false
+additional_developer_instructions = ""
 
 [allowed_permission_profiles]
 ":danger-full-access" = false

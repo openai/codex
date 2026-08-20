@@ -12,6 +12,7 @@ use crate::context::world_state::CompactPermissionsState;
 use crate::context::world_state::ContextWindowGuidanceState;
 use crate::context::world_state::EnvironmentsInstructionsState;
 use crate::context::world_state::EnvironmentsState;
+use crate::context::world_state::ManagedDeveloperInstructionsState;
 use crate::context::world_state::ModelInstructionsState;
 use crate::context::world_state::MultiAgentModeState;
 use crate::context::world_state::MultiAgentUsageHintState;
@@ -284,6 +285,14 @@ impl Session {
             world_state.add_section(usage_hint);
         }
         world_state.add_section(multi_agent_mode);
+        world_state.add_section(ManagedDeveloperInstructionsState::new(
+            turn_context
+                .config
+                .config_layer_stack
+                .requirements()
+                .additional_developer_instructions
+                .as_ref(),
+        ));
         Ok(world_state)
     }
 }

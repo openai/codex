@@ -371,6 +371,7 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
             },
         ),
         chatgpt_base_url: requirements.chatgpt_base_url,
+        additional_developer_instructions: requirements.additional_developer_instructions,
         allowed_approval_policies: requirements.allowed_approval_policies.map(|policies| {
             policies
                 .into_iter()

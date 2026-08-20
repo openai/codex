@@ -6,6 +6,7 @@ use anyhow::Context;
 use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_config::test_support::CloudConfigBundleFixture;
 use codex_core::StartThreadOptions;
 use codex_core::TurnInputRequest;
 use codex_core::X_CODEX_ROUTING_HINT_HEADER;
@@ -3154,9 +3155,14 @@ async fn remote_compact_and_resume_refresh_stale_developer_instructions() -> Res
 
     let server = wiremock::MockServer::start().await;
     let stale_developer_message = "STALE_DEVELOPER_INSTRUCTIONS_SHOULD_BE_REMOVED";
+    let managed_requirements = CloudConfigBundleFixture::loader_with_enterprise_requirement(
+        r#"additional_developer_instructions = "MANAGED_DEVELOPER_INSTRUCTIONS""#,
+    );
+    let managed_message = "<managed_developer_instructions>\nMANAGED_DEVELOPER_INSTRUCTIONS\n</managed_developer_instructions>";
 
-    let mut start_builder =
-        test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let mut start_builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_cloud_config_bundle(managed_requirements.clone());
     let initial = start_builder.build(&server).await?;
     let home = initial.home.clone();
     let rollout_path = initial
@@ -3233,8 +3239,9 @@ async fn remote_compact_and_resume_refresh_stale_developer_instructions() -> Res
     })
     .await;
 
-    let mut resume_builder =
-        test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let mut resume_builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_cloud_config_bundle(managed_requirements);
     let resumed = resume_builder.resume(&server, home, rollout_path).await?;
 
     resumed
@@ -3249,6 +3256,17 @@ async fn remote_compact_and_resume_refresh_stale_developer_instructions() -> Res
     assert_eq!(compact_mock.requests().len(), 1);
     let requests = responses_mock.requests();
     assert_eq!(requests.len(), 3, "expected three model requests");
+    for request in &requests {
+        assert_eq!(
+            request
+                .message_input_texts("developer")
+                .into_iter()
+                .filter(|message| message.contains("<managed_developer_instructions>"))
+                .collect::<Vec<_>>(),
+            vec![managed_message.to_string()],
+            "Each model request should contain exactly one managed developer-instructions block, including after compaction and resume."
+        );
+    }
 
     let after_compact_request = &requests[1];
     let after_resume_request = &requests[2];

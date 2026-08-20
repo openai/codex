@@ -385,6 +385,7 @@ pub struct ConfigReadResponse {
 pub struct ConfigRequirements {
     pub cli_auth_credentials_store: Option<CliAuthCredentialsStoreMode>,
     pub chatgpt_base_url: Option<String>,
+    pub additional_developer_instructions: Option<String>,
     #[experimental(nested)]
     pub allowed_approval_policies: Option<Vec<AskForApproval>>,
     #[experimental("configRequirements/read.allowedApprovalsReviewers")]

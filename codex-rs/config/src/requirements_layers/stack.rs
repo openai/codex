@@ -247,6 +247,7 @@ fn populate_merged_regular_fields_with_sources(
         permissions,
         auto_review,
         models,
+        additional_developer_instructions,
         guardian_policy_config,
     } = requirements;
 
@@ -292,6 +293,10 @@ fn populate_merged_regular_fields_with_sources(
     set_sourced!(network, &["experimental_network"]);
     set_sourced!(permissions, &["permissions"]);
     set_sourced!(models, &["models"]);
+    set_sourced!(
+        additional_developer_instructions,
+        &["additional_developer_instructions"]
+    );
 
     if let Some(guardian_policy_config) =
         guardian_policy_config.filter(|value| !value.trim().is_empty())

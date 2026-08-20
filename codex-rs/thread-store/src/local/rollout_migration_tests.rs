@@ -718,6 +718,10 @@ async fn migration_rolls_back_response_and_inter_agent_user_boundaries() {
             rollout_response_item(input_response_message("user", "keep first boundary")),
             rollout_response_item(input_response_message(
                 "developer",
+                "<managed_developer_instructions>context only</managed_developer_instructions>",
+            )),
+            rollout_response_item(input_response_message(
+                "developer",
                 "<permissions instructions>context only</permissions instructions>",
             )),
             rollout_response_item(input_response_message(
