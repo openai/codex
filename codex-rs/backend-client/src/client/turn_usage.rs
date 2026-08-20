@@ -62,21 +62,37 @@ impl Client {
         url.set_path("/v1/analytics/codex/turn-costs");
         url.set_query(None);
         url.set_fragment(None);
-        let url = url.to_string();
-        let mut headers = self.headers();
-        for header_name in ["openai-organization", "openai-project"] {
-            if let Some(value) = provider_headers.get(header_name) {
-                headers.insert(header_name, value.clone());
-            }
-        }
+        let provider_scope_headers = provider_headers
+            .iter()
+            .filter(|(name, _)| {
+                ["openai-organization", "openai-project"]
+                    .iter()
+                    .any(|allowed| name.as_str().eq_ignore_ascii_case(allowed))
+            })
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect();
+        self.query_api_key_turn_costs_at(url.as_ref(), turn_ids, &provider_scope_headers)
+            .await
+    }
+
+    /// Queries an API-key turn-cost endpoint chosen by the caller, attaching
+    /// the supplied provider headers in addition to this client's auth.
+    pub async fn query_api_key_turn_costs_at(
+        &self,
+        url: &str,
+        turn_ids: &[String],
+        provider_headers: &HeaderMap,
+    ) -> Result<Vec<ApiKeyTurnCost>, RequestError> {
+        let mut headers = provider_headers.clone();
+        headers.extend(self.headers());
         let request = self
-            .request(Method::POST, &url)
+            .request(Method::POST, url)
             .headers(headers)
             .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
             .json(&ApiKeyTurnCostsRequest { turn_ids });
-        let (body, content_type) = self.exec_request_detailed(request, "POST", &url).await?;
+        let (body, content_type) = self.exec_request_detailed(request, "POST", url).await?;
         let response: ApiKeyTurnCostsResponse = self
-            .decode_json(&url, &content_type, &body)
+            .decode_json(url, &content_type, &body)
             .map_err(RequestError::Other)?;
         Ok(response.turns)
     }
@@ -184,5 +200,47 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn custom_turn_cost_queries_apply_client_auth_after_provider_headers() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/analytics/codex/turn-costs"))
+            .and(header("authorization", "Bearer sk-test"))
+            .and(header("chatgpt-account-id", "account-test"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "turns": []
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let auth = CodexAuth::from_api_key("sk-test");
+        let client = Client::from_auth(
+            server.uri(),
+            &auth,
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        )
+        .with_chatgpt_account_id("account-test");
+        let mut provider_headers = HeaderMap::new();
+        provider_headers.insert(
+            "authorization",
+            HeaderValue::from_static("Bearer provider-override"),
+        );
+        provider_headers.insert(
+            "chatgpt-account-id",
+            HeaderValue::from_static("provider-account-override"),
+        );
+        let costs = client
+            .query_api_key_turn_costs_at(
+                &format!("{}/analytics/codex/turn-costs", server.uri()),
+                &["turn-one".to_string()],
+                &provider_headers,
+            )
+            .await
+            .expect("query custom-provider turn costs");
+
+        assert_eq!(costs, Vec::new());
     }
 }

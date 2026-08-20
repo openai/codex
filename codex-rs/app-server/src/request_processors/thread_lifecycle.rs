@@ -314,9 +314,12 @@ pub(super) async fn ensure_listener_task_running(
                     };
 
                     if let Some(worker) = &turn_cost_worker {
-                        worker.observe_event(conversation_id, &event, || {
-                            conversation.session_telemetry()
-                        });
+                        worker.observe_event(
+                            conversation_id,
+                            config.as_ref(),
+                            &event,
+                            || conversation.session_telemetry(),
+                        );
                     }
 
                     // Track the event before emitting any typed translations
