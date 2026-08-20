@@ -11,7 +11,7 @@ use std::process::ExitStatus;
 use tokio::fs::create_dir_all;
 use tokio::process::Child;
 
-async fn spawn_command_under_sandbox(
+pub(super) async fn spawn_command_under_sandbox(
     command: Vec<String>,
     command_cwd: AbsolutePathBuf,
     permission_profile: &PermissionProfile,
