@@ -414,21 +414,22 @@ impl LiteralMatcher {
             lowercase_start = lowercase_end;
         }
 
+        // Use two-pointer method to find matches in linear time.
+        let mut start_span = 0;
+        let mut end_span = 0;
         lowercase_text
             .match_indices(self.lowercase_needle.as_str())
             .take(limit)
             .filter_map(|(start, matched)| {
                 let end = start.saturating_add(matched.len());
-                let original_start = spans
-                    .iter()
-                    .find(|(lowercase, _)| lowercase.contains(&start))?
-                    .1
-                    .start;
-                let original_end = spans
-                    .iter()
-                    .find(|(lowercase, _)| lowercase.contains(&end.saturating_sub(1)))?
-                    .1
-                    .end;
+                while spans.get(start_span)?.0.end <= start {
+                    start_span += 1;
+                }
+                while spans.get(end_span)?.0.end <= end.saturating_sub(1) {
+                    end_span += 1;
+                }
+                let original_start = spans.get(start_span)?.1.start;
+                let original_end = spans.get(end_span)?.1.end;
                 Some(original_start..original_end)
             })
             .collect()
