@@ -36,6 +36,35 @@ jobs:
     uses: ./.github/workflows/codespell.yml
     secrets: inherit
 
+  # TODO(anp): Remove this freeze once the mirroring pipeline's permissions
+  # have been restored.
+  public-github-freeze:
+    name: Public GitHub Actions freeze
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        if: ${{ github.event_name == 'pull_request' }}
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Reject frozen public GitHub Actions changes
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          restricted_paths=(
+            public/.github/workflows/
+            ':(glob)public/**/.github/actions/**'
+          )
+          if ! git diff --quiet "${BASE_SHA}...${HEAD_SHA}" -- "${restricted_paths[@]}"; then
+            echo "::error::public GitHub Actions changes are temporarily frozen"
+            git diff --name-only "${BASE_SHA}...${HEAD_SHA}" -- "${restricted_paths[@]}"
+            exit 1
+          fi
+
   repo-checks:
     name: repo-checks
     uses: ./.github/workflows/repo-checks.yml
@@ -61,11 +90,19 @@ jobs:
       - blob-size-policy
       - cargo-deny
       - codespell
+      - public-github-freeze
       - repo-checks
       - rust-ci
       - sdk
     runs-on: ubuntu-24.04
     steps:
+      # Enforce the freeze before checking out any PR-controlled helper code.
+      - name: Require public GitHub Actions freeze
+        if: ${{ needs.public-github-freeze.result != 'success' }}
+        run: |
+          echo "::error::public GitHub Actions changes are temporarily frozen"
+          exit 1
+
       # Keep the helper on the same combined revision as the child workflows so
       # the merge gate evaluates the exact candidate they validated.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
