@@ -15,7 +15,10 @@ pub async fn resolve_root_git_project_for_trust(
     cwd: &AbsolutePathBuf,
 ) -> Option<AbsolutePathBuf> {
     let cwd_uri = PathUri::from_abs_path(cwd);
-    let base = match fs.get_metadata(&cwd_uri, /*sandbox*/ None).await {
+    let base = match fs
+        .get_metadata(&cwd_uri, Default::default(), /*sandbox*/ None)
+        .await
+    {
         Ok(metadata) if metadata.is_directory => cwd.clone(),
         _ => cwd.parent()?,
     };
@@ -32,13 +35,18 @@ pub async fn resolve_root_git_project_for_trust(
         .ok()??;
         let dot_git = candidate.join(".git");
         let metadata = fs
-            .get_metadata(&PathUri::from_abs_path(&dot_git), /*sandbox*/ None)
+            .get_metadata(
+                &PathUri::from_abs_path(&dot_git),
+                Default::default(),
+                /*sandbox*/ None,
+            )
             .await
             .ok()?;
         if !metadata.is_directory
             || fs
                 .get_metadata(
                     &PathUri::from_abs_path(&dot_git.join("HEAD")),
+                    Default::default(),
                     /*sandbox*/ None,
                 )
                 .await
@@ -50,7 +58,10 @@ pub async fn resolve_root_git_project_for_trust(
     };
     let dot_git = repo_root.join(".git");
     let dot_git_uri = PathUri::from_abs_path(&dot_git);
-    let dot_git_metadata = fs.get_metadata(&dot_git_uri, /*sandbox*/ None).await.ok()?;
+    let dot_git_metadata = fs
+        .get_metadata(&dot_git_uri, Default::default(), /*sandbox*/ None)
+        .await
+        .ok()?;
     if dot_git_metadata.is_directory {
         return Some(repo_root);
     }
@@ -63,7 +74,10 @@ pub async fn resolve_root_git_project_for_trust(
 
     let git_dir_uri = read_gitdir_file(fs, &dot_git_uri).await?;
     let git_dir_path = git_dir_uri.to_abs_path().ok()?;
-    let git_dir_metadata = fs.get_metadata(&git_dir_uri, /*sandbox*/ None).await.ok()?;
+    let git_dir_metadata = fs
+        .get_metadata(&git_dir_uri, Default::default(), /*sandbox*/ None)
+        .await
+        .ok()?;
     if !git_dir_metadata.is_directory || git_dir_metadata.is_symlink {
         return None;
     }
@@ -122,7 +136,7 @@ pub async fn resolve_root_git_project_for_trust(
     let main_root = common_dir.parent()?;
     let main_dot_git_uri = PathUri::from_abs_path(&main_root.join(".git"));
     let main_metadata = fs
-        .get_metadata(&main_dot_git_uri, /*sandbox*/ None)
+        .get_metadata(&main_dot_git_uri, Default::default(), /*sandbox*/ None)
         .await
         .ok()?;
     let main_git_dir_uri = if main_metadata.is_directory {
@@ -152,12 +166,18 @@ async fn read_gitdir_file(fs: &dyn ExecutorFileSystem, path: &PathUri) -> Option
 }
 
 async fn read_metadata_file(fs: &dyn ExecutorFileSystem, path: &PathUri) -> Option<Vec<u8>> {
-    let metadata = fs.get_metadata(path, /*sandbox*/ None).await.ok()?;
+    let metadata = fs
+        .get_metadata(path, Default::default(), /*sandbox*/ None)
+        .await
+        .ok()?;
     if !metadata.is_file || metadata.is_symlink || metadata.size > MAX_GIT_METADATA_FILE_BYTES {
         return None;
     }
     // Keep using fs/readFile for independently deployed older exec-servers.
     // Their streaming fs/open API is not universally available yet.
-    let bytes = fs.read_file(path, /*sandbox*/ None).await.ok()?;
+    let bytes = fs
+        .read_file(path, Default::default(), /*sandbox*/ None)
+        .await
+        .ok()?;
     (bytes.len() as u64 <= MAX_GIT_METADATA_FILE_BYTES).then_some(bytes)
 }

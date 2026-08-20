@@ -16,6 +16,7 @@ workspace = true
 [dependencies]
 codex-connectors = { workspace = true }
 codex-core-plugins = { workspace = true }
+codex-file-system = { workspace = true }
 codex-plugin = { workspace = true }
 codex-utils-path-uri = { workspace = true }
 serde_json = { workspace = true }

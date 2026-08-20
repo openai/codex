@@ -652,7 +652,10 @@ async fn review_uses_updated_turn_permissions_and_approval_policy() {
     test.fs()
         .create_directory(
             &selection.cwd,
-            CreateDirectoryOptions { recursive: true },
+            CreateDirectoryOptions {
+                recursive: true,
+                follow_symlinks: true,
+            },
             /*sandbox*/ None,
         )
         .await

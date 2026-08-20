@@ -1,5 +1,6 @@
 use codex_connectors::parse_plugin_app_config;
 use codex_core_plugins::ResolvedExecutorPlugin;
+use codex_file_system::ReadFileOptions;
 use codex_plugin::AppDeclaration;
 use codex_plugin::PluginResourceLocator;
 use codex_utils_path_uri::PathUri;
@@ -46,7 +47,11 @@ impl ExecutorPluginConnectorProvider {
         };
         let contents = plugin
             .file_system()
-            .read_file_text(config_path, /*sandbox*/ None)
+            .read_file_text(
+                config_path,
+                ReadFileOptions::default(),
+                /*sandbox*/ None,
+            )
             .await
             .map_err(|source| ExecutorPluginConnectorProviderError::ReadConfig {
                 plugin_id: plugin_id.to_string(),

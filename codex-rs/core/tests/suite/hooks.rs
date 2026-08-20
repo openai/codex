@@ -3076,7 +3076,12 @@ async fn permission_request_hook_allow_bypasses_strict_auto_review() -> Result<(
         .cwd
         .join(marker_name)?;
     test.fs()
-        .write_file(&marker, b"seed".to_vec(), /*sandbox*/ None)
+        .write_file(
+            &marker,
+            b"seed".to_vec(),
+            Default::default(),
+            /*sandbox*/ None,
+        )
         .await
         .context("create strict auto-review marker")?;
     let (sandbox_policy, permission_profile) =
@@ -3125,7 +3130,7 @@ async fn permission_request_hook_allow_bypasses_strict_auto_review() -> Result<(
     requests[2].function_call_output(command_call_id);
     assert!(
         test.fs()
-            .read_file(&marker, /*sandbox*/ None)
+            .read_file(&marker, Default::default(), /*sandbox*/ None)
             .await
             .is_err(),
         "hook-approved command should remove marker without Guardian review"

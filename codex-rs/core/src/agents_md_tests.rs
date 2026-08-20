@@ -17,9 +17,12 @@ use codex_exec_server::ExecutorFileSystemFuture;
 use codex_exec_server::FileMetadata;
 use codex_exec_server::FileSystemReadStream;
 use codex_exec_server::FileSystemSandboxContext;
+use codex_exec_server::GetMetadataOptions;
 use codex_exec_server::LOCAL_FS;
 use codex_exec_server::ReadDirectoryEntry;
+use codex_exec_server::ReadFileOptions;
 use codex_exec_server::RemoveOptions;
+use codex_exec_server::WriteFileOptions;
 use codex_extension_api::UserInstructions;
 use codex_features::Feature;
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -87,6 +90,7 @@ impl FailingFileSystem {
     async fn read_file(
         &self,
         path: &PathUri,
+        options: ReadFileOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> io::Result<Vec<u8>> {
         if path.to_abs_path()? == self.path
@@ -94,13 +98,14 @@ impl FailingFileSystem {
         {
             return Err(io::Error::new(kind, "injected read failure"));
         }
-        LOCAL_FS.read_file(path, sandbox).await
+        LOCAL_FS.read_file(path, options, sandbox).await
     }
 
     async fn write_file(
         &self,
         _path: &PathUri,
         _contents: Vec<u8>,
+        _options: WriteFileOptions,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> io::Result<()> {
         unreachable!("write_file should not be called")
@@ -118,6 +123,7 @@ impl FailingFileSystem {
     async fn get_metadata(
         &self,
         path: &PathUri,
+        options: GetMetadataOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> io::Result<FileMetadata> {
         let path_abs = path.to_abs_path()?;
@@ -138,7 +144,7 @@ impl FailingFileSystem {
                     .await
                     .expect("metadata release semaphore")
                     .forget();
-                LOCAL_FS.get_metadata(path, sandbox).await
+                LOCAL_FS.get_metadata(path, options, sandbox).await
             }
             InjectedFailure::MetadataBlockedByFilenamePrefix(prefix)
                 if path_abs
@@ -152,7 +158,7 @@ impl FailingFileSystem {
                     .await
                     .expect("metadata release semaphore")
                     .forget();
-                LOCAL_FS.get_metadata(path, sandbox).await
+                LOCAL_FS.get_metadata(path, options, sandbox).await
             }
             InjectedFailure::MetadataPending if path_abs == self.path => {
                 std::future::pending().await
@@ -161,7 +167,7 @@ impl FailingFileSystem {
             | InjectedFailure::MetadataBlocked
             | InjectedFailure::MetadataBlockedByFilenamePrefix(_)
             | InjectedFailure::MetadataPending
-            | InjectedFailure::Read(_) => LOCAL_FS.get_metadata(path, sandbox).await,
+            | InjectedFailure::Read(_) => LOCAL_FS.get_metadata(path, options, sandbox).await,
         }
     }
 
@@ -205,9 +211,10 @@ impl ExecutorFileSystem for FailingFileSystem {
     fn read_file<'a>(
         &'a self,
         path: &'a PathUri,
+        options: ReadFileOptions,
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, Vec<u8>> {
-        Box::pin(FailingFileSystem::read_file(self, path, sandbox))
+        Box::pin(FailingFileSystem::read_file(self, path, options, sandbox))
     }
 
     fn read_file_stream<'a>(
@@ -227,9 +234,12 @@ impl ExecutorFileSystem for FailingFileSystem {
         &'a self,
         path: &'a PathUri,
         contents: Vec<u8>,
+        options: WriteFileOptions,
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
-        Box::pin(FailingFileSystem::write_file(self, path, contents, sandbox))
+        Box::pin(FailingFileSystem::write_file(
+            self, path, contents, options, sandbox,
+        ))
     }
 
     fn create_directory<'a>(
@@ -246,9 +256,12 @@ impl ExecutorFileSystem for FailingFileSystem {
     fn get_metadata<'a>(
         &'a self,
         path: &'a PathUri,
+        options: GetMetadataOptions,
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
-        Box::pin(FailingFileSystem::get_metadata(self, path, sandbox))
+        Box::pin(FailingFileSystem::get_metadata(
+            self, path, options, sandbox,
+        ))
     }
 
     fn read_directory<'a>(

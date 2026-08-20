@@ -919,6 +919,7 @@ impl Environment {
             .fs_create_directory(FsCreateDirectoryParams {
                 path: path.clone(),
                 recursive: Some(false),
+                follow_symlinks: None,
                 sandbox: None,
                 private: Some(true),
             })
@@ -1840,7 +1841,7 @@ mod tests {
 
         let err = environment
             .get_filesystem()
-            .read_file(&path, Some(&sandbox))
+            .read_file(&path, Default::default(), Some(&sandbox))
             .await
             .expect_err("sandboxed read should require runtime paths");
 

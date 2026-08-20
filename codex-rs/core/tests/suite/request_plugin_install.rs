@@ -233,7 +233,7 @@ async fn start_gated_step_preparation(test: &TestCodex, server: &MockServer) -> 
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let mcp_started = fs
-                .read_file_text(&pid_file, /*sandbox*/ None)
+                .read_file_text(&pid_file, Default::default(), /*sandbox*/ None)
                 .await
                 .is_ok_and(|pid| !pid.trim().is_empty());
             let recommendation_count = server
@@ -424,7 +424,12 @@ async fn mcp_discovery_overlaps_endpoint_plugin_recommendations() -> Result<()> 
         "sampling should wait for the complete MCP catalog"
     );
     test.fs()
-        .write_file(&barrier, b"ready".to_vec(), /*sandbox*/ None)
+        .write_file(
+            &barrier,
+            b"ready".to_vec(),
+            Default::default(),
+            /*sandbox*/ None,
+        )
         .await?;
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
@@ -489,7 +494,12 @@ async fn interrupting_concurrent_step_preparation_prevents_sampling() -> Result<
     );
 
     test.fs()
-        .write_file(&barrier, b"ready".to_vec(), /*sandbox*/ None)
+        .write_file(
+            &barrier,
+            b"ready".to_vec(),
+            Default::default(),
+            /*sandbox*/ None,
+        )
         .await?;
     test.codex.shutdown_and_wait().await?;
     assert!(

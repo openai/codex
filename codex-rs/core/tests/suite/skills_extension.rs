@@ -548,7 +548,7 @@ async fn capability_sections_render_in_order_with_host_repo_and_plugin_skills() 
             let skill_dir = cwd.join(".agents/skills/repo-search");
             fs.create_directory(
                 &PathUri::from_host_native_path(&skill_dir)?,
-                CreateDirectoryOptions { recursive: true },
+                CreateDirectoryOptions { recursive: true, follow_symlinks: true },
                 /*sandbox*/ None,
             )
             .await?;
@@ -558,7 +558,7 @@ async fn capability_sections_render_in_order_with_host_repo_and_plugin_skills() 
                     "---\nname: repo-search\ndescription: inspect repo data\n---\n\n{REPO_SKILL_BODY}\n"
                 )
                 .into_bytes(),
-                /*sandbox*/ None,
+                Default::default(), /*sandbox*/ None,
             )
             .await?;
             Ok(())

@@ -45,15 +45,23 @@ async fn write_repo_skill(
     let skill_dir_uri = PathUri::from_host_native_path(&skill_dir)?;
     fs.create_directory(
         &skill_dir_uri,
-        CreateDirectoryOptions { recursive: true },
+        CreateDirectoryOptions {
+            recursive: true,
+            follow_symlinks: true,
+        },
         /*sandbox*/ None,
     )
     .await?;
     let contents = format!("---\nname: {name}\ndescription: {description}\n---\n\n{body}\n");
     let path = skill_dir.join("SKILL.md");
     let path_uri = PathUri::from_host_native_path(&path)?;
-    fs.write_file(&path_uri, contents.into_bytes(), /*sandbox*/ None)
-        .await?;
+    fs.write_file(
+        &path_uri,
+        contents.into_bytes(),
+        Default::default(),
+        /*sandbox*/ None,
+    )
+    .await?;
     Ok(())
 }
 

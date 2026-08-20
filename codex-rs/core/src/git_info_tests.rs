@@ -6,9 +6,12 @@ use codex_exec_server::FileMetadata;
 use codex_exec_server::FileSystemReadStream;
 use codex_exec_server::FileSystemResult;
 use codex_exec_server::FileSystemSandboxContext;
+use codex_exec_server::GetMetadataOptions;
 use codex_exec_server::LOCAL_FS;
 use codex_exec_server::ReadDirectoryEntry;
+use codex_exec_server::ReadFileOptions;
 use codex_exec_server::RemoveOptions;
+use codex_exec_server::WriteFileOptions;
 use codex_git_utils::GitInfo;
 use codex_git_utils::GitSha;
 use codex_git_utils::collect_git_info;
@@ -68,6 +71,7 @@ impl ExecutorFileSystem for MetadataOverrideFileSystem {
     fn read_file<'a>(
         &'a self,
         path: &'a PathUri,
+        options: ReadFileOptions,
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, Vec<u8>> {
         Box::pin(async move {
@@ -79,7 +83,7 @@ impl ExecutorFileSystem for MetadataOverrideFileSystem {
                 fs::remove_file(local_path.as_path())?;
                 std::os::unix::fs::symlink(replacement, local_path.as_path())?;
             }
-            LOCAL_FS.read_file(path, sandbox).await
+            LOCAL_FS.read_file(path, options, sandbox).await
         })
     }
 
@@ -95,6 +99,7 @@ impl ExecutorFileSystem for MetadataOverrideFileSystem {
         &'a self,
         _path: &'a PathUri,
         _contents: Vec<u8>,
+        _options: WriteFileOptions,
         _sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(async { Self::unsupported() })
@@ -112,6 +117,7 @@ impl ExecutorFileSystem for MetadataOverrideFileSystem {
     fn get_metadata<'a>(
         &'a self,
         path: &'a PathUri,
+        options: GetMetadataOptions,
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
         Box::pin(async move {
@@ -121,7 +127,7 @@ impl ExecutorFileSystem for MetadataOverrideFileSystem {
                     "injected metadata failure",
                 ))
             } else {
-                LOCAL_FS.get_metadata(path, sandbox).await
+                LOCAL_FS.get_metadata(path, options, sandbox).await
             }
         })
     }

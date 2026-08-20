@@ -112,6 +112,7 @@ async fn thread_start_reports_selected_environment_instruction_source() -> Resul
             .write_file(
                 &agents_source,
                 AGENTS_INSTRUCTIONS.as_bytes().to_vec(),
+                Default::default(),
                 /*sandbox*/ None,
             )
             .await?;
@@ -250,7 +251,12 @@ async fn command_execution_notifications_preserve_selected_environment_paths() -
         environment
             .environment()
             .get_filesystem()
-            .write_file(&path, b"fn main() {}\n".to_vec(), /*sandbox*/ None)
+            .write_file(
+                &path,
+                b"fn main() {}\n".to_vec(),
+                Default::default(),
+                /*sandbox*/ None,
+            )
             .await?;
         (
             path.inferred_native_path_string(),

@@ -15,7 +15,10 @@ use anyhow::Result;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::FileSystemSandboxContext;
+use codex_exec_server::GetMetadataOptions;
+use codex_exec_server::ReadFileOptions;
 use codex_exec_server::RemoveOptions;
+use codex_exec_server::WriteFileOptions;
 use codex_utils_path_uri::PathUri;
 use codex_utils_path_uri::PathUriParseError;
 pub use parser::Hunk;
@@ -64,6 +67,23 @@ pub enum ApplyPatchFileUpdateMode {
     NormalizeToLf,
     /// Preserve existing line endings and use the file's preferred ending for new lines.
     PreserveLineEndings,
+}
+
+/// Policy for one patch application. Standalone callers follow symlinks by default.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ApplyPatchOptions {
+    pub update_file_mode: ApplyPatchFileUpdateMode,
+    /// Whether filesystem operations may resolve symlinks in any path component.
+    pub follow_symlinks: bool,
+}
+
+impl Default for ApplyPatchOptions {
+    fn default() -> Self {
+        Self {
+            update_file_mode: ApplyPatchFileUpdateMode::default(),
+            follow_symlinks: true,
+        }
+    }
 }
 
 /// Reads the update mode selected for an arg0-dispatched `apply_patch` process.
@@ -324,9 +344,9 @@ pub async fn apply_patch(
     fs: &dyn ExecutorFileSystem,
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> Result<AppliedPatchDelta, ApplyPatchFailure> {
-    apply_patch_with_mode(
+    apply_patch_with_options(
         patch,
-        ApplyPatchFileUpdateMode::default(),
+        ApplyPatchOptions::default(),
         cwd,
         stdout,
         stderr,
@@ -336,11 +356,11 @@ pub async fn apply_patch(
     .await
 }
 
-/// Applies the patch using the selected file-update mode and prints the result
+/// Applies the patch using the selected options and prints the result
 /// to stdout/stderr.
-pub async fn apply_patch_with_mode(
+pub async fn apply_patch_with_options(
     patch: &str,
-    update_file_mode: ApplyPatchFileUpdateMode,
+    options: ApplyPatchOptions,
     cwd: &PathUri,
     stdout: &mut impl std::io::Write,
     stderr: &mut impl std::io::Write,
@@ -374,7 +394,7 @@ pub async fn apply_patch_with_mode(
         }
     };
 
-    apply_hunks_with_mode(&hunks, update_file_mode, cwd, stdout, stderr, fs, sandbox).await
+    apply_hunks_with_options(&hunks, options, cwd, stdout, stderr, fs, sandbox).await
 }
 
 /// Applies hunks and continues to update stdout/stderr
@@ -386,9 +406,9 @@ pub async fn apply_hunks(
     fs: &dyn ExecutorFileSystem,
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> Result<AppliedPatchDelta, ApplyPatchFailure> {
-    apply_hunks_with_mode(
+    apply_hunks_with_options(
         hunks,
-        ApplyPatchFileUpdateMode::default(),
+        ApplyPatchOptions::default(),
         cwd,
         stdout,
         stderr,
@@ -400,9 +420,9 @@ pub async fn apply_hunks(
 
 /// Applies hunks using the selected file-update mode and continues to update
 /// stdout/stderr.
-async fn apply_hunks_with_mode(
+async fn apply_hunks_with_options(
     hunks: &[Hunk],
-    update_file_mode: ApplyPatchFileUpdateMode,
+    options: ApplyPatchOptions,
     cwd: &PathUri,
     stdout: &mut impl std::io::Write,
     stderr: &mut impl std::io::Write,
@@ -410,7 +430,7 @@ async fn apply_hunks_with_mode(
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> Result<AppliedPatchDelta, ApplyPatchFailure> {
     let mut delta = AppliedPatchDelta::empty();
-    match apply_hunks_to_files(hunks, update_file_mode, cwd, fs, sandbox, &mut delta).await {
+    match apply_hunks_to_files(hunks, options, cwd, fs, sandbox, &mut delta).await {
         Ok(affected_paths) => {
             print_summary(&affected_paths, stdout).map_err(|error| {
                 ApplyPatchFailure::new(ApplyPatchError::from(error), delta.clone())
@@ -449,12 +469,16 @@ pub struct AffectedPaths {
 /// Returns an error if the patch could not be applied.
 async fn apply_hunks_to_files(
     hunks: &[Hunk],
-    update_file_mode: ApplyPatchFileUpdateMode,
+    options: ApplyPatchOptions,
     cwd: &PathUri,
     fs: &dyn ExecutorFileSystem,
     sandbox: Option<&FileSystemSandboxContext>,
     delta: &mut AppliedPatchDelta,
 ) -> anyhow::Result<AffectedPaths> {
+    let ApplyPatchOptions {
+        update_file_mode,
+        follow_symlinks,
+    } = options;
     if hunks.is_empty() {
         anyhow::bail!("No files were modified.");
     }
@@ -482,14 +506,20 @@ async fn apply_hunks_to_files(
         let path_uri = hunk.resolve_path(cwd)?;
         match hunk {
             Hunk::AddFile { contents, .. } => {
-                let overwritten_content =
-                    read_optional_file_text_for_delta(&path_uri, fs, sandbox, &mut delta.exact)
-                        .await;
+                let overwritten_content = read_optional_file_text_for_delta(
+                    &path_uri,
+                    fs,
+                    follow_symlinks,
+                    sandbox,
+                    &mut delta.exact,
+                )
+                .await;
                 try_write!(
                     write_file_with_missing_parent_retry(
                         fs,
                         &path_uri,
                         contents.clone().into_bytes(),
+                        follow_symlinks,
                         sandbox,
                     )
                     .await
@@ -504,12 +534,22 @@ async fn apply_hunks_to_files(
                 added.push(affected_path);
             }
             Hunk::DeleteFile { .. } => {
-                note_existing_path_delta_support(&path_uri, fs, sandbox, &mut delta.exact).await;
-                let deleted_content = fs.read_file_text(&path_uri, sandbox).await.ok();
+                note_existing_path_delta_support(
+                    &path_uri,
+                    fs,
+                    follow_symlinks,
+                    sandbox,
+                    &mut delta.exact,
+                )
+                .await;
+                let deleted_content = fs
+                    .read_file_text(&path_uri, ReadFileOptions { follow_symlinks }, sandbox)
+                    .await
+                    .ok();
                 if deleted_content.is_none() {
                     delta.exact = false;
                 }
-                ensure_not_directory(&path_uri, fs, sandbox)
+                ensure_not_directory(&path_uri, fs, follow_symlinks, sandbox)
                     .await
                     .with_context(|| {
                         format!(
@@ -523,6 +563,7 @@ async fn apply_hunks_to_files(
                         RemoveOptions {
                             recursive: false,
                             force: false,
+                            follow_symlinks,
                         },
                         sandbox,
                     )
@@ -538,6 +579,7 @@ async fn apply_hunks_to_files(
                         &path_uri,
                         deleted_content.as_deref(),
                         fs,
+                        follow_symlinks,
                         sandbox,
                     )
                     .await;
@@ -554,7 +596,14 @@ async fn apply_hunks_to_files(
             Hunk::UpdateFile {
                 move_path, chunks, ..
             } => {
-                note_existing_path_delta_support(&path_uri, fs, sandbox, &mut delta.exact).await;
+                note_existing_path_delta_support(
+                    &path_uri,
+                    fs,
+                    follow_symlinks,
+                    sandbox,
+                    &mut delta.exact,
+                )
+                .await;
                 let AppliedPatch {
                     original_contents,
                     new_contents,
@@ -563,19 +612,26 @@ async fn apply_hunks_to_files(
                     chunks,
                     update_file_mode,
                     fs,
+                    follow_symlinks,
                     sandbox,
                 )
                 .await?;
                 if let Some(dest) = move_path {
                     let dest_uri = cwd.join(&dest.to_string_lossy())?;
-                    let overwritten_move_content =
-                        read_optional_file_text_for_delta(&dest_uri, fs, sandbox, &mut delta.exact)
-                            .await;
+                    let overwritten_move_content = read_optional_file_text_for_delta(
+                        &dest_uri,
+                        fs,
+                        follow_symlinks,
+                        sandbox,
+                        &mut delta.exact,
+                    )
+                    .await;
                     try_write!(
                         write_file_with_missing_parent_retry(
                             fs,
                             &dest_uri,
                             new_contents.clone().into_bytes(),
+                            follow_symlinks,
                             sandbox,
                         )
                         .await
@@ -588,7 +644,7 @@ async fn apply_hunks_to_files(
                             overwritten_content: overwritten_move_content.clone(),
                         },
                     });
-                    ensure_not_directory(&path_uri, fs, sandbox)
+                    ensure_not_directory(&path_uri, fs, follow_symlinks, sandbox)
                         .await
                         .with_context(|| {
                             format!(
@@ -602,6 +658,7 @@ async fn apply_hunks_to_files(
                             RemoveOptions {
                                 recursive: false,
                                 force: false,
+                                follow_symlinks,
                             },
                             sandbox,
                         )
@@ -617,6 +674,7 @@ async fn apply_hunks_to_files(
                             &path_uri,
                             Some(&original_contents),
                             fs,
+                            follow_symlinks,
                             sandbox,
                         )
                         .await;
@@ -634,12 +692,17 @@ async fn apply_hunks_to_files(
                     modified.push(affected_path);
                 } else {
                     try_write!(
-                        fs.write_file(&path_uri, new_contents.clone().into_bytes(), sandbox)
-                            .await
-                            .with_context(|| format!(
-                                "Failed to write file {}",
-                                path_uri.inferred_native_path_string()
-                            ))
+                        fs.write_file(
+                            &path_uri,
+                            new_contents.clone().into_bytes(),
+                            WriteFileOptions { follow_symlinks },
+                            sandbox,
+                        )
+                        .await
+                        .with_context(|| format!(
+                            "Failed to write file {}",
+                            path_uri.inferred_native_path_string()
+                        ))
                     );
                     delta.changes.push(AppliedPatchChange {
                         path: path_uri,
@@ -665,9 +728,12 @@ async fn apply_hunks_to_files(
 async fn ensure_not_directory(
     path: &PathUri,
     fs: &dyn ExecutorFileSystem,
+    follow_symlinks: bool,
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> io::Result<()> {
-    let metadata = fs.get_metadata(path, sandbox).await?;
+    let metadata = fs
+        .get_metadata(path, GetMetadataOptions { follow_symlinks }, sandbox)
+        .await?;
     if metadata.is_directory {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -681,11 +747,12 @@ async fn remove_failure_was_side_effect_free(
     path: &PathUri,
     expected_content: Option<&str>,
     fs: &dyn ExecutorFileSystem,
+    follow_symlinks: bool,
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> bool {
     match expected_content {
         Some(expected_content) => fs
-            .read_file_text(path, sandbox)
+            .read_file_text(path, ReadFileOptions { follow_symlinks }, sandbox)
             .await
             .is_ok_and(|content| content == expected_content),
         None => false,
@@ -695,11 +762,15 @@ async fn remove_failure_was_side_effect_free(
 async fn read_optional_file_text_for_delta(
     path: &PathUri,
     fs: &dyn ExecutorFileSystem,
+    follow_symlinks: bool,
     sandbox: Option<&FileSystemSandboxContext>,
     exact: &mut bool,
 ) -> Option<String> {
-    note_existing_path_delta_support(path, fs, sandbox, exact).await;
-    match fs.read_file_text(path, sandbox).await {
+    note_existing_path_delta_support(path, fs, follow_symlinks, sandbox, exact).await;
+    match fs
+        .read_file_text(path, ReadFileOptions { follow_symlinks }, sandbox)
+        .await
+    {
         Ok(content) => Some(content),
         Err(source) if source.kind() == io::ErrorKind::NotFound => None,
         Err(_) => {
@@ -712,10 +783,14 @@ async fn read_optional_file_text_for_delta(
 async fn note_existing_path_delta_support(
     path: &PathUri,
     fs: &dyn ExecutorFileSystem,
+    follow_symlinks: bool,
     sandbox: Option<&FileSystemSandboxContext>,
     exact: &mut bool,
 ) {
-    match fs.get_metadata(path, sandbox).await {
+    match fs
+        .get_metadata(path, GetMetadataOptions { follow_symlinks }, sandbox)
+        .await
+    {
         Ok(metadata) if metadata.is_file && !metadata.is_symlink => {}
         Ok(_) => *exact = false,
         Err(source) if source.kind() == io::ErrorKind::NotFound => {}
@@ -727,29 +802,50 @@ async fn write_file_with_missing_parent_retry(
     fs: &dyn ExecutorFileSystem,
     path: &PathUri,
     contents: Vec<u8>,
+    follow_symlinks: bool,
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> anyhow::Result<()> {
-    match fs.write_file(path, contents.clone(), sandbox).await {
+    match fs
+        .write_file(
+            path,
+            contents.clone(),
+            WriteFileOptions { follow_symlinks },
+            sandbox,
+        )
+        .await
+    {
         Ok(()) => Ok(()),
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
             if let Some(parent) = path.parent() {
-                fs.create_directory(&parent, CreateDirectoryOptions { recursive: true }, sandbox)
-                    .await
-                    .with_context(|| {
-                        format!(
-                            "Failed to create parent directories for {}",
-                            path.inferred_native_path_string()
-                        )
-                    })?;
-            }
-            fs.write_file(path, contents, sandbox)
+                fs.create_directory(
+                    &parent,
+                    CreateDirectoryOptions {
+                        recursive: true,
+                        follow_symlinks,
+                    },
+                    sandbox,
+                )
                 .await
                 .with_context(|| {
                     format!(
-                        "Failed to write file {}",
+                        "Failed to create parent directories for {}",
                         path.inferred_native_path_string()
                     )
                 })?;
+            }
+            fs.write_file(
+                path,
+                contents,
+                WriteFileOptions { follow_symlinks },
+                sandbox,
+            )
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to write file {}",
+                    path.inferred_native_path_string()
+                )
+            })?;
             Ok(())
         }
         Err(err) => Err(err).with_context(|| {

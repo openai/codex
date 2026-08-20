@@ -1,5 +1,6 @@
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::FileSystemSandboxContext;
+use codex_exec_server::ReadFileOptions;
 use codex_utils_path_uri::PathUri;
 use similar::TextDiff;
 
@@ -27,17 +28,21 @@ pub(crate) async fn derive_new_contents_from_chunks(
     chunks: &[UpdateFileChunk],
     update_file_mode: ApplyPatchFileUpdateMode,
     fs: &dyn ExecutorFileSystem,
+    follow_symlinks: bool,
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> std::result::Result<AppliedPatch, ApplyPatchError> {
-    let original_contents = fs.read_file_text(path, sandbox).await.map_err(|err| {
-        ApplyPatchError::IoError(IoError {
-            context: format!(
-                "Failed to read file to update {}",
-                path.inferred_native_path_string()
-            ),
-            source: err,
-        })
-    })?;
+    let original_contents = fs
+        .read_file_text(path, ReadFileOptions { follow_symlinks }, sandbox)
+        .await
+        .map_err(|err| {
+            ApplyPatchError::IoError(IoError {
+                context: format!(
+                    "Failed to read file to update {}",
+                    path.inferred_native_path_string()
+                ),
+                source: err,
+            })
+        })?;
 
     let path_text = path.inferred_native_path_string();
     let new_contents = match update_file_mode {
@@ -311,7 +316,15 @@ async fn unified_diff_from_chunks_with_context_and_mode(
     let AppliedPatch {
         original_contents,
         new_contents,
-    } = derive_new_contents_from_chunks(path, chunks, update_file_mode, fs, sandbox).await?;
+    } = derive_new_contents_from_chunks(
+        path,
+        chunks,
+        update_file_mode,
+        fs,
+        /*follow_symlinks*/ true,
+        sandbox,
+    )
+    .await?;
     let text_diff = TextDiff::from_lines(&original_contents, &new_contents);
     let unified_diff = text_diff.unified_diff().context_radius(context).to_string();
     Ok(ApplyPatchFileUpdate {

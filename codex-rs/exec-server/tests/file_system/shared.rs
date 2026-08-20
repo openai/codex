@@ -78,6 +78,7 @@ async fn file_system_get_metadata_reports_files_and_directories(
     let file_metadata = file_system
         .get_metadata(
             &PathUri::from_host_native_path(&file_path)?,
+            Default::default(),
             /*sandbox*/ None,
         )
         .await
@@ -98,6 +99,7 @@ async fn file_system_get_metadata_reports_files_and_directories(
     let directory_metadata = file_system
         .get_metadata(
             &PathUri::from_host_native_path(&directory_path)?,
+            Default::default(),
             /*sandbox*/ None,
         )
         .await
@@ -133,7 +135,10 @@ async fn file_system_create_directory_creates_nested_directories(
     file_system
         .create_directory(
             &PathUri::from_host_native_path(&nested_dir)?,
-            CreateDirectoryOptions { recursive: true },
+            CreateDirectoryOptions {
+                recursive: true,
+                follow_symlinks: true,
+            },
             /*sandbox*/ None,
         )
         .await
@@ -158,6 +163,7 @@ async fn file_system_write_file_writes_bytes(
         .write_file(
             &PathUri::from_host_native_path(&file_path)?,
             b"hello from trait".to_vec(),
+            Default::default(),
             /*sandbox*/ None,
         )
         .await
@@ -206,6 +212,7 @@ async fn file_system_read_file_returns_bytes(
     let contents = file_system
         .read_file(
             &PathUri::from_host_native_path(&file_path)?,
+            Default::default(),
             /*sandbox*/ None,
         )
         .await
@@ -274,6 +281,7 @@ async fn file_system_read_file_text_returns_string(
     let contents = file_system
         .read_file_text(
             &PathUri::from_host_native_path(&file_path)?,
+            Default::default(),
             /*sandbox*/ None,
         )
         .await
@@ -586,6 +594,7 @@ async fn file_system_remove_removes_directory(
             RemoveOptions {
                 recursive: true,
                 force: true,
+                follow_symlinks: true,
             },
             /*sandbox*/ None,
         )
@@ -612,6 +621,7 @@ async fn file_system_write_file_reports_missing_parent(
         .write_file(
             &PathUri::from_host_native_path(&missing_parent_path)?,
             b"hello from trait".to_vec(),
+            Default::default(),
             /*sandbox*/ None,
         )
         .await
@@ -677,7 +687,11 @@ async fn file_system_sandboxed_metadata_and_read_allow_readable_root(
     let sandbox = read_only_sandbox(allowed_dir);
 
     let metadata = file_system
-        .get_metadata(&PathUri::from_host_native_path(&file_path)?, Some(&sandbox))
+        .get_metadata(
+            &PathUri::from_host_native_path(&file_path)?,
+            Default::default(),
+            Some(&sandbox),
+        )
         .await
         .with_context(|| format!("mode={implementation}"))?;
     assert_eq!(
@@ -693,7 +707,11 @@ async fn file_system_sandboxed_metadata_and_read_allow_readable_root(
     );
 
     let contents = file_system
-        .read_file(&PathUri::from_host_native_path(&file_path)?, Some(&sandbox))
+        .read_file(
+            &PathUri::from_host_native_path(&file_path)?,
+            Default::default(),
+            Some(&sandbox),
+        )
         .await
         .with_context(|| format!("mode={implementation}"))?;
     assert_eq!(contents, b"sandboxed hello");
@@ -743,6 +761,7 @@ async fn sandboxed_file_operations_cannot_read_helper_siblings() -> Result<()> {
     let allowed_contents = file_system
         .read_file(
             &PathUri::from_host_native_path(&allowed_file)?,
+            Default::default(),
             Some(&sandbox),
         )
         .await?;
@@ -766,7 +785,10 @@ async fn sandboxed_file_operations_cannot_read_helper_siblings() -> Result<()> {
     for path in [sibling, escaping_link] {
         let path = PathUri::from_host_native_path(path)?;
         assert!(
-            file_system.read_file(&path, Some(&sandbox)).await.is_err(),
+            file_system
+                .read_file(&path, Default::default(), Some(&sandbox))
+                .await
+                .is_err(),
             "sandboxed read unexpectedly accessed helper sibling {path}"
         );
         assert!(
@@ -901,6 +923,7 @@ async fn file_system_sandboxed_write_allows_additional_write_root(
         .write_file(
             &PathUri::from_host_native_path(&file_path)?,
             b"created".to_vec(),
+            Default::default(),
             Some(&sandbox),
         )
         .await

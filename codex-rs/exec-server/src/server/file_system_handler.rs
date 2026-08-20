@@ -10,7 +10,10 @@ use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
 use crate::ExecServerRuntimePaths;
 use crate::ExecutorFileSystem;
+use crate::GetMetadataOptions;
+use crate::ReadFileOptions;
 use crate::RemoveOptions;
+use crate::WriteFileOptions;
 use crate::file_read::FileReadHandleManager;
 use crate::local_file_system::LocalFileSystem;
 use crate::protocol::FS_READ_DIRECTORY_METHOD;
@@ -125,7 +128,13 @@ impl FileSystemHandler {
     ) -> Result<FsReadFileResponse, JSONRPCErrorError> {
         let bytes = self
             .file_system
-            .read_file(&params.path, params.sandbox.as_ref())
+            .read_file(
+                &params.path,
+                ReadFileOptions {
+                    follow_symlinks: params.follow_symlinks.unwrap_or(true),
+                },
+                params.sandbox.as_ref(),
+            )
             .await
             .map_err(map_fs_error)?;
         Ok(FsReadFileResponse {
@@ -143,7 +152,14 @@ impl FileSystemHandler {
             ))
         })?;
         self.file_system
-            .write_file(&params.path, bytes, params.sandbox.as_ref())
+            .write_file(
+                &params.path,
+                bytes,
+                WriteFileOptions {
+                    follow_symlinks: params.follow_symlinks.unwrap_or(true),
+                },
+                params.sandbox.as_ref(),
+            )
             .await
             .map_err(map_fs_error)?;
         Ok(FsWriteFileResponse {})
@@ -154,6 +170,11 @@ impl FileSystemHandler {
         params: FsCreateDirectoryParams,
     ) -> Result<FsCreateDirectoryResponse, JSONRPCErrorError> {
         if params.private.unwrap_or(false) {
+            if params.follow_symlinks == Some(false) {
+                return Err(invalid_request(
+                    "private directories do not support followSymlinks=false".to_string(),
+                ));
+            }
             if params.recursive.unwrap_or(false) || params.sandbox.is_some() {
                 return Err(invalid_request(
                     "private directories must be non-recursive and unsandboxed".to_string(),
@@ -178,7 +199,10 @@ impl FileSystemHandler {
         self.file_system
             .create_directory(
                 &params.path,
-                CreateDirectoryOptions { recursive },
+                CreateDirectoryOptions {
+                    recursive,
+                    follow_symlinks: params.follow_symlinks.unwrap_or(true),
+                },
                 params.sandbox.as_ref(),
             )
             .await
@@ -192,7 +216,13 @@ impl FileSystemHandler {
     ) -> Result<FsGetMetadataResponse, JSONRPCErrorError> {
         let metadata = self
             .file_system
-            .get_metadata(&params.path, params.sandbox.as_ref())
+            .get_metadata(
+                &params.path,
+                GetMetadataOptions {
+                    follow_symlinks: params.follow_symlinks.unwrap_or(true),
+                },
+                params.sandbox.as_ref(),
+            )
             .await
             .map_err(map_fs_error)?;
         Ok(FsGetMetadataResponse {
@@ -262,7 +292,11 @@ impl FileSystemHandler {
         self.file_system
             .remove(
                 &params.path,
-                RemoveOptions { recursive, force },
+                RemoveOptions {
+                    recursive,
+                    force,
+                    follow_symlinks: params.follow_symlinks.unwrap_or(true),
+                },
                 params.sandbox.as_ref(),
             )
             .await
@@ -337,6 +371,7 @@ mod tests {
         handler
             .create_directory(FsCreateDirectoryParams {
                 path: PathUri::from_host_native_path(&directory).expect("directory URI"),
+                follow_symlinks: None,
                 recursive: Some(false),
                 sandbox: None,
                 private: Some(true),
@@ -354,6 +389,37 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn private_directories_reject_no_follow_before_resolving_the_path() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let runtime_paths = ExecServerRuntimePaths::new(
+            std::env::current_exe().expect("current exe"),
+            /*codex_linux_sandbox_exe*/ None,
+        )
+        .expect("runtime paths");
+        let handler = FileSystemHandler::new(runtime_paths);
+        let target = temp_dir.path().join("target");
+        std::fs::create_dir(&target).expect("create target");
+        let alias = temp_dir.path().join("alias");
+        std::os::unix::fs::symlink(&target, &alias).expect("create alias");
+        let directory = alias.join("private-metrics");
+
+        let error = handler
+            .create_directory(FsCreateDirectoryParams {
+                path: PathUri::from_host_native_path(&directory).expect("directory URI"),
+                follow_symlinks: Some(false),
+                recursive: Some(false),
+                sandbox: None,
+                private: Some(true),
+            })
+            .await
+            .expect_err("strict private directory request must fail closed");
+
+        assert!(error.message.contains("followSymlinks=false"));
+        assert!(!target.join("private-metrics").exists());
+    }
+
     #[cfg(windows)]
     #[tokio::test]
     async fn private_directories_are_rejected_when_owner_only_permissions_are_unsupported() {
@@ -368,6 +434,7 @@ mod tests {
         let error = handler
             .create_directory(FsCreateDirectoryParams {
                 path: PathUri::from_host_native_path(&directory).expect("directory URI"),
+                follow_symlinks: None,
                 recursive: Some(false),
                 sandbox: None,
                 private: Some(true),
@@ -412,6 +479,7 @@ mod tests {
             handler
                 .write_file(FsWriteFileParams {
                     path: path.clone(),
+                    follow_symlinks: None,
                     data_base64: STANDARD.encode("ok"),
                     sandbox: Some(sandbox_context(sandbox_policy.clone())),
                 })
@@ -436,6 +504,7 @@ mod tests {
             let response = handler
                 .read_file(FsReadFileParams {
                     path,
+                    follow_symlinks: None,
                     sandbox: Some(sandbox_context(sandbox_policy)),
                 })
                 .await

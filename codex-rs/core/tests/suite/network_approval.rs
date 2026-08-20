@@ -1956,7 +1956,10 @@ async fn approved_network_host_for_one_environment_still_prompts_in_another() ->
     test.fs()
         .create_directory(
             &remote_cwd_uri,
-            CreateDirectoryOptions { recursive: true },
+            CreateDirectoryOptions {
+                recursive: true,
+                follow_symlinks: true,
+            },
             /*sandbox*/ None,
         )
         .await?;
@@ -2031,6 +2034,7 @@ async fn approved_network_host_for_one_environment_still_prompts_in_another() ->
             RemoveOptions {
                 recursive: true,
                 force: true,
+                follow_symlinks: true,
             },
             /*sandbox*/ None,
         )

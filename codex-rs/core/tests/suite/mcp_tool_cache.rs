@@ -88,7 +88,10 @@ async fn wait_for_new_pid(
 ) -> anyhow::Result<String> {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            if let Ok(contents) = fs.read_file_text(path, /*sandbox*/ None).await {
+            if let Ok(contents) = fs
+                .read_file_text(path, Default::default(), /*sandbox*/ None)
+                .await
+            {
                 let pid = contents.trim();
                 if !pid.is_empty() && Some(pid) != previous_pid {
                     return pid.to_string();
@@ -447,8 +450,13 @@ async fn cached_mcp_startup_is_eager_for_root_and_lazy_for_subagents() -> anyhow
         .start_or_steer_turn(user_turn("use the echo tool"))
         .await?;
     let first_pid = wait_for_new_pid(fs.as_ref(), &pid_file, /*previous_pid*/ None).await?;
-    fs.write_file(&barrier_file, b"ready".to_vec(), /*sandbox*/ None)
-        .await?;
+    fs.write_file(
+        &barrier_file,
+        b"ready".to_vec(),
+        Default::default(),
+        /*sandbox*/ None,
+    )
+    .await?;
     wait_for_event(&fixture.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
@@ -477,6 +485,7 @@ async fn cached_mcp_startup_is_eager_for_root_and_lazy_for_subagents() -> anyhow
         RemoveOptions {
             recursive: false,
             force: false,
+            follow_symlinks: true,
         },
         /*sandbox*/ None,
     )
@@ -484,6 +493,7 @@ async fn cached_mcp_startup_is_eager_for_root_and_lazy_for_subagents() -> anyhow
     fs.write_file(
         &app_only_cwd_marker_file,
         b"app-only".to_vec(),
+        Default::default(),
         /*sandbox*/ None,
     )
     .await?;
@@ -538,7 +548,9 @@ async fn cached_mcp_startup_is_eager_for_root_and_lazy_for_subagents() -> anyhow
         &format!("Echo from {cached_process}."),
     );
     assert_eq!(
-        fs.read_file_text(&pid_file, /*sandbox*/ None).await?.trim(),
+        fs.read_file_text(&pid_file, Default::default(), /*sandbox*/ None)
+            .await?
+            .trim(),
         eager_pid,
         "cached tool definitions should not start an unused subagent-owned MCP process"
     );
@@ -642,8 +654,13 @@ async fn cached_mcp_startup_is_eager_for_root_and_lazy_for_subagents() -> anyhow
         .context("the unrelated tool should emit its plan update")?;
 
     fixture.codex.shutdown_and_wait().await?;
-    fs.write_file(&barrier_file, b"ready".to_vec(), /*sandbox*/ None)
-        .await?;
+    fs.write_file(
+        &barrier_file,
+        b"ready".to_vec(),
+        Default::default(),
+        /*sandbox*/ None,
+    )
+    .await?;
     let expected_error = format!("MCP tool `{SERVER_NAME}/cwd` is not available to the model");
     assert_eq!(cached_turn.await??, second_process);
     assert_definition(
@@ -703,6 +720,7 @@ async fn cached_mcp_startup_is_eager_for_root_and_lazy_for_subagents() -> anyhow
         RemoveOptions {
             recursive: false,
             force: false,
+            follow_symlinks: true,
         },
         /*sandbox*/ None,
     )
@@ -751,8 +769,13 @@ async fn cached_mcp_startup_is_eager_for_root_and_lazy_for_subagents() -> anyhow
         matches!(event, EventMsg::TurnAborted(_))
     })
     .await;
-    fs.write_file(&barrier_file, b"ready".to_vec(), /*sandbox*/ None)
-        .await?;
+    fs.write_file(
+        &barrier_file,
+        b"ready".to_vec(),
+        Default::default(),
+        /*sandbox*/ None,
+    )
+    .await?;
     tokio::time::timeout(
         Duration::from_secs(2),
         wait_for_event(&interrupted_thread, |event| {

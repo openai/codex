@@ -10,13 +10,22 @@ mod support;
 
 use std::path::Path;
 use std::process::Command;
+use std::time::Duration;
 
 use anyhow::Result;
+use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::FileSystemSandboxContext;
+use codex_exec_server::GetMetadataOptions;
+use codex_exec_server::ReadFileOptions;
+use codex_exec_server::RemoveOptions;
+use codex_exec_server::WriteFileOptions;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_path_uri::PathUri;
 use test_case::test_case;
+use tokio::net::windows::named_pipe::ServerOptions;
+use tokio::time::timeout;
+use uuid::Uuid;
 
 use crate::support::FileSystemImplementation;
 use crate::support::create_file_system_context;
@@ -60,6 +69,267 @@ async fn file_system_sandboxed_canonicalize_resolves_directory_junction(
     .await
 }
 
+#[test_case(FileSystemImplementation::Local ; "local")]
+#[test_case(FileSystemImplementation::Remote ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_system_operations_can_reject_junctions_in_any_path_component(
+    implementation: FileSystemImplementation,
+) -> Result<()> {
+    let context = create_file_system_context(implementation).await?;
+    let tmp = tempfile::TempDir::new()?;
+    let real = tmp.path().join("real");
+    std::fs::create_dir(&real)?;
+    let existing = real.join("existing.txt");
+    std::fs::write(&existing, "unchanged")?;
+    let removable = real.join("removable.txt");
+    std::fs::write(&removable, "keep")?;
+    let directory_junction = tmp.path().join("directory-junction");
+    create_directory_junction(&real, &directory_junction)?;
+
+    let no_follow_read = ReadFileOptions {
+        follow_symlinks: false,
+    };
+    let no_follow_write = WriteFileOptions {
+        follow_symlinks: false,
+    };
+    let no_follow_metadata = GetMetadataOptions {
+        follow_symlinks: false,
+    };
+    let no_follow_create = CreateDirectoryOptions {
+        recursive: true,
+        follow_symlinks: false,
+    };
+    let no_follow_remove = RemoveOptions {
+        recursive: false,
+        force: false,
+        follow_symlinks: false,
+    };
+    let uri = |path: &Path| PathUri::from_host_native_path(path);
+
+    assert_eq!(
+        context
+            .file_system
+            .read_file(&uri(&existing)?, no_follow_read, /*sandbox*/ None,)
+            .await?,
+        b"unchanged"
+    );
+
+    let overwritten = real.join("overwritten.txt");
+    std::fs::write(&overwritten, "before")?;
+    context
+        .file_system
+        .write_file(
+            &uri(&overwritten)?,
+            b"after".to_vec(),
+            no_follow_write,
+            /*sandbox*/ None,
+        )
+        .await?;
+    assert_eq!(std::fs::read_to_string(&overwritten)?, "after");
+
+    let created_file = real.join("created.txt");
+    context
+        .file_system
+        .write_file(
+            &uri(&created_file)?,
+            b"created".to_vec(),
+            no_follow_write,
+            /*sandbox*/ None,
+        )
+        .await?;
+    assert_eq!(std::fs::read_to_string(&created_file)?, "created");
+
+    let nested_directory = real.join("nested").join("directory");
+    context
+        .file_system
+        .create_directory(
+            &uri(&nested_directory)?,
+            no_follow_create,
+            /*sandbox*/ None,
+        )
+        .await?;
+    assert!(nested_directory.is_dir());
+
+    let removed_file = real.join("removed.txt");
+    std::fs::write(&removed_file, "remove")?;
+    context
+        .file_system
+        .remove(
+            &uri(&removed_file)?,
+            no_follow_remove,
+            /*sandbox*/ None,
+        )
+        .await?;
+    assert!(!removed_file.exists());
+
+    let removed_directory = real.join("removed-directory");
+    std::fs::create_dir(&removed_directory)?;
+    context
+        .file_system
+        .remove(
+            &uri(&removed_directory)?,
+            no_follow_remove,
+            /*sandbox*/ None,
+        )
+        .await?;
+    assert!(!removed_directory.exists());
+
+    let file_link_target = real.join("file-link-target.txt");
+    std::fs::write(&file_link_target, "target")?;
+    let file_link = tmp.path().join("file-link.txt");
+    if std::os::windows::fs::symlink_file(&file_link_target, &file_link).is_ok() {
+        assert!(
+            context
+                .file_system
+                .write_file(
+                    &uri(&file_link)?,
+                    b"changed".to_vec(),
+                    no_follow_write,
+                    /*sandbox*/ None,
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(std::fs::read_to_string(&file_link_target)?, "target");
+    }
+
+    assert!(
+        context
+            .file_system
+            .read_file(
+                &uri(&directory_junction.join("existing.txt"))?,
+                no_follow_read,
+                /*sandbox*/ None,
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        context
+            .file_system
+            .write_file(
+                &uri(&directory_junction.join("existing.txt"))?,
+                b"changed".to_vec(),
+                no_follow_write,
+                /*sandbox*/ None,
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(std::fs::read_to_string(&existing)?, "unchanged");
+    assert!(
+        context
+            .file_system
+            .get_metadata(
+                &uri(&directory_junction)?,
+                no_follow_metadata,
+                /*sandbox*/ None,
+            )
+            .await
+            .is_err()
+    );
+    let directory_metadata = context
+        .file_system
+        .get_metadata(&uri(&real)?, no_follow_metadata, /*sandbox*/ None)
+        .await?;
+    assert!(directory_metadata.is_directory);
+    assert!(
+        context
+            .file_system
+            .create_directory(
+                &uri(&directory_junction.join("created"))?,
+                no_follow_create,
+                /*sandbox*/ None,
+            )
+            .await
+            .is_err()
+    );
+    assert!(!real.join("created").exists());
+    assert!(
+        context
+            .file_system
+            .remove(
+                &uri(&directory_junction.join("removable.txt"))?,
+                no_follow_remove,
+                /*sandbox*/ None,
+            )
+            .await
+            .is_err()
+    );
+    assert!(removable.exists());
+    assert!(
+        context
+            .file_system
+            .remove(
+                &uri(&directory_junction)?,
+                no_follow_remove,
+                /*sandbox*/ None,
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        directory_junction
+            .symlink_metadata()?
+            .file_type()
+            .is_symlink()
+    );
+
+    Ok(())
+}
+
+#[test_case(FileSystemImplementation::Local ; "local")]
+#[test_case(FileSystemImplementation::Remote ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_system_no_follow_operations_reject_named_pipes(
+    implementation: FileSystemImplementation,
+) -> Result<()> {
+    let context = create_file_system_context(implementation).await?;
+    let pipe_name = format!("codex-fs-no-follow-{}", Uuid::new_v4());
+    let server_path = format!(r"\\.\pipe\{pipe_name}");
+    let client_path = format!(r"\\localhost\pipe\{pipe_name}");
+    let _pipe = ServerOptions::new()
+        .first_pipe_instance(true)
+        .create(&server_path)?;
+
+    let error = timeout(
+        Duration::from_secs(1),
+        context.file_system.read_file(
+            &PathUri::from_host_native_path(Path::new(&client_path))?,
+            ReadFileOptions {
+                follow_symlinks: false,
+            },
+            /*sandbox*/ None,
+        ),
+    )
+    .await
+    .expect("strict named-pipe read must not hang")
+    .expect_err("strict named-pipe read must be rejected");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+
+    let pipe_name = format!("codex-fs-no-follow-write-{}", Uuid::new_v4());
+    let server_path = format!(r"\\.\pipe\{pipe_name}");
+    let client_path = format!(r"\\localhost\pipe\{pipe_name}");
+    let _pipe = ServerOptions::new()
+        .first_pipe_instance(true)
+        .create(&server_path)?;
+    timeout(
+        Duration::from_secs(1),
+        context.file_system.write_file(
+            &PathUri::from_host_native_path(Path::new(&client_path))?,
+            b"must not be written".to_vec(),
+            WriteFileOptions {
+                follow_symlinks: false,
+            },
+            /*sandbox*/ None,
+        ),
+    )
+    .await
+    .expect("strict named-pipe write must not hang")
+    .expect_err("strict named-pipe write must be rejected");
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn file_system_remote_fs_helper_respects_windows_sandbox_write_policy() -> Result<()> {
     let context = create_file_system_context(FileSystemImplementation::Remote).await?;
@@ -76,6 +346,7 @@ async fn file_system_remote_fs_helper_respects_windows_sandbox_write_policy() ->
     let read_result = file_system
         .read_file(
             &PathUri::from_host_native_path(&readable_file)?,
+            ReadFileOptions::default(),
             Some(&sandbox),
         )
         .await;
@@ -92,6 +363,7 @@ async fn file_system_remote_fs_helper_respects_windows_sandbox_write_policy() ->
         .write_file(
             &PathUri::from_host_native_path(&blocked_file)?,
             b"blocked".to_vec(),
+            WriteFileOptions::default(),
             Some(&sandbox),
         )
         .await

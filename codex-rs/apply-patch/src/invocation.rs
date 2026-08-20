@@ -244,12 +244,18 @@ async fn try_verify_apply_patch_args(
                 changes.insert(path, ApplyPatchFileChange::Add { content: contents });
             }
             Hunk::DeleteFile { .. } => {
-                let content = fs.read_file_text(&path, sandbox).await.map_err(|source| {
-                    ApplyPatchError::IoError(IoError {
-                        context: format!("Failed to read {}", path.inferred_native_path_string()),
-                        source,
-                    })
-                })?;
+                let content = fs
+                    .read_file_text(&path, Default::default(), sandbox)
+                    .await
+                    .map_err(|source| {
+                        ApplyPatchError::IoError(IoError {
+                            context: format!(
+                                "Failed to read {}",
+                                path.inferred_native_path_string()
+                            ),
+                            source,
+                        })
+                    })?;
                 changes.insert(path, ApplyPatchFileChange::Delete { content });
             }
             Hunk::UpdateFile {

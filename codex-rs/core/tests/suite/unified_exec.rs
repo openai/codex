@@ -242,7 +242,10 @@ async fn create_workspace_directory(
     test.fs()
         .create_directory(
             &abs_path_uri,
-            CreateDirectoryOptions { recursive: true },
+            CreateDirectoryOptions {
+                recursive: true,
+                follow_symlinks: true,
+            },
             /*sandbox*/ None,
         )
         .await?;

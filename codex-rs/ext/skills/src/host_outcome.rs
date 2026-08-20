@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
+use codex_exec_server::ReadFileOptions;
 use codex_skills::SkillError;
 use codex_skills::SkillMetadata;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -117,7 +118,8 @@ impl SkillLoadOutcome {
             .file_system_for_skill(skill)
             .unwrap_or_else(|| Arc::clone(&LOCAL_FS));
         let path = PathUri::from_abs_path(&skill.path_to_skills_md);
-        fs.read_file_text(&path, /*sandbox*/ None).await
+        fs.read_file_text(&path, ReadFileOptions::default(), /*sandbox*/ None)
+            .await
     }
 }
 

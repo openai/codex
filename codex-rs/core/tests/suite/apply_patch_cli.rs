@@ -21,6 +21,8 @@ use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_exec_server::REMOTE_ENVIRONMENT_ID;
 use codex_exec_server::RemoveOptions;
 use codex_features::Feature;
+#[cfg(unix)]
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
@@ -34,6 +36,10 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::EventMsg;
+#[cfg(unix)]
+use codex_protocol::protocol::Op;
+#[cfg(unix)]
+use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::TurnEnvironmentSelection;
@@ -933,6 +939,92 @@ async fn intercepted_apply_patch_verification_uses_local_sandbox() -> Result<()>
     Ok(())
 }
 
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn escalated_patch_rejects_symlink_swapped_after_approval_request() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_remote!(
+        Ok(()),
+        "approval-time symlink swap uses the local filesystem"
+    );
+    let temp = tempfile::tempdir_in(std::env::current_dir()?)?;
+    let root = temp.path().canonicalize()?;
+    let work = root.join("work");
+    let outside = root.join("victim.txt");
+    fs::create_dir(&work)?;
+    fs::write(work.join("file.txt"), "original\n")?;
+    fs::write(&outside, "original\n")?;
+    let harness = apply_patch_harness_with(move |builder| {
+        builder.with_model("gpt-5.4").with_config(move |config| {
+            config.cwd = work.try_into().expect("absolute workspace");
+            config.workspace_roots = vec![config.cwd.clone()];
+            config
+                .permissions
+                .set_workspace_roots(config.workspace_roots.clone());
+            config.approvals_reviewer = ApprovalsReviewer::User;
+        })
+    })
+    .await?;
+    let test = harness.test();
+    let call_id = "apply-patch-approval-swap";
+    let patch =
+        "*** Begin Patch\n*** Update File: file.txt\n@@\n-original\n+changed\n*** End Patch";
+    mount_apply_patch(&harness, call_id, patch, "done").await;
+    let (sandbox_policy, permission_profile) = turn_permission_fields(
+        restrictive_workspace_write_profile(),
+        test.config.cwd.as_path(),
+    );
+    test.codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "apply the patch".to_string(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                approval_policy: Some(AskForApproval::UnlessTrusted),
+                approvals_reviewer: Some(ApprovalsReviewer::User),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                ..Default::default()
+            }),
+        )
+        .await?;
+    let event = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::ApplyPatchApprovalRequest(_) | EventMsg::TurnComplete(_)
+        )
+    })
+    .await;
+    let EventMsg::ApplyPatchApprovalRequest(approval) = event else {
+        panic!("expected patch approval before completion");
+    };
+    assert_eq!(approval.call_id, call_id);
+    let target = harness.path("file.txt");
+    fs::remove_file(&target)?;
+    create_file_symlink(&outside, &target)?;
+    test.codex
+        .submit(Op::PatchApproval {
+            id: approval.call_id,
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let output = harness.apply_patch_output(call_id).await;
+    assert_eq!(fs::read_to_string(&outside)?, "original\n", "{output:?}");
+    assert!(fs::symlink_metadata(&target)?.is_symlink());
+    assert!(
+        output.contains("Failed to read file to update"),
+        "{output:?}"
+    );
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_cli_does_not_write_through_symlink_escape_outside_workspace() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -1601,7 +1693,10 @@ async fn apply_patch_turn_diff_paths_stay_repo_relative_when_session_cwd_is_nest
                 let cwd_uri = PathUri::from_host_native_path(&cwd)?;
                 fs.create_directory(
                     &cwd_uri,
-                    CreateDirectoryOptions { recursive: true },
+                    CreateDirectoryOptions {
+                        recursive: true,
+                        follow_symlinks: true,
+                    },
                     /*sandbox*/ None,
                 )
                 .await?;
@@ -1611,11 +1706,17 @@ async fn apply_patch_turn_diff_paths_stay_repo_relative_when_session_cwd_is_nest
                 fs.write_file(
                     &git_uri,
                     b"gitdir: /tmp/fake-worktree\n".to_vec(),
+                    Default::default(),
                     /*sandbox*/ None,
                 )
                 .await?;
-                fs.write_file(&repo_file_uri, b"before\n".to_vec(), /*sandbox*/ None)
-                    .await?;
+                fs.write_file(
+                    &repo_file_uri,
+                    b"before\n".to_vec(),
+                    Default::default(),
+                    /*sandbox*/ None,
+                )
+                .await?;
                 Ok(())
             })
     })
@@ -1690,7 +1791,10 @@ async fn apply_patch_turn_diff_skips_git_root_when_feature_is_enabled(
                 let cwd_uri = PathUri::from_host_native_path(&cwd)?;
                 fs.create_directory(
                     &cwd_uri,
-                    CreateDirectoryOptions { recursive: true },
+                    CreateDirectoryOptions {
+                        recursive: true,
+                        follow_symlinks: true,
+                    },
                     /*sandbox*/ None,
                 )
                 .await?;
@@ -1700,11 +1804,17 @@ async fn apply_patch_turn_diff_skips_git_root_when_feature_is_enabled(
                 fs.write_file(
                     &git_uri,
                     b"gitdir: /tmp/fake-worktree\n".to_vec(),
+                    Default::default(),
                     /*sandbox*/ None,
                 )
                 .await?;
-                fs.write_file(&work_file_uri, b"before\n".to_vec(), /*sandbox*/ None)
-                    .await?;
+                fs.write_file(
+                    &work_file_uri,
+                    b"before\n".to_vec(),
+                    Default::default(),
+                    /*sandbox*/ None,
+                )
+                .await?;
                 Ok(())
             })
     })
@@ -1974,7 +2084,7 @@ async fn apply_patch_turn_diff_emits_portable_paths_for_remote_cwd() -> Result<(
     );
     assert_eq!(
         test.fs()
-            .read_file_text(&file_uri, /*sandbox*/ None)
+            .read_file_text(&file_uri, Default::default(), /*sandbox*/ None)
             .await?,
         "hello\n"
     );
@@ -2019,6 +2129,7 @@ async fn apply_patch_turn_diff_tracks_local_and_remote_environment_paths() -> Re
             RemoveOptions {
                 recursive: true,
                 force: true,
+                follow_symlinks: true,
             },
             /*sandbox*/ None,
         )
@@ -2027,7 +2138,10 @@ async fn apply_patch_turn_diff_tracks_local_and_remote_environment_paths() -> Re
     test.fs()
         .create_directory(
             &shared_cwd_uri,
-            CreateDirectoryOptions { recursive: true },
+            CreateDirectoryOptions {
+                recursive: true,
+                follow_symlinks: true,
+            },
             /*sandbox*/ None,
         )
         .await?;
@@ -2114,6 +2228,7 @@ async fn apply_patch_turn_diff_tracks_local_and_remote_environment_paths() -> Re
         test.fs()
             .read_file_text(
                 &PathUri::from_host_native_path(shared_cwd.join(file_name))?,
+                Default::default(),
                 /*sandbox*/ None,
             )
             .await?,
@@ -2146,6 +2261,7 @@ index 0000000000000000000000000000000000000000..9c998f7b995a7327177b38a90d138517
             RemoveOptions {
                 recursive: true,
                 force: true,
+                follow_symlinks: true,
             },
             /*sandbox*/ None,
         )
@@ -2287,6 +2403,7 @@ async fn apply_patch_clears_aggregated_diff_after_inexact_delta() -> Result<()> 
             fs.write_file(
                 &binary_path_uri,
                 vec![0xff, 0xfe, 0xfd],
+                Default::default(),
                 /*sandbox*/ None,
             )
             .await?;

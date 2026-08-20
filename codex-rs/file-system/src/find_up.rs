@@ -103,7 +103,10 @@ where
     let mut results = futures::stream::iter(probes)
         .map(|(ancestor, marker_path)| async move {
             let marker_path = marker_path?;
-            match file_system.get_metadata(&marker_path, sandbox).await {
+            match file_system
+                .get_metadata(&marker_path, crate::GetMetadataOptions::default(), sandbox)
+                .await
+            {
                 Ok(_) => Ok(Some(ancestor)),
                 Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
                 Err(err) => match error_policy {

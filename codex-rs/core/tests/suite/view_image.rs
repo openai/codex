@@ -166,7 +166,10 @@ async fn create_workspace_directory(test: &TestCodex, rel_path: &str) -> anyhow:
     test.fs()
         .create_directory(
             &abs_path_uri,
-            CreateDirectoryOptions { recursive: true },
+            CreateDirectoryOptions {
+                recursive: true,
+                follow_symlinks: true,
+            },
             /*sandbox*/ None,
         )
         .await?;
@@ -183,13 +186,21 @@ async fn write_workspace_file(
         test.fs()
             .create_directory(
                 &parent_uri,
-                CreateDirectoryOptions { recursive: true },
+                CreateDirectoryOptions {
+                    recursive: true,
+                    follow_symlinks: true,
+                },
                 /*sandbox*/ None,
             )
             .await?;
     }
     test.fs()
-        .write_file(&abs_path_uri, contents, /*sandbox*/ None)
+        .write_file(
+            &abs_path_uri,
+            contents,
+            Default::default(),
+            /*sandbox*/ None,
+        )
         .await?;
     Ok(abs_path_uri.to_path_buf())
 }
@@ -728,7 +739,12 @@ async fn view_image_routes_to_selected_remote_environment() -> anyhow::Result<()
     let image_path_uri = remote_cwd_uri.join("remote.png")?;
     let png = png_bytes(/*width*/ 1, /*height*/ 1, [0, 255, 0, 255])?;
     test.fs()
-        .write_file(&image_path_uri, png, /*sandbox*/ None)
+        .write_file(
+            &image_path_uri,
+            png,
+            Default::default(),
+            /*sandbox*/ None,
+        )
         .await?;
     let absolute_image_path = image_path_uri.inferred_native_path_string();
     let remote_selection = TurnEnvironmentSelection {
@@ -810,6 +826,7 @@ async fn view_image_routes_to_selected_remote_environment() -> anyhow::Result<()
             RemoveOptions {
                 recursive: false,
                 force: true,
+                follow_symlinks: true,
             },
             /*sandbox*/ None,
         )

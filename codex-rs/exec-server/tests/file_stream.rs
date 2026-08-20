@@ -9,6 +9,7 @@ use codex_exec_server::FsCloseParams;
 use codex_exec_server::FsOpenParams;
 use codex_exec_server::FsReadBlockParams;
 use codex_exec_server::FsReadBlockResponse;
+use codex_exec_server::ReadFileOptions;
 use codex_exec_server::RemoteExecServerConnectArgs;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
@@ -94,7 +95,7 @@ async fn file_reads_reject_fifo_without_waiting_for_a_writer() -> Result<()> {
     let path_uri = PathUri::from_host_native_path(&path)?;
     let read_error = timeout(
         Duration::from_secs(1),
-        file_system.read_file(&path_uri, /*sandbox*/ None),
+        file_system.read_file(&path_uri, ReadFileOptions::default(), /*sandbox*/ None),
     )
     .await
     .expect("reading a FIFO should not wait for a writer")
@@ -130,6 +131,7 @@ async fn file_reads_reject_named_pipes() -> Result<()> {
         Duration::from_secs(1),
         file_system.read_file(
             &PathUri::from_host_native_path(std::path::Path::new(&read_path))?,
+            ReadFileOptions::default(),
             /*sandbox*/ None,
         ),
     )

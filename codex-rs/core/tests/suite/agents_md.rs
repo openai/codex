@@ -197,11 +197,17 @@ async fn agents_override_is_preferred_over_agents_md() -> Result<()> {
             let override_md = cwd.join("AGENTS.override.md");
             let agents_md_uri = executor_path_uri(&agents_md)?;
             let override_md_uri = executor_path_uri(&override_md)?;
-            fs.write_file(&agents_md_uri, b"base doc".to_vec(), /*sandbox*/ None)
-                .await?;
+            fs.write_file(
+                &agents_md_uri,
+                b"base doc".to_vec(),
+                Default::default(),
+                /*sandbox*/ None,
+            )
+            .await?;
             fs.write_file(
                 &override_md_uri,
                 b"override doc".to_vec(),
+                Default::default(),
                 /*sandbox*/ None,
             )
             .await?;
@@ -235,13 +241,17 @@ async fn configured_fallback_is_used_when_agents_candidate_is_directory() -> Res
                 let fallback_uri = executor_path_uri(&fallback)?;
                 fs.create_directory(
                     &agents_dir_uri,
-                    CreateDirectoryOptions { recursive: true },
+                    CreateDirectoryOptions {
+                        recursive: true,
+                        follow_symlinks: true,
+                    },
                     /*sandbox*/ None,
                 )
                 .await?;
                 fs.write_file(
                     &fallback_uri,
                     b"fallback doc".to_vec(),
+                    Default::default(),
                     /*sandbox*/ None,
                 )
                 .await?;
@@ -281,25 +291,31 @@ async fn agents_docs_are_concatenated_from_project_root_to_cwd() -> Result<()> {
 
                 fs.create_directory(
                     &nested_uri,
-                    CreateDirectoryOptions { recursive: true },
+                    CreateDirectoryOptions {
+                        recursive: true,
+                        follow_symlinks: true,
+                    },
                     /*sandbox*/ None,
                 )
                 .await?;
                 fs.write_file(
                     &root_agents_uri,
                     b"root doc".to_vec(),
+                    Default::default(),
                     /*sandbox*/ None,
                 )
                 .await?;
                 fs.write_file(
                     &git_marker_uri,
                     b"gitdir: /tmp/mock-git-dir\n".to_vec(),
+                    Default::default(),
                     /*sandbox*/ None,
                 )
                 .await?;
                 fs.write_file(
                     &nested_agents_uri,
                     b"child doc".to_vec(),
+                    Default::default(),
                     /*sandbox*/ None,
                 )
                 .await?;
@@ -421,6 +437,7 @@ async fn selected_environment_sources_match_model_visible_instructions() -> Resu
             fs.write_file(
                 &agents_md_uri,
                 b"project doc".to_vec(),
+                Default::default(),
                 /*sandbox*/ None,
             )
             .await?;
@@ -523,6 +540,7 @@ async fn denied_project_instructions_fail_thread_creation() -> Result<()> {
             fs.write_file(
                 &executor_path_uri(cwd.join(GLOBAL_AGENTS_FILENAME))?,
                 PROJECT_INSTRUCTIONS.as_bytes().to_vec(),
+                Default::default(),
                 /*sandbox*/ None,
             )
             .await?;
@@ -563,6 +581,7 @@ async fn tightening_environment_read_permissions_invalidates_cached_project_inst
         fs.write_file(
             &executor_path_uri(cwd.join(GLOBAL_AGENTS_FILENAME))?,
             PROJECT_INSTRUCTIONS.as_bytes().to_vec(),
+            Default::default(),
             /*sandbox*/ None,
         )
         .await?;
@@ -651,6 +670,7 @@ async fn loads_user_instructions_without_a_primary_environment() -> Result<()> {
             fs.write_file(
                 &project_agents_uri,
                 PROJECT_INSTRUCTIONS.as_bytes().to_vec(),
+                Default::default(),
                 /*sandbox*/ None,
             )
             .await?;
@@ -721,6 +741,7 @@ async fn fresh_thread_composes_global_before_project_and_reports_sources() -> Re
             fs.write_file(
                 &agents_md_uri,
                 PROJECT_INSTRUCTIONS.as_bytes().to_vec(),
+                Default::default(),
                 /*sandbox*/ None,
             )
             .await?;
@@ -747,6 +768,7 @@ async fn fresh_thread_composes_global_before_project_and_reports_sources() -> Re
         .write_file(
             &test.workspace_path_uri(GLOBAL_AGENTS_FILENAME)?,
             NEW_PROJECT_INSTRUCTIONS.as_bytes().to_vec(),
+            Default::default(),
             /*sandbox*/ None,
         )
         .await?;
@@ -829,6 +851,7 @@ async fn multi_environment_project_instructions_share_one_byte_budget() -> Resul
             fs.write_file(
                 &executor_path_uri(cwd.join(GLOBAL_AGENTS_FILENAME))?,
                 b"ABCDE".to_vec(),
+                Default::default(),
                 /*sandbox*/ None,
             )
             .await?;
@@ -911,6 +934,7 @@ async fn multi_environment_thread_loads_every_project_and_keeps_creation_snapsho
             fs.write_file(
                 &executor_path_uri(cwd.join(GLOBAL_AGENTS_FILENAME))?,
                 b"remote project instructions".to_vec(),
+                Default::default(),
                 /*sandbox*/ None,
             )
             .await?;
@@ -959,6 +983,7 @@ async fn multi_environment_thread_loads_every_project_and_keeps_creation_snapsho
         .write_file(
             &executor_path_uri(test.config.cwd.join(GLOBAL_AGENTS_OVERRIDE_FILENAME))?,
             b"new remote project instructions".to_vec(),
+            Default::default(),
             /*sandbox*/ None,
         )
         .await?;

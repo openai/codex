@@ -24,6 +24,8 @@ use codex_config::default_project_root_markers;
 use codex_config::merge_toml_values;
 use codex_config::project_root_markers_from_config;
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::GetMetadataOptions;
+use codex_exec_server::ReadFileOptions;
 use codex_extension_api::UserInstructions;
 use codex_file_system::FileSystemSandboxContext;
 use codex_file_system::FindUpErrorPolicy;
@@ -153,7 +155,7 @@ async fn read_agents_md(
             break;
         }
 
-        let mut data = match fs.read_file(&p, sandbox).await {
+        let mut data = match fs.read_file(&p, ReadFileOptions::default(), sandbox).await {
             Ok(data) => data,
             Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
             Err(err) => return Err(err),
@@ -252,7 +254,10 @@ async fn agents_md_paths(
                 let candidate = directory
                     .join(name)
                     .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
-                match fs.get_metadata(&candidate, sandbox).await {
+                match fs
+                    .get_metadata(&candidate, GetMetadataOptions::default(), sandbox)
+                    .await
+                {
                     Ok(metadata) if metadata.is_file => return Ok(Some(candidate)),
                     Ok(_) => {}
                     Err(err) if err.kind() == io::ErrorKind::NotFound => {}

@@ -16,6 +16,7 @@ use crate::session::step_context::StepContext;
 use codex_api::HostedFileUploadContext;
 use codex_api::OPENAI_FILE_UPLOAD_LIMIT_BYTES;
 use codex_api::upload_openai_file;
+use codex_exec_server::GetMetadataOptions;
 use codex_login::CodexAuth;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
@@ -196,7 +197,7 @@ async fn build_uploaded_argument_value(
     }
     let fs = turn_environment.environment.get_filesystem();
     let metadata = fs
-        .get_metadata(&path_uri, sandbox.as_ref())
+        .get_metadata(&path_uri, GetMetadataOptions::default(), sandbox.as_ref())
         .await
         .map_err(|error| contextualize_error(error.to_string()))?;
     if !metadata.is_file {

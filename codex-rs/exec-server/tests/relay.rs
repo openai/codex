@@ -355,6 +355,7 @@ async fn remote_environment_routes_encrypted_exec_server_rpc() -> Result<()> {
     let read_response = client
         .fs_read_file(FsReadFileParams {
             path: PathUri::from_host_native_path(large_file_path)?,
+            follow_symlinks: None,
             sandbox: None,
         })
         .await?;

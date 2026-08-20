@@ -1,3 +1,5 @@
+use codex_exec_server::GetMetadataOptions;
+use codex_exec_server::ReadFileOptions;
 use codex_protocol::items::ImageViewItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
@@ -154,7 +156,7 @@ impl ViewImageHandler {
         let fs = turn_environment.environment.get_filesystem();
 
         let metadata = fs
-            .get_metadata(&path_uri, Some(&sandbox))
+            .get_metadata(&path_uri, GetMetadataOptions::default(), Some(&sandbox))
             .await
             .map_err(|error| {
                 FunctionCallError::RespondToModel(format!(
@@ -168,7 +170,7 @@ impl ViewImageHandler {
             )));
         }
         let file_bytes = fs
-            .read_file(&path_uri, Some(&sandbox))
+            .read_file(&path_uri, ReadFileOptions::default(), Some(&sandbox))
             .await
             .map_err(|error| {
                 FunctionCallError::RespondToModel(format!(

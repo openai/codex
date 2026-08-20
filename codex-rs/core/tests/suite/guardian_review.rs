@@ -640,6 +640,7 @@ async fn guardian_session_is_reused_for_consecutive_tool_reviews_without_prewarm
             fs.write_file(
                 &codex_utils_path_uri::PathUri::from_abs_path(&cwd.join("guardian-secret.txt")),
                 SECRET.as_bytes().to_vec(),
+                Default::default(),
                 /*sandbox*/ None,
             )
             .await?;

@@ -2716,6 +2716,7 @@ version = "0.0.0"
 dependencies = [
  "codex-connectors",
  "codex-core-plugins",
+ "codex-file-system",
  "codex-plugin",
  "codex-utils-path-uri",
  "serde_json",

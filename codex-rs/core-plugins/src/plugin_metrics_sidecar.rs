@@ -4,6 +4,7 @@ use codex_exec_server::Environment;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::FileSystemReadStream;
 use codex_exec_server::RemoveOptions;
+use codex_exec_server::WriteFileOptions;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -71,6 +72,7 @@ impl Drop for RemotePluginMetricsDirectory {
                     RemoveOptions {
                         recursive: true,
                         force: true,
+                        follow_symlinks: true,
                     },
                     /*sandbox*/ None,
                 )
@@ -151,7 +153,12 @@ impl PluginMetricsSidecar {
         let output_path = directory.path.join("measurements.json").ok()?;
         directory
             .filesystem
-            .write_file(&output_path, Vec::new(), /*sandbox*/ None)
+            .write_file(
+                &output_path,
+                Vec::new(),
+                WriteFileOptions::default(),
+                /*sandbox*/ None,
+            )
             .await
             .ok()?;
         let file_stream = directory

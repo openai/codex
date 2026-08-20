@@ -293,10 +293,15 @@ async fn remote_test_env_can_connect_and_use_filesystem() -> Result<()> {
     let payload = b"remote-test-env-ok".to_vec();
 
     file_system
-        .write_file(&file_path_uri, payload.clone(), /*sandbox*/ None)
+        .write_file(
+            &file_path_uri,
+            payload.clone(),
+            Default::default(),
+            /*sandbox*/ None,
+        )
         .await?;
     let actual = file_system
-        .read_file(&file_path_uri, /*sandbox*/ None)
+        .read_file(&file_path_uri, Default::default(), /*sandbox*/ None)
         .await?;
     assert_eq!(actual, payload);
 
@@ -306,6 +311,7 @@ async fn remote_test_env_can_connect_and_use_filesystem() -> Result<()> {
             RemoveOptions {
                 recursive: false,
                 force: true,
+                follow_symlinks: true,
             },
             /*sandbox*/ None,
         )
@@ -625,7 +631,7 @@ async fn environment_permissions_follow_configuration_ownership() -> Result<()> 
     assert!(!output.contains("WRITE_SUCCEEDED"));
     assert!(
         test.fs()
-            .read_file_text(&marker, /*sandbox*/ None)
+            .read_file_text(&marker, Default::default(), /*sandbox*/ None)
             .await
             .is_err(),
         "read-only attachment unexpectedly wrote {FILE_NAME}"
@@ -2756,7 +2762,10 @@ async fn exec_command_routes_to_selected_remote_environment() -> Result<()> {
     test.fs()
         .create_directory(
             &remote_cwd_uri,
-            CreateDirectoryOptions { recursive: true },
+            CreateDirectoryOptions {
+                recursive: true,
+                follow_symlinks: true,
+            },
             /*sandbox*/ None,
         )
         .await?;
@@ -2764,6 +2773,7 @@ async fn exec_command_routes_to_selected_remote_environment() -> Result<()> {
         .write_file(
             &remote_marker_uri,
             b"remote-routing".to_vec(),
+            Default::default(),
             /*sandbox*/ None,
         )
         .await?;
@@ -2802,6 +2812,7 @@ async fn exec_command_routes_to_selected_remote_environment() -> Result<()> {
             RemoveOptions {
                 recursive: true,
                 force: true,
+                follow_symlinks: true,
             },
             /*sandbox*/ None,
         )
@@ -2834,7 +2845,10 @@ async fn remote_exec_materializes_target_roots_before_sandbox_selection() -> Res
     test.fs()
         .create_directory(
             &remote_cwd_uri,
-            CreateDirectoryOptions { recursive: true },
+            CreateDirectoryOptions {
+                recursive: true,
+                follow_symlinks: true,
+            },
             /*sandbox*/ None,
         )
         .await?;
@@ -2842,6 +2856,7 @@ async fn remote_exec_materializes_target_roots_before_sandbox_selection() -> Res
         .write_file(
             &remote_cwd_uri.join(SECRET_FILE)?,
             SECRET.as_bytes().to_vec(),
+            Default::default(),
             /*sandbox*/ None,
         )
         .await?;
@@ -2958,6 +2973,7 @@ async fn remote_exec_materializes_target_roots_before_sandbox_selection() -> Res
             RemoveOptions {
                 recursive: true,
                 force: true,
+                follow_symlinks: true,
             },
             /*sandbox*/ None,
         )
@@ -3010,7 +3026,10 @@ async fn remote_request_permissions_grant_unblocks_later_remote_exec() -> Result
     test.fs()
         .create_directory(
             &remote_write_root_uri,
-            CreateDirectoryOptions { recursive: true },
+            CreateDirectoryOptions {
+                recursive: true,
+                follow_symlinks: true,
+            },
             /*sandbox*/ None,
         )
         .await?;
@@ -3149,6 +3168,7 @@ async fn remote_request_permissions_grant_unblocks_later_remote_exec() -> Result
         test.fs()
             .read_file_text(
                 &PathUri::from_host_native_path(&remote_target_path)?,
+                Default::default(),
                 /*sandbox*/ None,
             )
             .await?,
@@ -3165,6 +3185,7 @@ async fn remote_request_permissions_grant_unblocks_later_remote_exec() -> Result
             RemoveOptions {
                 recursive: true,
                 force: true,
+                follow_symlinks: true,
             },
             /*sandbox*/ None,
         )
@@ -3194,7 +3215,10 @@ async fn apply_patch_freeform_routes_to_selected_remote_environment() -> Result<
     test.fs()
         .create_directory(
             &remote_cwd_uri,
-            CreateDirectoryOptions { recursive: true },
+            CreateDirectoryOptions {
+                recursive: true,
+                follow_symlinks: true,
+            },
             /*sandbox*/ None,
         )
         .await?;
@@ -3238,6 +3262,7 @@ async fn apply_patch_freeform_routes_to_selected_remote_environment() -> Result<
         .fs()
         .read_file_text(
             &PathUri::from_host_native_path(remote_cwd.join(file_name))?,
+            Default::default(),
             /*sandbox*/ None,
         )
         .await?;
@@ -3253,6 +3278,7 @@ async fn apply_patch_freeform_routes_to_selected_remote_environment() -> Result<
             RemoveOptions {
                 recursive: true,
                 force: true,
+                follow_symlinks: true,
             },
             /*sandbox*/ None,
         )
@@ -3284,7 +3310,10 @@ async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
     test.fs()
         .create_directory(
             &remote_cwd_uri,
-            CreateDirectoryOptions { recursive: true },
+            CreateDirectoryOptions {
+                recursive: true,
+                follow_symlinks: true,
+            },
             /*sandbox*/ None,
         )
         .await?;
@@ -3302,6 +3331,7 @@ async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
             RemoveOptions {
                 recursive: false,
                 force: true,
+                follow_symlinks: true,
             },
             /*sandbox*/ None,
         )
@@ -3406,7 +3436,7 @@ async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
     .await;
     assert_eq!(
         test.fs()
-            .read_file_text(&target_path_uri, /*sandbox*/ None)
+            .read_file_text(&target_path_uri, Default::default(), /*sandbox*/ None)
             .await?,
         "remote\n"
     );
@@ -3421,7 +3451,7 @@ async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
     wait_for_completion_without_patch_approval(&test).await;
     assert_eq!(
         test.fs()
-            .read_file_text(&target_path_uri, /*sandbox*/ None)
+            .read_file_text(&target_path_uri, Default::default(), /*sandbox*/ None)
             .await?,
         "remote updated\n"
     );
@@ -3433,6 +3463,7 @@ async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
             RemoveOptions {
                 recursive: false,
                 force: true,
+                follow_symlinks: true,
             },
             /*sandbox*/ None,
         )
@@ -3443,6 +3474,7 @@ async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
             RemoveOptions {
                 recursive: true,
                 force: true,
+                follow_symlinks: true,
             },
             /*sandbox*/ None,
         )
@@ -3472,7 +3504,10 @@ async fn apply_patch_intercepted_exec_command_routes_to_selected_remote_environm
     test.fs()
         .create_directory(
             &remote_cwd_uri,
-            CreateDirectoryOptions { recursive: true },
+            CreateDirectoryOptions {
+                recursive: true,
+                follow_symlinks: true,
+            },
             /*sandbox*/ None,
         )
         .await?;
@@ -3526,6 +3561,7 @@ async fn apply_patch_intercepted_exec_command_routes_to_selected_remote_environm
         .fs()
         .read_file_text(
             &PathUri::from_host_native_path(remote_cwd.join(file_name))?,
+            Default::default(),
             /*sandbox*/ None,
         )
         .await?;
@@ -3541,6 +3577,7 @@ async fn apply_patch_intercepted_exec_command_routes_to_selected_remote_environm
             RemoveOptions {
                 recursive: true,
                 force: true,
+                follow_symlinks: true,
             },
             /*sandbox*/ None,
         )
@@ -3566,7 +3603,10 @@ async fn remote_test_env_sandboxed_read_allows_readable_root() -> Result<()> {
     file_system
         .create_directory(
             &allowed_dir_uri,
-            CreateDirectoryOptions { recursive: true },
+            CreateDirectoryOptions {
+                recursive: true,
+                follow_symlinks: true,
+            },
             /*sandbox*/ None,
         )
         .await?;
@@ -3574,13 +3614,14 @@ async fn remote_test_env_sandboxed_read_allows_readable_root() -> Result<()> {
         .write_file(
             &file_path_uri,
             b"sandboxed hello".to_vec(),
+            Default::default(),
             /*sandbox*/ None,
         )
         .await?;
 
     let sandbox = read_only_sandbox(allowed_dir.clone());
     let contents = file_system
-        .read_file(&file_path_uri, Some(&sandbox))
+        .read_file(&file_path_uri, Default::default(), Some(&sandbox))
         .await?;
     assert_eq!(contents, b"sandboxed hello");
 
@@ -3590,6 +3631,7 @@ async fn remote_test_env_sandboxed_read_allows_readable_root() -> Result<()> {
             RemoveOptions {
                 recursive: true,
                 force: true,
+                follow_symlinks: true,
             },
             /*sandbox*/ None,
         )
@@ -3622,7 +3664,10 @@ async fn remote_test_env_sandboxed_read_rejects_symlink_parent_dotdot_escape() -
     let requested_path =
         PathUri::from_host_native_path(allowed_dir.join("link").join("..").join("secret.txt"))?;
     let sandbox = read_only_sandbox(allowed_dir.clone());
-    let error = match file_system.read_file(&requested_path, Some(&sandbox)).await {
+    let error = match file_system
+        .read_file(&requested_path, Default::default(), Some(&sandbox))
+        .await
+    {
         Ok(_) => anyhow::bail!("read should fail after path normalization"),
         Err(error) => error,
     };
@@ -3670,6 +3715,7 @@ async fn remote_test_env_remove_removes_symlink_not_target() -> Result<()> {
             RemoveOptions {
                 recursive: false,
                 force: false,
+                follow_symlinks: true,
             },
             Some(&sandbox),
         )
@@ -3678,6 +3724,7 @@ async fn remote_test_env_remove_removes_symlink_not_target() -> Result<()> {
     let symlink_exists = file_system
         .get_metadata(
             &PathUri::from_abs_path(&absolute_path(symlink_path)),
+            Default::default(),
             /*sandbox*/ None,
         )
         .await
@@ -3686,6 +3733,7 @@ async fn remote_test_env_remove_removes_symlink_not_target() -> Result<()> {
     let outside = file_system
         .read_file_text(
             &PathUri::from_host_native_path(&outside_file)?,
+            Default::default(),
             /*sandbox*/ None,
         )
         .await?;
@@ -3697,6 +3745,7 @@ async fn remote_test_env_remove_removes_symlink_not_target() -> Result<()> {
             RemoveOptions {
                 recursive: true,
                 force: true,
+                follow_symlinks: true,
             },
             /*sandbox*/ None,
         )
@@ -3769,6 +3818,7 @@ async fn remote_test_env_copy_preserves_symlink_source() -> Result<()> {
             RemoveOptions {
                 recursive: true,
                 force: true,
+                follow_symlinks: true,
             },
             /*sandbox*/ None,
         )

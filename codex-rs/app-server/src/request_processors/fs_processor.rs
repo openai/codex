@@ -68,7 +68,7 @@ impl FsRequestProcessor {
         let path = PathUri::from_abs_path(&params.path);
         let bytes = self
             .file_system()?
-            .read_file(&path, /*sandbox*/ None)
+            .read_file(&path, Default::default(), /*sandbox*/ None)
             .await
             .map_err(map_fs_error)?;
         Ok(FsReadFileResponse {
@@ -87,7 +87,7 @@ impl FsRequestProcessor {
         })?;
         let path = PathUri::from_abs_path(&params.path);
         self.file_system()?
-            .write_file(&path, bytes, /*sandbox*/ None)
+            .write_file(&path, bytes, Default::default(), /*sandbox*/ None)
             .await
             .map_err(map_fs_error)?;
         Ok(FsWriteFileResponse {})
@@ -103,6 +103,7 @@ impl FsRequestProcessor {
                 &path,
                 CreateDirectoryOptions {
                     recursive: params.recursive.unwrap_or(true),
+                    follow_symlinks: true,
                 },
                 /*sandbox*/ None,
             )
@@ -118,7 +119,7 @@ impl FsRequestProcessor {
         let path = PathUri::from_abs_path(&params.path);
         let metadata = self
             .file_system()?
-            .get_metadata(&path, /*sandbox*/ None)
+            .get_metadata(&path, Default::default(), /*sandbox*/ None)
             .await
             .map_err(map_fs_error)?;
         Ok(FsGetMetadataResponse {
@@ -163,6 +164,7 @@ impl FsRequestProcessor {
                 RemoveOptions {
                     recursive: params.recursive.unwrap_or(true),
                     force: params.force.unwrap_or(true),
+                    follow_symlinks: true,
                 },
                 /*sandbox*/ None,
             )

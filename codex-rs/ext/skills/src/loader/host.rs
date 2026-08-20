@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::GetMetadataOptions;
+use codex_exec_server::ReadFileOptions;
 use codex_protocol::protocol::SkillScope;
 use codex_skills::ParsedSkillFrontmatter;
 use codex_skills::SkillError;
@@ -219,7 +221,14 @@ async fn load_skills_under_root(
                     );
                     return None;
                 }
-                match file_system.get_metadata(&path_uri, /*sandbox*/ None).await {
+                match file_system
+                    .get_metadata(
+                        &path_uri,
+                        GetMetadataOptions::default(),
+                        /*sandbox*/ None,
+                    )
+                    .await
+                {
                     Ok(metadata) if metadata.is_file => {}
                     Ok(_) => {
                         error!(
@@ -348,7 +357,7 @@ async fn parse_skill_file(
     }
     .unwrap_or(SkillMetadataDiscovery::Absent);
     let (contents, loaded_metadata) = tokio::join!(
-        file_system.read_file_text(path_uri, /*sandbox*/ None),
+        file_system.read_file_text(path_uri, ReadFileOptions::default(), /*sandbox*/ None,),
         load_host_skill_metadata(file_system, path, &metadata, plugin_root),
     );
     let contents = contents.map_err(|error| format!("failed to read file: {error}"))?;

@@ -86,7 +86,10 @@ async fn discover_root(
         return discovery;
     }
 
-    match file_system.get_metadata(&path, sandbox).await {
+    match file_system
+        .get_metadata(&path, Default::default(), sandbox)
+        .await
+    {
         Ok(metadata) if metadata.is_directory => {}
         Ok(_) => {
             discovery.error = Some(format!("capability root {path} is not a directory"));
@@ -329,7 +332,10 @@ async fn read_optional_text_file(
     budget: &mut BundleBudget,
     warnings: &mut Vec<String>,
 ) -> Option<CapabilityTextFile> {
-    let metadata = match file_system.get_metadata(&path, sandbox).await {
+    let metadata = match file_system
+        .get_metadata(&path, Default::default(), sandbox)
+        .await
+    {
         Ok(metadata) if metadata.is_file => metadata,
         Ok(_) => return None,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return None,

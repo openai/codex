@@ -278,13 +278,21 @@ async fn save_image_generation_result(
                     LOCAL_FS
                         .create_directory(
                             &PathUri::from_abs_path(&parent),
-                            CreateDirectoryOptions { recursive: true },
+                            CreateDirectoryOptions {
+                                recursive: true,
+                                follow_symlinks: true,
+                            },
                             /*sandbox*/ None,
                         )
                         .await?;
                 }
                 LOCAL_FS
-                    .write_file(&PathUri::from_abs_path(&path), bytes, /*sandbox*/ None)
+                    .write_file(
+                        &PathUri::from_abs_path(&path),
+                        bytes,
+                        Default::default(),
+                        /*sandbox*/ None,
+                    )
                     .await?;
                 Ok(path)
             }
@@ -322,7 +330,10 @@ async fn save_image_generation_result(
                         .file_system
                         .create_directory(
                             &parent_uri,
-                            CreateDirectoryOptions { recursive: true },
+                            CreateDirectoryOptions {
+                                recursive: true,
+                                follow_symlinks: true,
+                            },
                             sandbox,
                         )
                         .await?;
@@ -330,7 +341,7 @@ async fn save_image_generation_result(
                     // Full-access executor contexts do not prevent symlinked output directories.
                     let metadata = environment
                         .file_system
-                        .get_metadata(&parent_uri, sandbox)
+                        .get_metadata(&parent_uri, Default::default(), sandbox)
                         .await?;
                     if metadata.is_symlink || !metadata.is_directory {
                         return Err(io::Error::new(
@@ -344,7 +355,7 @@ async fn save_image_generation_result(
                 let path_uri = PathUri::from_abs_path(&path);
                 match environment
                     .file_system
-                    .get_metadata(&path_uri, sandbox)
+                    .get_metadata(&path_uri, Default::default(), sandbox)
                     .await
                 {
                     Ok(_) => {
@@ -359,7 +370,7 @@ async fn save_image_generation_result(
 
                 environment
                     .file_system
-                    .write_file(&path_uri, bytes, sandbox)
+                    .write_file(&path_uri, bytes, Default::default(), sandbox)
                     .await?;
                 Ok(path)
             }
@@ -563,7 +574,7 @@ async fn image_url(
     let sandbox = environment.file_system_sandbox_context.clone();
     let bytes = environment
         .file_system
-        .read_file(&path_uri, Some(&sandbox))
+        .read_file(&path_uri, Default::default(), Some(&sandbox))
         .await
         .map_err(|error| {
             FunctionCallError::RespondToModel(format!(

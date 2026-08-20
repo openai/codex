@@ -17,6 +17,8 @@ use crate::store::DEFAULT_PLUGIN_VERSION;
 use crate::store::PluginStore;
 use crate::store::plugin_version_for_source;
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::GetMetadataOptions;
+use codex_exec_server::ReadFileOptions;
 use codex_plugin::PluginId;
 use codex_protocol::items::is_safe_plugin_relative_path;
 use codex_shell_command::bash::extract_bash_command;
@@ -256,14 +258,18 @@ impl TrustedPluginRoots {
             return None;
         }
         let metadata = file_system
-            .get_metadata(&script, /*sandbox*/ None)
+            .get_metadata(
+                &script,
+                GetMetadataOptions::default(),
+                /*sandbox*/ None,
+            )
             .await
             .ok()?;
         if !metadata.is_file || metadata.size != candidate.contents.len() as u64 {
             return None;
         }
         let contents = file_system
-            .read_file(&script, /*sandbox*/ None)
+            .read_file(&script, ReadFileOptions::default(), /*sandbox*/ None)
             .await
             .ok()?;
         (contents == candidate.contents).then_some(candidate.attribution)

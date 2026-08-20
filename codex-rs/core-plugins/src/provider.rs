@@ -1,6 +1,8 @@
 use crate::manifest::parse_plugin_manifest_uri;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::GetMetadataOptions;
+use codex_exec_server::ReadFileOptions;
 use codex_plugin::PluginProvider;
 use codex_plugin::ResolvedPlugin;
 use codex_plugin::ResolvedPluginError;
@@ -156,7 +158,11 @@ async fn resolve_plugin_root(
     let root_id = &selected_root.id;
     let CapabilityRootLocation::Environment { environment_id, .. } = &selected_root.location;
     let root_metadata = file_system
-        .get_metadata(&plugin_root, /*sandbox*/ None)
+        .get_metadata(
+            &plugin_root,
+            GetMetadataOptions::default(),
+            /*sandbox*/ None,
+        )
         .await
         .map_err(|source| ExecutorPluginProviderError::InspectRoot {
             root_id: root_id.clone(),
@@ -181,7 +187,11 @@ async fn resolve_plugin_root(
             }
         })?;
         match file_system
-            .get_metadata(&candidate_uri, /*sandbox*/ None)
+            .get_metadata(
+                &candidate_uri,
+                GetMetadataOptions::default(),
+                /*sandbox*/ None,
+            )
             .await
         {
             Ok(metadata) if metadata.is_file => {
@@ -203,7 +213,11 @@ async fn resolve_plugin_root(
         return Ok(None);
     };
     let contents = file_system
-        .read_file_text(&manifest_uri, /*sandbox*/ None)
+        .read_file_text(
+            &manifest_uri,
+            ReadFileOptions::default(),
+            /*sandbox*/ None,
+        )
         .await
         .map_err(|source| ExecutorPluginProviderError::ReadManifest {
             root_id: root_id.clone(),

@@ -125,7 +125,9 @@ async fn submit_workspace_turn(test: &TestCodex, prompt: &str) -> Result<()> {
 
 async fn read_file(test: &TestCodex, path: &PathUri) -> Result<String> {
     Ok(String::from_utf8(
-        test.fs().read_file(path, /*sandbox*/ None).await?,
+        test.fs()
+            .read_file(path, Default::default(), /*sandbox*/ None)
+            .await?,
     )?)
 }
 
@@ -137,6 +139,7 @@ async fn remove_files(test: &TestCodex, paths: &[&PathUri]) -> Result<()> {
                 RemoveOptions {
                     recursive: false,
                     force: true,
+                    follow_symlinks: true,
                 },
                 /*sandbox*/ None,
             )
@@ -233,7 +236,10 @@ async fn workspace_roots_allow_apply_patch_in_secondary_root() -> Result<()> {
                 .join(sibling_workspace_root_name(&cwd, SECONDARY_ROOT_NAME));
             fs.create_directory(
                 &PathUri::from_abs_path(&secondary_root),
-                CreateDirectoryOptions { recursive: true },
+                CreateDirectoryOptions {
+                    recursive: true,
+                    follow_symlinks: true,
+                },
                 /*sandbox*/ None,
             )
             .await?;
@@ -289,6 +295,7 @@ async fn workspace_roots_allow_apply_patch_in_secondary_root() -> Result<()> {
             RemoveOptions {
                 recursive: true,
                 force: true,
+                follow_symlinks: true,
             },
             /*sandbox*/ None,
         )
@@ -314,7 +321,10 @@ async fn workspace_roots_allow_patches_but_protect_metadata_directories() -> Res
         test.fs()
             .create_directory(
                 &cwd.join(directory)?,
-                CreateDirectoryOptions { recursive: true },
+                CreateDirectoryOptions {
+                    recursive: true,
+                    follow_symlinks: true,
+                },
                 /*sandbox*/ None,
             )
             .await?;
@@ -377,7 +387,7 @@ async fn workspace_roots_allow_patches_but_protect_metadata_directories() -> Res
         let protected_path = cwd.join(directory)?.join("protected.txt")?;
         let error = test
             .fs()
-            .get_metadata(&protected_path, /*sandbox*/ None)
+            .get_metadata(&protected_path, Default::default(), /*sandbox*/ None)
             .await
             .expect_err("protected metadata file should not be created");
         assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
@@ -441,13 +451,13 @@ async fn workspace_roots_deny_file_and_command_writes_outside_roots() -> Result<
     );
     assert!(
         test.fs()
-            .read_file(&patch_path, /*sandbox*/ None)
+            .read_file(&patch_path, Default::default(), /*sandbox*/ None)
             .await
             .is_err()
     );
     assert!(
         test.fs()
-            .read_file(&command_path, /*sandbox*/ None)
+            .read_file(&command_path, Default::default(), /*sandbox*/ None)
             .await
             .is_err()
     );

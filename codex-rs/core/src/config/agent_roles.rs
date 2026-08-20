@@ -4,6 +4,8 @@ use codex_config::config_toml::AgentRoleToml;
 use codex_config::config_toml::AgentsToml;
 use codex_config::config_toml::ConfigToml;
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::GetMetadataOptions;
+use codex_exec_server::ReadFileOptions;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use codex_utils_path_uri::PathUri;
@@ -317,7 +319,9 @@ async fn read_resolved_agent_role_file(
     role_name_hint: Option<&str>,
 ) -> std::io::Result<ResolvedAgentRoleFile> {
     let path_uri = PathUri::from_abs_path(path);
-    let contents = fs.read_file_text(&path_uri, /*sandbox*/ None).await?;
+    let contents = fs
+        .read_file_text(&path_uri, ReadFileOptions::default(), /*sandbox*/ None)
+        .await?;
     let config_base_dir = path.parent().unwrap_or_else(|| path.clone());
     parse_agent_role_file_contents(
         &contents,
@@ -391,7 +395,11 @@ async fn validate_agent_role_config_file(
 
     let config_file_uri = PathUri::from_abs_path(config_file);
     let metadata = fs
-        .get_metadata(&config_file_uri, /*sandbox*/ None)
+        .get_metadata(
+            &config_file_uri,
+            GetMetadataOptions::default(),
+            /*sandbox*/ None,
+        )
         .await
         .map_err(|e| {
             std::io::Error::new(

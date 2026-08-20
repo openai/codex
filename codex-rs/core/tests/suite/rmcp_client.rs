@@ -1421,7 +1421,10 @@ async fn stdio_server_uses_configured_cwd_before_runtime_fallback() -> anyhow::R
             let configured_cwd_uri = PathUri::from_host_native_path(&configured_cwd)?;
             fs.create_directory(
                 &configured_cwd_uri,
-                CreateDirectoryOptions { recursive: true },
+                CreateDirectoryOptions {
+                    recursive: true,
+                    follow_symlinks: true,
+                },
                 /*sandbox*/ None,
             )
             .await?;

@@ -11,9 +11,12 @@ use codex_exec_server::FileMetadata;
 use codex_exec_server::FileSystemReadStream;
 use codex_exec_server::FileSystemResult;
 use codex_exec_server::FileSystemSandboxContext;
+use codex_exec_server::GetMetadataOptions;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_exec_server::ReadDirectoryEntry;
+use codex_exec_server::ReadFileOptions;
 use codex_exec_server::RemoveOptions;
+use codex_exec_server::WriteFileOptions;
 use codex_exec_server_test_support::environment_manager_without_environments;
 use codex_plugin::PluginProvider;
 use codex_plugin::ResolvedPlugin;
@@ -74,6 +77,7 @@ impl ExecutorFileSystem for SyntheticPluginFileSystem {
     fn read_file<'a>(
         &'a self,
         path: &'a PathUri,
+        _options: ReadFileOptions,
         _sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, Vec<u8>> {
         Box::pin(async move {
@@ -101,6 +105,7 @@ impl ExecutorFileSystem for SyntheticPluginFileSystem {
         &'a self,
         _path: &'a PathUri,
         _contents: Vec<u8>,
+        _options: WriteFileOptions,
         _sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(async { Self::unsupported() })
@@ -118,6 +123,7 @@ impl ExecutorFileSystem for SyntheticPluginFileSystem {
     fn get_metadata<'a>(
         &'a self,
         path: &'a PathUri,
+        _options: GetMetadataOptions,
         _sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
         Box::pin(async move {

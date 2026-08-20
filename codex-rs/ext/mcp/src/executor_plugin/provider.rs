@@ -1,6 +1,7 @@
 use codex_config::McpServerConfig;
 use codex_core_plugins::ResolvedExecutorPlugin;
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::ReadFileOptions;
 use codex_mcp::parse_executor_plugin_mcp_config;
 use codex_plugin::PluginResourceLocator;
 use codex_plugin::ResolvedPlugin;
@@ -72,7 +73,7 @@ async fn load_from_file_system(
         })) => {
             (
                 file_system
-                    .read_file_text(path, /*sandbox*/ None)
+                    .read_file_text(path, ReadFileOptions::default(), /*sandbox*/ None)
                     .await
                     .map_err(|source| ExecutorPluginMcpProviderError::ReadConfig {
                         plugin_id: plugin_id.to_string(),
@@ -96,7 +97,11 @@ async fn load_from_file_system(
                     source,
                 })?;
             let contents = match file_system
-                .read_file_text(&config_path, /*sandbox*/ None)
+                .read_file_text(
+                    &config_path,
+                    ReadFileOptions::default(),
+                    /*sandbox*/ None,
+                )
                 .await
             {
                 Ok(contents) => contents,

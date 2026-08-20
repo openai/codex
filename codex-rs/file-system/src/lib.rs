@@ -41,14 +41,55 @@ const MAX_WALK_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const WALK_RESPONSE_ITEM_OVERHEAD_BYTES: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReadFileOptions {
+    pub follow_symlinks: bool,
+}
+
+impl Default for ReadFileOptions {
+    fn default() -> Self {
+        Self {
+            follow_symlinks: true,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WriteFileOptions {
+    pub follow_symlinks: bool,
+}
+
+impl Default for WriteFileOptions {
+    fn default() -> Self {
+        Self {
+            follow_symlinks: true,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GetMetadataOptions {
+    pub follow_symlinks: bool,
+}
+
+impl Default for GetMetadataOptions {
+    fn default() -> Self {
+        Self {
+            follow_symlinks: true,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CreateDirectoryOptions {
     pub recursive: bool,
+    pub follow_symlinks: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RemoveOptions {
     pub recursive: bool,
     pub force: bool,
+    pub follow_symlinks: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -420,6 +461,7 @@ pub trait ExecutorFileSystem: Send + Sync {
     fn read_file<'a>(
         &'a self,
         path: &'a PathUri,
+        options: ReadFileOptions,
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, Vec<u8>>;
 
@@ -434,10 +476,11 @@ pub trait ExecutorFileSystem: Send + Sync {
     fn read_file_text<'a>(
         &'a self,
         path: &'a PathUri,
+        options: ReadFileOptions,
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, String> {
         Box::pin(async move {
-            let bytes = self.read_file(path, sandbox).await?;
+            let bytes = self.read_file(path, options, sandbox).await?;
             String::from_utf8(bytes).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
         })
     }
@@ -446,6 +489,7 @@ pub trait ExecutorFileSystem: Send + Sync {
         &'a self,
         path: &'a PathUri,
         contents: Vec<u8>,
+        options: WriteFileOptions,
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, ()>;
 
@@ -459,6 +503,7 @@ pub trait ExecutorFileSystem: Send + Sync {
     fn get_metadata<'a>(
         &'a self,
         path: &'a PathUri,
+        options: GetMetadataOptions,
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, FileMetadata>;
 
@@ -530,7 +575,9 @@ async fn walk_via_directory_reads<F: ExecutorFileSystem + ?Sized>(
         ));
     }
 
-    let root_metadata = file_system.get_metadata(root, sandbox).await?;
+    let root_metadata = file_system
+        .get_metadata(root, GetMetadataOptions::default(), sandbox)
+        .await?;
     if !root_metadata.is_directory
         || (root_metadata.is_symlink && !options.follow_directory_symlinks)
     {
@@ -587,7 +634,10 @@ async fn walk_via_directory_reads<F: ExecutorFileSystem + ?Sized>(
                     continue;
                 }
             };
-            let metadata = match file_system.get_metadata(&path, sandbox).await {
+            let metadata = match file_system
+                .get_metadata(&path, GetMetadataOptions::default(), sandbox)
+                .await
+            {
                 Ok(metadata) => metadata,
                 Err(error) => {
                     if !push_walk_error(&mut outcome, &mut response_bytes, path, error.to_string())

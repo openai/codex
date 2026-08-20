@@ -282,7 +282,7 @@ async fn codex_delegate_rejects_skill_mcp_dependency_installation_without_prompt
             let agents_dir = skill_dir.join("agents");
             fs.create_directory(
                 &PathUri::from_host_native_path(&agents_dir)?,
-                CreateDirectoryOptions { recursive: true },
+                CreateDirectoryOptions { recursive: true, follow_symlinks: true },
                 /*sandbox*/ None,
             )
             .await?;
@@ -290,14 +290,14 @@ async fn codex_delegate_rejects_skill_mcp_dependency_installation_without_prompt
                 &PathUri::from_host_native_path(skill_dir.join("SKILL.md"))?,
                 b"---\nname: dependency-skill\ndescription: Requires an MCP server.\n---\n\nReview dependency instructions.\n"
                     .to_vec(),
-                /*sandbox*/ None,
+                Default::default(), /*sandbox*/ None,
             )
             .await?;
             fs.write_file(
                 &PathUri::from_host_native_path(agents_dir.join("openai.yaml"))?,
                 b"dependencies:\n  tools:\n    - type: mcp\n      value: missing-review-server\n      transport: streamable_http\n      url: http://127.0.0.1:1/mcp\n"
                     .to_vec(),
-                /*sandbox*/ None,
+                Default::default(), /*sandbox*/ None,
             )
             .await?;
             Ok(())

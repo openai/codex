@@ -23,7 +23,7 @@ async fn sandboxed_file_system_rejects_non_native_uri_as_invalid_input() {
     );
 
     let error = file_system
-        .read_file(&non_native_uri(), Some(&sandbox))
+        .read_file(&non_native_uri(), Default::default(), Some(&sandbox))
         .await
         .expect_err("non-native URI should be rejected");
 

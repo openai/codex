@@ -3,6 +3,8 @@ use std::io;
 
 use codex_exec_server::CapabilityRootDiscovery;
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::GetMetadataOptions;
+use codex_exec_server::ReadFileOptions;
 use codex_protocol::protocol::Product;
 use codex_skills::EnvironmentSkillMetadata;
 use codex_skills::ParsedSkillFrontmatter;
@@ -326,7 +328,11 @@ async fn read_skill_contents(
     skill_path: &PathUri,
 ) -> Result<String, String> {
     file_system
-        .read_file_text(skill_path, /*sandbox*/ None)
+        .read_file_text(
+            skill_path,
+            ReadFileOptions::default(),
+            /*sandbox*/ None,
+        )
         .await
         .map_err(|err| format!("failed to read file: {err}"))
 }
@@ -336,7 +342,11 @@ async fn probe_skill_metadata(
     metadata_path: &PathUri,
 ) -> (Option<SkillDependencies>, Option<SkillPolicy>) {
     match file_system
-        .get_metadata(metadata_path, /*sandbox*/ None)
+        .get_metadata(
+            metadata_path,
+            GetMetadataOptions::default(),
+            /*sandbox*/ None,
+        )
         .await
     {
         Ok(metadata) if metadata.is_file => {}
@@ -355,7 +365,11 @@ async fn read_skill_metadata(
     metadata_path: &PathUri,
 ) -> (Option<SkillDependencies>, Option<SkillPolicy>) {
     let contents = match file_system
-        .read_file_text(metadata_path, /*sandbox*/ None)
+        .read_file_text(
+            metadata_path,
+            ReadFileOptions::default(),
+            /*sandbox*/ None,
+        )
         .await
     {
         Ok(contents) => contents,

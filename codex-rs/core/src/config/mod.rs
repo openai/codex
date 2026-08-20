@@ -58,6 +58,7 @@ use codex_core_plugins::PluginLoadOutcome;
 use codex_core_plugins::PluginsConfigInput;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
+use codex_exec_server::ReadFileOptions;
 use codex_features::CodeModeConfigToml;
 use codex_features::CurrentTimeReminderConfigToml;
 use codex_features::CurrentTimeReminderDeliveryMode;
@@ -4259,7 +4260,7 @@ impl Config {
 
         let path_uri = PathUri::from_abs_path(path);
         let contents = fs
-            .read_file_text(&path_uri, /*sandbox*/ None)
+            .read_file_text(&path_uri, ReadFileOptions::default(), /*sandbox*/ None)
             .await
             .map_err(|e| {
                 std::io::Error::new(

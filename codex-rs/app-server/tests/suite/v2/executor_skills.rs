@@ -169,7 +169,10 @@ stream_max_retries = 0
         file_system
             .create_directory(
                 directory,
-                CreateDirectoryOptions { recursive: true },
+                CreateDirectoryOptions {
+                    recursive: true,
+                    follow_symlinks: true,
+                },
                 /*sandbox*/ None,
             )
             .await?;
@@ -194,7 +197,7 @@ stream_max_retries = 0
         file_system.write_file(
             &manifest_path,
             br#"{"name":"demo-plugin"}"#.to_vec(),
-            /*sandbox*/ None,
+            Default::default(), /*sandbox*/ None,
         ),
         file_system.write_file(
             &skill_path,
@@ -202,7 +205,7 @@ stream_max_retries = 0
                 "---\nname: deploy\ndescription: Deploy through the executor.\n---\n\n# Deploy\n\n{SKILL_MARKER}\n\nRead references/details.md.\n"
             )
             .into_bytes(),
-            /*sandbox*/ None,
+            Default::default(), /*sandbox*/ None,
         ),
         file_system.write_file(
             &openai_yaml_path,
@@ -210,12 +213,12 @@ stream_max_retries = 0
                 "policy:\n  allow_implicit_invocation: {allow_implicit_invocation}\n"
             )
             .into_bytes(),
-            /*sandbox*/ None,
+            Default::default(), /*sandbox*/ None,
         ),
         file_system.write_file(
             &reference_path,
             reference_contents.into_bytes(),
-            /*sandbox*/ None,
+            Default::default(), /*sandbox*/ None,
         ),
     )?;
     #[cfg(unix)]
@@ -255,7 +258,10 @@ stream_max_retries = 0
                     file_system
                         .create_directory(
                             &skill_dir,
-                            CreateDirectoryOptions { recursive: true },
+                            CreateDirectoryOptions {
+                                recursive: true,
+                                follow_symlinks: true,
+                            },
                             /*sandbox*/ None,
                         )
                         .await?;
@@ -267,6 +273,7 @@ stream_max_retries = 0
                                 "x".repeat(1_025)
                             )
                             .into_bytes(),
+                            Default::default(),
                             /*sandbox*/ None,
                         )
                         .await?;

@@ -236,6 +236,7 @@ async fn codex_apps_file_params_omit_fields_absent_from_tool_schema() -> Result<
             fs.write_file(
                 &report_path,
                 vec![b'x'; STREAMED_FILE_SIZE],
+                Default::default(),
                 /*sandbox*/ None,
             )
             .await?;
@@ -346,6 +347,7 @@ async fn codex_apps_file_params_stream_allowed_file_under_restricted_read_policy
             fs.write_file(
                 &report_path,
                 vec![b'x'; STREAMED_FILE_SIZE],
+                Default::default(),
                 /*sandbox*/ None,
             )
             .await?;
@@ -380,8 +382,13 @@ async fn codex_apps_file_params_reject_denied_file_before_upload() -> Result<()>
         .with_config(|config| restrict_apps_upload_reads(config, "report.txt"))
         .with_workspace_setup(|cwd, fs| async move {
             let report_path = PathUri::from_abs_path(&cwd.join("report.txt"));
-            fs.write_file(&report_path, b"private".to_vec(), /*sandbox*/ None)
-                .await?;
+            fs.write_file(
+                &report_path,
+                b"private".to_vec(),
+                Default::default(),
+                /*sandbox*/ None,
+            )
+            .await?;
             Ok(())
         });
     let test = builder.build_with_auto_env(&server).await?;
@@ -488,8 +495,13 @@ default_tools_approval_mode = "approve"
         })
         .with_workspace_setup(|cwd, fs| async move {
             let report_path = executor_path_uri(cwd.join("report.pdf"))?;
-            fs.write_file(&report_path, b"%PDF-1.4".to_vec(), /*sandbox*/ None)
-                .await?;
+            fs.write_file(
+                &report_path,
+                b"%PDF-1.4".to_vec(),
+                Default::default(),
+                /*sandbox*/ None,
+            )
+            .await?;
             Ok(())
         });
     let test = builder.build_with_auto_env(&server).await?;

@@ -8,6 +8,7 @@ use codex_config::default_project_root_markers;
 use codex_config::merge_toml_values;
 use codex_config::project_root_markers_from_config;
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::GetMetadataOptions;
 use codex_exec_server::LOCAL_FS;
 use codex_protocol::protocol::SkillScope;
 use codex_skills::system_cache_root_dir;
@@ -153,7 +154,11 @@ async fn repo_agents_skill_roots(
                 let agents_skills = directory.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME);
                 let agents_skills_uri = PathUri::from_abs_path(&agents_skills);
                 let result = repository_file_system
-                    .get_metadata(&agents_skills_uri, /*sandbox*/ None)
+                    .get_metadata(
+                        &agents_skills_uri,
+                        GetMetadataOptions::default(),
+                        /*sandbox*/ None,
+                    )
                     .await;
                 (agents_skills, result)
             }
@@ -217,7 +222,11 @@ async fn find_project_root(
         .map(|(ancestor, marker_path)| async move {
             let marker_path_uri = PathUri::from_abs_path(&marker_path);
             let result = repository_file_system
-                .get_metadata(&marker_path_uri, /*sandbox*/ None)
+                .get_metadata(
+                    &marker_path_uri,
+                    GetMetadataOptions::default(),
+                    /*sandbox*/ None,
+                )
                 .await;
             (ancestor, marker_path, result)
         })

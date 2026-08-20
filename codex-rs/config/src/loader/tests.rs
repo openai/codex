@@ -5,8 +5,11 @@ use codex_file_system::ExecutorFileSystemFuture;
 use codex_file_system::FileMetadata;
 use codex_file_system::FileSystemReadStream;
 use codex_file_system::FileSystemSandboxContext;
+use codex_file_system::GetMetadataOptions;
 use codex_file_system::ReadDirectoryEntry;
+use codex_file_system::ReadFileOptions;
 use codex_file_system::RemoveOptions;
+use codex_file_system::WriteFileOptions;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
@@ -29,6 +32,7 @@ impl ExecutorFileSystem for TestFileSystem {
     fn read_file<'a>(
         &'a self,
         path: &'a PathUri,
+        _options: ReadFileOptions,
         _sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, Vec<u8>> {
         Box::pin(async move {
@@ -54,6 +58,7 @@ impl ExecutorFileSystem for TestFileSystem {
         &'a self,
         _path: &'a PathUri,
         _contents: Vec<u8>,
+        _options: WriteFileOptions,
         _sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(async move { unimplemented!("test filesystem only supports reads") })
@@ -71,6 +76,7 @@ impl ExecutorFileSystem for TestFileSystem {
     fn get_metadata<'a>(
         &'a self,
         path: &'a PathUri,
+        _options: GetMetadataOptions,
         _sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
         Box::pin(async move {

@@ -68,9 +68,12 @@ pub fn run_main() -> i32 {
     // TODO(anp): Discover the standalone executable cwd as PathUri directly.
     let cwd = codex_utils_path_uri::PathUri::from_abs_path(&cwd);
     let update_file_mode = crate::apply_patch_file_update_mode_from_env();
-    match runtime.block_on(crate::apply_patch_with_mode(
+    match runtime.block_on(crate::apply_patch_with_options(
         &patch_arg,
-        update_file_mode,
+        crate::ApplyPatchOptions {
+            update_file_mode,
+            ..Default::default()
+        },
         &cwd,
         &mut stdout,
         &mut stderr,

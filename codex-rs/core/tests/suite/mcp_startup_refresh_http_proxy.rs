@@ -312,14 +312,14 @@ async fn skill_mcp_dependency_oauth_uses_configured_http_client() -> Result<()> 
             let agents_dir = skill_dir.join("agents");
             fs.create_directory(
                 &PathUri::from_host_native_path(&agents_dir)?,
-                CreateDirectoryOptions { recursive: true },
+                CreateDirectoryOptions { recursive: true, follow_symlinks: true },
                 /*sandbox*/ None,
             )
             .await?;
             fs.write_file(
                 &PathUri::from_host_native_path(skill_dir.join("SKILL.md"))?,
                 b"---\nname: proxy-skill\ndescription: Uses a proxied MCP server.\n---\n".to_vec(),
-                /*sandbox*/ None,
+                Default::default(), /*sandbox*/ None,
             )
             .await?;
             let metadata = format!(
@@ -328,7 +328,7 @@ async fn skill_mcp_dependency_oauth_uses_configured_http_client() -> Result<()> 
             fs.write_file(
                 &PathUri::from_host_native_path(agents_dir.join("openai.yaml"))?,
                 metadata.into_bytes(),
-                /*sandbox*/ None,
+                Default::default(), /*sandbox*/ None,
             )
             .await?;
             Ok(())
