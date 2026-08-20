@@ -3693,6 +3693,7 @@ async fn direct_input_to_multi_agent_v2_subagent_is_rejected() -> Result<()> {
     const CHILD_PROMPT: &str = "child: do work";
     const PARENT_PROMPT: &str = "spawn a child and continue";
     const SPAWN_CALL_ID: &str = "spawn-call-direct-input-rejection";
+    const FAILED_SPAWN_CALL_ID: &str = "spawn-call-invalid-fork-turns";
     const ERROR_MESSAGE: &str =
         "direct app-server input is not allowed for multi-agent v2 sub-agents";
 
@@ -3701,11 +3702,22 @@ async fn direct_input_to_multi_agent_v2_subagent_is_rejected() -> Result<()> {
         "message": CHILD_PROMPT,
         "task_name": "worker",
     }))?;
+    let failed_spawn_args = serde_json::to_string(&json!({
+        "message": CHILD_PROMPT,
+        "task_name": "invalid-worker",
+        "fork_turns": "0",
+    }))?;
     let _parent_turn = responses::mount_sse_once_match(
         &server,
         |req: &wiremock::Request| body_contains(req, PARENT_PROMPT),
         responses::sse(vec![
             responses::ev_response_created("resp-parent-1"),
+            responses::ev_function_call_with_namespace(
+                FAILED_SPAWN_CALL_ID,
+                MULTI_AGENT_V2_NAMESPACE,
+                "spawn_agent",
+                &failed_spawn_args,
+            ),
             responses::ev_function_call_with_namespace(
                 SPAWN_CALL_ID,
                 MULTI_AGENT_V2_NAMESPACE,
@@ -3719,8 +3731,10 @@ async fn direct_input_to_multi_agent_v2_subagent_is_rejected() -> Result<()> {
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&server.uri())
         .enable_feature(Feature::MultiAgentV2)
+        .with_root_config(&format!("chatgpt_base_url = \"{}\"", server.uri()))
         .write(codex_home.path())?;
     write_models_cache(codex_home.path())?;
+    mount_analytics_capture(&server, codex_home.path()).await?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -3738,7 +3752,7 @@ async fn direct_input_to_multi_agent_v2_subagent_is_rejected() -> Result<()> {
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
             params: TurnStartParams {
-                thread_id: thread.id,
+                thread_id: thread.id.clone(),
                 input: vec![V2UserInput::Text {
                     text: PARENT_PROMPT.to_string(),
                     text_elements: Vec::new(),
@@ -3752,6 +3766,10 @@ async fn direct_input_to_multi_agent_v2_subagent_is_rejected() -> Result<()> {
         loop {
             let completed: ItemCompletedNotification =
                 mcp.read_notification("item/completed").await?;
+            assert!(!matches!(
+                &completed.item,
+                ThreadItem::CollabAgentToolCall { .. }
+            ));
             if let ThreadItem::SubAgentActivity {
                 id,
                 kind: SubAgentActivityKind::Started,
@@ -3825,7 +3843,7 @@ async fn direct_input_to_multi_agent_v2_subagent_is_rejected() -> Result<()> {
 
     let direct_steer_req = mcp
         .send_turn_steer_request(TurnSteerParams {
-            thread_id: child_thread_id,
+            thread_id: child_thread_id.clone(),
             client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "direct app-server steer".to_string(),
@@ -3843,6 +3861,63 @@ async fn direct_input_to_multi_agent_v2_subagent_is_rejected() -> Result<()> {
     .await??;
     assert_eq!(direct_steer_error.error.code, INVALID_REQUEST_ERROR_CODE);
     assert_eq!(direct_steer_error.error.message, ERROR_MESSAGE);
+
+    let event = wait_for_matching_analytics_event(&server, DEFAULT_READ_TIMEOUT, |event| {
+        event["event_type"] == "codex_collab_agent_tool_call_event"
+            && event["event_params"]["item_id"] == SPAWN_CALL_ID
+    })
+    .await?;
+    assert_eq!(
+        json!({
+            "tool_name": event["event_params"]["tool_name"],
+            "sender_thread_id": event["event_params"]["sender_thread_id"],
+            "receiver_thread_ids": event["event_params"]["receiver_thread_ids"],
+            "agent_state_count": event["event_params"]["agent_state_count"],
+            "terminal_status": event["event_params"]["terminal_status"],
+        }),
+        json!({
+            "tool_name": "spawn_agent",
+            "sender_thread_id": thread.id,
+            "receiver_thread_ids": [child_thread_id],
+            "agent_state_count": 1,
+            "terminal_status": "completed",
+        })
+    );
+    let duration_ms = event["event_params"]["duration_ms"]
+        .as_u64()
+        .context("successful spawn should report its execution duration")?;
+    assert_eq!(event["event_params"]["execution_duration_ms"], duration_ms);
+    assert!(!event.to_string().contains(CHILD_PROMPT));
+
+    let failed_event = wait_for_matching_analytics_event(&server, DEFAULT_READ_TIMEOUT, |event| {
+        event["event_type"] == "codex_collab_agent_tool_call_event"
+            && event["event_params"]["item_id"] == FAILED_SPAWN_CALL_ID
+    })
+    .await?;
+    assert_eq!(
+        json!({
+            "tool_name": failed_event["event_params"]["tool_name"],
+            "receiver_thread_count": failed_event["event_params"]["receiver_thread_count"],
+            "receiver_thread_ids": failed_event["event_params"]["receiver_thread_ids"],
+            "terminal_status": failed_event["event_params"]["terminal_status"],
+            "failure_kind": failed_event["event_params"]["failure_kind"],
+        }),
+        json!({
+            "tool_name": "spawn_agent",
+            "receiver_thread_count": 0,
+            "receiver_thread_ids": [],
+            "terminal_status": "failed",
+            "failure_kind": "tool_error",
+        })
+    );
+    assert!(!failed_event.to_string().contains(CHILD_PROMPT));
+
+    let turn_event = wait_for_matching_analytics_event(&server, DEFAULT_READ_TIMEOUT, |event| {
+        event["event_type"] == "codex_turn_event" && event["event_params"]["thread_id"] == thread.id
+    })
+    .await?;
+    assert_eq!(turn_event["event_params"]["subagent_tool_call_count"], 2);
+    assert_eq!(turn_event["event_params"]["total_tool_call_count"], 2);
 
     Ok(())
 }

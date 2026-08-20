@@ -476,6 +476,7 @@ struct TurnToolCounts {
     mcp_tool_call: usize,
     dynamic_tool_call: usize,
     subagent_tool_call: usize,
+    subagent_tool_call_ids: HashSet<String>,
     web_search: usize,
     image_generation: usize,
 }
@@ -487,7 +488,11 @@ impl TurnToolCounts {
             ThreadItem::FileChange { .. } => self.file_change += 1,
             ThreadItem::McpToolCall { .. } => self.mcp_tool_call += 1,
             ThreadItem::DynamicToolCall { .. } => self.dynamic_tool_call += 1,
-            ThreadItem::CollabAgentToolCall { .. } | ThreadItem::SubAgentActivity { .. } => {
+            ThreadItem::CollabAgentToolCall { id, .. }
+            | ThreadItem::SubAgentActivity { id, .. } => {
+                if !self.subagent_tool_call_ids.insert(id.clone()) {
+                    return;
+                }
                 self.subagent_tool_call += 1;
             }
             ThreadItem::WebSearch(_) => self.web_search += 1,
@@ -2734,7 +2739,7 @@ fn tool_item_event(input: ToolItemEventInput<'_>) -> Option<TrackEventRequest> {
                 ToolItemOutcome {
                     terminal_status,
                     failure_kind,
-                    execution_duration_ms: None,
+                    execution_duration_ms: observed_duration_ms(started_at_ms, completed_at_ms),
                 },
                 ToolItemContext {
                     started_at_ms,

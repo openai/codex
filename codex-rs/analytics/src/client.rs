@@ -47,6 +47,8 @@ use crate::reducer::valid_plugin_measurement_row;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::InitializeParams;
+use codex_app_server_protocol::ItemCompletedNotification;
+use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
@@ -57,6 +59,9 @@ use codex_login::CodexAuth;
 use codex_login::default_client::create_client;
 use codex_plugin::PluginId;
 use codex_plugin::PluginTelemetryMetadata;
+use codex_protocol::items::CollabAgentToolCallItem;
+use codex_protocol::items::CollabAgentToolCallStatus;
+use codex_protocol::items::TurnItem;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use serde_json::Value; // copybara:strip-for-public
 use std::collections::HashSet;
@@ -466,6 +471,33 @@ impl AnalyticsEventsClient {
     pub fn track_subagent_thread_started(&self, input: SubAgentThreadStartedInput) {
         self.record_fact(AnalyticsFact::Custom(
             CustomAnalyticsFact::SubAgentThreadStarted(input),
+        ));
+    }
+
+    pub fn track_collab_tool_call(
+        &self,
+        turn_id: String,
+        mut item: CollabAgentToolCallItem,
+        started_at_ms: i64,
+        completed_at_ms: i64,
+    ) {
+        let thread_id = item.sender_thread_id.to_string();
+        let completed_item = TurnItem::CollabAgentToolCall(item.clone()).into();
+        item.status = CollabAgentToolCallStatus::InProgress;
+
+        self.track_notification(&ServerNotification::ItemStarted(ItemStartedNotification {
+            item: TurnItem::CollabAgentToolCall(item).into(),
+            thread_id: thread_id.clone(),
+            turn_id: turn_id.clone(),
+            started_at_ms,
+        }));
+        self.track_notification(&ServerNotification::ItemCompleted(
+            ItemCompletedNotification {
+                item: completed_item,
+                thread_id,
+                turn_id,
+                completed_at_ms,
+            },
         ));
     }
 
