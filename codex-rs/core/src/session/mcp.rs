@@ -154,6 +154,7 @@ impl Session {
     }
 
     /// Publishes changed MCP state, waiting for any refresh already in progress.
+    #[tracing::instrument(name = "mcp.runtime.refresh_if_dirty", skip_all)]
     pub(crate) async fn refresh_mcp_if_dirty(self: &Arc<Self>) {
         let Ok(_refresh) = self.mcp_refresh.acquire().await else {
             error!("MCP runtime refresh semaphore closed");

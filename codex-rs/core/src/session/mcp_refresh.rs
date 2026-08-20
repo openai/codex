@@ -30,6 +30,7 @@ impl McpRefresh {
         self.pending.swap(false, Ordering::AcqRel)
     }
 
+    #[tracing::instrument(name = "mcp.runtime.refresh_wait", skip_all)]
     pub(super) async fn acquire(&self) -> Result<SemaphorePermit<'_>, AcquireError> {
         self.gate.acquire().await
     }
