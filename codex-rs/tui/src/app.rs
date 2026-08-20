@@ -682,31 +682,6 @@ fn active_turn_steer_race(error: &TypedRequestError) -> Option<ActiveTurnSteerRa
     Some(ActiveTurnSteerRace::ExpectedTurnMismatch { actual_turn_id })
 }
 
-fn session_start_error(
-    action: &str,
-    target_session: &SessionTarget,
-    err: color_eyre::eyre::Report,
-) -> color_eyre::eyre::Report {
-    if let Some(message) = archived_session_guidance(&err) {
-        return color_eyre::eyre::eyre!("{message}");
-    }
-
-    let target_label = target_session.display_label();
-    color_eyre::eyre::eyre!("Failed to {action} session from {target_label}: {err}")
-}
-
-fn archived_session_guidance(err: &color_eyre::eyre::Report) -> Option<String> {
-    let err = err.to_string();
-    let message = &err[err.find("session ")?..];
-    if !message.contains(" is archived. Run `codex unarchive ") {
-        return None;
-    }
-    let message = message
-        .split_once(" (code ")
-        .map_or(message, |(message, _)| message);
-    Some(message.to_string())
-}
-
 fn active_turn_interrupt_race(error: &TypedRequestError) -> Option<String> {
     let TypedRequestError::Server { method, source } = error else {
         return None;

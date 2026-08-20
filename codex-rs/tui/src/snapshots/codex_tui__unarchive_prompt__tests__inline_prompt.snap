@@ -1,0 +1,15 @@
+---
+source: tui/src/unarchive_prompt_tests.rs
+assertion_line: 108
+expression: render_inline(80)
+---
+$ codex fork saved-session
+
+
+This conversation is archived
+019e72f4-e09a-70f2-b2c2-a153a57b8cc0
+
+› 1. Unarchive and fork
+  2. Cancel
+
+Press enter to continue or esc to cancel

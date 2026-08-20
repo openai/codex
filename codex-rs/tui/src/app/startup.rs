@@ -4,6 +4,10 @@
 //! remains isolated from protected interactive requests until the initialized composer owns it.
 
 use super::*;
+use crate::session_start::SessionStartAction;
+use crate::session_start::cancel_session_start;
+use crate::session_start::complete_session_start;
+use crate::unarchive_prompt::run_unarchive_prompt;
 
 async fn resolve_runtime_model_provider_base_url(provider: &ModelProviderInfo) -> Option<String> {
     let provider = create_model_provider(provider.clone(), /*auth_manager*/ None);
@@ -304,9 +308,24 @@ impl App {
                     )
                     .await
                 {
-                    Ok(resumed) => resumed
-                        .map_err(|err| session_start_error("resume", &target_session, err))?,
+                    Ok(resumed) => resumed,
                     Err(err) => return shutdown_on_startup_error(app_server, err).await,
+                };
+                let action = SessionStartAction::Resume(model_settings);
+                let Some(resumed) = complete_session_start(
+                    &mut app_server,
+                    &config,
+                    &target_session,
+                    action,
+                    resumed,
+                    async || {
+                        startup_draft.flush_pending_events(tui).await?;
+                        run_unarchive_prompt(tui, target_session.thread_id, action).await
+                    },
+                )
+                .await?
+                else {
+                    return Ok(cancel_session_start(app_server).await);
                 };
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
@@ -350,10 +369,24 @@ impl App {
                     )
                     .await
                 {
-                    Ok(forked) => {
-                        forked.map_err(|err| session_start_error("fork", &target_session, err))?
-                    }
+                    Ok(forked) => forked,
                     Err(err) => return shutdown_on_startup_error(app_server, err).await,
+                };
+                let action = SessionStartAction::Fork;
+                let Some(forked) = complete_session_start(
+                    &mut app_server,
+                    &config,
+                    &target_session,
+                    action,
+                    forked,
+                    async || {
+                        startup_draft.flush_pending_events(tui).await?;
+                        run_unarchive_prompt(tui, target_session.thread_id, action).await
+                    },
+                )
+                .await?
+                else {
+                    return Ok(cancel_session_start(app_server).await);
                 };
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
