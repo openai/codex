@@ -394,7 +394,7 @@ async fn detect_home_plugins_uses_local_settings_over_project_settings() {
 }
 
 #[tokio::test]
-async fn detect_repo_skips_plugins_that_are_already_configured_in_codex() {
+async fn detect_repo_skips_plugins_from_remote_marketplace() {
     let root = TempDir::new().expect("create tempdir");
     let external_agent_home = root.path().join(EXTERNAL_AGENT_DIR);
     let codex_home = root.path().join(".codex");
@@ -435,27 +435,7 @@ enabled = true
         .await
         .expect("detect");
 
-    assert_eq!(
-        items,
-        vec![ExternalAgentConfigMigrationItem {
-            item_type: ExternalAgentConfigMigrationItemType::Plugins,
-            description: format!(
-                "Migrate enabled plugins from {}",
-                repo_root
-                    .join(EXTERNAL_AGENT_DIR)
-                    .join("settings.json")
-                    .display()
-            ),
-            cwd: Some(repo_root),
-            details: Some(MigrationDetails {
-                plugins: vec![PluginsMigration {
-                    marketplace_name: "acme-tools".to_string(),
-                    plugin_names: vec!["deployer".to_string()],
-                }],
-                ..Default::default()
-            }),
-        }]
-    );
+    assert_eq!(items, Vec::<ExternalAgentConfigMigrationItem>::new());
 }
 
 #[tokio::test]
@@ -559,7 +539,7 @@ async fn import_plugins_requires_details() {
 }
 
 #[tokio::test]
-async fn detect_repo_does_not_skip_plugins_only_configured_in_project_codex() {
+async fn detect_repo_skips_plugins_only_configured_in_project_codex() {
     let root = TempDir::new().expect("create tempdir");
     let external_agent_home = root.path().join(EXTERNAL_AGENT_DIR);
     let codex_home = root.path().join(".codex");
@@ -600,27 +580,7 @@ enabled = true
         .await
         .expect("detect");
 
-    assert_eq!(
-        items,
-        vec![ExternalAgentConfigMigrationItem {
-            item_type: ExternalAgentConfigMigrationItemType::Plugins,
-            description: format!(
-                "Migrate enabled plugins from {}",
-                repo_root
-                    .join(EXTERNAL_AGENT_DIR)
-                    .join("settings.json")
-                    .display()
-            ),
-            cwd: Some(repo_root),
-            details: Some(MigrationDetails {
-                plugins: vec![PluginsMigration {
-                    marketplace_name: "acme-tools".to_string(),
-                    plugin_names: vec!["formatter".to_string()],
-                }],
-                ..Default::default()
-            }),
-        }]
-    );
+    assert_eq!(items, Vec::<ExternalAgentConfigMigrationItem>::new());
 }
 
 #[tokio::test]
@@ -681,7 +641,7 @@ async fn detect_home_skips_plugins_with_invalid_marketplace_source() {
 }
 
 #[tokio::test]
-async fn detect_repo_filters_plugins_against_installed_marketplace() {
+async fn detect_repo_skips_plugins_even_with_installed_marketplace() {
     let root = TempDir::new().expect("create tempdir");
     let external_agent_home = root.path().join(EXTERNAL_AGENT_DIR);
     let codex_home = root.path().join(".codex");
@@ -787,25 +747,5 @@ source = "owner/debug-marketplace"
         .await
         .expect("detect");
 
-    assert_eq!(
-        items,
-        vec![ExternalAgentConfigMigrationItem {
-            item_type: ExternalAgentConfigMigrationItemType::Plugins,
-            description: format!(
-                "Migrate enabled plugins from {}",
-                repo_root
-                    .join(EXTERNAL_AGENT_DIR)
-                    .join("settings.json")
-                    .display()
-            ),
-            cwd: Some(repo_root),
-            details: Some(MigrationDetails {
-                plugins: vec![PluginsMigration {
-                    marketplace_name: "debug".to_string(),
-                    plugin_names: vec!["available".to_string()],
-                }],
-                ..Default::default()
-            }),
-        }]
-    );
+    assert_eq!(items, Vec::<ExternalAgentConfigMigrationItem>::new());
 }

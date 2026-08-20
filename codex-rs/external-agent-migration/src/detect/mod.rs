@@ -327,7 +327,9 @@ impl ExternalAgentConfigService {
             );
         }
 
-        if self.source.supports_plugin_migration(settings.as_ref()) {
+        // Plugin import persists user-global enabled state, so repository-controlled
+        // settings must never be treated as plugin installation authority.
+        if scope.is_home() && self.source.supports_plugin_migration(settings.as_ref()) {
             match ConfigBuilder::default()
                 .codex_home(self.codex_home.clone())
                 .fallback_cwd(Some(self.codex_home.clone()))

@@ -27,16 +27,18 @@ impl ExternalAgentConfigService {
         &self,
         cwd: Option<&Path>,
     ) -> io::Result<BTreeMap<String, MarketplaceImportSource>> {
-        let Some(scope) = MigrationScope::from_cwd(cwd)? else {
-            return Ok(BTreeMap::new());
-        };
-        let source_root = scope
-            .repo_root()
-            .unwrap_or(self.external_agent_home.as_path());
+        // Plugin installs are user-global. Only missing or empty `cwd` values
+        // denote home scope; a project scope must not select executable content.
+        if cwd.is_some_and(|cwd| !cwd.as_os_str().is_empty()) {
+            return Err(invalid_data_error(
+                "repository-scoped plugin migration is not allowed".to_string(),
+            ));
+        }
+        let scope = MigrationScope::home();
         let source_settings = self.source_settings(&scope);
         self.source.marketplace_import_sources(
             self.external_agent_home.as_path(),
-            source_root,
+            self.external_agent_home.as_path(),
             &source_settings,
         )
     }
@@ -86,11 +88,13 @@ impl ExternalAgentConfigService {
         cwd: Option<&Path>,
         details: Option<MigrationDetails>,
     ) -> io::Result<PluginImportOutcome> {
+        let cwd = cwd.filter(|cwd| !cwd.as_os_str().is_empty());
         let Some(MigrationDetails { plugins, .. }) = details else {
             return Err(invalid_data_error(
                 "plugins migration item is missing details".to_string(),
             ));
         };
+        let import_sources = self.marketplace_import_sources(cwd)?;
         let config = ConfigBuilder::default()
             .codex_home(self.codex_home.clone())
             .fallback_cwd(Some(
@@ -120,7 +124,6 @@ impl ExternalAgentConfigService {
             .into_iter()
             .map(|marketplace| (marketplace.name, marketplace.path))
             .collect::<BTreeMap<_, _>>();
-        let import_sources = self.marketplace_import_sources(cwd)?;
         for plugin_group in plugins {
             let marketplace_name = plugin_group.marketplace_name.clone();
             let plugin_names = plugin_group.plugin_names;
