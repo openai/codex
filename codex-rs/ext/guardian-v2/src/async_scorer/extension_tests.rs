@@ -1912,6 +1912,63 @@ async fn contributor_reuses_the_latest_compatible_parent_compaction() -> Result<
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn contributor_can_disable_parent_compaction_reuse() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let oversized_compaction = ResponseItem::Compaction {
+        id: Some(ResponseItemId::from_server("cmp_oversized".to_owned())),
+        encrypted_content: "a".repeat(TruncationPolicy::Tokens(/*limit*/ 256).byte_budget()),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let conversation_history = vec![
+        oversized_compaction,
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_owned(),
+            content: vec![ContentItem::InputText {
+                text: "Inspect the repository guidelines.".to_owned(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ];
+    let configuration = "[features.guardianv2]\nenabled = true\nreuse_parent_compaction = false\nmax_parent_compaction_tokens = 256\n";
+    let (request, test, _registry) = sample_configured_conversation_history(
+        conversation_history,
+        r#"{"path":"README.md"}"#,
+        Some(TEST_GUARDIAN_POLICY),
+        configuration,
+        /*model_defaults*/ None,
+    )
+    .await?;
+
+    let input = request["input"]
+        .as_array()
+        .expect("Luna request input should be an array");
+    assert_eq!(input.len(), 3);
+    assert_eq!(input[2]["role"], "user");
+    assert!(
+        input
+            .iter()
+            .all(|item| item["type"] != "compaction" && item["type"] != "context_compaction")
+    );
+
+    let thread_store = test.codex.thread_extension_data();
+    let score = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(score) = thread_store.get::<SecurityRiskScore>() {
+                return score;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    assert_eq!(score.scores.get("action_risk"), Some(&0.8));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn contributor_bounds_oversized_actions_and_fairly_truncates_nested_fields() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

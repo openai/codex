@@ -1299,6 +1299,9 @@
         "reasoning_effort": {
           "$ref": "#/definitions/ReasoningEffort"
         },
+        "reuse_parent_compaction": {
+          "type": "boolean"
+        },
         "review_scope": {
           "$ref": "#/definitions/GuardianV2ReviewScopeConfigToml"
         },

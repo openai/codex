@@ -466,16 +466,20 @@ impl GuardianV2Extension {
             .latest_tool_call
             .fetch_add(/*val*/ 1, Ordering::Relaxed)
             .saturating_add(1);
-        let latest_parent_compaction = input
-            .conversation_history
-            .items()
-            .filter(|item| {
-                matches!(
-                    item,
-                    ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. }
-                )
-            })
-            .last();
+        let latest_parent_compaction = if guardian_config.reuse_parent_compaction {
+            input
+                .conversation_history
+                .items()
+                .filter(|item| {
+                    matches!(
+                        item,
+                        ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. }
+                    )
+                })
+                .last()
+        } else {
+            None
+        };
         let parent_compaction = latest_parent_compaction.and_then(|item| {
             encrypted_parent_compaction(
                 std::iter::once(item),
