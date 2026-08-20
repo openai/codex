@@ -5,6 +5,7 @@ use std::io;
 use std::io::Write;
 use std::mem::size_of;
 use std::os::windows::ffi::OsStrExt;
+use std::os::windows::io::AsRawHandle;
 use std::os::windows::io::FromRawHandle;
 use std::os::windows::io::OwnedHandle;
 use std::os::windows::io::RawHandle;
@@ -22,12 +23,15 @@ use windows_sys::Win32::Security::SECURITY_QUALITY_OF_SERVICE;
 use windows_sys::Win32::Security::SecurityIdentification;
 use windows_sys::Win32::Storage::FileSystem::DELETE;
 use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_NORMAL;
+use windows_sys::Win32::Storage::FileSystem::FILE_DISPOSITION_INFO;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_DELETE;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
 use windows_sys::Win32::Storage::FileSystem::FILE_WRITE_DATA;
+use windows_sys::Win32::Storage::FileSystem::FileDispositionInfo;
+use windows_sys::Win32::Storage::FileSystem::SetFileInformationByHandle;
 use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 use windows_sys::Win32::System::IO::IO_STATUS_BLOCK_0;
 use windows_sys::Win32::System::Kernel::OBJ_CASE_INSENSITIVE;
@@ -36,7 +40,6 @@ use windows_sys::Win32::System::Kernel::OBJ_DONT_REPARSE;
 const FILE_DIRECTORY_FILE: u32 = 0x0000_0001;
 const FILE_SYNCHRONOUS_IO_NONALERT: u32 = 0x0000_0020;
 const FILE_NON_DIRECTORY_FILE: u32 = 0x0000_0040;
-const FILE_DELETE_ON_CLOSE: u32 = 0x0000_1000;
 const FILE_OPEN: u32 = 1;
 const FILE_CREATE: u32 = 2;
 const FILE_OPEN_IF: u32 = 3;
@@ -300,12 +303,22 @@ fn remove_sync(path: &Path, recursive: bool, force: bool) -> io::Result<()> {
     } else {
         FILE_NON_DIRECTORY_FILE
     };
-    open_handle(
-        path,
-        DELETE,
-        FILE_OPEN,
-        create_options | FILE_DELETE_ON_CLOSE,
-    )?;
+    let handle = open_handle(path, DELETE, FILE_OPEN, create_options)?;
+    let disposition = FILE_DISPOSITION_INFO {
+        DeleteFile: BOOLEAN_TRUE,
+    };
+    let result = unsafe {
+        SetFileInformationByHandle(
+            handle.as_raw_handle() as HANDLE,
+            FileDispositionInfo,
+            (&raw const disposition).cast(),
+            size_of::<FILE_DISPOSITION_INFO>() as u32,
+        )
+    };
+    if result == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    drop(handle);
     Ok(())
 }
 

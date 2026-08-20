@@ -3,11 +3,17 @@ use rustix::fs::AtFlags;
 use rustix::fs::Mode;
 use rustix::fs::OFlags;
 use rustix::fs::Stat;
+#[cfg(target_os = "linux")]
+use rustix::fs::Statx;
+#[cfg(target_os = "linux")]
+use rustix::fs::StatxFlags;
 use rustix::fs::fstat;
 use rustix::fs::mkdirat;
 use rustix::fs::open;
 use rustix::fs::openat;
 use rustix::fs::statat;
+#[cfg(target_os = "linux")]
+use rustix::fs::statx;
 use rustix::fs::unlinkat;
 use std::ffi::OsString;
 use std::io;
@@ -141,16 +147,76 @@ pub(super) async fn write_file(path: PathBuf, contents: Vec<u8>) -> io::Result<(
 
 fn metadata_sync(path: &Path) -> io::Result<FileMetadata> {
     let components = components(path)?;
-    let metadata = if components.is_empty() {
-        fstat(root()?).map_err(io::Error::from)?
+
+    #[cfg(target_os = "linux")]
+    {
+        let (parent, leaf, flags) = if components.is_empty() {
+            (root()?, OsString::new(), AtFlags::EMPTY_PATH)
+        } else {
+            let (parent, leaf) = parent(path)?;
+            (parent, leaf, AtFlags::SYMLINK_NOFOLLOW)
+        };
+        let metadata = statx(
+            &parent,
+            &leaf,
+            flags,
+            StatxFlags::BASIC_STATS | StatxFlags::BTIME,
+        );
+        match metadata {
+            Ok(metadata) => file_metadata_linux(metadata),
+            Err(error) if error == rustix::io::Errno::NOSYS || error == rustix::io::Errno::PERM => {
+                let metadata = if components.is_empty() {
+                    fstat(&parent)
+                } else {
+                    statat(&parent, &leaf, AtFlags::SYMLINK_NOFOLLOW)
+                }
+                .map_err(io::Error::from)?;
+                file_metadata(metadata, /*created_at_ms*/ 0)
+            }
+            Err(error) => Err(io::Error::from(error)),
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    if components.is_empty() {
+        let root = root()?;
+        let metadata = fstat(&root).map_err(io::Error::from)?;
+        let created_at_ms = created_at_ms(&metadata);
+        file_metadata(metadata, created_at_ms)
     } else {
         let (parent, leaf) = parent(path)?;
-        statat(&parent, leaf, AtFlags::SYMLINK_NOFOLLOW).map_err(io::Error::from)?
-    };
-    file_metadata(metadata)
+        let metadata =
+            statat(&parent, &leaf, AtFlags::SYMLINK_NOFOLLOW).map_err(io::Error::from)?;
+        let created_at_ms = created_at_ms(&metadata);
+        file_metadata(metadata, created_at_ms)
+    }
 }
 
-fn file_metadata(metadata: Stat) -> io::Result<FileMetadata> {
+#[cfg(target_os = "linux")]
+fn file_metadata_linux(metadata: Statx) -> io::Result<FileMetadata> {
+    let kind = u32::from(metadata.stx_mode) & libc::S_IFMT;
+    if kind == libc::S_IFLNK {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "path contains a symbolic link",
+        ));
+    }
+    let created_at_ms = if metadata.stx_mask & StatxFlags::BTIME.bits() == 0 {
+        0
+    } else {
+        unix_time_ms(metadata.stx_btime.tv_sec, metadata.stx_btime.tv_nsec)
+    };
+    Ok(FileMetadata {
+        is_directory: kind == libc::S_IFDIR,
+        is_file: kind == libc::S_IFREG,
+        is_symlink: false,
+        size: metadata.stx_size,
+        created_at_ms,
+        modified_at_ms: unix_time_ms(metadata.stx_mtime.tv_sec, metadata.stx_mtime.tv_nsec),
+    })
+}
+
+fn file_metadata(metadata: Stat, created_at_ms: i64) -> io::Result<FileMetadata> {
     let kind = metadata.st_mode & libc::S_IFMT;
     if kind == libc::S_IFLNK {
         return Err(io::Error::new(
@@ -163,7 +229,7 @@ fn file_metadata(metadata: Stat) -> io::Result<FileMetadata> {
         is_file: kind == libc::S_IFREG,
         is_symlink: false,
         size: u64::try_from(metadata.st_size).unwrap_or(0),
-        created_at_ms: created_at_ms(&metadata),
+        created_at_ms,
         modified_at_ms: unix_time_ms(metadata.st_mtime, metadata.st_mtime_nsec),
     })
 }
@@ -173,7 +239,7 @@ fn created_at_ms(metadata: &Stat) -> i64 {
     unix_time_ms(metadata.st_birthtime, metadata.st_birthtime_nsec)
 }
 
-#[cfg(not(target_vendor = "apple"))]
+#[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
 fn created_at_ms(_metadata: &Stat) -> i64 {
     0
 }

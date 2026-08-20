@@ -29,6 +29,8 @@ use uuid::Uuid;
 
 use crate::support::FileSystemImplementation;
 use crate::support::create_file_system_context;
+use crate::support::is_unsupported_restricted_token_host;
+use crate::support::workspace_write_sandbox;
 
 fn create_directory_junction(target: &Path, alias: &Path) -> Result<()> {
     let output = Command::new("cmd")
@@ -113,66 +115,6 @@ async fn file_system_operations_can_reject_junctions_in_any_path_component(
             .await?,
         b"unchanged"
     );
-
-    let overwritten = real.join("overwritten.txt");
-    std::fs::write(&overwritten, "before")?;
-    context
-        .file_system
-        .write_file(
-            &uri(&overwritten)?,
-            b"after".to_vec(),
-            no_follow_write,
-            /*sandbox*/ None,
-        )
-        .await?;
-    assert_eq!(std::fs::read_to_string(&overwritten)?, "after");
-
-    let created_file = real.join("created.txt");
-    context
-        .file_system
-        .write_file(
-            &uri(&created_file)?,
-            b"created".to_vec(),
-            no_follow_write,
-            /*sandbox*/ None,
-        )
-        .await?;
-    assert_eq!(std::fs::read_to_string(&created_file)?, "created");
-
-    let nested_directory = real.join("nested").join("directory");
-    context
-        .file_system
-        .create_directory(
-            &uri(&nested_directory)?,
-            no_follow_create,
-            /*sandbox*/ None,
-        )
-        .await?;
-    assert!(nested_directory.is_dir());
-
-    let removed_file = real.join("removed.txt");
-    std::fs::write(&removed_file, "remove")?;
-    context
-        .file_system
-        .remove(
-            &uri(&removed_file)?,
-            no_follow_remove,
-            /*sandbox*/ None,
-        )
-        .await?;
-    assert!(!removed_file.exists());
-
-    let removed_directory = real.join("removed-directory");
-    std::fs::create_dir(&removed_directory)?;
-    context
-        .file_system
-        .remove(
-            &uri(&removed_directory)?,
-            no_follow_remove,
-            /*sandbox*/ None,
-        )
-        .await?;
-    assert!(!removed_directory.exists());
 
     let file_link_target = real.join("file-link-target.txt");
     std::fs::write(&file_link_target, "target")?;
@@ -274,6 +216,75 @@ async fn file_system_operations_can_reject_junctions_in_any_path_component(
             .file_type()
             .is_symlink()
     );
+
+    let sandbox = workspace_write_sandbox(tmp.path().to_path_buf());
+    let read_result = context
+        .file_system
+        .read_file(&uri(&existing)?, no_follow_read, Some(&sandbox))
+        .await;
+    if is_unsupported_restricted_token_host(&read_result) {
+        return Ok(());
+    }
+    assert_eq!(read_result?, b"unchanged");
+    assert!(
+        context
+            .file_system
+            .read_file(
+                &uri(&directory_junction.join("existing.txt"))?,
+                no_follow_read,
+                Some(&sandbox),
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        context
+            .file_system
+            .write_file(
+                &uri(&directory_junction.join("existing.txt"))?,
+                b"changed".to_vec(),
+                no_follow_write,
+                Some(&sandbox),
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(std::fs::read_to_string(&existing)?, "unchanged");
+    assert!(
+        context
+            .file_system
+            .get_metadata(
+                &uri(&directory_junction)?,
+                no_follow_metadata,
+                Some(&sandbox),
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        context
+            .file_system
+            .create_directory(
+                &uri(&directory_junction.join("sandbox-created"))?,
+                no_follow_create,
+                Some(&sandbox),
+            )
+            .await
+            .is_err()
+    );
+    assert!(!real.join("sandbox-created").exists());
+    assert!(
+        context
+            .file_system
+            .remove(
+                &uri(&directory_junction.join("removable.txt"))?,
+                no_follow_remove,
+                Some(&sandbox),
+            )
+            .await
+            .is_err()
+    );
+    assert!(removable.exists());
 
     Ok(())
 }
@@ -381,11 +392,4 @@ fn read_only_sandbox_for_cwd(cwd: std::path::PathBuf) -> Result<FileSystemSandbo
         SandboxPolicy::new_read_only_policy(),
         PathUri::from_host_native_path(cwd)?,
     )?)
-}
-
-fn is_unsupported_restricted_token_host<T>(result: &std::io::Result<T>) -> bool {
-    result.as_ref().err().is_some_and(|err| {
-        err.to_string()
-            .contains("windows sandbox failed: CreateRestrictedToken failed: 87")
-    })
 }

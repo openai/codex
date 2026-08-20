@@ -16,6 +16,8 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
+#[cfg(windows)]
+use codex_utils_path_uri::PathUri;
 
 use crate::common::exec_server::ExecServerHarness;
 use crate::common::exec_server::TestCodexHelperPaths;
@@ -72,6 +74,14 @@ pub(crate) async fn create_file_system_context(
     }
 }
 
+#[cfg(windows)]
+pub(crate) fn is_unsupported_restricted_token_host<T>(result: &std::io::Result<T>) -> bool {
+    result.as_ref().err().is_some_and(|err| {
+        err.to_string()
+            .contains("windows sandbox failed: CreateRestrictedToken failed: 87")
+    })
+}
+
 pub(crate) fn absolute_path(path: std::path::PathBuf) -> AbsolutePathBuf {
     assert!(
         path.is_absolute(),
@@ -92,6 +102,7 @@ pub(crate) fn read_only_sandbox(readable_root: std::path::PathBuf) -> FileSystem
     }])
 }
 
+#[cfg(not(windows))]
 pub(crate) fn workspace_write_sandbox(
     writable_root: std::path::PathBuf,
 ) -> FileSystemSandboxContext {
@@ -103,6 +114,35 @@ pub(crate) fn workspace_write_sandbox(
         access: FileSystemAccessMode::Write,
         missing_path_behavior: None,
     }])
+}
+
+#[cfg(windows)]
+pub(crate) fn workspace_write_sandbox(
+    writable_root: std::path::PathBuf,
+) -> FileSystemSandboxContext {
+    let writable_root = absolute_path(writable_root);
+    // Keep the runtime policy aligned with the legacy workspace-write projection used by the
+    // unelevated restricted-token preflight.
+    let policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry::new(
+            FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            FileSystemAccessMode::Read,
+        ),
+        FileSystemSandboxEntry::new(
+            FileSystemPath::Special {
+                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+            },
+            FileSystemAccessMode::Write,
+        ),
+    ]);
+    let mut sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
+        PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted),
+        PathUri::from_abs_path(&writable_root),
+    );
+    sandbox.windows_sandbox_level = WindowsSandboxLevel::RestrictedToken;
+    sandbox
 }
 
 fn sandbox_context(mut entries: Vec<FileSystemSandboxEntry>) -> FileSystemSandboxContext {

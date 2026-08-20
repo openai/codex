@@ -20,6 +20,8 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
+#[cfg(target_os = "linux")]
+use std::time::UNIX_EPOCH;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -213,95 +215,103 @@ async fn file_system_operations_can_reject_symlinks_in_any_path_component(
         follow_symlinks: false,
     };
     let uri = |path: &Path| PathUri::from_host_native_path(path);
+    #[cfg(target_os = "linux")]
+    let strict_sandbox = workspace_write_sandbox(tmp_path);
+    #[cfg(target_os = "linux")]
+    let sandboxes = [None, Some(&strict_sandbox)];
+    #[cfg(not(target_os = "linux"))]
+    let sandboxes: [Option<&FileSystemSandboxContext>; 1] = [None];
 
-    assert!(
-        context
+    for sandbox in sandboxes {
+        assert!(
+            context
+                .file_system
+                .read_file(&uri(&file_link)?, no_follow_read, sandbox)
+                .await
+                .is_err()
+        );
+        assert!(
+            context
+                .file_system
+                .read_file(
+                    &uri(&directory_link.join("existing.txt"))?,
+                    no_follow_read,
+                    sandbox,
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            context
+                .file_system
+                .write_file(
+                    &uri(&file_link)?,
+                    b"changed".to_vec(),
+                    no_follow_write,
+                    sandbox,
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(std::fs::read_to_string(&existing)?, "unchanged");
+        assert!(
+            context
+                .file_system
+                .write_file(
+                    &uri(&directory_link.join("existing.txt"))?,
+                    b"changed".to_vec(),
+                    no_follow_write,
+                    sandbox,
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(std::fs::read_to_string(&existing)?, "unchanged");
+        assert!(
+            context
+                .file_system
+                .get_metadata(&uri(&file_link)?, no_follow_metadata, sandbox)
+                .await
+                .is_err()
+        );
+        let directory_metadata = context
             .file_system
-            .read_file(&uri(&file_link)?, no_follow_read, /*sandbox*/ None)
-            .await
-            .is_err()
-    );
-    assert!(
-        context
-            .file_system
-            .read_file(
-                &uri(&directory_link.join("existing.txt"))?,
-                no_follow_read,
-                /*sandbox*/ None,
-            )
-            .await
-            .is_err()
-    );
-    assert!(
-        context
-            .file_system
-            .write_file(
-                &uri(&file_link)?,
-                b"changed".to_vec(),
-                no_follow_write,
-                /*sandbox*/ None,
-            )
-            .await
-            .is_err()
-    );
-    assert_eq!(std::fs::read_to_string(&existing)?, "unchanged");
-    assert!(
-        context
-            .file_system
-            .write_file(
-                &uri(&directory_link.join("existing.txt"))?,
-                b"changed".to_vec(),
-                no_follow_write,
-                /*sandbox*/ None,
-            )
-            .await
-            .is_err()
-    );
-    assert_eq!(std::fs::read_to_string(&existing)?, "unchanged");
-    assert!(
-        context
-            .file_system
-            .get_metadata(&uri(&file_link)?, no_follow_metadata, /*sandbox*/ None)
-            .await
-            .is_err()
-    );
-    let directory_metadata = context
-        .file_system
-        .get_metadata(&uri(&real)?, no_follow_metadata, /*sandbox*/ None)
-        .await?;
-    assert!(directory_metadata.is_directory);
-    assert!(
-        context
-            .file_system
-            .create_directory(
-                &uri(&directory_link.join("created"))?,
-                no_follow_create,
-                /*sandbox*/ None,
-            )
-            .await
-            .is_err()
-    );
-    assert!(!real.join("created").exists());
-    assert!(
-        context
-            .file_system
-            .remove(
-                &uri(&directory_link.join("removable.txt"))?,
-                no_follow_remove,
-                /*sandbox*/ None,
-            )
-            .await
-            .is_err()
-    );
-    assert!(removable.exists());
-    assert!(
-        context
-            .file_system
-            .remove(&uri(&file_link)?, no_follow_remove, /*sandbox*/ None)
-            .await
-            .is_err()
-    );
-    assert!(file_link.symlink_metadata()?.file_type().is_symlink());
+            .get_metadata(&uri(&real)?, no_follow_metadata, sandbox)
+            .await?;
+        assert!(directory_metadata.is_directory);
+        assert!(
+            context
+                .file_system
+                .create_directory(
+                    &uri(&directory_link.join("created"))?,
+                    no_follow_create,
+                    sandbox,
+                )
+                .await
+                .is_err()
+        );
+        assert!(!real.join("created").exists());
+        assert!(
+            context
+                .file_system
+                .remove(
+                    &uri(&directory_link.join("removable.txt"))?,
+                    no_follow_remove,
+                    sandbox,
+                )
+                .await
+                .is_err()
+        );
+        assert!(removable.exists());
+        assert!(
+            context
+                .file_system
+                .remove(&uri(&file_link)?, no_follow_remove, sandbox)
+                .await
+                .is_err()
+        );
+        assert!(file_link.symlink_metadata()?.file_type().is_symlink());
+    }
 
     Ok(())
 }
@@ -326,6 +336,45 @@ async fn file_system_no_follow_non_recursive_root_creation_fails(
         .await;
 
     assert!(result.is_err());
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test_case(FileSystemImplementation::Local ; "local")]
+#[test_case(FileSystemImplementation::Remote ; "remote")]
+#[tokio::test]
+async fn file_system_no_follow_metadata_preserves_linux_birthtime(
+    implementation: FileSystemImplementation,
+) -> Result<()> {
+    let context = create_file_system_context(implementation).await?;
+    let tmp = TempDir::new()?;
+    let file = tmp.path().join("created.txt");
+    std::fs::write(&file, "created")?;
+    let expected = match std::fs::metadata(&file)?.created() {
+        Ok(created) => Some(i64::try_from(
+            created.duration_since(UNIX_EPOCH)?.as_millis(),
+        )?),
+        Err(error) if error.kind() == std::io::ErrorKind::Unsupported => None,
+        Err(error) => return Err(error.into()),
+    };
+
+    let metadata = context
+        .file_system
+        .get_metadata(
+            &PathUri::from_host_native_path(&file)?,
+            GetMetadataOptions {
+                follow_symlinks: false,
+            },
+            /*sandbox*/ None,
+        )
+        .await?;
+
+    if let Some(expected) = expected {
+        assert!(expected > 0);
+        assert_eq!(metadata.created_at_ms, expected);
+    } else {
+        assert_eq!(metadata.created_at_ms, 0);
+    }
     Ok(())
 }
 
