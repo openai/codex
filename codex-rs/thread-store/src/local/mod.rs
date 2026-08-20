@@ -99,6 +99,7 @@ use crate::UpdatedProject;
 use crate::local::writer_lock::WriterLockCoordinator;
 use crate::local::writer_lock::WriterLockGuard;
 
+pub use rollout_migration::RolloutMigrationFailureReason;
 pub use rollout_migration::RolloutMigrationMode;
 pub use rollout_migration::RolloutMigrationOptions;
 pub use rollout_migration::RolloutMigrationOutcome;

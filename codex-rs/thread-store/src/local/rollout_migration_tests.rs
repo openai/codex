@@ -45,6 +45,7 @@ use serde_json::json;
 use tempfile::TempDir;
 
 use super::LocalThreadStore;
+use super::RolloutMigrationFailureReason;
 use super::RolloutMigrationMode;
 use super::RolloutMigrationOptions;
 use super::RolloutMigrationProgress;
@@ -261,6 +262,16 @@ fn apply_options() -> RolloutMigrationOptions {
         max_mib_per_second: Some(1024),
         ..RolloutMigrationOptions::default()
     }
+}
+
+fn assert_failed_with_reason(
+    outcome: &super::RolloutMigrationOutcome,
+    failure_reason: RolloutMigrationFailureReason,
+) {
+    assert_eq!(
+        (outcome.status, outcome.failure_reason),
+        (RolloutMigrationStatus::Failed, Some(failure_reason))
+    );
 }
 
 async fn indexed_store(home: &Path) -> LocalThreadStore {
@@ -2249,6 +2260,57 @@ async fn migration_skips_empty_rollout_files() {
             .await
             .expect("read thread metadata")
             .is_none()
+    );
+}
+
+#[tokio::test]
+async fn migration_reports_missing_sqlite_metadata() {
+    let home = TempDir::new().expect("create Codex home");
+    let thread_id = ThreadId::new();
+    write_rollout(
+        home.path(),
+        thread_id,
+        SessionSource::Cli,
+        vec![user_message("question")],
+    );
+    let store = indexed_store(home.path()).await;
+    store
+        .state_db
+        .as_ref()
+        .expect("state db")
+        .delete_thread(thread_id)
+        .await
+        .expect("remove thread metadata");
+
+    let report = store
+        .migrate_rollouts(apply_options())
+        .await
+        .expect("inspect rollout with missing metadata");
+
+    assert_failed_with_reason(
+        &report.outcomes[0],
+        RolloutMigrationFailureReason::MissingSqliteMetadata,
+    );
+}
+
+#[tokio::test]
+async fn migration_reports_invalid_session_metadata() {
+    let home = TempDir::new().expect("create Codex home");
+    let thread_id = ThreadId::new();
+    let directory = home.path().join("sessions/2025/01/03");
+    fs::create_dir_all(&directory).expect("create rollout directory");
+    let path = directory.join(format!("rollout-2025-01-03T12-00-00-{thread_id}.jsonl"));
+    fs::write(path, "not a rollout record\n").expect("write malformed rollout");
+    let store = indexed_store(home.path()).await;
+
+    let report = store
+        .migrate_rollouts(apply_options())
+        .await
+        .expect("inspect rollout with invalid metadata");
+
+    assert_failed_with_reason(
+        &report.outcomes[0],
+        RolloutMigrationFailureReason::InvalidSessionMetadata,
     );
 }
 

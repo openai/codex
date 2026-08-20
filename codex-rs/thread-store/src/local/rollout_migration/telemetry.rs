@@ -5,6 +5,7 @@
 
 use std::time::Instant;
 
+use super::RolloutMigrationFailureReason;
 use super::RolloutMigrationMode;
 use super::RolloutMigrationOptions;
 use super::RolloutMigrationReport;
@@ -56,12 +57,15 @@ impl RolloutMigrationTelemetry {
         let mut io_bytes = 0_u64;
         if let Ok(report) = result {
             for outcome in &report.outcomes {
-                let tags = [
+                let mut tags = vec![
                     ("trigger", self.trigger.tag()),
                     ("mode", self.mode.tag()),
                     ("scope", self.scope.tag()),
                     ("status", outcome.status.tag()),
                 ];
+                if let Some(failure_reason) = outcome.failure_reason {
+                    tags.push(("failure_reason", failure_reason.tag()));
+                }
                 let _ = metrics.counter(THREAD_METRIC, /*inc*/ 1, &tags);
                 io_bytes = io_bytes.saturating_add(outcome.bytes_processed);
             }
@@ -128,6 +132,21 @@ impl RolloutMigrationStatus {
             Self::SkippedEmpty => "skipped_empty",
             Self::SkippedBusy => "skipped_busy",
             Self::Failed => "failed",
+        }
+    }
+}
+
+impl RolloutMigrationFailureReason {
+    fn tag(self) -> &'static str {
+        match self {
+            Self::MissingSqliteMetadata => "missing_sqlite_metadata",
+            Self::InvalidSessionMetadata => "invalid_session_metadata",
+            Self::RolloutReadFailed => "rollout_read_failed",
+            Self::LegacyRolloutConversionFailed => "legacy_rollout_conversion_failed",
+            Self::SqliteMaterializationFailed => "sqlite_materialization_failed",
+            Self::RolloutPublishFailed => "rollout_publish_failed",
+            Self::InterruptedMigrationRecoveryFailed => "interrupted_migration_recovery_failed",
+            Self::Unknown => "unknown",
         }
     }
 }

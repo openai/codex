@@ -25,6 +25,7 @@ pub use live_thread::LiveThread;
 pub use live_thread::LiveThreadInitGuard;
 pub use local::LocalThreadStore;
 pub use local::LocalThreadStoreConfig;
+pub use local::RolloutMigrationFailureReason;
 pub use local::RolloutMigrationMode;
 pub use local::RolloutMigrationOptions;
 pub use local::RolloutMigrationOutcome;
