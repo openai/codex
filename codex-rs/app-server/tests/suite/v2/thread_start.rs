@@ -1840,6 +1840,11 @@ fn create_config_toml_with_profile_workspace_root(
 [permissions.dev.workspace_roots]
 "{profile_root_key}" = true
 
+# This test only exercises workspace roots; Windows restricted-token sandboxes
+# cannot enforce a filesystem policy without root read access.
+[permissions.dev.filesystem]
+":root" = "read"
+
 [permissions.dev.filesystem.":workspace_roots"]
 "." = "write"
 "#,

@@ -499,8 +499,9 @@ describe("Codex", () => {
       ],
     });
 
-    const deniedPath = path.join(os.tmpdir(), "codex-sdk-config.env");
-    const permissionOverride = `permissions.sdk_test.filesystem={":root"="read",${JSON.stringify(deniedPath)}="deny"}`;
+    // TODO(anp): Add the sandbox helper to the SDK workflow so this can use a deny-read override.
+    const writablePath = path.join(os.tmpdir(), "codex-sdk-config.env");
+    const permissionOverride = `permissions.sdk_test.filesystem={":root"="read",${JSON.stringify(writablePath)}="write"}`;
     const { args: spawnArgs, restore } = codexExecSpy();
     const { client, cleanup } = createTestClient({
       baseUrl: url,

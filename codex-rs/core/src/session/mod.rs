@@ -3154,8 +3154,12 @@ impl Session {
         let environments = turn_context.environments.refresh_readiness();
         self.services
             .agents_md_manager
-            .refresh(&turn_context.config, &environments)
-            .await;
+            .refresh(
+                &turn_context.config,
+                &environments,
+                turn_context.windows_sandbox_level,
+            )
+            .await?;
         let loaded_agents_md = self.services.agents_md_manager.get_loaded().await;
         let selected_capability_roots = self
             .resolve_selected_capability_roots_for_step(&environments)

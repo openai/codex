@@ -146,6 +146,16 @@ fn workspace_write_with_read_only_root(read_only_root: AbsolutePathBuf) -> Permi
     }
 
     let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
+        // TODO(anp): Rationalize these write-confinement tests so sandboxed project-instruction
+        // discovery works on macOS without unrestricted reads.
+        #[cfg(target_os = "macos")]
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            access: FileSystemAccessMode::Read,
+            missing_path_behavior: None,
+        },
         FileSystemSandboxEntry {
             path: FileSystemPath::Path {
                 path: read_only_root.into(),
@@ -932,14 +942,19 @@ async fn apply_patch_cli_does_not_write_through_symlink_escape_outside_workspace
     );
 
     let test_root = tempfile::tempdir_in(std::env::current_dir()?)?;
-    let work_dir = AbsolutePathBuf::try_from(test_root.path().join("work"))?;
-    let outside_dir = AbsolutePathBuf::try_from(test_root.path().join("outside"))?;
+    let test_root_path = dunce::canonicalize(test_root.path())?;
+    let work_dir = AbsolutePathBuf::try_from(test_root_path.join("work"))?;
+    let outside_dir = AbsolutePathBuf::try_from(test_root_path.join("outside"))?;
     std::fs::create_dir_all(work_dir.as_path())?;
     std::fs::create_dir_all(outside_dir.as_path())?;
 
     let harness_work_dir = work_dir.clone();
     let harness = apply_patch_harness_with(move |builder| {
         builder.with_config(move |config| {
+            config.workspace_roots = vec![harness_work_dir.clone()];
+            config
+                .permissions
+                .set_workspace_roots(config.workspace_roots.clone());
             config.cwd = harness_work_dir;
         })
     })
@@ -1062,8 +1077,9 @@ async fn apply_patch_cli_preserves_existing_hard_link_outside_workspace() -> Res
     );
 
     let test_root = tempfile::tempdir_in(std::env::current_dir()?)?;
-    let work_dir = AbsolutePathBuf::try_from(test_root.path().join("work"))?;
-    let outside_dir = AbsolutePathBuf::try_from(test_root.path().join("outside"))?;
+    let test_root_path = dunce::canonicalize(test_root.path())?;
+    let work_dir = AbsolutePathBuf::try_from(test_root_path.join("work"))?;
+    let outside_dir = AbsolutePathBuf::try_from(test_root_path.join("outside"))?;
     std::fs::create_dir_all(work_dir.as_path())?;
     std::fs::create_dir_all(outside_dir.as_path())?;
 

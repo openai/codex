@@ -451,15 +451,20 @@ async fn windows_elevated_shell_and_unified_exec_enforce_managed_deny_reads() ->
                     NetworkSandboxPolicy::Restricted,
                 ))
                 .expect("set managed deny-read permission profile");
+        })
+        .with_workspace_setup(|cwd, _fs| async move {
+            std::fs::write(
+                cwd.join("secret.env"),
+                "glob secret should remain private\n",
+            )?;
+            std::fs::write(
+                cwd.join("exact-secret.txt"),
+                "exact secret should remain private\n",
+            )?;
+            std::fs::write(cwd.join("public.txt"), "public ok\n")?;
+            Ok(())
         });
     let harness = TestCodexHarness::with_builder(builder).await?;
-    harness
-        .write_file("secret.env", "glob secret should remain private\n")
-        .await?;
-    harness
-        .write_file("exact-secret.txt", "exact secret should remain private\n")
-        .await?;
-    harness.write_file("public.txt", "public ok\n").await?;
 
     let command = concat!(
         "(type secret.env 1>NUL 2>NUL && echo GLOB-READ || echo GLOB-DENIED) & ",

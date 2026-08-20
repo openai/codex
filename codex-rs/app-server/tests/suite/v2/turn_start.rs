@@ -2828,6 +2828,11 @@ wire_api = "responses"
 request_max_retries = 0
 stream_max_retries = 0
 
+# This test only exercises writable workspace roots; the Windows restricted-token
+# sandbox cannot enforce a filesystem policy without root read access.
+[permissions.dev.filesystem]
+":root" = "read"
+
 [permissions.dev.filesystem.":workspace_roots"]
 "." = "write"
 "#

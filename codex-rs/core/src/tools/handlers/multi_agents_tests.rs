@@ -2245,6 +2245,8 @@ async fn multi_agent_v2_spawn_surfaces_task_name_validation_errors() {
     );
 }
 
+// TODO(anp): Restore this test on Linux once sandbox helpers work inside test microVMs.
+#[cfg_attr(target_os = "linux", ignore)]
 #[tokio::test]
 async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
     #[derive(Debug, Deserialize)]
@@ -2254,7 +2256,18 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
     }
 
     let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager();
+    let server = core_test_support::responses::start_mock_server().await;
+    let sandbox_runtime = core_test_support::test_codex::test_codex()
+        .build_with_auto_env(&server)
+        .await
+        .expect("sandbox-capable test environment should start");
+    let environment_manager = sandbox_runtime.thread_manager.environment_manager();
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        built_in_model_providers(/*openai_base_url*/ None)["openai"].clone(),
+        turn.config.codex_home.to_path_buf(),
+        Arc::clone(&environment_manager),
+    );
     session.services.agent_control = manager.agent_control();
     let expected_sandbox = turn.config.legacy_sandbox_policy();
     #[allow(deprecated)]
@@ -2266,7 +2279,13 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
             path: FileSystemPath::GlobPattern {
                 pattern: "**/.env".to_string(),
             },
-            access: FileSystemAccessMode::Deny,
+            // TODO(anp): Configure this fixture with the elevated Windows backend so it can
+            // enforce denied reads while reapplying the owner's restrictive policy.
+            access: if cfg!(windows) {
+                FileSystemAccessMode::Read
+            } else {
+                FileSystemAccessMode::Deny
+            },
             missing_path_behavior: None,
         });
     let expected_network_sandbox_policy = NetworkSandboxPolicy::from(&expected_sandbox);
@@ -2300,6 +2319,9 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
     else {
         panic!("parent environment should be ready");
     };
+    environment.environment = environment_manager
+        .default_environment()
+        .expect("sandbox-capable test environment should exist");
     environment.config_mut().permission_profile =
         PermissionProfileSnapshot::legacy(expected_permission_profile.clone());
     environment.config_origin = EnvironmentConfigOrigin::Owner;

@@ -1187,11 +1187,17 @@ impl Session {
                         "session_init.thread_name_lookup",
                         otel.name = "session_init.thread_name_lookup",
                     ));
-            let ((), plugin_skill_errors, thread_name) = tokio::join!(
-                agents_md_manager.refresh(config.as_ref(), &resolved_environments),
+            let (agents_md_result, plugin_skill_errors, thread_name) = tokio::join!(
+                agents_md_manager.refresh(
+                    config.as_ref(),
+                    &resolved_environments,
+                    session_configuration.windows_sandbox_level,
+                ),
                 plugin_skill_warmup,
                 thread_name_lookup,
             );
+            // TODO(anp): Present AGENTS.md discovery errors more clearly to the user.
+            agents_md_result?;
             for err in &plugin_skill_errors {
                 error!(
                     "failed to load skill {}: {}",
