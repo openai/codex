@@ -14,4 +14,7 @@ runs:
   steps:
     - name: Expose MSVC SDK environment
       shell: pwsh
-      run: '& "$env:GITHUB_ACTION_PATH/setup-msvc-env.ps1" -Target "${{ inputs.target }}" -HostArch "${{ inputs.host-arch }}"'
+      env:
+        HOST_ARCH: ${{ inputs.host-arch }}
+        TARGET: ${{ inputs.target }}
+      run: '& "$env:GITHUB_ACTION_PATH/setup-msvc-env.ps1" -Target "$env:TARGET" -HostArch "$env:HOST_ARCH"'
