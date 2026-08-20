@@ -634,7 +634,7 @@ impl OutgoingMessageSender {
         &self,
         connection_id: ConnectionId,
         notification: ServerNotification,
-    ) {
+    ) -> bool {
         tracing::trace!("app-server event: {notification}");
         let outgoing_message = timestamped_server_notification(notification);
         let (write_complete_tx, write_complete_rx) = oneshot::channel();
@@ -649,7 +649,7 @@ impl OutgoingMessageSender {
         {
             warn!("failed to send server notification to client: {err:?}");
         }
-        let _ = write_complete_rx.await;
+        write_complete_rx.await.is_ok()
     }
 
     pub(crate) async fn send_error(

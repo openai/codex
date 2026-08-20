@@ -2472,6 +2472,34 @@
     "LegacyAppPathString": {
       "type": "string"
     },
+    "McpServerEventNotification": {
+      "properties": {
+        "method": {
+          "type": "string"
+        },
+        "params": true
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    "McpServerEventStreamNotification": {
+      "properties": {
+        "notification": {
+          "$ref": "#/definitions/McpServerEventNotification"
+        },
+        "subscriptionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "notification",
+        "subscriptionId"
+      ],
+      "type": "object"
+    },
     "McpServerOauthLoginCompletedNotification": {
       "properties": {
         "error": {
@@ -6985,6 +7013,26 @@
         "params"
       ],
       "title": "McpServer/startupStatus/updatedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "mcpServer/event/stream/notification"
+          ],
+          "title": "McpServer/event/stream/notificationNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/McpServerEventStreamNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "McpServer/event/stream/notificationNotification",
       "type": "object"
     },
     {

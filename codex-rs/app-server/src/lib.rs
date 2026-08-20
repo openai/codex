@@ -1186,11 +1186,11 @@ pub async fn run_main_with_transport_options(
             };
 
             if !shutdown_state.forced() {
-                futures::future::join_all(
-                    connections
-                        .values()
-                        .map(|connection_state| connection_state.session.rpc_gate.shutdown()),
-                )
+                futures::future::join_all(connections.iter().map(
+                    |(&connection_id, connection_state)| {
+                        processor.connection_closed(connection_id, &connection_state.session)
+                    },
+                ))
                 .await;
                 connection_cleanup_tasks.drain().await;
                 processor.drain_background_tasks().await;

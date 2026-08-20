@@ -258,6 +258,8 @@ export type { McpResourceReadResponse } from "./McpResourceReadResponse";
 export type { McpServerElicitationAction } from "./McpServerElicitationAction";
 export type { McpServerElicitationRequestParams } from "./McpServerElicitationRequestParams";
 export type { McpServerElicitationRequestResponse } from "./McpServerElicitationRequestResponse";
+export type { McpServerEventNotification } from "./McpServerEventNotification";
+export type { McpServerEventStreamNotification } from "./McpServerEventStreamNotification";
 export type { McpServerMigration } from "./McpServerMigration";
 export type { McpServerOauthClientRegistration } from "./McpServerOauthClientRegistration";
 export type { McpServerOauthLoginCompletedNotification } from "./McpServerOauthLoginCompletedNotification";

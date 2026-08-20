@@ -43,6 +43,7 @@ mod initialize;
 mod marketplace_add;
 mod marketplace_remove;
 mod marketplace_upgrade;
+mod mcp_event_stream;
 mod mcp_resource;
 mod mcp_resource_origin;
 mod mcp_server_elicitation;

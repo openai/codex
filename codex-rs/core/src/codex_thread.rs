@@ -753,6 +753,26 @@ impl CodexThread {
         Ok(serde_json::to_value(result)?)
     }
 
+    pub async fn start_mcp_event_stream(
+        &self,
+        name: &str,
+        arguments: serde_json::Value,
+        meta: Option<serde_json::Value>,
+    ) -> anyhow::Result<codex_mcp::McpEventStream> {
+        let meta = match meta.as_ref() {
+            Some(serde_json::Value::Object(meta)) => Some(meta),
+            Some(other) => {
+                anyhow::bail!("MCP event request _meta must be a JSON object, got {other}")
+            }
+            None => None,
+        };
+        let _ = self.session.services.auth_manager.auth().await;
+        self.session.refresh_mcp_if_dirty().await;
+        codex_mcp::McpResourceClient::new(Arc::clone(&self.session.services.mcp_runtime))
+            .open_event_stream(name, &arguments, meta)
+            .await
+    }
+
     pub async fn call_mcp_tool(
         &self,
         server: &str,

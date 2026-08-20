@@ -737,6 +737,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                                 match send_error {
                                     mpsc::error::TrySendError::Full(_) => {
                                         warn!("dropping in-process server notification (queue full)");
+                                        continue;
                                     }
                                     mpsc::error::TrySendError::Closed(_) => {
                                         break;

@@ -8,6 +8,7 @@ use anyhow::anyhow;
 use codex_protocol::mcp::Resource;
 use codex_protocol::mcp::ResourceContent;
 use codex_rmcp_client::CancellableEventStreamRequest;
+use rmcp::model::GetMeta;
 use rmcp::model::PaginatedRequestParams;
 use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ServerResult;
@@ -17,9 +18,11 @@ use serde_json::Map;
 use serde_json::Value;
 use serde_json::json;
 use tokio::runtime::Handle;
+use tokio::sync::watch;
 
 use crate::McpRuntime;
 use crate::connection_manager::McpConnectionSet;
+use crate::connection_manager::McpServerConnection;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 
 /// One page of resources returned by an MCP server.
@@ -66,7 +69,8 @@ pub struct McpEventNotification {
 pub struct McpEventStream {
     request: Option<CancellableEventStreamRequest>,
     runtime_handle: Handle,
-    _connections: Arc<McpConnectionSet>,
+    connection: Option<Arc<McpServerConnection>>,
+    hosted_event_server_removals: watch::Receiver<()>,
 }
 
 impl McpEventStream {
@@ -79,54 +83,59 @@ impl McpEventStream {
         tokio::select! {
             biased;
 
-            notification = request.notifications.recv() => {
-                match notification {
-                    Some(notification) => Ok(Some(McpEventNotification {
-                        method: notification.method,
-                        params: notification.params,
-                    })),
-                    None => {
-                        let response = (&mut request.handle.rx).await;
-                        self.request = None;
-                        match response {
-                            Ok(Ok(_)) | Ok(Err(ServiceError::Cancelled { .. })) => Ok(None),
-                            Ok(Err(error)) => Err(error.into()),
-                            Err(error) => Err(error.into()),
-                        }
-                    }
+            Ok(()) = self.hosted_event_server_removals.changed() => {
+                self.cancel();
+                Err(anyhow!("hosted MCP event server was removed"))
+            }
+            Some(notification) = request.notifications.recv() => {
+                let metadata = notification.get_meta().0.0.clone();
+                let mut params = notification.params;
+                if !metadata.is_empty() {
+                    params.get_or_insert_with(|| json!({}))["_meta"] = Value::Object(metadata);
                 }
+                Ok(Some(McpEventNotification {
+                    method: notification.method,
+                    params,
+                }))
             }
             response = &mut request.handle.rx => {
                 self.request = None;
+                self.connection = None;
 
                 match response {
-                    Ok(Ok(_)) | Ok(Err(ServiceError::Cancelled { .. })) => Ok(None),
+                    Ok(Ok(_))
+                    | Ok(Err(ServiceError::Cancelled { .. }))
+                    | Ok(Err(ServiceError::TransportClosed))
+                    | Err(_) => Ok(None),
                     Ok(Err(error)) => Err(error.into()),
-                    Err(error) => Err(error.into()),
                 }
             }
         }
     }
-}
 
-impl Drop for McpEventStream {
-    fn drop(&mut self) {
+    fn cancel(&mut self) {
         if let Some(CancellableEventStreamRequest {
             handle,
             notifications,
         }) = self.request.take()
         {
             drop(notifications);
-            let connections = Arc::clone(&self._connections);
+            let connection = self.connection.take();
             self.runtime_handle.spawn(async move {
                 let _ = tokio::time::timeout(
                     Duration::from_secs(30),
                     handle.cancel(Some("event subscription closed".to_string())),
                 )
                 .await;
-                drop(connections);
+                drop(connection);
             });
         }
+    }
+}
+
+impl Drop for McpEventStream {
+    fn drop(&mut self) {
+        self.cancel();
     }
 }
 
@@ -222,7 +231,9 @@ impl McpResourceClient {
 
     /// Lists the events advertised by the hosted Plugin Runtime.
     pub async fn list_events(&self) -> Result<McpEventCatalogSnapshot> {
-        let connections = self.runtime.latest_connections();
+        let (connections, _) = self
+            .runtime
+            .latest_connections_for_event_server(CODEX_APPS_MCP_SERVER_NAME)?;
         let cache_key = McpResourceClientCacheKey(Arc::downgrade(&connections));
         let (managed, request_timeout) = connections
             .client_by_name(CODEX_APPS_MCP_SERVER_NAME)
@@ -260,9 +271,11 @@ impl McpResourceClient {
             params["_meta"] = Value::Object(request_meta.clone());
         }
 
-        let connections = self.runtime.latest_connections();
-        let (managed, _) = connections
-            .client_by_name(CODEX_APPS_MCP_SERVER_NAME)
+        let (connections, hosted_event_server_removals) = self
+            .runtime
+            .latest_connections_for_event_server(CODEX_APPS_MCP_SERVER_NAME)?;
+        let (managed, _, connection) = connections
+            .client_with_connection_by_name(CODEX_APPS_MCP_SERVER_NAME)
             .await?;
         let request = managed
             .client
@@ -273,7 +286,8 @@ impl McpResourceClient {
         Ok(McpEventStream {
             request: Some(request),
             runtime_handle: Handle::current(),
-            _connections: connections,
+            connection: Some(connection),
+            hosted_event_server_removals,
         })
     }
 }

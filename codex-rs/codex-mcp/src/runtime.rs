@@ -49,6 +49,7 @@ use crate::connection_manager::McpConnectionSet;
 use crate::elicitation::ElicitationLifecycle;
 use crate::elicitation::ElicitationRequestRouter;
 use crate::elicitation::ElicitationReviewerHandle;
+use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::resource_origin::ResourceOrigins;
 use crate::server::EffectiveMcpServer;
 use crate::tool_catalog_cache::McpToolCatalogCache;
@@ -90,6 +91,7 @@ pub struct McpRuntimeInput {
 /// their exact connections and configuration for as long as they are needed.
 pub struct McpRuntime {
     current: ArcSwap<PublishedMcpRuntime>,
+    hosted_event_server_removals: watch::Sender<()>,
     reconnect_pending: AtomicBool,
     elicitation_router: ElicitationRequestRouter,
     resource_origins: Mutex<ResourceOrigins>,
@@ -174,6 +176,7 @@ impl McpRuntime {
                 ready_selected_capability_roots: Vec::new(),
                 cached_binding: Mutex::new(None),
             }),
+            hosted_event_server_removals: watch::channel(()).0,
             reconnect_pending: AtomicBool::new(false),
             elicitation_router: ElicitationRequestRouter::default(),
             resource_origins: Mutex::default(),
@@ -276,6 +279,15 @@ impl McpRuntime {
             )
             .await,
         );
+        let hosted_event_server_retained = connections.contains_server(CODEX_APPS_MCP_SERVER_NAME)
+            && config
+                .mcp_server_catalog
+                .server(CODEX_APPS_MCP_SERVER_NAME)
+                .is_some_and(|registration| {
+                    registration
+                        .source()
+                        .is_host_owned_apps(CODEX_APPS_MCP_SERVER_NAME, registration.config())
+                });
         self.current.store(Arc::new(PublishedMcpRuntime {
             connections,
             config: Some(config),
@@ -286,6 +298,9 @@ impl McpRuntime {
             cached_binding: Mutex::new(None),
         }));
         let _ = publish.send(true);
+        if !hosted_event_server_retained {
+            self.hosted_event_server_removals.send_replace(());
+        }
     }
 
     /// Ensures the next refresh creates fresh connections for every configured server.
@@ -503,6 +518,31 @@ impl McpRuntime {
 
     pub(crate) fn latest_connections(&self) -> Arc<McpConnectionSet> {
         Arc::clone(&self.current.load().connections)
+    }
+
+    pub(crate) fn latest_connections_for_event_server(
+        &self,
+        server: &str,
+    ) -> anyhow::Result<(Arc<McpConnectionSet>, watch::Receiver<()>)> {
+        let hosted_event_server_removals = self.hosted_event_server_removals.subscribe();
+        let current = self.current.load();
+        if server == CODEX_APPS_MCP_SERVER_NAME
+            && !current
+                .config
+                .as_ref()
+                .and_then(|config| config.mcp_server_catalog.server(server))
+                .is_some_and(|registration| {
+                    registration
+                        .source()
+                        .is_host_owned_apps(server, registration.config())
+                })
+        {
+            anyhow::bail!("MCP server '{server}' is not registered by the hosted runtime");
+        }
+        Ok((
+            Arc::clone(&current.connections),
+            hosted_event_server_removals,
+        ))
     }
 
     pub async fn shutdown(&self) {
