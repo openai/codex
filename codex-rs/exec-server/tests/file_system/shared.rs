@@ -17,6 +17,9 @@ use codex_exec_server::WalkEntryKind;
 use codex_exec_server::WalkOptions;
 use codex_exec_server::WalkOutcome;
 use codex_exec_server::WriteFileOptions;
+use codex_file_system::MAX_WALK_DEPTH;
+use codex_file_system::MAX_WALK_DIRECTORIES;
+use codex_file_system::MAX_WALK_ENTRIES;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
@@ -566,6 +569,89 @@ async fn file_system_walk_returns_a_bounded_tree(
             truncated: true,
         }
     );
+
+    Ok(())
+}
+
+#[test_case(FileSystemImplementation::Local ; "local")]
+#[test_case(FileSystemImplementation::Remote ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_system_walk_handles_invalid_roots_and_limits(
+    implementation: FileSystemImplementation,
+) -> Result<()> {
+    let context = create_file_system_context(implementation).await?;
+    let file_system = context.file_system;
+    let tmp = TempDir::new()?;
+    let file_path = tmp.path().join("file.txt");
+    std::fs::write(&file_path, "contents")?;
+    let missing = PathUri::from_host_native_path(tmp.path().join("missing"))?;
+    let options = WalkOptions {
+        max_depth: 8,
+        max_directories: 100,
+        max_entries: 100,
+        follow_directory_symlinks: false,
+        prune_hidden_directories: false,
+    };
+
+    let outcome = file_system
+        .walk(
+            &PathUri::from_host_native_path(file_path)?,
+            options,
+            /*sandbox*/ None,
+        )
+        .await
+        .with_context(|| format!("mode={implementation}"))?;
+    assert_eq!(outcome, WalkOutcome::default());
+
+    let error = file_system
+        .walk(&missing, options, /*sandbox*/ None)
+        .await
+        .expect_err("a missing root must fail");
+    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+
+    let zero_limit_message = "filesystem walk limits must be greater than zero";
+    let excessive_limit_message = format!(
+        "filesystem walk limits exceed maximums: depth={MAX_WALK_DEPTH}, directories={MAX_WALK_DIRECTORIES}, entries={MAX_WALK_ENTRIES}"
+    );
+    for (max_depth, max_directories, max_entries, message) in [
+        (8, 0, 100, zero_limit_message),
+        (8, 100, 0, zero_limit_message),
+        (
+            MAX_WALK_DEPTH + 1,
+            100,
+            100,
+            excessive_limit_message.as_str(),
+        ),
+        (
+            8,
+            MAX_WALK_DIRECTORIES + 1,
+            100,
+            excessive_limit_message.as_str(),
+        ),
+        (
+            8,
+            100,
+            MAX_WALK_ENTRIES + 1,
+            excessive_limit_message.as_str(),
+        ),
+    ] {
+        let options = WalkOptions {
+            max_depth,
+            max_directories,
+            max_entries,
+            ..options
+        };
+        // Invalid limits take precedence over the missing root.
+        let error = file_system
+            .walk(&missing, options, /*sandbox*/ None)
+            .await
+            .expect_err("invalid walk limits must fail");
+        assert_eq!(
+            (error.kind(), error.to_string()),
+            (std::io::ErrorKind::InvalidInput, message.to_owned()),
+            "mode={implementation}, options={options:?}",
+        );
+    }
 
     Ok(())
 }

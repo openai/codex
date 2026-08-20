@@ -10,6 +10,8 @@ use codex_file_system::GetMetadataOptions;
 use codex_file_system::ReadDirectoryEntry;
 use codex_file_system::ReadFileOptions;
 use codex_file_system::RemoveOptions;
+use codex_file_system::WalkOptions;
+use codex_file_system::WalkOutcome;
 use codex_file_system::WriteFileOptions;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
@@ -138,6 +140,15 @@ impl ExecutorFileSystem for TestFileSystem {
         _sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, Vec<ReadDirectoryEntry>> {
         Box::pin(async move { unimplemented!("test filesystem only supports reads") })
+    }
+
+    fn walk<'a>(
+        &'a self,
+        _path: &'a PathUri,
+        _options: WalkOptions,
+        _sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, WalkOutcome> {
+        unimplemented!()
     }
 
     fn remove<'a>(

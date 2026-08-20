@@ -815,14 +815,105 @@ async fn file_system_walk_handles_directory_symlinks(
     std::fs::write(&target_file, "target")?;
     symlink(&target, &target_link)?;
     symlink(&root, &root_link)?;
+    symlink(&target_file, root.join("file-link"))?;
+    symlink(root.join("missing"), root.join("broken-link"))?;
 
-    let outcome = file_system
+    for root in [&root, &root_link] {
+        let target_link = root.join("target-link");
+
+        let outcome = file_system
+            .walk(
+                &PathUri::from_host_native_path(root)?,
+                WalkOptions {
+                    max_depth: 2,
+                    max_directories: 4,
+                    max_entries: 8,
+                    follow_directory_symlinks: false,
+                    prune_hidden_directories: false,
+                },
+                /*sandbox*/ None,
+            )
+            .await
+            .with_context(|| format!("mode={implementation}"))?;
+        assert_eq!(
+            outcome,
+            WalkOutcome {
+                entries: Vec::new(),
+                errors: Vec::new(),
+                truncated: false,
+            }
+        );
+
+        let outcome = file_system
+            .walk(
+                &PathUri::from_host_native_path(root)?,
+                WalkOptions {
+                    max_depth: 2,
+                    max_directories: 4,
+                    max_entries: 8,
+                    follow_directory_symlinks: true,
+                    prune_hidden_directories: false,
+                },
+                /*sandbox*/ None,
+            )
+            .await
+            .with_context(|| format!("mode={implementation}"))?;
+        assert_eq!(
+            outcome,
+            WalkOutcome {
+                entries: vec![
+                    WalkEntry {
+                        path: PathUri::from_host_native_path(&target_link)?,
+                        kind: WalkEntryKind::Directory,
+                    },
+                    WalkEntry {
+                        path: PathUri::from_host_native_path(target_link.join("note.txt"))?,
+                        kind: WalkEntryKind::File,
+                    },
+                    WalkEntry {
+                        path: PathUri::from_host_native_path(target_link.join("root-link"))?,
+                        kind: WalkEntryKind::Directory,
+                    },
+                ],
+                errors: Vec::new(),
+                truncated: false,
+            }
+        );
+    }
+
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test_case(FileSystemImplementation::Local ; "local")]
+#[test_case(FileSystemImplementation::Remote ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_system_walk_reports_non_utf8_names(
+    implementation: FileSystemImplementation,
+) -> Result<()> {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    use codex_exec_server::WalkError;
+
+    let context = create_file_system_context(implementation).await?;
+    let tmp = TempDir::new()?;
+    std::fs::write(
+        tmp.path()
+            .join(OsString::from_vec(b"invalid-\xff".to_vec())),
+        "contents",
+    )?;
+    let lossy_path = tmp.path().join("invalid-\u{fffd}");
+    let error =
+        std::fs::symlink_metadata(&lossy_path).expect_err("the lossy filename must not exist");
+    let outcome = context
+        .file_system
         .walk(
-            &PathUri::from_host_native_path(&root)?,
+            &PathUri::from_host_native_path(tmp.path())?,
             WalkOptions {
-                max_depth: 2,
-                max_directories: 4,
-                max_entries: 8,
+                max_depth: 0,
+                max_directories: 1,
+                max_entries: 1,
                 follow_directory_symlinks: false,
                 prune_hidden_directories: false,
             },
@@ -834,47 +925,13 @@ async fn file_system_walk_handles_directory_symlinks(
         outcome,
         WalkOutcome {
             entries: Vec::new(),
-            errors: Vec::new(),
+            errors: vec![WalkError {
+                path: PathUri::from_host_native_path(lossy_path)?,
+                message: error.to_string(),
+            }],
             truncated: false,
         }
     );
-
-    let outcome = file_system
-        .walk(
-            &PathUri::from_host_native_path(&root)?,
-            WalkOptions {
-                max_depth: 2,
-                max_directories: 4,
-                max_entries: 8,
-                follow_directory_symlinks: true,
-                prune_hidden_directories: false,
-            },
-            /*sandbox*/ None,
-        )
-        .await
-        .with_context(|| format!("mode={implementation}"))?;
-    assert_eq!(
-        outcome,
-        WalkOutcome {
-            entries: vec![
-                WalkEntry {
-                    path: PathUri::from_host_native_path(&target_link)?,
-                    kind: WalkEntryKind::Directory,
-                },
-                WalkEntry {
-                    path: PathUri::from_host_native_path(target_link.join("note.txt"))?,
-                    kind: WalkEntryKind::File,
-                },
-                WalkEntry {
-                    path: PathUri::from_host_native_path(target_link.join("root-link"))?,
-                    kind: WalkEntryKind::Directory,
-                },
-            ],
-            errors: Vec::new(),
-            truncated: false,
-        }
-    );
-
     Ok(())
 }
 

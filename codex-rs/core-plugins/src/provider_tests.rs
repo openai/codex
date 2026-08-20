@@ -16,6 +16,8 @@ use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_exec_server::ReadDirectoryEntry;
 use codex_exec_server::ReadFileOptions;
 use codex_exec_server::RemoveOptions;
+use codex_exec_server::WalkOptions;
+use codex_exec_server::WalkOutcome;
 use codex_exec_server::WriteFileOptions;
 use codex_exec_server_test_support::environment_manager_without_environments;
 use codex_plugin::PluginProvider;
@@ -154,6 +156,15 @@ impl ExecutorFileSystem for SyntheticPluginFileSystem {
         _path: &'a PathUri,
         _sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, Vec<ReadDirectoryEntry>> {
+        Box::pin(async { Self::unsupported() })
+    }
+
+    fn walk<'a>(
+        &'a self,
+        _path: &'a PathUri,
+        _options: WalkOptions,
+        _sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, WalkOutcome> {
         Box::pin(async { Self::unsupported() })
     }
 
