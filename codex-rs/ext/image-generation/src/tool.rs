@@ -511,7 +511,9 @@ fn recent_images(history: &[ResponseItem], count: usize) -> Vec<ImageUrl> {
                 }));
             }
             ResponseItem::FunctionCallOutput {
-                call_id, output, ..
+                call_id: Some(call_id),
+                output,
+                ..
             } if function_call_ids.contains(call_id.as_str()) => {
                 image_urls.extend(output_image_urls(output));
             }

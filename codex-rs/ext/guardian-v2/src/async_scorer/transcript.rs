@@ -228,7 +228,9 @@ impl TranscriptConfig {
                     (format!("tool {name} call"), arguments.clone())
                 }
                 ResponseItem::FunctionCallOutput {
-                    call_id, output, ..
+                    call_id: Some(call_id),
+                    output,
+                    ..
                 }
                 | ResponseItem::CustomToolCallOutput {
                     call_id, output, ..
@@ -287,6 +289,7 @@ impl TranscriptConfig {
                     ("tool web_search call".to_owned(), text)
                 }
                 ResponseItem::AdditionalTools { .. }
+                | ResponseItem::FunctionCallOutput { call_id: None, .. }
                 | ResponseItem::ImageGenerationCall { .. }
                 | ResponseItem::ToolSearchCall { .. }
                 | ResponseItem::ToolSearchOutput { .. }

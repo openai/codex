@@ -77,7 +77,9 @@ fn executed_tool_call_recorder_bounds_pending_calls_and_preserves_overflow() {
 
     let mut items = [ResponseItem::FunctionCallOutput {
         id: None,
-        call_id: "bounded-output".to_string(),
+        call_id: Some("bounded-output".to_string()),
+        name: None,
+        namespace: None,
         output: FunctionCallOutputPayload::from_text(String::new()),
         internal_chat_message_metadata_passthrough: None,
     }];
@@ -116,7 +118,9 @@ fn executed_tool_call_recorder_bounds_pending_calls_and_preserves_overflow() {
 
     let mut replayed_items = [ResponseItem::FunctionCallOutput {
         id: None,
-        call_id: "bounded-output".to_string(),
+        call_id: Some("bounded-output".to_string()),
+        name: None,
+        namespace: None,
         output: FunctionCallOutputPayload::from_text(String::new()),
         internal_chat_message_metadata_passthrough: None,
     }];
@@ -162,7 +166,9 @@ fn executed_tool_call_recorder_bounds_retained_history_and_reports_omissions() {
         );
         history.push(ResponseItem::FunctionCallOutput {
             id: None,
-            call_id,
+            call_id: Some(call_id),
+            name: None,
+            namespace: None,
             output: FunctionCallOutputPayload::from_text(String::new()),
             internal_chat_message_metadata_passthrough: None,
         });

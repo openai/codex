@@ -40,7 +40,9 @@ fn transcript_keeps_conversation_and_configured_sources() {
         },
         ResponseItem::FunctionCallOutput {
             id: None,
-            call_id: "call-1".to_string(),
+            call_id: Some("call-1".to_string()),
+            name: None,
+            namespace: None,
             output: FunctionCallOutputPayload::from_text("Workspace inspected.".to_string()),
             internal_chat_message_metadata_passthrough: None,
         },
@@ -459,7 +461,9 @@ fn transcript_truncates_tool_results_using_standard_budget() {
         },
         ResponseItem::FunctionCallOutput {
             id: None,
-            call_id: "call-1".to_owned(),
+            call_id: Some("call-1".to_owned()),
+            name: None,
+            namespace: None,
             output: FunctionCallOutputPayload::from_text(output),
             internal_chat_message_metadata_passthrough: None,
         },
@@ -596,7 +600,9 @@ fn transcript_omits_media_payloads_and_keeps_readable_content() {
         },
         ResponseItem::FunctionCallOutput {
             id: None,
-            call_id: "call-1".to_string(),
+            call_id: Some("call-1".to_string()),
+            name: None,
+            namespace: None,
             output: FunctionCallOutputPayload::from_content_items(vec![
                 FunctionCallOutputContentItem::InputText {
                     text: "Screenshot captured.".to_string(),

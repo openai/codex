@@ -208,7 +208,10 @@ impl ExecutedToolCallRecorder {
                 break;
             }
             let call_id = match &*item {
-                ResponseItem::FunctionCallOutput { call_id, .. }
+                ResponseItem::FunctionCallOutput {
+                    call_id: Some(call_id),
+                    ..
+                }
                 | ResponseItem::CustomToolCallOutput { call_id, .. }
                 | ResponseItem::ToolSearchOutput {
                     call_id: Some(call_id),
@@ -266,7 +269,10 @@ impl ExecutedToolCallRecorder {
             state.retained_calls.clear();
             for item in items {
                 let call_id = match &*item {
-                    ResponseItem::FunctionCallOutput { call_id, .. }
+                    ResponseItem::FunctionCallOutput {
+                        call_id: Some(call_id),
+                        ..
+                    }
                     | ResponseItem::CustomToolCallOutput { call_id, .. }
                     | ResponseItem::ToolSearchOutput {
                         call_id: Some(call_id),

@@ -1043,7 +1043,15 @@ pub enum ResponseItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         id: Option<ResponseItemId>,
-        call_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        call_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        namespace: Option<String>,
         #[ts(as = "FunctionCallOutputBody")]
         #[schemars(with = "FunctionCallOutputBody")]
         output: FunctionCallOutputPayload,
@@ -1776,7 +1784,9 @@ impl From<ResponseInputItem> for ResponseItem {
             },
             ResponseInputItem::FunctionCallOutput { call_id, output } => Self::FunctionCallOutput {
                 id: None,
-                call_id,
+                call_id: Some(call_id),
+                name: None,
+                namespace: None,
                 output,
                 internal_chat_message_metadata_passthrough: None,
             },
@@ -1784,7 +1794,9 @@ impl From<ResponseInputItem> for ResponseItem {
                 let output = output.into_function_call_output_payload();
                 Self::FunctionCallOutput {
                     id: None,
-                    call_id,
+                    call_id: Some(call_id),
+                    name: None,
+                    namespace: None,
                     output,
                     internal_chat_message_metadata_passthrough: None,
                 }
@@ -3097,6 +3109,55 @@ mod tests {
                 internal_chat_message_metadata_passthrough: None,
             }
         );
+    }
+
+    #[test]
+    fn paired_function_call_output_preserves_existing_wire_shape() {
+        let value = serde_json::json!({
+            "type": "function_call_output",
+            "call_id": "call-1",
+            "output": "done",
+        });
+        let item: ResponseItem = serde_json::from_value(value.clone())
+            .expect("paired function call output should deserialize");
+
+        assert_eq!(
+            item,
+            ResponseItem::FunctionCallOutput {
+                id: None,
+                call_id: Some("call-1".to_string()),
+                name: None,
+                namespace: None,
+                output: FunctionCallOutputPayload::from_text("done".to_string()),
+                internal_chat_message_metadata_passthrough: None,
+            }
+        );
+        assert_eq!(serde_json::to_value(item).expect("serialize item"), value);
+    }
+
+    #[test]
+    fn named_unpaired_function_call_output_round_trips_without_call_id() {
+        let value = serde_json::json!({
+            "type": "function_call_output",
+            "name": "notifications",
+            "namespace": "slack",
+            "output": "Alice mentioned you.",
+        });
+        let item: ResponseItem = serde_json::from_value(value.clone())
+            .expect("named unpaired function call output should deserialize");
+
+        assert_eq!(
+            item,
+            ResponseItem::FunctionCallOutput {
+                id: None,
+                call_id: None,
+                name: Some("notifications".to_string()),
+                namespace: Some("slack".to_string()),
+                output: FunctionCallOutputPayload::from_text("Alice mentioned you.".to_string()),
+                internal_chat_message_metadata_passthrough: None,
+            }
+        );
+        assert_eq!(serde_json::to_value(item).expect("serialize item"), value);
     }
 
     #[test]

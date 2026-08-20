@@ -358,7 +358,9 @@ async fn seed_guardian_parent_history(session: &Arc<Session>, turn: &Arc<TurnCon
                 },
                 ResponseItem::FunctionCallOutput {
                     id: None,
-                    call_id: "call-1".to_string(),
+                    call_id: Some("call-1".to_string()),
+                    name: None,
+                    namespace: None,
                     output: codex_protocol::models::FunctionCallOutputPayload::from_text(
                         "repo visibility: public".to_string(),
                     ),
@@ -999,7 +1001,9 @@ fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
         },
         ResponseItem::FunctionCallOutput {
             id: None,
-            call_id: "call-1".to_string(),
+            call_id: Some("call-1".to_string()),
+            name: None,
+            namespace: None,
             output: codex_protocol::models::FunctionCallOutputPayload::from_text(
                 "repo is public".to_string(),
             ),

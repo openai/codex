@@ -143,7 +143,9 @@ fn preparation_reports_tool_output_item_id() {
     let (image_url, _) = png_data_url(/*width*/ 64, /*height*/ 32);
     let mut items = vec![ResponseItem::FunctionCallOutput {
         id: None,
-        call_id: call_id.to_string(),
+        call_id: Some(call_id.to_string()),
+        name: None,
+        namespace: None,
         output: FunctionCallOutputPayload::from_content_items(vec![
             FunctionCallOutputContentItem::InputImage {
                 image_url,
@@ -199,7 +201,9 @@ fn resize_notices_preserve_original_image_positions_and_skip_failed_images() {
         },
         ResponseItem::FunctionCallOutput {
             id: None,
-            call_id: "call-image".to_string(),
+            call_id: Some("call-image".to_string()),
+            name: None,
+            namespace: None,
             output: FunctionCallOutputPayload::from_content_items(vec![
                 FunctionCallOutputContentItem::InputImage {
                     image_url: "data:image/png;base64,%%%".to_string(),

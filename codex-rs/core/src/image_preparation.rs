@@ -9,6 +9,7 @@ use codex_analytics::ImagePreparationMetadata;
 use codex_features::Feature;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
@@ -99,6 +100,26 @@ pub(crate) fn prepare_response_items(
 ) -> Vec<ImagePreparationMetadata> {
     let mut metadata = Vec::new();
     let mut prepared_items = Vec::with_capacity(items.len());
+    let prepare_tool_output =
+        |output: &mut FunctionCallOutputPayload,
+         item_id: Option<&str>,
+         metadata: &mut Vec<ImagePreparationMetadata>| {
+            output.content_items_mut().and_then(|content| {
+                let resized_images = prepare_tool_output_content(
+                    content,
+                    ImageOrigin {
+                        message_role: None,
+                        item_id,
+                    },
+                    resize_notice_mode,
+                    metadata,
+                    mode,
+                );
+                (!resized_images.is_empty()).then(|| {
+                    ImageResizeNotice::new(ImageResizeNoticeSource::ToolOutput, resized_images)
+                })
+            })
+        };
     for mut item in std::mem::take(items) {
         let resize_notice = match &mut item {
             ResponseItem::Message { role, content, .. } => {
@@ -122,24 +143,10 @@ pub(crate) fn prepare_response_items(
             }
             ResponseItem::FunctionCallOutput {
                 call_id, output, ..
-            }
-            | ResponseItem::CustomToolCallOutput {
+            } => prepare_tool_output(output, call_id.as_deref(), &mut metadata),
+            ResponseItem::CustomToolCallOutput {
                 call_id, output, ..
-            } => output.content_items_mut().and_then(|content| {
-                let resized_images = prepare_tool_output_content(
-                    content,
-                    ImageOrigin {
-                        message_role: None,
-                        item_id: Some(call_id),
-                    },
-                    resize_notice_mode,
-                    &mut metadata,
-                    mode,
-                );
-                (!resized_images.is_empty()).then(|| {
-                    ImageResizeNotice::new(ImageResizeNoticeSource::ToolOutput, resized_images)
-                })
-            }),
+            } => prepare_tool_output(output, Some(call_id.as_str()), &mut metadata),
             ResponseItem::AdditionalTools { .. }
             | ResponseItem::Reasoning { .. }
             | ResponseItem::AgentMessage { .. }

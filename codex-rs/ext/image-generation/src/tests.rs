@@ -107,7 +107,9 @@ async fn recent_image_fallback_selects_newest_images_in_chronological_order() {
         },
         ResponseItem::FunctionCallOutput {
             id: None,
-            call_id: "mcp-call".to_string(),
+            call_id: Some("mcp-call".to_string()),
+            name: None,
+            namespace: None,
             output: image_output("mcp"),
             internal_chat_message_metadata_passthrough: None,
         },
@@ -136,7 +138,9 @@ async fn recent_image_fallback_selects_newest_images_in_chronological_order() {
         },
         ResponseItem::FunctionCallOutput {
             id: None,
-            call_id: "orphan-call".to_string(),
+            call_id: Some("orphan-call".to_string()),
+            name: None,
+            namespace: None,
             output: image_output("orphan"),
             internal_chat_message_metadata_passthrough: None,
         },

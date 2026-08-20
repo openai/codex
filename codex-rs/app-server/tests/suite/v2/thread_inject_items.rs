@@ -21,6 +21,7 @@ use core_test_support::responses;
 use core_test_support::responses::strip_response_item_id;
 use core_test_support::responses::strip_response_item_ids_from_json;
 use serde_json::Value;
+use serde_json::json;
 use std::collections::HashMap;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -78,6 +79,13 @@ async fn thread_inject_items_adds_raw_response_items_to_thread_history() -> Resu
     let injected_developer_item = developer_item("Injected developer context");
     let marker_shaped_developer_item =
         developer_item("<image_resize_notice>\nclient message\n</image_resize_notice>");
+    let named_tool_output = json!({
+        "type": "function_call_output",
+        "name": "send_message_to_thread",
+        "namespace": "codex_app",
+        "output": "Another agent delegated this task.",
+    });
+    let named_tool_item: ResponseItem = serde_json::from_value(named_tool_output.clone())?;
 
     let inject_req = mcp
         .send_thread_inject_items_request(ThreadInjectItemsParams {
@@ -86,6 +94,7 @@ async fn thread_inject_items_adds_raw_response_items_to_thread_history() -> Resu
                 serde_json::to_value(&injected_item)?,
                 serde_json::to_value(&injected_developer_item)?,
                 serde_json::to_value(&marker_shaped_developer_item)?,
+                named_tool_output.clone(),
             ],
         })
         .await?;
@@ -114,6 +123,7 @@ async fn thread_inject_items_adds_raw_response_items_to_thread_history() -> Resu
             item == &injected_item
                 || item == &injected_developer_item
                 || item == &marker_shaped_developer_item
+                || item == &named_tool_item
         })
         .collect::<Vec<_>>();
     assert_eq!(
@@ -122,6 +132,7 @@ async fn thread_inject_items_adds_raw_response_items_to_thread_history() -> Resu
             (injected_item.clone(), None),
             (injected_developer_item.clone(), Some(true)),
             (marker_shaped_developer_item.clone(), Some(true)),
+            (named_tool_item, None),
         ]
     );
 
@@ -232,6 +243,10 @@ async fn thread_inject_items_adds_raw_response_items_to_thread_history() -> Resu
     assert!(
         injected_index < user_prompt_index,
         "injected items should be sent before the user prompt"
+    );
+    assert!(
+        model_input.contains(&named_tool_output),
+        "named unpaired tool output should be sent in the next model request"
     );
 
     Ok(())

@@ -59,13 +59,16 @@ fn keep_forked_rollout_item(item: &RolloutItem, preserve_reference_context_item:
                 "assistant" => *phase == Some(MessagePhase::FinalAnswer),
                 _ => false,
             },
+            ResponseItem::FunctionCallOutput { call_id: None, .. } => true,
             ResponseItem::AdditionalTools { .. }
             | ResponseItem::AgentMessage { .. }
             | ResponseItem::Reasoning { .. }
             | ResponseItem::LocalShellCall { .. }
             | ResponseItem::FunctionCall { .. }
             | ResponseItem::ToolSearchCall { .. }
-            | ResponseItem::FunctionCallOutput { .. }
+            | ResponseItem::FunctionCallOutput {
+                call_id: Some(_), ..
+            }
             | ResponseItem::CustomToolCall { .. }
             | ResponseItem::CustomToolCallOutput { .. }
             | ResponseItem::ToolSearchOutput { .. }

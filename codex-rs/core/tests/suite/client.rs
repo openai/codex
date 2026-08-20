@@ -1210,7 +1210,9 @@ async fn resume_replays_image_tool_outputs_with_detail() {
             ordinal: None,
             item: rollout_response_item(ResponseItem::FunctionCallOutput {
                 id: None,
-                call_id: function_call_id.to_string(),
+                call_id: Some(function_call_id.to_string()),
+                name: None,
+                namespace: None,
                 output: FunctionCallOutputPayload::from_content_items(vec![
                     FunctionCallOutputContentItem::InputImage {
                         image_url: image_url.to_string(),
@@ -3056,7 +3058,9 @@ async fn azure_responses_request_does_not_store_and_preserves_prefixed_item_ids(
     });
     prompt.input.push(ResponseItem::FunctionCallOutput {
         id: None,
-        call_id: "function-call-id".into(),
+        call_id: Some("function-call-id".into()),
+        name: None,
+        namespace: None,
         output: FunctionCallOutputPayload::from_text("ok".into()),
         internal_chat_message_metadata_passthrough: None,
     });

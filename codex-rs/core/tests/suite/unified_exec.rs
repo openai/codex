@@ -184,7 +184,7 @@ async fn wait_for_raw_unified_exec_output(
     let content = wait_for_event_match(&test.codex, |event| match event {
         EventMsg::RawResponseItem(raw) => match &raw.item {
             ResponseItem::FunctionCallOutput {
-                call_id: output_call_id,
+                call_id: Some(output_call_id),
                 output,
                 ..
             } if output_call_id == call_id => output.text_content().map(str::to_string),

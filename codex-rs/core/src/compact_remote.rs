@@ -461,11 +461,15 @@ fn rewritten_output_for_context_window(
         ResponseItem::FunctionCallOutput {
             id,
             call_id,
+            name,
+            namespace,
             output,
             internal_chat_message_metadata_passthrough: metadata,
         } => ResponseItem::FunctionCallOutput {
             id: id.clone(),
             call_id: call_id.clone(),
+            name: name.clone(),
+            namespace: namespace.clone(),
             output: truncated_output_payload(output),
             internal_chat_message_metadata_passthrough: metadata.clone(),
         },

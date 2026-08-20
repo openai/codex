@@ -1018,7 +1018,7 @@ Invoke a plugin by including a UI mention token such as `@sample` in the text in
 
 ### Example: Inject raw history items
 
-Use `thread/inject_items` to append prebuilt Responses API items to a loaded thread’s prompt history without starting a user turn. These items are persisted to the rollout and included in subsequent model requests. Any `input_image` items must use inline data URLs; remote HTTP(S) image URLs are rejected.
+Use `thread/inject_items` to append prebuilt Responses API items to a loaded thread’s prompt history without starting a user turn. These items are persisted to the rollout and included in subsequent model requests. A standalone `function_call_output` can omit `call_id` when it has a nonempty `name`; `namespace` is optional, and the output retains tool-tier authority. Any `input_image` items must use inline data URLs; remote HTTP(S) image URLs are rejected.
 
 ```json
 { "method": "thread/inject_items", "id": 36, "params": {
@@ -1028,6 +1028,12 @@ Use `thread/inject_items` to append prebuilt Responses API items to a loaded thr
             "type": "message",
             "role": "assistant",
             "content": [{ "type": "output_text", "text": "Previously computed context." }]
+        },
+        {
+            "type": "function_call_output",
+            "name": "send_message_to_thread",
+            "namespace": "codex_app",
+            "output": "Another agent delegated this task."
         }
     ]
 } }

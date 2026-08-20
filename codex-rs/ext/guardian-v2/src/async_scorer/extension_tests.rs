@@ -918,7 +918,9 @@ max_recent_non_user_entries = 8
         },
         ResponseItem::FunctionCallOutput {
             id: None,
-            call_id: "previous-call".to_owned(),
+            call_id: Some("previous-call".to_owned()),
+            name: None,
+            namespace: None,
             output: FunctionCallOutputPayload::from_text("README.md".to_owned()),
             internal_chat_message_metadata_passthrough: None,
         },
@@ -1174,7 +1176,9 @@ async fn contributor_includes_configured_transcript_images() -> Result<()> {
         },
         ResponseItem::FunctionCallOutput {
             id: None,
-            call_id: "previous-call".to_owned(),
+            call_id: Some("previous-call".to_owned()),
+            name: None,
+            namespace: None,
             output: FunctionCallOutputPayload::from_content_items(vec![
                 FunctionCallOutputContentItem::InputText {
                     text: "Screenshot captured.".to_owned(),
@@ -1386,7 +1390,9 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
         },
         ResponseItem::FunctionCallOutput {
             id: None,
-            call_id: "previous-call".to_owned(),
+            call_id: Some("previous-call".to_owned()),
+            name: None,
+            namespace: None,
             output: FunctionCallOutputPayload::from_text("README.md".to_owned()),
             internal_chat_message_metadata_passthrough: None,
         },
@@ -1662,7 +1668,9 @@ async fn contributor_sends_compacted_conversation_history_to_luna() -> Result<()
             },
             ResponseItem::FunctionCallOutput {
                 id: None,
-                call_id,
+                call_id: Some(call_id),
+                name: None,
+                namespace: None,
                 output: FunctionCallOutputPayload::from_text(format!(
                     "result evidence {index}: {}",
                     "signal ".repeat(1_000)

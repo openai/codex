@@ -35,6 +35,7 @@ use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
@@ -1352,6 +1353,14 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         "parent trigger message".to_string(),
         /*trigger_turn*/ true,
     );
+    let standalone_output = ResponseItem::FunctionCallOutput {
+        id: None,
+        call_id: None,
+        name: Some("notifications".to_string()),
+        namespace: Some("slack".to_string()),
+        output: FunctionCallOutputPayload::from_text("parent notification".to_string()),
+        internal_chat_message_metadata_passthrough: None,
+    };
     parent_thread
         .session
         .record_conversation_items(
@@ -1399,6 +1408,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
                 },
                 assistant_message("parent commentary", Some(MessagePhase::Commentary)),
                 assistant_message("parent final answer", Some(MessagePhase::FinalAnswer)),
+                standalone_output,
                 assistant_message("parent unknown phase", /*phase*/ None),
                 ResponseItem::Reasoning {
                     id: Some(ResponseItemId::with_suffix("rs", "parent-reasoning")),
@@ -1412,6 +1422,14 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
             ],
         )
         .await;
+    let expected_standalone_output = parent_thread
+        .session
+        .clone_history()
+        .await
+        .raw_items()
+        .find(|item| matches!(item, ResponseItem::FunctionCallOutput { call_id: None, .. }))
+        .cloned()
+        .expect("standalone output should be recorded");
     let parent_reference_context_item = turn_context.to_turn_context_item();
     parent_thread
         .session
@@ -1494,6 +1512,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         expected_parent_seed,
         expected_developer_message,
         expected_final_answer,
+        expected_standalone_output,
         ResponseItem::Message {
             id: None,
             role: "developer".to_string(),

@@ -24,7 +24,10 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItemEnvelope>)
     let mut custom_tool_output_ids = HashSet::new();
     for envelope in items.iter() {
         match &envelope.item {
-            ResponseItem::FunctionCallOutput { call_id, .. } => {
+            ResponseItem::FunctionCallOutput {
+                call_id: Some(call_id),
+                ..
+            } => {
                 function_output_ids.insert(call_id.as_str());
             }
             ResponseItem::ToolSearchOutput {
@@ -55,7 +58,9 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItemEnvelope>)
                     idx,
                     ResponseItemEnvelope::new(ResponseItem::FunctionCallOutput {
                         id: synthetic_output_id("fco", id.as_deref()),
-                        call_id: call_id.clone(),
+                        call_id: Some(call_id.clone()),
+                        name: None,
+                        namespace: None,
                         output: FunctionCallOutputPayload::from_text("aborted".to_string()),
                         internal_chat_message_metadata_passthrough: None,
                     }),
@@ -109,7 +114,9 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItemEnvelope>)
                     idx,
                     ResponseItemEnvelope::new(ResponseItem::FunctionCallOutput {
                         id: synthetic_output_id("fco", id.as_deref()),
-                        call_id: call_id.clone(),
+                        call_id: Some(call_id.clone()),
+                        name: None,
+                        namespace: None,
                         output: FunctionCallOutputPayload::from_text("aborted".to_string()),
                         internal_chat_message_metadata_passthrough: None,
                     }),
@@ -174,9 +181,10 @@ pub(crate) fn remove_orphan_outputs(items: &mut Vec<ResponseItemEnvelope>) {
     let mut orphan_positions = Vec::new();
     for (position, envelope) in items.iter().enumerate() {
         match &envelope.item {
-            ResponseItem::FunctionCallOutput { call_id, .. }
-                if !function_call_ids.contains(call_id.as_str()) =>
-            {
+            ResponseItem::FunctionCallOutput {
+                call_id: Some(call_id),
+                ..
+            } if !function_call_ids.contains(call_id.as_str()) => {
                 error_or_panic(format!(
                     "Orphan function call output for call id: {call_id}"
                 ));
@@ -223,12 +231,16 @@ pub(crate) fn remove_corresponding_for(items: &mut Vec<ResponseItemEnvelope>, it
                 matches!(
                     i,
                     ResponseItem::FunctionCallOutput {
-                        call_id: existing, ..
+                        call_id: Some(existing),
+                        ..
                     } if existing == call_id
                 )
             });
         }
-        ResponseItem::FunctionCallOutput { call_id, .. } => {
+        ResponseItem::FunctionCallOutput {
+            call_id: Some(call_id),
+            ..
+        } => {
             if let Some(pos) = items.iter().position(|envelope| {
                 matches!(&envelope.item, ResponseItem::FunctionCall { call_id: existing, .. } if existing == call_id)
             }) {
@@ -294,7 +306,8 @@ pub(crate) fn remove_corresponding_for(items: &mut Vec<ResponseItemEnvelope>, it
                 matches!(
                     i,
                     ResponseItem::FunctionCallOutput {
-                        call_id: existing, ..
+                        call_id: Some(existing),
+                        ..
                     } if existing == call_id
                 )
             });

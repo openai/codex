@@ -6,7 +6,9 @@ fn rewritten_output_preserves_harness_metadata() {
     let envelope = ResponseItemEnvelope {
         item: ResponseItem::FunctionCallOutput {
             id: None,
-            call_id: "call-1".to_string(),
+            call_id: Some("call-1".to_string()),
+            name: None,
+            namespace: None,
             output: FunctionCallOutputPayload {
                 body: FunctionCallOutputBody::Text("large output".repeat(100)),
                 success: Some(true),

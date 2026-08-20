@@ -90,7 +90,9 @@ fn preparation_replaces_invalid_message_audio_with_placeholders() {
 fn preparation_replaces_only_failed_tool_audio_and_preserves_metadata() {
     let mut items = vec![ResponseItem::FunctionCallOutput {
         id: None,
-        call_id: "call-1".to_string(),
+        call_id: Some("call-1".to_string()),
+        name: None,
+        namespace: None,
         output: FunctionCallOutputPayload {
             body: FunctionCallOutputBody::ContentItems(vec![
                 FunctionCallOutputContentItem::InputText {
@@ -114,7 +116,9 @@ fn preparation_replaces_only_failed_tool_audio_and_preserves_metadata() {
         items,
         vec![ResponseItem::FunctionCallOutput {
             id: None,
-            call_id: "call-1".to_string(),
+            call_id: Some("call-1".to_string()),
+            name: None,
+            namespace: None,
             output: FunctionCallOutputPayload {
                 body: FunctionCallOutputBody::ContentItems(vec![
                     FunctionCallOutputContentItem::InputText {
