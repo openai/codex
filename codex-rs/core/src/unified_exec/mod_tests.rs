@@ -1,4 +1,3 @@
-use super::head_tail_buffer::HeadTailBuffer;
 use super::*;
 use crate::codex_thread::BackgroundTerminalInfo;
 use crate::environment_selection::TurnEnvironmentState;
@@ -320,34 +319,6 @@ async fn write_stdin(
             interaction_event: None,
         })
         .await
-}
-
-#[test]
-fn push_chunk_preserves_prefix_and_suffix() {
-    let mut buffer: HeadTailBuffer = Default::default();
-    buffer.push_chunk(vec![b'a'; UNIFIED_EXEC_OUTPUT_MAX_BYTES]);
-    buffer.push_chunk(vec![b'b']);
-    buffer.push_chunk(vec![b'c']);
-
-    assert_eq!(buffer.retained_bytes(), UNIFIED_EXEC_OUTPUT_MAX_BYTES);
-    let snapshot = buffer.to_bytes();
-    let head_bytes = UNIFIED_EXEC_OUTPUT_MAX_BYTES / 2;
-    let tail_bytes = UNIFIED_EXEC_OUTPUT_MAX_BYTES - head_bytes;
-    let expected = std::iter::repeat_n(b'a', head_bytes + tail_bytes - 2)
-        .chain(b"bc".iter().copied())
-        .collect::<Vec<_>>();
-    assert_eq!(snapshot, expected);
-}
-
-#[test]
-fn head_tail_buffer_default_preserves_prefix_and_suffix() {
-    let mut buffer: HeadTailBuffer = Default::default();
-    buffer.push_chunk(vec![b'a'; UNIFIED_EXEC_OUTPUT_MAX_BYTES]);
-    buffer.push_chunk(b"bc".to_vec());
-
-    let rendered = buffer.to_bytes();
-    assert_eq!(rendered.first(), Some(&b'a'));
-    assert!(rendered.ends_with(b"bc"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

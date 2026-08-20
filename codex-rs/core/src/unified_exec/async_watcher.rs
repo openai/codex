@@ -249,7 +249,7 @@ async fn process_chunk(
     while let Some(prefix) = split_valid_utf8_prefix(pending) {
         {
             let mut guard = transcript.lock().await;
-            guard.push_chunk(prefix.to_vec());
+            guard.push_chunk(&prefix);
         }
 
         if *emitted_deltas >= MAX_EXEC_OUTPUT_DELTAS_PER_CALL {

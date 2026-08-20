@@ -42,22 +42,52 @@ impl<const MAX_BYTES: usize> HeadTailBuffer<MAX_BYTES> {
     /// Bytes are first added to the head until the head budget is full; any
     /// remaining bytes are added to the tail, with older tail bytes being
     /// dropped to preserve the tail budget.
-    pub(crate) fn push_chunk(&mut self, chunk: Vec<u8>) {
-        if chunk.is_empty() {
-            return;
-        }
-        if MAX_BYTES == 0 {
-            self.omitted_bytes = self.omitted_bytes.saturating_add(chunk.len());
-            return;
-        }
+    pub(crate) fn push_chunk(&mut self, chunk: &[u8]) {
+        let chunk = self.fill_head(chunk);
+        self.push_tail(chunk);
+    }
 
-        // Fill the head budget first, then keep a capped tail.
-        let remaining_head = Self::HEAD_BUDGET.saturating_sub(self.head.len());
-        let head_len = remaining_head.min(chunk.len());
-        if head_len > 0 {
-            self.head.extend_from_slice(&chunk[..head_len]);
-        }
-        self.push_to_tail(&chunk[head_len..]);
+    /// Fill the stable prefix and return the bytes that did not fit.
+    fn fill_head<'a>(&mut self, chunk: &'a [u8]) -> &'a [u8] {
+        let Self {
+            head,
+            tail: _,
+            omitted_bytes: _,
+        } = self;
+
+        let remaining_head = Self::HEAD_BUDGET.saturating_sub(head.len());
+        // A shorter chunk fits entirely in the head.
+        let (chunk_head, chunk_tail) = chunk
+            .split_at_checked(remaining_head)
+            .unwrap_or((chunk, &[]));
+        head.extend_from_slice(chunk_head);
+        chunk_tail
+    }
+
+    /// Append bytes known not to belong in the head, keeping the newest tail bytes.
+    fn push_tail(&mut self, chunk: &[u8]) {
+        let Self {
+            head: _,
+            tail,
+            omitted_bytes,
+        } = self;
+
+        let remaining_tail = Self::TAIL_BUDGET.saturating_sub(tail.len());
+        let excess_tail = chunk.len().saturating_sub(remaining_tail);
+        *omitted_bytes = omitted_bytes.saturating_add(excess_tail);
+
+        // Discard old tail bytes first, then skip any excess incoming bytes.
+        let chunk = match excess_tail.checked_sub(tail.len()) {
+            None => {
+                tail.drain(..excess_tail);
+                chunk
+            }
+            Some(skip) => {
+                tail.clear();
+                &chunk[skip..]
+            }
+        };
+        tail.extend(chunk);
     }
 
     /// Return the retained output as a single byte vector.
@@ -95,45 +125,41 @@ impl<const MAX_BYTES: usize> HeadTailBuffer<MAX_BYTES> {
 
     /// Append a later buffer with the same budget. This preserves the summary
     /// of the original concatenated output, including its omission count.
-    pub(crate) fn push_buffer(&mut self, mut buffer: Self) {
-        self.push_chunk(std::mem::take(&mut buffer.head));
-        self.push_chunk(buffer.tail.drain(..).collect());
-        self.omitted_bytes = self.omitted_bytes.saturating_add(buffer.omitted_bytes);
-    }
+    pub(crate) fn push_buffer(&mut self, buffer: Self) {
+        let Self {
+            head,
+            tail,
+            omitted_bytes,
+        } = buffer;
 
-    fn push_to_tail(&mut self, chunk: &[u8]) {
-        if chunk.is_empty() {
-            return;
-        }
-        if Self::TAIL_BUDGET == 0 {
-            self.omitted_bytes = self.omitted_bytes.saturating_add(chunk.len());
-            return;
-        }
+        self.omitted_bytes = self.omitted_bytes.saturating_add(omitted_bytes);
 
-        if chunk.len() >= Self::TAIL_BUDGET {
-            // This single chunk is larger than the whole tail budget. Keep only the last
-            // tail_budget bytes and drop everything else.
-            let start = chunk.len().saturating_sub(Self::TAIL_BUDGET);
-            let kept = &chunk[start..];
-            let dropped = chunk.len().saturating_sub(kept.len());
+        // Preserve an existing prefix; otherwise reuse the source head.
+        let overflow = if self.head.is_empty() {
+            self.head = head;
+            &[]
+        } else {
+            self.fill_head(&head)
+        };
+
+        // A full source tail displaces both the old tail and the unused source head.
+        if tail.len() == Self::TAIL_BUDGET {
             self.omitted_bytes = self
                 .omitted_bytes
                 .saturating_add(self.tail.len())
-                .saturating_add(dropped);
-            self.tail.clear();
-            self.tail.extend(kept);
-            return;
-        }
-
-        self.tail.extend(chunk);
-        self.trim_tail_to_budget();
-    }
-
-    fn trim_tail_to_budget(&mut self) {
-        let excess = self.tail.len().saturating_sub(Self::TAIL_BUDGET);
-        if excess > 0 {
-            drop(self.tail.drain(..excess));
-            self.omitted_bytes = self.omitted_bytes.saturating_add(excess);
+                .saturating_add(overflow.len());
+            self.tail = tail;
+        } else {
+            self.push_tail(overflow);
+            // An empty destination can take a partial source tail without copying it.
+            if self.tail.is_empty() {
+                self.tail = tail;
+            } else {
+                // A nonempty source tail means its head, and now ours, is full.
+                let (first, second) = tail.as_slices();
+                self.push_tail(first);
+                self.push_tail(second);
+            }
         }
     }
 }

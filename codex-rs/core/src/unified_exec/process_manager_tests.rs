@@ -283,7 +283,8 @@ fn initial_exec_yield_time_has_no_platform_floor() {
 
 #[tokio::test]
 async fn output_collection_stays_bounded_across_repeated_drains() {
-    let output_buffer = Arc::new(tokio::sync::Mutex::new(HeadTailBuffer::default()));
+    let chunks: [&[u8]; 4] = [b"01234567", b"89ABCDEF", b"ghijklmnopq", b"rs"];
+    let output_buffer = Arc::new(tokio::sync::Mutex::new(HeadTailBuffer::<10>::default()));
     let output_notify = Arc::new(Notify::new());
     let output_closed = Arc::new(AtomicBool::new(false));
     let output_closed_notify = Arc::new(Notify::new());
@@ -302,10 +303,8 @@ async fn output_collection_stays_bounded_across_repeated_drains() {
         Instant::now() + Duration::from_secs(5),
     );
     let produce = async {
-        for byte in [b'a', b'b', b'c'] {
-            output_buffer.lock().await.push_chunk(
-                vec![byte; crate::unified_exec::UNIFIED_EXEC_OUTPUT_MAX_BYTES],
-            );
+        for chunk in chunks {
+            output_buffer.lock().await.push_chunk(chunk);
             output_notify.notify_one();
             tokio::time::timeout(Duration::from_secs(1), async {
                 loop {
@@ -326,30 +325,21 @@ async fn output_collection_stays_bounded_across_repeated_drains() {
     };
 
     let (collected, ()) = tokio::join!(collect, produce);
-    let mut expected = HeadTailBuffer::default();
-    for byte in [b'a', b'b', b'c'] {
-        expected.push_chunk(vec![
-            byte;
-            crate::unified_exec::UNIFIED_EXEC_OUTPUT_MAX_BYTES
-        ]);
+    let mut expected = HeadTailBuffer::<10>::default();
+    for chunk in chunks {
+        expected.push_chunk(chunk);
     }
     assert_eq!(collected, expected);
 }
 
 #[tokio::test]
 async fn output_collection_preserves_omissions_from_drained_buffer() {
-    let mut buffered_output = HeadTailBuffer::default();
-    buffered_output.push_chunk(vec![
-        b'a';
-        crate::unified_exec::UNIFIED_EXEC_OUTPUT_MAX_BYTES
-    ]);
-    buffered_output.push_chunk(b"overflow".to_vec());
-    let mut expected = HeadTailBuffer::default();
-    expected.push_chunk(vec![
-        b'a';
-        crate::unified_exec::UNIFIED_EXEC_OUTPUT_MAX_BYTES
-    ]);
-    expected.push_chunk(b"overflow".to_vec());
+    let mut buffered_output = HeadTailBuffer::<10>::default();
+    buffered_output.push_chunk(&[b'a'; 10]);
+    buffered_output.push_chunk(b"overflow");
+    let mut expected = HeadTailBuffer::<10>::default();
+    expected.push_chunk(&[b'a'; 10]);
+    expected.push_chunk(b"overflow");
     let output_buffer = Arc::new(tokio::sync::Mutex::new(buffered_output));
     let output_notify = Arc::new(Notify::new());
     let output_closed = Arc::new(AtomicBool::new(true));
@@ -435,10 +425,7 @@ async fn failed_initial_end_for_unstored_process_uses_fallback_output() {
     };
 
     let transcript = Arc::new(tokio::sync::Mutex::new(HeadTailBuffer::default()));
-    transcript
-        .lock()
-        .await
-        .push_chunk(b"PARTIAL_TRANSCRIPT".to_vec());
+    transcript.lock().await.push_chunk(b"PARTIAL_TRANSCRIPT");
 
     emit_failed_initial_exec_end_if_unstored(
         /*process_started_alive*/ false,
