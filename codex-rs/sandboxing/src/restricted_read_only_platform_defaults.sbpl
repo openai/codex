@@ -122,8 +122,6 @@
   (global-name "com.apple.analyticsd.messagetracer")
   (global-name "com.apple.appsleep")
   (global-name "com.apple.bsd.dirhelper")
-  (global-name "com.apple.cfprefsd.agent")
-  (global-name "com.apple.cfprefsd.daemon")
   (global-name "com.apple.diagnosticd")
   (global-name "com.apple.dt.automationmode.reader")
   (global-name "com.apple.espd")
@@ -137,8 +135,7 @@
   (global-name "com.apple.system.opendirectoryd.membership")
   (global-name "com.apple.trustd")
   (global-name "com.apple.trustd.agent")
-  (global-name "com.apple.xpc.activity.unmanaged")
-  (local-name "com.apple.cfprefsd.agent"))
+  (global-name "com.apple.xpc.activity.unmanaged"))
 
 ; Allow IPC to the syslog socket for logging.
 (allow network-outbound (literal "/private/var/run/syslog"))

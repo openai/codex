@@ -35,7 +35,11 @@ use codex_protocol::permissions::PROTECTED_METADATA_PATH_NAMES;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
+use std::ffi::CStr;
+use std::ffi::OsStr;
 use std::fs;
+use std::mem::MaybeUninit;
+use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -762,19 +766,227 @@ fn unreadable_glob_policy_includes_canonicalized_static_prefix() {
 }
 
 #[test]
-fn seatbelt_args_without_extension_profile_keep_legacy_preferences_read_access() {
-    let cwd = std::env::temp_dir();
-    let args = create_seatbelt_command_args_for_legacy_policy(
-        vec!["echo".to_string(), "ok".to_string()],
+fn preferences_access_requires_unrestricted_reads() {
+    let cwd = Path::new("/tmp");
+    let full_read = FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
+        &SandboxPolicy::new_workspace_write_policy(),
+        cwd,
+    );
+    let minimal = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry::new(
+        FileSystemPath::Special {
+            value: FileSystemSpecialPath::Minimal,
+        },
+        FileSystemAccessMode::Read,
+    )]);
+    let workspace_only = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry::new(
+        absolute_path("/tmp").into(),
+        FileSystemAccessMode::Read,
+    )]);
+    let mut denied_path = full_read.clone();
+    denied_path.entries.push(FileSystemSandboxEntry::new(
+        absolute_path("/tmp/codex-private").into(),
+        FileSystemAccessMode::Deny,
+    ));
+    let mut denied_glob = full_read.clone();
+    denied_glob.entries.push(FileSystemSandboxEntry::new(
+        FileSystemPath::GlobPattern {
+            pattern: "/tmp/**/*.private".to_string(),
+        },
+        FileSystemAccessMode::Deny,
+    ));
+
+    for (name, file_system_policy, allow_preferences) in [
+        ("legacy workspace-write", full_read, true),
+        ("minimal", minimal, false),
+        ("workspace only", workspace_only, false),
+        ("denied path", denied_path, false),
+        ("denied glob", denied_glob, false),
+    ] {
+        for profile in [
+            MacosSeatbeltProfile::Process,
+            MacosSeatbeltProfile::FileSystemHelper,
+        ] {
+            let args = create_seatbelt_command_args_with_profile(
+                CreateSeatbeltCommandArgsParams {
+                    command: vec!["/usr/bin/true".to_string()],
+                    file_system_sandbox_policy: &file_system_policy,
+                    network_sandbox_policy: NetworkSandboxPolicy::Restricted,
+                    sandbox_policy_cwd: cwd,
+                    enforce_managed_network: false,
+                    managed_network: None,
+                    environment_id: None,
+                    network: None,
+                    extra_allow_unix_sockets: &[],
+                },
+                profile,
+            )
+            .expect("build seatbelt policy");
+            let policy = seatbelt_policy_arg(&args);
+            for grant in [
+                "apple.cfprefs.",
+                "com.apple.cfprefsd.daemon",
+                "com.apple.cfprefsd.agent",
+                "(allow user-preference-read)",
+            ] {
+                assert_eq!(
+                    policy.contains(grant),
+                    allow_preferences,
+                    "unexpected {grant} permission for {name} ({profile:?})"
+                );
+            }
+            assert!(!policy.contains("(allow user-preference-write)"));
+        }
+    }
+}
+
+#[test]
+fn restricted_reads_cannot_read_preferences_outside_allowed_roots() {
+    struct PreferenceDomain(String);
+
+    impl Drop for PreferenceDomain {
+        fn drop(&mut self) {
+            let _ = Command::new("/usr/bin/defaults")
+                .args(["delete", &self.0])
+                .output();
+        }
+    }
+
+    let workspace = tempfile::Builder::new()
+        .prefix("codex-prefs-")
+        .tempdir()
+        .expect("temp workspace");
+    let domain = PreferenceDomain(format!(
+        "com.openai.codex.{}",
+        workspace
+            .path()
+            .file_name()
+            .expect("workspace name")
+            .to_string_lossy()
+    ));
+    let marker = "codex-preferences-read-canary";
+    // Bazel gives tests a temporary HOME, but preferences use the account home.
+    // Use caller-owned storage because tests can query the account concurrently.
+    let mut passwd = MaybeUninit::<libc::passwd>::uninit();
+    let mut buffer = vec![0_u8; 16 * 1024];
+    let mut result = std::ptr::null_mut();
+    let status = unsafe {
+        libc::getpwuid_r(
+            libc::getuid(),
+            passwd.as_mut_ptr(),
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+            &mut result,
+        )
+    };
+    assert_eq!(status, 0, "look up current account");
+    assert!(!result.is_null(), "current account was not found");
+    // SAFETY: getpwuid_r succeeded and initialized passwd; buffer is still alive.
+    let passwd = unsafe { passwd.assume_init_ref() };
+    assert!(!passwd.pw_dir.is_null(), "current account has no home");
+    let account_home = unsafe { CStr::from_ptr(passwd.pw_dir) };
+    let plist = PathBuf::from(OsStr::from_bytes(account_home.to_bytes()))
+        .join("Library/Preferences")
+        .join(format!("{}.plist", domain.0));
+    let written = Command::new("/usr/bin/defaults")
+        .args(["write", &domain.0, "canary", "-string", marker])
+        .output()
+        .expect("write test preference");
+    assert!(
+        written.status.success(),
+        "write test preference: {}",
+        String::from_utf8_lossy(&written.stderr)
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !plist.is_file() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(
+        plist.is_file(),
+        "test preference was not persisted at {}",
+        plist.display()
+    );
+
+    let workspace_root =
+        AbsolutePathBuf::from_absolute_path(workspace.path()).expect("absolute workspace");
+    let plist_path = AbsolutePathBuf::from_absolute_path(&plist).expect("absolute plist path");
+    let restricted = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry::new(
+            FileSystemPath::Special {
+                value: FileSystemSpecialPath::Minimal,
+            },
+            FileSystemAccessMode::Read,
+        ),
+        FileSystemSandboxEntry::new(workspace_root.into(), FileSystemAccessMode::Read),
+        FileSystemSandboxEntry::new(plist_path.into(), FileSystemAccessMode::Deny),
+    ]);
+    let full_read = FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
         &SandboxPolicy::new_read_only_policy(),
-        cwd.as_path(),
-        /*enforce_managed_network*/ false,
-        /*network*/ None,
-    )
-    .unwrap();
-    let policy = &args[1];
-    assert!(policy.contains("(allow user-preference-read)"));
-    assert!(!policy.contains("(allow user-preference-write)"));
+        workspace.path(),
+    );
+    let run = |policy: &FileSystemSandboxPolicy, command: Vec<String>| {
+        let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
+            command,
+            file_system_sandbox_policy: policy,
+            network_sandbox_policy: NetworkSandboxPolicy::Restricted,
+            sandbox_policy_cwd: workspace.path(),
+            enforce_managed_network: false,
+            managed_network: None,
+            environment_id: None,
+            network: None,
+            extra_allow_unix_sockets: &[],
+        })
+        .expect("build seatbelt command");
+        Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
+            .args(args)
+            .current_dir(workspace.path())
+            .output()
+            .expect("run seatbelt command")
+    };
+    let allowed_file = workspace.path().join("allowed.txt");
+    fs::write(&allowed_file, "allowed").expect("write allowed file");
+    let control = run(
+        &restricted,
+        vec!["/bin/cat".to_string(), allowed_file.display().to_string()],
+    );
+    let control_stderr = String::from_utf8_lossy(&control.stderr);
+    if !control.status.success()
+        && control_stderr.contains("sandbox-exec: sandbox_apply: Operation not permitted")
+    {
+        return;
+    }
+    assert!(control.status.success(), "control failed: {control_stderr}");
+    assert_eq!(control.stdout, b"allowed");
+
+    let direct = run(
+        &restricted,
+        vec!["/bin/cat".to_string(), plist.display().to_string()],
+    );
+    assert!(
+        !direct.status.success()
+            && String::from_utf8_lossy(&direct.stderr).contains("Operation not permitted"),
+        "direct plist read should be denied: {direct:?}"
+    );
+
+    let read_preference = || {
+        vec![
+            "/usr/bin/defaults".to_string(),
+            "read".to_string(),
+            domain.0.clone(),
+            "canary".to_string(),
+        ]
+    };
+    for _ in 0..2 {
+        let denied = run(&restricted, read_preference());
+        assert!(
+            !denied.status.success() && !String::from_utf8_lossy(&denied.stdout).contains(marker),
+            "restricted preferences read returned protected data: {denied:?}"
+        );
+
+        // The full-read control also warms the cache before the next attempt.
+        let allowed = run(&full_read, read_preference());
+        assert!(allowed.status.success(), "full-read control: {allowed:?}");
+        assert_eq!(String::from_utf8_lossy(&allowed.stdout).trim(), marker);
+    }
 }
 
 #[test]

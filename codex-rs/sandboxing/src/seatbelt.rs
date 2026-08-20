@@ -20,6 +20,7 @@ use url::Url;
 
 const MACOS_SEATBELT_BASE_POLICY: &str = include_str!("seatbelt_base_policy.sbpl");
 const MACOS_SEATBELT_NETWORK_POLICY: &str = include_str!("seatbelt_network_policy.sbpl");
+const MACOS_SEATBELT_PREFERENCES_POLICY: &str = include_str!("seatbelt_preferences_policy.sbpl");
 const MACOS_RESTRICTED_READ_ONLY_PLATFORM_DEFAULTS: &str =
     include_str!("restricted_read_only_platform_defaults.sbpl");
 const MACOS_PROCESS_APPLICATIONS_READ_POLICY: &str =
@@ -987,6 +988,9 @@ pub(crate) fn create_seatbelt_command_args_with_profile(
         file_write_policy,
         network_policy,
     ];
+    if file_system_sandbox_policy.has_full_disk_read_access() {
+        policy_sections.push(MACOS_SEATBELT_PREFERENCES_POLICY.to_string());
+    }
     if include_platform_defaults {
         policy_sections.push(MACOS_RESTRICTED_READ_ONLY_PLATFORM_DEFAULTS.to_string());
         if profile == MacosSeatbeltProfile::Process {
