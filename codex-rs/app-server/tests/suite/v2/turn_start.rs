@@ -3,14 +3,14 @@ use anyhow::Result;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use app_test_support::create_apply_patch_sse_response;
-use app_test_support::create_escalated_shell_command_sse_response;
+use app_test_support::create_command_execution_sse_response;
+use app_test_support::create_escalated_command_execution_sse_response;
 use app_test_support::create_exec_command_sse_response;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::create_request_user_input_sse_response;
-use app_test_support::create_shell_command_sse_response;
 use app_test_support::format_with_current_shell_display;
 use app_test_support::write_mock_responses_config_toml_with_chatgpt_base_url;
 use app_test_support::write_models_cache;
@@ -2242,7 +2242,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
     let first_shell_command = vec![
         "python3".to_string(),
         "-c".to_string(),
-        "import sys; print(sys.argv[1].endswith('7890'))".to_string(),
+        "import sys, time; time.sleep(0.5); print(sys.argv[1].endswith('7890'))".to_string(),
         format!("Authorization: Bearer {bearer_token}"),
     ];
     let expected_approval_command = format_with_current_shell_display(&shlex::try_join(
@@ -2254,14 +2254,14 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
     // Mock server: first turn requests a shell call (elicitation), then completes.
     // Second turn same, but we'll set approval_policy=never to avoid elicitation.
     let responses = vec![
-        create_escalated_shell_command_sse_response(
+        create_escalated_command_execution_sse_response(
             first_shell_command,
             /*workdir*/ None,
             Some(5000),
             "call1",
         )?,
         create_final_assistant_message_sse_response("done 1")?,
-        create_shell_command_sse_response(
+        create_command_execution_sse_response(
             vec![
                 "python3".to_string(),
                 "-c".to_string(),
@@ -2387,6 +2387,31 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
         }
     }
 
+    let requests = server
+        .received_requests()
+        .await
+        .context("failed to fetch received requests")?;
+    assert!(
+        requests.iter().any(|request| {
+            request.url.path().ends_with("/responses")
+                && serde_json::from_slice::<Value>(&request.body)
+                    .ok()
+                    .and_then(|body| {
+                        body["input"].as_array().map(|items| {
+                            items.iter().any(|item| {
+                                item["type"] == "function_call_output"
+                                    && item["call_id"] == "call1"
+                                    && item["output"]
+                                        .as_str()
+                                        .is_some_and(|output| output.contains("True"))
+                            })
+                        })
+                    })
+                    .unwrap_or(false)
+        }),
+        "model request should include the command output confirming the original bearer token"
+    );
+
     // Second turn with approval_policy=never should not elicit approval
     let _: TurnStartResponse = mcp
         .request(|request_id| ClientRequest::TurnStart {
@@ -2468,7 +2493,7 @@ async fn run_turn_start_exec_approval_rejection_v2(
         expected_approval_command.replace(bearer_token, "[REDACTED_SECRET]");
 
     let responses = vec![
-        create_escalated_shell_command_sse_response(
+        create_escalated_command_execution_sse_response(
             shell_command,
             /*workdir*/ None,
             Some(5000),
@@ -2614,6 +2639,12 @@ async fn turn_start_explicit_local_environment_updates_legacy_cwd_between_turns(
     let tmp = TempDir::new()?;
     let codex_home = tmp.path().join("codex_home");
     std::fs::create_dir(&codex_home)?;
+    let rules_dir = codex_home.join("rules");
+    std::fs::create_dir(&rules_dir)?;
+    std::fs::write(
+        rules_dir.join("default.rules"),
+        r#"prefix_rule(pattern=["echo"], decision="allow")"#,
+    )?;
     let workspace_root = tmp.path().join("workspace");
     std::fs::create_dir(&workspace_root)?;
     let first_cwd = workspace_root.join("turn1");
@@ -2622,14 +2653,14 @@ async fn turn_start_explicit_local_environment_updates_legacy_cwd_between_turns(
     std::fs::create_dir(&second_cwd)?;
 
     let responses = vec![
-        create_shell_command_sse_response(
+        create_command_execution_sse_response(
             vec!["echo".to_string(), "first".to_string(), "turn".to_string()],
             /*workdir*/ None,
             Some(5000),
             "call-first",
         )?,
         create_final_assistant_message_sse_response("done first")?,
-        create_shell_command_sse_response(
+        create_command_execution_sse_response(
             vec!["echo".to_string(), "second".to_string(), "turn".to_string()],
             /*workdir*/ None,
             Some(5000),
@@ -4639,7 +4670,7 @@ async fn command_execution_notifications_include_trusted_plugin_id() -> Result<(
 }"#,
     )?;
     let responses = vec![
-        create_shell_command_sse_response(
+        create_command_execution_sse_response(
             vec![
                 "/bin/sh".to_string(),
                 script_path.to_string_lossy().into_owned(),

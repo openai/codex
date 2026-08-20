@@ -167,7 +167,7 @@ async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow
         &turn.dynamic_tools,
     );
 
-    let parallel_tool_name = ["exec_command", "shell_command"]
+    let parallel_tool_name = ["exec_command"]
         .into_iter()
         .find(|name| {
             router.tool_supports_parallel(&ToolCall {

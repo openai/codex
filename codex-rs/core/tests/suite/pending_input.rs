@@ -1263,9 +1263,9 @@ async fn steered_user_input_waits_when_tool_output_triggers_compact_before_next_
         "printf '%04000d' 0"
     };
     let large_output_args = json!({
-        "command": large_output_command,
+        "cmd": large_output_command,
         "login": false,
-        "timeout_ms": 2000,
+        "yield_time_ms": 2000,
     })
     .to_string();
 
@@ -1273,7 +1273,7 @@ async fn steered_user_input_waits_when_tool_output_triggers_compact_before_next_
         chunk(ev_response_created("resp-1")),
         chunk(ev_function_call(
             "call-1",
-            "shell_command",
+            "exec_command",
             &large_output_args,
         )),
         gated_chunk(

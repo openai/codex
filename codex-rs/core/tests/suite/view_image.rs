@@ -1613,7 +1613,7 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
             effort: ReasoningEffort::Medium,
             description: ReasoningEffort::Medium.to_string(),
         }],
-        shell_type: ConfigShellToolType::ShellCommand,
+        shell_type: ConfigShellToolType::UnifiedExec,
         visibility: ModelVisibility::List,
         supported_in_api: true,
         input_modalities: vec![InputModality::Text],

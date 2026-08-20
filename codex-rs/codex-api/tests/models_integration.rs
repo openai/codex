@@ -71,7 +71,7 @@ async fn models_client_hits_models_endpoint() {
                     description: ReasoningEffort::High.to_string(),
                 },
             ],
-            shell_type: ConfigShellToolType::ShellCommand,
+            shell_type: ConfigShellToolType::UnifiedExec,
             visibility: ModelVisibility::List,
             supported_in_api: true,
             priority: 1,

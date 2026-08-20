@@ -388,7 +388,7 @@ async fn persisted_remote_plugin_command_attribution_flows_through_turn_context(
     let command = shlex::try_join(["/bin/sh", script_path.to_string_lossy().as_ref()])?;
     let call_id = "remote-plugin-command";
     let arguments = serde_json::to_string(&serde_json::json!({
-        "command": command,
+        "cmd": command,
         "login": false,
     }))?;
     mount_sse_sequence(
@@ -396,7 +396,7 @@ async fn persisted_remote_plugin_command_attribution_flows_through_turn_context(
         vec![
             sse(vec![
                 ev_response_created("resp-1"),
-                ev_function_call(call_id, "shell_command", &arguments),
+                ev_function_call(call_id, "exec_command", &arguments),
                 ev_completed("resp-1"),
             ]),
             sse(vec![
@@ -1450,7 +1450,7 @@ async fn implicit_plugin_skill_invocation_tracks_remote_plugin_id(
         }
     };
     let command_args = serde_json::json!({
-        "command": command,
+        "cmd": command,
         "login": false,
     })
     .to_string();
@@ -1459,7 +1459,7 @@ async fn implicit_plugin_skill_invocation_tracks_remote_plugin_id(
         vec![
             sse(vec![
                 ev_response_created("resp-1"),
-                ev_function_call("call-1", "shell_command", &command_args),
+                ev_function_call("call-1", "exec_command", &command_args),
                 ev_completed("resp-1"),
             ]),
             sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),

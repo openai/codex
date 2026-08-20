@@ -40,6 +40,7 @@ mod agent_execution;
 mod agent_websocket;
 mod agents_md;
 mod apply_patch_cli;
+mod apply_patch_serialization;
 #[cfg(not(target_os = "windows"))]
 mod approvals;
 mod audio_truncation;
@@ -134,8 +135,6 @@ mod safety_buffering;
 mod safety_check_downgrade;
 mod search_tool;
 mod send_user_message_async;
-mod shell_command;
-mod shell_serialization;
 mod shell_snapshot;
 mod skill_approval;
 mod skills;

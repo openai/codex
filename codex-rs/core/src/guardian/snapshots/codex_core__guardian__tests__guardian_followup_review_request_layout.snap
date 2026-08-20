@@ -22,7 +22,7 @@ Scenario: Guardian follow-up review request layout
     [12] First retry reason\n\n
     [13] Assess the exact planned action below. Use read-only tool checks when local state matters.\n
     [14] Planned action JSON:\n
-    [15] {\n  "command": [\n    "git",\n    "push"\n  ],\n  "cwd": "/repo/codex-rs/core",\n  "justification": "Need to push the first docs fix.",\n  "sandbox_permissions": "use_default",\n  "tool": "shell"\n}\n
+    [15] {\n  "command": [\n    "git",\n    "push"\n  ],\n  "cwd": "/repo/codex-rs/core",\n  "justification": "Need to push the first docs fix.",\n  "sandbox_permissions": "use_default",\n  "tool": "exec_command",\n  "tty": false\n}\n
     [16] >>> APPROVAL REQUEST END\n
 
 ## Follow-up Guardian Review Request
@@ -43,7 +43,7 @@ Scenario: Guardian follow-up review request layout
     [12] First retry reason\n\n
     [13] Assess the exact planned action below. Use read-only tool checks when local state matters.\n
     [14] Planned action JSON:\n
-    [15] {\n  "command": [\n    "git",\n    "push"\n  ],\n  "cwd": "/repo/codex-rs/core",\n  "justification": "Need to push the first docs fix.",\n  "sandbox_permissions": "use_default",\n  "tool": "shell"\n}\n
+    [15] {\n  "command": [\n    "git",\n    "push"\n  ],\n  "cwd": "/repo/codex-rs/core",\n  "justification": "Need to push the first docs fix.",\n  "sandbox_permissions": "use_default",\n  "tool": "exec_command",\n  "tty": false\n}\n
     [16] >>> APPROVAL REQUEST END\n
 03:message/assistant:{"risk_level":"low","user_authorization":"high","outcome":"allow","rationale":"first guardian rationale from the prior review"}
 04:message/developer:Use prior reviews as context, not binding precedent. Follow the Workspace Policy. If the user explicitly approves a previously rejected action after being informed of the concrete risks, set outcome to "allow" unless the policy explicitly disallows user overwrites in such cases.
@@ -60,7 +60,7 @@ Scenario: Guardian follow-up review request layout
     [10] Second retry reason\n\n
     [11] Assess the exact planned action below. Use read-only tool checks when local state matters.\n
     [12] Planned action JSON:\n
-    [13] {\n  "command": [\n    "git",\n    "push",\n    "--force-with-lease"\n  ],\n  "cwd": "/repo/codex-rs/core",\n  "justification": "Need to push the second docs fix.",\n  "sandbox_permissions": "use_default",\n  "tool": "shell"\n}\n
+    [13] {\n  "command": [\n    "git",\n    "push",\n    "--force-with-lease"\n  ],\n  "cwd": "/repo/codex-rs/core",\n  "justification": "Need to push the second docs fix.",\n  "sandbox_permissions": "use_default",\n  "tool": "exec_command",\n  "tty": false\n}\n
     [14] >>> APPROVAL REQUEST END\n
 
 shared_prompt_cache_key: true

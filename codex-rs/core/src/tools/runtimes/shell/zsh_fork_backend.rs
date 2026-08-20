@@ -1,32 +1,14 @@
-use super::ShellRequest;
 use crate::sandboxing::ExecRequest;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::unified_exec::SpawnLifecycleHandle;
-use codex_core_plugins::PluginMetricsSidecar;
-use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_tools::ZshForkConfig;
 
 pub(crate) struct PreparedUnifiedExecSpawn {
     pub(crate) exec_request: ExecRequest,
     pub(crate) spawn_lifecycle: SpawnLifecycleHandle,
-}
-
-/// Runs the zsh-fork shell-command backend when this request should be handled
-/// by executable-level escalation instead of the default shell runtime.
-///
-/// Returns `Ok(None)` when the current platform or request shape should fall
-/// back to the normal shell-command path.
-pub(crate) async fn maybe_run_shell_command(
-    req: &ShellRequest,
-    attempt: &SandboxAttempt<'_>,
-    ctx: &ToolCtx,
-    command: &[String],
-    metrics_sidecar: Option<&PluginMetricsSidecar>,
-) -> Result<Option<ExecToolCallOutput>, ToolError> {
-    imp::maybe_run_shell_command(req, attempt, ctx, command, metrics_sidecar).await
 }
 
 /// Prepares unified exec to launch through the zsh-fork backend when the
@@ -73,16 +55,6 @@ mod imp {
         }
     }
 
-    pub(super) async fn maybe_run_shell_command(
-        req: &ShellRequest,
-        attempt: &SandboxAttempt<'_>,
-        ctx: &ToolCtx,
-        command: &[String],
-        metrics_sidecar: Option<&PluginMetricsSidecar>,
-    ) -> Result<Option<ExecToolCallOutput>, ToolError> {
-        unix_escalation::try_run_zsh_fork(req, attempt, ctx, command, metrics_sidecar).await
-    }
-
     pub(super) async fn maybe_prepare_unified_exec(
         req: &UnifiedExecRequest,
         attempt: &SandboxAttempt<'_>,
@@ -115,17 +87,6 @@ mod imp {
 #[cfg(not(unix))]
 mod imp {
     use super::*;
-
-    pub(super) async fn maybe_run_shell_command(
-        req: &ShellRequest,
-        attempt: &SandboxAttempt<'_>,
-        ctx: &ToolCtx,
-        command: &[String],
-        metrics_sidecar: Option<&PluginMetricsSidecar>,
-    ) -> Result<Option<ExecToolCallOutput>, ToolError> {
-        let _ = (req, attempt, ctx, command, metrics_sidecar);
-        Ok(None)
-    }
 
     pub(super) async fn maybe_prepare_unified_exec(
         req: &UnifiedExecRequest,

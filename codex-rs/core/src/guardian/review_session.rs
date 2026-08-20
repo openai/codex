@@ -1626,13 +1626,14 @@ mod tests {
             parent_session: Arc::new(session),
             parent_context: GuardianReviewContext::from(Arc::new(turn)),
             spawn_config,
-            request: GuardianApprovalRequest::Shell {
+            request: GuardianApprovalRequest::ExecCommand {
                 id: "shell-1".to_string(),
                 command: vec!["git".to_string(), "status".to_string()],
                 cwd,
                 sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
                 additional_permissions: None,
                 justification: Some("Inspect repo state.".to_string()),
+                tty: false,
             },
             reasons: ApprovalRequestReasons::default(),
             schema: super::super::prompt::guardian_output_schema(),

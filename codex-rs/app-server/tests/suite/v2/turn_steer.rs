@@ -3,9 +3,9 @@
 use anyhow::Context;
 use anyhow::Result;
 use app_test_support::TestAppServer;
+use app_test_support::create_command_execution_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
-use app_test_support::create_shell_command_sse_response;
 use app_test_support::write_mock_responses_config_toml_with_chatgpt_base_url;
 use codex_app_server::INPUT_TOO_LARGE_ERROR_CODE;
 use codex_app_server::INVALID_PARAMS_ERROR_CODE;
@@ -124,14 +124,15 @@ async fn turn_steer_rejects_oversized_text_input() -> Result<()> {
     let working_directory = tmp.path().join("workdir");
     std::fs::create_dir(&working_directory)?;
 
-    let server =
-        create_mock_responses_server_sequence_unchecked(vec![create_shell_command_sse_response(
+    let server = create_mock_responses_server_sequence_unchecked(vec![
+        create_command_execution_sse_response(
             shell_command.clone(),
             Some(&working_directory),
             Some(10_000),
             "call_sleep",
-        )?])
-        .await;
+        )?,
+    ])
+    .await;
     write_mock_responses_config_toml_with_chatgpt_base_url(
         &codex_home,
         &server.uri(),
@@ -237,7 +238,7 @@ async fn turn_steer_returns_active_turn_id() -> Result<()> {
     std::fs::create_dir(&working_directory)?;
 
     let server = create_mock_responses_server_sequence_unchecked(vec![
-        create_shell_command_sse_response(
+        create_command_execution_sse_response(
             shell_command.clone(),
             Some(&working_directory),
             Some(10_000),
@@ -371,7 +372,7 @@ async fn turn_steer_rejects_context_only_input_without_merging_context() -> Resu
     std::fs::create_dir(&working_directory)?;
 
     let server = create_mock_responses_server_sequence_unchecked(vec![
-        create_shell_command_sse_response(
+        create_command_execution_sse_response(
             vec!["sleep".to_string(), "1".to_string()],
             Some(&working_directory),
             Some(10_000),

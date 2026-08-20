@@ -6,7 +6,6 @@ use super::commands_for_intercepted_exec_policy;
 use super::evaluate_intercepted_exec_policy;
 use super::extract_shell_script;
 use super::join_program_and_argv;
-use super::map_exec_result;
 use crate::config::Constrained;
 use crate::guardian::GuardianReviewContext;
 use crate::sandboxing::SandboxPermissions;
@@ -36,7 +35,6 @@ use codex_sandboxing::SandboxType;
 use codex_sandboxing::policy_transforms::effective_permission_profile;
 use codex_shell_escalation::EscalationExecution;
 use codex_shell_escalation::EscalationPermissions;
-use codex_shell_escalation::ExecResult;
 use codex_shell_escalation::ResolvedPermissionProfile;
 use codex_tools::ToolName;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -278,26 +276,6 @@ fn commands_for_intercepted_exec_policy_preserves_unparsed_shell_wrappers() {
 }
 
 #[test]
-fn map_exec_result_preserves_stdout_and_stderr() {
-    let out = map_exec_result(
-        SandboxType::None,
-        ExecResult {
-            exit_code: 0,
-            stdout: "out".to_string(),
-            stderr: "err".to_string(),
-            output: "outerr".to_string(),
-            duration: Duration::from_millis(1),
-            timed_out: false,
-        },
-    )
-    .unwrap();
-
-    assert_eq!(out.stdout.text, "out");
-    assert_eq!(out.stderr.text, "err");
-    assert_eq!(out.aggregated_output.text, "outerr");
-}
-
-#[test]
 fn shell_request_escalation_execution_is_explicit() {
     let requested_permissions = AdditionalPermissionProfile {
         file_system: Some(FileSystemPermissions::from_read_write_roots(
@@ -445,8 +423,8 @@ async fn preapproved_additional_permissions_escalate_intercepted_exec() -> anyho
         review_context: GuardianReviewContext::from(Arc::new(turn_context)),
         call_id: "preapproved-additional-permissions".to_string(),
         environment_id: "local".to_string(),
-        source: GuardianCommandSource::Shell,
-        tool_name: ToolName::plain("shell_command"),
+        source: GuardianCommandSource::UnifiedExec,
+        tool_name: ToolName::plain("exec_command"),
         approval_policy: AskForApproval::OnRequest,
         permission_profile: permission_profile.clone(),
         sandbox_permissions: SandboxPermissions::WithAdditionalPermissions,
@@ -613,8 +591,8 @@ async fn execve_permission_request_hook_short_circuits_prompt() -> anyhow::Resul
         review_context: GuardianReviewContext::from(turn_context),
         call_id: "execve-hook-call".to_string(),
         environment_id: "local".to_string(),
-        source: GuardianCommandSource::Shell,
-        tool_name: ToolName::plain("shell_command"),
+        source: GuardianCommandSource::UnifiedExec,
+        tool_name: ToolName::plain("exec_command"),
         approval_policy: AskForApproval::OnRequest,
         permission_profile: PermissionProfile::read_only(),
         sandbox_permissions: SandboxPermissions::RequireEscalated,
@@ -824,8 +802,8 @@ prefix_rule(pattern = ["{cat_path_literal}"], decision = "allow")
         review_context: GuardianReviewContext::from(Arc::new(turn_context)),
         call_id: "deny-read-prefix-allow".to_string(),
         environment_id: "local".to_string(),
-        source: GuardianCommandSource::Shell,
-        tool_name: ToolName::plain("shell_command"),
+        source: GuardianCommandSource::UnifiedExec,
+        tool_name: ToolName::plain("exec_command"),
         approval_policy: AskForApproval::OnRequest,
         permission_profile,
         sandbox_permissions: SandboxPermissions::UseDefault,
@@ -861,8 +839,8 @@ async fn denied_reads_keep_granular_sandbox_rejection_for_escalation() -> anyhow
         review_context: GuardianReviewContext::from(Arc::new(turn_context)),
         call_id: "deny-read-granular-sandbox-reject".to_string(),
         environment_id: "local".to_string(),
-        source: GuardianCommandSource::Shell,
-        tool_name: ToolName::plain("shell_command"),
+        source: GuardianCommandSource::UnifiedExec,
+        tool_name: ToolName::plain("exec_command"),
         approval_policy: AskForApproval::Granular(GranularApprovalConfig {
             sandbox_approval: false,
             rules: true,

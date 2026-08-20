@@ -269,7 +269,7 @@ impl ToolCallRuntime {
         if call.tool_name.is_default_namespace()
             && matches!(
                 call.tool_name.name.as_str(),
-                "shell_command" | "unified_exec"
+                "exec_command" | "unified_exec"
             )
         {
             format!("Wall time: {secs:.1} seconds\naborted by user")

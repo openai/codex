@@ -31,20 +31,19 @@ use wiremock::matchers::path;
 use core_test_support::skip_if_no_network;
 use mcp_test_support::McpProcess;
 use mcp_test_support::create_apply_patch_sse_response;
+use mcp_test_support::create_command_execution_sse_response;
 use mcp_test_support::create_final_assistant_message_sse_response;
 use mcp_test_support::create_mock_responses_server;
-use mcp_test_support::create_shell_command_sse_response;
 use mcp_test_support::format_with_current_shell;
 
 // Windows CI can spend tens of seconds in session startup before the first
 // mock model request is sent.
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// Test that a shell command that is not on the "trusted" list triggers an
-/// elicitation request to the MCP and that sending the approval runs the
-/// command, as expected.
+/// Test that an explicitly escalated exec command triggers MCP elicitation and
+/// that approving the request runs the command.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn test_shell_command_approval_triggers_elicitation() {
+async fn test_exec_command_approval_triggers_elicitation() {
     if env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
             "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
@@ -54,14 +53,13 @@ async fn test_shell_command_approval_triggers_elicitation() {
 
     // Apparently `#[tokio::test]` must return `()`, so we create a helper
     // function that returns `Result` so we can use `?` in favor of `unwrap`.
-    shell_command_approval_triggers_elicitation()
+    exec_command_approval_triggers_elicitation()
         .await
-        .expect("shell command approval should trigger elicitation");
+        .expect("exec command approval should trigger elicitation");
 }
 
-async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
-    // Use a simple, untrusted command that creates a file so we can
-    // observe a side-effect.
+async fn exec_command_approval_triggers_elicitation() -> anyhow::Result<()> {
+    // Use a command that creates a file so we can observe its side effect.
     let workdir_for_shell_function_call = TempDir::new()?;
     let created_filename = "created_by_shell_tool.txt";
     let created_file = workdir_for_shell_function_call
@@ -95,7 +93,7 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
         server: _server,
         dir: _dir,
     } = create_mcp_process(vec![
-        create_shell_command_sse_response(
+        create_command_execution_sse_response(
             shell_command.clone(),
             Some(workdir_for_shell_function_call.path()),
             Some(timeout_ms),
@@ -111,6 +109,11 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
     let codex_request_id = mcp_process
         .send_codex_tool_call(CodexToolCallParam {
             prompt: "run `git init`".to_string(),
+            // Exercise MCP elicitation even when the surrounding environment enables auto-review.
+            config: Some(HashMap::from([
+                ("approvals_reviewer".to_string(), json!("user")),
+                ("features.guardian_approval".to_string(), json!(false)),
+            ])),
             ..Default::default()
         })
         .await?;
@@ -646,7 +649,7 @@ async fn create_mcp_process(responses: Vec<String>) -> anyhow::Result<McpHandle>
 }
 
 /// Create a Codex config that uses the mock server as the model provider.
-/// The shell command explicitly requests escalation so that we exercise the
+/// The command explicitly requests escalation so that we exercise the
 /// elicitation code path.
 fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {
     let config_toml = codex_home.join("config.toml");

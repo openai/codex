@@ -480,7 +480,7 @@ async fn register_call_with_default_shell_trigger(
             turn_id: "turn-1".to_string(),
             trigger: GuardianNetworkAccessTrigger {
                 call_id: "call-1".to_string(),
-                tool_name: "shell_command".to_string(),
+                tool_name: "exec_command".to_string(),
                 command: vec!["curl".to_string(), "https://example.com".to_string()],
                 cwd: PathUri::from_abs_path(&test_path_buf("/tmp").abs()),
                 sandbox_permissions: SandboxPermissions::UseDefault,
@@ -502,7 +502,7 @@ async fn active_call_preserves_triggering_command_context() {
     let service = NetworkApprovalService::default();
     let expected = GuardianNetworkAccessTrigger {
         call_id: "call-1".to_string(),
-        tool_name: "shell_command".to_string(),
+        tool_name: "exec_command".to_string(),
         command: vec!["curl".to_string(), "https://example.com".to_string()],
         cwd: PathUri::parse("file:///C:/repo").expect("valid Windows path URI"),
         sandbox_permissions: SandboxPermissions::UseDefault,
@@ -667,42 +667,6 @@ fn approval_denial_messages_are_bounded_for_model_context() {
 
     assert!(codex_utils_string::approx_token_count(&message) < 1_000);
     assert!(message.contains("tokens truncated"));
-}
-
-#[tokio::test]
-async fn finish_call_returns_denial_and_unregisters_active_call() {
-    let service = NetworkApprovalService::default();
-    let cancellation_token =
-        register_call_with_default_shell_trigger(&service, "registration-1").await;
-
-    service.record_call_outcome("registration-1", "network denied".to_string());
-
-    let err = service
-        .finish_call("registration-1", &cancellation_token)
-        .await
-        .expect_err("denial should be returned");
-
-    assert!(matches!(err, ToolError::Rejected(message) if message == "network denied"));
-    assert!(service.resolve_single_active_call().await.is_none());
-    assert_eq!(service.take_call_outcome("registration-1").await, None);
-}
-
-#[tokio::test]
-async fn finish_call_reports_abandoned_network_approval() {
-    let service = NetworkApprovalService::default();
-    let cancellation_token =
-        register_call_with_default_shell_trigger(&service, "registration-1").await;
-    cancellation_token.cancel();
-
-    let err = service
-        .finish_call("registration-1", &cancellation_token)
-        .await
-        .expect_err("abandoned approval should be returned");
-
-    assert!(matches!(
-        err,
-        ToolError::Rejected(message) if message == ABANDONED_NETWORK_APPROVAL_MESSAGE
-    ));
 }
 
 #[tokio::test]

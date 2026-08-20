@@ -3,6 +3,7 @@ use app_test_support::ChatGptAuthFixture;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use app_test_support::create_apply_patch_sse_response;
+use app_test_support::create_command_execution_sse_response;
 use app_test_support::create_fake_paginated_rollout;
 use app_test_support::create_fake_rollout;
 use app_test_support::create_fake_rollout_with_text_elements;
@@ -10,7 +11,6 @@ use app_test_support::create_fake_rollout_with_token_usage;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
-use app_test_support::create_shell_command_sse_response;
 use app_test_support::rollout_path;
 use app_test_support::test_absolute_path;
 use app_test_support::to_response;
@@ -4507,7 +4507,7 @@ async fn thread_resume_replays_pending_command_execution_request_approval() -> R
 
     let responses = vec![
         create_final_assistant_message_sse_response("seeded")?,
-        create_shell_command_sse_response(
+        create_command_execution_sse_response(
             vec![
                 "python3".to_string(),
                 "-c".to_string(),

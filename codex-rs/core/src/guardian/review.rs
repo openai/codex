@@ -77,8 +77,7 @@ fn plugin_attribution_for_guardian_request(
     request: &GuardianApprovalRequest,
 ) -> Option<PluginCommandAttribution> {
     match request {
-        GuardianApprovalRequest::Shell { command, cwd, .. }
-        | GuardianApprovalRequest::ExecCommand { command, cwd, .. } => {
+        GuardianApprovalRequest::ExecCommand { command, cwd, .. } => {
             turn.plugin_attribution_for_command(command, cwd)
         }
         #[cfg(unix)]

@@ -660,34 +660,28 @@ async fn request_user_input_stays_direct_in_code_mode_only() {
 }
 
 #[tokio::test]
-async fn shell_family_registers_visible_unified_exec_and_hidden_legacy_shell() {
+async fn shell_family_registers_only_unified_exec_tools() {
     let plan = probe(|turn| {
         set_features(turn, &[Feature::ShellTool, Feature::UnifiedExec]);
         set_feature(turn, Feature::ShellZshFork, /*enabled*/ false);
-        Arc::make_mut(&mut turn.model_info).shell_type = ConfigShellToolType::ShellCommand;
+        Arc::make_mut(&mut turn.model_info).shell_type = ConfigShellToolType::UnifiedExec;
     })
     .await;
 
     plan.assert_visible_contains(&["exec_command", "write_stdin"]);
-    plan.assert_visible_lacks(&["shell_command"]);
-    plan.assert_registered_contains(&["exec_command", "write_stdin", "shell_command"]);
-    assert_eq!(plan.exposure("shell_command"), ToolExposure::Hidden);
+    plan.assert_registered_contains(&["exec_command", "write_stdin"]);
     assert!(has_parameter(plan.visible_spec("exec_command"), "shell"));
 }
 
 #[tokio::test]
 async fn login_shell_parameter_follows_selected_environment() {
-    for (tool_name, guardian) in [
-        ("shell_command", false),
-        ("exec_command", false),
-        ("exec_command", true),
-    ] {
+    for guardian in [false, true] {
         for allow_login_shell in [false, true] {
             let plan = probe(|turn| {
                 set_feature(turn, Feature::ShellTool, /*enabled*/ true);
-                set_feature(turn, Feature::UnifiedExec, tool_name == "exec_command");
+                set_feature(turn, Feature::UnifiedExec, /*enabled*/ true);
                 set_feature(turn, Feature::ShellZshFork, /*enabled*/ false);
-                Arc::make_mut(&mut turn.model_info).shell_type = ConfigShellToolType::ShellCommand;
+                Arc::make_mut(&mut turn.model_info).shell_type = ConfigShellToolType::UnifiedExec;
                 update_config(turn, |config| {
                     config.permissions.allow_login_shell = !allow_login_shell;
                 });
@@ -711,7 +705,7 @@ async fn login_shell_parameter_follows_selected_environment() {
             .await;
 
             assert_eq!(
-                has_parameter(plan.visible_spec(tool_name), "login"),
+                has_parameter(plan.visible_spec("exec_command"), "login"),
                 allow_login_shell
             );
         }
@@ -740,11 +734,10 @@ async fn login_shell_parameter_is_available_when_any_environment_allows_it() {
 }
 
 #[tokio::test]
-async fn shell_command_is_not_registered_without_a_single_local_environment() {
+async fn disabling_shell_tools_disables_command_tools_for_all_environments() {
     let remote_environment = probe(|turn| {
-        set_feature(turn, Feature::ShellTool, /*enabled*/ true);
-        set_feature(turn, Feature::UnifiedExec, /*enabled*/ false);
-        Arc::make_mut(&mut turn.model_info).shell_type = ConfigShellToolType::ShellCommand;
+        set_feature(turn, Feature::ShellTool, /*enabled*/ false);
+        Arc::make_mut(&mut turn.model_info).shell_type = ConfigShellToolType::UnifiedExec;
 
         let TurnEnvironmentState::Ready(environment) = turn
             .environments
@@ -767,64 +760,63 @@ async fn shell_command_is_not_registered_without_a_single_local_environment() {
     remote_environment.assert_registered_lacks(&["shell_command", "exec_command", "write_stdin"]);
 
     let multiple_local_environments = probe(|turn| {
-        set_feature(turn, Feature::ShellTool, /*enabled*/ true);
-        set_feature(turn, Feature::UnifiedExec, /*enabled*/ false);
-        Arc::make_mut(&mut turn.model_info).shell_type = ConfigShellToolType::ShellCommand;
+        set_feature(turn, Feature::ShellTool, /*enabled*/ false);
+        Arc::make_mut(&mut turn.model_info).shell_type = ConfigShellToolType::UnifiedExec;
         duplicate_primary_environment(turn);
     })
     .await;
-    multiple_local_environments.assert_visible_lacks(&["shell_command"]);
-    multiple_local_environments.assert_registered_lacks(&["shell_command"]);
+    multiple_local_environments.assert_visible_lacks(&[
+        "shell_command",
+        "exec_command",
+        "write_stdin",
+    ]);
+    multiple_local_environments.assert_registered_lacks(&[
+        "shell_command",
+        "exec_command",
+        "write_stdin",
+    ]);
 }
 
 #[tokio::test]
-async fn dynamic_tools_cannot_reclaim_the_reserved_shell_command_name() {
+async fn dynamic_tools_cannot_reclaim_the_reserved_exec_command_name() {
     let plan = probe_with(
         duplicate_primary_environment,
         ToolPlanInputs {
             dynamic_tools: vec![
                 dynamic_tool(
                     /*namespace*/ None,
-                    "shell_command",
+                    "exec_command",
                     /*defer_loading*/ false,
                 ),
-                dynamic_tool(
-                    Some("client"),
-                    "shell_command",
-                    /*defer_loading*/ false,
-                ),
+                dynamic_tool(Some("client"), "exec_command", /*defer_loading*/ false),
             ],
             ..ToolPlanInputs::default()
         },
     )
     .await;
 
-    plan.assert_visible_lacks(&["shell_command"]);
-    plan.assert_registered_lacks(&["shell_command"]);
+    plan.assert_visible_contains(&["exec_command"]);
+    plan.assert_registered_contains(&["exec_command"]);
     plan.assert_visible_contains(&["client"]);
-    plan.assert_registered_contains(
-        &[&ToolName::namespaced("client", "shell_command").to_string()],
-    );
+    plan.assert_registered_contains(&[&ToolName::namespaced("client", "exec_command").to_string()]);
     assert_eq!(
         plan.namespace_function_names("client"),
-        &["shell_command".to_string()]
+        &["exec_command".to_string()]
     );
 }
 
 #[tokio::test]
-async fn shell_zsh_fork_stays_standalone_until_unified_exec_composition_is_enabled() {
-    let standalone = probe(|turn| {
+async fn shell_zsh_fork_keeps_unified_exec_available() {
+    let without_composition = probe(|turn| {
         set_features(turn, &[Feature::ShellTool, Feature::UnifiedExec]);
         set_feature(turn, Feature::ShellZshFork, /*enabled*/ true);
         set_feature(turn, Feature::UnifiedExecZshFork, /*enabled*/ false);
-        Arc::make_mut(&mut turn.model_info).shell_type = ConfigShellToolType::ShellCommand;
+        Arc::make_mut(&mut turn.model_info).shell_type = ConfigShellToolType::UnifiedExec;
     })
     .await;
 
-    standalone.assert_visible_contains(&["shell_command"]);
-    standalone.assert_visible_lacks(&["exec_command", "write_stdin"]);
-    standalone.assert_registered_contains(&["shell_command"]);
-    standalone.assert_registered_lacks(&["exec_command", "write_stdin"]);
+    without_composition.assert_visible_contains(&["exec_command", "write_stdin"]);
+    without_composition.assert_registered_contains(&["exec_command", "write_stdin"]);
 
     let composed = probe(|turn| {
         set_features(
@@ -836,19 +828,12 @@ async fn shell_zsh_fork_stays_standalone_until_unified_exec_composition_is_enabl
                 Feature::UnifiedExecZshFork,
             ],
         );
-        Arc::make_mut(&mut turn.model_info).shell_type = ConfigShellToolType::ShellCommand;
+        Arc::make_mut(&mut turn.model_info).shell_type = ConfigShellToolType::UnifiedExec;
     })
     .await;
 
-    if codex_utils_pty::conpty_supported() {
-        composed.assert_visible_contains(&["exec_command", "write_stdin"]);
-        composed.assert_visible_lacks(&["shell_command"]);
-        composed.assert_registered_contains(&["exec_command", "write_stdin", "shell_command"]);
-        assert_eq!(composed.exposure("shell_command"), ToolExposure::Hidden);
-    } else {
-        composed.assert_visible_contains(&["shell_command"]);
-        composed.assert_visible_lacks(&["exec_command", "write_stdin"]);
-    }
+    composed.assert_visible_contains(&["exec_command", "write_stdin"]);
+    composed.assert_registered_contains(&["exec_command", "write_stdin"]);
 }
 
 #[tokio::test]
@@ -958,15 +943,15 @@ async fn environment_count_controls_environment_backed_tools() {
     })
     .await;
     no_environment.assert_visible_lacks(&[
-        "shell_command",
         "exec_command",
+        "write_stdin",
         "apply_patch",
         "view_image",
         "request_permissions",
     ]);
     no_environment.assert_registered_lacks(&[
-        "shell_command",
         "exec_command",
+        "write_stdin",
         "apply_patch",
         "view_image",
         "request_permissions",
@@ -1363,7 +1348,7 @@ async fn unified_tool_runtimes_preserve_source_order_and_collision_priority() {
         |turn| {
             set_features(turn, &[Feature::ShellTool, Feature::UnifiedExec]);
             set_feature(turn, Feature::ShellZshFork, /*enabled*/ false);
-            Arc::make_mut(&mut turn.model_info).shell_type = ConfigShellToolType::ShellCommand;
+            Arc::make_mut(&mut turn.model_info).shell_type = ConfigShellToolType::UnifiedExec;
         },
         ToolPlanInputs {
             tool_runtimes: vec![mcp_runtime(

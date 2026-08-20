@@ -35,10 +35,10 @@ fn write_skill_metadata(home: &Path, name: &str, contents: &str) -> Result<()> {
     Ok(())
 }
 
-fn shell_command_arguments(command: &str) -> Result<String> {
+fn exec_command_arguments(command: &str) -> Result<String> {
     Ok(serde_json::to_string(&serde_json::json!({
-        "command": command,
-        "timeout_ms": 500,
+        "cmd": command,
+        "yield_time_ms": 500,
     }))?)
 }
 
@@ -192,9 +192,9 @@ async fn shell_zsh_fork_skill_scripts_ignore_declared_permissions() -> Result<()
 
     let command = skill_script_command(&test, "sandboxed.sh")?;
     let call_id = "zsh-fork-skill-script-ignores-permissions";
-    let arguments = shell_command_arguments(&command)?;
+    let arguments = exec_command_arguments(&command)?;
     let mocks =
-        mount_function_call_agent_response(&server, call_id, &arguments, "shell_command").await;
+        mount_function_call_agent_response(&server, call_id, &arguments, "exec_command").await;
 
     submit_turn_with_policies(
         &test,
@@ -259,10 +259,9 @@ async fn shell_zsh_fork_still_enforces_workspace_write_sandbox() -> Result<()> {
     .await?;
 
     let command = format!("touch {outside_path}");
-    let arguments = shell_command_arguments(&command)?;
+    let arguments = exec_command_arguments(&command)?;
     let mocks =
-        mount_function_call_agent_response(&server, tool_call_id, &arguments, "shell_command")
-            .await;
+        mount_function_call_agent_response(&server, tool_call_id, &arguments, "exec_command").await;
 
     submit_turn_with_policies(
         &test,

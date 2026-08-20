@@ -18,7 +18,6 @@ use crate::session::turn_context::TurnContext;
 use crate::tools::flat_tool_name;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::runtimes::apply_patch::ApplyPatchApprovalKey;
-use crate::tools::runtimes::shell::ApprovalKey;
 use crate::tools::runtimes::unified_exec::UnifiedExecApprovalKey;
 use crate::tools::sandboxing::ApprovalRequestReasons;
 use crate::tools::sandboxing::PermissionRequestPayload;
@@ -65,17 +64,6 @@ pub(crate) struct ApprovalContext {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum ApprovalAction {
-    Shell {
-        id: String,
-        environment_id: String,
-        command: Vec<String>,
-        hook_command: String,
-        cwd: PathUri,
-        sandbox_permissions: SandboxPermissions,
-        additional_permissions: Option<AdditionalPermissionProfile>,
-        justification: Option<String>,
-        proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
-    },
     ExecCommand {
         id: String,
         environment_id: String,
@@ -153,7 +141,6 @@ pub(crate) enum ApprovalAction {
 #[derive(Clone, Debug, Eq, Hash, PartialEq, serde::Serialize)]
 #[serde(untagged)]
 pub(crate) enum ApprovalCacheKey {
-    Shell(ApprovalKey),
     ExecCommand(UnifiedExecApprovalKey),
     ApplyPatch(ApplyPatchApprovalKey),
 }
@@ -161,12 +148,7 @@ pub(crate) enum ApprovalCacheKey {
 impl ApprovalAction {
     pub(crate) fn permission_request_payload(&self) -> PermissionRequestPayload {
         match self {
-            Self::Shell {
-                hook_command,
-                justification,
-                ..
-            }
-            | Self::ExecCommand {
+            Self::ExecCommand {
                 hook_command,
                 justification,
                 ..
@@ -214,20 +196,6 @@ impl ApprovalAction {
 
     pub(crate) fn cache_keys(&self) -> Vec<ApprovalCacheKey> {
         match self {
-            Self::Shell {
-                environment_id,
-                command,
-                cwd,
-                sandbox_permissions,
-                additional_permissions,
-                ..
-            } => vec![ApprovalCacheKey::Shell(ApprovalKey {
-                environment_id: environment_id.clone(),
-                command: canonicalize_command_for_approval(command),
-                cwd: cwd.clone(),
-                sandbox_permissions: *sandbox_permissions,
-                additional_permissions: additional_permissions.clone(),
-            })],
             Self::ExecCommand {
                 environment_id,
                 command,
@@ -269,23 +237,6 @@ impl ApprovalAction {
 
     fn into_guardian_request(self) -> std::io::Result<crate::guardian::GuardianApprovalRequest> {
         Ok(match self {
-            Self::Shell {
-                id,
-                environment_id,
-                command,
-                cwd,
-                sandbox_permissions,
-                additional_permissions,
-                justification,
-                ..
-            } => crate::guardian::GuardianApprovalRequest::Shell {
-                id,
-                command,
-                cwd: guardian_cwd(&environment_id, cwd)?,
-                sandbox_permissions,
-                additional_permissions,
-                justification,
-            },
             Self::ExecCommand {
                 id,
                 environment_id,
@@ -663,16 +614,7 @@ impl Session {
         ctx: &ApprovalContext,
     ) -> ReviewDecision {
         match action {
-            ApprovalAction::Shell {
-                environment_id,
-                command,
-                cwd,
-                additional_permissions,
-                justification,
-                proposed_execpolicy_amendment,
-                ..
-            }
-            | ApprovalAction::ExecCommand {
+            ApprovalAction::ExecCommand {
                 environment_id,
                 command,
                 cwd,
@@ -690,18 +632,7 @@ impl Session {
                         ));
                     }
                 };
-                let tool_name = match action {
-                    ApprovalAction::Shell { .. } => "shell",
-                    ApprovalAction::ExecCommand { .. } => "unified_exec",
-                    #[cfg(unix)]
-                    ApprovalAction::Execve { .. } => unreachable!("matched command approval"),
-                    ApprovalAction::ApplyPatch { .. } => unreachable!("matched command approval"),
-                    ApprovalAction::McpToolCall { .. }
-                    | ApprovalAction::NetworkAccess { .. }
-                    | ApprovalAction::RequestPermissions { .. } => {
-                        unreachable!("matched command approval")
-                    }
-                };
+                let tool_name = "unified_exec";
                 let reason = ctx
                     .retry_reason
                     .clone()

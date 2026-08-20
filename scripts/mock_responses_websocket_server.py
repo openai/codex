@@ -14,9 +14,9 @@ HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 PATH = "/v1/responses"
 
-CALL_ID = "shell-command-call"
-FUNCTION_NAME = "shell_command"
-FUNCTION_ARGS_JSON = json.dumps({"command": "echo websocket"}, separators=(",", ":"))
+CALL_ID = "exec-command-call"
+FUNCTION_NAME = "exec_command"
+FUNCTION_ARGS_JSON = json.dumps({"cmd": "echo websocket"}, separators=(",", ":"))
 
 ASSISTANT_TEXT = "done"
 

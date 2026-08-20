@@ -25,8 +25,6 @@ use crate::tools::handlers::RequestPermissionsHandler;
 use crate::tools::handlers::RequestPluginInstallHandler;
 use crate::tools::handlers::RequestUserInputHandler;
 use crate::tools::handlers::SendUserMessageAsyncHandler;
-use crate::tools::handlers::ShellCommandHandler;
-use crate::tools::handlers::ShellCommandHandlerOptions;
 use crate::tools::handlers::SleepHandler;
 use crate::tools::handlers::TestSyncHandler;
 use crate::tools::handlers::ToolSearchHandlerCache;
@@ -92,7 +90,6 @@ use codex_tools::collect_code_mode_exec_prompt_tool_definitions;
 use codex_tools::collect_request_plugin_install_entries;
 use codex_tools::default_namespace_description;
 use codex_tools::request_user_input_available_modes;
-use codex_tools::shell_command_backend_for_features;
 use codex_tools::shell_type_for_model_and_features;
 use futures::future::BoxFuture;
 use std::collections::BTreeMap;
@@ -970,13 +967,6 @@ fn add_shell_tools(context: &CoreToolPlanContext<'_>, registry: &mut ToolRegistr
     let allow_login_shell = any_environment_allows_login_shell(context.environments);
     let exec_permission_approvals_enabled = features.enabled(Feature::ExecPermissionApprovals);
     let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
-    let supports_shell_command = context.environments.single_local_environment().is_some();
-    let shell_command_options = ShellCommandHandlerOptions {
-        backend_config: shell_command_backend_for_features(features),
-        allow_login_shell,
-        exec_permission_approvals_enabled,
-    };
-
     match shell_type_for_model_and_features(&turn_context.model_info, features) {
         ConfigShellToolType::UnifiedExec => {
             registry.add(ExecCommandHandler::new(ExecCommandHandlerOptions {
@@ -989,24 +979,9 @@ fn add_shell_tools(context: &CoreToolPlanContext<'_>, registry: &mut ToolRegistr
                 ),
             }));
             registry.add(WriteStdinHandler);
-
-            if supports_shell_command {
-                // Keep the legacy shell tool registered while unified exec is
-                // model-visible.
-                registry.add_with_exposure(
-                    ShellCommandHandler::new(shell_command_options),
-                    ToolExposure::Hidden,
-                );
-            }
         }
         ConfigShellToolType::Disabled => {}
-        ConfigShellToolType::Default
-        | ConfigShellToolType::Local
-        | ConfigShellToolType::ShellCommand => {
-            if supports_shell_command {
-                registry.add(ShellCommandHandler::new(shell_command_options));
-            }
-        }
+        ConfigShellToolType::Default | ConfigShellToolType::Local => {}
     }
 }
 

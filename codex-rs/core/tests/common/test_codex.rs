@@ -308,7 +308,7 @@ fn docker_command_capture_stdout<const N: usize>(args: [&str; N]) -> Result<Stri
 /// Non-default apply_patch model output shapes used by compatibility tests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ApplyPatchModelOutput {
-    ShellCommandViaHeredoc,
+    ExecCommandViaHeredoc,
 }
 
 /// Returns the permission fields required by test thread-settings overrides.

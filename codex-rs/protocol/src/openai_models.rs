@@ -299,9 +299,9 @@ pub enum ModelVisibility {
 pub enum ConfigShellToolType {
     Default,
     Local,
+    #[serde(alias = "shell_command")]
     UnifiedExec,
     Disabled,
-    ShellCommand,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, TS, JsonSchema)]
@@ -886,6 +886,18 @@ mod tests {
     use serde_json::from_str;
     use serde_json::to_string;
 
+    #[test]
+    fn legacy_shell_model_metadata_deserializes_as_unified_exec() {
+        assert_eq!(
+            from_str::<ConfigShellToolType>("\"shell_command\"").expect("legacy shell type"),
+            ConfigShellToolType::UnifiedExec
+        );
+        assert_eq!(
+            to_string(&ConfigShellToolType::UnifiedExec).expect("serialize unified shell type"),
+            "\"unified_exec\""
+        );
+    }
+
     fn test_model(spec: Option<ModelMessages>) -> ModelInfo {
         ModelInfo {
             slug: "test-model".to_string(),
@@ -893,7 +905,7 @@ mod tests {
             description: None,
             default_reasoning_level: None,
             supported_reasoning_levels: vec![],
-            shell_type: ConfigShellToolType::ShellCommand,
+            shell_type: ConfigShellToolType::UnifiedExec,
             visibility: ModelVisibility::List,
             supported_in_api: true,
             priority: 1,
@@ -1530,7 +1542,7 @@ mod tests {
             "display_name": "Test Model",
             "description": null,
             "supported_reasoning_levels": [],
-            "shell_type": "shell_command",
+            "shell_type": "unified_exec",
             "visibility": "list",
             "supported_in_api": true,
             "priority": 1,

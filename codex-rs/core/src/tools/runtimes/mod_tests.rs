@@ -88,14 +88,14 @@ async fn explicit_escalation_prepares_exec_without_managed_network() -> anyhow::
     let mut env = HashMap::from([("CUSTOM_ENV".to_string(), "kept".to_string())]);
     proxy.apply_to_env(&mut env);
 
-    let command = vec!["/bin/echo".to_string(), "ok".to_string()];
-    let command = build_sandbox_command(
-        &command,
-        &command_cwd,
-        &exec_env_for_sandbox_permissions(&env, SandboxPermissions::RequireEscalated),
-        /*additional_permissions*/ None,
-    )
-    .expect("build sandbox command");
+    let command = codex_sandboxing::SandboxCommand {
+        program: "/bin/echo".into(),
+        args: vec!["ok".to_string()],
+        cwd: PathUri::from_abs_path(&command_cwd),
+        env: exec_env_for_sandbox_permissions(&env, SandboxPermissions::RequireEscalated),
+        managed_network: None,
+        additional_permissions: None,
+    };
     assert_eq!(command.cwd, PathUri::from_abs_path(&command_cwd));
     let sandbox_policy_cwd = PathUri::from_abs_path(&native_sandbox_policy_cwd);
     let options = ExecOptions {
@@ -233,24 +233,6 @@ fn runtime_path_prepends_ignores_empty_path_entry() {
         runtime_path_prepends,
         RuntimePathPrepends::default(),
         "empty runtime PATH prepend should not be recorded for snapshot replay"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn prepend_zsh_fork_bin_to_path_ignores_empty_parent() {
-    let mut env = HashMap::from([("PATH".to_string(), "/usr/bin:/bin".to_string())]);
-
-    let result = prepend_zsh_fork_bin_to_path(&mut env, PathBuf::from("zsh").as_path());
-
-    assert_eq!(
-        result, None,
-        "zsh fork helper should not report a PATH update for an empty parent"
-    );
-    assert_eq!(
-        env.get("PATH").map(String::as_str),
-        Some("/usr/bin:/bin"),
-        "zsh fork helper should leave PATH unchanged when the parent is empty"
     );
 }
 

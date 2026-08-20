@@ -3,10 +3,10 @@
 use anyhow::Result;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
+use app_test_support::create_command_execution_sse_response;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
-use app_test_support::create_shell_command_sse_response;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::RequestId;
@@ -53,14 +53,15 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
     std::fs::create_dir(&working_directory)?;
 
     // Mock server: long-running shell command then (after abort) nothing else needed.
-    let server =
-        create_mock_responses_server_sequence_unchecked(vec![create_shell_command_sse_response(
+    let server = create_mock_responses_server_sequence_unchecked(vec![
+        create_command_execution_sse_response(
             shell_command.clone(),
             Some(&working_directory),
             Some(10_000),
             "call_sleep",
-        )?])
-        .await;
+        )?,
+    ])
+    .await;
     MockResponsesConfig::new(&server.uri())
         .with_sandbox_mode("workspace-write")
         .with_root_config(r#"approvals_reviewer = "user""#)
@@ -218,13 +219,14 @@ async fn turn_interrupt_resolves_pending_command_approval_request() -> Result<()
     let working_directory = tmp.path().join("workdir");
     std::fs::create_dir(&working_directory)?;
 
-    let server = create_mock_responses_server_sequence(vec![create_shell_command_sse_response(
-        shell_command.clone(),
-        Some(&working_directory),
-        Some(10_000),
-        "call_sleep_approval",
-    )?])
-    .await;
+    let server =
+        create_mock_responses_server_sequence(vec![create_command_execution_sse_response(
+            shell_command.clone(),
+            Some(&working_directory),
+            Some(10_000),
+            "call_sleep_approval",
+        )?])
+        .await;
     MockResponsesConfig::new(&server.uri())
         .with_approval_policy("on-request")
         .with_root_config(r#"approvals_reviewer = "user""#)

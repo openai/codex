@@ -80,9 +80,9 @@ fn assert_empty_mcp_tool_fields(line: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn shell_command_call(call_id: &str, command: &str) -> serde_json::Value {
-    let args = serde_json::json!({ "command": command }).to_string();
-    ev_function_call(call_id, "shell_command", &args)
+fn exec_command_call(call_id: &str, command: &str) -> serde_json::Value {
+    let args = serde_json::json!({ "cmd": command }).to_string();
+    ev_function_call(call_id, "exec_command", &args)
 }
 
 fn touch_command(path: &str) -> String {
@@ -989,13 +989,13 @@ async fn handle_response_item_records_tool_result_for_function_call() {
 
 #[tokio::test]
 #[traced_test]
-async fn handle_response_item_records_tool_result_for_shell_command_call() {
+async fn handle_response_item_records_tool_result_for_exec_command_call() {
     let server = start_mock_server().await;
 
     mount_sse_once(
         &server,
         sse(vec![
-            shell_command_call("shell-call", "echo shell"),
+            exec_command_call("shell-call", "echo shell"),
             ev_completed("done"),
         ]),
     )
@@ -1038,10 +1038,10 @@ async fn handle_response_item_records_tool_result_for_shell_command_call() {
             .find(|line| line.contains("codex.tool_result") && line.contains("call_id=shell-call"))
             .ok_or_else(|| "missing codex.tool_result event".to_string())?;
 
-        if !line.contains("tool_name=shell_command") {
+        if !line.contains("tool_name=exec_command") {
             return Err("missing tool_name field".to_string());
         }
-        if !line.contains("arguments={\"command\":\"echo shell\"}") {
+        if !line.contains("arguments={\"cmd\":\"echo shell\"}") {
             return Err("missing arguments field".to_string());
         }
         let output_idx = line
@@ -1077,8 +1077,8 @@ fn tool_decision_assertion<'a>(
             .ok_or_else(|| format!("missing codex.tool_decision event for {call_id}"))?;
 
         let lower = line.to_lowercase();
-        if !lower.contains("tool_name=shell_command") {
-            return Err("missing tool_name for shell_command".to_string());
+        if !lower.contains("tool_name=exec_command") {
+            return Err("missing tool_name for exec_command".to_string());
         }
         if !lower.contains(&format!("decision={expected_decision}")) {
             return Err(format!("unexpected decision for {call_id}"));
@@ -1108,8 +1108,8 @@ fn sandbox_outcome_assertion<'a>(
             .ok_or_else(|| format!("missing codex.sandbox_outcome event for {call_id}"))?;
 
         let lower = line.to_lowercase();
-        if !lower.contains("tool_name=shell_command") {
-            return Err("missing tool_name for shell_command".to_string());
+        if !lower.contains("tool_name=exec_command") {
+            return Err("missing tool_name for exec_command".to_string());
         }
         if !lower.contains(&format!("outcome={expected_outcome}")) {
             return Err(format!("unexpected sandbox outcome for {call_id}"));
@@ -1209,7 +1209,7 @@ fn sandbox_outcome_event_records_outcome() {
     );
 
     telemetry.sandbox_outcome(
-        "shell_command",
+        "exec_command",
         "sandbox-outcome-call",
         "escalated",
         Duration::from_millis(/*millis*/ 12),
@@ -1224,12 +1224,12 @@ fn sandbox_outcome_event_records_outcome() {
 
 #[tokio::test]
 #[traced_test]
-async fn handle_shell_command_autoapprove_from_config_records_tool_decision() {
+async fn handle_exec_command_autoapprove_from_config_records_tool_decision() {
     let server = start_mock_server().await;
     mount_sse_once(
         &server,
         sse(vec![
-            shell_command_call("auto_config_call", "echo local shell"),
+            exec_command_call("auto_config_call", "echo local shell"),
             ev_completed("done"),
         ]),
     )
@@ -1275,13 +1275,13 @@ async fn handle_shell_command_autoapprove_from_config_records_tool_decision() {
 
 #[tokio::test]
 #[traced_test]
-async fn handle_shell_command_user_approved_records_tool_decision() {
+async fn handle_exec_command_user_approved_records_tool_decision() {
     let server = start_mock_server().await;
     let command = touch_command("codex-otel-approval-test");
     mount_sse_once(
         &server,
         sse(vec![
-            shell_command_call("user_approved_call", &command),
+            exec_command_call("user_approved_call", &command),
             ev_completed("done"),
         ]),
     )
@@ -1339,14 +1339,14 @@ async fn handle_shell_command_user_approved_records_tool_decision() {
 
 #[tokio::test]
 #[traced_test]
-async fn handle_shell_command_user_approved_for_session_records_tool_decision() {
+async fn handle_exec_command_user_approved_for_session_records_tool_decision() {
     let server = start_mock_server().await;
     let command = touch_command("codex-otel-approval-test");
 
     mount_sse_once(
         &server,
         sse(vec![
-            shell_command_call("user_approved_session_call", &command),
+            exec_command_call("user_approved_session_call", &command),
             ev_completed("done"),
         ]),
     )
@@ -1410,7 +1410,7 @@ async fn handle_sandbox_error_user_approves_retry_records_tool_decision() {
     mount_sse_once(
         &server,
         sse(vec![
-            shell_command_call("sandbox_retry_call", &command),
+            exec_command_call("sandbox_retry_call", &command),
             ev_completed("done"),
         ]),
     )
@@ -1467,14 +1467,14 @@ async fn handle_sandbox_error_user_approves_retry_records_tool_decision() {
 
 #[tokio::test]
 #[traced_test]
-async fn handle_shell_command_user_denies_records_tool_decision() {
+async fn handle_exec_command_user_denies_records_tool_decision() {
     let server = start_mock_server().await;
     let command = touch_command("codex-otel-approval-test");
 
     mount_sse_once(
         &server,
         sse(vec![
-            shell_command_call("user_denied_call", &command),
+            exec_command_call("user_denied_call", &command),
             ev_completed("done"),
         ]),
     )
@@ -1538,7 +1538,7 @@ async fn handle_sandbox_error_user_approves_for_session_records_tool_decision() 
     mount_sse_once(
         &server,
         sse(vec![
-            shell_command_call("sandbox_session_call", &command),
+            exec_command_call("sandbox_session_call", &command),
             ev_completed("done"),
         ]),
     )
@@ -1602,7 +1602,7 @@ async fn handle_sandbox_error_user_denies_records_tool_decision() {
     mount_sse_once(
         &server,
         sse(vec![
-            shell_command_call("sandbox_deny_call", &command),
+            exec_command_call("sandbox_deny_call", &command),
             ev_completed("done"),
         ]),
     )

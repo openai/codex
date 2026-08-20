@@ -271,25 +271,23 @@ async fn sandboxed_shell_classification_respects_review_scope() -> Result<()> {
         arguments: r#"{"cmd":"pwd","sandbox_permissions":"require_escalated"}"#.to_owned(),
     };
 
-    for tool_name in ["exec_command", "shell_command"] {
-        let tool_name = ToolName::plain(tool_name);
-        assert!(!should_classify_tool(
-            &tool_name, &sandboxed, /*sandboxed_exec_commands*/ false
-        ));
-        assert!(!should_classify_tool(
-            &tool_name,
-            &additional_permissions,
-            /*sandboxed_exec_commands*/ false
-        ));
-        assert!(should_classify_tool(
-            &tool_name,
-            &unsandboxed,
-            /*sandboxed_exec_commands*/ false
-        ));
-        assert!(should_classify_tool(
-            &tool_name, &sandboxed, /*sandboxed_exec_commands*/ true
-        ));
-    }
+    let tool_name = ToolName::plain("exec_command");
+    assert!(!should_classify_tool(
+        &tool_name, &sandboxed, /*sandboxed_exec_commands*/ false
+    ));
+    assert!(!should_classify_tool(
+        &tool_name,
+        &additional_permissions,
+        /*sandboxed_exec_commands*/ false
+    ));
+    assert!(should_classify_tool(
+        &tool_name,
+        &unsandboxed,
+        /*sandboxed_exec_commands*/ false
+    ));
+    assert!(should_classify_tool(
+        &tool_name, &sandboxed, /*sandboxed_exec_commands*/ true
+    ));
     assert!(should_classify_tool(
         &ToolName::plain("read_file"),
         &sandboxed,

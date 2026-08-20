@@ -396,8 +396,7 @@ async fn windows_elevated_enforces_deny_read_and_protects_setup_marker() -> anyh
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial(codex_home)]
-async fn windows_elevated_shell_and_unified_exec_enforce_managed_deny_reads() -> anyhow::Result<()>
-{
+async fn windows_elevated_unified_exec_enforces_managed_deny_reads() -> anyhow::Result<()> {
     let codex_home =
         codex_home_for_windows_sandbox_test("windows-elevated-tool-runtime-deny-read-codex-home")?;
     let _codex_home_guard = EnvVarGuard::set("CODEX_HOME", codex_home.path().as_os_str());
@@ -471,13 +470,7 @@ async fn windows_elevated_shell_and_unified_exec_enforce_managed_deny_reads() ->
         "(type exact-secret.txt 1>NUL 2>NUL && echo EXACT-READ || echo EXACT-DENIED) & ",
         "type public.txt"
     );
-    let shell_call_id = "windows-managed-deny-read-shell-command";
-    let unified_call_id = "windows-managed-deny-read-exec-command";
-    let shell_args = json!({
-        "command": command,
-        "timeout_ms": 30_000,
-        "login": false,
-    });
+    let call_id = "windows-managed-deny-read-exec-command";
     let unified_args = json!({
         "cmd": command,
         "yield_time_ms": 30_000,
@@ -488,18 +481,9 @@ async fn windows_elevated_shell_and_unified_exec_enforce_managed_deny_reads() ->
         harness.server(),
         vec![
             sse(vec![
-                ev_response_created("resp-windows-shell-deny-read"),
-                ev_function_call(
-                    shell_call_id,
-                    "shell_command",
-                    &serde_json::to_string(&shell_args)?,
-                ),
-                ev_completed("resp-windows-shell-deny-read"),
-            ]),
-            sse(vec![
                 ev_response_created("resp-windows-unified-deny-read"),
                 ev_function_call(
-                    unified_call_id,
+                    call_id,
                     "exec_command",
                     &serde_json::to_string(&unified_args)?,
                 ),
@@ -522,32 +506,27 @@ async fn windows_elevated_shell_and_unified_exec_enforce_managed_deny_reads() ->
         .submit_with_permission_profile("read the sandbox fixtures", permission_profile)
         .await?;
 
-    for (tool_name, call_id) in [
-        ("shell_command", shell_call_id),
-        ("exec_command", unified_call_id),
-    ] {
-        let output = harness.function_call_stdout(call_id).await;
-        assert!(
-            output.contains("GLOB-DENIED"),
-            "{tool_name} should reject glob-denied reads: {output:?}"
-        );
-        assert!(
-            output.contains("EXACT-DENIED"),
-            "{tool_name} should reject exact-path-denied reads: {output:?}"
-        );
-        assert!(
-            output.contains("public ok"),
-            "{tool_name} should preserve allowed reads: {output:?}"
-        );
-        assert!(
-            !output.contains("GLOB-READ") && !output.contains("glob secret"),
-            "{tool_name} leaked glob-denied file contents: {output:?}"
-        );
-        assert!(
-            !output.contains("EXACT-READ") && !output.contains("exact secret"),
-            "{tool_name} leaked exact-path-denied file contents: {output:?}"
-        );
-    }
+    let output = harness.function_call_stdout(call_id).await;
+    assert!(
+        output.contains("GLOB-DENIED"),
+        "exec_command should reject glob-denied reads: {output:?}"
+    );
+    assert!(
+        output.contains("EXACT-DENIED"),
+        "exec_command should reject exact-path-denied reads: {output:?}"
+    );
+    assert!(
+        output.contains("public ok"),
+        "exec_command should preserve allowed reads: {output:?}"
+    );
+    assert!(
+        !output.contains("GLOB-READ") && !output.contains("glob secret"),
+        "exec_command leaked glob-denied file contents: {output:?}"
+    );
+    assert!(
+        !output.contains("EXACT-READ") && !output.contains("exact secret"),
+        "exec_command leaked exact-path-denied file contents: {output:?}"
+    );
 
     Ok(())
 }

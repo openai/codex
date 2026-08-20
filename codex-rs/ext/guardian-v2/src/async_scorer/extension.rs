@@ -56,7 +56,7 @@ fn should_classify_tool(
 ) -> bool {
     if sandboxed_exec_commands
         || !tool_name.is_default_namespace()
-        || !matches!(tool_name.name.as_str(), "exec_command" | "shell_command")
+        || tool_name.name != "exec_command"
     {
         return true;
     }

@@ -2,9 +2,9 @@ use anyhow::Context;
 use anyhow::Result;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
+use app_test_support::create_command_execution_sse_response;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
-use app_test_support::create_shell_command_sse_response;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
@@ -2942,7 +2942,7 @@ async fn websocket_v2_tool_call_delegated_turn_can_execute_shell_tool() -> Resul
     // calls the `background_agent` function; the shell command is requested by the delegated
     // background agent Responses turn that app-server starts after receiving that function call.
     let main_loop = main_loop_responses(vec![
-        create_shell_command_sse_response(
+        create_command_execution_sse_response(
             realtime_tool_ok_command(),
             /*workdir*/ None,
             // Windows CI can spend several seconds starting the nested PowerShell command. This

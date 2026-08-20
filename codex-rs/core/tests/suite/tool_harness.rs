@@ -62,7 +62,7 @@ fn custom_call_output(req: &ResponsesRequest, call_id: &str) -> (String, Option<
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn shell_command_tool_executes_command_and_streams_output() -> anyhow::Result<()> {
+async fn exec_command_tool_executes_command_and_streams_output() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -75,15 +75,15 @@ async fn shell_command_tool_executes_command_and_streams_output() -> anyhow::Res
         ..
     } = builder.build(&server).await?;
 
-    let call_id = "shell-command-tool-call";
+    let call_id = "exec-command-tool-call";
     let command_args = json!({
-        "command": "echo tool harness",
+        "cmd": "echo tool harness",
         "login": false,
     })
     .to_string();
     let first_response = sse(vec![
         ev_response_created("resp-1"),
-        ev_function_call(call_id, "shell_command", &command_args),
+        ev_function_call(call_id, "exec_command", &command_args),
         ev_completed("resp-1"),
     ]);
     responses::mount_sse_once(&server, first_response).await;
@@ -128,7 +128,7 @@ async fn shell_command_tool_executes_command_and_streams_output() -> anyhow::Res
     let req = second_mock.single_request();
     let (output_text, _) = call_output(&req, call_id);
     assert_regex_match(
-        r"(?s)^Exit code: 0\nWall time: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\ntool harness\n?$",
+        r"(?s)^(?:Chunk ID: [^\n]+\n)?Wall time: [0-9]+(?:\.[0-9]+)? seconds\nProcess exited with code 0\n(?:Original token count: \d+\n)?Output:\ntool harness\n?$",
         &output_text,
     );
 

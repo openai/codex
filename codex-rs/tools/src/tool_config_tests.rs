@@ -69,35 +69,19 @@ fn shell_features() -> Features {
 fn shell_type_is_derived_from_model_and_feature_gates() {
     let model = model_with_shell_type(ConfigShellToolType::UnifiedExec);
     let mut features = shell_features();
-    assert_eq!(
-        shell_type_for_model_and_features(&model, &features),
-        ConfigShellToolType::ShellCommand
-    );
-
     features.enable(Feature::UnifiedExec);
-    let expected_unified_exec = if codex_utils_pty::conpty_supported() {
+    assert_eq!(
+        shell_type_for_model_and_features(&model, &features),
         ConfigShellToolType::UnifiedExec
-    } else {
-        ConfigShellToolType::ShellCommand
-    };
-    assert_eq!(
-        shell_type_for_model_and_features(&model, &features),
-        expected_unified_exec
     );
-
-    features.enable(Feature::ShellZshFork);
-    assert_eq!(
-        shell_type_for_model_and_features(&model, &features),
-        ConfigShellToolType::ShellCommand
-    );
-
-    features.enable(Feature::UnifiedExecZshFork);
-    assert_eq!(
-        shell_type_for_model_and_features(&model, &features),
-        expected_unified_exec
-    );
-
     features.disable(Feature::ShellTool);
+    assert_eq!(
+        shell_type_for_model_and_features(&model, &features),
+        ConfigShellToolType::Disabled
+    );
+
+    features.enable(Feature::ShellTool);
+    features.disable(Feature::UnifiedExec);
     assert_eq!(
         shell_type_for_model_and_features(&model, &features),
         ConfigShellToolType::Disabled
@@ -105,23 +89,11 @@ fn shell_type_is_derived_from_model_and_feature_gates() {
 }
 
 #[test]
-fn shell_command_backend_requires_both_shell_tool_and_zsh_fork() {
-    let mut features = shell_features();
+fn shell_type_respects_disabled_model_capability() {
+    let model = model_with_shell_type(ConfigShellToolType::Disabled);
     assert_eq!(
-        shell_command_backend_for_features(&features),
-        ShellCommandBackendConfig::Classic
-    );
-
-    features.enable(Feature::ShellZshFork);
-    assert_eq!(
-        shell_command_backend_for_features(&features),
-        ShellCommandBackendConfig::ZshFork
-    );
-
-    features.disable(Feature::ShellTool);
-    assert_eq!(
-        shell_command_backend_for_features(&features),
-        ShellCommandBackendConfig::Classic
+        shell_type_for_model_and_features(&model, &shell_features()),
+        ConfigShellToolType::Disabled
     );
 }
 
@@ -149,7 +121,7 @@ fn unified_exec_feature_mode_follows_composition_dependencies() {
     features.disable(Feature::UnifiedExecZshFork);
     assert_eq!(
         unified_exec_feature_mode_for_features(&features),
-        UnifiedExecFeatureMode::Disabled
+        UnifiedExecFeatureMode::Direct
     );
 
     features.enable(Feature::UnifiedExecZshFork);

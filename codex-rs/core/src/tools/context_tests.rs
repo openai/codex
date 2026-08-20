@@ -468,6 +468,52 @@ fn exec_command_tool_output_formats_truncated_response() {
 }
 
 #[test]
+fn exec_command_tool_output_reserves_metadata_budget_and_preserves_policy_units() {
+    let payload = ToolPayload::Function {
+        arguments: "{}".to_string(),
+    };
+    let raw_output = (1..=150)
+        .map(|line| format!("{line}\n"))
+        .collect::<String>()
+        .into_bytes();
+
+    for (policy, marker) in [
+        (TruncationPolicy::Bytes(200), "chars truncated"),
+        (TruncationPolicy::Tokens(50), "tokens truncated"),
+    ] {
+        let response = ExecCommandToolOutput {
+            event_call_id: "call-42".to_string(),
+            chunk_id: "abc123".to_string(),
+            wall_time: std::time::Duration::from_millis(/*millis*/ 1250),
+            raw_output: raw_output.clone(),
+            truncation_policy: policy,
+            max_output_tokens: None,
+            process_id: None,
+            exit_code: Some(0),
+            original_token_count: Some(123),
+            output_omitted_bytes: None,
+            hook_command: None,
+        }
+        .to_response_item("call-42", &payload);
+
+        let ResponseInputItem::FunctionCallOutput { output, .. } = response else {
+            panic!("expected FunctionCallOutput");
+        };
+        let text = output
+            .body
+            .to_text()
+            .expect("exec output should serialize as text");
+
+        assert!(text.len() <= (policy * 1.2).byte_budget());
+        assert_eq!(text.matches(marker).count(), 1);
+        assert!(text.contains("Original token count: 123"));
+        assert!(text.contains("Total output lines: 150"));
+        assert!(text.contains("\n1\n2\n3\n"));
+        assert!(text.ends_with("149\n150\n"));
+    }
+}
+
+#[test]
 fn exec_command_tool_output_preserves_omission_metadata_when_truncated() {
     let payload = ToolPayload::Function {
         arguments: "{}".to_string(),

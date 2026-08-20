@@ -347,7 +347,7 @@ async fn remote_test_env_exposes_target_shell_to_model() -> Result<()> {
     let mut builder = test_codex().with_config(|config| {
         config
             .features
-            .disable(Feature::UnifiedExec)
+            .disable(Feature::ShellTool)
             .expect("test config should allow feature update");
     });
     let test = builder.build_with_auto_env(&server).await?;
@@ -356,7 +356,7 @@ async fn remote_test_env_exposes_target_shell_to_model() -> Result<()> {
 
     let request = response_mock.single_request();
     let tools = tool_names(&request.body_json());
-    assert!(!tools.contains(&"shell_command".to_string()));
+    assert!(!tools.contains(&"exec_command".to_string()));
     let environment_context = request
         .message_input_texts("user")
         .into_iter()
@@ -2793,7 +2793,6 @@ async fn exec_command_routing_output(
     let tools = tool_names(&request.body_json());
     assert!(tools.contains(&"exec_command".to_string()));
     assert!(tools.contains(&"write_stdin".to_string()));
-    assert!(!tools.contains(&"shell_command".to_string()));
 
     Ok(output)
 }

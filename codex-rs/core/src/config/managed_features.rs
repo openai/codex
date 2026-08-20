@@ -152,6 +152,12 @@ fn normalize_candidate(
     mut candidate: Features,
     pinned_features: &BTreeMap<Feature, bool>,
 ) -> Features {
+    // Legacy user opt-outs selected the removed shell backend. Only managed
+    // requirements may disable the remaining unified-exec implementation.
+    if !pinned_features.contains_key(&Feature::UnifiedExec) {
+        candidate.enable(Feature::UnifiedExec);
+    }
+
     for (feature, enabled) in pinned_features {
         candidate.set_enabled(*feature, *enabled);
     }

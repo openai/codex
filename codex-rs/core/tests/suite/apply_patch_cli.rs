@@ -4,8 +4,8 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_core::StartThreadOptions;
 use codex_core::TurnInputRequest;
 use core_test_support::responses::ev_apply_patch_custom_tool_call;
-use core_test_support::responses::ev_apply_patch_shell_command_call_via_heredoc;
-use core_test_support::responses::ev_shell_command_call;
+use core_test_support::responses::ev_apply_patch_exec_command_call_via_heredoc;
+use core_test_support::responses::ev_exec_command_call;
 use core_test_support::test_codex::ApplyPatchModelOutput;
 use pretty_assertions::assert_eq;
 use std::fs;
@@ -53,9 +53,9 @@ use core_test_support::TestTargetOs;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_exec_command_call_with_args;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
-use core_test_support::responses::ev_shell_command_call_with_args;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
@@ -251,8 +251,8 @@ async fn mount_apply_patch_model_output(
     model_output: ApplyPatchModelOutput,
 ) {
     let apply_patch_call = match model_output {
-        ApplyPatchModelOutput::ShellCommandViaHeredoc => {
-            ev_apply_patch_shell_command_call_via_heredoc
+        ApplyPatchModelOutput::ExecCommandViaHeredoc => {
+            ev_apply_patch_exec_command_call_via_heredoc
         }
     };
 
@@ -300,13 +300,13 @@ async fn assert_apply_patch_crlf_update(
         CrLfApplyPatchModelOutput::CustomTool => {
             mount_apply_patch(&harness, call_id, &patch, "apply_patch done").await;
         }
-        CrLfApplyPatchModelOutput::ShellCommandViaHeredoc => {
+        CrLfApplyPatchModelOutput::ExecCommandViaHeredoc => {
             mount_apply_patch_model_output(
                 &harness,
                 call_id,
                 &patch,
                 "apply_patch done",
-                ApplyPatchModelOutput::ShellCommandViaHeredoc,
+                ApplyPatchModelOutput::ExecCommandViaHeredoc,
             )
             .await;
         }
@@ -327,7 +327,7 @@ async fn assert_apply_patch_crlf_update(
 #[derive(Clone, Copy)]
 enum CrLfApplyPatchModelOutput {
     CustomTool,
-    ShellCommandViaHeredoc,
+    ExecCommandViaHeredoc,
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -363,7 +363,7 @@ async fn apply_patch_shell_heredoc_normalizes_crlf_without_preserve_line_endings
     skip_if_wine_exec!(Ok(()), "uses a POSIX shell heredoc");
     assert_apply_patch_crlf_update(
         |builder| builder,
-        CrLfApplyPatchModelOutput::ShellCommandViaHeredoc,
+        CrLfApplyPatchModelOutput::ExecCommandViaHeredoc,
         "after\n",
     )
     .await
@@ -382,7 +382,7 @@ async fn apply_patch_shell_heredoc_preserves_crlf_with_preserve_line_endings_fea
                     .expect("feature should be enabled");
             })
         },
-        CrLfApplyPatchModelOutput::ShellCommandViaHeredoc,
+        CrLfApplyPatchModelOutput::ExecCommandViaHeredoc,
         "after\r\n",
     )
     .await
@@ -907,7 +907,7 @@ async fn intercepted_apply_patch_verification_uses_local_sandbox() -> Result<()>
         call_id,
         &patch,
         "fail",
-        ApplyPatchModelOutput::ShellCommandViaHeredoc,
+        ApplyPatchModelOutput::ExecCommandViaHeredoc,
     )
     .await;
 
@@ -1330,7 +1330,7 @@ async fn apply_patch_cli_verification_failure_has_no_side_effects() -> Result<()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn apply_patch_shell_command_heredoc_with_cd_updates_relative_workdir() -> Result<()> {
+async fn apply_patch_exec_command_heredoc_with_cd_updates_relative_workdir() -> Result<()> {
     // TODO(anp): Remove after apply_patch shell fixtures use target-native commands.
     skip_if_wine_exec!(Ok(()), "uses a POSIX shell heredoc and cd command");
     skip_if_no_network!(Ok(()));
@@ -1345,7 +1345,7 @@ async fn apply_patch_shell_command_heredoc_with_cd_updates_relative_workdir() ->
     let bodies = vec![
         sse(vec![
             ev_response_created("resp-1"),
-            ev_shell_command_call(call_id, script),
+            ev_exec_command_call(call_id, script),
             ev_completed("resp-1"),
         ]),
         sse(vec![
@@ -1360,18 +1360,18 @@ async fn apply_patch_shell_command_heredoc_with_cd_updates_relative_workdir() ->
     let out = harness.function_call_stdout(call_id).await;
     assert!(
         out.contains("Success."),
-        "expected successful apply_patch invocation via shell_command: {out}"
+        "expected successful apply_patch invocation via exec_command: {out}"
     );
     assert_eq!(harness.read_file_text("sub/in_sub.txt").await?, "after\n");
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn apply_patch_cli_can_use_shell_command_output_as_patch_input() -> Result<()> {
+async fn apply_patch_cli_can_use_exec_command_output_as_patch_input() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_remote!(
         Ok(()),
-        "shell_command output producer runs in the test runner, not in the remote apply_patch workspace",
+        "exec_command output producer runs in the test runner, not in the remote apply_patch workspace",
     );
 
     let harness =
@@ -1438,12 +1438,12 @@ async fn apply_patch_cli_can_use_shell_command_output_as_patch_input() -> Result
                         "cat source.txt".to_string()
                     };
                     let args = json!({
-                        "command": command,
+                        "cmd": command,
                         "login": false,
                     });
                     let body = sse(vec![
                         ev_response_created("resp-1"),
-                        ev_shell_command_call_with_args(&self.read_call_id, &args),
+                        ev_exec_command_call_with_args(&self.read_call_id, &args),
                         ev_completed("resp-1"),
                     ]);
                     ResponseTemplate::new(200)
@@ -1614,7 +1614,7 @@ async fn apply_patch_custom_tool_streaming_emits_updated_changes() -> Result<()>
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn apply_patch_shell_command_heredoc_with_cd_emits_turn_diff() -> Result<()> {
+async fn apply_patch_exec_command_heredoc_with_cd_emits_turn_diff() -> Result<()> {
     // TODO(anp): Remove after apply_patch shell fixtures use target-native commands.
     skip_if_wine_exec!(Ok(()), "uses a POSIX shell heredoc and cd command");
     skip_if_no_network!(Ok(()));
@@ -1628,11 +1628,11 @@ async fn apply_patch_shell_command_heredoc_with_cd_emits_turn_diff() -> Result<(
 
     let script = "cd sub && apply_patch <<'EOF'\n*** Begin Patch\n*** Update File: in_sub.txt\n@@\n-before\n+after\n*** End Patch\nEOF\n";
     let call_id = "shell-heredoc-cd";
-    let args = json!({ "command": script, "timeout_ms": 30_000 });
+    let args = json!({ "cmd": script, "yield_time_ms": 30_000 });
     let bodies = vec![
         sse(vec![
             ev_response_created("resp-1"),
-            ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
             ev_completed("resp-1"),
         ]),
         sse(vec![
@@ -1866,7 +1866,7 @@ async fn apply_patch_turn_diff_skips_git_root_when_feature_is_enabled(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn apply_patch_shell_command_failure_propagates_error_and_skips_diff() -> Result<()> {
+async fn apply_patch_exec_command_failure_propagates_error_and_skips_diff() -> Result<()> {
     // TODO(anp): Remove after apply_patch shell fixtures use target-native commands.
     skip_if_wine_exec!(Ok(()), "uses a POSIX shell heredoc");
     skip_if_no_network!(Ok(()));
@@ -1879,11 +1879,11 @@ async fn apply_patch_shell_command_failure_propagates_error_and_skips_diff() -> 
 
     let script = "apply_patch <<'EOF'\n*** Begin Patch\n*** Update File: invalid.txt\n@@\n-nope\n+changed\n*** End Patch\nEOF\n";
     let call_id = "shell-apply-failure";
-    let args = json!({ "command": script, "timeout_ms": 5_000 });
+    let args = json!({ "cmd": script, "yield_time_ms": 5_000 });
     let bodies = vec![
         sse(vec![
             ev_response_created("resp-1"),
-            ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
             ev_completed("resp-1"),
         ]),
         sse(vec![
@@ -1941,7 +1941,7 @@ async fn apply_patch_shell_accepts_lenient_heredoc_wrapped_patch() -> Result<()>
         call_id,
         patch_inner.as_str(),
         "ok",
-        ApplyPatchModelOutput::ShellCommandViaHeredoc,
+        ApplyPatchModelOutput::ExecCommandViaHeredoc,
     )
     .await;
 

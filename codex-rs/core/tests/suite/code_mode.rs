@@ -383,7 +383,7 @@ async fn missing_process_host_keeps_code_mode_only_and_fails_closed() -> Result<
     assert!(
         tools
             .iter()
-            .all(|name| { !matches!(name.as_str(), "shell" | "shell_command" | "exec_command") }),
+            .all(|name| !matches!(name.as_str(), "shell" | "exec_command")),
         "code-mode-only must never expose direct shell tools: {tools:?}"
     );
     let (output, _) = custom_tool_output_body_and_success(&request, "call-1");

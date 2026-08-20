@@ -189,18 +189,18 @@ async fn user_shell_command_does_not_replace_active_turn() -> anyhow::Result<()>
     let call_id = "active-turn-shell-call";
     let args = if cfg!(windows) {
         serde_json::json!({
-            "command": "Start-Sleep -Seconds 2; Write-Output model-shell",
-            "timeout_ms": 10_000,
+            "cmd": "Start-Sleep -Seconds 2; Write-Output model-shell",
+            "yield_time_ms": 10_000,
         })
     } else {
         serde_json::json!({
-            "command": "sleep 2; echo model-shell",
-            "timeout_ms": 10_000,
+            "cmd": "sleep 2; echo model-shell",
+            "yield_time_ms": 10_000,
         })
     };
     let first = sse(vec![
         ev_response_created("resp-1"),
-        ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
+        ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
         ev_completed("resp-1"),
     ]);
     let second = sse(vec![
@@ -239,7 +239,9 @@ async fn user_shell_command_does_not_replace_active_turn() -> anyhow::Result<()>
         .await?;
 
     let _ = wait_for_event_match(&fixture.codex, |ev| match ev {
-        EventMsg::ExecCommandBegin(event) if event.source == ExecCommandSource::Agent => {
+        EventMsg::ExecCommandBegin(event)
+            if event.source == ExecCommandSource::UnifiedExecStartup =>
+        {
             Some(event.clone())
         }
         _ => None,
@@ -505,13 +507,13 @@ async fn user_shell_command_is_truncated_only_once() -> anyhow::Result<()> {
     let call_id = "user-shell-double-truncation";
     let args = if cfg!(windows) {
         serde_json::json!({
-            "command": "for ($i=1; $i -le 2000; $i++) { Write-Output $i }",
-            "timeout_ms": 5_000,
+            "cmd": "for ($i=1; $i -le 2000; $i++) { Write-Output $i }",
+            "yield_time_ms": 5_000,
         })
     } else {
         serde_json::json!({
-            "command": "seq 1 2000",
-            "timeout_ms": 5_000,
+            "cmd": "seq 1 2000",
+            "yield_time_ms": 5_000,
         })
     };
 
@@ -519,7 +521,7 @@ async fn user_shell_command_is_truncated_only_once() -> anyhow::Result<()> {
         &server,
         sse(vec![
             ev_response_created("resp-1"),
-            ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
             ev_completed("resp-1"),
         ]),
     )
@@ -535,7 +537,7 @@ async fn user_shell_command_is_truncated_only_once() -> anyhow::Result<()> {
 
     fixture
         .submit_turn_with_permission_profile(
-            "trigger big shell_command output",
+            "trigger big exec_command output",
             PermissionProfile::Disabled,
         )
         .await?;
@@ -543,13 +545,13 @@ async fn user_shell_command_is_truncated_only_once() -> anyhow::Result<()> {
     let output = mock2
         .single_request()
         .function_call_output_text(call_id)
-        .context("function_call_output present for shell_command call")?;
+        .context("function_call_output present for exec_command call")?;
 
     let truncation_headers = output.matches("Total output lines:").count();
 
     assert_eq!(
         truncation_headers, 1,
-        "shell_command output should carry only one truncation header: {output}"
+        "exec_command output should carry only one truncation header: {output}"
     );
 
     Ok(())

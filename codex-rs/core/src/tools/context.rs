@@ -367,7 +367,7 @@ impl ToolOutput for ExecCommandToolOutput {
         }
 
         Some(JsonValue::String(
-            self.truncated_output(self.model_output_max_tokens()),
+            self.truncated_output_with_policy(self.model_output_policy()),
         ))
     }
 
@@ -405,13 +405,21 @@ impl ToolOutput for ExecCommandToolOutput {
 }
 
 impl ExecCommandToolOutput {
-    fn model_output_max_tokens(&self) -> usize {
-        resolve_max_tokens(self.max_output_tokens).min(self.truncation_policy.token_budget())
+    fn model_output_policy(&self) -> TruncationPolicy {
+        let requested_policy = TruncationPolicy::Tokens(resolve_max_tokens(self.max_output_tokens));
+        if requested_policy.byte_budget() < self.truncation_policy.byte_budget() {
+            requested_policy
+        } else {
+            self.truncation_policy
+        }
     }
 
     pub(crate) fn truncated_output(&self, max_tokens: usize) -> String {
+        self.truncated_output_with_policy(TruncationPolicy::Tokens(max_tokens))
+    }
+
+    fn truncated_output_with_policy(&self, policy: TruncationPolicy) -> String {
         let text = String::from_utf8_lossy(&self.raw_output).to_string();
-        let policy = TruncationPolicy::Tokens(max_tokens);
         let Some(omitted_bytes) = self.output_omitted_bytes else {
             return formatted_truncate_text(&text, policy);
         };
@@ -462,9 +470,30 @@ impl ExecCommandToolOutput {
         }
 
         sections.push("Output:".to_string());
-        sections.push(self.truncated_output(self.model_output_max_tokens()));
+        let header = sections.join("\n");
+        let output_budget = (self.truncation_policy * 1.2)
+            .byte_budget()
+            .saturating_sub(header.len().saturating_add(/*rhs*/ 1));
+        let mut policy = self.model_output_policy();
+        let mut output = self.truncated_output_with_policy(policy);
 
-        sections.join("\n")
+        // History applies this same serialization budget to the complete response.
+        // Reserve room for metadata, warning headers, and the truncation marker so
+        // it does not truncate an already-truncated output a second time.
+        while output.len() > output_budget && policy.byte_budget() > 0 {
+            let excess_bytes = output.len() - output_budget;
+            policy = match policy {
+                TruncationPolicy::Bytes(bytes) => {
+                    TruncationPolicy::Bytes(bytes.saturating_sub(excess_bytes))
+                }
+                TruncationPolicy::Tokens(tokens) => TruncationPolicy::Tokens(
+                    tokens.saturating_sub(TruncationPolicy::Bytes(excess_bytes).token_budget()),
+                ),
+            };
+            output = self.truncated_output_with_policy(policy);
+        }
+
+        format!("{header}\n{output}")
     }
 }
 

@@ -4,7 +4,6 @@ use app_test_support::DEFAULT_CLIENT_NAME;
 use app_test_support::TestAppServer;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
-use app_test_support::create_shell_command_sse_response;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use app_test_support::write_mock_responses_config_toml_with_chatgpt_base_url;
@@ -256,12 +255,6 @@ pub(crate) fn assert_basic_thread_initialized_event(
 const METRICS_PLUGIN_ID: &str = "sample@openai-curated";
 const TEST_CURATED_PLUGIN_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 
-#[derive(Clone, Copy)]
-enum PluginMetricsRuntime {
-    Classic,
-    Unified { remote: bool, background: bool },
-}
-
 fn write_curated_metrics_plugin(codex_home: &Path) -> Result<PathBuf> {
     let plugin_id = PluginId::parse(METRICS_PLUGIN_ID)?;
     let plugin_root = PluginStore::new(codex_home.to_path_buf()).plugin_root(
@@ -314,7 +307,7 @@ printf '%s' '{"version":1,"measurements":[{"name":"findings","value":3,"dimensio
     Ok(script_path.into_path_buf())
 }
 
-async fn assert_plugin_measurement_analytics(runtime: PluginMetricsRuntime) -> Result<()> {
+async fn assert_plugin_measurement_analytics(remote: bool, background: bool) -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_remote!(
         Ok(()),
@@ -324,11 +317,6 @@ async fn assert_plugin_measurement_analytics(runtime: PluginMetricsRuntime) -> R
 
     let codex_home = TempDir::new()?;
     let script_path = write_curated_metrics_plugin(codex_home.path())?.canonicalize()?;
-    let (remote, background) = match runtime {
-        PluginMetricsRuntime::Classic => (false, false),
-        PluginMetricsRuntime::Unified { remote, background } => (remote, background),
-    };
-    let unified_exec = matches!(runtime, PluginMetricsRuntime::Unified { .. });
     let mut command = vec![
         "/bin/sh".to_string(),
         script_path.to_string_lossy().into_owned(),
@@ -337,22 +325,15 @@ async fn assert_plugin_measurement_analytics(runtime: PluginMetricsRuntime) -> R
         command.push("1.0".to_string());
     }
     let call_id = "curated-plugin-metrics";
-    let command_response = match runtime {
-        PluginMetricsRuntime::Classic => {
-            create_shell_command_sse_response(command, /*workdir*/ None, Some(5_000), call_id)?
-        }
-        PluginMetricsRuntime::Unified { .. } => {
-            let arguments = serde_json::to_string(&json!({
-                "cmd": shlex::try_join(command.iter().map(String::as_str))?,
-                "yield_time_ms": if background { 10 } else { 1_000 },
-            }))?;
-            responses::sse(vec![
-                responses::ev_response_created("resp-1"),
-                responses::ev_function_call(call_id, "exec_command", &arguments),
-                responses::ev_completed("resp-1"),
-            ])
-        }
-    };
+    let arguments = serde_json::to_string(&json!({
+        "cmd": shlex::try_join(command.iter().map(String::as_str))?,
+        "yield_time_ms": if background { 10 } else { 1_000 },
+    }))?;
+    let command_response = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_function_call(call_id, "exec_command", &arguments),
+        responses::ev_completed("resp-1"),
+    ]);
     let final_response = create_final_assistant_message_sse_response("done")?;
     let server =
         create_mock_responses_server_sequence(vec![command_response, final_response]).await;
@@ -372,7 +353,7 @@ async fn assert_plugin_measurement_analytics(runtime: PluginMetricsRuntime) -> R
 [features]
 plugins = true
 remote_plugin = false
-unified_exec = {unified_exec}
+unified_exec = true
 shell_zsh_fork = false
 unified_exec_zsh_fork = false
 
@@ -578,48 +559,26 @@ enabled = true
 }
 
 #[cfg_attr(windows, ignore = "plugin metrics fixture is Unix-only")]
-#[tokio::test]
-async fn classic_plugin_script_emits_measurement_analytics() -> Result<()> {
-    assert_plugin_measurement_analytics(PluginMetricsRuntime::Classic).await
-}
-
-#[cfg_attr(windows, ignore = "plugin metrics fixture is Unix-only")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_plugin_script_emits_measurement_analytics() -> Result<()> {
-    assert_plugin_measurement_analytics(PluginMetricsRuntime::Unified {
-        remote: false,
-        background: false,
-    })
-    .await
+    assert_plugin_measurement_analytics(/*remote*/ false, /*background*/ false).await
 }
 
 #[cfg_attr(windows, ignore = "plugin metrics fixture is Unix-only")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_unified_plugin_script_emits_measurement_analytics() -> Result<()> {
-    assert_plugin_measurement_analytics(PluginMetricsRuntime::Unified {
-        remote: true,
-        background: false,
-    })
-    .await
+    assert_plugin_measurement_analytics(/*remote*/ true, /*background*/ false).await
 }
 
 #[cfg_attr(windows, ignore = "plugin metrics fixture is Unix-only")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_background_plugin_script_emits_measurements_after_turn_completion() -> Result<()> {
-    assert_plugin_measurement_analytics(PluginMetricsRuntime::Unified {
-        remote: false,
-        background: true,
-    })
-    .await
+    assert_plugin_measurement_analytics(/*remote*/ false, /*background*/ true).await
 }
 
 #[cfg_attr(windows, ignore = "plugin metrics fixture is Unix-only")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_unified_background_plugin_script_emits_measurements_after_turn_completion()
 -> Result<()> {
-    assert_plugin_measurement_analytics(PluginMetricsRuntime::Unified {
-        remote: true,
-        background: true,
-    })
-    .await
+    assert_plugin_measurement_analytics(/*remote*/ true, /*background*/ true).await
 }

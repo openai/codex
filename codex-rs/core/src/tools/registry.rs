@@ -358,7 +358,9 @@ impl ToolRegistry {
         exposure: ToolExposure,
     ) -> bool {
         let tool_name = runtime.tool_name().with_default_namespace();
-        if tool_name.is_default_namespace() && tool_name.name == "shell_command" {
+        if tool_name.is_default_namespace()
+            && matches!(tool_name.name.as_str(), "exec_command" | "shell_command")
+        {
             tracing::warn!(tool_name = %tool_name, "skipping external tool with reserved name");
             if self.tools.contains_key(&tool_name) {
                 self.record_collision(tool_name);
@@ -632,9 +634,7 @@ impl ToolRegistry {
                             .get("command")
                             .and_then(Value::as_str),
                     ) {
-                        (true, "shell_command" | "exec_command", Some(script)) => {
-                            shell_command_metadata(script)
-                        }
+                        (true, "exec_command", Some(script)) => shell_command_metadata(script),
                         _ => serde_json::json!({}),
                     },
                 );

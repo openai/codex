@@ -12,10 +12,8 @@ use crate::tools::approvals::ApprovalContext;
 use crate::tools::flat_tool_name;
 use crate::tools::network_approval::ActiveNetworkApproval;
 use crate::tools::network_approval::DeferredNetworkApproval;
-use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::begin_network_approval;
 use crate::tools::network_approval::finish_deferred_network_approval;
-use crate::tools::network_approval::finish_immediate_network_approval;
 use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::SandboxOverride;
@@ -108,28 +106,16 @@ impl ToolOrchestrator {
             return (run_result, None);
         };
 
-        match network_approval.mode() {
-            NetworkApprovalMode::Immediate => {
-                let finalize_result =
-                    finish_immediate_network_approval(&tool_ctx.session, network_approval).await;
-                if let Err(err) = finalize_result {
-                    return (Err(err), None);
-                }
-                (run_result, None)
+        let deferred = network_approval.into_deferred();
+        if run_result.is_err() {
+            let finalize_result =
+                finish_deferred_network_approval(&tool_ctx.session, deferred).await;
+            if let Err(err) = finalize_result {
+                return (Err(err), None);
             }
-            NetworkApprovalMode::Deferred => {
-                let deferred = network_approval.into_deferred();
-                if run_result.is_err() {
-                    let finalize_result =
-                        finish_deferred_network_approval(&tool_ctx.session, deferred).await;
-                    if let Err(err) = finalize_result {
-                        return (Err(err), None);
-                    }
-                    return (run_result, None);
-                }
-                (run_result, deferred)
-            }
+            return (run_result, None);
         }
+        (run_result, deferred)
     }
 
     pub async fn run<Rq, Out, T>(

@@ -1257,7 +1257,7 @@ async fn danger_full_access_tool_attempts_do_not_enforce_managed_network() -> an
             _req: &TurnEnvironment,
             call_id: &str,
         ) -> std::io::Result<crate::tools::sandboxing::ApprovalAction> {
-            Ok(crate::tools::sandboxing::ApprovalAction::Shell {
+            Ok(crate::tools::sandboxing::ApprovalAction::ExecCommand {
                 id: call_id.to_string(),
                 environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
                 command: Vec::new(),
@@ -1266,6 +1266,7 @@ async fn danger_full_access_tool_attempts_do_not_enforce_managed_network() -> an
                 sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
                 additional_permissions: None,
                 justification: None,
+                tty: false,
                 proposed_execpolicy_amendment: None,
             })
         }
@@ -11089,7 +11090,7 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
         id: None,
         status: None,
         call_id: "call-1".to_string(),
-        name: "shell_command".to_string(),
+        name: "exec_command".to_string(),
         namespace: None,
         input: "{}".to_string(),
         internal_chat_message_metadata_passthrough: None,
@@ -11116,7 +11117,7 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
         FunctionCallError::Fatal(message) => {
             assert_eq!(
                 message,
-                "tool shell_command invoked with incompatible payload"
+                "tool exec_command invoked with incompatible payload"
             );
         }
         other => panic!("expected FunctionCallError::Fatal, got {other:?}"),
@@ -11298,77 +11299,6 @@ async fn sample_rollout(
         rollout_items,
         live_history.for_prompt(&reconstruction_turn.model_info.input_modalities),
     )
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn shell_tool_cancellation_waits_for_runtime_cleanup() -> anyhow::Result<()> {
-    let session = make_session_with_config(|config| {
-        let cwd = config.cwd.clone();
-        config
-            .permissions
-            .set_legacy_sandbox_policy(SandboxPolicy::DangerFullAccess, cwd.as_path())
-            .expect("test setup should allow sandbox policy");
-    })
-    .await?;
-    let turn_context = session.new_default_turn().await;
-    let session = Arc::new(session);
-    let turn_context = Arc::new(turn_context);
-    let temp_dir = tempfile::TempDir::new()?;
-    let ready_marker = temp_dir.path().join("ready");
-    let cleanup_marker = temp_dir.path().join("cleanup");
-    // Interrupt after the shell starts, then verify dispatch waits for its TERM cleanup trap.
-    let command = format!(
-        r#"trap 'printf cleaned > "{}"; exit 0' TERM
-printf ready > "{}"
-while :; do sleep 1; done"#,
-        cleanup_marker.display(),
-        ready_marker.display(),
-    );
-    let item = ResponseItem::FunctionCall {
-        id: None,
-        name: "shell_command".to_string(),
-        namespace: None,
-        arguments: serde_json::json!({
-            "command": command,
-            "timeout_ms": 60_000,
-        })
-        .to_string(),
-        call_id: "shell-cleanup-call".to_string(),
-        encrypted_function_args: None,
-        internal_chat_message_metadata_passthrough: None,
-    };
-    let call = ToolRouter::build_tool_call(item)?
-        .expect("shell command response item should build a tool call");
-    let cancellation_token = CancellationToken::new();
-    let cancellation_tx = cancellation_token.clone();
-    let handle = tokio::spawn(
-        test_tool_runtime(Arc::clone(&session), Arc::clone(&turn_context))
-            .handle_tool_call(call, cancellation_token),
-    );
-
-    let mut ready = false;
-    for _ in 0..50 {
-        if ready_marker.exists() {
-            ready = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    if !ready {
-        cancellation_tx.cancel();
-        let _ = timeout(Duration::from_secs(5), handle).await;
-        anyhow::bail!("shell command should reach the ready marker");
-    }
-
-    cancellation_tx.cancel();
-    timeout(Duration::from_secs(5), handle)
-        .await
-        .expect("cancelled shell tool should finish promptly")
-        .expect("shell tool task should join")
-        .expect("cancelled shell tool should return a response item");
-    assert_eq!(std::fs::read_to_string(cleanup_marker)?, "cleaned");
-    Ok(())
 }
 
 #[tokio::test]

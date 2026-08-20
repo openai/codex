@@ -42,7 +42,6 @@ use core_test_support::responses::sse;
 use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
-use core_test_support::skip_if_remote;
 use core_test_support::skip_if_sandbox;
 use core_test_support::skip_if_target_windows;
 use core_test_support::skip_if_wine_exec;
@@ -109,19 +108,19 @@ fn parse_result(item: &Value) -> CommandResult {
     }
 }
 
-fn shell_event_with_request_permissions<S: serde::Serialize>(
+fn command_event_with_request_permissions<S: serde::Serialize>(
     call_id: &str,
     command: &str,
     additional_permissions: &S,
 ) -> Result<Value> {
     let args = json!({
-        "command": command,
-        "timeout_ms": 1_000_u64,
+        "cmd": command,
+        "yield_time_ms": 10_000_u64,
         "sandbox_permissions": SandboxPermissions::WithAdditionalPermissions,
         "additional_permissions": additional_permissions,
     });
     let args_str = serde_json::to_string(&args)?;
-    Ok(ev_function_call(call_id, "shell_command", &args_str))
+    Ok(ev_function_call(call_id, "exec_command", &args_str))
 }
 
 fn request_permissions_tool_event(
@@ -137,13 +136,13 @@ fn request_permissions_tool_event(
     Ok(ev_function_call(call_id, "request_permissions", &args_str))
 }
 
-fn shell_command_event(call_id: &str, command: &str) -> Result<Value> {
+fn command_event(call_id: &str, command: &str) -> Result<Value> {
     let args = json!({
-        "command": command,
-        "timeout_ms": 1_000_u64,
+        "cmd": command,
+        "yield_time_ms": 10_000_u64,
     });
     let args_str = serde_json::to_string(&args)?;
-    Ok(ev_function_call(call_id, "shell_command", &args_str))
+    Ok(ev_function_call(call_id, "exec_command", &args_str))
 }
 
 fn exec_command_event(call_id: &str, command: &str) -> Result<Value> {
@@ -363,7 +362,7 @@ async fn with_additional_permissions_requires_approval_under_on_request() -> Res
         )),
         ..Default::default()
     };
-    let event = shell_event_with_request_permissions(call_id, command, &requested_permissions)?;
+    let event = command_event_with_request_permissions(call_id, command, &requested_permissions)?;
 
     let _ = mount_sse_once(
         &server,
@@ -760,18 +759,8 @@ async fn interrupted_request_permissions_auto_review_aborts_guardian_review() ->
     Ok(())
 }
 
-#[derive(Clone, Copy, Debug)]
-enum AdditionalPermissionsCommandTool {
-    ShellCommand,
-    ExecCommand,
-}
-
-#[test_case(AdditionalPermissionsCommandTool::ShellCommand ; "shell_command")]
-#[test_case(AdditionalPermissionsCommandTool::ExecCommand ; "exec_command")]
 #[tokio::test(flavor = "current_thread")]
-async fn relative_additional_permissions_resolve_against_tool_workdir(
-    command_tool: AdditionalPermissionsCommandTool,
-) -> Result<()> {
+async fn relative_additional_permissions_resolve_against_tool_workdir() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
 
@@ -818,26 +807,13 @@ async fn relative_additional_permissions_resolve_against_tool_workdir(
         )),
         ..Default::default()
     };
-    let (tool_name, arguments) = match command_tool {
-        AdditionalPermissionsCommandTool::ShellCommand => (
-            "shell_command",
-            json!({
-                "command": command,
-                "workdir": workdir,
-                "sandbox_permissions": SandboxPermissions::WithAdditionalPermissions,
-                "additional_permissions": additional_permissions,
-            }),
-        ),
-        AdditionalPermissionsCommandTool::ExecCommand => (
-            "exec_command",
-            json!({
-                "cmd": command,
-                "workdir": workdir,
-                "sandbox_permissions": SandboxPermissions::WithAdditionalPermissions,
-                "additional_permissions": additional_permissions,
-            }),
-        ),
-    };
+    let tool_name = "exec_command";
+    let arguments = json!({
+        "cmd": command,
+        "workdir": workdir,
+        "sandbox_permissions": SandboxPermissions::WithAdditionalPermissions,
+        "additional_permissions": additional_permissions,
+    });
     let event = ev_function_call(call_id, tool_name, &serde_json::to_string(&arguments)?);
 
     let _ = mount_sse_once(
@@ -935,7 +911,7 @@ async fn read_only_with_additional_permissions_does_not_widen_to_unrequested_cwd
         )),
         ..Default::default()
     };
-    let event = shell_event_with_request_permissions(call_id, &command, &requested_permissions)?;
+    let event = command_event_with_request_permissions(call_id, &command, &requested_permissions)?;
 
     let _ = mount_sse_once(
         &server,
@@ -1039,7 +1015,7 @@ async fn read_only_with_additional_permissions_does_not_widen_to_unrequested_tmp
         )),
         ..Default::default()
     };
-    let event = shell_event_with_request_permissions(call_id, &command, &requested_permissions)?;
+    let event = command_event_with_request_permissions(call_id, &command, &requested_permissions)?;
 
     let _ = mount_sse_once(
         &server,
@@ -1150,7 +1126,7 @@ async fn workspace_write_with_additional_permissions_can_write_outside_cwd() -> 
         )),
         ..RequestPermissionProfile::default()
     };
-    let event = shell_event_with_request_permissions(call_id, &command, &requested_permissions)?;
+    let event = command_event_with_request_permissions(call_id, &command, &requested_permissions)?;
 
     let _ = mount_sse_once(
         &server,
@@ -1255,7 +1231,7 @@ async fn with_additional_permissions_denied_approval_blocks_execution() -> Resul
         )),
         ..Default::default()
     };
-    let event = shell_event_with_request_permissions(call_id, &command, &requested_permissions)?;
+    let event = command_event_with_request_permissions(call_id, &command, &requested_permissions)?;
 
     let _ = mount_sse_once(
         &server,
@@ -1560,121 +1536,7 @@ async fn request_permissions_preapprove_explicit_exec_permissions_outside_on_req
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn request_permissions_grants_apply_to_later_shell_command_calls() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-    skip_if_sandbox!(Ok(()));
-
-    let server = start_mock_server().await;
-    let approval_policy = AskForApproval::OnRequest;
-    let permission_profile = workspace_write_excluding_tmp();
-    let permission_profile_for_config = workspace_write_excluding_tmp();
-
-    let mut builder = test_codex().with_config(move |config| {
-        config.permissions.approval_policy = Constrained::allow_any(approval_policy);
-        config
-            .permissions
-            .set_permission_profile(permission_profile_for_config)
-            .expect("set permission profile");
-        config
-            .features
-            .enable(Feature::ExecPermissionApprovals)
-            .expect("test config should allow feature update");
-        config
-            .features
-            .enable(Feature::RequestPermissionsTool)
-            .expect("test config should allow feature update");
-    });
-    let test = builder.build(&server).await?;
-
-    let outside_dir = tempfile::tempdir()?;
-    let outside_write = outside_dir.path().join("sticky-shell-write.txt");
-    let command = format!(
-        "printf {:?} > {:?} && cat {:?}",
-        "sticky-shell-grant-ok", outside_write, outside_write
-    );
-    let requested_permissions = requested_directory_write_permissions(outside_dir.path());
-    let normalized_requested_permissions =
-        normalized_directory_write_permissions(outside_dir.path())?;
-    let responses = mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_response_created("resp-sticky-shell-1"),
-                request_permissions_tool_event(
-                    "permissions-call",
-                    "Allow writing outside the workspace",
-                    &requested_permissions,
-                )?,
-                ev_completed("resp-sticky-shell-1"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-sticky-shell-2"),
-                shell_command_event("shell-call", &command)?,
-                ev_completed("resp-sticky-shell-2"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-sticky-shell-3"),
-                ev_assistant_message("msg-sticky-shell-1", "done"),
-                ev_completed("resp-sticky-shell-3"),
-            ]),
-        ],
-    )
-    .await;
-
-    submit_turn(
-        &test,
-        "write outside the workspace",
-        approval_policy,
-        permission_profile,
-    )
-    .await?;
-
-    let granted_permissions = expect_request_permissions_event(&test, "permissions-call").await;
-    assert_eq!(
-        granted_permissions,
-        normalized_requested_permissions.clone()
-    );
-    test.codex
-        .submit(Op::RequestPermissionsResponse {
-            id: "permissions-call".to_string(),
-            response: RequestPermissionsResponse {
-                permissions: normalized_requested_permissions.clone(),
-                scope: PermissionGrantScope::Turn,
-                strict_auto_review: false,
-            },
-        })
-        .await?;
-
-    if let Some(approval) = wait_for_exec_approval_or_completion(&test).await {
-        test.codex
-            .submit(Op::ExecApproval {
-                id: approval.effective_approval_id(),
-                turn_id: None,
-                decision: ReviewDecision::Approved,
-            })
-            .await?;
-        wait_for_completion(&test).await;
-    }
-
-    let shell_output = responses
-        .function_call_output_text("shell-call")
-        .map(|output| json!({ "output": output }))
-        .expect("expected shell-call output");
-    let result = parse_result(&shell_output);
-    assert!(
-        result.exit_code.is_none_or(|exit_code| exit_code == 0),
-        "expected success output, got exit_code={:?}, stdout={:?}",
-        result.exit_code,
-        result.stdout
-    );
-    assert_eq!(result.stdout.trim(), "sticky-shell-grant-ok");
-    assert_eq!(fs::read_to_string(&outside_write)?, "sticky-shell-grant-ok");
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn request_permissions_grants_apply_to_later_shell_command_calls_without_inline_permission_feature()
+async fn request_permissions_grants_apply_to_later_exec_command_calls_without_inline_permission_feature()
 -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
@@ -1722,7 +1584,7 @@ async fn request_permissions_grants_apply_to_later_shell_command_calls_without_i
             ]),
             sse(vec![
                 ev_response_created("resp-sticky-shell-independent-2"),
-                shell_command_event("shell-call", &command)?,
+                command_event("shell-call", &command)?,
                 ev_completed("resp-sticky-shell-independent-2"),
             ]),
             sse(vec![
@@ -2224,7 +2086,6 @@ const WRITE_CALL_ID: &str = "denied-child-permissions-write";
 #[derive(Clone, Copy, Debug)]
 enum WriteTool {
     ExecCommand,
-    ShellCommand,
     ApplyPatch,
 }
 
@@ -2237,8 +2098,6 @@ enum ApprovalMode {
 
 #[test_case(WriteTool::ExecCommand, PermissionGrantScope::Turn, ApprovalMode::Prompt; "exec_command_turn")]
 #[test_case(WriteTool::ExecCommand, PermissionGrantScope::Session, ApprovalMode::Prompt; "exec_command_session")]
-#[test_case(WriteTool::ShellCommand, PermissionGrantScope::Turn, ApprovalMode::Prompt; "shell_command_turn")]
-#[test_case(WriteTool::ShellCommand, PermissionGrantScope::Session, ApprovalMode::Prompt; "shell_command_session")]
 #[test_case(WriteTool::ApplyPatch, PermissionGrantScope::Turn, ApprovalMode::Prompt; "apply_patch_turn")]
 #[test_case(WriteTool::ApplyPatch, PermissionGrantScope::Session, ApprovalMode::Prompt; "apply_patch_session")]
 #[test_case(WriteTool::ExecCommand, PermissionGrantScope::Session, ApprovalMode::Never; "exec_command_session_never")]
@@ -2255,13 +2114,6 @@ async fn denied_child_permissions_require_fresh_approval(
         Ok(()),
         "this regression exercises POSIX split-policy enforcement; a disabled Windows sandbox can independently prompt for the command"
     );
-    if matches!(tool, WriteTool::ShellCommand) {
-        skip_if_remote!(
-            Ok(()),
-            "the legacy shell_command tool is only registered for a single local environment"
-        );
-    }
-
     let harness =
         TestCodexHarness::with_auto_env_builder(test_codex().with_config(move |config| {
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
@@ -2322,9 +2174,6 @@ async fn denied_child_permissions_require_fresh_approval(
             &command,
             &fresh_permissions,
         )?,
-        WriteTool::ShellCommand => {
-            shell_event_with_request_permissions(WRITE_CALL_ID, &command, &fresh_permissions)?
-        }
         WriteTool::ApplyPatch => ev_apply_patch_custom_tool_call(
             WRITE_CALL_ID,
             &format!(
@@ -2425,10 +2274,7 @@ async fn denied_child_permissions_require_fresh_approval(
     }
 
     let (decision, reason) = match (tool, event) {
-        (
-            WriteTool::ExecCommand | WriteTool::ShellCommand,
-            EventMsg::ExecApprovalRequest(approval),
-        ) => {
+        (WriteTool::ExecCommand, EventMsg::ExecApprovalRequest(approval)) => {
             assert_eq!(approval.call_id, WRITE_CALL_ID);
             let expected_permissions = PermissionProfile {
                 file_system: Some(FileSystemPermissions {

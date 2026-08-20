@@ -6446,6 +6446,50 @@ async fn legacy_toggles_map_to_features() -> std::io::Result<()> {
 }
 
 #[tokio::test]
+async fn legacy_unified_exec_disable_flags_do_not_disable_command_execution() -> std::io::Result<()>
+{
+    for cfg in [
+        ConfigToml {
+            features: Some(FeaturesToml::from(BTreeMap::from([(
+                "unified_exec".to_string(),
+                false,
+            )]))),
+            ..Default::default()
+        },
+        ConfigToml {
+            experimental_use_unified_exec_tool: Some(false),
+            ..Default::default()
+        },
+    ] {
+        let codex_home = TempDir::new()?;
+        let mut config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.abs(),
+        )
+        .await?;
+
+        assert!(config.features.enabled(Feature::UnifiedExec));
+        assert!(config.features.enabled(Feature::ShellTool));
+
+        config
+            .features
+            .disable(Feature::UnifiedExec)
+            .expect("legacy unified-exec toggle should normalize successfully");
+        assert!(config.features.enabled(Feature::UnifiedExec));
+
+        config
+            .features
+            .disable(Feature::ShellTool)
+            .expect("shell tool should remain independently configurable");
+        assert!(!config.features.enabled(Feature::ShellTool));
+        assert!(config.features.enabled(Feature::UnifiedExec));
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn responses_websocket_features_do_not_change_wire_api() -> std::io::Result<()> {
     for feature_key in ["responses_websockets", "responses_websockets_v2"] {
         let codex_home = TempDir::new()?;
@@ -10973,6 +11017,38 @@ shell_tool = false
         "{:?}",
         config.startup_warnings
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn feature_requirements_can_still_disable_unified_exec() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+
+    let mut config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"
+[features]
+unified_exec = false
+shell_tool = true
+"#,
+            ),
+        )
+        .build()
+        .await?;
+
+    assert!(!config.features.enabled(Feature::UnifiedExec));
+    assert!(config.features.enabled(Feature::ShellTool));
+
+    config
+        .features
+        .enable(Feature::UnifiedExec)
+        .expect("managed feature mutations should normalize successfully");
+
+    assert!(!config.features.enabled(Feature::UnifiedExec));
+    assert!(config.features.enabled(Feature::ShellTool));
 
     Ok(())
 }

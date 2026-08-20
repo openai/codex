@@ -3,24 +3,27 @@ use std::path::Path;
 use core_test_support::responses;
 use serde_json::json;
 
-pub fn create_shell_command_sse_response(
+pub fn create_command_execution_sse_response(
     command: Vec<String>,
     workdir: Option<&Path>,
     timeout_ms: Option<u64>,
     call_id: &str,
 ) -> anyhow::Result<String> {
     let command_str = shlex::try_join(command.iter().map(String::as_str))?;
-    let arguments = serde_json::to_string(&json!({
-        "command": command_str,
+    let mut tool_call_arguments = json!({
+        "cmd": command_str,
         "workdir": workdir.map(|w| w.to_string_lossy()),
-        "timeout_ms": timeout_ms,
         "sandbox_permissions": "require_escalated",
         "justification": "Test approval request.",
-    }))?;
+    });
+    if let Some(timeout_ms) = timeout_ms {
+        tool_call_arguments["yield_time_ms"] = json!(timeout_ms);
+    }
+    let arguments = serde_json::to_string(&tool_call_arguments)?;
     let response_id = format!("resp-{call_id}");
     Ok(responses::sse(vec![
         responses::ev_response_created(&response_id),
-        responses::ev_function_call(call_id, "shell_command", &arguments),
+        responses::ev_function_call(call_id, "exec_command", &arguments),
         responses::ev_completed(&response_id),
     ]))
 }
@@ -39,11 +42,11 @@ pub fn create_apply_patch_sse_response(
     call_id: &str,
 ) -> anyhow::Result<String> {
     let command = format!("apply_patch <<'EOF'\n{patch_content}\nEOF");
-    let arguments = serde_json::to_string(&json!({ "command": command }))?;
+    let arguments = serde_json::to_string(&json!({ "cmd": command }))?;
     let response_id = format!("resp-{call_id}");
     Ok(responses::sse(vec![
         responses::ev_response_created(&response_id),
-        responses::ev_function_call(call_id, "shell_command", &arguments),
+        responses::ev_function_call(call_id, "exec_command", &arguments),
         responses::ev_completed(&response_id),
     ]))
 }

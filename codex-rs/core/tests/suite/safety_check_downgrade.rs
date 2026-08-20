@@ -207,15 +207,15 @@ async fn openai_model_header_mismatch_only_emits_one_warning_per_turn() -> Resul
 
     let server = start_mock_server().await;
     let tool_args = serde_json::json!({
-        "command": "echo hello",
-        "timeout_ms": 1_000
+        "cmd": "echo hello",
+        "yield_time_ms": 1_000
     });
 
     let first_response = sse_response(sse(vec![
         ev_response_created("resp-1"),
         ev_function_call(
             "call-1",
-            "shell_command",
+            "exec_command",
             &serde_json::to_string(&tool_args)?,
         ),
         core_test_support::responses::ev_completed("resp-1"),
@@ -364,15 +364,15 @@ async fn model_verification_only_emits_once_per_turn() -> Result<()> {
 
     let server = start_mock_server().await;
     let tool_args = serde_json::json!({
-        "command": "echo hello",
-        "timeout_ms": 1_000
+        "cmd": "echo hello",
+        "yield_time_ms": 1_000
     });
 
     let first_response = sse_response(sse(vec![
         ev_response_created("resp-1"),
         ev_function_call(
             "call-1",
-            "shell_command",
+            "exec_command",
             &serde_json::to_string(&tool_args)?,
         ),
         ev_model_verification_metadata("resp-1", vec![TRUSTED_ACCESS_FOR_CYBER_VERIFICATION]),

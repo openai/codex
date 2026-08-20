@@ -278,14 +278,15 @@ async fn guardian_test_session_turn_and_rx(
     (session, turn, rx)
 }
 
-fn guardian_shell_request(id: &str) -> GuardianApprovalRequest {
-    GuardianApprovalRequest::Shell {
+fn guardian_exec_command_request(id: &str) -> GuardianApprovalRequest {
+    GuardianApprovalRequest::ExecCommand {
         id: id.to_string(),
         command: vec!["git".to_string(), "push".to_string()],
         cwd: test_path_buf("/repo/codex-rs/core").abs(),
         sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
         additional_permissions: None,
         justification: Some("Need to push the reviewed docs fix.".to_string()),
+        tty: false,
     }
 }
 
@@ -482,13 +483,14 @@ async fn build_guardian_prompt_full_mode_preserves_initial_review_format() -> an
     let prompt = build_guardian_prompt_items(
         session.as_ref(),
         Some("Sandbox denied outbound git push to github.com.".to_string()),
-        GuardianApprovalRequest::Shell {
+        GuardianApprovalRequest::ExecCommand {
             id: "shell-1".to_string(),
             command: vec!["git".to_string(), "push".to_string()],
             cwd: test_path_buf("/repo/codex-rs/core").abs(),
             sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
             additional_permissions: None,
             justification: Some("Need to push the reviewed docs fix.".to_string()),
+            tty: false,
         },
         GuardianPromptMode::Full,
     )
@@ -518,13 +520,14 @@ async fn build_guardian_prompt_prefers_retry_reason_over_approval_reason() -> an
             approval: Some("A policy rule requires approval.".to_string()),
             retry: Some("The sandbox blocked the initial command.".to_string()),
         },
-        GuardianApprovalRequest::Shell {
+        GuardianApprovalRequest::ExecCommand {
             id: "shell-1".to_string(),
             command: vec!["git".to_string(), "push".to_string()],
             cwd: test_path_buf("/repo/codex-rs/core").abs(),
             sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
             additional_permissions: None,
             justification: None,
+            tty: false,
         },
         GuardianPromptMode::Full,
         /*reviewed_node_repl_evidence_sequence*/ 0,
@@ -556,13 +559,14 @@ async fn build_guardian_prompt_truncates_oversized_approval_reason() -> anyhow::
             approval: Some(approval_reason),
             retry: None,
         },
-        GuardianApprovalRequest::Shell {
+        GuardianApprovalRequest::ExecCommand {
             id: "shell-1".to_string(),
             command: vec!["git".to_string(), "push".to_string()],
             cwd: test_path_buf("/repo/codex-rs/core").abs(),
             sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
             additional_permissions: None,
             justification: None,
+            tty: false,
         },
         GuardianPromptMode::Full,
         /*reviewed_node_repl_evidence_sequence*/ 0,
@@ -646,13 +650,14 @@ async fn build_guardian_prompt_includes_parent_turn_denied_reads() -> anyhow::Re
             approval: None,
             retry: Some("Sandbox denied reading /repo/private/secret.txt.".to_string()),
         },
-        GuardianApprovalRequest::Shell {
+        GuardianApprovalRequest::ExecCommand {
             id: "shell-1".to_string(),
             command: vec!["cat".to_string(), "/repo/private/secret.txt".to_string()],
             cwd: test_path_buf("/repo").abs(),
             sandbox_permissions: crate::sandboxing::SandboxPermissions::RequireEscalated,
             additional_permissions: None,
             justification: Some("Need to inspect the secret file.".to_string()),
+            tty: false,
         },
         GuardianPromptMode::Full,
         /*reviewed_node_repl_evidence_sequence*/ 0,
@@ -702,13 +707,14 @@ async fn build_guardian_prompt_delta_mode_preserves_original_numbering() -> anyh
     let prompt = build_guardian_prompt_items(
         session.as_ref(),
         /*retry_reason*/ None,
-        GuardianApprovalRequest::Shell {
+        GuardianApprovalRequest::ExecCommand {
             id: "shell-2".to_string(),
             command: vec!["git".to_string(), "push".to_string()],
             cwd: test_path_buf("/repo/codex-rs/core").abs(),
             sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
             additional_permissions: None,
             justification: Some("Need to push the second docs fix.".to_string()),
+            tty: false,
         },
         GuardianPromptMode::Delta {
             cursor: GuardianTranscriptCursor {
@@ -740,13 +746,14 @@ async fn build_guardian_prompt_delta_mode_handles_empty_delta() -> anyhow::Resul
     let prompt = build_guardian_prompt_items(
         session.as_ref(),
         /*retry_reason*/ None,
-        GuardianApprovalRequest::Shell {
+        GuardianApprovalRequest::ExecCommand {
             id: "shell-2".to_string(),
             command: vec!["git".to_string(), "push".to_string()],
             cwd: test_path_buf("/repo/codex-rs/core").abs(),
             sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
             additional_permissions: None,
             justification: Some("Need to push the second docs fix.".to_string()),
+            tty: false,
         },
         GuardianPromptMode::Delta {
             cursor: GuardianTranscriptCursor {
@@ -775,13 +782,14 @@ async fn build_guardian_prompt_stale_delta_cursor_falls_back_to_full_prompt() ->
     let prompt = build_guardian_prompt_items(
         session.as_ref(),
         /*retry_reason*/ None,
-        GuardianApprovalRequest::Shell {
+        GuardianApprovalRequest::ExecCommand {
             id: "shell-3".to_string(),
             command: vec!["git".to_string(), "push".to_string()],
             cwd: test_path_buf("/repo/codex-rs/core").abs(),
             sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
             additional_permissions: None,
             justification: Some("Need to push the docs fix.".to_string()),
+            tty: false,
         },
         GuardianPromptMode::Delta {
             cursor: GuardianTranscriptCursor {
@@ -860,13 +868,14 @@ async fn build_guardian_prompt_stale_delta_version_falls_back_to_full_prompt() -
     let prompt = build_guardian_prompt_items(
         session.as_ref(),
         /*retry_reason*/ None,
-        GuardianApprovalRequest::Shell {
+        GuardianApprovalRequest::ExecCommand {
             id: "shell-4".to_string(),
             command: vec!["git".to_string(), "push".to_string()],
             cwd: test_path_buf("/repo/codex-rs/core").abs(),
             sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
             additional_permissions: None,
             justification: Some("Need to push after the compaction.".to_string()),
+            tty: false,
         },
         GuardianPromptMode::Delta {
             cursor: GuardianTranscriptCursor {
@@ -1167,7 +1176,7 @@ async fn build_guardian_prompt_items_keeps_other_requests_generic() -> anyhow::R
         guardian_mcp_request("node_repl", "js"),
         guardian_mcp_request("node_repl", "inspect"),
         guardian_mcp_request("another_server", "js"),
-        guardian_shell_request("shell-1"),
+        guardian_exec_command_request("shell-1"),
     ] {
         let prompt = build_guardian_prompt_items_with_parent_turn(
             session.as_ref(),
@@ -1732,13 +1741,14 @@ async fn guardian_request_model_for_auto_review(
     let (outcome, analytics_result) = run_guardian_review_session_for_test(
         Arc::clone(&session),
         turn,
-        GuardianApprovalRequest::Shell {
+        GuardianApprovalRequest::ExecCommand {
             id: "shell-1".to_string(),
             command: vec!["git".to_string(), "push".to_string()],
             cwd: test_path_buf("/repo/codex-rs/core").abs(),
             sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
             additional_permissions: None,
             justification: None,
+            tty: false,
         },
         ApprovalRequestReasons {
             approval: None,
@@ -1970,7 +1980,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
         )
         .await;
 
-    let request = GuardianApprovalRequest::Shell {
+    let request = GuardianApprovalRequest::ExecCommand {
         id: "shell-1".to_string(),
         command: vec![
             "git".to_string(),
@@ -1982,6 +1992,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
         sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
         additional_permissions: None,
         justification: Some("Need to push the reviewed docs fix to the repo remote.".to_string()),
+        tty: false,
     };
 
     let outcome = run_guardian_review_session_for_test(
@@ -2107,13 +2118,14 @@ async fn build_guardian_prompt_items_includes_parent_session_id() -> anyhow::Res
     let prompt = build_guardian_prompt_items(
         &session,
         /*retry_reason*/ None,
-        GuardianApprovalRequest::Shell {
+        GuardianApprovalRequest::ExecCommand {
             id: "shell-1".to_string(),
             command: vec!["git".to_string(), "status".to_string()],
             cwd: test_path_buf("/repo").abs(),
             sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
             additional_permissions: None,
             justification: None,
+            tty: false,
         },
         GuardianPromptMode::Full,
     )
@@ -2198,13 +2210,14 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
     turn_mut.config = Arc::new(config);
     seed_guardian_parent_history(&session, &turn).await;
 
-    let first_request = GuardianApprovalRequest::Shell {
+    let first_request = GuardianApprovalRequest::ExecCommand {
         id: "shell-1".to_string(),
         command: vec!["git".to_string(), "push".to_string()],
         cwd: test_path_buf("/repo/codex-rs/core").abs(),
         sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
         additional_permissions: None,
         justification: Some("Need to push the first docs fix.".to_string()),
+        tty: false,
     };
     let first_outcome = run_guardian_review_session_for_test(
         Arc::clone(&session),
@@ -2244,7 +2257,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
             ],
         )
         .await;
-    let second_request = GuardianApprovalRequest::Shell {
+    let second_request = GuardianApprovalRequest::ExecCommand {
         id: "shell-2".to_string(),
         command: vec![
             "git".to_string(),
@@ -2255,6 +2268,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
         sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
         additional_permissions: None,
         justification: Some("Need to push the second docs fix.".to_string()),
+        tty: false,
     };
     let second_outcome = run_guardian_review_session_for_test(
         Arc::clone(&session),
@@ -2317,13 +2331,14 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
             /*reference_context_item*/ None,
         )
         .await;
-    let third_request = GuardianApprovalRequest::Shell {
+    let third_request = GuardianApprovalRequest::ExecCommand {
         id: "shell-3".to_string(),
         command: vec!["git".to_string(), "push".to_string()],
         cwd: test_path_buf("/repo/codex-rs/core").abs(),
         sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
         additional_permissions: None,
         justification: Some("Need to push the third docs fix.".to_string()),
+        tty: false,
     };
     let third_outcome = run_guardian_review_session_for_test(
         Arc::clone(&session),
@@ -2355,7 +2370,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
     let fourth_outcome = run_guardian_review_session_for_test(
         Arc::clone(&session),
         Arc::clone(&turn),
-        guardian_shell_request("shell-4"),
+        guardian_exec_command_request("shell-4"),
         ApprovalRequestReasons::default(),
         guardian_output_schema(),
         /*external_cancel*/ None,
@@ -2564,13 +2579,14 @@ async fn guardian_reused_trunk_ignores_stale_prior_turn_completion() -> anyhow::
     let first_outcome = run_guardian_review_session_for_test(
         Arc::clone(&session),
         Arc::clone(&turn),
-        GuardianApprovalRequest::Shell {
+        GuardianApprovalRequest::ExecCommand {
             id: "shell-1".to_string(),
             command: vec!["git".to_string(), "push".to_string()],
             cwd: test_path_buf("/repo/codex-rs/core").abs(),
             sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
             additional_permissions: None,
             justification: Some("Need to push the first docs fix.".to_string()),
+            tty: false,
         },
         ApprovalRequestReasons::default(),
         guardian_output_schema(),
@@ -2609,13 +2625,14 @@ async fn guardian_reused_trunk_ignores_stale_prior_turn_completion() -> anyhow::
     let second_outcome = run_guardian_review_session_for_test(
         Arc::clone(&session),
         Arc::clone(&turn),
-        GuardianApprovalRequest::Shell {
+        GuardianApprovalRequest::ExecCommand {
             id: "shell-2".to_string(),
             command: vec!["git".to_string(), "push".to_string()],
             cwd: test_path_buf("/repo/codex-rs/core").abs(),
             sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
             additional_permissions: None,
             justification: Some("Need to push the second docs fix.".to_string()),
+            tty: false,
         },
         ApprovalRequestReasons::default(),
         guardian_output_schema(),
@@ -2689,13 +2706,14 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
         &session,
         &turn,
         "review-shell-guardian-error".to_string(),
-        GuardianApprovalRequest::Shell {
+        GuardianApprovalRequest::ExecCommand {
             id: "shell-guardian-error".to_string(),
             command: vec!["git".to_string(), "push".to_string()],
             cwd: test_path_buf("/repo/codex-rs/core").abs(),
             sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
             additional_permissions: None,
             justification: Some("Need to push the reviewed docs fix.".to_string()),
+            tty: false,
         },
         ApprovalRequestReasons::default(),
     )
@@ -2782,7 +2800,7 @@ async fn guardian_review_retries_transient_session_failure_then_approves() -> an
     let (outcome, metadata) = run_guardian_review_session_for_test(
         Arc::clone(&session),
         Arc::clone(&turn),
-        guardian_shell_request("shell-session-retry"),
+        guardian_exec_command_request("shell-session-retry"),
         ApprovalRequestReasons::default(),
         guardian_output_schema(),
         /*external_cancel*/ None,
@@ -2824,7 +2842,7 @@ async fn guardian_review_does_not_retry_missing_assessment_payload() -> anyhow::
         &session,
         &turn,
         "review-missing-assessment".to_string(),
-        guardian_shell_request("shell-missing-assessment"),
+        guardian_exec_command_request("shell-missing-assessment"),
         ApprovalRequestReasons::default(),
     )
     .await;
@@ -2873,7 +2891,7 @@ async fn guardian_review_retries_two_parse_failures_then_approves() -> anyhow::R
     let (outcome, metadata) = run_guardian_review_session_for_test(
         Arc::clone(&session),
         Arc::clone(&turn),
-        guardian_shell_request("shell-parse-retry"),
+        guardian_exec_command_request("shell-parse-retry"),
         ApprovalRequestReasons::default(),
         guardian_output_schema(),
         /*external_cancel*/ None,
@@ -2928,7 +2946,7 @@ async fn guardian_review_exhausts_three_failures_with_one_terminal_event() -> an
         &session,
         &turn,
         "review-exhausted-retry".to_string(),
-        guardian_shell_request("shell-exhausted-retry"),
+        guardian_exec_command_request("shell-exhausted-retry"),
         ApprovalRequestReasons::default(),
     )
     .await;
@@ -2979,7 +2997,7 @@ async fn guardian_review_does_not_retry_valid_denial() -> anyhow::Result<()> {
         &session,
         &turn,
         "review-valid-denial".to_string(),
-        guardian_shell_request("shell-valid-denial"),
+        guardian_exec_command_request("shell-valid-denial"),
         ApprovalRequestReasons::default(),
     )
     .await;
@@ -3039,7 +3057,7 @@ async fn escalated_retry_bypasses_extension_approval_and_runs_guardian() -> anyh
         &session,
         &turn,
         "review-escalated-retry".to_string(),
-        guardian_shell_request("shell-escalated-retry"),
+        guardian_exec_command_request("shell-escalated-retry"),
         ApprovalRequestReasons {
             approval: None,
             retry: Some(retry_reason.to_string()),
@@ -3136,13 +3154,14 @@ async fn guardian_ephemeral_retry_preserves_parallel_trunk_and_fork_history() ->
         let (session, turn) = guardian_test_session_and_turn_with_base_url(server.uri()).await;
         seed_guardian_parent_history(&session, &turn).await;
 
-        let initial_request = GuardianApprovalRequest::Shell {
+        let initial_request = GuardianApprovalRequest::ExecCommand {
             id: "shell-guardian-1".to_string(),
             command: vec!["git".to_string(), "status".to_string()],
             cwd: test_path_buf("/repo/codex-rs/core").abs(),
             sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
             additional_permissions: None,
             justification: Some("Inspect repo state before proceeding.".to_string()),
+            tty: false,
         };
         assert_eq!(
             review_approval_request(
@@ -3179,21 +3198,23 @@ async fn guardian_ephemeral_retry_preserves_parallel_trunk_and_fork_history() ->
             )
             .await;
 
-        let second_request = GuardianApprovalRequest::Shell {
+        let second_request = GuardianApprovalRequest::ExecCommand {
             id: "shell-guardian-2".to_string(),
             command: vec!["git".to_string(), "diff".to_string()],
             cwd: test_path_buf("/repo/codex-rs/core").abs(),
             sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
             additional_permissions: None,
             justification: Some("Inspect pending changes before proceeding.".to_string()),
+            tty: false,
         };
-        let third_request = GuardianApprovalRequest::Shell {
+        let third_request = GuardianApprovalRequest::ExecCommand {
             id: "shell-guardian-3".to_string(),
             command: vec!["git".to_string(), "push".to_string()],
             cwd: test_path_buf("/repo/codex-rs/core").abs(),
             sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
             additional_permissions: None,
             justification: Some("Inspect whether pushing is safe before proceeding.".to_string()),
+            tty: false,
         };
 
         let session_for_second = Arc::clone(&session);

@@ -10,7 +10,6 @@ use crate::exec_env::CODEX_THREAD_ID_ENV_VAR;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::shell::ShellType;
-use crate::tools::sandboxing::ToolError;
 use codex_apply_patch::CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR;
 use codex_core_plugins::PLUGIN_METRICS_OUTPUT_ENV_VAR;
 #[cfg(unix)]
@@ -25,11 +24,8 @@ use codex_network_proxy::PROXY_GIT_SSH_COMMAND_ENV_KEY;
 pub(crate) use codex_network_proxy::is_managed_proxy_env_var;
 pub(crate) use codex_network_proxy::strip_managed_proxy_env;
 use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::shell_environment::is_non_inheritable_env_var;
-use codex_sandboxing::SandboxCommand;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
 #[cfg(unix)]
 use std::path::Path;
@@ -37,28 +33,6 @@ use std::path::Path;
 pub(crate) mod apply_patch;
 pub(crate) mod shell;
 pub(crate) mod unified_exec;
-
-/// Shared helper to construct sandbox transform inputs from a tokenized command line and native
-/// working directory. Validates that at least a program is present.
-pub(crate) fn build_sandbox_command(
-    command: &[String],
-    cwd: &AbsolutePathBuf,
-    env: &HashMap<String, String>,
-    additional_permissions: Option<AdditionalPermissionProfile>,
-) -> Result<SandboxCommand, ToolError> {
-    let (program, args) = command
-        .split_first()
-        .ok_or_else(|| ToolError::Rejected("command args are empty".to_string()))?;
-    let cwd = PathUri::from_abs_path(cwd);
-    Ok(SandboxCommand {
-        program: program.clone().into(),
-        args: args.to_vec(),
-        cwd,
-        env: env.clone(),
-        managed_network: None,
-        additional_permissions,
-    })
-}
 
 pub(crate) fn exec_env_for_sandbox_permissions(
     env: &HashMap<String, String>,
@@ -154,17 +128,6 @@ pub(crate) fn apply_package_path_prepend(
     };
 
     runtime_path_prepends.prepend(env, path_dir.as_path());
-}
-
-#[cfg(unix)]
-pub(crate) fn prepend_zsh_fork_bin_to_path(
-    env: &mut HashMap<String, String>,
-    shell_zsh_path: &Path,
-) -> Option<String> {
-    let zsh_bin_dir = shell_zsh_path
-        .parent()
-        .map(|path| path.to_string_lossy().to_string())?;
-    prepend_path_entry(env, &zsh_bin_dir)
 }
 
 #[cfg(unix)]

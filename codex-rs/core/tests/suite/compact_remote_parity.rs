@@ -1,3 +1,4 @@
+use super::compact::allow_echo_commands;
 use codex_core::TurnInputRequest;
 use std::fs;
 use std::path::Path;
@@ -514,6 +515,7 @@ async fn build_harness_inner(
     fs::create_dir_all(FIXED_CWD)?;
     let mut builder = test_codex()
         .with_auth(settings.auth.build())
+        .with_pre_build_hook(allow_echo_commands)
         .with_pre_build_hook(|home| {
             fs::write(home.join("AGENTS.md"), USER_INSTRUCTIONS)
                 .expect("write global instructions");
@@ -690,7 +692,7 @@ fn response_bodies_for_step(scenario_name: &str, idx: usize, step: Step) -> Vec<
         ],
         Step::ShellTool => vec![
             responses::sse(vec![
-                responses::ev_shell_command_call(
+                responses::ev_exec_command_call(
                     &format!("{response_id}-shell-call"),
                     &format!("echo {scenario_name}_{idx}_SHELL_TOOL"),
                 ),
@@ -947,6 +949,22 @@ fn normalize_string(value: &str) -> String {
     let mut text = value.to_string();
     normalize_tmp_prefix_before_marker(&mut text, "/skills/");
     normalize_tmp_prefix_before_marker(&mut text, "\\skills\\");
+
+    let mut search_start = 0;
+    let chunk_id_prefix = "Chunk ID: ";
+    while let Some(relative_start) = text[search_start..].find(chunk_id_prefix) {
+        let value_start = search_start + relative_start + chunk_id_prefix.len();
+        let value_end = text[value_start..]
+            .find('\n')
+            .map_or(text.len(), |offset| value_start + offset);
+        let value = &text[value_start..value_end];
+        if !value.is_empty() && value.chars().all(|ch| ch.is_ascii_hexdigit()) {
+            text.replace_range(value_start..value_end, "<CHUNK_ID>");
+            search_start = value_start + "<CHUNK_ID>".len();
+        } else {
+            search_start = value_end;
+        }
+    }
 
     let skills_open_tag = "<skills_instructions>";
     let skills_close_tag = "</skills_instructions>";

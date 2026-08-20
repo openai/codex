@@ -174,8 +174,8 @@ async fn current_time_reminders_follow_time_interval_and_persist_in_history() ->
 
     let server = start_mock_server().await;
     let tool_args = json!({
-        "command": "echo current time",
-        "timeout_ms": 1_000,
+        "cmd": "echo current time",
+        "yield_time_ms": 1_000,
     });
     let responses = mount_sse_sequence(
         &server,
@@ -184,7 +184,7 @@ async fn current_time_reminders_follow_time_interval_and_persist_in_history() ->
                 ev_response_created("resp-1"),
                 ev_function_call(
                     "current-time-tool-call",
-                    "shell_command",
+                    "exec_command",
                     &serde_json::to_string(&tool_args)?,
                 ),
                 ev_completed("resp-1"),
@@ -265,8 +265,8 @@ async fn current_time_reminders_can_follow_only_user_or_tool_outputs() -> Result
 
     let server = start_mock_server().await;
     let tool_args = json!({
-        "command": "echo current time",
-        "timeout_ms": 1_000,
+        "cmd": "echo current time",
+        "yield_time_ms": 1_000,
     });
     let mut continue_response = ev_completed("resp-2");
     // Ask for another inference without recording a new user message or tool output.
@@ -278,7 +278,7 @@ async fn current_time_reminders_can_follow_only_user_or_tool_outputs() -> Result
                 ev_response_created("resp-1"),
                 ev_function_call(
                     "current-time-tool-call",
-                    "shell_command",
+                    "exec_command",
                     &serde_json::to_string(&tool_args)?,
                 ),
                 ev_completed("resp-1"),

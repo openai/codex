@@ -41,7 +41,6 @@ const SAVED_PREFIX: &str = r#"["git", "version"]"#;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CommandTool {
-    ShellCommand,
     UnifiedExec,
 }
 
@@ -92,7 +91,6 @@ fn configure_saved_prefix_and_guardian(config: &mut Config) {
 
 fn command_response(response_id: &str, call_id: &str, command_tool: CommandTool) -> Result<String> {
     let (tool_name, command_key) = match command_tool {
-        CommandTool::ShellCommand => ("shell_command", "command"),
         CommandTool::UnifiedExec => ("exec_command", "cmd"),
     };
     let mut args = json!({
@@ -130,11 +128,8 @@ async fn submit_model_turn(test: &TestCodex, model: &str, prompt: &str) -> Resul
     test.submit_text_turn(prompt).await
 }
 
-#[test_case(CommandTool::ShellCommand, ModelSpecialty::Cyber, ShellBackend::Standard; "cyber shell command is reviewed")]
 #[test_case(CommandTool::UnifiedExec, ModelSpecialty::Cyber, ShellBackend::Standard; "cyber unified exec is reviewed")]
-#[test_case(CommandTool::ShellCommand, ModelSpecialty::Cyber, ShellBackend::ZshFork; "cyber zsh shell command is reviewed")]
 #[test_case(CommandTool::UnifiedExec, ModelSpecialty::Cyber, ShellBackend::ZshFork; "cyber zsh unified exec is reviewed")]
-#[test_case(CommandTool::ShellCommand, ModelSpecialty::General, ShellBackend::Standard; "general shell command keeps saved approval")]
 #[test_case(CommandTool::UnifiedExec, ModelSpecialty::General, ShellBackend::Standard; "general unified exec keeps saved approval")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn saved_prefix_only_bypasses_guardian_for_general_models(
@@ -222,7 +217,6 @@ async fn saved_prefix_only_bypasses_guardian_for_general_models(
     Ok(())
 }
 
-#[test_case(CommandTool::ShellCommand; "shell command")]
 #[test_case(CommandTool::UnifiedExec; "unified exec")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cyber_model_user_approval_never_offers_a_reusable_prefix(
@@ -331,20 +325,20 @@ async fn switching_models_suppresses_and_restores_saved_prefix_approvals() -> Re
             command_response(
                 "parent-general-first-command",
                 "general-first-command",
-                CommandTool::ShellCommand,
+                CommandTool::UnifiedExec,
             )?,
             sse_completed("parent-general-first-complete"),
             command_response(
                 "parent-cyber-command",
                 "cyber-command",
-                CommandTool::ShellCommand,
+                CommandTool::UnifiedExec,
             )?,
             guardian_allow_response("guardian-cyber-review"),
             sse_completed("parent-cyber-complete"),
             command_response(
                 "parent-general-last-command",
                 "general-last-command",
-                CommandTool::ShellCommand,
+                CommandTool::UnifiedExec,
             )?,
             sse_completed("parent-general-last-complete"),
         ],

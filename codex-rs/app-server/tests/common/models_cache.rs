@@ -21,7 +21,7 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
         description: Some(preset.description.clone()),
         default_reasoning_level: Some(preset.default_reasoning_effort.clone()),
         supported_reasoning_levels: preset.supported_reasoning_efforts.clone(),
-        shell_type: ConfigShellToolType::ShellCommand,
+        shell_type: ConfigShellToolType::UnifiedExec,
         visibility: if preset.show_in_picker {
             ModelVisibility::List
         } else {

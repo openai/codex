@@ -85,7 +85,7 @@ fn test_model_info(
         description: Some(description.to_string()),
         default_reasoning_level: Some(default_reasoning_level),
         supported_reasoning_levels,
-        shell_type: ConfigShellToolType::ShellCommand,
+        shell_type: ConfigShellToolType::UnifiedExec,
         visibility,
         supported_in_api: true,
         input_modalities: default_input_modalities(),

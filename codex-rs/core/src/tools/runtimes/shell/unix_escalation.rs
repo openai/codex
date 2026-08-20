@@ -1,36 +1,23 @@
-use super::ShellRequest;
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
-use crate::exec::cancel_when_either;
-use crate::exec::is_likely_sandbox_denied;
 use crate::guardian::GuardianReviewContext;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxPermissions;
-use crate::shell::ShellType;
 use crate::tools::approvals::ApprovalAction;
 use crate::tools::approvals::ApprovalContext;
-use crate::tools::runtimes::build_sandbox_command;
 use crate::tools::runtimes::exec_env_for_sandbox_permissions;
-use crate::tools::runtimes::prepend_zsh_fork_bin_to_path;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
-use crate::tools::sandboxing::managed_network_for_sandbox_permissions;
-use crate::tools::sandboxing::sandbox_permissions_preserving_denied_reads;
 use crate::tools::sandboxing::unsandboxed_execution_allowed;
-use codex_core_plugins::PluginMetricsSidecar;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Evaluation;
 use codex_execpolicy::MatchOptions;
 use codex_execpolicy::Policy;
 use codex_execpolicy::RuleMatch;
-use codex_features::Feature;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::error::CodexErr;
-use codex_protocol::error::SandboxErr;
-use codex_protocol::exec_output::ExecToolCallOutput;
-use codex_protocol::exec_output::StreamOutput;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
@@ -42,8 +29,6 @@ use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
-use codex_sandboxing::policy_transforms::merge_permission_profiles;
-use codex_sandboxing::record_filesystem_sandbox_violation;
 use codex_shell_command::bash::parse_shell_lc_plain_commands;
 use codex_shell_escalation::EscalateServer;
 use codex_shell_escalation::EscalationDecision;
@@ -52,7 +37,6 @@ use codex_shell_escalation::EscalationPermissions;
 use codex_shell_escalation::EscalationPolicy;
 use codex_shell_escalation::EscalationPolicyFuture;
 use codex_shell_escalation::EscalationSession;
-use codex_shell_escalation::ExecParams;
 use codex_shell_escalation::ExecResult;
 use codex_shell_escalation::PreparedExec;
 use codex_shell_escalation::ResolvedPermissionProfile;
@@ -66,7 +50,6 @@ use std::collections::HashMap;
 use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
@@ -97,178 +80,6 @@ fn approval_sandbox_permissions(
     } else {
         sandbox_permissions
     }
-}
-
-pub(super) async fn try_run_zsh_fork(
-    req: &ShellRequest,
-    attempt: &SandboxAttempt<'_>,
-    ctx: &ToolCtx,
-    command: &[String],
-    metrics_sidecar: Option<&PluginMetricsSidecar>,
-) -> Result<Option<ExecToolCallOutput>, ToolError> {
-    let Some(shell_zsh_path) = ctx.session.services.shell_zsh_path.as_ref() else {
-        tracing::warn!("ZshFork backend specified, but shell_zsh_path is not configured.");
-        return Ok(None);
-    };
-    if !ctx.session.features().enabled(Feature::ShellZshFork) {
-        tracing::warn!("ZshFork backend specified, but ShellZshFork feature is not enabled.");
-        return Ok(None);
-    }
-    if !matches!(ctx.session.user_shell().shell_type, ShellType::Zsh) {
-        tracing::warn!("ZshFork backend specified, but user shell is not Zsh.");
-        return Ok(None);
-    }
-
-    let (attempt_file_system_sandbox_policy, _) = attempt.permissions.to_runtime_permissions();
-    let sandbox_permissions = sandbox_permissions_preserving_denied_reads(
-        req.sandbox_permissions,
-        &attempt_file_system_sandbox_policy,
-    );
-    let req = &ShellRequest {
-        sandbox_permissions,
-        ..req.clone()
-    };
-    let mut env = exec_env_for_sandbox_permissions(&req.env, req.sandbox_permissions);
-    if let Some(sidecar) = metrics_sidecar {
-        sidecar.install_output_env(&mut env);
-    }
-    prepend_zsh_fork_bin_to_path(&mut env, shell_zsh_path);
-    let sidecar_permissions = metrics_sidecar.map(PluginMetricsSidecar::additional_permissions);
-    let additional_permissions = merge_permission_profiles(
-        req.additional_permissions.as_ref(),
-        sidecar_permissions.as_ref(),
-    );
-    let command = build_sandbox_command(command, &req.cwd, &env, additional_permissions)?;
-    let options = ExecOptions {
-        expiration: req.timeout_ms.into(),
-        capture_policy: ExecCapturePolicy::ShellTool,
-    };
-    let sandbox_exec_request = attempt
-        .env_for(
-            command,
-            options,
-            managed_network_for_sandbox_permissions(req.network.as_ref(), req.sandbox_permissions),
-            Some(&req.turn_environment.selection.environment_id),
-        )
-        .map_err(ToolError::Codex)?;
-    let crate::sandboxing::ExecRequest {
-        command,
-        cwd: sandbox_cwd,
-        env: sandbox_env,
-        exec_server_env_config: _,
-        network: sandbox_network,
-        network_environment_id,
-        expiration: _sandbox_expiration,
-        capture_policy: _capture_policy,
-        sandbox,
-        windows_sandbox_policy_cwd: sandbox_policy_cwd,
-        windows_sandbox_workspace_roots,
-        windows_sandbox_level,
-        windows_sandbox_private_desktop: _windows_sandbox_private_desktop,
-        permission_profile,
-        windows_sandbox_filesystem_overrides: _windows_sandbox_filesystem_overrides,
-        arg0,
-        exec_server_sandbox: _,
-        exec_server_enforce_managed_network: _,
-        exec_server_managed_network: _,
-        exec_server_network_proxy: _,
-    } = sandbox_exec_request;
-    let ParsedShellCommand { script, login, .. } = extract_shell_script(&command)?;
-    let effective_timeout = Duration::from_millis(
-        req.timeout_ms
-            .unwrap_or(crate::exec::DEFAULT_EXEC_COMMAND_TIMEOUT_MS),
-    );
-    let exec_policy = Arc::new(RwLock::new(
-        ctx.session
-            .services
-            .exec_policy
-            .current_for_environment(
-                req.turn_environment.config().exec_policy.as_ref(),
-                ctx.step_context.turn.allow_prefix_rules(),
-            )
-            .as_ref()
-            .clone(),
-    ));
-    // TODO(anp): Keep PathUri through the shell escalation boundary.
-    let sandbox_cwd = sandbox_cwd
-        .to_abs_path()
-        .map_err(|err| ToolError::Rejected(err.to_string()))?;
-    // TODO(anp): Keep PathUri through the shell sandbox policy boundary.
-    let sandbox_policy_cwd = sandbox_policy_cwd
-        .to_abs_path()
-        .map_err(|err| ToolError::Rejected(err.to_string()))?;
-    let command_executor = CoreShellCommandExecutor {
-        command,
-        cwd: sandbox_cwd,
-        permission_profile,
-        sandbox,
-        env: sandbox_env,
-        network: sandbox_network,
-        network_environment_id,
-        windows_sandbox_level,
-        arg0,
-        sandbox_policy_cwd,
-        windows_sandbox_workspace_roots,
-        codex_linux_sandbox_exe: ctx.step_context.turn.config.codex_linux_sandbox_exe.clone(),
-        use_legacy_landlock: ctx.step_context.turn.config.features.use_legacy_landlock(),
-    };
-    let main_execve_wrapper_exe = ctx
-        .session
-        .services
-        .main_execve_wrapper_exe
-        .clone()
-        .ok_or_else(|| {
-            ToolError::Rejected(
-                "zsh fork feature enabled, but execve wrapper is not configured".to_string(),
-            )
-        })?;
-    let exec_params = ExecParams {
-        command: script,
-        workdir: req.cwd.to_string_lossy().to_string(),
-        timeout_ms: Some(effective_timeout.as_millis() as u64),
-        login: Some(login),
-    };
-
-    // Note that Stopwatch starts immediately upon creation, so currently we try
-    // to minimize the time between creating the Stopwatch and starting the
-    // escalation server.
-    let stopwatch = Stopwatch::new(effective_timeout);
-    let mut cancel_token = stopwatch.cancellation_token();
-    if let Some(cancellation) = attempt.network_denial_cancellation_token.clone() {
-        cancel_token = cancel_when_either(cancel_token, cancellation);
-    }
-    let approval_sandbox_permissions = approval_sandbox_permissions(
-        req.sandbox_permissions,
-        req.additional_permissions_preapproved,
-    );
-    let escalation_policy = CoreShellActionProvider {
-        policy: Arc::clone(&exec_policy),
-        session: Arc::clone(&ctx.session),
-        review_context: GuardianReviewContext::from(&ctx.step_context),
-        call_id: ctx.call_id.clone(),
-        environment_id: req.turn_environment.selection.environment_id.clone(),
-        source: GuardianCommandSource::Shell,
-        tool_name: ctx.tool_name.clone(),
-        approval_policy: ctx.step_context.turn.approval_policy(),
-        permission_profile: command_executor.permission_profile.clone(),
-        sandbox_permissions: req.sandbox_permissions,
-        approval_sandbox_permissions,
-        prompt_permissions: req.additional_permissions.clone(),
-        stopwatch: stopwatch.clone(),
-    };
-
-    let escalate_server = EscalateServer::new(
-        shell_zsh_path.clone(),
-        main_execve_wrapper_exe,
-        escalation_policy,
-    );
-
-    let exec_result = escalate_server
-        .exec(exec_params, cancel_token, Arc::new(command_executor))
-        .await
-        .map_err(|err| ToolError::Rejected(err.to_string()))?;
-
-    map_exec_result(attempt.sandbox, exec_result).map(Some)
 }
 
 pub(crate) async fn prepare_unified_exec_zsh_fork(
@@ -1022,36 +833,6 @@ fn extract_shell_script(command: &[String]) -> Result<ParsedShellCommand, ToolEr
     Err(ToolError::Rejected(
         "unexpected shell command format for zsh-fork execution".to_string(),
     ))
-}
-
-fn map_exec_result(
-    sandbox: SandboxType,
-    result: ExecResult,
-) -> Result<ExecToolCallOutput, ToolError> {
-    let output = ExecToolCallOutput {
-        exit_code: result.exit_code,
-        stdout: StreamOutput::new(result.stdout.clone()),
-        stderr: StreamOutput::new(result.stderr.clone()),
-        aggregated_output: StreamOutput::new(result.output.clone()),
-        duration: result.duration,
-        timed_out: result.timed_out,
-    };
-
-    if result.timed_out {
-        return Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Timeout {
-            output: Box::new(output),
-        })));
-    }
-
-    if is_likely_sandbox_denied(sandbox, &output) {
-        record_filesystem_sandbox_violation(sandbox, &output);
-        return Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
-            output: Box::new(output),
-            network_policy_decision: None,
-        })));
-    }
-
-    Ok(output)
 }
 
 /// Convert an intercepted exec `(program, argv)` into a command vector suitable

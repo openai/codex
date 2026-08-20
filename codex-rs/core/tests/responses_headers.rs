@@ -562,7 +562,7 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
     let first_response = responses::sse(vec![
         responses::ev_response_created("resp-2"),
         responses::ev_reasoning_item("rsn-1", &["thinking"], &[]),
-        responses::ev_shell_command_call("call-1", "echo turn-metadata"),
+        responses::ev_exec_command_call("call-1", "echo turn-metadata"),
         responses::ev_completed("resp-2"),
     ]);
     let follow_up_response = responses::sse(vec![

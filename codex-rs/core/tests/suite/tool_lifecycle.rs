@@ -250,9 +250,9 @@ async fn tool_start_is_not_called_when_pre_tool_hook_prevents_execution() -> Res
             }),
         ),
         (
-            "shell_command",
+            "exec_command",
             "^Bash$",
-            json!({ "command": "echo original" }),
+            json!({ "cmd": "echo original" }),
             json!({
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",

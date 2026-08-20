@@ -23,5 +23,5 @@ Scenario: Guardian review request layout
     [13] Sandbox denied outbound git push to github.com.\n\n
     [14] Assess the exact planned action below. Use read-only tool checks when local state matters.\n
     [15] Planned action JSON:\n
-    [16] {\n  "command": [\n    "git",\n    "push",\n    "origin",\n    "guardian-approval-mvp"\n  ],\n  "cwd": "/repo/codex-rs/core",\n  "justification": "Need to push the reviewed docs fix to the repo remote.",\n  "sandbox_permissions": "use_default",\n  "tool": "shell"\n}\n
+    [16] {\n  "command": [\n    "git",\n    "push",\n    "origin",\n    "guardian-approval-mvp"\n  ],\n  "cwd": "/repo/codex-rs/core",\n  "justification": "Need to push the reviewed docs fix to the repo remote.",\n  "sandbox_permissions": "use_default",\n  "tool": "exec_command",\n  "tty": false\n}\n
     [17] >>> APPROVAL REQUEST END\n
