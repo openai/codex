@@ -40,6 +40,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::ApprovalPreset;
+use strum_macros::IntoStaticStr;
 use uuid::Uuid;
 
 use crate::app_command::AppCommand;
@@ -193,7 +194,7 @@ pub(crate) enum TranscriptExportDestination {
 }
 
 #[allow(clippy::large_enum_variant)]
-#[derive(Debug)]
+#[derive(Debug, IntoStaticStr)]
 pub(crate) enum AppEvent {
     /// Open the daemon-wide overview of loaded root sessions.
     OpenAgentsOverview,
