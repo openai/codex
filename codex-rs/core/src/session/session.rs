@@ -362,14 +362,6 @@ impl SessionConfiguration {
         let current_file_system_sandbox_policy =
             self.file_system_sandbox_policy(current_environments);
         let current_network_sandbox_policy = self.network_sandbox_policy();
-        let legacy_file_system_projection =
-            FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_deny_entries(
-                &current_sandbox_policy,
-                self.cwd(),
-                &current_file_system_sandbox_policy,
-            );
-        let file_system_policy_matches_legacy = current_file_system_sandbox_policy
-            .is_semantically_equivalent_to(&legacy_file_system_projection, self.cwd());
         let file_system_policy_has_rebindable_project_root_write =
             current_file_system_sandbox_policy
                 .entries
@@ -504,8 +496,15 @@ impl SessionConfiguration {
                     ),
                 )?;
         } else if cwd_changed
-            && file_system_policy_matches_legacy
             && file_system_policy_has_rebindable_project_root_write
+            && current_file_system_sandbox_policy.is_semantically_equivalent_to(
+                &FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_deny_entries(
+                    &current_sandbox_policy,
+                    self.cwd(),
+                    &current_file_system_sandbox_policy,
+                ),
+                self.cwd(),
+            )
         {
             // Preserve richer split policies across cwd-only updates; only
             // rederive when the session is already using a structurally
