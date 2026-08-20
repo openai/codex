@@ -66,6 +66,7 @@ pub(crate) use legacy_apply_patch_exec_command_warning::LegacyApplyPatchExecComm
 pub(crate) use legacy_model_mismatch_warning::LegacyModelMismatchWarning;
 pub(crate) use legacy_unified_exec_process_limit_warning::LegacyUnifiedExecProcessLimitWarning;
 pub(crate) use model_switch_instructions::ModelSwitchInstructions;
+pub(crate) use multi_agent_mode_instructions::MultiAgentModeInstructions;
 pub(crate) use multi_agent_role_instructions::MultiAgentRoleInstructions;
 pub(crate) use multi_agent_usage_hint::MultiAgentUsageHint;
 pub(crate) use network_rule_saved::NetworkRuleSaved;

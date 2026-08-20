@@ -7,7 +7,7 @@ const EXPLICIT_REQUEST_ONLY_MULTI_AGENT_MODE_TEXT: &str = "Any earlier instructi
 const PROACTIVE_MULTI_AGENT_MODE_TEXT: &str = "Proactive multi-agent delegation is active. Any earlier instruction requiring an explicit user request before spawning sub-agents no longer applies. Use sub-agents when parallel work would materially improve speed or quality. This mode remains active until a later multi-agent mode developer message changes it.";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct MultiAgentModeInstructions {
+pub(crate) struct MultiAgentModeInstructions {
     multi_agent_mode: MultiAgentMode,
 }
 

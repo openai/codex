@@ -1382,6 +1382,10 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
                                 .to_string(),
                         },
                         ContentItem::InputText {
+                            text: "<multi_agent_mode>Proactive multi-agent delegation is active.</multi_agent_mode>"
+                                .to_string(),
+                        },
+                        ContentItem::InputText {
                             text: "Preserved developer context.".to_string(),
                         },
                     ],
@@ -1651,6 +1655,10 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history() {
                         .to_string(),
                 },
                 ContentItem::InputText {
+                    text: "<multi_agent_mode>Proactive multi-agent delegation is active.</multi_agent_mode>"
+                        .to_string(),
+                },
+                ContentItem::InputText {
                     text: "Preserved compacted developer context.".to_string(),
                 },
             ],
@@ -1741,6 +1749,13 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history() {
     assert!(
         !history_contains_text(history.raw_items(), "Parent root guidance."),
         "forked child history should strip stale parent hints from compacted replacement history"
+    );
+    assert!(
+        !history_contains_text(
+            history.raw_items(),
+            "Proactive multi-agent delegation is active."
+        ),
+        "forked child history should strip stale policy fragments from compound compacted messages"
     );
     assert!(
         !history_contains_text(history.raw_items(), "Parent developer instructions."),
