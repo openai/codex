@@ -572,6 +572,8 @@ pub struct CollaborationModeMessages {
 pub struct AutoReviewMessages {
     pub policy: Option<String>,
     pub policy_template: Option<String>,
+    pub rejection_instructions: Option<String>,
+    pub timeout_instructions: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
@@ -987,7 +989,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_review_messages_preserve_missing_and_empty_template_values() {
+    fn auto_review_messages_preserve_missing_and_empty_values() {
         let missing_template: ModelMessages = from_str(
             r#"{
                 "instructions_template": null,
@@ -1004,7 +1006,9 @@ mod tests {
                 "instructions_variables": null,
                 "auto_review": {
                     "policy": "policy",
-                    "policy_template": ""
+                    "policy_template": "",
+                    "rejection_instructions": "",
+                    "timeout_instructions": ""
                 }
             }"#,
         )
@@ -1015,6 +1019,8 @@ mod tests {
             Some(AutoReviewMessages {
                 policy: Some("policy".to_string()),
                 policy_template: None,
+                rejection_instructions: None,
+                timeout_instructions: None,
             })
         );
         assert_eq!(
@@ -1022,6 +1028,8 @@ mod tests {
             Some(AutoReviewMessages {
                 policy: Some("policy".to_string()),
                 policy_template: Some(String::new()),
+                rejection_instructions: Some(String::new()),
+                timeout_instructions: Some(String::new()),
             })
         );
     }
@@ -1385,6 +1393,8 @@ mod tests {
             auto_review: Some(AutoReviewMessages {
                 policy: Some("policy".to_string()),
                 policy_template: None,
+                rejection_instructions: Some("rejection instructions".to_string()),
+                timeout_instructions: Some("timeout instructions".to_string()),
             }),
             permissions: Some(PermissionMessages {
                 danger_full_access: None,

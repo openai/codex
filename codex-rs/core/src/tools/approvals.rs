@@ -36,6 +36,7 @@ use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::AdditionalPermissionProfile;
+use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::NetworkPolicyRuleAction;
@@ -452,7 +453,7 @@ struct ApprovalResolution {
 }
 
 impl ApprovalResolution {
-    fn into_tool_result(self) -> Result<ReviewDecision, ToolError> {
+    fn into_tool_result(self, model_info: &ModelInfo) -> Result<ReviewDecision, ToolError> {
         let source = self.source;
         match self.decision {
             ReviewDecision::ApprovedMcpPolicyAmendment => {
@@ -474,7 +475,9 @@ impl ApprovalResolution {
                 Err(ToolError::Rejected(rejection.to_string()))
             }
             ReviewDecision::Denied { rejection } => Err(ToolError::Rejected(rejection)),
-            ReviewDecision::TimedOut => Err(ToolError::Rejected(guardian_timeout_message())),
+            ReviewDecision::TimedOut => {
+                Err(ToolError::Rejected(guardian_timeout_message(model_info)))
+            }
             ReviewDecision::Abort => Err(ToolError::Codex(CodexErr::TurnAborted)),
             decision => Ok(decision),
         }
@@ -543,7 +546,7 @@ impl Session {
                 _ => {}
             }
         }
-        resolution.into_tool_result()
+        resolution.into_tool_result(&ctx.review_context.turn().model_info)
     }
 
     async fn request_reviewer_approval(

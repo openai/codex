@@ -1912,6 +1912,8 @@ mod tests {
             auto_review: Some(AutoReviewMessages {
                 policy: Some("Use the catalog Guardian policy.".to_string()),
                 policy_template: Some(catalog_template.to_string()),
+                rejection_instructions: None,
+                timeout_instructions: None,
             }),
             permissions: None,
             multi_agent: None,
@@ -1948,6 +1950,8 @@ mod tests {
             auto_review: Some(AutoReviewMessages {
                 policy: Some(String::new()),
                 policy_template: None,
+                rejection_instructions: None,
+                timeout_instructions: None,
             }),
             permissions: None,
             multi_agent: None,
@@ -1992,6 +1996,8 @@ mod tests {
             auto_review: Some(AutoReviewMessages {
                 policy: Some(catalog_policy.to_string()),
                 policy_template: Some(String::new()),
+                rejection_instructions: None,
+                timeout_instructions: None,
             }),
             permissions: None,
             multi_agent: None,

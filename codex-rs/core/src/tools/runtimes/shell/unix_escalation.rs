@@ -551,7 +551,9 @@ impl CoreShellActionProvider {
                             EscalationDecision::deny(Some(rejection))
                         }
                         ReviewDecision::TimedOut => EscalationDecision::deny(Some(
-                            crate::guardian::guardian_timeout_message(),
+                            crate::guardian::guardian_timeout_message(
+                                &self.review_context.turn().model_info,
+                            ),
                         )),
                         ReviewDecision::ApprovedMcpPolicyAmendment => {
                             error!("Shell escalation received ApprovedMcpPolicyAmendment");

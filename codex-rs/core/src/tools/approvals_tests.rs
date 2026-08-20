@@ -1,4 +1,5 @@
 use super::*;
+use codex_models_manager::model_info::model_info_from_slug;
 use codex_protocol::approvals::NetworkPolicyAmendment;
 use pretty_assertions::assert_eq;
 
@@ -15,7 +16,7 @@ fn approval_resolution_rejects_denied_network_policy_amendment() {
     };
 
     assert!(matches!(
-        resolution.into_tool_result(),
+        resolution.into_tool_result(&model_info_from_slug("acting-model")),
         Err(ToolError::Rejected(rejection)) if rejection == "rejected by user"
     ));
 }
@@ -28,7 +29,7 @@ fn approval_resolution_rejects_mcp_policy_amendment() {
     };
 
     assert!(matches!(
-        resolution.into_tool_result(),
+        resolution.into_tool_result(&model_info_from_slug("acting-model")),
         Err(ToolError::Rejected(rejection)) if rejection == "Error while requesting approval"
     ));
 }
@@ -41,13 +42,37 @@ fn approval_resolution_aborts_turn_when_approval_is_aborted() {
     };
 
     assert!(matches!(
-        resolution.into_tool_result(),
+        resolution.into_tool_result(&model_info_from_slug("acting-model")),
         Err(ToolError::Codex(error))
             if matches!(
                 error.details(),
                 codex_protocol::error::CodexErrorDetails::TurnAborted
             )
     ));
+}
+
+#[test]
+fn approval_resolution_uses_acting_model_timeout_instructions() {
+    let mut model = model_info_from_slug("acting-model");
+    for timeout_instructions in ["Catalog timeout instructions.", ""] {
+        model.model_messages = Some(
+            serde_json::from_value(serde_json::json!({
+                "auto_review": {
+                    "timeout_instructions": timeout_instructions,
+                },
+            }))
+            .expect("model messages should deserialize"),
+        );
+        let resolution = ApprovalResolution {
+            decision: ReviewDecision::TimedOut,
+            source: ApprovalResolutionSource::Guardian,
+        };
+
+        assert!(matches!(
+            resolution.into_tool_result(&model),
+            Err(ToolError::Rejected(rejection)) if rejection == timeout_instructions
+        ));
+    }
 }
 
 #[test]

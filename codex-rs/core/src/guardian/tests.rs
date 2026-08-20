@@ -1427,10 +1427,28 @@ async fn cancelled_guardian_review_emits_terminal_abort_without_warning() {
 
 #[test]
 fn guardian_timeout_message_distinguishes_timeout_from_policy_denial() {
-    let message = guardian_timeout_message();
+    let mut model = codex_models_manager::model_info::model_info_from_slug("acting-model");
+    model.model_messages = None;
+    let message = guardian_timeout_message(&model);
     assert!(message.contains("did not finish before its deadline"));
     assert!(message.contains("retry once"));
     assert!(!message.contains("unacceptable risk"));
+
+    for timeout_instructions in [None, Some("Catalog timeout instructions."), Some("")] {
+        model.model_messages = Some(
+            serde_json::from_value(serde_json::json!({
+                "auto_review": {
+                    "policy": "review policy",
+                    "timeout_instructions": timeout_instructions,
+                },
+            }))
+            .expect("model messages should deserialize"),
+        );
+        assert_eq!(
+            guardian_timeout_message(&model),
+            timeout_instructions.unwrap_or(&message),
+        );
+    }
 }
 
 #[tokio::test]

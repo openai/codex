@@ -37,6 +37,8 @@ fn base_instruction_override_is_literal_and_preserves_catalog_messages() {
     let auto_review = AutoReviewMessages {
         policy: Some("review policy".to_string()),
         policy_template: Some("review policy template".to_string()),
+        rejection_instructions: Some("rejection instructions".to_string()),
+        timeout_instructions: Some(String::new()),
     };
     let permissions = PermissionMessages {
         danger_full_access: Some("danger".to_string()),

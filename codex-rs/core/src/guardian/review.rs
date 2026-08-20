@@ -10,6 +10,7 @@ use codex_extension_api::ThreadIdleCause;
 use codex_features::Feature;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::openai_models::MODEL_SPECIALTY_CYBER;
+use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::EventMsg;
@@ -101,8 +102,14 @@ pub(crate) fn new_guardian_review_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
-pub(crate) fn guardian_timeout_message() -> String {
-    GUARDIAN_TIMEOUT_INSTRUCTIONS.to_string()
+pub(crate) fn guardian_timeout_message(model_info: &ModelInfo) -> String {
+    model_info
+        .model_messages
+        .as_ref()
+        .and_then(|messages| messages.auto_review.as_ref())
+        .and_then(|messages| messages.timeout_instructions.as_deref())
+        .unwrap_or(GUARDIAN_TIMEOUT_INSTRUCTIONS)
+        .to_string()
 }
 
 #[derive(Debug)]
@@ -665,8 +672,15 @@ async fn run_guardian_review(
         } else {
             assessment.rationale.trim()
         };
+        let rejection_instructions = turn
+            .model_info
+            .model_messages
+            .as_ref()
+            .and_then(|messages| messages.auto_review.as_ref())
+            .and_then(|messages| messages.rejection_instructions.as_deref())
+            .unwrap_or(GUARDIAN_REJECTION_INSTRUCTIONS);
         ReviewDecision::denied(format!(
-            "This action was rejected due to unacceptable risk.\nReason: {rationale}\n{GUARDIAN_REJECTION_INSTRUCTIONS}"
+            "This action was rejected due to unacceptable risk.\nReason: {rationale}\n{rejection_instructions}"
         ))
     }
 }

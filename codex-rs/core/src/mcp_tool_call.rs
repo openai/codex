@@ -283,7 +283,7 @@ pub(crate) async fn handle_mcp_tool_call(
                     &call_id,
                     invocation,
                     item_metadata.clone(),
-                    crate::guardian::guardian_timeout_message(),
+                    crate::guardian::guardian_timeout_message(&turn_context.model_info),
                     /*already_started*/ true,
                 )
                 .await

@@ -29,6 +29,7 @@ use codex_protocol::mcp_approval_meta::TOOL_DESCRIPTION_KEY as MCP_ELICITATION_T
 use codex_protocol::mcp_approval_meta::TOOL_NAME_KEY as MCP_ELICITATION_TOOL_NAME_KEY;
 use codex_protocol::mcp_approval_meta::TOOL_PARAMS_KEY as MCP_ELICITATION_TOOL_PARAMS_KEY;
 use codex_protocol::mcp_approval_meta::TOOL_TITLE_KEY as MCP_ELICITATION_TOOL_TITLE_KEY;
+use codex_protocol::openai_models::ModelInfo;
 use codex_rmcp_client::Elicitation;
 use rmcp::model::ElicitationAction;
 use rmcp::model::RequestMetaObject;
@@ -784,8 +785,9 @@ async fn review_guardian_mcp_elicitation(
         )
         .await;
 
-        return Ok(matches!(decision, ReviewDecision::Approved)
-            .then(|| mcp_elicitation_response_from_guardian_decision(decision)));
+        return Ok(matches!(decision, ReviewDecision::Approved).then(|| {
+            mcp_elicitation_response_from_guardian_decision(decision, &turn_context.model_info)
+        }));
     }
 
     let approval_policy = mcp_config.approval_policy.value();
@@ -855,6 +857,7 @@ async fn review_guardian_mcp_elicitation(
     .await;
     Ok(Some(mcp_elicitation_response_from_guardian_decision(
         decision,
+        &turn_context.model_info,
     )))
 }
 
@@ -1005,6 +1008,7 @@ fn mcp_elicitation_request_id(id: &RequestId) -> String {
 
 fn mcp_elicitation_response_from_guardian_decision(
     decision: ReviewDecision,
+    model_info: &ModelInfo,
 ) -> ElicitationResponse {
     match decision {
         ReviewDecision::Approved
@@ -1017,9 +1021,9 @@ fn mcp_elicitation_response_from_guardian_decision(
             meta: Some(mcp_elicitation_auto_meta()),
         },
         ReviewDecision::Denied { rejection } => mcp_elicitation_decline_with_message(rejection),
-        ReviewDecision::TimedOut => {
-            mcp_elicitation_decline_with_message(crate::guardian::guardian_timeout_message())
-        }
+        ReviewDecision::TimedOut => mcp_elicitation_decline_with_message(
+            crate::guardian::guardian_timeout_message(model_info),
+        ),
         ReviewDecision::Abort => ElicitationResponse {
             action: ElicitationAction::Cancel,
             content: None,
