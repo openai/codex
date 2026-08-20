@@ -1,5 +1,6 @@
 use super::mcp_refresh::McpRefreshInvalidationGuard;
 use super::*;
+use crate::environment_selection::combine_selected_capability_roots;
 use crate::tools::sandboxing::executor_windows_sandbox_level;
 use codex_exec_server::ExecutorCapabilityDiscoveryCache;
 use codex_exec_server::ExecutorCapabilityDiscoverySnapshot;
@@ -438,18 +439,18 @@ impl Session {
         let mut root_locations_by_id = HashMap::new();
         let mut selected_capability_roots = Vec::new();
         let mut ready_environment_root_count = 0;
-        for (index, root) in self
-            .services
-            .selected_capability_roots
-            .iter()
-            .cloned()
-            .chain(
-                environments
-                    .turn_environments()
-                    .flat_map(|environment| environment.config().selected_capability_roots.clone()),
-            )
-            .enumerate()
-        {
+        let combined_roots = combine_selected_capability_roots(
+            &self.services.selected_capability_roots,
+            environments.turn_environments().map(|environment| {
+                (
+                    environment.config_origin,
+                    environment
+                        .config_origin
+                        .selected_capability_roots(&environment.environment, environment.config()),
+                )
+            }),
+        );
+        for (index, root) in combined_roots.into_iter().enumerate() {
             if let Some(kept_location) = root_locations_by_id.get(&root.id) {
                 if kept_location != &root.location {
                     tracing::warn!(

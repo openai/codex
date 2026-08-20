@@ -54,6 +54,59 @@ impl EnvironmentConfigOrigin {
         }
         selection
     }
+
+    pub(crate) fn selected_capability_roots(
+        self,
+        environment: &Environment,
+        config: &EnvironmentConfig,
+    ) -> Vec<SelectedCapabilityRoot> {
+        match self {
+            Self::Thread => environment.selected_capability_roots(),
+            Self::Owner => config.selected_capability_roots.clone(),
+        }
+    }
+}
+
+/// Combines persisted thread roots with attachment roots in selection order.
+///
+/// Thread-owned attachments still rely on roots reported by legacy executors. A matching live root
+/// refreshes the persisted location while explicit owner configuration retains the existing
+/// thread-first collision behavior.
+pub(crate) fn combine_selected_capability_roots(
+    thread_roots: &[SelectedCapabilityRoot],
+    sources: impl IntoIterator<Item = (EnvironmentConfigOrigin, Vec<SelectedCapabilityRoot>)>,
+) -> Vec<SelectedCapabilityRoot> {
+    let attachment_roots = sources
+        .into_iter()
+        .flat_map(|(config_origin, roots)| roots.into_iter().map(move |root| (config_origin, root)))
+        .collect::<Vec<_>>();
+    let mut combined_roots = thread_roots
+        .iter()
+        .map(|thread_root| {
+            let CapabilityRootLocation::Environment {
+                environment_id: thread_environment_id,
+                ..
+            } = &thread_root.location;
+            attachment_roots
+                .iter()
+                .find_map(|(origin, attachment_root)| {
+                    if *origin != EnvironmentConfigOrigin::Thread
+                        || attachment_root.id != thread_root.id
+                    {
+                        return None;
+                    }
+                    let CapabilityRootLocation::Environment {
+                        environment_id: attachment_environment_id,
+                        ..
+                    } = &attachment_root.location;
+                    (attachment_environment_id == thread_environment_id).then_some(attachment_root)
+                })
+                .unwrap_or(thread_root)
+                .clone()
+        })
+        .collect::<Vec<_>>();
+    combined_roots.extend(attachment_roots.into_iter().map(|(_, root)| root));
+    combined_roots
 }
 
 pub(crate) fn default_thread_environment_selections(
@@ -410,13 +463,20 @@ impl ThreadEnvironments {
         thread_selected_capability_roots: &[SelectedCapabilityRoot],
     ) -> SelectedCapabilityRootsStatus {
         let environments = self.environments.load();
-        let mut selected_capability_roots = thread_selected_capability_roots.to_vec();
-        for environment in environments.iter() {
-            let EnvironmentConfigState::Ready(config) = &environment.selection.config else {
-                continue;
-            };
-            selected_capability_roots.extend(config.selected_capability_roots.iter().cloned());
-        }
+        let mut selected_capability_roots = combine_selected_capability_roots(
+            thread_selected_capability_roots,
+            environments.iter().filter_map(|environment| {
+                let EnvironmentConfigState::Ready(config) = &environment.selection.config else {
+                    return None;
+                };
+                Some((
+                    environment.config_origin,
+                    environment
+                        .config_origin
+                        .selected_capability_roots(&environment.environment, config),
+                ))
+            }),
+        );
         let mut seen_root_ids = HashSet::with_capacity(selected_capability_roots.len());
         selected_capability_roots.retain(|root| seen_root_ids.insert(root.id.clone()));
 
