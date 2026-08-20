@@ -1111,6 +1111,18 @@ mod tests {
                 expected_token_requests
             );
             assert_eq!(result.is_ok(), expected_token_requests == 1);
+
+            if expected_token_requests == 0 {
+                state
+                    .handle_callback_with_issuer(
+                        "legitimate-code",
+                        &csrf_state,
+                        Some(authorization_issuer.as_str()),
+                    )
+                    .await
+                    .expect("issuer validation failures must preserve OAuth authorization state");
+                assert_eq!(token_requests.load(Ordering::SeqCst), 1);
+            }
             server.abort();
         }
     }

@@ -824,6 +824,101 @@ async fn modern_mode_falls_back_only_for_a_json_rpc_method_not_found() -> anyhow
 }
 
 #[tokio::test]
+async fn modern_legacy_fallback_preserves_authentication_required_error() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    let observed = Arc::new(Mutex::new(Vec::<String>::new()));
+    let recorded = Arc::clone(&observed);
+
+    Mock::given(method("POST"))
+        .and(path("/mcp"))
+        .respond_with(move |request: &Request| {
+            let body: Value = request.body_json().expect("valid JSON-RPC request");
+            let method = body["method"].as_str().expect("JSON-RPC method");
+            recorded.lock().expect("requests lock").push(method.into());
+            match method {
+                "server/discover" => ResponseTemplate::new(200).set_body_json(json!({
+                    "jsonrpc": "2.0",
+                    "id": body["id"],
+                    "error": {"code": -32601, "message": "method not found"},
+                })),
+                "initialize" => ResponseTemplate::new(401)
+                    .insert_header("www-authenticate", "Bearer error=\"invalid_token\""),
+                other => panic!("unexpected authentication fallback request: {other}"),
+            }
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let client = create_client(&server, McpProtocolMode::V20260728).await?;
+    let error = initialize_client(&client)
+        .await
+        .expect_err("legacy fallback should surface the authentication challenge");
+    assert!(
+        codex_rmcp_client::is_authentication_required_error(&error),
+        "legacy fallback must preserve the authentication-required classification: {error:#}"
+    );
+    assert_eq!(
+        *observed.lock().expect("requests lock"),
+        vec!["server/discover", "initialize"]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn modern_legacy_fallback_retries_transient_initialize_failures() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    let observed = Arc::new(Mutex::new(Vec::<String>::new()));
+    let recorded = Arc::clone(&observed);
+
+    Mock::given(method("POST"))
+        .and(path("/mcp"))
+        .respond_with(move |request: &Request| {
+            let body: Value = request.body_json().expect("valid JSON-RPC request");
+            let method = body["method"].as_str().expect("JSON-RPC method");
+            let initialize_attempt = {
+                let mut requests = recorded.lock().expect("requests lock");
+                requests.push(method.into());
+                requests
+                    .iter()
+                    .filter(|request| request.as_str() == "initialize")
+                    .count()
+            };
+            match method {
+                "server/discover" => ResponseTemplate::new(200).set_body_json(json!({
+                    "jsonrpc": "2.0",
+                    "id": body["id"],
+                    "error": {"code": -32601, "message": "method not found"},
+                })),
+                "initialize" if initialize_attempt == 1 => {
+                    ResponseTemplate::new(503).set_body_string("service unavailable")
+                }
+                "initialize" => legacy_initialize_response(&body),
+                "notifications/initialized" => ResponseTemplate::new(202),
+                other => panic!("unexpected retry fallback request: {other}"),
+            }
+        })
+        .expect(5)
+        .mount(&server)
+        .await;
+
+    let client = create_client(&server, McpProtocolMode::V20260728).await?;
+    initialize_client(&client).await?;
+    assert_eq!(
+        *observed.lock().expect("requests lock"),
+        vec![
+            "server/discover",
+            "initialize",
+            "server/discover",
+            "initialize",
+            "notifications/initialized",
+        ]
+    );
+    client.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn modern_mode_falls_back_when_discovery_only_advertises_legacy_versions()
 -> anyhow::Result<()> {
     for legacy_response in ["discover-result", "unsupported-protocol"] {

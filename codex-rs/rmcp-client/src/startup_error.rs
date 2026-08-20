@@ -20,7 +20,10 @@ pub fn is_authentication_required_error(error: &Error) -> bool {
             .is_some_and(auth_error_requires_authentication)
             || source
                 .downcast_ref::<ClientInitializeError>()
-                .is_some_and(|error| {
+                .is_some_and(|mut error| {
+                    while let ClientInitializeError::LegacyFallbackFailed { fallback, .. } = error {
+                        error = fallback;
+                    }
                     matches!(
                         error,
                         ClientInitializeError::TransportError { error, .. }
