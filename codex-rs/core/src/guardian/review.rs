@@ -313,11 +313,13 @@ async fn run_guardian_review(
     options: GuardianReviewOptions,
 ) -> ReviewDecision {
     let turn = Arc::clone(context.turn());
-    if !turn
+    // Required models must use Guardian, but an enabled V2 monitor can satisfy the review.
+    if (!turn
         .config
         .config_layer_stack
         .requirements()
         .auto_review_required_for_model(&turn.model_info.slug)
+        || turn.config.features.enabled(Feature::GuardianV2))
         && reasons.retry.is_none()
         && options
             .external_cancel

@@ -45,6 +45,7 @@ use super::mcp_tool::TEST_TOOL_NAME;
 use super::mcp_tool::start_mcp_server;
 
 const TIMEOUT: Duration = Duration::from_secs(30);
+const MODEL: &str = "mock-model";
 const USER_CONTEXT: &str = "The user authorized reading the existing project files.";
 
 #[derive(Default)]
@@ -63,6 +64,12 @@ enum GuardianRisk {
     Low,
     Threshold,
     High,
+}
+
+#[derive(Clone, Copy)]
+enum ModelReviewRequirement {
+    Optional,
+    Required,
 }
 
 #[derive(Clone, Copy)]
@@ -166,6 +173,7 @@ async fn luna_websocket(
 async fn guardian_v2_routes_tool_approvals(
     risk: GuardianRisk,
     lifecycle: ThreadLifecycle,
+    requirement: ModelReviewRequirement,
 ) -> Result<()> {
     let (luna_score, expected_guardian_reviews) = match risk {
         GuardianRisk::Low => (0.25, 1),
@@ -197,10 +205,24 @@ async fn guardian_v2_routes_tool_approvals(
     let (mcp_server_url, mcp_server_handle) = start_mcp_server().await?;
 
     let codex_home = TempDir::new()?;
+    let (reviewer_config, requested_reviewer) = match requirement {
+        ModelReviewRequirement::Optional => (
+            "approvals_reviewer = \"auto_review\"",
+            ApprovalsReviewer::AutoReview,
+        ),
+        ModelReviewRequirement::Required => {
+            std::fs::write(
+                codex_home.path().join("requirements.toml"),
+                format!("[auto_review]\nrequired_on_models = [\"{MODEL}\"]\n"),
+            )?;
+            ("approvals_reviewer = \"user\"", ApprovalsReviewer::User)
+        }
+    };
     MockResponsesConfig::new(&responses_url)
+        .with_model(MODEL)
         .with_provider_config("supports_websockets = false")
         .with_approval_policy("on-request")
-        .with_root_config("approvals_reviewer = \"auto_review\"")
+        .with_root_config(reviewer_config)
         .with_extra_config(&format!(
             "[mcp_servers.{TEST_SERVER_NAME}]\nurl = \"{mcp_server_url}/mcp\"\ndefault_tools_approval_mode = \"prompt\"\n\n[analytics]\nenabled = true\n\n[otel]\nmetrics_exporter = {{ otlp-http = {{ endpoint = \"{responses_url}/metrics\", protocol = \"json\" }} }}"
         ))
@@ -225,14 +247,18 @@ async fn guardian_v2_routes_tool_approvals(
         .await?;
     let thread = match lifecycle {
         ThreadLifecycle::New => {
-            app_server
+            let started = app_server
                 .start_thread(ThreadStartParams {
                     approval_policy: Some(AskForApproval::OnRequest),
-                    approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+                    approvals_reviewer: Some(requested_reviewer),
                     ..Default::default()
                 })
-                .await?
-                .thread
+                .await?;
+            assert_eq!(
+                (started.model.as_str(), started.approvals_reviewer),
+                (MODEL, ApprovalsReviewer::AutoReview)
+            );
+            started.thread
         }
         ThreadLifecycle::Resume => {
             let original_thread_id = original_thread_id.expect("resumed thread should exist");
@@ -274,7 +300,10 @@ async fn guardian_v2_routes_tool_approvals(
                 text_elements: Vec::new(),
             }],
             approval_policy: Some(AskForApproval::OnRequest),
-            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+            approvals_reviewer: match requirement {
+                ModelReviewRequirement::Optional => Some(ApprovalsReviewer::AutoReview),
+                ModelReviewRequirement::Required => None,
+            },
             ..Default::default()
         })
         .await?;
@@ -372,29 +401,76 @@ async fn guardian_v2_routes_tool_approvals(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_v2_low_risk_actions_skip_subsequent_reviews() -> Result<()> {
     skip_if_no_network!(Ok(()));
-    guardian_v2_routes_tool_approvals(GuardianRisk::Low, ThreadLifecycle::New).await
+    guardian_v2_routes_tool_approvals(
+        GuardianRisk::Low,
+        ThreadLifecycle::New,
+        ModelReviewRequirement::Optional,
+    )
+    .await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_v2_high_risk_actions_require_full_reviews() -> Result<()> {
     skip_if_no_network!(Ok(()));
-    guardian_v2_routes_tool_approvals(GuardianRisk::High, ThreadLifecycle::New).await
+    guardian_v2_routes_tool_approvals(
+        GuardianRisk::High,
+        ThreadLifecycle::New,
+        ModelReviewRequirement::Optional,
+    )
+    .await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_v2_threshold_score_requires_full_reviews() -> Result<()> {
     skip_if_no_network!(Ok(()));
-    guardian_v2_routes_tool_approvals(GuardianRisk::Threshold, ThreadLifecycle::New).await
+    guardian_v2_routes_tool_approvals(
+        GuardianRisk::Threshold,
+        ThreadLifecycle::New,
+        ModelReviewRequirement::Optional,
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_v2_required_model_honors_low_risk_assessment() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    guardian_v2_routes_tool_approvals(
+        GuardianRisk::Low,
+        ThreadLifecycle::New,
+        ModelReviewRequirement::Required,
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_v2_required_model_high_risk_requires_full_review() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    guardian_v2_routes_tool_approvals(
+        GuardianRisk::High,
+        ThreadLifecycle::New,
+        ModelReviewRequirement::Required,
+    )
+    .await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resumed_thread_starts_without_guardian_score() -> Result<()> {
     skip_if_no_network!(Ok(()));
-    guardian_v2_routes_tool_approvals(GuardianRisk::Low, ThreadLifecycle::Resume).await
+    guardian_v2_routes_tool_approvals(
+        GuardianRisk::Low,
+        ThreadLifecycle::Resume,
+        ModelReviewRequirement::Optional,
+    )
+    .await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn forked_thread_starts_without_guardian_score() -> Result<()> {
     skip_if_no_network!(Ok(()));
-    guardian_v2_routes_tool_approvals(GuardianRisk::Low, ThreadLifecycle::Fork).await
+    guardian_v2_routes_tool_approvals(
+        GuardianRisk::Low,
+        ThreadLifecycle::Fork,
+        ModelReviewRequirement::Optional,
+    )
+    .await
 }
