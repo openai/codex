@@ -1167,6 +1167,18 @@ impl FileSystemSandboxPolicy {
         self.get_writable_roots_with_cwd_impl(cwd, WritableRootPathResolution::Effective)
     }
 
+    /// Returns whether any effective writable root exists without materializing its carveouts.
+    pub fn has_writable_roots_with_cwd(&self, cwd: &Path) -> bool {
+        !self.has_full_disk_write_access()
+            && self
+                .resolved_entries_with_cwd(cwd)
+                .into_iter()
+                .any(|entry| {
+                    entry.access.can_write()
+                        && self.can_write_path_with_cwd(entry.path.as_path(), cwd)
+                })
+    }
+
     /// Returns writable roots without following attacker-mutable path components.
     ///
     /// Trusted top-level aliases such as `/tmp -> /private/tmp` are still
@@ -2169,6 +2181,44 @@ mod tests {
             assert_eq!(
                 serde_json::to_value(actual).expect("lossless raw permission path"),
                 expected
+            );
+        }
+    }
+
+    #[test]
+    fn writable_root_presence_matches_materialized_roots() {
+        let cwd = TempDir::new().expect("tempdir");
+        let writable_root = AbsolutePathBuf::resolve_path_against_base("work", cwd.path());
+        let policies = [
+            FileSystemSandboxPolicy::read_only(),
+            FileSystemSandboxPolicy::unrestricted(),
+            FileSystemSandboxPolicy::external_sandbox(),
+            FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry::new(
+                writable_root.clone().into(),
+                FileSystemAccessMode::Write,
+            )]),
+            FileSystemSandboxPolicy::restricted(vec![
+                FileSystemSandboxEntry::new(
+                    writable_root.clone().into(),
+                    FileSystemAccessMode::Write,
+                ),
+                FileSystemSandboxEntry::new(writable_root.into(), FileSystemAccessMode::Deny),
+            ]),
+            FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry::new(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::unknown(
+                        ":future_special_path",
+                        /*subpath*/ None,
+                    ),
+                },
+                FileSystemAccessMode::Write,
+            )]),
+        ];
+
+        for policy in policies {
+            assert_eq!(
+                policy.has_writable_roots_with_cwd(cwd.path()),
+                !policy.get_writable_roots_with_cwd(cwd.path()).is_empty()
             );
         }
     }
