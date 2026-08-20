@@ -804,6 +804,85 @@ async fn queued_startup_app_event_owns_protected_view_before_draft_restore() -> 
 }
 
 #[tokio::test]
+async fn known_thread_started_preserves_session_without_reading_unmaterialized_rollout() {
+    use futures::FutureExt as _;
+
+    let mut app = make_test_app().await;
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let thread_id = ThreadId::new();
+    let session = test_thread_session(thread_id, temp_dir.path().to_path_buf());
+    app.primary_session_configured = Some(session.clone());
+    app.thread_event_channels.insert(
+        thread_id,
+        ThreadEventChannel::new_with_session(
+            THREAD_EVENT_CHANNEL_CAPACITY,
+            session.clone(),
+            Vec::new(),
+        ),
+    );
+    let notification = ThreadStartedNotification {
+        thread: Thread {
+            id: thread_id.to_string(),
+            extra: None,
+            session_id: thread_id.to_string(),
+            forked_from_id: None,
+            parent_thread_id: None,
+            preview: String::new(),
+            ephemeral: false,
+            section: None,
+            section_entered_at: None,
+            project_id: None,
+            history_mode: Default::default(),
+            model_provider: "notification-provider".to_string(),
+            created_at: 1,
+            updated_at: 2,
+            recency_at: Some(2),
+            status: codex_app_server_protocol::ThreadStatus::Idle,
+            path: Some(temp_dir.path().join("not-yet-materialized.jsonl")),
+            cwd: session.cwd.clone(),
+            cli_version: "0.0.0".to_string(),
+            source: codex_app_server_protocol::SessionSource::Unknown,
+            can_accept_direct_input: None,
+            thread_source: None,
+            agent_nickname: Some("Robie".to_string()),
+            agent_role: Some("explorer".to_string()),
+            git_info: None,
+            name: Some("notification title".to_string()),
+            turns: Vec::new(),
+        },
+    };
+
+    tokio::task::unconstrained(app.enqueue_thread_notification(
+        thread_id,
+        ServerNotification::ThreadStarted(notification.clone()),
+    ))
+    .now_or_never()
+    .expect("known sessions must not wait for rollout reads")
+    .expect("thread notification should be routed");
+
+    let store = app.thread_event_channels[&thread_id].store.lock().await;
+    assert_eq!(store.session, Some(session));
+    let Some(ThreadBufferedEvent::Notification(buffered)) = store.buffer.back() else {
+        panic!("thread started notification should remain buffered");
+    };
+    let ServerNotification::ThreadStarted(buffered) = buffered.as_ref() else {
+        panic!("buffered notification should be thread started");
+    };
+    assert_eq!(buffered, &notification);
+    drop(store);
+    assert_eq!(
+        app.agent_navigation.get(&thread_id),
+        Some(&AgentPickerThreadEntry {
+            agent_nickname: Some("Robie".to_string()),
+            agent_role: Some("explorer".to_string()),
+            agent_path: None,
+            is_running: false,
+            is_closed: false,
+        })
+    );
+}
+
+#[tokio::test]
 async fn startup_thread_started_submits_queued_startup_input() {
     let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
     app.pending_startup_thread_start = true;
