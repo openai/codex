@@ -2,19 +2,8 @@ use codex_features::Feature;
 use codex_features::Features;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::TUI_VISIBLE_COLLABORATION_MODES;
-use codex_protocol::openai_models::ConfigShellToolType;
-use codex_protocol::openai_models::ModelInfo;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::path::PathBuf;
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum UnifiedExecFeatureMode {
-    /// Unified exec should not be selected by this feature set.
-    ///
-    Disabled,
-    Direct,
-    ZshFork,
-}
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ToolUserShellType {
@@ -36,40 +25,6 @@ pub fn request_user_input_available_modes(features: &Features) -> Vec<ModeKind> 
         .collect()
 }
 
-/// Returns the unified-exec mode requested by feature policy, before runtime
-/// session inputs such as platform, user shell, and zsh-fork binary paths are
-/// resolved.
-///
-/// Disabling unified exec keeps command execution disabled. The legacy
-/// composition flag can still disable zsh-fork interception independently.
-pub fn unified_exec_feature_mode_for_features(features: &Features) -> UnifiedExecFeatureMode {
-    if !features.enabled(Feature::ShellTool) || !features.enabled(Feature::UnifiedExec) {
-        UnifiedExecFeatureMode::Disabled
-    } else if features.enabled(Feature::ShellZshFork) {
-        if features.enabled(Feature::UnifiedExecZshFork) {
-            UnifiedExecFeatureMode::ZshFork
-        } else {
-            UnifiedExecFeatureMode::Direct
-        }
-    } else {
-        UnifiedExecFeatureMode::Direct
-    }
-}
-
-pub fn shell_type_for_model_and_features(
-    model_info: &ModelInfo,
-    features: &Features,
-) -> ConfigShellToolType {
-    if !features.enabled(Feature::ShellTool)
-        || !features.enabled(Feature::UnifiedExec)
-        || matches!(model_info.shell_type, ConfigShellToolType::Disabled)
-    {
-        ConfigShellToolType::Disabled
-    } else {
-        ConfigShellToolType::UnifiedExec
-    }
-}
-
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum UnifiedExecShellMode {
     Direct,
@@ -84,13 +39,16 @@ pub struct ZshForkConfig {
 
 impl UnifiedExecShellMode {
     pub fn for_session(
-        feature_mode: UnifiedExecFeatureMode,
+        features: &Features,
         user_shell_type: ToolUserShellType,
         shell_zsh_path: Option<&PathBuf>,
         main_execve_wrapper_exe: Option<&PathBuf>,
     ) -> Self {
         if cfg!(unix)
-            && matches!(feature_mode, UnifiedExecFeatureMode::ZshFork)
+            && features.enabled(Feature::ShellTool)
+            && features.enabled(Feature::UnifiedExec)
+            && features.enabled(Feature::ShellZshFork)
+            && features.enabled(Feature::UnifiedExecZshFork)
             && matches!(user_shell_type, ToolUserShellType::Zsh)
             && let (Some(shell_zsh_path), Some(main_execve_wrapper_exe)) =
                 (shell_zsh_path, main_execve_wrapper_exe)

@@ -161,14 +161,6 @@ pub enum ExecExpirationOutcome {
     Cancelled,
 }
 
-impl From<Option<u64>> for ExecExpiration {
-    fn from(timeout_ms: Option<u64>) -> Self {
-        timeout_ms.map_or(ExecExpiration::DefaultTimeout, |timeout_ms| {
-            ExecExpiration::Timeout(Duration::from_millis(timeout_ms))
-        })
-    }
-}
-
 impl From<u64> for ExecExpiration {
     fn from(timeout_ms: u64) -> Self {
         ExecExpiration::Timeout(Duration::from_millis(timeout_ms))

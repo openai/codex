@@ -3,7 +3,6 @@ use codex_core::TurnInputRequest;
 use codex_core::config::Config;
 use codex_core::config::Constrained;
 use codex_core::sandboxing::SandboxPermissions;
-use codex_features::Feature;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::openai_models::MODEL_SPECIALTY_CYBER;
 use codex_protocol::protocol::AskForApproval;
@@ -40,23 +39,6 @@ const TEST_COMMAND: &str = "git version";
 const SAVED_PREFIX: &str = r#"["git", "version"]"#;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum CommandTool {
-    UnifiedExec,
-}
-
-impl CommandTool {
-    fn configure(self, config: &mut Config) {
-        if self == Self::UnifiedExec {
-            config.use_experimental_unified_exec_tool = true;
-            config
-                .features
-                .enable(Feature::UnifiedExec)
-                .expect("enable unified exec");
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ModelSpecialty {
     Cyber,
     General,
@@ -89,19 +71,17 @@ fn configure_saved_prefix_and_guardian(config: &mut Config) {
         .expect("set workspace sandbox policy");
 }
 
-fn command_response(response_id: &str, call_id: &str, command_tool: CommandTool) -> Result<String> {
-    let (tool_name, command_key) = match command_tool {
-        CommandTool::UnifiedExec => ("exec_command", "cmd"),
-    };
-    let mut args = json!({
+fn command_response(response_id: &str, call_id: &str) -> Result<String> {
+    let args = json!({
+        "cmd": TEST_COMMAND,
         "sandbox_permissions": SandboxPermissions::RequireEscalated,
         "justification": "Check whether a saved prefix bypasses Guardian.",
         "prefix_rule": ["git", "version"],
     });
-    args[command_key] = json!(TEST_COMMAND);
+
     Ok(sse(vec![
         ev_response_created(response_id),
-        ev_function_call(call_id, tool_name, &serde_json::to_string(&args)?),
+        ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
         ev_completed(response_id),
     ]))
 }
@@ -128,12 +108,11 @@ async fn submit_model_turn(test: &TestCodex, model: &str, prompt: &str) -> Resul
     test.submit_text_turn(prompt).await
 }
 
-#[test_case(CommandTool::UnifiedExec, ModelSpecialty::Cyber, ShellBackend::Standard; "cyber unified exec is reviewed")]
-#[test_case(CommandTool::UnifiedExec, ModelSpecialty::Cyber, ShellBackend::ZshFork; "cyber zsh unified exec is reviewed")]
-#[test_case(CommandTool::UnifiedExec, ModelSpecialty::General, ShellBackend::Standard; "general unified exec keeps saved approval")]
+#[test_case(ModelSpecialty::Cyber, ShellBackend::Standard; "cyber unified exec is reviewed")]
+#[test_case(ModelSpecialty::Cyber, ShellBackend::ZshFork; "cyber zsh unified exec is reviewed")]
+#[test_case(ModelSpecialty::General, ShellBackend::Standard; "general unified exec keeps saved approval")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn saved_prefix_only_bypasses_guardian_for_general_models(
-    command_tool: CommandTool,
     model_specialty: ModelSpecialty,
     shell_backend: ShellBackend,
 ) -> Result<()> {
@@ -158,16 +137,7 @@ async fn saved_prefix_only_bypasses_guardian_for_general_models(
                 model.model_specialty = Some(MODEL_SPECIALTY_CYBER.to_string());
             }
         })
-        .with_config(move |config| {
-            configure_saved_prefix_and_guardian(config);
-            command_tool.configure(config);
-            if shell_backend == ShellBackend::ZshFork && command_tool == CommandTool::UnifiedExec {
-                config
-                    .features
-                    .enable(Feature::UnifiedExecZshFork)
-                    .expect("enable unified-exec zsh fork");
-            }
-        });
+        .with_config(configure_saved_prefix_and_guardian);
     let test = builder.build_with_auto_env(&server).await?;
     let expected_guardian_review_count = match (model_specialty, shell_backend) {
         (ModelSpecialty::General, _) => 0,
@@ -178,7 +148,6 @@ async fn saved_prefix_only_bypasses_guardian_for_general_models(
     let mut response_bodies = vec![command_response(
         "parent-saved-prefix-command",
         "saved-prefix-command",
-        command_tool,
     )?];
     for review_index in 0..expected_guardian_review_count {
         response_bodies.push(guardian_allow_response(&format!(
@@ -217,11 +186,8 @@ async fn saved_prefix_only_bypasses_guardian_for_general_models(
     Ok(())
 }
 
-#[test_case(CommandTool::UnifiedExec; "unified exec")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn cyber_model_user_approval_never_offers_a_reusable_prefix(
-    command_tool: CommandTool,
-) -> Result<()> {
+async fn cyber_model_user_approval_never_offers_a_reusable_prefix() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
     skip_if_wine_exec!(Ok(()), "command approval requires host-native paths");
@@ -233,7 +199,6 @@ async fn cyber_model_user_approval_never_offers_a_reusable_prefix(
         })
         .with_config(move |config| {
             configure_saved_prefix_and_guardian(config);
-            command_tool.configure(config);
             config.approvals_reviewer = ApprovalsReviewer::User;
         });
     let test = builder.build_with_auto_env(&server).await?;
@@ -242,11 +207,7 @@ async fn cyber_model_user_approval_never_offers_a_reusable_prefix(
     let responses = mount_sse_sequence(
         &server,
         vec![
-            command_response(
-                "parent-one-time-approval",
-                "one-time-approval",
-                command_tool,
-            )?,
+            command_response("parent-one-time-approval", "one-time-approval")?,
             sse_completed("parent-one-time-complete"),
         ],
     )
@@ -322,24 +283,12 @@ async fn switching_models_suppresses_and_restores_saved_prefix_approvals() -> Re
     let responses = mount_sse_sequence(
         &server,
         vec![
-            command_response(
-                "parent-general-first-command",
-                "general-first-command",
-                CommandTool::UnifiedExec,
-            )?,
+            command_response("parent-general-first-command", "general-first-command")?,
             sse_completed("parent-general-first-complete"),
-            command_response(
-                "parent-cyber-command",
-                "cyber-command",
-                CommandTool::UnifiedExec,
-            )?,
+            command_response("parent-cyber-command", "cyber-command")?,
             guardian_allow_response("guardian-cyber-review"),
             sse_completed("parent-cyber-complete"),
-            command_response(
-                "parent-general-last-command",
-                "general-last-command",
-                CommandTool::UnifiedExec,
-            )?,
+            command_response("parent-general-last-command", "general-last-command")?,
             sse_completed("parent-general-last-complete"),
         ],
     )

@@ -662,7 +662,7 @@ async fn request_user_input_stays_direct_in_code_mode_only() {
 #[tokio::test]
 async fn shell_family_registers_only_unified_exec_tools() {
     let plan = probe(|turn| {
-        set_features(turn, &[Feature::ShellTool, Feature::UnifiedExec]);
+        set_features(turn, &[Feature::ShellTool]);
         set_feature(turn, Feature::ShellZshFork, /*enabled*/ false);
         Arc::make_mut(&mut turn.model_info).shell_type = ConfigShellToolType::UnifiedExec;
     })
@@ -679,7 +679,6 @@ async fn login_shell_parameter_follows_selected_environment() {
         for allow_login_shell in [false, true] {
             let plan = probe(|turn| {
                 set_feature(turn, Feature::ShellTool, /*enabled*/ true);
-                set_feature(turn, Feature::UnifiedExec, /*enabled*/ true);
                 set_feature(turn, Feature::ShellZshFork, /*enabled*/ false);
                 Arc::make_mut(&mut turn.model_info).shell_type = ConfigShellToolType::UnifiedExec;
                 update_config(turn, |config| {
@@ -715,7 +714,7 @@ async fn login_shell_parameter_follows_selected_environment() {
 #[tokio::test]
 async fn login_shell_parameter_is_available_when_any_environment_allows_it() {
     let plan = probe(|turn| {
-        set_features(turn, &[Feature::ShellTool, Feature::UnifiedExec]);
+        set_features(turn, &[Feature::ShellTool]);
         set_feature(turn, Feature::ShellZshFork, /*enabled*/ false);
         update_config(turn, |config| {
             config.permissions.allow_login_shell = false;
@@ -756,8 +755,8 @@ async fn disabling_shell_tools_disables_command_tools_for_all_environments() {
         );
     })
     .await;
-    remote_environment.assert_visible_lacks(&["shell_command", "exec_command", "write_stdin"]);
-    remote_environment.assert_registered_lacks(&["shell_command", "exec_command", "write_stdin"]);
+    remote_environment.assert_visible_lacks(&["exec_command", "write_stdin"]);
+    remote_environment.assert_registered_lacks(&["exec_command", "write_stdin"]);
 
     let multiple_local_environments = probe(|turn| {
         set_feature(turn, Feature::ShellTool, /*enabled*/ false);
@@ -765,16 +764,8 @@ async fn disabling_shell_tools_disables_command_tools_for_all_environments() {
         duplicate_primary_environment(turn);
     })
     .await;
-    multiple_local_environments.assert_visible_lacks(&[
-        "shell_command",
-        "exec_command",
-        "write_stdin",
-    ]);
-    multiple_local_environments.assert_registered_lacks(&[
-        "shell_command",
-        "exec_command",
-        "write_stdin",
-    ]);
+    multiple_local_environments.assert_visible_lacks(&["exec_command", "write_stdin"]);
+    multiple_local_environments.assert_registered_lacks(&["exec_command", "write_stdin"]);
 }
 
 #[tokio::test]
@@ -808,7 +799,7 @@ async fn dynamic_tools_cannot_reclaim_the_reserved_exec_command_name() {
 #[tokio::test]
 async fn shell_zsh_fork_keeps_unified_exec_available() {
     let without_composition = probe(|turn| {
-        set_features(turn, &[Feature::ShellTool, Feature::UnifiedExec]);
+        set_features(turn, &[Feature::ShellTool]);
         set_feature(turn, Feature::ShellZshFork, /*enabled*/ true);
         set_feature(turn, Feature::UnifiedExecZshFork, /*enabled*/ false);
         Arc::make_mut(&mut turn.model_info).shell_type = ConfigShellToolType::UnifiedExec;
@@ -823,7 +814,6 @@ async fn shell_zsh_fork_keeps_unified_exec_available() {
             turn,
             &[
                 Feature::ShellTool,
-                Feature::UnifiedExec,
                 Feature::ShellZshFork,
                 Feature::UnifiedExecZshFork,
             ],
@@ -847,7 +837,6 @@ async fn zsh_fork_unified_exec_hides_shell_parameter() {
             turn,
             &[
                 Feature::ShellTool,
-                Feature::UnifiedExec,
                 Feature::ShellZshFork,
                 Feature::UnifiedExecZshFork,
             ],
@@ -872,7 +861,6 @@ async fn zsh_fork_unified_exec_keeps_shell_parameter_when_remote_environment_ava
             turn,
             &[
                 Feature::ShellTool,
-                Feature::UnifiedExec,
                 Feature::ShellZshFork,
                 Feature::UnifiedExecZshFork,
             ],
@@ -923,8 +911,6 @@ async fn zsh_fork_unified_exec_keeps_shell_parameter_when_remote_environment_ava
     .await;
 
     plan.assert_visible_contains(&["exec_command", "write_stdin"]);
-    plan.assert_visible_lacks(&["shell_command"]);
-    plan.assert_registered_lacks(&["shell_command"]);
     assert!(has_parameter(plan.visible_spec("exec_command"), "shell"));
     assert!(has_parameter(
         plan.visible_spec("exec_command"),
@@ -960,7 +946,6 @@ async fn environment_count_controls_environment_backed_tools() {
     let multiple_environments = probe(|turn| {
         duplicate_primary_environment(turn);
         set_feature(turn, Feature::ShellTool, /*enabled*/ true);
-        set_feature(turn, Feature::UnifiedExec, /*enabled*/ true);
         set_feature(turn, Feature::RequestPermissionsTool, /*enabled*/ true);
         Arc::make_mut(&mut turn.model_info).apply_patch_tool_type =
             Some(ApplyPatchToolType::Freeform);
@@ -972,8 +957,6 @@ async fn environment_count_controls_environment_backed_tools() {
         "view_image",
         "request_permissions",
     ]);
-    multiple_environments.assert_visible_lacks(&["shell_command"]);
-    multiple_environments.assert_registered_lacks(&["shell_command"]);
     assert!(has_parameter(
         multiple_environments.visible_spec("exec_command"),
         "environment_id"
@@ -990,7 +973,6 @@ async fn environment_count_controls_environment_backed_tools() {
 #[tokio::test]
 async fn environment_tools_follow_the_step_context() {
     let (_session, mut turn) = make_session_and_context().await;
-    set_feature(&mut turn, Feature::UnifiedExec, /*enabled*/ true);
     Arc::make_mut(&mut turn.model_info).apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
 
     let environments = turn.environments.clone();
@@ -1346,7 +1328,7 @@ async fn strict_namespace_ownership_requires_tool_namespace_inventory_opt_in() {
 async fn unified_tool_runtimes_preserve_source_order_and_collision_priority() {
     let plan = probe_with(
         |turn| {
-            set_features(turn, &[Feature::ShellTool, Feature::UnifiedExec]);
+            set_features(turn, &[Feature::ShellTool]);
             set_feature(turn, Feature::ShellZshFork, /*enabled*/ false);
             Arc::make_mut(&mut turn.model_info).shell_type = ConfigShellToolType::UnifiedExec;
         },

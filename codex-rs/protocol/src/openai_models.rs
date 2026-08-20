@@ -297,9 +297,7 @@ pub enum ModelVisibility {
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum ConfigShellToolType {
-    Default,
-    Local,
-    #[serde(alias = "shell_command")]
+    #[serde(alias = "default", alias = "local", alias = "shell_command")]
     UnifiedExec,
     Disabled,
 }
@@ -888,10 +886,13 @@ mod tests {
 
     #[test]
     fn legacy_shell_model_metadata_deserializes_as_unified_exec() {
-        assert_eq!(
-            from_str::<ConfigShellToolType>("\"shell_command\"").expect("legacy shell type"),
-            ConfigShellToolType::UnifiedExec
-        );
+        for legacy_shell_type in ["default", "local", "shell_command"] {
+            assert_eq!(
+                from_str::<ConfigShellToolType>(&format!("\"{legacy_shell_type}\""))
+                    .expect("legacy shell type"),
+                ConfigShellToolType::UnifiedExec
+            );
+        }
         assert_eq!(
             to_string(&ConfigShellToolType::UnifiedExec).expect("serialize unified shell type"),
             "\"unified_exec\""

@@ -31,8 +31,8 @@ use std::collections::HashMap;
 use std::path::Path;
 
 pub(crate) mod apply_patch;
-pub(crate) mod shell;
 pub(crate) mod unified_exec;
+pub(crate) mod zsh_fork;
 
 pub(crate) fn exec_env_for_sandbox_permissions(
     env: &HashMap<String, String>,

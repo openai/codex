@@ -210,7 +210,6 @@ struct GuardianReviewSessionReuseKey {
     main_execve_wrapper_exe: Option<PathBuf>,
     zsh_path: Option<PathBuf>,
     features: ManagedFeatures,
-    use_experimental_unified_exec_tool: bool,
     environment_ids: Vec<String>,
 }
 
@@ -249,7 +248,6 @@ impl GuardianReviewSessionReuseKey {
             main_execve_wrapper_exe: spawn_config.main_execve_wrapper_exe.clone(),
             zsh_path: spawn_config.zsh_path.clone(),
             features: spawn_config.features.clone(),
-            use_experimental_unified_exec_tool: spawn_config.use_experimental_unified_exec_tool,
             environment_ids: Vec::new(),
         }
     }

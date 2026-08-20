@@ -108,21 +108,6 @@ fn parse_result(item: &Value) -> CommandResult {
     }
 }
 
-fn command_event_with_request_permissions<S: serde::Serialize>(
-    call_id: &str,
-    command: &str,
-    additional_permissions: &S,
-) -> Result<Value> {
-    let args = json!({
-        "cmd": command,
-        "yield_time_ms": 10_000_u64,
-        "sandbox_permissions": SandboxPermissions::WithAdditionalPermissions,
-        "additional_permissions": additional_permissions,
-    });
-    let args_str = serde_json::to_string(&args)?;
-    Ok(ev_function_call(call_id, "exec_command", &args_str))
-}
-
 fn request_permissions_tool_event(
     call_id: &str,
     reason: &str,
@@ -136,19 +121,10 @@ fn request_permissions_tool_event(
     Ok(ev_function_call(call_id, "request_permissions", &args_str))
 }
 
-fn command_event(call_id: &str, command: &str) -> Result<Value> {
-    let args = json!({
-        "cmd": command,
-        "yield_time_ms": 10_000_u64,
-    });
-    let args_str = serde_json::to_string(&args)?;
-    Ok(ev_function_call(call_id, "exec_command", &args_str))
-}
-
 fn exec_command_event(call_id: &str, command: &str) -> Result<Value> {
     let args = json!({
         "cmd": command,
-        "yield_time_ms": 1_000_u64,
+        "yield_time_ms": 10_000_u64,
     });
     let args_str = serde_json::to_string(&args)?;
     Ok(ev_function_call(call_id, "exec_command", &args_str))
@@ -161,7 +137,7 @@ fn exec_command_event_with_request_permissions<S: serde::Serialize>(
 ) -> Result<Value> {
     let args = json!({
         "cmd": command,
-        "yield_time_ms": 1_000_u64,
+        "yield_time_ms": 10_000_u64,
         "sandbox_permissions": SandboxPermissions::WithAdditionalPermissions,
         "additional_permissions": additional_permissions,
     });
@@ -362,7 +338,8 @@ async fn with_additional_permissions_requires_approval_under_on_request() -> Res
         )),
         ..Default::default()
     };
-    let event = command_event_with_request_permissions(call_id, command, &requested_permissions)?;
+    let event =
+        exec_command_event_with_request_permissions(call_id, command, &requested_permissions)?;
 
     let _ = mount_sse_once(
         &server,
@@ -911,7 +888,8 @@ async fn read_only_with_additional_permissions_does_not_widen_to_unrequested_cwd
         )),
         ..Default::default()
     };
-    let event = command_event_with_request_permissions(call_id, &command, &requested_permissions)?;
+    let event =
+        exec_command_event_with_request_permissions(call_id, &command, &requested_permissions)?;
 
     let _ = mount_sse_once(
         &server,
@@ -1015,7 +993,8 @@ async fn read_only_with_additional_permissions_does_not_widen_to_unrequested_tmp
         )),
         ..Default::default()
     };
-    let event = command_event_with_request_permissions(call_id, &command, &requested_permissions)?;
+    let event =
+        exec_command_event_with_request_permissions(call_id, &command, &requested_permissions)?;
 
     let _ = mount_sse_once(
         &server,
@@ -1126,7 +1105,8 @@ async fn workspace_write_with_additional_permissions_can_write_outside_cwd() -> 
         )),
         ..RequestPermissionProfile::default()
     };
-    let event = command_event_with_request_permissions(call_id, &command, &requested_permissions)?;
+    let event =
+        exec_command_event_with_request_permissions(call_id, &command, &requested_permissions)?;
 
     let _ = mount_sse_once(
         &server,
@@ -1231,7 +1211,8 @@ async fn with_additional_permissions_denied_approval_blocks_execution() -> Resul
         )),
         ..Default::default()
     };
-    let event = command_event_with_request_permissions(call_id, &command, &requested_permissions)?;
+    let event =
+        exec_command_event_with_request_permissions(call_id, &command, &requested_permissions)?;
 
     let _ = mount_sse_once(
         &server,
@@ -1584,7 +1565,7 @@ async fn request_permissions_grants_apply_to_later_exec_command_calls_without_in
             ]),
             sse(vec![
                 ev_response_created("resp-sticky-shell-independent-2"),
-                command_event("shell-call", &command)?,
+                exec_command_event("shell-call", &command)?,
                 ev_completed("resp-sticky-shell-independent-2"),
             ]),
             sse(vec![
@@ -2122,10 +2103,6 @@ async fn denied_child_permissions_require_fresh_approval(
                 .permissions
                 .set_permission_profile(CorePermissionProfile::read_only())
                 .expect("set permission profile");
-            config
-                .features
-                .enable(Feature::UnifiedExec)
-                .expect("enable unified exec");
             let inline_permissions = if mode == ApprovalMode::InlineFeatureDisabled {
                 config.features.disable(Feature::ExecPermissionApprovals)
             } else {

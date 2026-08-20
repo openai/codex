@@ -2,7 +2,6 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::RemoveOptions;
-use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -46,11 +45,6 @@ async fn workspace_roots_test(server: &MockServer) -> Result<TestCodex> {
                 .expect("test workspace should be canonicalizable")
                 .abs();
         }
-        config.use_experimental_unified_exec_tool = true;
-        config
-            .features
-            .enable(Feature::UnifiedExec)
-            .expect("test config should allow feature update");
         config.workspace_roots = vec![config.cwd.clone()];
         config.set_windows_sandbox_enabled(/*value*/ true);
     });

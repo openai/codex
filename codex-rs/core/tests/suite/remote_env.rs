@@ -204,14 +204,7 @@ fn test_codex_with_wait_for_environment() -> TestCodexBuilder {
 }
 
 async fn unified_exec_test(server: &wiremock::MockServer) -> Result<TestCodex> {
-    let mut builder = test_codex().with_config(|config| {
-        config.use_experimental_unified_exec_tool = true;
-        let result = config.features.enable(Feature::UnifiedExec);
-        assert!(
-            result.is_ok(),
-            "unified exec should enable for test: {result:?}",
-        );
-    });
+    let mut builder = test_codex();
     builder.build_with_remote_and_local_env(server).await
 }
 
@@ -405,13 +398,7 @@ async fn explicit_remote_shell_runs_in_remote_cwd() -> Result<()> {
         "login": false,
         "yield_time_ms": 10_000,
     }))?;
-    let mut builder = test_codex().with_config(|config| {
-        config.use_experimental_unified_exec_tool = true;
-        config
-            .features
-            .enable(Feature::UnifiedExec)
-            .expect("test config should allow feature update");
-    });
+    let mut builder = test_codex();
     let test = builder.build_with_auto_env(&server).await?;
     let response_mock = mount_sse_sequence(
         &server,
@@ -468,11 +455,6 @@ async fn environment_permissions_follow_configuration_ownership() -> Result<()> 
 
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(|config| {
-        config.use_experimental_unified_exec_tool = true;
-        config
-            .features
-            .enable(Feature::UnifiedExec)
-            .expect("test config should allow feature update");
         config
             .permissions
             .set_permission_profile(PermissionProfile::workspace_write())
@@ -1229,12 +1211,7 @@ async fn shared_executor_keeps_ready_capability_roots_scoped_to_each_attachment(
     let server = start_mock_server().await;
     let mut extensions = ExtensionRegistryBuilder::new();
     extensions.prompt_contributor(Arc::new(ReadyCapabilityRootsTestExtension::default()));
-    let mut builder = test_codex()
-        .with_extensions(Arc::new(extensions.build()))
-        .with_config(|config| {
-            config.use_experimental_unified_exec_tool = true;
-            assert!(config.features.enable(Feature::UnifiedExec).is_ok());
-        });
+    let mut builder = test_codex().with_extensions(Arc::new(extensions.build()));
     let test = builder.build_with_auto_env(&server).await?;
     let selection = test
         .codex
@@ -1498,9 +1475,7 @@ async fn pending_attachment_installs_configuration_before_waiting_turn_resumes()
     let mut builder = test_codex()
         .with_extensions(Arc::new(extensions.build()))
         .with_config(|config| {
-            config.use_experimental_unified_exec_tool = true;
             assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
-            assert!(config.features.enable(Feature::UnifiedExec).is_ok());
             config
                 .permissions
                 .set_permission_profile(PermissionProfile::read_only())
@@ -1827,9 +1802,7 @@ async fn ready_before_selection_resolves_resumed_thread_capability_root_after_wa
         .with_extensions(Arc::new(extensions.build()))
         .with_config(|config| {
             config.project_doc_max_bytes = 0;
-            config.use_experimental_unified_exec_tool = true;
             assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
-            assert!(config.features.enable(Feature::UnifiedExec).is_ok());
         });
     let test = builder.build(&server).await?;
     let refreshed_root = SelectedCapabilityRoot {
@@ -2018,9 +1991,7 @@ async fn deferred_executor_stays_pending_after_materialization() -> Result<()> {
     )
     .await;
     let mut builder = test_codex_with_wait_for_environment().with_config(|config| {
-        config.use_experimental_unified_exec_tool = true;
         assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
-        assert!(config.features.enable(Feature::UnifiedExec).is_ok());
     });
     let test = timeout(Duration::from_secs(5), builder.build(&server))
         .await
@@ -2310,11 +2281,9 @@ async fn deferred_executor_guardian_uses_newly_ready_step_environment() -> Resul
         .with_exec_server_url(format!("ws://{}", listener.local_addr()?))
         .with_config(|config| {
             config.project_doc_max_bytes = 0;
-            config.use_experimental_unified_exec_tool = true;
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
             config.approvals_reviewer = ApprovalsReviewer::AutoReview;
             assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
-            assert!(config.features.enable(Feature::UnifiedExec).is_ok());
         });
     let (attach_tx, attach_rx) = tokio::sync::oneshot::channel();
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
@@ -3049,13 +3018,8 @@ async fn remote_request_permissions_grant_unblocks_later_remote_exec() -> Result
 
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(|config| {
-        config.use_experimental_unified_exec_tool = true;
         config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
         config.approvals_reviewer = ApprovalsReviewer::User;
-        config
-            .features
-            .enable(Feature::UnifiedExec)
-            .expect("test config should allow feature update");
         config
             .features
             .enable(Feature::ExecPermissionApprovals)

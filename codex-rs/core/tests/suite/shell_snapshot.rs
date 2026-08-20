@@ -127,11 +127,6 @@ async fn run_snapshot_command_with_options(
         shell_environment_set,
     } = options;
     let builder = test_codex().with_config(move |config| {
-        config.use_experimental_unified_exec_tool = true;
-        config
-            .features
-            .enable(Feature::UnifiedExec)
-            .expect("test config should allow feature update");
         config
             .features
             .enable(Feature::ShellSnapshot)
@@ -320,11 +315,6 @@ async fn linux_unified_exec_uses_shell_snapshot() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_snapshot_preserves_shell_environment_policy_set() -> Result<()> {
     let builder = test_codex().with_config(|config| {
-        config.use_experimental_unified_exec_tool = true;
-        config
-            .features
-            .enable(Feature::UnifiedExec)
-            .expect("test config should allow feature update");
         config
             .features
             .enable(Feature::ShellSnapshot)

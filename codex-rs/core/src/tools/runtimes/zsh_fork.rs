@@ -28,9 +28,13 @@ pub(crate) async fn maybe_prepare_unified_exec(
 }
 
 #[cfg(unix)]
+#[path = "zsh_fork/unix_escalation.rs"]
+mod unix_escalation;
+
+#[cfg(unix)]
 mod imp {
     use super::*;
-    use crate::tools::runtimes::shell::unix_escalation;
+    use crate::tools::runtimes::zsh_fork::unix_escalation;
     use crate::unified_exec::SpawnLifecycle;
     use codex_shell_escalation::ESCALATE_SOCKET_ENV_VAR;
     use codex_shell_escalation::EscalationSession;

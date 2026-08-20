@@ -4,7 +4,6 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_core::TurnInputRequest;
-use codex_features::Feature;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
@@ -651,7 +650,6 @@ timeout = 900
     }
     let mut builder = builder.with_config(move |config| {
         config.project_doc_max_bytes = 0;
-        config.use_experimental_unified_exec_tool = true;
         if matches!(scenario, PushedExecScenario::ElevatedPowerShell) {
             config.set_windows_elevated_sandbox_enabled(/*value*/ true);
         }
@@ -661,10 +659,6 @@ timeout = 900
             config.approvals_reviewer = ApprovalsReviewer::AutoReview;
             config.bypass_hook_trust = true;
         }
-        config
-            .features
-            .enable(Feature::UnifiedExec)
-            .expect("test config should allow feature update");
     });
     let test = timeout(Duration::from_secs(5), builder.build(&server))
         .await

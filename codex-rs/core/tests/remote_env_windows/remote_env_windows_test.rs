@@ -3,7 +3,6 @@
 use anyhow::Context;
 use anyhow::Result;
 use codex_exec_server::REMOTE_ENVIRONMENT_ID;
-use codex_features::Feature;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
@@ -97,14 +96,7 @@ async fn windows_exec_server_runs_with_native_shell_and_cwd() -> Result<()> {
 
             let mut builder = test_codex()
                 .with_model("gpt-5.2")
-                .with_exec_server_url(exec_server_url)
-                .with_config(|config| {
-                    config.use_experimental_unified_exec_tool = true;
-                    config
-                        .features
-                        .enable(Feature::UnifiedExec)
-                        .expect("test config should allow feature update");
-                });
+                .with_exec_server_url(exec_server_url);
             let test = builder.build(&server).await?;
             let (sandbox_policy, permission_profile) =
                 turn_permission_fields(PermissionProfile::Disabled, test.config.cwd.as_path());

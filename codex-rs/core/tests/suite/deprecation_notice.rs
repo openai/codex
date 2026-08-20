@@ -20,14 +20,12 @@ async fn emits_deprecation_notice_for_legacy_feature_flag() -> anyhow::Result<()
 
     let mut builder = test_codex().with_config(|config| {
         let mut features = config.features.get().clone();
-        features.enable(Feature::UnifiedExec);
         features
             .record_legacy_usage_force("use_experimental_unified_exec_tool", Feature::UnifiedExec);
         config
             .features
             .set(features)
             .expect("test config should allow managed feature metadata updates");
-        config.use_experimental_unified_exec_tool = true;
     });
 
     let TestCodex { codex, .. } = builder.build(&server).await?;

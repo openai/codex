@@ -90,7 +90,6 @@ use codex_tools::collect_code_mode_exec_prompt_tool_definitions;
 use codex_tools::collect_request_plugin_install_entries;
 use codex_tools::default_namespace_description;
 use codex_tools::request_user_input_available_modes;
-use codex_tools::shell_type_for_model_and_features;
 use futures::future::BoxFuture;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -960,29 +959,30 @@ fn add_shell_tools(context: &CoreToolPlanContext<'_>, registry: &mut ToolRegistr
     let turn_context = context.turn_context;
     let features = turn_context.config.features.get();
     let environment_mode = tool_environment_mode(context.environments);
-    if !environment_mode.has_environment() {
+    if !environment_mode.has_environment()
+        || !features.enabled(Feature::ShellTool)
+        || !features.enabled(Feature::UnifiedExec)
+        || matches!(
+            turn_context.model_info.shell_type,
+            ConfigShellToolType::Disabled
+        )
+    {
         return;
     }
 
     let allow_login_shell = any_environment_allows_login_shell(context.environments);
     let exec_permission_approvals_enabled = features.enabled(Feature::ExecPermissionApprovals);
     let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
-    match shell_type_for_model_and_features(&turn_context.model_info, features) {
-        ConfigShellToolType::UnifiedExec => {
-            registry.add(ExecCommandHandler::new(ExecCommandHandlerOptions {
-                allow_login_shell,
-                exec_permission_approvals_enabled,
-                include_environment_id,
-                include_shell_parameter: unified_exec_should_include_shell_parameter(
-                    turn_context,
-                    context.environments,
-                ),
-            }));
-            registry.add(WriteStdinHandler);
-        }
-        ConfigShellToolType::Disabled => {}
-        ConfigShellToolType::Default | ConfigShellToolType::Local => {}
-    }
+    registry.add(ExecCommandHandler::new(ExecCommandHandlerOptions {
+        allow_login_shell,
+        exec_permission_approvals_enabled,
+        include_environment_id,
+        include_shell_parameter: unified_exec_should_include_shell_parameter(
+            turn_context,
+            context.environments,
+        ),
+    }));
+    registry.add(WriteStdinHandler);
 }
 
 fn unified_exec_should_include_shell_parameter(

@@ -96,8 +96,6 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
         "never",
         &BTreeMap::from([
             (Feature::ShellZshFork, true),
-            (Feature::UnifiedExec, true),
-            (Feature::UnifiedExecZshFork, true),
             (Feature::ShellSnapshot, false),
         ]),
     )?;
@@ -212,8 +210,6 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
         "on-request",
         &BTreeMap::from([
             (Feature::ShellZshFork, true),
-            (Feature::UnifiedExec, true),
-            (Feature::UnifiedExecZshFork, true),
             (Feature::ShellSnapshot, false),
         ]),
     )?;
@@ -342,8 +338,6 @@ async fn turn_start_shell_zsh_fork_exec_approval_cancel_v2() -> Result<()> {
         "on-request",
         &BTreeMap::from([
             (Feature::ShellZshFork, true),
-            (Feature::UnifiedExec, true),
-            (Feature::UnifiedExecZshFork, true),
             (Feature::ShellSnapshot, false),
         ]),
     )?;
@@ -498,8 +492,6 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
         "on-request",
         &BTreeMap::from([
             (Feature::ShellZshFork, true),
-            (Feature::UnifiedExec, true),
-            (Feature::UnifiedExecZshFork, true),
             (Feature::ShellSnapshot, false),
         ]),
     )?;

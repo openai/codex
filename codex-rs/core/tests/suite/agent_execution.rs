@@ -240,13 +240,12 @@ async fn v2_residency_reload_preserves_inherited_environment_and_tools() -> Resu
         .with_model("gpt-5.6-sol")
         .with_exec_server_url("none")
         .with_config(|config| {
-            for feature in [Feature::Collab, Feature::MultiAgentV2, Feature::UnifiedExec] {
+            for feature in [Feature::Collab, Feature::MultiAgentV2] {
                 config
                     .features
                     .enable(feature)
                     .expect("test config should allow feature update");
             }
-            config.use_experimental_unified_exec_tool = true;
             config.multi_agent_v2.max_concurrent_threads_per_session = 2;
             config
                 .permissions

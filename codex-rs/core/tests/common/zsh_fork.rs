@@ -106,15 +106,6 @@ where
                 .permissions
                 .set_permission_profile(permission_profile)
                 .expect("set permission profile");
-            config.use_experimental_unified_exec_tool = true;
-            config
-                .features
-                .enable(Feature::UnifiedExec)
-                .expect("test config should allow feature update");
-            config
-                .features
-                .enable(Feature::UnifiedExecZshFork)
-                .expect("test config should allow feature update");
         });
     builder.build(server).await
 }
