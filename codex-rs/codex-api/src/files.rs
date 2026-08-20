@@ -98,10 +98,8 @@ pub enum OpenAiFileError {
 struct CreateFileResponse {
     file_id: String,
     upload_url: String,
-    // copybara:strip-for-public begin
     #[serde(default)]
     pdf_c2pa_reservation: bool,
-    // copybara:strip-for-public end
 }
 
 #[derive(Deserialize)]
@@ -261,13 +259,11 @@ pub async fn upload_openai_file(
         create_payload.file_id,
     );
     let finalize_request = serde_json::json!({});
-    // copybara:strip-for-public begin
     let finalize_request = if create_payload.pdf_c2pa_reservation {
         serde_json::json!({"pdf_c2pa_create_request": create_request})
     } else {
         finalize_request
     };
-    // copybara:strip-for-public end
     let finalize_started_at = Instant::now();
     loop {
         let finalize_response = authorized_request(client_pool, auth, Method::POST, &finalize_url)
@@ -476,7 +472,6 @@ mod tests {
         assert_eq!(uploaded.mime_type, Some("text/plain".to_string()));
         assert_eq!(finalize_attempts.load(Ordering::SeqCst), 2);
     }
-    // copybara:strip-for-public begin
     #[tokio::test]
     async fn upload_hosted_app_context_and_finalizes_reservation() {
         let server = MockServer::start().await;
@@ -544,7 +539,6 @@ mod tests {
         assert_eq!(uploaded.file_size_bytes, 24);
         server.verify().await;
     }
-    // copybara:strip-for-public end
 
     #[tokio::test]
     async fn upload_hosted_app_preserves_empty_finalization_for_older_servers() {
