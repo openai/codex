@@ -37,6 +37,8 @@ mod runtime_paths;
 mod sandboxed_file_open;
 mod sandboxed_file_system;
 mod server;
+#[cfg(unix)]
+mod shell_snapshot;
 mod telemetry;
 mod trace_context;
 mod websocket_pong_watchdog;
@@ -186,6 +188,7 @@ pub use protocol::ProcessSignal;
 pub use protocol::ReadParams;
 pub use protocol::ReadResponse;
 pub use protocol::ShellInfo;
+pub use protocol::ShellSnapshotRequest;
 pub use protocol::SignalParams;
 pub use protocol::SignalResponse;
 pub use protocol::TerminateParams;

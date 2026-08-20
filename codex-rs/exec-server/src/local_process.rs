@@ -158,6 +158,8 @@ struct Inner {
     notifications: std::sync::RwLock<Option<RpcNotificationSender>>,
     requests: Arc<std::sync::RwLock<Option<RpcServerRequestSender>>>,
     processes: Mutex<HashMap<ProcessId, ProcessEntry>>,
+    #[cfg(unix)]
+    shell_snapshots: crate::shell_snapshot::ShellSnapshotCache,
     telemetry: ExecServerTelemetry,
 }
 
@@ -215,6 +217,8 @@ impl LocalProcess {
                 notifications: std::sync::RwLock::new(Some(notifications)),
                 requests: Arc::new(std::sync::RwLock::new(Some(requests))),
                 processes: Mutex::new(HashMap::new()),
+                #[cfg(unix)]
+                shell_snapshots: crate::shell_snapshot::ShellSnapshotCache::default(),
                 telemetry,
             }),
             runtime_paths,
@@ -332,6 +336,12 @@ impl LocalProcess {
                 let _ = notifications.try_notify(NETWORK_POLICY_DECISION_METHOD, &notification);
             }) as NetworkPolicyAuditObserver
         });
+        #[cfg(not(unix))]
+        if params.shell_snapshot.is_some() {
+            return Err(invalid_params(
+                "shell snapshots are unsupported on this platform".to_string(),
+            ));
+        }
         let prepared = prepare_exec_request(
             &params,
             child_env(&params),
@@ -340,6 +350,13 @@ impl LocalProcess {
             network_policy_audit_observer,
         )
         .await?;
+        #[cfg(unix)]
+        let mut prepared = prepared;
+        #[cfg(unix)]
+        self.inner
+            .shell_snapshots
+            .prepare(&params, &mut prepared)
+            .await?;
         if prepared.command.is_empty() {
             return Err(invalid_params("argv must not be empty".to_string()));
         }
@@ -692,7 +709,7 @@ fn child_env(params: &ExecParams) -> HashMap<String, String> {
     env
 }
 
-fn shell_environment_policy(env_policy: &ExecEnvPolicy) -> ShellEnvironmentPolicy {
+pub(crate) fn shell_environment_policy(env_policy: &ExecEnvPolicy) -> ShellEnvironmentPolicy {
     ShellEnvironmentPolicy {
         inherit: env_policy.inherit.clone(),
         ignore_default_excludes: env_policy.ignore_default_excludes,
@@ -1139,6 +1156,7 @@ mod tests {
             argv: vec!["true".to_string()],
             cwd: PathUri::from_host_native_path(std::env::current_dir().expect("cwd"))
                 .expect("cwd URI"),
+            shell_snapshot: None,
             env_policy: None,
             env,
             tty: false,

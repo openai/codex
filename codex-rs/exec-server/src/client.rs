@@ -1850,6 +1850,7 @@ mod tests {
                     argv: vec!["true".to_string()],
                     cwd: PathUri::from_host_native_path(std::env::current_dir().expect("cwd"))
                         .expect("cwd URI"),
+                    shell_snapshot: None,
                     env_policy: None,
                     env: HashMap::new(),
                     tty: false,

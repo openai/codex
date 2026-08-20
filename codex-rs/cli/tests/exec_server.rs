@@ -251,6 +251,7 @@ metrics_exporter = {{ otlp-http = {{ endpoint = "{collector_url}/v1/metrics", pr
             process_id: ProcessId::from("parent-lifetime-process"),
             argv: argv.into_iter().map(str::to_string).collect(),
             cwd: cwd.as_str().parse()?,
+            shell_snapshot: None,
             env_policy: Some(codex_exec_server::ExecEnvPolicy {
                 inherit: codex_protocol::config_types::ShellEnvironmentPolicyInherit::All,
                 ignore_default_excludes: false,

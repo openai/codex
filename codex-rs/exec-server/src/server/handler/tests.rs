@@ -31,6 +31,7 @@ fn exec_params_with_argv(process_id: &str, argv: Vec<String>) -> ExecParams {
         argv,
         cwd: PathUri::from_host_native_path(std::env::current_dir().expect("cwd"))
             .expect("cwd URI"),
+        shell_snapshot: None,
         env_policy: None,
         env: inherited_path_env(),
         tty: false,

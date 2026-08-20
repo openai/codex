@@ -65,6 +65,7 @@ async fn forwarder_runs_commands_and_transfers_files() -> Result<()> {
                 process_id: process_id.clone(),
                 argv,
                 cwd: PathUri::from_host_native_path(std::env::current_dir()?)?,
+                shell_snapshot: None,
                 env_policy: None,
                 env: HashMap::new(),
                 tty: false,

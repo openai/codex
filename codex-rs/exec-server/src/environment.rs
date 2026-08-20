@@ -1737,6 +1737,7 @@ mod tests {
                     std::env::current_dir().expect("read current dir"),
                 )
                 .expect("cwd URI"),
+                shell_snapshot: None,
                 env_policy: None,
                 env: Default::default(),
                 tty: false,
@@ -1778,6 +1779,7 @@ mod tests {
                     std::env::current_dir().expect("read current dir"),
                 )
                 .expect("cwd URI"),
+                shell_snapshot: None,
                 env_policy: None,
                 env: Default::default(),
                 tty: false,

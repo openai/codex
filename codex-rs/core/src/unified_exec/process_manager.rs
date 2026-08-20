@@ -221,6 +221,7 @@ fn exec_server_params_for_request(
         argv: request.command.clone(),
         cwd: request.cwd.clone(),
         env_policy,
+        shell_snapshot: None,
         env,
         tty,
         pipe_stdin: false,

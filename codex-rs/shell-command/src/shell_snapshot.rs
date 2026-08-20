@@ -5,6 +5,7 @@ use crate::shell_detect::ShellType;
 mod tests;
 
 const EXCLUDED_EXPORT_VARS: &[&str] = &["PWD", "OLDPWD"];
+const EXPORT_CAPTURE_MARKER: &str = "# Capture exported variables";
 
 /// Returns the shell-native script used to capture restorable shell state.
 ///
@@ -18,6 +19,16 @@ pub fn snapshot_script(shell_type: ShellType) -> Option<String> {
         ShellType::PowerShell => Some(powershell_snapshot_script().to_string()),
         ShellType::Cmd => None,
     }
+}
+
+/// Captures shell state and a separate NUL-delimited exported environment.
+///
+/// Keeping exports outside the restorable script lets executors apply their
+/// environment policy after shell profiles have run.
+pub fn snapshot_state_and_environment_script(shell_type: ShellType) -> Option<String> {
+    let script = snapshot_script(shell_type)?;
+    let (state, _) = script.split_once(EXPORT_CAPTURE_MARKER)?;
+    Some(format!("{state}printf '\\0'\n/usr/bin/env -0\n"))
 }
 
 fn excluded_exports_regex() -> String {
@@ -46,6 +57,7 @@ alias_count=$(alias -L | wc -l | tr -d ' ')
 print "# aliases $alias_count"
 alias -L
 print ''
+# Capture exported variables
 export_lines=$(export -p | awk '
 /^(export|declare -x|typeset -x) / {
   line=$0
@@ -97,6 +109,7 @@ alias_count=$(alias -p | wc -l | tr -d ' ')
 echo "# aliases $alias_count"
 alias -p
 echo ''
+# Capture exported variables
 export_lines=$(
   while IFS= read -r name; do
     if [[ "$name" =~ ^(EXCLUDED_EXPORTS)$ ]]; then
@@ -151,6 +164,7 @@ if alias >/dev/null 2>&1; then
 else
   echo '# aliases 0'
 fi
+# Capture exported variables
 if export -p >/dev/null 2>&1; then
   export_lines=$(export -p | awk '
 /^(export|declare -x|typeset -x) / {
