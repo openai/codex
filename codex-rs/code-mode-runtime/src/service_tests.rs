@@ -786,6 +786,124 @@ text("done");
 }
 
 #[tokio::test]
+async fn global_scope_contains_only_allowed_items() {
+    let service = InProcessCodeModeSession::new();
+
+    let response = execute(
+        &service,
+        ExecuteRequest {
+            enabled_tools: vec![echo_tool()],
+            source: "text(JSON.stringify(Object.getOwnPropertyNames(globalThis).sort()));"
+                .to_string(),
+            yield_time_ms: None,
+            ..execute_request("")
+        },
+    )
+    .await;
+
+    let RuntimeResponse::Result {
+        content_items,
+        error_text: None,
+        ..
+    } = response
+    else {
+        panic!("global scope inspection failed unexpectedly: {response:?}");
+    };
+    let [FunctionCallOutputContentItem::InputText { text }] = content_items.as_slice() else {
+        panic!("global scope inspection returned unexpected output: {content_items:?}");
+    };
+    let globals = serde_json::from_str::<Vec<String>>(text)
+        .expect("global scope inspection should return a JSON array");
+    let expected = [
+        "AggregateError",
+        "ALL_TOOLS",
+        "Array",
+        "ArrayBuffer",
+        "AsyncDisposableStack",
+        "BigInt",
+        "BigInt64Array",
+        "BigUint64Array",
+        "Boolean",
+        "clearTimeout",
+        "DataView",
+        "Date",
+        "DisposableStack",
+        "Error",
+        "EvalError",
+        "FinalizationRegistry",
+        "Float16Array",
+        "Float32Array",
+        "Float64Array",
+        "Function",
+        "Infinity",
+        "Int16Array",
+        "Int32Array",
+        "Int8Array",
+        "Intl",
+        "Iterator",
+        "JSON",
+        "Map",
+        "Math",
+        "NaN",
+        "Number",
+        "Object",
+        "Promise",
+        "Proxy",
+        "RangeError",
+        "ReferenceError",
+        "Reflect",
+        "RegExp",
+        "Set",
+        "String",
+        "SuppressedError",
+        "Symbol",
+        "SyntaxError",
+        "Temporal",
+        "TypeError",
+        "URIError",
+        "Uint16Array",
+        "Uint32Array",
+        "Uint8Array",
+        "Uint8ClampedArray",
+        "WeakMap",
+        "WeakRef",
+        "WeakSet",
+        "__codexContentItems",
+        "add_content",
+        "audio",
+        "decodeURI",
+        "decodeURIComponent",
+        "encodeURI",
+        "encodeURIComponent",
+        "escape",
+        "exit",
+        "eval",
+        "generatedImage",
+        "globalThis",
+        "image",
+        "isFinite",
+        "isNaN",
+        "load",
+        "notify",
+        "parseFloat",
+        "parseInt",
+        "setTimeout",
+        "store",
+        "text",
+        "tools",
+        "undefined",
+        "unescape",
+        "yield_control",
+    ];
+    for global in &globals {
+        assert!(
+            expected.contains(&global.as_str()),
+            "unexpected global {global} in {globals:?}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn v8_console_is_not_exposed_on_global_this() {
     let service = InProcessCodeModeSession::new();
 
