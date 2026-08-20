@@ -235,8 +235,9 @@ impl RequestPluginInstallHandler {
                 );
         }
 
+        let request =
+            build_request_plugin_install_elicitation_request(suggest_reason, &tool, &suggestion_id);
         let request_id = RequestId::String(suggestion_id.into());
-        let request = build_request_plugin_install_elicitation_request(suggest_reason, &tool);
         let elicitation = session
             .request_mcp_server_elicitation(
                 turn.as_ref(),

@@ -41,6 +41,8 @@ pub struct RequestPluginInstallMeta<'a> {
     pub tool_id: &'a str,
     pub tool_name: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggestion_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub install_url: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub remote_plugin_id: Option<&'a str>,
@@ -51,6 +53,7 @@ pub struct RequestPluginInstallMeta<'a> {
 pub fn build_request_plugin_install_elicitation_request(
     suggest_reason: &str,
     tool: &DiscoverableTool,
+    suggestion_id: &str,
 ) -> ElicitationRequest {
     let message = suggest_reason.to_string();
 
@@ -58,6 +61,7 @@ pub fn build_request_plugin_install_elicitation_request(
         meta: Some(json!(build_request_plugin_install_meta(
             suggest_reason,
             tool,
+            suggestion_id,
         ))),
         message,
         requested_schema: json!({
@@ -89,11 +93,13 @@ pub fn verified_connector_install_completed(
 fn build_request_plugin_install_meta<'a>(
     suggest_reason: &'a str,
     tool: &'a DiscoverableTool,
+    suggestion_id: &'a str,
 ) -> RequestPluginInstallMeta<'a> {
-    let (tool_type, remote_plugin_id, app_connector_ids) = match tool {
-        DiscoverableTool::Connector(_) => (DiscoverableToolType::Connector, None, None),
+    let (tool_type, suggestion_id, remote_plugin_id, app_connector_ids) = match tool {
+        DiscoverableTool::Connector(_) => (DiscoverableToolType::Connector, None, None, None),
         DiscoverableTool::Plugin(plugin) => (
             DiscoverableToolType::Plugin,
+            Some(suggestion_id),
             plugin.remote_plugin_id.as_deref(),
             Some(plugin.app_connector_ids.as_slice()),
         ),
@@ -106,6 +112,7 @@ fn build_request_plugin_install_meta<'a>(
         suggest_reason,
         tool_id: tool.id(),
         tool_name: tool.name(),
+        suggestion_id,
         install_url: tool.install_url(),
         remote_plugin_id,
         app_connector_ids,

@@ -859,6 +859,10 @@ async fn run_remote_plugin_install_metadata_case() -> Result<()> {
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     };
+    assert_eq!(
+        meta["suggestion_id"],
+        analytics_event["event_params"]["suggestion_id"]
+    );
     let thread_id = analytics_event["event_params"]["thread_id"].clone();
     let turn_id = analytics_event["event_params"]["turn_id"].clone();
     assert_eq!(
