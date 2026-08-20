@@ -73,6 +73,7 @@ use codex_config::types::WindowsToml;
 use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
 use codex_features::FeaturesToml;
+use codex_login::default_client::RESIDENCY_HEADER_NAME;
 use codex_login::test_support::auth_manager_from_optional_auth;
 use codex_model_provider::ProviderCapabilities;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
@@ -945,6 +946,88 @@ profile = "codex-bedrock"
             "model_providers.custom: provider aws is only supported for `amazon-bedrock`"
         )
     );
+}
+
+#[tokio::test]
+async fn managed_residency_warns_about_provider_header_overrides_without_mutating_config()
+-> std::io::Result<()> {
+    for enforce_residency in [None, Some(ResidencyRequirement::Us)] {
+        let cfg = toml::from_str::<ConfigToml>(
+            r#"
+model_provider = "custom-openai"
+
+[model_providers.custom-openai]
+name = "OpenAI"
+http_headers = { "X-OpenAI-Internal-Codex-Residency" = "request-override", "x-provider-header" = "preserved" }
+env_http_headers = { "x-openai-internal-codex-residency" = "CODEX_TEST_UNSET_RESIDENCY_HEADER", "x-provider-env-header" = "CODEX_TEST_UNSET_PROVIDER_HEADER" }
+"#,
+        )
+        .expect("existing provider configuration should remain loadable");
+        let requirements = ConfigRequirements {
+            enforce_residency: ConstrainedWithSource::new(
+                Constrained::allow_only(enforce_residency),
+                enforce_residency.map(|_| RequirementSource::Unknown),
+            ),
+            ..Default::default()
+        };
+        let requirements_toml = ConfigRequirementsToml {
+            enforce_residency,
+            ..Default::default()
+        };
+        let config_layer_stack =
+            ConfigLayerStack::new(Vec::new(), requirements, requirements_toml)?;
+        let config = Config::load_config_with_layer_stack(
+            LOCAL_FS.as_ref(),
+            cfg,
+            ConfigOverrides::default(),
+            tempdir()?.abs(),
+            config_layer_stack,
+        )
+        .await?;
+
+        let static_headers = config
+            .model_provider
+            .http_headers
+            .as_ref()
+            .expect("static headers should remain configured");
+        let environment_headers = config
+            .model_provider
+            .env_http_headers
+            .as_ref()
+            .expect("environment-backed headers should remain configured");
+        assert_eq!(
+            static_headers
+                .get("X-OpenAI-Internal-Codex-Residency")
+                .map(String::as_str),
+            Some("request-override")
+        );
+        assert_eq!(
+            environment_headers
+                .get(RESIDENCY_HEADER_NAME)
+                .map(String::as_str),
+            Some("CODEX_TEST_UNSET_RESIDENCY_HEADER")
+        );
+        assert_eq!(
+            static_headers.get("x-provider-header").map(String::as_str),
+            Some("preserved")
+        );
+        assert_eq!(
+            environment_headers
+                .get("x-provider-env-header")
+                .map(String::as_str),
+            Some("CODEX_TEST_UNSET_PROVIDER_HEADER")
+        );
+
+        let expected_warning = format!(
+            "Ignoring `{RESIDENCY_HEADER_NAME}` in `model_providers.custom-openai` because managed residency is required."
+        );
+        assert_eq!(
+            config.startup_warnings.contains(&expected_warning),
+            enforce_residency.is_some()
+        );
+    }
+
+    Ok(())
 }
 
 #[test]

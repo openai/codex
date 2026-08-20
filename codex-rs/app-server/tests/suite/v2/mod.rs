@@ -75,6 +75,7 @@ mod remote_thread_store;
 mod request_permissions;
 mod request_user_input;
 mod request_validation;
+mod residency;
 mod review;
 mod rollout_migration;
 mod safety_check_downgrade;

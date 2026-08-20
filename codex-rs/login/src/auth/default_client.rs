@@ -104,6 +104,11 @@ pub fn set_default_client_residency_requirement(enforce_residency: Option<Reside
     *guard = enforce_residency;
 }
 
+/// Returns the current process-wide residency requirement.
+pub fn read_default_client_residency_requirement() -> Option<ResidencyRequirement> {
+    REQUIREMENTS_RESIDENCY.read().ok().and_then(|guard| *guard)
+}
+
 pub fn originator() -> Originator {
     if let Ok(guard) = ORIGINATOR.read()
         && let Some(originator) = guard.as_ref()
