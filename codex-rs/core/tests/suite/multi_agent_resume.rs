@@ -4,7 +4,6 @@ use codex_core::config::AgentRoleConfig;
 use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
-use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
@@ -287,19 +286,10 @@ async fn cold_root_resume_restores_agent_identity_and_role_on_followup() -> Resu
         sleep(Duration::from_millis(10)).await;
     };
     let worker_thread = initial.thread_manager.get_thread(worker_thread_id).await?;
-    let deadline = Instant::now() + Duration::from_secs(2);
-    loop {
-        if matches!(
-            worker_thread.agent_status().await,
-            AgentStatus::Completed(_)
-        ) {
-            break;
-        }
-        if Instant::now() >= deadline {
-            anyhow::bail!("timed out waiting for worker completion");
-        }
-        sleep(Duration::from_millis(10)).await;
-    }
+    wait_for_event(worker_thread.as_ref(), |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
     assert!(initial_child_request.requests().iter().any(|request| {
         request.body_contains_text(INITIAL_TASK)
             && request.body_contains_text(ROLE_DEVELOPER_INSTRUCTIONS)
@@ -494,19 +484,10 @@ openai_base_url = "{redirected_base_url}"
         "cold reload must preserve the parent's complete model provider",
     );
     resumed.submit_turn(FOLLOWUP_PROMPT).await?;
-    let deadline = Instant::now() + Duration::from_secs(2);
-    loop {
-        if matches!(
-            reloaded_worker.agent_status().await,
-            AgentStatus::Completed(_)
-        ) {
-            break;
-        }
-        if Instant::now() >= deadline {
-            anyhow::bail!("timed out waiting for reloaded worker completion");
-        }
-        sleep(Duration::from_millis(10)).await;
-    }
+    wait_for_event(reloaded_worker.as_ref(), |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
     assert!(followup_child_request.requests().iter().any(|request| {
         request.body_contains_text(FOLLOWUP_TASK)
             && request.body_contains_text(ROLE_DEVELOPER_INSTRUCTIONS)
