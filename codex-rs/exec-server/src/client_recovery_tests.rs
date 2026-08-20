@@ -37,13 +37,31 @@ fn registry_recovery_retry_delay_exponentially_backs_off_and_caps() {
 
 #[test]
 fn recovery_retries_transient_registry_errors() {
-    let error = registry_error(http::StatusCode::TOO_MANY_REQUESTS, /*code*/ None);
+    for status in [
+        http::StatusCode::REQUEST_TIMEOUT,
+        http::StatusCode::TOO_MANY_REQUESTS,
+        http::StatusCode::INTERNAL_SERVER_ERROR,
+        http::StatusCode::BAD_GATEWAY,
+        http::StatusCode::SERVICE_UNAVAILABLE,
+    ] {
+        let error = registry_error(status, /*code*/ None);
+
+        assert!(is_retryable_registry_error(&error));
+        assert!(is_retryable_recovery_error(&error));
+        assert!(is_retryable_recovery_error(
+            &ExecServerError::ConnectionAttempt(Arc::new(error))
+        ));
+    }
+}
+
+#[test]
+fn recovery_retries_registry_request_timeouts() {
+    let error = ExecServerError::EnvironmentRegistryRequest(
+        codex_http_client::RouteAwareRequestError::Timeout,
+    );
 
     assert!(is_retryable_registry_error(&error));
     assert!(is_retryable_recovery_error(&error));
-    assert!(is_retryable_recovery_error(
-        &ExecServerError::ConnectionAttempt(Arc::new(error))
-    ));
 }
 
 #[test]

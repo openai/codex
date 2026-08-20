@@ -5,7 +5,10 @@ use std::time::Duration;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
 use tokio::process::Command;
+use tokio::time::Instant;
+use tokio::time::sleep;
 use tokio::time::timeout;
+use tokio::time::timeout_at;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tracing::debug;
 use tracing::warn;
@@ -18,6 +21,8 @@ use codex_websocket_client::WebSocketTlsMode;
 
 use crate::ExecServerClient;
 use crate::ExecServerError;
+use crate::client::is_retryable_registry_error;
+use crate::client::registry_recovery_retry_delay;
 use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT;
 use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT;
 use crate::client_api::ExecServerClientConnectOptions;
@@ -37,6 +42,9 @@ use crate::relay::harness_connection_from_websocket;
 use crate::trace_context::current_rendezvous_headers;
 
 const ENVIRONMENT_CLIENT_NAME: &str = "codex-environment";
+const INITIAL_REGISTRY_MAX_RETRIES: u32 = 4;
+const INITIAL_REGISTRY_REQUEST_TIMEOUT: Duration = Duration::from_secs(6);
+const INITIAL_REGISTRY_OPERATION_TIMEOUT: Duration = Duration::from_secs(14);
 
 /// Reopens the transport for one logical exec-server client session.
 ///
@@ -199,23 +207,65 @@ impl ExecServerClient {
                 http_client_factory: http_client_factory.clone(),
             })
         };
-        let bundle = provider.connect_bundle(identity.public_key()).await?;
-        match open_connection(bundle).await {
-            Err(error)
-                if matches!(
-                    &error,
-                    ExecServerError::WebSocketConnect { source, .. }
-                        if matches!(
-                            source,
-                            tokio_tungstenite::tungstenite::Error::Http(response)
-                                if response.status().as_u16() == 401
-                        )
-                ) =>
-            {
-                let bundle = provider.connect_bundle(identity.public_key()).await?;
-                open_connection(bundle).await
+        let mut deadline = Instant::now() + INITIAL_REGISTRY_OPERATION_TIMEOUT;
+        let retry_key = uuid::Uuid::new_v4().to_string();
+        let mut retries = 0;
+        let mut refreshed_unauthorized_bundle = false;
+        let connect_bundle = || async {
+            timeout(
+                INITIAL_REGISTRY_REQUEST_TIMEOUT,
+                provider.connect_bundle(identity.public_key()),
+            )
+            .await
+            .unwrap_or_else(|_| {
+                Err(ExecServerError::EnvironmentRegistryRequest(
+                    codex_http_client::RouteAwareRequestError::Timeout,
+                ))
+            })
+        };
+        let mut result = connect_bundle().await;
+        loop {
+            let bundle = match result {
+                Ok(bundle) => bundle,
+                Err(error)
+                    if is_retryable_registry_error(&error)
+                        && retries < INITIAL_REGISTRY_MAX_RETRIES =>
+                {
+                    // Session resumption owns its separate recovery deadline.
+                    let delay = registry_recovery_retry_delay(&retry_key, retries);
+                    retries += 1;
+                    result = match timeout_at(deadline, async {
+                        sleep(delay).await;
+                        connect_bundle().await
+                    })
+                    .await
+                    {
+                        Ok(result) => result,
+                        Err(_) => return Err(error),
+                    };
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            match open_connection(bundle).await {
+                Err(error)
+                    if !refreshed_unauthorized_bundle
+                        && matches!(
+                            &error,
+                            ExecServerError::WebSocketConnect { source, .. }
+                                if matches!(
+                                    source,
+                                    tokio_tungstenite::tungstenite::Error::Http(response)
+                                        if response.status().as_u16() == 401
+                                )
+                        ) =>
+                {
+                    refreshed_unauthorized_bundle = true;
+                    deadline = Instant::now() + INITIAL_REGISTRY_OPERATION_TIMEOUT;
+                    result = connect_bundle().await;
+                }
+                result => return result,
             }
-            result => result,
         }
     }
 

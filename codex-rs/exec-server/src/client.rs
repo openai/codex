@@ -129,7 +129,11 @@ pub(crate) mod http_client;
 mod network_policy_audit;
 #[path = "client_recovery.rs"]
 mod recovery;
+#[cfg(test)]
+pub(crate) use recovery::is_environment_offline_error;
 pub(crate) use recovery::is_retryable_recovery_error;
+pub(crate) use recovery::is_retryable_registry_error;
+pub(crate) use recovery::registry_recovery_retry_delay;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(10);

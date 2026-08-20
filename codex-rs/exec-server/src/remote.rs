@@ -250,10 +250,11 @@ impl EnvironmentRegistryClient {
         R: for<'de> Deserialize<'de>,
     {
         if response.status().is_success() {
-            return response
-                .json::<R>()
+            let body = response
+                .text()
                 .await
-                .map_err(|error| ExecServerError::EnvironmentRegistryRequest(error.into()));
+                .map_err(|error| ExecServerError::EnvironmentRegistryRequest(error.into()))?;
+            return serde_json::from_str(&body).map_err(ExecServerError::Json);
         }
 
         let status = response.status();
@@ -817,6 +818,7 @@ mod tests {
     use opentelemetry::trace::TracerProvider as _;
     use opentelemetry_sdk::trace::SdkTracerProvider;
     use pretty_assertions::assert_eq;
+    use tokio::io::AsyncReadExt;
     use tokio::io::AsyncWriteExt;
     use tokio::net::TcpListener;
     use tracing::Instrument;
@@ -1037,6 +1039,85 @@ mod tests {
             error,
             ExecServerError::EnvironmentRegistryRequest(error) if error.is_timeout()
         ));
+    }
+
+    #[tokio::test]
+    async fn connect_environment_retries_interrupted_registry_response_bodies() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("registry listener should bind");
+        let registry_url = format!(
+            "http://{}",
+            listener
+                .local_addr()
+                .expect("registry listener should have an address")
+        );
+        tokio::spawn(async move {
+            let (mut stream, _) = listener
+                .accept()
+                .await
+                .expect("registry request should connect");
+            let mut request = [0_u8; 4096];
+            let bytes_read = stream
+                .read(&mut request)
+                .await
+                .expect("registry request should arrive before the response");
+            assert_ne!(bytes_read, 0, "registry request should not be empty");
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 256\r\n\r\n{",
+                )
+                .await
+                .expect("registry response headers should write");
+            stream
+                .shutdown()
+                .await
+                .expect("registry connection should close");
+        });
+        let client = EnvironmentRegistryClient::new(registry_url, static_registry_auth_provider())
+            .expect("client");
+        let harness_public_key = NoiseChannelIdentity::generate()
+            .expect("identity")
+            .public_key();
+
+        let error = client
+            .connect_environment("environment-requested", harness_public_key)
+            .await
+            .err()
+            .expect("interrupted response body must fail");
+
+        assert!(
+            crate::client::is_retryable_registry_error(&error),
+            "interrupted registry response body should be retryable: {error:?}"
+        );
+        assert!(matches!(
+            error,
+            ExecServerError::EnvironmentRegistryRequest(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn connect_environment_does_not_retry_malformed_successful_responses() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/cloud/environment/environment-requested/connect"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("{"))
+            .mount(&server)
+            .await;
+        let client = EnvironmentRegistryClient::new(server.uri(), static_registry_auth_provider())
+            .expect("client");
+        let harness_public_key = NoiseChannelIdentity::generate()
+            .expect("identity")
+            .public_key();
+
+        let error = client
+            .connect_environment("environment-requested", harness_public_key)
+            .await
+            .err()
+            .expect("malformed response must fail");
+
+        assert!(!crate::client::is_retryable_registry_error(&error));
+        assert!(matches!(error, ExecServerError::Json(_)));
     }
 
     #[tokio::test]

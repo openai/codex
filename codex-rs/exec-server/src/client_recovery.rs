@@ -825,33 +825,44 @@ pub(crate) fn is_retryable_recovery_error(error: &ExecServerError) -> bool {
         )
 }
 
-fn is_retryable_registry_error(error: &ExecServerError) -> bool {
+pub(crate) fn is_retryable_registry_error(error: &ExecServerError) -> bool {
     matches!(
         error,
         ExecServerError::EnvironmentRegistryRequest(error)
-            if error.is_connect() || error.is_timeout()
+            if error.is_connect()
+                || error.is_timeout()
+                || error.is_body()
+                || matches!(
+                    error,
+                    codex_http_client::RouteAwareRequestError::Request(error)
+                        if error.is_decode()
+                )
     ) || matches!(
         error,
-        ExecServerError::EnvironmentRegistryHttp { status, code, .. }
+        ExecServerError::EnvironmentRegistryHttp { status, .. }
             if status.is_server_error()
                 || *status == http::StatusCode::REQUEST_TIMEOUT
                 || *status == http::StatusCode::TOO_MANY_REQUESTS
-                // TODO: Replace this coarse retry with an explicit registry/presence
-                // recovery FSM so `environment_offline` is retried only while the
-                // executor is expected to reconnect.
-                || (*status == http::StatusCode::CONFLICT
-                    && code.as_deref() == Some("environment_offline"))
+    ) || is_environment_offline_error(error)
+}
+
+pub(crate) fn is_environment_offline_error(error: &ExecServerError) -> bool {
+    matches!(
+        error,
+        ExecServerError::EnvironmentRegistryHttp { status, code, .. }
+            if *status == http::StatusCode::CONFLICT
+                && code.as_deref() == Some("environment_offline")
     )
 }
 
-fn registry_recovery_retry_delay(session_id: &str, attempt: u32) -> Duration {
+pub(crate) fn registry_recovery_retry_delay(retry_key: &str, attempt: u32) -> Duration {
     let multiplier = 1_u32.checked_shl(attempt.min(4)).unwrap_or(u32::MAX);
     let base_delay = REGISTRY_RECOVERY_INITIAL_RETRY_INTERVAL
         .saturating_mul(multiplier)
         .min(REGISTRY_RECOVERY_MAX_RETRY_INTERVAL);
     let base_millis = base_delay.as_millis() as u64;
     let mut hasher = DefaultHasher::new();
-    session_id.hash(&mut hasher);
+    retry_key.hash(&mut hasher);
     attempt.hash(&mut hasher);
 
     Duration::from_millis(base_millis + hasher.finish() % (base_millis / 2 + 1))
