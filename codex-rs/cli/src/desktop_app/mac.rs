@@ -6,6 +6,7 @@ use tempfile::Builder;
 use tokio::process::Command;
 
 const CODEX_BUNDLE_IDENTIFIER: &str = "com.openai.codex";
+const OPENAI_APPLE_TEAM_IDENTIFIER: &str = "2DC432GLL2";
 const CODEX_DMG_URL_ARM64: &str = "https://persistent.oaistatic.com/codex-app-prod/Codex.dmg";
 const CODEX_DMG_URL_X64: &str =
     "https://persistent.oaistatic.com/codex-app-prod/Codex-latest-x64.dmg";
@@ -99,6 +100,7 @@ fn is_codex_app_bundle(app_path: &Path) -> bool {
 }
 
 async fn open_codex_app(app_path: &Path, workspace: &Path) -> anyhow::Result<()> {
+    verify_codex_app_bundle(app_path).await?;
     eprintln!(
         "Opening workspace {workspace}...",
         workspace = workspace.display()
@@ -120,6 +122,29 @@ async fn open_codex_app(app_path: &Path, workspace: &Path) -> anyhow::Result<()>
         "`open -a {app_path} {url}` exited with {status}",
         app_path = app_path.display(),
         url = url
+    );
+}
+
+async fn verify_codex_app_bundle(app_path: &Path) -> anyhow::Result<()> {
+    let requirement = format!(
+        "identifier \"{CODEX_BUNDLE_IDENTIFIER}\" and anchor apple generic and certificate leaf[subject.OU] = \"{OPENAI_APPLE_TEAM_IDENTIFIER}\""
+    );
+    let output = Command::new("/usr/bin/codesign")
+        .args(["--verify", "--deep", "--strict"])
+        .arg(format!("-R={requirement}"))
+        .arg(app_path)
+        .output()
+        .await
+        .context("failed to verify Desktop app signature")?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "Desktop app at {} failed OpenAI signature verification (team {OPENAI_APPLE_TEAM_IDENTIFIER}, bundle {CODEX_BUNDLE_IDENTIFIER}): {}",
+        app_path.display(),
+        String::from_utf8_lossy(&output.stderr).trim()
     );
 }
 
@@ -151,6 +176,9 @@ async fn download_and_install_codex_to_user_applications(dmg_url: &str) -> anyho
     let result = async {
         let app_in_volume = find_codex_app_in_mount(&mount_point)
             .context("failed to locate Codex.app in mounted dmg")?;
+        verify_codex_app_bundle(&app_in_volume)
+            .await
+            .context("refusing to install an unverified Desktop app")?;
         install_codex_app_bundle(&app_in_volume).await
     }
     .await;
@@ -325,7 +353,9 @@ fn parse_hdiutil_attach_mount_point(output: &str) -> Option<String> {
 mod tests {
     use super::codex_new_thread_url;
     use super::find_existing_codex_app_path;
+    use super::open_codex_app;
     use super::parse_hdiutil_attach_mount_point;
+    use super::verify_codex_app_bundle;
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::Path;
@@ -364,6 +394,80 @@ mod tests {
         assert_eq!(
             find_existing_codex_app_path(&[temp_dir.path().to_path_buf()]),
             Some(codex_app_path)
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_unsigned_app_with_codex_bundle_identifier() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let app_path = temp_dir.path().join("Codex.app");
+        write_app_bundle(&app_path, "com.openai.codex");
+
+        let err = verify_codex_app_bundle(&app_path)
+            .await
+            .expect_err("unsigned app should not satisfy the OpenAI signing requirement");
+
+        assert!(
+            err.to_string()
+                .contains("failed OpenAI signature verification"),
+            "unexpected verification error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_valid_signature_without_openai_signing_identity() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let app_path = temp_dir.path().join("Codex.app");
+        let contents_path = app_path.join("Contents");
+        let executable_path = contents_path.join("MacOS/Codex");
+        fs::create_dir_all(executable_path.parent().expect("executable parent"))
+            .expect("create executable directory");
+        fs::copy("/usr/bin/true", &executable_path).expect("copy executable into app bundle");
+        fs::write(
+            contents_path.join("Info.plist"),
+            r#"<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.openai.codex</string><key>CFBundleExecutable</key><string>Codex</string></dict></plist>"#,
+        )
+        .expect("write Info.plist");
+
+        let sign_status = std::process::Command::new("/usr/bin/codesign")
+            .args(["--force", "--sign", "-"])
+            .arg(&app_path)
+            .status()
+            .expect("sign app bundle");
+        assert!(sign_status.success(), "failed to ad-hoc sign app bundle");
+
+        let verify_status = std::process::Command::new("/usr/bin/codesign")
+            .args(["--verify", "--deep", "--strict"])
+            .arg(&app_path)
+            .status()
+            .expect("verify app bundle signature");
+        assert!(verify_status.success(), "ad-hoc signature should be valid");
+
+        let err = verify_codex_app_bundle(&app_path)
+            .await
+            .expect_err("valid signature without the OpenAI team should not be trusted");
+
+        assert!(
+            err.to_string()
+                .contains("failed OpenAI signature verification"),
+            "unexpected verification error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn refuses_to_launch_unsigned_existing_codex_app() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let app_path = temp_dir.path().join("Codex.app");
+        write_app_bundle(&app_path, "com.openai.codex");
+
+        let err = open_codex_app(&app_path, temp_dir.path())
+            .await
+            .expect_err("unsigned existing app should not be launched");
+
+        assert!(
+            err.to_string()
+                .contains("failed OpenAI signature verification"),
+            "unexpected launch error: {err}"
         );
     }
 
