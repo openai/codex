@@ -857,6 +857,34 @@ mod tests {
     }
 
     #[test]
+    fn keeps_mutating_sed_in_compound_command() {
+        for sed_command in [
+            "sed -n -i.bak 1p secret.txt",
+            "sed -ni.bak 1p secret.txt",
+            "sed -Eni.bak 1p secret.txt",
+        ] {
+            let inner = format!("cat README.md && {sed_command}");
+            assert_parsed(
+                &vec_str(&["bash", "-lc", &inner]),
+                vec![ParsedCommand::Unknown { cmd: inner }],
+            );
+        }
+    }
+
+    #[test]
+    fn ignores_sed_operands_after_double_dash_when_checking_mutation() {
+        let inner = "cat README.md && sed 's/a/x/' -- -input.txt";
+        assert_parsed(
+            &vec_str(&["bash", "-lc", inner]),
+            vec![ParsedCommand::Read {
+                cmd: "cat README.md".to_string(),
+                name: "README.md".to_string(),
+                path: PathBuf::from("README.md"),
+            }],
+        );
+    }
+
+    #[test]
     fn empty_tokens_is_not_small() {
         let empty: Vec<String> = Vec::new();
         assert!(!is_small_formatting_command(&empty));
@@ -1560,7 +1588,8 @@ fn is_valid_sed_n_arg(arg: Option<&str>) -> bool {
 
 fn sed_read_path(args: &[String]) -> Option<String> {
     let args_no_connector = trim_at_connector(args);
-    if has_in_place_flag(&args_no_connector) || !args_no_connector.iter().any(|arg| arg == "-n") {
+    if sed_has_in_place_flag(&args_no_connector) || !args_no_connector.iter().any(|arg| arg == "-n")
+    {
         return None;
     }
     let mut has_range_script = false;
@@ -2158,8 +2187,10 @@ fn is_small_formatting_command(tokens: &[String]) -> bool {
         }
         "sed" => {
             // Keep `sed -n <range> file` (treated as a file read elsewhere);
-            // otherwise consider it a formatting helper in a pipeline.
-            sed_read_path(&tokens[1..]).is_none()
+            // keep in-place mutations as unknown actions; otherwise consider it
+            // a formatting helper in a pipeline.
+            let args = &tokens[1..];
+            !sed_has_in_place_flag(args) && sed_read_path(args).is_none()
         }
         _ => false,
     }
@@ -2200,7 +2231,8 @@ fn xargs_is_mutating_subcommand(tokens: &[String]) -> bool {
         return false;
     };
     match head.as_str() {
-        "perl" | "ruby" | "sed" => has_in_place_flag(tail),
+        "perl" | "ruby" => has_in_place_flag(tail),
+        "sed" => sed_has_in_place_flag(tail),
         "rg" => tail.iter().any(|token| token == "--replace"),
         _ => false,
     }
@@ -2215,6 +2247,39 @@ fn has_in_place_flag(tokens: &[String]) -> bool {
             || token == "--in-place"
             || token.starts_with("--in-place=")
     })
+}
+
+fn sed_has_in_place_flag(tokens: &[String]) -> bool {
+    let mut tokens = tokens.iter();
+    while let Some(token) = tokens.next() {
+        match token.as_str() {
+            "--" => break,
+            "-e" | "-f" | "--expression" | "--file" => {
+                let _ = tokens.next();
+            }
+            "--in-place" => return true,
+            token if token.starts_with("--in-place=") => return true,
+            token if token.starts_with("--") => {}
+            token => {
+                let Some(short_options) = token.strip_prefix('-') else {
+                    continue;
+                };
+                for (index, option) in short_options.char_indices() {
+                    match option {
+                        'i' => return true,
+                        'e' | 'f' => {
+                            if index + option.len_utf8() == short_options.len() {
+                                let _ = tokens.next();
+                            }
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    false
 }
 
 fn drop_small_formatting_commands(mut commands: Vec<Vec<String>>) -> Vec<Vec<String>> {
