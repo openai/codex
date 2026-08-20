@@ -36,8 +36,10 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::InputModality;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InterAgentCommunication;
@@ -217,6 +219,14 @@ fn compacted_summary_only_output(summary: &str) -> Vec<ResponseItem> {
 fn test_codex() -> TestCodexBuilder {
     base_test_codex().with_config(|config| {
         let _ = config.features.disable(Feature::RemoteCompactionV2);
+    })
+}
+
+fn unrestricted_user_turn(items: Vec<UserInput>) -> TurnInputRequest {
+    TurnInputRequest::user_input(items).with_thread_settings(ThreadSettingsOverrides {
+        approval_policy: Some(AskForApproval::Never),
+        permission_profile: Some(PermissionProfile::Disabled),
+        ..Default::default()
     })
 }
 
@@ -1096,7 +1106,7 @@ async fn assert_remote_manual_compact_request_parity(
     .await;
 
     codex
-        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+        .start_or_steer_turn(unrestricted_user_turn(vec![UserInput::Text {
             text: "TURN_ONE_USER".to_string(),
             text_elements: Vec::new(),
         }]))
@@ -2045,7 +2055,7 @@ async fn remote_compact_runs_automatically() -> Result<()> {
     .await;
 
     codex
-        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+        .start_or_steer_turn(unrestricted_user_turn(vec![UserInput::Text {
             text: "hello remote compact".into(),
             text_elements: Vec::new(),
         }]))
@@ -4564,7 +4574,7 @@ async fn snapshot_request_shape_remote_mid_turn_compaction_multi_summary_reinjec
     .await;
 
     codex
-        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+        .start_or_steer_turn(unrestricted_user_turn(vec![UserInput::Text {
             text: "USER_ONE".to_string(),
             text_elements: Vec::new(),
         }]))
