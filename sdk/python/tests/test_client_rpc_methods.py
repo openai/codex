@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from openai_codex.client import CodexClient, _params_dict
 from openai_codex.generated.notification_registry import notification_turn_id
 from openai_codex.generated.v2_all import (
@@ -73,18 +75,24 @@ def test_plan_type_accepts_business_prolite_from_newer_runtime() -> None:
     assert rate_limits_updated.payload.rate_limits.plan_type == PlanType(plan_type)
 
 
-def test_reasoning_effort_preserves_enum_constants_and_accepts_future_values() -> None:
+@pytest.mark.parametrize(
+    ("effort", "wire_value"),
+    [(ReasoningEffort.max, "max"), (ReasoningEffort.ultra, "ultra")],
+)
+def test_reasoning_effort_preserves_enum_constants_and_accepts_future_values(
+    effort: ReasoningEffort, wire_value: str
+) -> None:
     """Known effort members and new runtime values should share the enum-style API."""
     known_option = ReasoningEffortOption.model_validate(
         {"description": "Balanced", "reasoningEffort": "medium"}
     )
     future_option = ReasoningEffortOption.model_validate(
-        {"description": "Future", "reasoningEffort": "ultra"}
+        {"description": "Future", "reasoningEffort": "future"}
     )
     turn_params = TurnStartParams(
         thread_id="thread-1",
         input=[],
-        effort=ReasoningEffort.medium,
+        effort=effort,
     )
 
     assert {
@@ -95,8 +103,8 @@ def test_reasoning_effort_preserves_enum_constants_and_accepts_future_values() -
     } == {
         "known_member": "medium",
         "known_option": "medium",
-        "future_option": "ultra",
-        "turn_effort": "medium",
+        "future_option": "future",
+        "turn_effort": wire_value,
     }
 
 

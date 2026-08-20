@@ -656,6 +656,8 @@ def _preserve_reasoning_effort_enum(out_path: Path) -> None:
     medium = "medium"
     high = "high"
     xhigh = "xhigh"
+    max = "max"
+    ultra = "ultra"
 
     @classmethod
     def _missing_(cls, value: object) -> ReasoningEffort | None:

@@ -3208,6 +3208,8 @@ class ReasoningEffort(str, Enum):
     medium = "medium"
     high = "high"
     xhigh = "xhigh"
+    max = "max"
+    ultra = "ultra"
 
     @classmethod
     def _missing_(cls, value: object) -> ReasoningEffort | None:
