@@ -3,6 +3,7 @@ use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use app_test_support::create_fake_rollout;
 use app_test_support::create_mock_responses_server_repeating_assistant;
+use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::RequestId;
@@ -12,6 +13,7 @@ use codex_app_server_protocol::ThreadArchivedNotification;
 use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
+use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
@@ -112,17 +114,28 @@ async fn thread_archive_rejects_owned_unmaterialized_paginated_descendant() -> R
 async fn thread_archive_requires_materialized_rollout() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
+    MockResponsesConfig::new(&server.uri())
+        .with_root_config(&format!(r#"chatgpt_base_url = "{}""#, server.uri()))
+        .write(codex_home.path())?;
+    mount_analytics_capture(&server, codex_home.path()).await?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .build_initialized()
+        .build()
         .await?;
+    mcp.initialize_with_client_info(ClientInfo {
+        name: "codex_work_desktop".to_string(),
+        title: None,
+        version: "0.1.0".to_string(),
+    })
+    .await?;
 
     // Start a thread.
     let ThreadStartResponse { thread, .. } = mcp
         .start_thread(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            thread_source: Some(ThreadSource::User),
+            service_name: Some("codex_work_desktop".to_string()),
             ..Default::default()
         })
         .await?;
@@ -208,6 +221,40 @@ async fn thread_archive_requires_materialized_rollout() -> Result<()> {
     )
     .await??;
     assert_eq!(archived_notification.thread_id, thread.id);
+
+    let event = wait_for_matching_analytics_event(&server, DEFAULT_READ_TIMEOUT, |event| {
+        event["event_type"] == "codex_thread_archive_event"
+            && event["event_params"]["thread_id"] == thread.id
+    })
+    .await?;
+    let occurred_at_ms = event["event_params"]["occurred_at_ms"]
+        .as_u64()
+        .expect("thread archive analytics must include its producer timestamp");
+    assert_eq!(
+        event,
+        json!({
+            "event_type": "codex_thread_archive_event",
+            "event_params": {
+                "thread_id": thread.id,
+                "action": "archived",
+                "occurred_at_ms": occurred_at_ms,
+                "app_server_client": {
+                    "product_client_id": "codex_work_desktop",
+                    "client_name": "codex_work_desktop",
+                    "client_version": "0.1.0",
+                    "rpc_transport": "stdio",
+                    "experimental_api_enabled": true,
+                },
+                "runtime": {
+                    "codex_rs_version": env!("CARGO_PKG_VERSION"),
+                    "runtime_os": std::env::consts::OS,
+                    "runtime_os_version": event["event_params"]["runtime"]["runtime_os_version"],
+                    "runtime_arch": std::env::consts::ARCH,
+                },
+                "thread_source": "user",
+            },
+        })
+    );
 
     // Verify file moved.
     let archived_directory = codex_home.path().join(ARCHIVED_SESSIONS_SUBDIR);

@@ -301,6 +301,14 @@ pub(crate) struct ThreadArchiveEventParams {
     pub(crate) thread_id: String,
     pub(crate) action: ThreadArchiveAction,
     pub(crate) occurred_at_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) app_server_client: Option<CodexAppServerClientMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) runtime: Option<CodexRuntimeMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) thread_source: Option<ThreadSource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) parent_thread_id: Option<String>,
 }
 
 #[derive(Serialize)]

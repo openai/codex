@@ -1797,6 +1797,38 @@ impl AnalyticsReducer {
         );
     }
 
+    fn thread_archive_event_params(
+        &self,
+        thread_id: String,
+        action: ThreadArchiveAction,
+    ) -> ThreadArchiveEventParams {
+        let thread_state = self.threads.get(&thread_id);
+        let connection_state = self
+            .thread_connection_id(&thread_id)
+            .and_then(|connection_id| self.connections.get(&connection_id));
+        let thread_metadata = thread_state.and_then(|thread_state| thread_state.metadata.as_ref());
+
+        ThreadArchiveEventParams {
+            thread_id,
+            action,
+            occurred_at_ms: now_unix_millis(),
+            app_server_client: thread_state
+                .zip(connection_state)
+                .map(|(thread_state, connection_state)| {
+                    thread_state.app_server_client(connection_state)
+                }),
+            runtime: connection_state.map(|connection_state| connection_state.runtime.clone()),
+            thread_source: thread_metadata
+                .and_then(|thread_metadata| thread_metadata.thread_source.as_ref())
+                .filter(|thread_source| {
+                    !matches!(thread_source, ThreadSource::Feature(feature) if feature != "automation")
+                })
+                .cloned(),
+            parent_thread_id: thread_metadata
+                .and_then(|thread_metadata| thread_metadata.parent_thread_id.clone()),
+        }
+    }
+
     async fn ingest_notification(
         &mut self,
         notification: ServerNotification,
@@ -1806,21 +1838,19 @@ impl AnalyticsReducer {
             ServerNotification::ThreadArchived(notification) => {
                 out.push(TrackEventRequest::ThreadArchive(ThreadArchiveEvent {
                     event_type: "codex_thread_archive_event",
-                    event_params: ThreadArchiveEventParams {
-                        thread_id: notification.thread_id,
-                        action: ThreadArchiveAction::Archived,
-                        occurred_at_ms: now_unix_millis(),
-                    },
+                    event_params: self.thread_archive_event_params(
+                        notification.thread_id,
+                        ThreadArchiveAction::Archived,
+                    ),
                 }));
             }
             ServerNotification::ThreadUnarchived(notification) => {
                 out.push(TrackEventRequest::ThreadArchive(ThreadArchiveEvent {
                     event_type: "codex_thread_archive_event",
-                    event_params: ThreadArchiveEventParams {
-                        thread_id: notification.thread_id,
-                        action: ThreadArchiveAction::Unarchived,
-                        occurred_at_ms: now_unix_millis(),
-                    },
+                    event_params: self.thread_archive_event_params(
+                        notification.thread_id,
+                        ThreadArchiveAction::Unarchived,
+                    ),
                 }));
             }
             ServerNotification::ItemStarted(notification) => {
