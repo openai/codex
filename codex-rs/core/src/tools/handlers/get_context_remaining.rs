@@ -36,7 +36,7 @@ impl GetContextRemainingOutput {
 }
 
 impl ToolOutput for GetContextRemainingOutput {
-    fn log_preview(&self) -> String {
+    fn log_output(&self) -> String {
         self.fragment()
     }
 

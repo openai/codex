@@ -9554,6 +9554,7 @@ async fn trace_exporter_defaults_to_none_when_log_exporter_is_set() -> std::io::
     let fixture = create_test_fixture()?;
     let mut cfg = fixture.cfg.clone();
     cfg.otel = Some(OtelConfigToml {
+        tool_result: toml::from_str("max_bytes = 8192").expect("tool-result logging config"),
         exporter: Some(OtelExporterKind::OtlpHttp {
             endpoint: "http://localhost:14318/v1/logs".to_string(),
             headers: HashMap::new(),
@@ -9574,6 +9575,7 @@ async fn trace_exporter_defaults_to_none_when_log_exporter_is_set() -> std::io::
     )
     .await?;
 
+    assert_eq!(config.otel.tool_result.max_bytes, 8192);
     assert!(matches!(
         config.otel.exporter,
         OtelExporterKind::OtlpHttp { .. }

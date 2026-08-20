@@ -6,6 +6,7 @@ pub(crate) mod trace_context;
 
 mod otlp;
 mod targets;
+mod tool_result;
 
 use crate::metrics::Result as MetricsResult;
 use codex_protocol::auth::AuthMode;

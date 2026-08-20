@@ -478,6 +478,7 @@ async fn register_call_with_default_shell_trigger(
         .register_call(ActiveNetworkApprovalCall {
             registration_id: registration_id.to_string(),
             turn_id: "turn-1".to_string(),
+            tool_name: ToolName::plain("exec_command"),
             trigger: GuardianNetworkAccessTrigger {
                 call_id: "call-1".to_string(),
                 tool_name: "exec_command".to_string(),
@@ -500,9 +501,10 @@ async fn register_call_with_default_shell_trigger(
 #[tokio::test]
 async fn active_call_preserves_triggering_command_context() {
     let service = NetworkApprovalService::default();
+    let tool_name = ToolName::namespaced("mcp__example", "exec_command");
     let expected = GuardianNetworkAccessTrigger {
         call_id: "call-1".to_string(),
-        tool_name: "exec_command".to_string(),
+        tool_name: tool_name.to_string(),
         command: vec!["curl".to_string(), "https://example.com".to_string()],
         cwd: PathUri::parse("file:///C:/repo").expect("valid Windows path URI"),
         sandbox_permissions: SandboxPermissions::UseDefault,
@@ -516,6 +518,7 @@ async fn active_call_preserves_triggering_command_context() {
             registration_id: "registration-1".to_string(),
             turn_id: "turn-1".to_string(),
             trigger: expected.clone(),
+            tool_name: tool_name.clone(),
             command: "curl https://example.com".to_string(),
             environment_id: "remote".to_string(),
             permission_profile: PermissionProfile::workspace_write(),
@@ -529,6 +532,7 @@ async fn active_call_preserves_triggering_command_context() {
         .expect("single active call should resolve");
 
     assert_eq!(&call.trigger, &expected);
+    assert_eq!(call.tool_name, tool_name);
     assert_eq!(call.command, "curl https://example.com");
     assert_eq!(call.environment_id, "remote");
 }

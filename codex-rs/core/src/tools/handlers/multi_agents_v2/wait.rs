@@ -157,7 +157,7 @@ impl WaitAgentResult {
 }
 
 impl ToolOutput for WaitAgentResult {
-    fn log_preview(&self) -> String {
+    fn log_output(&self) -> String {
         tool_output_json_text(self, "wait_agent")
     }
 

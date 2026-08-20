@@ -49,6 +49,8 @@ const ABANDONED_NETWORK_APPROVAL_MESSAGE: &str =
 pub(crate) struct NetworkApprovalSpec {
     pub network: Option<NetworkProxy>,
     pub trigger: GuardianNetworkAccessTrigger,
+    /// Preserve the typed identity independently of Guardian's display-name payload.
+    pub tool_name: ToolName,
     pub command: String,
     pub environment_id: String,
     pub permission_profile: PermissionProfile,
@@ -229,6 +231,7 @@ struct ActiveNetworkApprovalCall {
     registration_id: String,
     turn_id: String,
     trigger: GuardianNetworkAccessTrigger,
+    tool_name: ToolName,
     command: String,
     environment_id: String,
     permission_profile: PermissionProfile,
@@ -730,8 +733,8 @@ impl NetworkApprovalService {
             |call| call.trigger.call_id.clone(),
         );
         let telemetry_tool_name = owner_call.as_ref().map_or_else(
-            || "network_access".to_string(),
-            |call| call.trigger.tool_name.clone(),
+            || ToolName::plain("network_access"),
+            |call| call.tool_name.clone(),
         );
         let action = ApprovalAction::NetworkAccess {
             id: guardian_approval_id,
@@ -750,7 +753,7 @@ impl NetworkApprovalService {
         let approval_context = ApprovalContext {
             review_context: GuardianReviewContext::from(&turn_context),
             call_id: approval_call_id,
-            tool_name: ToolName::plain(telemetry_tool_name.clone()),
+            tool_name: telemetry_tool_name.clone(),
             strict_auto_review,
             approval_reason: Some(prompt_reason),
             retry_reason: Some(policy_denial_message.clone()),
@@ -1026,6 +1029,7 @@ pub(crate) async fn begin_network_approval(
     let NetworkApprovalSpec {
         network,
         trigger,
+        tool_name,
         command,
         environment_id,
         permission_profile,
@@ -1057,6 +1061,7 @@ pub(crate) async fn begin_network_approval(
             registration_id: registration_id.clone(),
             turn_id: turn_id.to_string(),
             trigger,
+            tool_name,
             command,
             environment_id,
             permission_profile,

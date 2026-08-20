@@ -21,6 +21,23 @@ use wildmatch::WildMatchPattern;
 
 use crate::openai_models::ReasoningEffort;
 
+/// Limit for the text included in `codex.tool_result` log records.
+/// This does not affect model-visible output. Raising it can expose more tool data to logs.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, JsonSchema)]
+#[serde(default)]
+pub struct ToolResultLogConfig {
+    /// Maximum UTF-8 bytes before the truncation notice. Defaults to 2048.
+    pub max_bytes: usize,
+}
+
+impl Default for ToolResultLogConfig {
+    fn default() -> Self {
+        Self {
+            max_bytes: 2 * 1024,
+        }
+    }
+}
+
 /// Selects which part of the active context is charged against
 /// `model_auto_compact_token_limit`.
 #[derive(

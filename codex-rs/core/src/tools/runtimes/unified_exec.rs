@@ -225,6 +225,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecAttempt> for UnifiedExecRunt
             managed_network_for_sandbox_permissions(req.network.as_ref(), sandbox_permissions)?;
         Some(NetworkApprovalSpec {
             network: Some(network.clone()),
+            tool_name: ctx.tool_name.clone(),
             trigger: GuardianNetworkAccessTrigger {
                 call_id: ctx.call_id.clone(),
                 tool_name: flat_tool_name(&ctx.tool_name).into_owned(),

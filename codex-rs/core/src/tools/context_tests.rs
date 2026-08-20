@@ -153,6 +153,13 @@ fn mcp_tool_output_response_item_truncates_large_structured_content() {
         truncation_policy: TruncationPolicy::Bytes(128),
     };
 
+    assert_eq!(
+        output.log_output(),
+        format!(
+            "Wall time: 1.2500 seconds\nOutput:\n{}",
+            json!({"items": "large structured value ".repeat(1_000)})
+        )
+    );
     let response = output.to_response_item(
         "mcp-call-large",
         &ToolPayload::Function {
@@ -384,7 +391,7 @@ fn log_preview_uses_content_items_when_plain_text_is_missing() {
         Some(true),
     );
 
-    assert_eq!(output.log_preview(), "preview");
+    assert_eq!(output.log_output(), "preview");
     assert_eq!(
         function_call_output_content_items_to_text(&output.body),
         Some("preview".to_string())
@@ -392,43 +399,11 @@ fn log_preview_uses_content_items_when_plain_text_is_missing() {
 }
 
 #[test]
-fn telemetry_preview_returns_original_within_limits() {
-    let content = "short output";
-    assert_eq!(telemetry_preview(content), content);
-}
-
-#[test]
-fn telemetry_preview_truncates_by_bytes() {
-    let content = "x".repeat(TELEMETRY_PREVIEW_MAX_BYTES + 8);
-    let preview = telemetry_preview(&content);
-
-    assert!(preview.contains(TELEMETRY_PREVIEW_TRUNCATION_NOTICE));
-    assert!(
-        preview.len()
-            <= TELEMETRY_PREVIEW_MAX_BYTES + TELEMETRY_PREVIEW_TRUNCATION_NOTICE.len() + 1
-    );
-}
-
-#[test]
-fn telemetry_preview_truncates_by_lines() {
-    let content = (0..(TELEMETRY_PREVIEW_MAX_LINES + 5))
-        .map(|idx| format!("line {idx}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let preview = telemetry_preview(&content);
-    let lines: Vec<&str> = preview.lines().collect();
-
-    assert!(lines.len() <= TELEMETRY_PREVIEW_MAX_LINES + 1);
-    assert_eq!(lines.last(), Some(&TELEMETRY_PREVIEW_TRUNCATION_NOTICE));
-}
-
-#[test]
 fn exec_command_tool_output_formats_truncated_response() {
     let payload = ToolPayload::Function {
         arguments: "{}".to_string(),
     };
-    let response = ExecCommandToolOutput {
+    let output = ExecCommandToolOutput {
         event_call_id: "call-42".to_string(),
         chunk_id: "abc123".to_string(),
         wall_time: std::time::Duration::from_millis(1250),
@@ -440,8 +415,12 @@ fn exec_command_tool_output_formats_truncated_response() {
         original_token_count: Some(10),
         output_omitted_bytes: None,
         hook_command: None,
-    }
-    .to_response_item("call-42", &payload);
+    };
+    assert_eq!(
+        output.log_output(),
+        "Chunk ID: abc123\nWall time: 1.2500 seconds\nProcess exited with code 0\nOriginal token count: 10\nOutput:\ntoken one token two token three token four token five"
+    );
+    let response = output.to_response_item("call-42", &payload);
 
     match response {
         ResponseInputItem::FunctionCallOutput { call_id, output } => {
@@ -525,7 +504,7 @@ fn exec_command_tool_output_preserves_omission_metadata_when_truncated() {
         "z".repeat(/*n*/ 100)
     )
     .into_bytes();
-    let response = ExecCommandToolOutput {
+    let mut output = ExecCommandToolOutput {
         event_call_id: "call-omitted".to_string(),
         chunk_id: "abc123".to_string(),
         wall_time: std::time::Duration::from_millis(/*millis*/ 1250),
@@ -537,8 +516,23 @@ fn exec_command_tool_output_preserves_omission_metadata_when_truncated() {
         original_token_count: Some(42_000),
         output_omitted_bytes: NonZeroUsize::new(/*n*/ 123_456),
         hook_command: None,
-    }
-    .to_response_item("call-omitted", &payload);
+    };
+    let expected_header = "Chunk ID: abc123\nWall time: 1.2500 seconds\nProcess exited with code 0\nOriginal token count: 42000\nOutput:\n";
+    assert_eq!(
+        output.log_output(),
+        format!(
+            "{expected_header}{}",
+            String::from_utf8_lossy(&output.raw_output)
+        )
+    );
+    let response = output.to_response_item("call-omitted", &payload);
+
+    // Collection may report omitted bytes without including the marker in its text.
+    output.raw_output = b"remaining output".to_vec();
+    assert_eq!(
+        output.log_output(),
+        format!("{expected_header}{marker}\nremaining output")
+    );
 
     let ResponseInputItem::FunctionCallOutput { output, .. } = response else {
         panic!("expected FunctionCallOutput");

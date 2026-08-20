@@ -6,6 +6,7 @@ use codex_otel::RuntimeMetricsSummary;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
+use codex_protocol::ToolName;
 use codex_protocol::protocol::SessionSource;
 use eventsource_stream::Event as StreamEvent;
 use opentelemetry_sdk::metrics::InMemoryMetricExporter;
@@ -37,7 +38,7 @@ fn runtime_metrics_summary_collects_tool_api_and_streaming_metrics() -> Result<(
     manager.reset_runtime_metrics();
 
     manager.tool_result_with_tags(
-        "shell",
+        &ToolName::plain("shell"),
         "call-1",
         "{\"cmd\":\"echo\"}",
         Duration::from_millis(250),

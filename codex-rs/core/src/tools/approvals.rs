@@ -15,7 +15,6 @@ use crate::mcp_tool_call::request_mcp_tool_user_approval;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
-use crate::tools::flat_tool_name;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::runtimes::apply_patch::ApplyPatchApprovalKey;
 use crate::tools::runtimes::unified_exec::UnifiedExecApprovalKey;
@@ -778,9 +777,8 @@ fn record_resolution(ctx: &ApprovalContext, resolution: &ApprovalResolution) {
         ApprovalResolutionSource::Guardian => ToolDecisionSource::AutomatedReviewer,
         ApprovalResolutionSource::User => ToolDecisionSource::User,
     };
-    let tool_name = flat_tool_name(&ctx.tool_name);
     ctx.review_context.turn().session_telemetry.tool_decision(
-        tool_name.as_ref(),
+        &ctx.tool_name,
         &ctx.call_id,
         &resolution.decision,
         Some(source),

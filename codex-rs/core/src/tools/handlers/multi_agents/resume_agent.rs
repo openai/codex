@@ -168,7 +168,7 @@ pub(crate) struct ResumeAgentResult {
 }
 
 impl ToolOutput for ResumeAgentResult {
-    fn log_preview(&self) -> String {
+    fn log_output(&self) -> String {
         tool_output_json_text(self, "resume_agent")
     }
 

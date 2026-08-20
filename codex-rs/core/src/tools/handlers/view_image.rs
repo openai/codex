@@ -223,7 +223,7 @@ pub struct ViewImageOutput {
 }
 
 impl ToolOutput for ViewImageOutput {
-    fn log_preview(&self) -> String {
+    fn log_output(&self) -> String {
         format!("<image data URL omitted: {} bytes>", self.image_url.len())
     }
 
@@ -323,7 +323,7 @@ mod tests {
             unified_image_budget: false,
         };
 
-        assert_eq!(output.log_preview(), "<image data URL omitted: 25 bytes>");
+        assert_eq!(output.log_output(), "<image data URL omitted: 25 bytes>");
     }
 
     #[test]

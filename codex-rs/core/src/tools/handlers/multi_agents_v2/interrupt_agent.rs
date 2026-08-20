@@ -113,7 +113,7 @@ pub(crate) struct InterruptAgentResult {
 }
 
 impl ToolOutput for InterruptAgentResult {
-    fn log_preview(&self) -> String {
+    fn log_output(&self) -> String {
         tool_output_json_text(self, "interrupt_agent")
     }
 

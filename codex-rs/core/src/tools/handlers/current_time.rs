@@ -25,7 +25,7 @@ const TOOL_NAME: &str = "curr_time";
 struct CurrentTimeOutput(CurrentTimeReminder);
 
 impl ToolOutput for CurrentTimeOutput {
-    fn log_preview(&self) -> String {
+    fn log_output(&self) -> String {
         self.0.body()
     }
 

@@ -65,7 +65,7 @@ pub(crate) struct ListAgentsResult {
 }
 
 impl ToolOutput for ListAgentsResult {
-    fn log_preview(&self) -> String {
+    fn log_output(&self) -> String {
         tool_output_json_text(self, "list_agents")
     }
 

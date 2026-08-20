@@ -4,6 +4,7 @@ use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
+use codex_protocol::ToolName;
 use codex_protocol::approvals::NetworkPolicyAmendment;
 use codex_protocol::approvals::NetworkPolicyRuleAction;
 use codex_protocol::config_types::ServiceTier;
@@ -1080,6 +1081,9 @@ fn tool_decision_assertion<'a>(
         if !lower.contains("tool_name=exec_command") {
             return Err("missing tool_name for exec_command".to_string());
         }
+        if !lower.contains("tool_namespace=functions") {
+            return Err("missing default tool namespace".to_string());
+        }
         if !lower.contains(&format!("decision={expected_decision}")) {
             return Err(format!("unexpected decision for {call_id}"));
         }
@@ -1154,7 +1158,7 @@ fn network_policy_decisions_omit_source_and_destination() {
         ),
     ] {
         telemetry.tool_decision(
-            "exec_command",
+            &ToolName::namespaced("mcp__example", "exec_command"),
             call_id,
             &ReviewDecision::NetworkPolicyAmendment {
                 network_policy_amendment: NetworkPolicyAmendment {
@@ -1176,6 +1180,9 @@ fn network_policy_decisions_omit_source_and_destination() {
 
             if !line.contains("tool_name=exec_command") {
                 return Err("missing triggering network tool name".to_string());
+            }
+            if !line.contains("tool_namespace=mcp__example") {
+                return Err("missing triggering network tool namespace".to_string());
             }
             if !line.contains(&format!("decision={expected_decision}")) {
                 return Err(format!("unexpected network tool decision for {call_id}"));

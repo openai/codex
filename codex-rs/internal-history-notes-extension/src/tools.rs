@@ -413,8 +413,8 @@ impl HistoryNotesToolOutput {
 }
 
 impl ToolOutput for HistoryNotesToolOutput {
-    fn log_preview(&self) -> String {
-        JsonToolOutput::new(self.result.clone()).log_preview()
+    fn log_output(&self) -> String {
+        JsonToolOutput::new(self.result.clone()).log_output()
     }
 
     fn success_for_logging(&self) -> bool {

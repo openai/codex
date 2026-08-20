@@ -2561,6 +2561,17 @@
           "description": "Attributes to add to every exported trace span.",
           "type": "object"
         },
+        "tool_result": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ToolResultLogConfig"
+            }
+          ],
+          "default": {
+            "max_bytes": 2048
+          },
+          "description": "Byte limit for tool-result log output; independent of model-visible output."
+        },
         "trace_exporter": {
           "allOf": [
             {
@@ -3406,6 +3417,19 @@
         "turn_metadata_includes_tool_info": {
           "description": "Include authoritative tool information in per-turn request metadata.",
           "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "ToolResultLogConfig": {
+      "description": "Limit for the text included in `codex.tool_result` log records. This does not affect model-visible output. Raising it can expose more tool data to logs.",
+      "properties": {
+        "max_bytes": {
+          "default": 2048,
+          "description": "Maximum UTF-8 bytes before the truncation notice. Defaults to 2048.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
         }
       },
       "type": "object"

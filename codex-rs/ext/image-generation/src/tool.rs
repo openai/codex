@@ -641,7 +641,7 @@ struct GeneratedImageOutput {
 
 impl ToolOutput for GeneratedImageOutput {
     /// Avoids copying image bytes into tool-call telemetry.
-    fn log_preview(&self) -> String {
+    fn log_output(&self) -> String {
         "[generated image]".to_string()
     }
 

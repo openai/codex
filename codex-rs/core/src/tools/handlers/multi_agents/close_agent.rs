@@ -141,7 +141,7 @@ pub(crate) struct CloseAgentResult {
 }
 
 impl ToolOutput for CloseAgentResult {
-    fn log_preview(&self) -> String {
+    fn log_output(&self) -> String {
         tool_output_json_text(self, "close_agent")
     }
 

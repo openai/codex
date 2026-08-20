@@ -178,7 +178,7 @@ impl ToolOrchestrator {
                     already_approved = true;
                 } else {
                     otel.tool_decision(
-                        &otel_tn,
+                        &tool_ctx.tool_name,
                         otel_ci,
                         &ReviewDecision::Approved,
                         Some(ToolDecisionSource::Config),

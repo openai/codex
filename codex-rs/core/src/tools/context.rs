@@ -3,9 +3,6 @@ use crate::original_image_detail::sanitize_original_image_detail;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
-use crate::tools::TELEMETRY_PREVIEW_MAX_BYTES;
-use crate::tools::TELEMETRY_PREVIEW_MAX_LINES;
-use crate::tools::TELEMETRY_PREVIEW_TRUNCATION_NOTICE;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::unified_exec::format_output_omission_marker;
 use crate::unified_exec::resolve_max_tokens;
@@ -21,7 +18,6 @@ use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::formatted_truncate_text;
 use codex_utils_output_truncation::truncate_text;
-use codex_utils_string::take_bytes_at_char_boundary;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::num::NonZeroUsize;
@@ -80,13 +76,16 @@ pub struct McpToolOutput {
 }
 
 impl ToolOutput for McpToolOutput {
-    fn log_preview(&self) -> String {
-        let payload = self.response_payload();
-        let preview = payload.body.to_text().unwrap_or_else(|| {
-            serde_json::to_string(&self.result.content)
-                .unwrap_or_else(|err| format!("failed to serialize mcp result: {err}"))
-        });
-        telemetry_preview(&preview)
+    fn log_output(&self) -> String {
+        // Logging has its own budget; do not first apply the model-context budget.
+        let output = self.result.log_output();
+        let wall_time_seconds = self.wall_time.as_secs_f64();
+        let header = format!("Wall time: {wall_time_seconds:.4} seconds\nOutput:");
+        if output.is_empty() {
+            header
+        } else {
+            format!("{header}\n{output}")
+        }
     }
 
     fn success_for_logging(&self) -> bool {
@@ -152,7 +151,7 @@ pub struct ToolSearchOutput {
 }
 
 impl ToolOutput for ToolSearchOutput {
-    fn log_preview(&self) -> String {
+    fn log_output(&self) -> String {
         let tools = self
             .tools
             .iter()
@@ -162,7 +161,7 @@ impl ToolOutput for ToolSearchOutput {
                 })
             })
             .collect();
-        telemetry_preview(&JsonValue::Array(tools).to_string())
+        JsonValue::Array(tools).to_string()
     }
 
     fn success_for_logging(&self) -> bool {
@@ -219,10 +218,8 @@ impl FunctionToolOutput {
 }
 
 impl ToolOutput for FunctionToolOutput {
-    fn log_preview(&self) -> String {
-        telemetry_preview(
-            &function_call_output_content_items_to_text(&self.body).unwrap_or_default(),
-        )
+    fn log_output(&self) -> String {
+        function_call_output_content_items_to_text(&self.body).unwrap_or_default()
     }
 
     fn success_for_logging(&self) -> bool {
@@ -249,8 +246,8 @@ impl ApplyPatchToolOutput {
 }
 
 impl ToolOutput for ApplyPatchToolOutput {
-    fn log_preview(&self) -> String {
-        telemetry_preview(&self.text)
+    fn log_output(&self) -> String {
+        self.text.clone()
     }
 
     fn success_for_logging(&self) -> bool {
@@ -282,8 +279,8 @@ pub struct AbortedToolOutput {
 }
 
 impl ToolOutput for AbortedToolOutput {
-    fn log_preview(&self) -> String {
-        telemetry_preview(&self.message)
+    fn log_output(&self) -> String {
+        self.message.clone()
     }
 
     fn success_for_logging(&self) -> bool {
@@ -328,8 +325,16 @@ pub struct ExecCommandToolOutput {
 }
 
 impl ToolOutput for ExecCommandToolOutput {
-    fn log_preview(&self) -> String {
-        telemetry_preview(&self.response_text())
+    fn log_output(&self) -> String {
+        // The telemetry budget must not inherit the model's output-token limit.
+        let mut output = String::from_utf8_lossy(&self.raw_output).into_owned();
+        if let Some(omitted_bytes) = self.output_omitted_bytes {
+            let marker = format_output_omission_marker(omitted_bytes.get());
+            if !output.contains(&marker) {
+                output = format!("{marker}\n{output}");
+            }
+        }
+        format!("{}\n{output}", self.response_header())
     }
 
     fn success_for_logging(&self) -> bool {
@@ -447,7 +452,7 @@ impl ExecCommandToolOutput {
         )
     }
 
-    fn response_text(&self) -> String {
+    fn response_header(&self) -> String {
         let mut sections = Vec::new();
 
         if !self.chunk_id.is_empty() {
@@ -470,7 +475,11 @@ impl ExecCommandToolOutput {
         }
 
         sections.push("Output:".to_string());
-        let header = sections.join("\n");
+        sections.join("\n")
+    }
+
+    fn response_text(&self) -> String {
+        let header = self.response_header();
         let output_budget = (self.truncation_policy * 1.2)
             .byte_budget()
             .saturating_sub(header.len().saturating_add(/*rhs*/ 1));
@@ -522,46 +531,6 @@ fn function_tool_response(
         call_id: call_id.to_string(),
         output: FunctionCallOutputPayload { body, success },
     }
-}
-
-fn telemetry_preview(content: &str) -> String {
-    let truncated_slice = take_bytes_at_char_boundary(content, TELEMETRY_PREVIEW_MAX_BYTES);
-    let truncated_by_bytes = truncated_slice.len() < content.len();
-
-    let mut preview = String::new();
-    let mut lines_iter = truncated_slice.lines();
-    for idx in 0..TELEMETRY_PREVIEW_MAX_LINES {
-        match lines_iter.next() {
-            Some(line) => {
-                if idx > 0 {
-                    preview.push('\n');
-                }
-                preview.push_str(line);
-            }
-            None => break,
-        }
-    }
-    let truncated_by_lines = lines_iter.next().is_some();
-
-    if !truncated_by_bytes && !truncated_by_lines {
-        return content.to_string();
-    }
-
-    if preview.len() < truncated_slice.len()
-        && truncated_slice
-            .as_bytes()
-            .get(preview.len())
-            .is_some_and(|byte| *byte == b'\n')
-    {
-        preview.push('\n');
-    }
-
-    if !preview.is_empty() && !preview.ends_with('\n') {
-        preview.push('\n');
-    }
-    preview.push_str(TELEMETRY_PREVIEW_TRUNCATION_NOTICE);
-
-    preview
 }
 
 #[cfg(test)]
