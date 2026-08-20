@@ -1,5 +1,6 @@
 use crate::ResolvedPluginMetricsOperation;
 use codex_analytics::PluginMeasurementRow;
+use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::Environment;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::FileSystemReadStream;
@@ -142,12 +143,20 @@ impl PluginMetricsSidecar {
             .join(&format!("codex-plugin-metrics-{execution_id}"))
             .ok()?;
         let absolute_output_dir = directory_path.to_abs_path().ok()?;
-        environment
-            .create_private_directory(&directory_path)
+        let filesystem = environment.get_filesystem();
+        filesystem
+            .create_directory(
+                &directory_path,
+                CreateDirectoryOptions {
+                    recursive: false,
+                    follow_symlinks: true,
+                },
+                /*sandbox*/ None,
+            )
             .await
             .ok()?;
         let directory = RemotePluginMetricsDirectory {
-            filesystem: environment.get_filesystem(),
+            filesystem,
             path: directory_path,
         };
         let output_path = directory.path.join("measurements.json").ok()?;

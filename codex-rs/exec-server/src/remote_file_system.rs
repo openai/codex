@@ -146,7 +146,6 @@ impl RemoteFileSystem {
                 recursive: Some(options.recursive),
                 follow_symlinks: (!options.follow_symlinks).then_some(false),
                 sandbox: remote_sandbox_context(sandbox),
-                private: None,
             })
             .await;
         self.metadata_requests.lock().await.clear();

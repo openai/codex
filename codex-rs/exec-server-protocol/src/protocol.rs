@@ -97,7 +97,7 @@ pub struct EnvironmentInfo {
     /// On Windows, a command's `TEMP` or `TMP` overrides take precedence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temporary_directories: Option<Vec<PathUri>>,
-    /// Executor-native temporary directory for private, child-visible sidecars.
+    /// Executor-native temporary directory for child-visible sidecars.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temp_dir: Option<PathUri>,
     /// Optional executor features that clients must gate before sending newer request fields.
@@ -433,9 +433,6 @@ pub struct FsCreateDirectoryParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub follow_symlinks: Option<bool>,
     pub sandbox: Option<FileSystemSandboxContext>,
-    /// Atomically restrict a newly created, non-recursive directory to its owner.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub private: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

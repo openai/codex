@@ -164,7 +164,6 @@ impl SandboxedFileSystem {
                 recursive: Some(options.recursive),
                 follow_symlinks: (!options.follow_symlinks).then_some(false),
                 sandbox: None,
-                private: None,
             }),
         )
         .await?

@@ -38,11 +38,9 @@ use crate::local_file_system::LocalFileSystem;
 use crate::local_process::LocalProcess;
 use crate::process::ExecBackend;
 use crate::protocol::EnvironmentInfo;
-use crate::protocol::FsCreateDirectoryParams;
 use crate::remote::NoiseRendezvousEnvironmentConfig;
 use crate::remote_file_system::RemoteFileSystem;
 use crate::remote_process::RemoteProcess;
-use codex_utils_path_uri::PathUri;
 use tokio::sync::watch;
 use tokio_util::task::AbortOnDropHandle;
 use tracing::Instrument;
@@ -904,27 +902,6 @@ impl Environment {
                 .await
                 .map_err(|error| ExecServerError::Protocol(error.to_string())),
         }
-    }
-
-    /// Atomically creates an owner-private directory on a remote executor.
-    pub async fn create_private_directory(&self, path: &PathUri) -> Result<(), ExecServerError> {
-        let Some(client) = &self.remote_client else {
-            return Err(ExecServerError::Protocol(
-                "private executor directory creation requires a remote environment".to_string(),
-            ));
-        };
-        client
-            .get()
-            .await?
-            .fs_create_directory(FsCreateDirectoryParams {
-                path: path.clone(),
-                recursive: Some(false),
-                follow_symlinks: None,
-                sandbox: None,
-                private: Some(true),
-            })
-            .await?;
-        Ok(())
     }
 
     /// Discovers plugin and skill manifests through the environment's high-level discovery API.
