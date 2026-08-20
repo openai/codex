@@ -418,7 +418,14 @@ fn normalize_guardian_snapshot_paths(text: String) -> String {
             .replace(&escaped_platform_path, canonical_path)
             .replace(&platform_path, canonical_path);
     }
-    text
+    let guardian_policy = guardian_policy_prompt_with_config_and_template(
+        BUNDLED_GUARDIAN_POLICY,
+        BUNDLED_GUARDIAN_POLICY_TEMPLATE,
+    )
+    .replace("\r\n", "\n")
+    .replace('\r', "\n")
+    .replace('\n', "\\n");
+    text.replace(&guardian_policy, "<GUARDIAN_POLICY>")
 }
 
 fn guardian_prompt_text(items: &[codex_protocol::user_input::UserInput]) -> String {
@@ -2024,15 +2031,43 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     ));
     let request = request_log.single_request();
     let request_body = request.body_json();
-    let guardian_tool_names = request_body["tools"]
+    assert!(
+        request_body.get("tools").is_none(),
+        "guardian request should use Responses Lite tool input"
+    );
+    let guardian_tools = request_body["input"]
         .as_array()
-        .expect("guardian request tools")
+        .and_then(|input| input.first())
+        .filter(|item| item["type"] == "additional_tools")
+        .and_then(|item| item["tools"].as_array())
+        .and_then(|tools| {
+            tools
+                .iter()
+                .find(|tool| tool["type"] == "namespace" && tool["name"] == "functions")
+        })
+        .and_then(|namespace| namespace["tools"].as_array())
+        .expect("guardian request functions namespace");
+    let mut guardian_tool_names = guardian_tools
         .iter()
-        .map(|tool| tool["name"].as_str().expect("guardian request tool name"))
+        .map(|tool| tool["name"].as_str().expect("guardian code-mode tool name"))
         .collect::<Vec<_>>();
+    guardian_tool_names.sort_unstable();
+    assert_eq!(guardian_tool_names, vec!["exec", "wait"]);
+
+    let guardian_exec_description = guardian_tools
+        .iter()
+        .find(|tool| tool["name"] == "exec")
+        .and_then(|tool| tool["description"].as_str())
+        .expect("guardian code-mode exec description");
+    let mut guardian_nested_tool_names = guardian_exec_description
+        .lines()
+        .filter_map(|line| line.strip_prefix("### `"))
+        .filter_map(|line| line.strip_suffix('`'))
+        .collect::<Vec<_>>();
+    guardian_nested_tool_names.sort_unstable();
     assert_eq!(
-        guardian_tool_names,
-        vec!["exec_command", "write_stdin", "view_image"]
+        guardian_nested_tool_names,
+        vec!["exec_command", "view_image", "write_stdin"]
     );
     let guardian_user_text = request.message_input_texts("user").join("\n");
     assert!(
