@@ -10,6 +10,7 @@ use std::task::Poll;
 use codex_http_client::BuildCustomCaTransportError;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::build_rustls_client_config_with_custom_ca;
+use futures::FutureExt;
 use futures::Sink;
 use futures::Stream;
 use rustls::ClientConfig;
@@ -105,6 +106,7 @@ impl WebSocketConnector {
             proxy_route,
             self.tcp_nodelay,
         )
+        .boxed()
         .await?;
         Ok((WebSocketConnection { inner }, response))
     }
