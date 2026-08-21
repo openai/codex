@@ -62,6 +62,7 @@ pub use remote_installed_plugin_sync::RemotePluginMaterialization;
 pub use remote_installed_plugin_sync::mark_remote_plugin_cache_mutation_in_flight;
 pub(crate) use remote_installed_plugin_sync::remote_installed_plugin_bundle_sync_gate;
 pub use remote_installed_plugin_sync::sync_remote_installed_plugin_bundles_once;
+pub(crate) use remote_installed_plugin_sync::sync_remote_installed_plugin_bundles_once_with_snapshot;
 pub use search::RemotePluginSearchPage;
 pub use search::RemotePluginSearchRequest;
 pub use search::search_remote_plugins;
@@ -1815,11 +1816,18 @@ fn remote_installed_plugin_to_cache_entry(
     installed_plugin: &RemotePluginInstalledItem,
 ) -> Result<RemoteInstalledPlugin, RemotePluginCatalogError> {
     let plugin = &installed_plugin.plugin;
+    let marketplace_name = remote_plugin_canonical_marketplace_name(plugin)?.to_string();
+    PluginId::new(plugin.name.clone(), marketplace_name.clone()).map_err(|err| {
+        RemotePluginCatalogError::UnexpectedResponse(format!(
+            "invalid remote plugin config id for `{}` in `{marketplace_name}`: {err}",
+            plugin.name
+        ))
+    })?;
     // Remote per-skill disabled state (`disabled_skill_names`) is intentionally
     // not projected into skills/list yet; local skills.config remains the
     // supported source for skill enablement.
     Ok(RemoteInstalledPlugin {
-        marketplace_name: remote_plugin_canonical_marketplace_name(plugin)?.to_string(),
+        marketplace_name,
         id: plugin.id.clone(),
         version: plugin.release.version.clone(),
         name: plugin.name.clone(),

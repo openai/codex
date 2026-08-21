@@ -20,6 +20,7 @@ use crate::startup_sync::curated_plugins_repo_path;
 use crate::test_support::TEST_CURATED_PLUGIN_CACHE_VERSION;
 use crate::test_support::TEST_CURATED_PLUGIN_SHA;
 use crate::test_support::load_plugins_config as load_plugins_config_input;
+use crate::test_support::set_test_auth;
 use crate::test_support::set_test_auth_mode;
 use crate::test_support::test_auth_manager;
 use crate::test_support::test_http_client_factory;
@@ -3062,6 +3063,7 @@ fn loaded_plugins_cache_invalidation_rejects_stale_load_completion() {
         configured_plugins: HashMap::new(),
         skill_config_rules: SkillConfigRules::default(),
         remote_global_catalog_active: false,
+        auth_identity: None,
     };
     let stale_generation = manager.loaded_plugins_cache_generation();
 
@@ -3074,6 +3076,60 @@ fn loaded_plugins_cache_invalidation_rejects_stale_load_completion() {
     );
 
     assert_eq!(manager.cached_loaded_plugins(&cache_key), None);
+}
+
+#[tokio::test]
+async fn plugins_for_config_discards_in_flight_load_after_account_change() {
+    let codex_home = TempDir::new().unwrap();
+    write_cached_plugin(
+        codex_home.path(),
+        REMOTE_GLOBAL_MARKETPLACE_NAME,
+        "remote-only",
+    );
+    let config = PluginsConfigInput::new(
+        unrestricted_config_layer_stack(),
+        String::new(),
+        /*plugins_enabled*/ true,
+        /*remote_plugin_enabled*/ true,
+        String::new(),
+        test_http_client_factory(),
+    );
+    let auth_manager = test_auth_manager(Some(AuthMode::ChatgptAuthTokens));
+    let manager = Arc::new(test_plugins_manager_with_auth_manager(
+        codex_home.path().to_path_buf(),
+        Some(Product::Codex),
+        Arc::clone(&auth_manager),
+    ));
+    manager.write_remote_installed_plugins_cache(vec![remote_installed_plugin("remote-only")]);
+    let account_a = auth_manager
+        .auth_cached()
+        .expect("capture first ChatGPT auth");
+
+    let load_permit = manager
+        .loaded_plugins_load_semaphore
+        .try_acquire()
+        .expect("hold plugin load semaphore");
+    let load = manager.plugins_for_config(&config);
+    tokio::pin!(load);
+    assert!(matches!(
+        futures::poll!(load.as_mut()),
+        std::task::Poll::Pending
+    ));
+    let account_b = CodexAuth::from_external_chatgpt_tokens(
+        "header.e30.other",
+        "other-account",
+        /*chatgpt_plan_type*/ None,
+    )
+    .expect("build second ChatGPT auth");
+    set_test_auth(&auth_manager, Some(account_b)).await;
+    drop(load_permit);
+    assert_eq!(load.await, PluginLoadOutcome::default());
+
+    set_test_auth(&auth_manager, Some(account_a)).await;
+    assert_eq!(
+        loaded_plugin_names(&manager, &config).await,
+        vec!["remote-only@openai-curated-remote".to_string()]
+    );
 }
 
 #[tokio::test]
@@ -6830,8 +6886,12 @@ fn remote_installed_plugins_cache_refresh_coalesces_materializations() {
         });
         callback
     };
+    let generation = manager
+        .prepare_remote_installed_plugins_cache_generation(/*auth*/ None)
+        .expect("prepare remote installed cache generation");
     let request =
         |change, on_effective_plugins_changed| RemoteInstalledPluginsCacheRefreshRequest {
+            generation,
             service_config: RemotePluginServiceConfig::new(
                 "https://example.com".to_string(),
                 test_http_client_factory(),
@@ -6929,6 +6989,200 @@ remote_plugin = true
 
     tokio::time::sleep(Duration::from_millis(400)).await;
     server.verify().await;
+}
+
+#[tokio::test]
+async fn reconcile_remote_installed_plugins_rejects_incomplete_snapshot_without_cleanup() {
+    let codex_home = TempDir::new().unwrap();
+    write_file(
+        &codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+remote_plugin = true
+"#,
+    );
+    write_cached_plugin(codex_home.path(), REMOTE_GLOBAL_MARKETPLACE_NAME, "linear");
+    write_cached_plugin(
+        codex_home.path(),
+        REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME,
+        "malformed",
+    );
+    write_cached_plugin(
+        codex_home.path(),
+        REMOTE_WORKSPACE_MARKETPLACE_NAME,
+        "renamed-malformed",
+    );
+    let malformed_remote_plugin_id = "plugins~Plugin_malformed";
+    let malformed_plugin_id = PluginId::new(
+        "malformed".to_string(),
+        REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME.to_string(),
+    )
+    .expect("valid malformed plugin id");
+    PluginStore::new(codex_home.path().to_path_buf())
+        .write_remote_plugin_id(&malformed_plugin_id, malformed_remote_plugin_id)
+        .expect("persist malformed plugin identity");
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/ps/plugins/installed"))
+        .and(query_param("includeDownloadUrls", "true"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "plugins": [
+                {
+                    "id": "plugins~Plugin_linear",
+                    "name": "linear",
+                    "scope": "GLOBAL",
+                    "installation_policy": "AVAILABLE",
+                    "authentication_policy": "ON_USE",
+                    "status": "ENABLED",
+                    "release": {
+                        "version": "local",
+                        "display_name": "",
+                        "description": "Track work",
+                        "interface": {},
+                    },
+                    "enabled": true,
+                },
+                {
+                    "id": malformed_remote_plugin_id,
+                    "name": "renamed-malformed",
+                    "scope": "WORKSPACE",
+                    "installation_policy": "AVAILABLE",
+                    "authentication_policy": "ON_USE",
+                    "status": "ENABLED",
+                    "release": {
+                        "version": "local",
+                        "display_name": "Malformed",
+                        "description": "Missing discoverability",
+                        "interface": {},
+                    },
+                    "enabled": true,
+                },
+            ],
+            "pagination": {"next_page_token": null},
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut config = load_config(codex_home.path(), codex_home.path()).await;
+    config.chatgpt_base_url = format!("{}/backend-api", server.uri());
+    let auth_manager = test_auth_manager(Some(AuthMode::Chatgpt));
+    let auth = auth_manager.auth_cached().expect("test ChatGPT auth");
+    let manager = std::sync::Arc::new(test_plugins_manager_with_auth_manager(
+        codex_home.path().to_path_buf(),
+        Some(Product::Codex),
+        auth_manager,
+    ));
+    let mut previous_malformed = remote_installed_plugin_in_marketplace(
+        "malformed",
+        REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME,
+    );
+    previous_malformed.id = malformed_remote_plugin_id.to_string();
+    previous_malformed.version = Some("local".to_string());
+    previous_malformed.enabled = false;
+    manager.write_remote_installed_plugins_cache(vec![previous_malformed.clone()]);
+
+    let result = manager
+        .reconcile_remote_installed_plugins(&config, Some(&auth))
+        .await;
+
+    assert!(matches!(
+        result,
+        Err(RemoteInstalledPluginBundleSyncError::Catalog(
+            RemotePluginCatalogError::UnexpectedResponse(_)
+        ))
+    ));
+    server.verify().await;
+    assert_eq!(
+        manager
+            .remote_installed_plugins_cache
+            .read()
+            .expect("installed plugin cache lock")
+            .plugins
+            .clone(),
+        Some(vec![previous_malformed])
+    );
+    let plugin_cache_root = codex_home.path().join("plugins/cache");
+    let renamed_malformed_cache = plugin_cache_root
+        .join(REMOTE_WORKSPACE_MARKETPLACE_NAME)
+        .join("renamed-malformed");
+    let previous_malformed_cache = plugin_cache_root
+        .join(REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME)
+        .join("malformed");
+    let linear_metadata = plugin_cache_root
+        .join(REMOTE_GLOBAL_MARKETPLACE_NAME)
+        .join("linear")
+        .join(".codex-remote-plugin-install.json");
+    assert!(renamed_malformed_cache.exists());
+    assert!(previous_malformed_cache.exists());
+    assert!(!linear_metadata.exists());
+}
+
+#[test]
+fn reconciliation_fences_refresh_publication_and_recovers_after_cancellation() {
+    let codex_home = TempDir::new().unwrap();
+    let manager = test_plugins_manager(codex_home.path().to_path_buf());
+    let reconcile_generation = manager
+        .begin_remote_installed_plugins_reconcile(/*auth*/ None)
+        .expect("begin reconciliation");
+    let stale_refresh_generation = manager
+        .remote_installed_plugins_cache_generation_if_current(/*auth*/ None)
+        .expect("capture concurrent refresh generation");
+
+    assert_eq!(
+        manager.write_remote_installed_plugins_cache_snapshot(
+            stale_refresh_generation,
+            Vec::new(),
+            /*auth*/ None,
+            RemoteInstalledPluginsCachePublication::Refresh,
+        ),
+        None
+    );
+    assert_eq!(
+        manager.write_remote_installed_plugins_cache_snapshot(
+            reconcile_generation,
+            vec![remote_installed_linear_plugin()],
+            /*auth*/ None,
+            RemoteInstalledPluginsCachePublication::Reconcile,
+        ),
+        Some(true)
+    );
+    let cancelled_generation = manager
+        .begin_remote_installed_plugins_reconcile(/*auth*/ None)
+        .expect("begin cancelled reconciliation");
+    let reconciliation = RemoteInstalledPluginsReconciliationGuard {
+        manager: &manager,
+        generation: cancelled_generation,
+        committed: false,
+    };
+
+    drop(reconciliation);
+
+    let refresh_generation = manager
+        .remote_installed_plugins_cache_generation_if_current(/*auth*/ None)
+        .expect("capture refresh generation after cancellation");
+    assert_eq!(
+        manager.write_remote_installed_plugins_cache_snapshot(
+            refresh_generation,
+            vec![remote_installed_plugin("beta")],
+            /*auth*/ None,
+            RemoteInstalledPluginsCachePublication::Refresh,
+        ),
+        Some(true)
+    );
+    let retry_generation = manager
+        .begin_remote_installed_plugins_reconcile(/*auth*/ None)
+        .expect("begin retry after cancellation");
+    assert_eq!(
+        manager.write_remote_installed_plugins_cache_snapshot(
+            retry_generation,
+            vec![remote_installed_plugin("beta")],
+            /*auth*/ None,
+            RemoteInstalledPluginsCachePublication::Reconcile,
+        ),
+        Some(true)
+    );
 }
 
 #[test]

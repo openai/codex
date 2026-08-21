@@ -89,7 +89,11 @@ pub(crate) fn test_auth_manager(auth_mode: Option<AuthMode>) -> Arc<AuthManager>
 }
 
 pub(crate) async fn set_test_auth_mode(auth_manager: &AuthManager, auth_mode: Option<AuthMode>) {
-    let Some(auth) = test_codex_auth(auth_mode) else {
+    set_test_auth(auth_manager, test_codex_auth(auth_mode)).await;
+}
+
+pub(crate) async fn set_test_auth(auth_manager: &AuthManager, auth: Option<CodexAuth>) {
+    let Some(auth) = auth else {
         auth_manager.clear_external_auth();
         return;
     };
