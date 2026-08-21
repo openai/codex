@@ -616,6 +616,7 @@ impl Session {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[instrument(name = "turn_context.make", level = "trace", skip_all)]
     pub(crate) fn make_turn_context(
         thread_id: ThreadId,
         session_id: SessionId,

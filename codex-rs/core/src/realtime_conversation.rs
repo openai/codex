@@ -503,6 +503,11 @@ impl RealtimeConversationManager {
         self.mode_instructions.lock().await.clone()
     }
 
+    #[tracing::instrument(
+        name = "realtime_conversation.running_state",
+        level = "trace",
+        skip_all
+    )]
     pub(crate) async fn running_state(&self) -> Option<()> {
         let state = self.state.lock().await;
         state
