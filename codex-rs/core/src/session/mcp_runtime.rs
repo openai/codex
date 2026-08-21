@@ -7,10 +7,18 @@
 use super::session::SessionConfiguration;
 use super::*;
 use crate::mcp::McpRuntimeProjection;
+use codex_config::McpServerDisabledReason;
+use codex_config::McpServerTransportConfig;
+use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::ElicitationReviewerHandle;
+use codex_mcp::McpEnvironmentAuthority;
+use codex_mcp::McpServerRegistration;
+use codex_mcp::McpServerSource;
 use codex_mcp::McpStartupPolicy;
 use codex_mcp::PreparedMcpCall;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
+use codex_protocol::protocol::EnvironmentConfigState;
+use std::collections::HashSet;
 
 pub(super) struct McpDesiredState {
     pub(super) config: Arc<Config>,
@@ -133,6 +141,137 @@ impl Session {
         self.services.mcp_runtime.validate_required_servers().await
     }
 
+    /// Adds effective executor-owned configuration from this exact thread snapshot.
+    pub(super) fn project_selected_environment_mcp_servers<'a>(
+        &'a self,
+        config: &'a Config,
+        environments: &'a TurnEnvironmentSnapshot,
+        mut projection: McpRuntimeProjection,
+    ) -> BoxFuture<'a, McpRuntimeProjection> {
+        Box::pin(async move {
+            let mut catalog = None;
+            let mut registered = HashSet::new();
+            for selected in environments.turn_environments() {
+                let environment = &selected.environment;
+                if !environment.is_remote() {
+                    continue;
+                }
+
+                let environment_id = &selected.selection.environment_id;
+                let servers = match environment
+                    .discover_http_mcp_servers(selected.cwd().clone())
+                    .await
+                {
+                    Ok(servers) => servers,
+                    Err(error) => {
+                        tracing::warn!(
+                            environment_id,
+                            %error,
+                            "failed to discover executor-local MCP servers"
+                        );
+                        continue;
+                    }
+                };
+                for (name, mut server) in servers {
+                    if name == CODEX_APPS_MCP_SERVER_NAME
+                        || !server.is_local_environment()
+                        || projection
+                            .config
+                            .mcp_server_catalog
+                            .server(&name)
+                            .is_some_and(|existing| {
+                                existing.config().environment_id != *environment_id
+                                    || !matches!(
+                                        existing.source(),
+                                        McpServerSource::Plugin(_)
+                                            | McpServerSource::SelectedPlugin(_)
+                                    )
+                            })
+                        || registered.contains(&name)
+                    {
+                        continue;
+                    }
+                    // Selected executors can attach after startup, so their MCPs are best effort.
+                    server.required = false;
+                    let McpServerTransportConfig::StreamableHttp {
+                        env_http_headers,
+                        http_headers_helper,
+                        ..
+                    } = &server.transport
+                    else {
+                        continue;
+                    };
+                    if http_headers_helper.is_some()
+                        || env_http_headers
+                            .as_ref()
+                            .is_some_and(|headers| !headers.is_empty())
+                    {
+                        tracing::warn!(
+                            environment_id,
+                            server = name,
+                            "executor-local HTTP header helpers are not supported"
+                        );
+                        continue;
+                    }
+                    server.environment_id = environment_id.clone();
+                    if let Some(requirements) = config
+                        .config_layer_stack
+                        .requirements()
+                        .mcp_servers
+                        .as_ref()
+                        && !requirements
+                            .value
+                            .get(&name)
+                            .is_some_and(|requirement| server.matches_requirement(requirement))
+                    {
+                        server.enabled = false;
+                        server.disabled_reason = Some(McpServerDisabledReason::Requirements {
+                            source: requirements.source.clone(),
+                        });
+                    }
+                    registered.insert(name.clone());
+                    catalog
+                        .get_or_insert_with(|| projection.config.mcp_server_catalog.to_builder())
+                        .register(McpServerRegistration::from_config(name, server));
+                }
+            }
+
+            if let Some(catalog) = catalog {
+                let selections = self.services.turn_environments.selections();
+                projection.config.mcp_server_catalog =
+                    catalog.build_with_environment_authority(|environment_id| {
+                        let Some(selection) = selections
+                            .iter()
+                            .find(|selection| selection.environment_id == environment_id)
+                        else {
+                            return if environment_id
+                                == codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID
+                            {
+                                McpEnvironmentAuthority::Unrestricted
+                            } else {
+                                McpEnvironmentAuthority::SelectedPluginsOnly
+                            };
+                        };
+                        match &selection.config {
+                            EnvironmentConfigState::FromThread => {
+                                McpEnvironmentAuthority::Unrestricted
+                            }
+                            EnvironmentConfigState::Pending | EnvironmentConfigState::Failed(_) => {
+                                McpEnvironmentAuthority::Unavailable
+                            }
+                            EnvironmentConfigState::Ready(config) => config
+                                .mcp_policy
+                                .as_ref()
+                                .map_or(McpEnvironmentAuthority::Unrestricted, |policy| {
+                                    McpEnvironmentAuthority::Restricted(policy)
+                                }),
+                        }
+                    });
+            }
+            projection
+        })
+    }
+
     #[tracing::instrument(name = "mcp.runtime.refresh", skip_all)]
     pub(super) async fn publish_mcp_runtime(
         &self,
@@ -141,6 +280,13 @@ impl Session {
         ready_selected_capability_roots: &[SelectedCapabilityRoot],
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) {
+        let mcp_projection = self
+            .project_selected_environment_mcp_servers(
+                &desired.config,
+                &desired.environments,
+                mcp_projection,
+            )
+            .await;
         let selected_plugins = mcp_projection.selected_plugins.clone();
         let input = self.build_mcp_runtime_input(
             desired,
@@ -187,6 +333,18 @@ impl Session {
         let runtime_context = McpRuntimeContext::new(
             self.services.turn_environments.environment_manager(),
             desired.local_process_cwd.clone(),
+        )
+        .with_selected_environments(
+            desired
+                .environments
+                .turn_environments()
+                .map(|environment| {
+                    (
+                        environment.selection.environment_id.clone(),
+                        Arc::clone(&environment.environment),
+                    )
+                })
+                .collect(),
         );
         let codex_apps_auth_manager =
             codex_mcp::host_owned_codex_apps_enabled(&mcp_config, auth.as_ref())

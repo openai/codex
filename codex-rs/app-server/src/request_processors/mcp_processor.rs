@@ -275,19 +275,19 @@ impl McpRequestProcessor {
         };
         let mcp_manager = self.thread_manager.mcp_manager();
         let auth = self.auth_manager.auth().await;
-        let (mcp_config, runtime_context) = match thread {
-            Some(thread) => thread.runtime_mcp_config_and_context(&config).await,
-            None => {
-                let mcp_config = mcp_manager.runtime_config(&config).await;
-                let runtime_context = McpRuntimeContext::new(
-                    self.thread_manager.environment_manager(),
-                    config.cwd.to_path_buf(),
-                );
-                (mcp_config, runtime_context)
-            }
-        };
+        let environment_manager = self.thread_manager.environment_manager();
 
         tokio::spawn(async move {
+            let (mcp_config, runtime_context) = match thread {
+                Some(thread) => thread.runtime_mcp_config_and_context(&config).await,
+                None => {
+                    let mcp_config = mcp_manager.runtime_config(&config).await;
+                    let runtime_context =
+                        McpRuntimeContext::new(environment_manager, config.cwd.to_path_buf());
+                    (mcp_config, runtime_context)
+                }
+            };
+
             Self::list_mcp_server_status_task(
                 outgoing,
                 request,

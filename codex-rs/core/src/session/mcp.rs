@@ -120,7 +120,7 @@ impl Session {
                 windows_sandbox_level,
             )
             .await;
-        let mcp_config = self
+        let mcp_projection = self
             .services
             .mcp_manager
             .runtime_config_for_step(
@@ -135,6 +135,9 @@ impl Session {
                 &ready_selected_capability_roots,
                 executor_capability_discovery.as_deref(),
             )
+            .await;
+        let mcp_config = self
+            .project_selected_environment_mcp_servers(config, &environments, mcp_projection)
             .await
             .config;
         let local_process_cwd = environments
@@ -144,6 +147,17 @@ impl Session {
         let runtime_context = McpRuntimeContext::new(
             self.services.turn_environments.environment_manager(),
             local_process_cwd,
+        )
+        .with_selected_environments(
+            environments
+                .turn_environments()
+                .map(|environment| {
+                    (
+                        environment.selection.environment_id.clone(),
+                        Arc::clone(&environment.environment),
+                    )
+                })
+                .collect(),
         );
         (mcp_config, runtime_context)
     }
@@ -263,6 +277,13 @@ impl Session {
                 },
                 &ready_selected_capability_roots,
                 executor_capability_discovery.as_deref(),
+            )
+            .await;
+        let mcp_projection = self
+            .project_selected_environment_mcp_servers(
+                &desired.config,
+                &desired.environments,
+                mcp_projection,
             )
             .await;
         let selected_plugins = mcp_projection.selected_plugins.clone();
