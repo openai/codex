@@ -7,6 +7,8 @@ use std::time::SystemTime;
 
 use anyhow::Result;
 use codex_core::config::Config;
+use codex_core::config::ConfigBuilder;
+use codex_core::config::LoaderOverrides;
 use codex_core::context::NodeReplReviewEvidence;
 use codex_extension_api::ConversationHistorySnapshot;
 use codex_extension_api::ExtensionData;
@@ -1557,6 +1559,208 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
                 &disabled_thread_store,
                 "review action",
                 /*extension_metrics*/ None
+            )
+            .await,
+        None
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn contributor_skips_models_requiring_managed_guardian_review() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let thread_server = responses::start_mock_server().await;
+    let initial = test_codex().build_with_auto_env(&thread_server).await?;
+    std::fs::write(
+        initial.home.path().join("requirements.toml"),
+        "[auto_review]\nrequired_on_models = [\"protected-model\"]\n",
+    )?;
+    let config_layer_stack = ConfigBuilder::default()
+        .codex_home(initial.home.path().to_path_buf())
+        .loader_overrides(LoaderOverrides::with_managed_config_path_for_tests(
+            initial.home.path().join("managed_config.toml"),
+        ))
+        .build()
+        .await?
+        .config_layer_stack;
+    let test = test_codex()
+        .with_home(Arc::clone(&initial.home))
+        .with_config(move |config| {
+            config.config_layer_stack = config_layer_stack;
+            config
+                .features
+                .enable(Feature::GuardianV2)
+                .expect("Guardian v2 should remain globally enabled");
+        })
+        .build_with_auto_env(&thread_server)
+        .await?;
+
+    let server = responses::start_websocket_server(vec![Vec::new(), Vec::new()]).await;
+    let provider_info = ModelProviderInfo::create_openai_provider(Some(format!(
+        "http://{}/v1",
+        server.uri().trim_start_matches("ws://")
+    )));
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test-api-key"));
+    let mut config = test.config.clone();
+    config.model_provider = provider_info;
+    let mut builder = ExtensionRegistryBuilder::new();
+    super::install(
+        &mut builder,
+        auth_manager,
+        Arc::downgrade(&test.thread_manager),
+    );
+    let registry = builder.build();
+    let session_store = ExtensionData::new("session-1");
+    let thread_store = test.codex.thread_extension_data();
+    registry.thread_lifecycle_contributors()[0]
+        .on_thread_start(ThreadStartInput {
+            config: &config,
+            session_source: &SessionSource::Exec,
+            persistent_thread_state_available: false,
+            environments: &[],
+            mcp_resource_client: None,
+            extension_metrics: None,
+            session_store: &session_store,
+            thread_store,
+        })
+        .await;
+
+    let mut model_info = test
+        .thread_manager
+        .get_models_manager()
+        .get_model_info("gpt-5.5", &config.to_models_manager_config())
+        .await;
+    model_info.slug = "protected-model".to_owned();
+    thread_store.insert(model_info);
+    thread_store.insert(SecurityRiskScore {
+        scores: BTreeMap::from([("action_risk".to_owned(), 0.25)]),
+        sampled_at: None,
+    });
+    assert_eq!(
+        registry
+            .approval_review(
+                &session_store,
+                thread_store,
+                "review action",
+                /*extension_metrics*/ None,
+            )
+            .await,
+        Some(ReviewDecision::Approved)
+    );
+
+    let turn_store = ExtensionData::new("turn-1");
+    let tool_name = ToolName::plain("read_file");
+    let payload = ToolPayload::Function {
+        arguments: json!({ "path": "protected.md" }).to_string(),
+    };
+    let oversized_compaction = ResponseItem::Compaction {
+        id: Some(ResponseItemId::from_server("cmp_oversized".to_owned())),
+        encrypted_content: "a"
+            .repeat(TruncationPolicy::Tokens(DEFAULT_PARENT_COMPACTION_TOKENS).byte_budget()),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    registry.tool_lifecycle_contributors()[0]
+        .on_tool_start(ToolStartInput {
+            session_store: &session_store,
+            thread_store,
+            turn_store: &turn_store,
+            turn_id: "turn-1",
+            call_id: "protected.md",
+            tool_name: &tool_name,
+            payload: &payload,
+            conversation_history: Arc::new(TestConversationHistory(vec![oversized_compaction])),
+            source: ToolCallSource::Direct,
+        })
+        .await;
+
+    assert!(
+        thread_store.get::<SecurityRiskScore>().is_none(),
+        "protected models must not receive Guardian v2 fail-closed scores"
+    );
+    assert!(
+        server.connections().iter().all(Vec::is_empty),
+        "protected models must not spawn Guardian v2 classifiers"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn contributor_counts_failed_thread_lookups_toward_score_lag() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let (_, test, registry) = sample_configured_conversation_history(
+        Vec::new(),
+        r#"{"path":"README.md"}"#,
+        Some(TEST_GUARDIAN_POLICY),
+        "[features.guardianv2]\nenabled = true\nmax_tool_call_lag = 0\n",
+        /*model_defaults*/ None,
+    )
+    .await?;
+    let session_store = ExtensionData::new("session-1");
+    let thread_store = test.codex.thread_extension_data();
+    let score_progress = thread_store
+        .get::<GuardianV2ScoreProgress>()
+        .expect("Guardian v2 should track score progress per thread");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while score_progress
+            .latest_scored_tool_call
+            .load(Ordering::Acquire)
+            == 0
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    thread_store.insert(SecurityRiskScore {
+        scores: BTreeMap::from([("action_risk".to_owned(), 0.25)]),
+        sampled_at: None,
+    });
+    assert_eq!(
+        registry
+            .approval_review(
+                &session_store,
+                thread_store,
+                "review action",
+                /*extension_metrics*/ None,
+            )
+            .await,
+        Some(ReviewDecision::Approved)
+    );
+
+    test.thread_manager
+        .remove_thread(&test.session_configured.thread_id)
+        .await
+        .expect("the test thread should exist before simulating a failed lookup");
+    let turn_store = ExtensionData::new("turn-1");
+    let tool_name = ToolName::plain("read_file");
+    let payload = ToolPayload::Function {
+        arguments: r#"{"path":"missing.md"}"#.to_owned(),
+    };
+    registry.tool_lifecycle_contributors()[0]
+        .on_tool_start(ToolStartInput {
+            session_store: &session_store,
+            thread_store,
+            turn_store: &turn_store,
+            turn_id: "turn-1",
+            call_id: "missing.md",
+            tool_name: &tool_name,
+            payload: &payload,
+            conversation_history: Arc::new(TestConversationHistory(Vec::new())),
+            source: ToolCallSource::Direct,
+        })
+        .await;
+
+    assert_eq!(score_progress.latest_tool_call.load(Ordering::Acquire), 2);
+    assert_eq!(
+        registry
+            .approval_review(
+                &session_store,
+                thread_store,
+                "review action",
+                /*extension_metrics*/ None,
             )
             .await,
         None

@@ -175,10 +175,11 @@ async fn guardian_v2_routes_tool_approvals(
     lifecycle: ThreadLifecycle,
     requirement: ModelReviewRequirement,
 ) -> Result<()> {
-    let (luna_score, expected_guardian_reviews) = match risk {
-        GuardianRisk::Low => (0.25, 1),
-        GuardianRisk::Threshold => (0.5, 2),
-        GuardianRisk::High => (0.95, 2),
+    let (luna_score, expected_guardian_reviews) = match (requirement, risk) {
+        (ModelReviewRequirement::Required, _) => (0.25, 2),
+        (ModelReviewRequirement::Optional, GuardianRisk::Low) => (0.25, 1),
+        (ModelReviewRequirement::Optional, GuardianRisk::Threshold) => (0.5, 2),
+        (ModelReviewRequirement::Optional, GuardianRisk::High) => (0.95, 2),
     };
     let responses_state = Arc::new(MockResponsesState {
         luna_score,
@@ -316,44 +317,46 @@ async fn guardian_v2_routes_tool_approvals(
     .await??;
     assert_eq!(review_started.thread_id, thread_id);
 
-    let luna_request = timeout(TIMEOUT, async {
-        loop {
-            if let Some(request) = responses_state
-                .luna_requests
-                .lock()
-                .expect("Luna request lock should not be poisoned")
-                .first()
-                .cloned()
-            {
-                return request;
+    if matches!(requirement, ModelReviewRequirement::Optional) {
+        let luna_request = timeout(TIMEOUT, async {
+            loop {
+                if let Some(request) = responses_state
+                    .luna_requests
+                    .lock()
+                    .expect("Luna request lock should not be poisoned")
+                    .first()
+                    .cloned()
+                {
+                    return request;
+                }
+                tokio::task::yield_now().await;
             }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await?;
-    assert_eq!(
-        luna_request["prompt_cache_key"],
-        format!("guardian-v2:{thread_id}")
-    );
-    assert!(
-        luna_request["input"]
-            .as_array()
-            .expect("Luna input should be an array")
-            .iter()
-            .any(|item| {
-                item["content"].as_array().is_some_and(|content| {
-                    content.iter().any(|entry| {
-                        entry["text"]
-                            .as_str()
-                            .is_some_and(|text| text.contains(USER_CONTEXT))
+        })
+        .await?;
+        assert_eq!(
+            luna_request["prompt_cache_key"],
+            format!("guardian-v2:{thread_id}")
+        );
+        assert!(
+            luna_request["input"]
+                .as_array()
+                .expect("Luna input should be an array")
+                .iter()
+                .any(|item| {
+                    item["content"].as_array().is_some_and(|content| {
+                        content.iter().any(|entry| {
+                            entry["text"]
+                                .as_str()
+                                .is_some_and(|text| text.contains(USER_CONTEXT))
+                        })
                     })
                 })
-            })
-    );
-    responses_state.allow_luna.notify_one();
-    timeout(TIMEOUT, responses_state.classification_completed.notified()).await?;
+        );
+        responses_state.allow_luna.notify_one();
+        timeout(TIMEOUT, responses_state.classification_completed.notified()).await?;
+        responses_state.allow_luna.notify_one();
+    }
     responses_state.allow_guardian_review.notify_one();
-    responses_state.allow_luna.notify_one();
     timeout(
         TIMEOUT,
         app_server.read_stream_until_notification_message("turn/completed"),
@@ -363,16 +366,25 @@ async fn guardian_v2_routes_tool_approvals(
         responses_state.guardian_reviews.load(Ordering::SeqCst),
         expected_guardian_reviews
     );
+    if matches!(requirement, ModelReviewRequirement::Required) {
+        assert!(
+            responses_state
+                .luna_requests
+                .lock()
+                .expect("Luna request lock should not be poisoned")
+                .is_empty(),
+            "protected models must not receive Guardian v2 risk scoring"
+        );
+    }
+    let requires_strict_review = matches!(requirement, ModelReviewRequirement::Optional)
+        && matches!(risk, GuardianRisk::Threshold | GuardianRisk::High);
     let strict_review_count = app_server
         .pending_notification_methods()
         .into_iter()
         .filter(|method| method == "autoApprovalReview/strictReviewRequired")
         .count();
-    assert_eq!(
-        strict_review_count,
-        usize::from(matches!(risk, GuardianRisk::Threshold | GuardianRisk::High))
-    );
-    if matches!(risk, GuardianRisk::Threshold | GuardianRisk::High) {
+    assert_eq!(strict_review_count, usize::from(requires_strict_review));
+    if requires_strict_review {
         let review_started: ItemGuardianApprovalReviewStartedNotification = timeout(
             TIMEOUT,
             app_server.read_notification("item/autoApprovalReview/started"),
@@ -432,21 +444,10 @@ async fn guardian_v2_threshold_score_requires_full_reviews() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn guardian_v2_required_model_honors_low_risk_assessment() -> Result<()> {
+async fn guardian_v2_required_model_bypasses_scoring_and_runs_full_reviews() -> Result<()> {
     skip_if_no_network!(Ok(()));
     guardian_v2_routes_tool_approvals(
         GuardianRisk::Low,
-        ThreadLifecycle::New,
-        ModelReviewRequirement::Required,
-    )
-    .await
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn guardian_v2_required_model_high_risk_requires_full_review() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-    guardian_v2_routes_tool_approvals(
-        GuardianRisk::High,
         ThreadLifecycle::New,
         ModelReviewRequirement::Required,
     )
