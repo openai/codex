@@ -49,7 +49,7 @@ impl SessionTask for CompactTask {
                 );
                 crate::compact_remote_v2::run_remote_compact_task(session.clone(), ctx).await
             }
-            RemoteCompactionSupport::V1 | RemoteCompactionSupport::V2 => {
+            RemoteCompactionSupport::V2 => {
                 emit_compact_metric(
                     &session.services.session_telemetry,
                     "remote",

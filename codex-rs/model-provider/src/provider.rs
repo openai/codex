@@ -46,9 +46,7 @@ pub(crate) fn enforce_managed_residency(provider: &mut Provider) {
 pub enum RemoteCompactionSupport {
     /// The provider does not support remote compaction.
     Unsupported,
-    /// The provider supports only the dedicated `/v1/responses/compact` endpoint.
-    V1,
-    /// The provider supports both the dedicated endpoint and `compaction_trigger` items.
+    /// The provider supports `compaction_trigger` items over the Responses endpoint.
     V2,
 }
 
@@ -73,7 +71,7 @@ impl Default for ProviderCapabilities {
             image_generation: true,
             web_search: true,
             external_web_access: true,
-            remote_compaction: RemoteCompactionSupport::V2,
+            remote_compaction: RemoteCompactionSupport::Unsupported,
         }
     }
 }
@@ -629,13 +627,19 @@ mod tests {
     }
 
     #[test]
-    fn configured_provider_uses_default_capabilities() {
+    fn openai_provider_enables_remote_compaction() {
         let provider = create_model_provider(
             ModelProviderInfo::create_openai_provider(/*base_url*/ None),
             /*auth_manager*/ None,
         );
 
-        assert_eq!(provider.capabilities(), ProviderCapabilities::default());
+        assert_eq!(
+            provider.capabilities(),
+            ProviderCapabilities {
+                remote_compaction: RemoteCompactionSupport::V2,
+                ..ProviderCapabilities::default()
+            }
+        );
     }
 
     #[test]

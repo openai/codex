@@ -182,7 +182,7 @@ impl ModelProvider for AmazonBedrockModelProvider {
             image_generation: false,
             web_search: self.endpoint == BedrockEndpoint::Mantle,
             external_web_access: false,
-            remote_compaction: RemoteCompactionSupport::V1,
+            remote_compaction: RemoteCompactionSupport::V2,
         }
     }
 
@@ -477,13 +477,13 @@ mod tests {
                 image_generation: false,
                 web_search: true,
                 external_web_access: false,
-                remote_compaction: RemoteCompactionSupport::V1,
+                remote_compaction: RemoteCompactionSupport::V2,
             }
         );
     }
 
     #[test]
-    fn runtime_capabilities_disable_web_search_and_support_v1_remote_compaction() {
+    fn runtime_capabilities_disable_web_search_and_support_v2_remote_compaction() {
         let provider = AmazonBedrockModelProvider::new(
             ModelProviderInfo::create_amazon_bedrock_runtime_provider(/*aws*/ None),
             /*auth_manager*/ None,
@@ -496,7 +496,7 @@ mod tests {
                 image_generation: false,
                 web_search: false,
                 external_web_access: false,
-                remote_compaction: RemoteCompactionSupport::V1,
+                remote_compaction: RemoteCompactionSupport::V2,
             }
         );
     }
