@@ -1,6 +1,7 @@
 use anyhow::Context;
 use anyhow::Result;
 use chrono::Utc;
+use codex_config::config_toml::RealtimeWsMode;
 use codex_config::config_toml::RealtimeWsVersion;
 use codex_core::TurnInputRequest;
 use codex_core::test_support::auth_manager_from_auth;
@@ -54,6 +55,7 @@ use std::process::Command;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
+use test_case::test_case;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::oneshot;
@@ -508,6 +510,85 @@ async fn conversation_start_defaults_to_v2_and_gpt_realtime_1_5() -> Result<()> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_existing_call_attaches_without_creating_another_call() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let realtime_server = start_websocket_server(vec![vec![vec![]]]).await;
+    let realtime_ws_base_url = realtime_server.uri().to_string();
+    let mut builder = test_codex().with_config(move |config| {
+        config.experimental_realtime_ws_backend_prompt = Some("backend prompt".to_string());
+        config.experimental_realtime_ws_base_url = Some(realtime_ws_base_url);
+        config.realtime.session_type = RealtimeWsMode::Transcription;
+    });
+    let test = builder.build_with_auto_env(&server).await?;
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            client_managed_handoffs: false,
+            delegation_ack_filler: None,
+            flush_transcript_tail_on_session_end: false,
+            codex_responses_as_items: false,
+            codex_response_item_prefix: None,
+            codex_response_handoff_mode:
+                codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            codex_response_handoff_channel_prefixes: None,
+            model: None,
+            output_modality: RealtimeOutputModality::Audio,
+            include_startup_context: false,
+            initial_items: Vec::new(),
+            realtime_start_instructions: None,
+            realtime_end_instructions: None,
+            prompt: None,
+            realtime_session_id: None,
+            transport: Some(ConversationStartTransport::ExistingCall {
+                call_id: "rtc_existing".to_string(),
+            }),
+            version: Some(RealtimeConversationVersion::V3),
+            voice: None,
+        }))
+        .await?;
+
+    let started = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationStarted(started) => Some(Ok(started.clone())),
+        EventMsg::Error(err) => Some(Err(err.clone())),
+        _ => None,
+    })
+    .await
+    .expect("existing call sideband attachment failed");
+    assert_eq!(
+        (started.version, started.realtime_session_id),
+        (RealtimeConversationVersion::V3, None)
+    );
+
+    let handshake = realtime_server.single_handshake();
+    assert_eq!(handshake.uri(), "/v1/live/rtc_existing");
+    assert_eq!(
+        handshake.header("authorization").as_deref(),
+        Some("Bearer dummy")
+    );
+    assert_eq!(handshake.header("x-session-id"), None);
+    assert!(
+        server
+            .received_requests()
+            .await
+            .context("mock server should record requests")?
+            .iter()
+            .all(|request| !request.url.path().ends_with("/realtime/calls")),
+        "attaching to an existing call must not create another realtime call"
+    );
+
+    test.codex.submit(Op::RealtimeConversationClose).await?;
+    let _closed = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationClosed(closed) => Some(closed.clone()),
+        _ => None,
+    })
+    .await;
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conversation_webrtc_frameless_chatgpt_sends_codex_headers_to_backend() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -823,10 +904,22 @@ async fn conversation_webrtc_start_posts_generated_session() -> Result<()> {
     Ok(())
 }
 
+#[test_case(
+    ConversationStartTransport::Webrtc { sdp: "v=offer\r\n".to_string() };
+    "core-created webrtc"
+)]
+#[test_case(
+    ConversationStartTransport::ExistingCall { call_id: "rtc_reconnect".to_string() };
+    "client-created existing call"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn conversation_webrtc_live_reconnects_sideband_after_unclean_disconnect() -> Result<()> {
+async fn conversation_webrtc_live_reconnects_sideband_after_unclean_disconnect(
+    transport: ConversationStartTransport,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    let attaches_existing_call =
+        matches!(&transport, ConversationStartTransport::ExistingCall { .. });
     let server = start_mock_server().await;
     Mock::given(method("POST"))
         .and(path("/v1/live"))
@@ -979,7 +1072,7 @@ async fn conversation_webrtc_live_reconnects_sideband_after_unclean_disconnect()
         config.experimental_realtime_ws_base_url = Some(realtime_ws_base_url);
         config.realtime.version = RealtimeWsVersion::V3;
     });
-    let test = builder.build(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
@@ -993,15 +1086,17 @@ async fn conversation_webrtc_live_reconnects_sideband_after_unclean_disconnect()
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
-            include_startup_context: true,
+            include_startup_context: !attaches_existing_call,
             initial_items: Vec::new(),
             realtime_start_instructions: None,
             realtime_end_instructions: None,
-            prompt: Some(Some("backend prompt".to_string())),
-            realtime_session_id: None,
-            transport: Some(ConversationStartTransport::Webrtc {
-                sdp: "v=offer\r\n".to_string(),
-            }),
+            prompt: if attaches_existing_call {
+                None
+            } else {
+                Some(Some("backend prompt".to_string()))
+            },
+            realtime_session_id: attaches_existing_call.then(|| "sess_client_owned".to_string()),
+            transport: Some(transport),
             version: Some(RealtimeConversationVersion::V3),
             voice: None,
         }))

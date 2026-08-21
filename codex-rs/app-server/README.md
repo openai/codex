@@ -1079,6 +1079,27 @@ Then send `offer.sdp` to app-server. Core uses `experimental_realtime_ws_backend
 } }
 ```
 
+Clients that create and negotiate the realtime call themselves can instead pass its call ID:
+
+```json
+{ "method": "thread/realtime/start", "id": 41, "params": {
+    "threadId": "thr_123",
+    "outputModality": "audio",
+    "version": "v3",
+    "realtimeSessionId": "sess_123",
+    "transport": { "type": "existingCall", "callId": "rtc_123" }
+} }
+{ "id": 41, "result": {} }
+```
+
+The existing-call transport attaches Codex to the call over its sideband WebSocket without creating
+another call or emitting `thread/realtime/sdp`. The client owns the SDP negotiation and the initial
+realtime session configuration. Codex startup context is disabled by default for existing calls;
+`includeStartupContext: true`, `prompt`, nonempty `initialItems`, `model`, `voice`, and
+`delegationAckFiller` are rejected because they would change the client-owned session. Supply
+`realtimeSessionId` when the upstream session ID is known; otherwise the
+`thread/realtime/started` notification reports `realtimeSessionId: null`.
+
 Omit `prompt` to use Codex's default realtime backend prompt. Send `prompt: null` or
 `prompt: ""` when the session should start without that default backend prompt.
 Pass `realtimeStartInstructions` to provide the developer instructions given to

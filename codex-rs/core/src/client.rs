@@ -686,6 +686,20 @@ impl ModelClient {
         })
     }
 
+    pub(crate) async fn realtime_sideband_headers(
+        &self,
+        mut extra_headers: ApiHeaderMap,
+    ) -> Result<ApiHeaderMap> {
+        let client_setup = self.current_client_setup().await?;
+        if let Some(header_value) = self.generate_attestation_header_for().await {
+            extra_headers.insert(X_OAI_ATTESTATION_HEADER, header_value);
+        }
+        extra_headers.extend(sideband_websocket_auth_headers(
+            client_setup.api_auth.as_ref(),
+        ));
+        Ok(extra_headers)
+    }
+
     /// Builds memory summaries for each provided normalized raw memory.
     ///
     /// This is a unary call (no streaming) to `/v1/memories/trace_summarize`.

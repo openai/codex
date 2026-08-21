@@ -1,5 +1,6 @@
 use super::RealtimeInputTask;
 use super::RealtimeInputTaskExit;
+use super::RealtimeSidebandSessionInitialization;
 use super::RealtimeWebrtcSidebandInputTask;
 use super::flush_realtime_transcript_tail;
 use super::report_realtime_transport_loss;
@@ -31,6 +32,7 @@ pub(super) fn spawn_webrtc_sideband_input_task(
         session_config,
         call_id,
         sideband_headers,
+        mut session_initialization,
         input_channels,
         events_tx,
         handoff_state,
@@ -45,18 +47,44 @@ pub(super) fn spawn_webrtc_sideband_input_task(
         let mut reconnecting = false;
         let mut rapid_disconnects = 0_u32;
         let mut pending_outbound = None;
-        let transcript_state = RealtimeTranscriptState::default();
+        let transcript_state = match &session_initialization {
+            RealtimeSidebandSessionInitialization::ExistingCall {
+                initial_connection: Some(connection),
+            } => connection.events().transcript_state(),
+            RealtimeSidebandSessionInitialization::CoreCreated
+            | RealtimeSidebandSessionInitialization::ExistingCall {
+                initial_connection: None,
+            } => RealtimeTranscriptState::default(),
+        };
         while realtime_active.load(Ordering::Relaxed) {
             let connection = match tokio::select! {
                 biased;
                 _ = stop_token.cancelled() => break,
-                connection = client.connect_webrtc_sideband(
-                    session_config.clone(),
-                    &call_id,
-                    sideband_headers.clone(),
-                    default_headers(),
-                    transcript_state.clone(),
-                ) => connection,
+                connection = async {
+                    match &mut session_initialization {
+                        RealtimeSidebandSessionInitialization::CoreCreated => {
+                            client.connect_webrtc_sideband(
+                                session_config.clone(),
+                                &call_id,
+                                sideband_headers.clone(),
+                                default_headers(),
+                                transcript_state.clone(),
+                            ).await
+                        }
+                        RealtimeSidebandSessionInitialization::ExistingCall { initial_connection } => {
+                            match initial_connection.take() {
+                                Some(connection) => Ok(connection),
+                                None => client.connect_existing_call_sideband(
+                                    session_config.clone(),
+                                    &call_id,
+                                    sideband_headers.clone(),
+                                    default_headers(),
+                                    transcript_state.clone(),
+                                ).await,
+                            }
+                        }
+                    }
+                } => connection,
             } {
                 Ok(connection) => connection,
                 Err(err) => {

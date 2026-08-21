@@ -21178,6 +21178,27 @@
             ],
             "title": "WebrtcThreadRealtimeStartTransport",
             "type": "object"
+          },
+          {
+            "properties": {
+              "callId": {
+                "description": "Identifier of a realtime call already created and negotiated by the client.",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "existingCall"
+                ],
+                "title": "ExistingCallThreadRealtimeStartTransportType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "callId",
+              "type"
+            ],
+            "title": "ExistingCallThreadRealtimeStartTransport",
+            "type": "object"
           }
         ]
       },

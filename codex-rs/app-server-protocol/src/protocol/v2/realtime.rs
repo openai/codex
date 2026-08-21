@@ -155,6 +155,12 @@ pub enum ThreadRealtimeStartTransport {
         /// realtime events data channel.
         sdp: String,
     },
+    ExistingCall {
+        /// Identifier of a realtime call already created and negotiated by the client.
+        #[serde(rename = "callId")]
+        #[ts(rename = "callId")]
+        call_id: String,
+    },
 }
 
 /// EXPERIMENTAL - response for starting thread realtime.

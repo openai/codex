@@ -251,6 +251,7 @@ pub struct ConversationStartParams {
 pub enum ConversationStartTransport {
     Websocket,
     Webrtc { sdp: String },
+    ExistingCall { call_id: String },
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]

@@ -1082,6 +1082,36 @@ impl TurnRequestProcessor {
         request_id: &ConnectionRequestId,
         params: ThreadRealtimeStartParams,
     ) -> Result<Option<ThreadRealtimeStartResponse>, JSONRPCErrorError> {
+        let attaches_existing_call = matches!(
+            &params.transport,
+            Some(ThreadRealtimeStartTransport::ExistingCall { .. })
+        );
+        if attaches_existing_call {
+            let unsupported_option = if params.include_startup_context == Some(true) {
+                Some("includeStartupContext")
+            } else if params.prompt.is_some() {
+                Some("prompt")
+            } else if params
+                .initial_items
+                .as_ref()
+                .is_some_and(|items| !items.is_empty())
+            {
+                Some("initialItems")
+            } else if params.model.is_some() {
+                Some("model")
+            } else if params.voice.is_some() {
+                Some("voice")
+            } else if params.delegation_ack_filler.is_some() {
+                Some("delegationAckFiller")
+            } else {
+                None
+            };
+            if let Some(option) = unsupported_option {
+                return Err(invalid_request(format!(
+                    "existingCall transport does not support {option}"
+                )));
+            }
+        }
         let Some((_, thread)) = self
             .prepare_realtime_conversation_thread(request_id, &params.thread_id)
             .await?
@@ -1104,7 +1134,9 @@ impl TurnRequestProcessor {
                     .codex_response_handoff_channel_prefixes,
                 model: params.model,
                 output_modality: params.output_modality,
-                include_startup_context: params.include_startup_context.unwrap_or(true),
+                include_startup_context: params
+                    .include_startup_context
+                    .unwrap_or(!attaches_existing_call),
                 initial_items: params
                     .initial_items
                     .unwrap_or_default()
@@ -1124,6 +1156,9 @@ impl TurnRequestProcessor {
                     }
                     ThreadRealtimeStartTransport::Webrtc { sdp } => {
                         ConversationStartTransport::Webrtc { sdp }
+                    }
+                    ThreadRealtimeStartTransport::ExistingCall { call_id } => {
+                        ConversationStartTransport::ExistingCall { call_id }
                     }
                 }),
                 version: params.version,

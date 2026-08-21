@@ -68,6 +68,7 @@ use std::sync::Mutex;
 use std::sync::mpsc;
 use std::time::Duration;
 use tempfile::TempDir;
+use test_case::test_case;
 use tokio::time::timeout;
 use wiremock::Match;
 use wiremock::Mock;
@@ -1677,6 +1678,191 @@ async fn webrtc_v1_start_posts_offer_returns_sdp_and_joins_sideband() -> Result<
     )
     .await;
     assert!(closed.is_err(), "WebRTC start should not close immediately");
+
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[test_case(
+    None,
+    None,
+    RealtimeConversationVersion::V1,
+    "/v1/realtime?intent=quicksilver&call_id=rtc_existing";
+    "defaults to v1"
+)]
+#[test_case(
+    Some(RealtimeConversationVersion::V3),
+    Some("sess_client_owned"),
+    RealtimeConversationVersion::V3,
+    "/v1/live/rtc_existing";
+    "supports v3"
+)]
+#[test_case(
+    Some(RealtimeConversationVersion::V2),
+    None,
+    RealtimeConversationVersion::V2,
+    "";
+    "rejects v2"
+)]
+#[tokio::test]
+async fn existing_call_attaches_without_reinitializing_the_client_session(
+    version: Option<RealtimeConversationVersion>,
+    realtime_session_id: Option<&str>,
+    expected_version: RealtimeConversationVersion,
+    expected_handshake_uri: &str,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let mut harness = RealtimeE2eHarness::new(
+        RealtimeTestVersion::V1,
+        no_main_loop_responses(),
+        realtime_sideband(vec![open_realtime_sideband_connection(vec![vec![]])]),
+    )
+    .await?;
+    let request_id = harness
+        .mcp
+        .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            thread_id: harness.thread_id.clone(),
+            client_managed_handoffs: None,
+            delegation_ack_filler: None,
+            flush_transcript_tail_on_session_end: None,
+            codex_response_item_prefix: None,
+            codex_response_handoff_mode: None,
+            codex_response_handoff_channel_prefixes: None,
+            codex_responses_as_items: None,
+            model: None,
+            output_modality: RealtimeOutputModality::Audio,
+            include_startup_context: None,
+            initial_items: None,
+            realtime_start_instructions: None,
+            realtime_end_instructions: None,
+            prompt: None,
+            realtime_session_id: realtime_session_id.map(str::to_string),
+            transport: Some(ThreadRealtimeStartTransport::ExistingCall {
+                call_id: "rtc_existing".to_string(),
+            }),
+            version,
+            voice: None,
+        })
+        .await?;
+    let _: ThreadRealtimeStartResponse =
+        timeout(DEFAULT_TIMEOUT, harness.mcp.read_response(request_id)).await??;
+    if expected_version == RealtimeConversationVersion::V2 {
+        let error = harness
+            .read_notification::<ThreadRealtimeErrorNotification>("thread/realtime/error")
+            .await?;
+        assert_eq!(
+            error.message,
+            "AVAS realtime calls require realtime v1 or v3"
+        );
+        assert!(harness.realtime_server.handshakes().is_empty());
+        harness.shutdown().await;
+        return Ok(());
+    }
+    let started = harness
+        .read_notification::<ThreadRealtimeStartedNotification>("thread/realtime/started")
+        .await?;
+
+    assert_eq!(
+        started,
+        ThreadRealtimeStartedNotification {
+            thread_id: harness.thread_id.clone(),
+            realtime_session_id: realtime_session_id.map(str::to_string),
+            version: expected_version,
+        }
+    );
+    assert_eq!(
+        harness.realtime_server.single_handshake().uri(),
+        expected_handshake_uri
+    );
+    assert!(
+        harness.realtime_server.single_connection().is_empty(),
+        "attaching to an existing call must not overwrite the client session"
+    );
+    assert!(
+        harness
+            .call_capture
+            .requests
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_empty(),
+        "an existing call must not issue a second call-create request"
+    );
+
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[test_case("includeStartupContext"; "rejects startup context")]
+#[test_case("prompt"; "rejects prompt")]
+#[test_case("initialItems"; "rejects initial items")]
+#[test_case("model"; "rejects model")]
+#[test_case("voice"; "rejects voice")]
+#[test_case("delegationAckFiller"; "rejects delegation acknowledgement filler")]
+#[tokio::test]
+async fn existing_call_rejects_client_owned_session_configuration(option: &str) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let mut harness = RealtimeE2eHarness::new(
+        RealtimeTestVersion::V1,
+        no_main_loop_responses(),
+        realtime_sideband(Vec::new()),
+    )
+    .await?;
+    let mut params = ThreadRealtimeStartParams {
+        thread_id: harness.thread_id.clone(),
+        client_managed_handoffs: None,
+        delegation_ack_filler: None,
+        flush_transcript_tail_on_session_end: None,
+        codex_response_item_prefix: None,
+        codex_response_handoff_mode: None,
+        codex_response_handoff_channel_prefixes: None,
+        codex_responses_as_items: None,
+        model: None,
+        output_modality: RealtimeOutputModality::Audio,
+        include_startup_context: None,
+        initial_items: None,
+        realtime_start_instructions: None,
+        realtime_end_instructions: None,
+        prompt: None,
+        realtime_session_id: None,
+        transport: Some(ThreadRealtimeStartTransport::ExistingCall {
+            call_id: "rtc_existing".to_string(),
+        }),
+        version: Some(RealtimeConversationVersion::V3),
+        voice: None,
+    };
+    match option {
+        "includeStartupContext" => params.include_startup_context = Some(true),
+        "prompt" => params.prompt = Some(Some("backend prompt".to_string())),
+        "initialItems" => {
+            params.initial_items = Some(vec![ThreadRealtimeInitialItem {
+                role: ConversationTextRole::User,
+                text: "client-owned history".to_string(),
+            }]);
+        }
+        "model" => params.model = Some("another-model".to_string()),
+        "voice" => params.voice = Some(RealtimeVoice::Cove),
+        "delegationAckFiller" => params.delegation_ack_filler = Some(true),
+        option => anyhow::bail!("unsupported test option: {option}"),
+    }
+
+    let request_id = harness
+        .mcp
+        .send_thread_realtime_start_request(params)
+        .await?;
+    let error = timeout(
+        DEFAULT_TIMEOUT,
+        harness
+            .mcp
+            .read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert_invalid_request(
+        error,
+        format!("existingCall transport does not support {option}"),
+    );
+    assert!(harness.realtime_server.handshakes().is_empty());
 
     harness.shutdown().await;
     Ok(())
