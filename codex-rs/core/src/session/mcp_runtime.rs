@@ -149,6 +149,12 @@ impl Session {
         mut projection: McpRuntimeProjection,
     ) -> BoxFuture<'a, McpRuntimeProjection> {
         Box::pin(async move {
+            if crate::guardian::is_guardian_reviewer_source(
+                &self.state.lock().await.session_configuration.session_source,
+            ) {
+                return projection;
+            }
+
             let mut catalog = None;
             let mut registered = HashSet::new();
             for selected in environments.turn_environments() {

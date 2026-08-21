@@ -22,6 +22,7 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput;
+use codex_features::Feature;
 use codex_http_client::HttpClientBuilder;
 use codex_utils_path_uri::PathUri;
 use core_test_support::responses;
@@ -227,6 +228,113 @@ async fn selected_executor_discovers_browser_mcp_with_executor_only_bearer_token
 
     http_server_handle.abort();
     let _ = http_server_handle.await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_review_does_not_discover_executor_mcp() -> Result<()> {
+    let responses_server = responses::start_mock_server().await;
+    let codex_home = TempDir::new()?;
+    let executor_home = TempDir::new()?;
+    MockResponsesConfig::new(&responses_server.uri())
+        .with_approval_policy("on-request")
+        .with_root_config("approvals_reviewer = \"auto_review\"")
+        .enable_feature(Feature::GuardianApproval)
+        .write(codex_home.path())?;
+    std::fs::write(executor_home.path().join("config.toml"), "")?;
+    let codex_bin = toml::Value::String(
+        codex_utils_cargo_bin::cargo_bin("codex")?
+            .to_string_lossy()
+            .into_owned(),
+    );
+    let executor_home_value =
+        toml::Value::String(executor_home.path().to_string_lossy().into_owned());
+    std::fs::write(
+        codex_home.path().join("environments.toml"),
+        format!(
+            "default = \"{EXECUTOR_ID}\"\ninclude_local = false\n\n[[environments]]\nid = \"{EXECUTOR_ID}\"\nprogram = {codex_bin}\nargs = [\"exec-server\", \"--listen\", \"stdio\"]\n[environments.env]\nCODEX_HOME = {executor_home_value}\n"
+        ),
+    )?;
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+    let thread_id = start_thread(&mut app_server, /*selected_capability_roots*/ None).await?;
+
+    std::fs::write(
+        executor_home.path().join("config.toml"),
+        "[mcp_servers.unavailable_browser]\nurl = \"http://127.0.0.1:9/mcp\"\nrequired = true\nstartup_timeout_sec = 1\n",
+    )?;
+    let response_mock = responses::mount_sse_sequence(
+        &responses_server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("resp-guardian-command"),
+                responses::ev_function_call(
+                    "guardian-shell-call",
+                    "exec_command",
+                    &json!({
+                        "cmd": "echo guardian",
+                        "sandbox_permissions": "require_escalated",
+                        "justification": "Test Guardian isolation.",
+                    })
+                    .to_string(),
+                ),
+                responses::ev_completed("resp-guardian-command"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("resp-guardian-review"),
+                responses::ev_assistant_message(
+                    "guardian-review",
+                    &json!({
+                        "outcome": "deny",
+                        "rationale": "Guardian can review without the browser.",
+                    })
+                    .to_string(),
+                ),
+                responses::ev_completed("resp-guardian-review"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("resp-guardian-done"),
+                responses::ev_assistant_message("guardian-done", "Done"),
+                responses::ev_completed("resp-guardian-done"),
+            ]),
+        ],
+    )
+    .await;
+    let request_id = app_server
+        .send_turn_start_request(TurnStartParams {
+            thread_id,
+            input: vec![UserInput::Text {
+                text: "Review a command without starting the browser".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let _: TurnStartResponse =
+        timeout(DEFAULT_READ_TIMEOUT, app_server.read_response(request_id)).await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        app_server.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(
+        requests[1].body_json()["client_metadata"]["x-openai-subagent"],
+        "guardian"
+    );
+    let output = requests[2].function_call_output("guardian-shell-call");
+    assert!(
+        output
+            .get("output")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|output| output.contains("Guardian can review without the browser."))
+    );
 
     Ok(())
 }
