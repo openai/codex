@@ -3,6 +3,7 @@ use crate::agents_md::load_project_instructions;
 use crate::config::Config;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use codex_extension_api::UserInstructions;
+use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use std::io;
@@ -18,6 +19,7 @@ pub(crate) struct AgentsMdManager {
 #[derive(Default)]
 struct AgentsMdCache {
     selections: Option<Vec<TurnEnvironmentSelection>>,
+    active_project_trust_level: Option<TrustLevel>,
     windows_sandbox_level: Option<WindowsSandboxLevel>,
     loaded: Option<Arc<LoadedAgentsMd>>,
 }
@@ -42,14 +44,17 @@ impl AgentsMdManager {
             .turn_environments()
             .map(|environment| environment.selection.clone())
             .collect::<Vec<_>>();
+        let active_project_trust_level = config.active_project.trust_level;
         {
             let mut cache = self.cache.lock().await;
             if cache.selections.as_ref() == Some(&selections)
+                && cache.active_project_trust_level == active_project_trust_level
                 && cache.windows_sandbox_level == Some(windows_sandbox_level)
             {
                 return Ok(());
             }
             cache.selections = None;
+            cache.active_project_trust_level = None;
             cache.windows_sandbox_level = None;
             cache.loaded = None;
         }
@@ -64,6 +69,7 @@ impl AgentsMdManager {
         .map(Arc::new);
         let mut cache = self.cache.lock().await;
         cache.selections = Some(selections);
+        cache.active_project_trust_level = active_project_trust_level;
         cache.windows_sandbox_level = Some(windows_sandbox_level);
         cache.loaded = loaded;
         Ok(())

@@ -61,6 +61,10 @@ pub(crate) async fn load_project_instructions(
     windows_sandbox_level: WindowsSandboxLevel,
 ) -> io::Result<Option<LoadedAgentsMd>> {
     let mut loaded = LoadedAgentsMd::from_user_instructions(user_instructions);
+    if config.active_project.is_untrusted() {
+        return Ok((!loaded.is_empty()).then_some(loaded));
+    }
+
     let mut remaining = config.project_doc_max_bytes;
     for turn_environment in environments.turn_environments() {
         if remaining == 0 {

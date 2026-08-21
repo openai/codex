@@ -10,6 +10,7 @@ use codex_features::Feature;
 use codex_history::RolloutItem;
 use codex_history::RolloutLine;
 use codex_home::CodexHomeUserInstructionsProvider;
+use codex_protocol::config_types::TrustLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -462,6 +463,125 @@ async fn selected_environment_sources_match_model_visible_instructions() -> Resu
         .find(|text| text.starts_with("# AGENTS.md instructions"))
         .expect("instructions message");
     assert!(instructions.contains("global doc\n\n--- project-doc ---\n\nproject doc"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn untrusted_project_excludes_project_instructions() -> Result<()> {
+    let server = start_mock_server().await;
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+    let home = Arc::new(TempDir::new()?);
+    let global_agents =
+        write_global_file(home.as_ref(), GLOBAL_AGENTS_FILENAME, GLOBAL_INSTRUCTIONS)?;
+
+    let mut builder = test_codex()
+        .with_home(home)
+        .with_config(|config| {
+            config.active_project.trust_level = Some(TrustLevel::Untrusted);
+        })
+        .with_workspace_setup(|cwd, fs| async move {
+            fs.write_file(
+                &executor_path_uri(cwd.join(GLOBAL_AGENTS_FILENAME))?,
+                PROJECT_INSTRUCTIONS.as_bytes().to_vec(),
+                Default::default(),
+                /*sandbox*/ None,
+            )
+            .await?;
+            Ok::<(), anyhow::Error>(())
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+
+    assert_eq!(
+        test.codex.instruction_sources().await,
+        vec![PathUri::from_abs_path(&global_agents)]
+    );
+
+    test.submit_turn("hello").await?;
+    let instructions = resp_mock
+        .single_request()
+        .message_input_texts("user")
+        .into_iter()
+        .find(|text| text.starts_with("# AGENTS.md instructions"))
+        .expect("global instructions message");
+    assert!(instructions.contains(GLOBAL_INSTRUCTIONS));
+    assert!(!instructions.contains(PROJECT_INSTRUCTIONS));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn runtime_trust_reload_refreshes_project_instructions() -> Result<()> {
+    let server = start_mock_server().await;
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+            sse(vec![ev_response_created("resp2"), ev_completed("resp2")]),
+            sse(vec![ev_response_created("resp3"), ev_completed("resp3")]),
+        ],
+    )
+    .await;
+    let home = Arc::new(TempDir::new()?);
+    let global_agents =
+        write_global_file(home.as_ref(), GLOBAL_AGENTS_FILENAME, GLOBAL_INSTRUCTIONS)?;
+    let mut builder = test_codex()
+        .with_home(home)
+        .with_config(|config| {
+            config.active_project.trust_level = Some(TrustLevel::Trusted);
+        })
+        .with_workspace_setup(|cwd, fs| async move {
+            fs.write_file(
+                &executor_path_uri(cwd.join(GLOBAL_AGENTS_FILENAME))?,
+                PROJECT_INSTRUCTIONS.as_bytes().to_vec(),
+                Default::default(),
+                /*sandbox*/ None,
+            )
+            .await?;
+            Ok::<(), anyhow::Error>(())
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    let project_agents = test.workspace_path_uri(GLOBAL_AGENTS_FILENAME)?;
+    let global_agents = PathUri::from_abs_path(&global_agents);
+
+    test.submit_turn("trusted project").await?;
+    assert_eq!(
+        test.codex.instruction_sources().await,
+        vec![global_agents.clone(), project_agents.clone()]
+    );
+
+    let mut untrusted_config = (*test.codex.config().await).clone();
+    untrusted_config.active_project.trust_level = Some(TrustLevel::Untrusted);
+    test.codex.refresh_runtime_config(untrusted_config).await;
+    test.submit_turn("untrusted project").await?;
+    assert_eq!(
+        test.codex.instruction_sources().await,
+        vec![global_agents.clone()]
+    );
+
+    let mut trusted_config = (*test.codex.config().await).clone();
+    trusted_config.active_project.trust_level = Some(TrustLevel::Trusted);
+    test.codex.refresh_runtime_config(trusted_config).await;
+    test.submit_turn("trusted again").await?;
+    assert_eq!(
+        test.codex.instruction_sources().await,
+        vec![global_agents, project_agents]
+    );
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 3);
+    let latest_instruction_fragments = requests
+        .iter()
+        .map(instruction_fragments)
+        .map(|fragments| fragments.last().cloned().expect("instructions message"))
+        .collect::<Vec<_>>();
+    assert!(latest_instruction_fragments[0].contains(PROJECT_INSTRUCTIONS));
+    assert!(!latest_instruction_fragments[1].contains(PROJECT_INSTRUCTIONS));
+    assert!(latest_instruction_fragments[2].contains(PROJECT_INSTRUCTIONS));
 
     Ok(())
 }
