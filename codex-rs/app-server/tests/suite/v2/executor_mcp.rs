@@ -75,11 +75,13 @@ const EXECUTOR_ID: &str = "executor-1";
 const EXECUTOR_DISABLED_PLUGIN_SERVER_NAME: &str = "executor_disabled_plugin";
 const PROJECT_MCP_SERVER_NAME: &str = "node_repl";
 const PROJECT_MCP_BEARER_TOKEN: &str = "executor-browser-token";
+const PROJECT_MCP_BEARER_ENV_NAME: &str = "NODE_REPL_AUTH_TOKEN";
 const REFRESH_PROBE_SERVER_NAME: &str = "refresh_probe";
 const TOOL_CALL_ID: &str = "executor-mcp-call";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn selected_executor_discovers_executor_local_http_mcp() -> Result<()> {
+async fn selected_executor_discovers_browser_mcp_with_executor_only_bearer_token() -> Result<()> {
+    assert!(std::env::var_os(PROJECT_MCP_BEARER_ENV_NAME).is_none());
     let responses_server = responses::start_mock_server().await;
     let http_listener = TcpListener::bind("127.0.0.1:0").await?;
     let http_addr = http_listener.local_addr()?;
@@ -128,21 +130,28 @@ async fn selected_executor_discovers_executor_local_http_mcp() -> Result<()> {
     std::fs::write(
         executor_home.path().join("config.toml"),
         format!(
-            "[mcp_servers.{PROJECT_MCP_SERVER_NAME}]\nurl = \"{EXECUTOR_HTTP_MCP_URL}\"\nhttp_headers = {{ Authorization = \"Bearer {PROJECT_MCP_BEARER_TOKEN}\" }}\nrequired = true\nstartup_timeout_sec = 10\n\n[mcp_servers.ignored_stdio]\ncommand = \"executor-local-command\"\nenv_vars = [\"EXECUTOR_ONLY_TOKEN\"]\ncwd = \"./server\"\n\n[mcp_servers.policy_unlisted]\nurl = \"{EXECUTOR_HTTP_MCP_URL}\"\n"
+            "[mcp_servers.{PROJECT_MCP_SERVER_NAME}]\nurl = \"{EXECUTOR_HTTP_MCP_URL}\"\nbearer_token_env_var = \"{PROJECT_MCP_BEARER_ENV_NAME}\"\nrequired = true\nstartup_timeout_sec = 10\n\n[mcp_servers.ignored_stdio]\ncommand = \"executor-local-command\"\nenv_vars = [\"EXECUTOR_ONLY_TOKEN\"]\ncwd = \"./server\"\n\n[mcp_servers.policy_unlisted]\nurl = \"{EXECUTOR_HTTP_MCP_URL}\"\n"
         ),
     )?;
-    let codex_bin = toml::Value::String(
-        codex_utils_cargo_bin::cargo_bin("codex")?
-            .to_string_lossy()
-            .into_owned(),
-    );
-    let executor_home_value =
-        toml::Value::String(executor_home.path().to_string_lossy().into_owned());
-    let http_proxy = toml::Value::String(format!("http://{http_addr}"));
+    // Browser auth tokens are not inherited by spawned executors, so use the production
+    // WebSocket connection and put the token directly in the executor's environment.
+    let mut executor = Command::new(codex_utils_cargo_bin::cargo_bin("codex")?)
+        .args(["exec-server", "--listen", "ws://127.0.0.1:0"])
+        .stdout(Stdio::piped())
+        .kill_on_drop(true)
+        .env("CODEX_HOME", executor_home.path())
+        .env(PROJECT_MCP_BEARER_ENV_NAME, PROJECT_MCP_BEARER_TOKEN)
+        .env("HTTP_PROXY", format!("http://{http_addr}"))
+        .spawn()?;
+    let stdout = executor.stdout.take().expect("executor stdout is piped");
+    let mut lines = BufReader::new(stdout).lines();
+    let executor_url = timeout(DEFAULT_READ_TIMEOUT, lines.next_line())
+        .await??
+        .expect("executor emits its websocket URL");
     std::fs::write(
         codex_home.path().join("environments.toml"),
         format!(
-            "default = \"{EXECUTOR_ID}\"\ninclude_local = false\n\n[[environments]]\nid = \"{EXECUTOR_ID}\"\nprogram = {codex_bin}\nargs = [\"exec-server\", \"--listen\", \"stdio\"]\n[environments.env]\nCODEX_HOME = {executor_home_value}\nHTTP_PROXY = {http_proxy}\n"
+            "default = \"{EXECUTOR_ID}\"\ninclude_local = false\n\n[[environments]]\nid = \"{EXECUTOR_ID}\"\nurl = \"{executor_url}\"\n"
         ),
     )?;
 
