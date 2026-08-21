@@ -2200,6 +2200,24 @@ async fn executor_stop_hooks_run_unless_regular_hooks_block_without_stopping() {
     );
 }
 
+#[test]
+fn executor_stop_hooks_register_only_the_first_environment_and_handler() {
+    let (mut engine, _, _, _, mut first_source) = executor_stop_hook_fixture();
+    let expected_handlers = engine.handlers.clone();
+    let first_group = &mut first_source.hooks.stop[0];
+    let mut second_handler = first_group.hooks[0].clone();
+    let HookHandlerConfig::McpTool { tool, .. } = &mut second_handler else {
+        panic!("executor Stop handler should be an MCP tool");
+    };
+    *tool = "second_turn_ended".to_string();
+    first_group.hooks.push(second_handler);
+    let mut second_source = first_source.clone();
+    second_source.environment_id = "executor-b".to_string();
+    engine.set_executor_hooks(vec![first_source, second_source]);
+
+    assert_eq!(engine.handlers, expected_handlers);
+}
+
 #[tokio::test]
 async fn executor_stop_hooks_do_not_delay_stop_completion() {
     struct BlockingMcpExecutor {
