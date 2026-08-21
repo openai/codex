@@ -3769,10 +3769,15 @@ impl Session {
     }
 
     pub(crate) async fn current_window_id(&self) -> String {
+        self.current_window().await.0
+    }
+
+    pub(crate) async fn current_window(&self) -> (String, Uuid) {
         let state = self.state.lock().await;
         let thread_id = self.thread_id;
         let window_number = state.auto_compact_window_number();
-        format!("{thread_id}:{window_number}")
+        let context_window_id = state.auto_compact_window_ids().window_id;
+        (format!("{thread_id}:{window_number}"), context_window_id)
     }
 
     pub(crate) async fn advance_auto_compact_window(&self) -> (u64, AutoCompactWindowIds) {

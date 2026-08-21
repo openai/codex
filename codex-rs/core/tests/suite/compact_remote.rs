@@ -865,6 +865,7 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
         compact_metadata["window_id"].as_str(),
         compact_request.header("x-codex-window-id").as_deref()
     );
+    assert!(compact_metadata["context_window_id"].as_str().is_some());
     assert_eq!(
         compact_metadata["compaction"],
         json!({
@@ -891,6 +892,10 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
     assert_ne!(
         first_response_metadata["turn_id"], compact_metadata["turn_id"],
         "manual compaction should use its own turn id"
+    );
+    assert_eq!(
+        first_response_metadata["context_window_id"], compact_metadata["context_window_id"],
+        "remote compaction should retain the active model-visible context window"
     );
     assert_eq!(
         compact_body["tools"],
@@ -950,6 +955,10 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
     assert_ne!(
         follow_up_metadata["window_id"], compact_metadata["window_id"],
         "the following user turn should use the new compacted context window"
+    );
+    assert_ne!(
+        follow_up_metadata["context_window_id"], compact_metadata["context_window_id"],
+        "the following user turn should expose the new model-visible context window"
     );
     let follow_up_body = follow_up_request.body_json().to_string();
     assert!(
@@ -1742,6 +1751,12 @@ async fn remote_compact_v2_retries_failures_with_stream_retry_budget() -> Result
 
     for compact_request in &response_requests[1..=3] {
         assert_eq!("/v1/responses", compact_request.path());
+        let compact_metadata: Value = serde_json::from_str(
+            &compact_request
+                .header("x-codex-turn-metadata")
+                .expect("v2 compact request should include turn metadata"),
+        )?;
+        assert!(compact_metadata["context_window_id"].as_str().is_some());
         assert!(
             compact_request
                 .body_json()

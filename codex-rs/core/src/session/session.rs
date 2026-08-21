@@ -6,6 +6,8 @@ use crate::config::ConstraintError;
 use crate::environment_selection::ThreadEnvironments;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::hook_mcp_executor::CoreHookMcpExecutor;
+use crate::responses_metadata::CodexResponsesMetadata;
+use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::state::ActiveTurn;
 use codex_extension_api::ExtensionDataInit;
@@ -637,6 +639,22 @@ impl Session {
     pub(crate) async fn originator(&self) -> String {
         let state = self.state.lock().await;
         state.session_configuration.originator.clone()
+    }
+
+    pub(crate) async fn responses_metadata(
+        &self,
+        turn_context: &TurnContext,
+        request_kind: CodexResponsesRequestKind,
+    ) -> CodexResponsesMetadata {
+        let (window_id, context_window_id) = self.current_window().await;
+        CodexResponsesMetadata {
+            context_window_id: Some(context_window_id),
+            ..turn_context.turn_metadata_state.to_responses_metadata(
+                self.installation_id.clone(),
+                window_id,
+                request_kind,
+            )
+        }
     }
 
     #[instrument(name = "session_init", level = "info", skip_all)]

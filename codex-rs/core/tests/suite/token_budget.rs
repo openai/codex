@@ -1022,6 +1022,15 @@ async fn token_budget_context_uses_new_window_after_compaction(
     assert_eq!(initial_token_budget.len(), 1);
     let (initial_first_window_id, initial_previous_window_id, initial_window_id) =
         token_budget_window_ids(&initial_token_budget[0], "/root");
+    let initial_turn_metadata: Value = serde_json::from_str(
+        &requests[0]
+            .header("x-codex-turn-metadata")
+            .expect("initial context window metadata"),
+    )?;
+    assert_eq!(
+        initial_turn_metadata["context_window_id"].as_str(),
+        Some(initial_window_id.as_str())
+    );
     let post_compaction_token_budget = token_budget_contexts(&requests[1]);
     assert_eq!(post_compaction_token_budget.len(), 1);
     let (
@@ -1029,6 +1038,15 @@ async fn token_budget_context_uses_new_window_after_compaction(
         post_compaction_previous_window_id,
         post_compaction_window_id,
     ) = token_budget_window_ids(&post_compaction_token_budget[0], "/root");
+    let post_compaction_turn_metadata: Value = serde_json::from_str(
+        &requests[1]
+            .header("x-codex-turn-metadata")
+            .expect("post-compaction context window metadata"),
+    )?;
+    assert_eq!(
+        post_compaction_turn_metadata["context_window_id"].as_str(),
+        Some(post_compaction_window_id.as_str())
+    );
     assert_eq!(initial_previous_window_id, None);
     assert_eq!(initial_first_window_id, initial_window_id);
     assert_eq!(post_compaction_first_window_id, initial_first_window_id);

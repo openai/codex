@@ -71,6 +71,10 @@ async fn turn_start_forwards_client_metadata_to_responses_request_v2() -> Result
     let client_metadata = HashMap::from([
         ("fiber_run_id".to_string(), "fiber-start-123".to_string()),
         ("origin".to_string(), "gaas".to_string()),
+        (
+            "context_window_id".to_string(),
+            "client-supplied".to_string(),
+        ),
     ]);
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
@@ -108,6 +112,11 @@ async fn turn_start_forwards_client_metadata_to_responses_request_v2() -> Result
     assert_eq!(
         metadata["window_id"].as_str(),
         request.header("x-codex-window-id").as_deref()
+    );
+    assert!(
+        metadata["context_window_id"]
+            .as_str()
+            .is_some_and(|window_id| uuid::Uuid::parse_str(window_id).is_ok())
     );
 
     Ok(())
@@ -585,6 +594,11 @@ async fn turn_start_forwards_client_metadata_to_responses_websocket_request_body
     assert_eq!(
         metadata["window_id"].as_str(),
         request["client_metadata"]["x-codex-window-id"].as_str()
+    );
+    assert!(
+        metadata["context_window_id"]
+            .as_str()
+            .is_some_and(|window_id| uuid::Uuid::parse_str(window_id).is_ok())
     );
 
     websocket_server.shutdown().await;

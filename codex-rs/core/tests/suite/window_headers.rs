@@ -97,6 +97,39 @@ async fn window_id_advances_after_compact_persists_on_resume_and_resets_on_fork(
     assert_ne!(after_fork_thread_id, initial_thread_id);
     assert_eq!(after_fork_generation, 0);
 
+    let metadata = requests
+        .iter()
+        .map(|request| {
+            let metadata = request
+                .header("x-codex-turn-metadata")
+                .expect("turn metadata header");
+            serde_json::from_str::<serde_json::Value>(&metadata).expect("valid turn metadata")
+        })
+        .collect::<Vec<_>>();
+    for (request, metadata) in requests.iter().zip(&metadata) {
+        assert_eq!(
+            metadata["window_id"].as_str(),
+            request.header("x-codex-window-id").as_deref()
+        );
+        assert!(
+            metadata["context_window_id"]
+                .as_str()
+                .is_some_and(|window_id| uuid::Uuid::parse_str(window_id).is_ok())
+        );
+    }
+    assert_eq!(
+        metadata[0]["context_window_id"],
+        metadata[1]["context_window_id"]
+    );
+    assert_ne!(
+        metadata[1]["context_window_id"],
+        metadata[2]["context_window_id"]
+    );
+    assert_eq!(
+        metadata[2]["context_window_id"],
+        metadata[3]["context_window_id"]
+    );
+
     Ok(())
 }
 

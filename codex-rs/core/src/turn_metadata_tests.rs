@@ -1,6 +1,7 @@
 use super::*;
 
 use crate::responses_metadata::AUTO_REVIEW_ENABLED_KEY;
+use crate::responses_metadata::CONTEXT_WINDOW_ID_KEY;
 use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::responses_metadata::CompactionTurnMetadata;
 use crate::responses_metadata::INSTALLATION_ID_KEY;
@@ -738,6 +739,10 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
         ),
         ("turn_id".to_string(), "client-supplied".to_string()),
         (WINDOW_ID_KEY.to_string(), "client-supplied".to_string()),
+        (
+            CONTEXT_WINDOW_ID_KEY.to_string(),
+            "client-supplied".to_string(),
+        ),
         ("thread_source".to_string(), "client-supplied".to_string()),
         ("request_kind".to_string(), "client-supplied".to_string()),
         (
@@ -819,6 +824,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
     assert_eq!(json["turn_id"].as_str(), Some("turn-a"));
     assert!(json.get("request_kind").is_none());
     assert!(json.get(WINDOW_ID_KEY).is_none());
+    assert!(json.get(CONTEXT_WINDOW_ID_KEY).is_none());
     assert_eq!(
         json["turn_started_at_unix_ms"].as_i64(),
         Some(1_700_000_000_123)
@@ -954,12 +960,14 @@ fn turn_metadata_state_overlays_compaction_only_on_compaction_requests() {
 
 #[test]
 fn responses_api_metadata_rejects_reserved_keys() {
-    assert_eq!(
-        validate_extra_metadata(
-            BTreeMap::from([("thread_source".to_string(), "sdk".to_string())]).iter()
-        ),
-        Err("responses_api_metadata contains a reserved key")
-    );
+    for reserved_key in ["thread_source", WINDOW_ID_KEY, CONTEXT_WINDOW_ID_KEY] {
+        assert_eq!(
+            validate_extra_metadata(
+                BTreeMap::from([(reserved_key.to_string(), "sdk".to_string())]).iter()
+            ),
+            Err("responses_api_metadata contains a reserved key")
+        );
+    }
 }
 
 #[tokio::test]
