@@ -101,8 +101,8 @@ const TOOL_NAME: &str = "calendar_confirm_action";
 const TOOL_CALL_ID: &str = "call-calendar-confirm";
 const NEXT_TURN_TOOL_CALL_ID: &str = "call-calendar-next-turn";
 const ELICITATION_MESSAGE: &str = "Allow this request?";
-const STRICT_DECLINE_MESSAGE: &str =
-    "Strict automated review failed. Do not proceed or ask the user for approval.";
+const STRICT_DECLINE_MESSAGE: &str = "Automated review of this operation failed. Do not proceed without asking the user for explicit approval.";
+const GUARDIAN_DENIAL_RATIONALE: &str = "The calendar action exceeds the user's authorization.";
 const OPENAI_FORM_MESSAGE: &str = "Select a template";
 const IMAGE_DATA_URL: &str =
     "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciLz4=";
@@ -529,12 +529,14 @@ async fn start_elicitation_services(
         if let ElicitationScenario::Strict(strict) = scenario {
             let completion = streams.pop().expect("parent model completion");
             for approved in strict.review_outcomes() {
+                let assessment = if *approved {
+                    json!({ "outcome": "allow" })
+                } else {
+                    json!({ "outcome": "deny", "rationale": GUARDIAN_DENIAL_RATIONALE })
+                };
                 streams.push(responses::sse(vec![
                     responses::ev_response_created("resp-guardian"),
-                    responses::ev_assistant_message(
-                        "msg-guardian",
-                        &json!({ "outcome": if *approved { "allow" } else { "deny" } }).to_string(),
-                    ),
+                    responses::ev_assistant_message("msg-guardian", &assessment.to_string()),
                     responses::ev_completed("resp-guardian"),
                 ]));
             }
@@ -1094,17 +1096,31 @@ impl ServerHandler for ElicitationAppsMcpServer {
                             .map_err(|err| {
                                 rmcp::ErrorData::internal_error(err.to_string(), None)
                             })?;
-                        let expected = if strict.review_outcomes().get(index) == Some(&true) {
-                            json!({
+                        let expected = match strict.review_outcomes().get(index) {
+                            Some(true) => json!({
                                 "action": "accept",
                                 "content": {},
                                 "_meta": { "approvals_reviewer": "auto_review" },
-                            })
-                        } else {
-                            json!({
+                            }),
+                            Some(false) => json!({
+                                "action": "decline",
+                                "_meta": {
+                                    "approvals_reviewer": "auto_review",
+                                    "message": format!(
+                                        "This action was rejected due to unacceptable risk.\n\
+                                         Reason: {GUARDIAN_DENIAL_RATIONALE}\n\
+                                         The agent must not attempt to achieve the same outcome via workaround, \
+                                         indirect execution, or policy circumvention. \
+                                         Proceed only with a materially safer alternative, \
+                                         or if the user explicitly approves the action after being informed of the risk. \
+                                         Otherwise, stop and request user input."
+                                    ),
+                                },
+                            }),
+                            None => json!({
                                 "action": "decline",
                                 "_meta": { "message": STRICT_DECLINE_MESSAGE },
-                            })
+                            }),
                         };
                         assert_eq!(
                             serde_json::to_value(result)

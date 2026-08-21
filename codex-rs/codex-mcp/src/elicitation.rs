@@ -41,8 +41,7 @@ use tokio::sync::oneshot;
 
 static NEXT_ELICITATION_REQUEST_ID: AtomicU64 = AtomicU64::new(0);
 
-const STRICT_AUTO_REVIEW_DECLINE_MESSAGE: &str =
-    "Strict automated review failed. Do not proceed or ask the user for approval.";
+const STRICT_AUTO_REVIEW_DECLINE_MESSAGE: &str = "Automated review of this operation failed. Do not proceed without asking the user for explicit approval.";
 
 #[derive(Debug, Clone)]
 pub struct ElicitationReviewRequest {
@@ -278,8 +277,12 @@ impl ElicitationRequestManager {
                                 .await
                             {
                                 Ok(Some(response))
-                                    if response.action == ElicitationAction::Accept
+                                    if (response.action == ElicitationAction::Accept
                                         && response.content == Some(serde_json::json!({}))
+                                        || matches!(
+                                            response.action,
+                                            ElicitationAction::Decline | ElicitationAction::Cancel
+                                        ) && response.content.is_none())
                                         && response
                                             .meta
                                             .as_ref()

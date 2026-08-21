@@ -228,6 +228,35 @@ async fn strict_auto_review_respects_explicit_elicitation_denials() {
 }
 
 #[tokio::test]
+async fn strict_auto_review_preserves_guardian_denials_and_cancellations() {
+    for response in [
+        ElicitationResponse {
+            action: ElicitationAction::Decline,
+            content: None,
+            meta: Some(json!({
+                "approvals_reviewer": "auto_review",
+                "message": "The user has not authorized sending this data. Ask the user for approval.",
+            })),
+        },
+        ElicitationResponse {
+            action: ElicitationAction::Cancel,
+            content: None,
+            meta: Some(json!({ "approvals_reviewer": "auto_review" })),
+        },
+    ] {
+        let reviewer = RecordingReviewer::new(Ok(Some(response.clone())));
+        let (_, events, sender) = elicitation_fixture(
+            AskForApproval::Never,
+            PermissionProfile::Disabled,
+            Some(reviewer.clone()),
+        );
+        assert_eq!(send_elicitation(&sender, Some(json!(true))).await, response);
+        assert_eq!(reviewer.calls.load(Relaxed), 1);
+        assert!(events.is_empty(), "strict review must not emit an event");
+    }
+}
+
+#[tokio::test]
 async fn strict_auto_review_fails_closed_without_a_canonical_decision() {
     for marker in ["null", "\"true\"", "1", "{}", "[true]"] {
         let marker = serde_json::from_str(marker).expect("valid malformed marker");

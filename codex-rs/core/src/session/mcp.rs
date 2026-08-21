@@ -807,7 +807,14 @@ async fn review_guardian_mcp_elicitation(
         )
         .await;
 
-        return Ok(matches!(decision, ReviewDecision::Approved).then(|| {
+        return Ok(matches!(
+            decision,
+            ReviewDecision::Approved
+                | ReviewDecision::Denied { .. }
+                | ReviewDecision::TimedOut
+                | ReviewDecision::Abort
+        )
+        .then(|| {
             mcp_elicitation_response_from_guardian_decision(decision, &turn_context.model_info)
         }));
     }
