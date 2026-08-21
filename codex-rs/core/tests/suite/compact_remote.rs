@@ -458,7 +458,7 @@ fn assert_compact_request_omits_harness_metadata(request: &responses::ResponsesR
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn amazon_bedrock_uses_remote_compaction_endpoint() -> Result<()> {
+async fn amazon_bedrock_manual_compaction_uses_v2_responses_endpoint() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = TestCodexHarness::with_auto_env_builder(amazon_bedrock_test_codex()).await?;
@@ -471,15 +471,20 @@ async fn amazon_bedrock_uses_remote_compaction_endpoint() -> Result<()> {
                 responses::ev_completed("response-1"),
             ]),
             sse(vec![
+                json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "compaction",
+                        "encrypted_content": "BEDROCK_REMOTE_COMPACTED_SUMMARY",
+                    }
+                }),
+                responses::ev_completed("response-compact"),
+            ]),
+            sse(vec![
                 responses::ev_assistant_message("message-2", "after compaction"),
                 responses::ev_completed("response-2"),
             ]),
         ],
-    )
-    .await;
-    let compact_mock = responses::mount_compact_user_history_with_summary_once(
-        harness.server(),
-        "BEDROCK_REMOTE_COMPACTED_SUMMARY",
     )
     .await;
 
@@ -488,8 +493,14 @@ async fn amazon_bedrock_uses_remote_compaction_endpoint() -> Result<()> {
     wait_for_turn_complete(&harness.test().codex).await;
     harness.test().submit_turn("after compact").await?;
 
-    let compact_request = compact_mock.single_request();
-    assert_eq!(compact_request.path(), "/v1/responses/compact");
+    let response_requests = response_mock.requests();
+    assert_eq!(response_requests.len(), 3);
+    assert!(
+        response_requests
+            .iter()
+            .all(|request| request.path() == "/v1/responses")
+    );
+    let compact_request = &response_requests[1];
     assert_eq!(
         compact_request.header("authorization").as_deref(),
         Some("Bearer bedrock-test-api-key")
@@ -504,15 +515,11 @@ async fn amazon_bedrock_uses_remote_compaction_endpoint() -> Result<()> {
         compact_request.body_json()["model"],
         AMAZON_BEDROCK_GPT_5_5_MODEL_ID
     );
-
-    let response_requests = response_mock.requests();
-    assert_eq!(response_requests.len(), 2);
-    assert!(
-        response_requests
-            .iter()
-            .all(|request| request.inputs_of_type("compaction_trigger").is_empty())
+    assert_eq!(
+        compact_request.inputs_of_type("compaction_trigger").len(),
+        1
     );
-    assert!(response_requests[1].input().iter().any(|item| {
+    assert!(response_requests[2].input().iter().any(|item| {
         item["type"] == "compaction"
             && item["encrypted_content"] == "BEDROCK_REMOTE_COMPACTED_SUMMARY"
     }));
@@ -681,7 +688,7 @@ async fn remote_compact_v2_retains_only_client_developer_messages_when_enabled(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn amazon_bedrock_automatic_compaction_uses_v1_endpoint_when_v2_is_enabled() -> Result<()> {
+async fn amazon_bedrock_automatic_compaction_uses_v2_responses_endpoint() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = TestCodexHarness::with_auto_env_builder(amazon_bedrock_test_codex().with_config(
@@ -698,15 +705,20 @@ async fn amazon_bedrock_automatic_compaction_uses_v1_endpoint_when_v2_is_enabled
                 responses::ev_completed_with_tokens("response-1", /*total_tokens*/ 500),
             ]),
             sse(vec![
+                json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "compaction",
+                        "encrypted_content": "BEDROCK_AUTOMATIC_REMOTE_COMPACTED_SUMMARY",
+                    }
+                }),
+                responses::ev_completed("response-compact"),
+            ]),
+            sse(vec![
                 responses::ev_assistant_message("message-2", "after automatic compaction"),
                 responses::ev_completed("response-2"),
             ]),
         ],
-    )
-    .await;
-    let compact_mock = responses::mount_compact_user_history_with_summary_once(
-        harness.server(),
-        "BEDROCK_AUTOMATIC_REMOTE_COMPACTED_SUMMARY",
     )
     .await;
 
@@ -719,21 +731,33 @@ async fn amazon_bedrock_automatic_compaction_uses_v1_endpoint_when_v2_is_enabled
         .submit_turn("after automatic compact")
         .await?;
 
-    let compact_request = compact_mock.single_request();
-    assert_eq!(compact_request.path(), "/v1/responses/compact");
+    let response_requests = response_mock.requests();
+    assert_eq!(response_requests.len(), 3);
+    assert!(
+        response_requests
+            .iter()
+            .all(|request| request.path() == "/v1/responses")
+    );
+    let compact_request = &response_requests[1];
     assert_eq!(
         compact_request.header("authorization").as_deref(),
         Some("Bearer bedrock-test-api-key")
     );
-
-    let response_requests = response_mock.requests();
-    assert_eq!(response_requests.len(), 2);
-    assert!(
-        response_requests
-            .iter()
-            .all(|request| request.inputs_of_type("compaction_trigger").is_empty())
+    assert_eq!(
+        compact_request
+            .header("x-amzn-mantle-client-agent")
+            .as_deref(),
+        Some("codex")
     );
-    assert!(response_requests[1].input().iter().any(|item| {
+    assert_eq!(
+        compact_request.body_json()["model"],
+        AMAZON_BEDROCK_GPT_5_5_MODEL_ID
+    );
+    assert_eq!(
+        compact_request.inputs_of_type("compaction_trigger").len(),
+        1
+    );
+    assert!(response_requests[2].input().iter().any(|item| {
         item["type"] == "compaction"
             && item["encrypted_content"] == "BEDROCK_AUTOMATIC_REMOTE_COMPACTED_SUMMARY"
     }));
