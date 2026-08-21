@@ -29,6 +29,40 @@ case "$(uname -s):$(uname -m)" in
 esac
 
 asset="codex-${target}.tar.gz"
+
+if [[ "$(uname -s)" == "Linux" ]] \
+  && command -v apt-get >/dev/null \
+  && command -v dpkg-deb >/dev/null \
+  && command -v dpkg-architecture >/dev/null \
+  && ! pkg-config --exists alsa glib-2.0 gobject-2.0 gio-2.0; then
+  # Debian-like hosts can download development metadata without sudo. The
+  # temporary sysroot still relies on runtime libraries installed on the host.
+  voice_package_directory="${release_directory}/voice-packages"
+  voice_sysroot="${release_directory}/voice-sysroot"
+  mkdir -p "${voice_package_directory}" "${voice_sysroot}"
+  (
+    cd "${voice_package_directory}"
+    apt-get download libasound2-dev libglib2.0-dev libcap-dev libffi-dev libmount-dev \
+      libpcre2-dev libselinux1-dev zlib1g-dev libblkid-dev libsepol-dev
+  )
+  for package in "${voice_package_directory}"/*.deb; do
+    dpkg-deb --extract "${package}" "${voice_sysroot}"
+  done
+
+  voice_multiarch="$(dpkg-architecture -qDEB_HOST_MULTIARCH)"
+  voice_library_directory="${voice_sysroot}/usr/lib/${voice_multiarch}"
+  for library in "${voice_library_directory}"/*.so; do
+    [[ -L "${library}" ]] || continue
+    library_target="$(readlink "${library}")"
+    if [[ ! -e "${voice_library_directory}/${library_target}" && -e "/usr/lib/${voice_multiarch}/${library_target}" ]]; then
+      ln -s "/usr/lib/${voice_multiarch}/${library_target}" "${voice_library_directory}/${library_target}"
+    fi
+  done
+
+  export PKG_CONFIG_PATH="${voice_library_directory}/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+  export PKG_CONFIG_SYSROOT_DIR="${voice_sysroot}"
+fi
+
 cd "${repo_root}/codex-rs"
 cargo build -p codex-cli --bin codex
 export CODEX_TEST_CURRENT_CODEX="${CARGO_TARGET_DIR:-${repo_root}/codex-rs/target}/debug/codex"

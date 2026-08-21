@@ -3573,7 +3573,8 @@
               "increase_reasoning_effort": null,
               "interrupt_turn": null,
               "next_permission_mode": null,
-              "previous_permission_mode": null
+              "previous_permission_mode": null,
+              "toggle_voice_mute": null
             },
             "composer": {
               "history_search_next": null,
@@ -3985,6 +3986,14 @@
             }
           ],
           "description": "Switch to the previous available permission mode."
+        },
+        "toggle_voice_mute": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Toggle the microphone in an active voice conversation."
         }
       },
       "type": "object"
@@ -4329,7 +4338,8 @@
             "increase_reasoning_effort": null,
             "interrupt_turn": null,
             "next_permission_mode": null,
-            "previous_permission_mode": null
+            "previous_permission_mode": null,
+            "toggle_voice_mute": null
           }
         },
         "composer": {
