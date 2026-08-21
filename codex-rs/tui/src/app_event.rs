@@ -948,6 +948,12 @@ pub(crate) enum AppEvent {
         profile_selection: Option<PermissionProfileSelection>,
     },
 
+    /// Apply a permission shortcut only while its originating thread is displayed.
+    ApplyPermissionShortcut {
+        thread_id: ThreadId,
+        selection: PermissionProfileSelection,
+    },
+
     /// Open the Windows world-writable directories warning.
     /// If `preset` is `Some`, the confirmation will apply the provided
     /// approval/sandbox configuration on Continue; if `None`, it performs no

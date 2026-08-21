@@ -1,0 +1,6 @@
+---
+source: tui/src/app/tests/permission_shortcuts_tests.rs
+assertion_line: 33
+expression: lines_to_single_string(&cell.display_lines(120))
+---
+■ Failed to update permissions: this app server does not support confirmed permission changes; use /permissions

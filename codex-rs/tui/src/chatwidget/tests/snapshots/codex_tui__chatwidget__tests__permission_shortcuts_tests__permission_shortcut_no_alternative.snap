@@ -1,0 +1,5 @@
+---
+source: tui/src/chatwidget/tests/permission_shortcuts_tests.rs
+expression: lines_to_single_string(&cell.display_lines(80))
+---
+• No other permission modes are available.

@@ -19,6 +19,19 @@ use tempfile::tempdir;
 
 pub(super) struct TestFileSystem;
 
+#[test]
+fn project_config_cannot_bind_permission_shortcuts() {
+    let safe = "[tui.keymap.chat]\nincrease_reasoning_effort = 'f9'\n";
+    for key in ["previous_permission_mode", "next_permission_mode"] {
+        let mut config = toml::from_str(&format!("{safe}{key} = 'page-down'")).unwrap();
+        assert_eq!(
+            sanitize_project_config(&mut config),
+            [format!("tui.keymap.chat.{key}")]
+        );
+        assert_eq!(config, toml::from_str::<TomlValue>(safe).unwrap());
+    }
+}
+
 #[tokio::test]
 async fn managed_browser_import_denial_survives_user_and_session_config() {
     let tmp = tempdir().expect("tempdir");

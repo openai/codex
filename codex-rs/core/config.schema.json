@@ -3571,7 +3571,9 @@
               "decrease_reasoning_effort": null,
               "edit_queued_message": null,
               "increase_reasoning_effort": null,
-              "interrupt_turn": null
+              "interrupt_turn": null,
+              "next_permission_mode": null,
+              "previous_permission_mode": null
             },
             "composer": {
               "history_search_next": null,
@@ -3967,6 +3969,22 @@
             }
           ],
           "description": "Interrupt the active turn."
+        },
+        "next_permission_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Switch to the next available permission mode."
+        },
+        "previous_permission_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Switch to the previous available permission mode."
         }
       },
       "type": "object"
@@ -4309,7 +4327,9 @@
             "decrease_reasoning_effort": null,
             "edit_queued_message": null,
             "increase_reasoning_effort": null,
-            "interrupt_turn": null
+            "interrupt_turn": null,
+            "next_permission_mode": null,
+            "previous_permission_mode": null
           }
         },
         "composer": {

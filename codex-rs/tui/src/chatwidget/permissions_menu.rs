@@ -33,6 +33,31 @@ pub(crate) fn cyber_model_approval_reviewer(config: &Config) -> Option<Approvals
 }
 
 impl ChatWidget {
+    pub(super) fn permission_mode_disabled_reason(
+        &self,
+        preset: &ApprovalPreset,
+        approval_policy: AskForApproval,
+    ) -> Option<String> {
+        self.config
+            .permissions
+            .approval_policy
+            .can_set(&approval_policy.to_core())
+            .and_then(|()| {
+                self.config
+                    .permissions
+                    .can_set_permission_profile(&preset.permission_profile)
+            })
+            .err()
+            .map(|err| err.to_string())
+            .or_else(|| {
+                (!self.config.is_permission_profile_allowed(
+                    &preset.active_permission_profile.id,
+                    &preset.permission_profile,
+                ))
+                .then(|| "Disabled by requirements.".to_string())
+            })
+    }
+
     pub(super) fn open_permission_profiles_popup(&mut self) {
         let active_profile_id = self
             .config
@@ -161,26 +186,7 @@ impl ChatWidget {
                 /*return_to_permissions*/ true,
             ),
             dismiss_on_select: true,
-            disabled_reason: self
-                .config
-                .permissions
-                .approval_policy
-                .can_set(&approval_policy.to_core())
-                .err()
-                .map(|err| err.to_string())
-                .or_else(|| {
-                    self.config
-                        .permissions
-                        .can_set_permission_profile(&preset.permission_profile)
-                        .err()
-                        .map(|err| err.to_string())
-                })
-                .or_else(|| {
-                    (!self
-                        .config
-                        .is_permission_profile_allowed(id, &preset.permission_profile))
-                    .then(|| "Disabled by requirements.".to_string())
-                }),
+            disabled_reason: self.permission_mode_disabled_reason(preset, approval_policy),
             ..Default::default()
         }
     }

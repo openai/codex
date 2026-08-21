@@ -109,6 +109,10 @@ pub(crate) struct ChatKeymap {
     pub(crate) decrease_reasoning_effort: Vec<KeyBinding>,
     /// Increase the active reasoning effort.
     pub(crate) increase_reasoning_effort: Vec<KeyBinding>,
+    /// Switch to the previous available permission mode.
+    pub(crate) previous_permission_mode: Vec<KeyBinding>,
+    /// Switch to the next available permission mode.
+    pub(crate) next_permission_mode: Vec<KeyBinding>,
     /// Edit the most recently queued message.
     pub(crate) edit_queued_message: Vec<KeyBinding>,
 }
@@ -648,6 +652,13 @@ impl RuntimeKeymap {
                 &defaults.chat.increase_reasoning_effort,
                 "tui.keymap.chat.increase_reasoning_effort",
             )?,
+            previous_permission_mode: resolve_local!(
+                keymap,
+                defaults,
+                chat,
+                previous_permission_mode
+            ),
+            next_permission_mode: resolve_local!(keymap, defaults, chat, next_permission_mode),
             edit_queued_message: resolve_bindings(
                 keymap.chat.edit_queued_message.as_ref(),
                 &defaults.chat.edit_queued_message,
@@ -1211,6 +1222,8 @@ impl RuntimeKeymap {
                     alt(KeyCode::Char('.')),
                     shift(KeyCode::Up)
                 ],
+                previous_permission_mode: default_bindings![],
+                next_permission_mode: default_bindings![],
                 edit_queued_message: default_bindings![alt(KeyCode::Up), shift(KeyCode::Left)],
             },
             composer: ComposerKeymap {
@@ -1458,6 +1471,23 @@ impl RuntimeKeymap {
     /// 2. Contexts with hard-coded sequence behavior, such as edit-previous
     ///    backtracking, intentionally stay outside this configurable keymap.
     fn validate_conflicts(&self) -> Result<(), String> {
+        for (action, bindings) in [
+            (
+                "previous_permission_mode",
+                &self.chat.previous_permission_mode,
+            ),
+            ("next_permission_mode", &self.chat.next_permission_mode),
+        ] {
+            if bindings.iter().any(|binding| {
+                let (code, modifiers) = binding.parts();
+                crate::key_hint::is_plain_text_key_event(KeyEvent::new(code, modifiers))
+                    || matches!(code, KeyCode::Char(_)) && crate::key_hint::is_altgr(modifiers)
+            }) {
+                return Err(format!(
+                    "tui.keymap.chat.{action}: printable keys are reserved for text input"
+                ));
+            }
+        }
         #[cfg(unix)]
         if self
             .app
@@ -1511,6 +1541,14 @@ impl RuntimeKeymap {
                     self.chat.increase_reasoning_effort.as_slice(),
                 ),
                 (
+                    "chat.previous_permission_mode",
+                    self.chat.previous_permission_mode.as_slice(),
+                ),
+                (
+                    "chat.next_permission_mode",
+                    self.chat.next_permission_mode.as_slice(),
+                ),
+                (
                     "chat.edit_queued_message",
                     self.chat.edit_queued_message.as_slice(),
                 ),
@@ -1554,6 +1592,14 @@ impl RuntimeKeymap {
                 (
                     "chat.increase_reasoning_effort",
                     self.chat.increase_reasoning_effort.as_slice(),
+                ),
+                (
+                    "chat.previous_permission_mode",
+                    self.chat.previous_permission_mode.as_slice(),
+                ),
+                (
+                    "chat.next_permission_mode",
+                    self.chat.next_permission_mode.as_slice(),
                 ),
                 (
                     "chat.edit_queued_message",
@@ -1667,6 +1713,14 @@ impl RuntimeKeymap {
                 (
                     "chat.increase_reasoning_effort",
                     self.chat.increase_reasoning_effort.as_slice(),
+                ),
+                (
+                    "chat.previous_permission_mode",
+                    self.chat.previous_permission_mode.as_slice(),
+                ),
+                (
+                    "chat.next_permission_mode",
+                    self.chat.next_permission_mode.as_slice(),
                 ),
                 ("composer.submit", self.composer.submit.as_slice()),
                 ("toggle_vim_mode", self.app.toggle_vim_mode.as_slice()),
@@ -2559,6 +2613,32 @@ mod tests {
     fn default_copy_binding_is_ctrl_o() {
         let runtime = RuntimeKeymap::defaults();
         assert_eq!(runtime.app.copy, vec![key_hint::ctrl(KeyCode::Char('o'))]);
+    }
+
+    #[test]
+    fn permission_shortcuts_reserve_plain_text() {
+        for binding in ["a", "shift-a", "2", "space"] {
+            let mut keymap = TuiKeymap::default();
+            keymap.chat.previous_permission_mode = Some(one(binding));
+            assert!(
+                RuntimeKeymap::from_config(&keymap)
+                    .expect_err("permission shortcuts must not intercept typing")
+                    .contains("printable keys")
+            );
+            keymap.chat.previous_permission_mode = None;
+            keymap.chat.next_permission_mode = Some(one(binding));
+            assert!(RuntimeKeymap::from_config(&keymap).is_err());
+        }
+        #[cfg(windows)]
+        {
+            let mut keymap = TuiKeymap::default();
+            keymap.chat.next_permission_mode = Some(one("ctrl-alt-q"));
+            assert!(RuntimeKeymap::from_config(&keymap).is_err());
+        }
+        let mut keymap = TuiKeymap::default();
+        keymap.chat.previous_permission_mode = Some(one("f7"));
+        keymap.chat.next_permission_mode = Some(one("ctrl-x enter"));
+        assert!(RuntimeKeymap::from_config(&keymap).is_ok());
     }
 
     #[test]

@@ -211,6 +211,7 @@ impl ChatWidget {
             input_queue: InputQueueState::default(),
             safety_buffering_prompt: None,
             chat_keymap,
+            permission_shortcut_pending: false,
             queued_message_edit_hint_binding,
             show_welcome_banner: is_first_run,
             startup_tooltip_override,

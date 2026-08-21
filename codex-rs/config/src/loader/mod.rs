@@ -1127,6 +1127,19 @@ fn sanitize_project_config(config: &mut TomlValue) -> Vec<String> {
     {
         ignored_keys.push("features.respect_system_proxy".to_string());
     }
+    // Repository contents must not turn an ordinary key into a permission increase.
+    if let Some(chat) = table
+        .get_mut("tui")
+        .and_then(|tui| tui.get_mut("keymap"))
+        .and_then(|keymap| keymap.get_mut("chat"))
+        .and_then(TomlValue::as_table_mut)
+    {
+        for key in ["previous_permission_mode", "next_permission_mode"] {
+            if chat.remove(key).is_some() {
+                ignored_keys.push(format!("tui.keymap.chat.{key}"));
+            }
+        }
+    }
 
     ignored_keys
 }

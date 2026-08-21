@@ -13,4 +13,4 @@ Toggle Side Conversation | ctrl-/ | Global toggle_side_conversation Toggle Side 
 Interrupt Turn | esc | Chat interrupt_turn Interrupt Turn Interrupt the active turn. esc Default
 Decrease Reasoning Effort | alt-,, shift-down | Chat decrease_reasoning_effort Decrease Reasoning Effort Decrease reasoning effort. alt-,, shift-down Default
 Increase Reasoning Effort | alt-., shift-up | Chat increase_reasoning_effort Increase Reasoning Effort Increase reasoning effort. alt-., shift-up Default
-Edit Queued Message | alt-up, shift-left | Chat edit_queued_message Edit Queued Message Edit the most recently queued message. alt-up, shift-left Default
+Previous Permission Mode | unbound | Chat previous_permission_mode Previous Permission Mode Switch to the previous available permission mode. unbound Default

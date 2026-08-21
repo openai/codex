@@ -1,0 +1,6 @@
+---
+source: tui/src/app/tests/permission_shortcuts_tests.rs
+assertion_line: 63
+expression: "lines_to_single_string(&cell.display_lines(120)).replace(&missing_thread.to_string(),\n\"<THREAD_ID>\")"
+---
+■ Failed to update permissions: thread/settings/update failed in TUI: thread/settings/update failed: thread not found: <THREAD_ID> (code -32600)

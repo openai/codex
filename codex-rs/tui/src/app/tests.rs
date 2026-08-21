@@ -11,6 +11,8 @@ mod key_chords;
 #[path = "tests/mcp_startup.rs"]
 mod mcp_startup;
 mod model_catalog;
+#[path = "tests/permission_shortcuts_tests.rs"]
+mod permission_shortcuts_tests;
 mod plugin_catalog;
 mod rate_limits;
 mod safety_buffering;

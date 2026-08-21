@@ -67,7 +67,9 @@ fn windows_sandbox_requirements_stack(
     requirements_stack(requirements_toml)
 }
 
-fn requirements_stack(requirements_toml: codex_config::ConfigRequirementsToml) -> ConfigLayerStack {
+pub(super) fn requirements_stack(
+    requirements_toml: codex_config::ConfigRequirementsToml,
+) -> ConfigLayerStack {
     let mut requirements_with_sources = codex_config::ConfigRequirementsWithSources::default();
     requirements_with_sources
         .merge_unset_fields(RequirementSource::Unknown, requirements_toml.clone());
