@@ -481,6 +481,8 @@ impl CoreShellActionProvider {
                     })?;
                 let approval_ctx = ApprovalContext {
                     review_context: GuardianReviewContext::from(turn_context),
+                    // The running process can outlive its launching tool or code-mode cell.
+                    cancellation_token: None,
                     call_id: self.call_id.clone(),
                     tool_name: self.tool_name.clone(),
                     strict_auto_review,

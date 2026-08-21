@@ -1290,6 +1290,7 @@ impl UnifiedExecProcessManager {
         let tool_ctx = ToolCtx {
             session: context.session.clone(),
             step_context: Arc::clone(&context.step_context),
+            cancellation_token: context.cancellation_token.clone(),
             call_id: context.call_id.clone(),
             tool_name: ToolName::plain("exec_command"),
         };

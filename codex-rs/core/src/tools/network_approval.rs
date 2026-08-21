@@ -779,6 +779,7 @@ impl NetworkApprovalService {
         };
         let approval_context = ApprovalContext {
             review_context: GuardianReviewContext::from(&turn_context),
+            cancellation_token: None,
             call_id: approval_call_id,
             tool_name: ToolName::plain(telemetry_tool_name.clone()),
             strict_auto_review,

@@ -392,6 +392,7 @@ async fn failed_initial_end_for_unstored_process_uses_fallback_output() {
     let context = UnifiedExecContext::new(
         Arc::clone(&session),
         crate::session::step_context::StepContext::for_test(Arc::clone(&turn)),
+        tokio_util::sync::CancellationToken::new(),
         "call-unified-denied".to_string(),
     );
     let request = ExecCommandRequest {
