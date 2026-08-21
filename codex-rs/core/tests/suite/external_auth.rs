@@ -8,6 +8,7 @@ use codex_model_provider_info::ModelProviderAwsAuthInfo;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_model_provider_info::create_oss_provider_with_base_url;
+use codex_utils_redacted_string::RedactedString;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
@@ -160,7 +161,7 @@ async fn custom_provider_uses_explicit_bearer_without_ambient_account() -> anyho
     );
     let mut provider =
         create_oss_provider_with_base_url(&format!("{}/v1", server.uri()), WireApi::Responses);
-    provider.experimental_bearer_token = Some("provider-token".to_string());
+    provider.experimental_bearer_token = Some("provider-token".into());
     let mut builder = test_codex()
         .with_auth(CodexAuth::Headers(AuthHeaders::new(headers)))
         .with_config(move |config| {
@@ -253,7 +254,9 @@ async fn amazon_bedrock_aws_auth_refresh_resigns() -> anyhow::Result<()> {
             region: Some("us-east-1".to_string()),
             auth_refresh: Some(AwsAuthRefreshConfig {
                 command: "aws".to_string(),
-                args: Vec::from(["--exact", TEST_NAME, "--skip", HELPER_ARG].map(str::to_string)),
+                args: Vec::from(
+                    ["--exact", TEST_NAME, "--skip", HELPER_ARG].map(RedactedString::from),
+                ),
                 timeout_ms: NonZeroU64::new(30_000).expect("timeout should be non-zero"),
             }),
         }));

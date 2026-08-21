@@ -1,4 +1,5 @@
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_redacted_string::RedactedString;
 use schemars::JsonSchema;
 use schemars::r#gen::SchemaGenerator;
 use schemars::schema::InstanceType;
@@ -571,7 +572,7 @@ pub struct ModelProviderAuthInfo {
 
     /// Command arguments.
     #[serde(default)]
-    pub args: Vec<String>,
+    pub args: Vec<RedactedString>,
 
     /// Maximum time to wait for the token command to exit successfully.
     #[serde(default = "default_provider_auth_timeout_ms")]

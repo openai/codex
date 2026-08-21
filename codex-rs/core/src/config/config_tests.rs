@@ -998,10 +998,8 @@ env_http_headers = { "x-openai-internal-codex-residency" = "CODEX_TEST_UNSET_RES
             .as_ref()
             .expect("environment-backed headers should remain configured");
         assert_eq!(
-            static_headers
-                .get("X-OpenAI-Internal-Codex-Residency")
-                .map(String::as_str),
-            Some("request-override")
+            static_headers.get("X-OpenAI-Internal-Codex-Residency"),
+            Some(&"request-override".into())
         );
         assert_eq!(
             environment_headers
@@ -1010,8 +1008,8 @@ env_http_headers = { "x-openai-internal-codex-residency" = "CODEX_TEST_UNSET_RES
             Some("CODEX_TEST_UNSET_RESIDENCY_HEADER")
         );
         assert_eq!(
-            static_headers.get("x-provider-header").map(String::as_str),
-            Some("preserved")
+            static_headers.get("x-provider-header"),
+            Some(&"preserved".into())
         );
         assert_eq!(
             environment_headers
@@ -1140,7 +1138,7 @@ command = "print-token"
     expected_provider
         .http_headers
         .get_or_insert_default()
-        .insert("X-Custom-Header".to_string(), "value".to_string());
+        .insert("X-Custom-Header".to_string(), "value".into());
 
     assert_eq!(config.model_provider_id, "amazon-bedrock");
     assert_eq!(config.model_provider, expected_provider);

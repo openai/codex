@@ -318,7 +318,7 @@ mod tests {
         provider.base_url = base_url.map(str::to_string);
         provider.auth = Some(ModelProviderAuthInfo {
             command: "token-fetcher".to_string(),
-            args: vec!["fetch".to_string()],
+            args: vec!["fetch".into()],
             timeout_ms: NonZeroU64::new(5_000).expect("timeout should be non-zero"),
             refresh_interval_ms: 300_000,
             cwd: std::env::current_dir()
@@ -353,7 +353,7 @@ mod tests {
             region: Some("us-west-2".to_string()),
             auth_refresh: Some(AwsAuthRefreshConfig {
                 command: "aws".to_string(),
-                args: vec!["login".to_string()],
+                args: vec!["login".into()],
                 timeout_ms: NonZeroU64::new(1_000).expect("timeout should be non-zero"),
             }),
         });
@@ -397,7 +397,7 @@ mod tests {
                 region: Some("us-west-2".to_string()),
                 auth_refresh: Some(AwsAuthRefreshConfig {
                     command: "aws".to_string(),
-                    args: vec!["login".to_string()],
+                    args: vec!["login".into()],
                     timeout_ms: NonZeroU64::new(1_000).expect("timeout should be non-zero"),
                 }),
             })),

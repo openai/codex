@@ -2578,6 +2578,12 @@ impl ProviderAuthReachabilityMode {
 }
 
 fn provider_reachability_plan(config: &Config) -> ReachabilityPlan {
+    let query_params = config.model_provider.query_params.as_ref().map(|params| {
+        params
+            .iter()
+            .map(|(name, value)| (name.clone(), value.as_str().to_owned()))
+            .collect::<HashMap<_, _>>()
+    });
     let stored_auth = load_auth_dot_json(
         &config.codex_home,
         config.cli_auth_credentials_store_mode,
@@ -2597,7 +2603,7 @@ fn provider_reachability_plan(config: &Config) -> ReachabilityPlan {
         &config.model_provider_id,
         &config.model_provider.name,
         config.model_provider.base_url.as_deref(),
-        config.model_provider.query_params.as_ref(),
+        query_params.as_ref(),
         config.model_provider.is_amazon_bedrock(),
         &config.chatgpt_base_url,
     );

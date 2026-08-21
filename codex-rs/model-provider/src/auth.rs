@@ -294,7 +294,7 @@ fn bearer_auth_for_provider(
     }
 
     if let Some(token) = provider.experimental_bearer_token.clone() {
-        return Ok(Some(BearerAuthProvider::new(token)));
+        return Ok(Some(BearerAuthProvider::new(token.into_inner())));
     }
 
     Ok(None)
@@ -512,7 +512,7 @@ mod tests {
     fn custom_provider_uses_explicit_bearer_instead_of_ambient_auth() {
         let mut provider =
             create_oss_provider_with_base_url("http://localhost:11434/v1", WireApi::Responses);
-        provider.experimental_bearer_token = Some("provider-token".to_string());
+        provider.experimental_bearer_token = Some("provider-token".into());
         let ambient_auth = CodexAuth::BedrockApiKey(BedrockApiKeyAuth {
             api_key: "bedrock-api-key-test".to_string(),
             region: "us-east-1".to_string(),

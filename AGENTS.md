@@ -103,6 +103,10 @@ Likewise, when reviewing code, do not hesitate to push back on PRs that would un
 
 Keep crate API surfaces as small as possible. Avoid proliferating test-only helpers.
 
+### Credential-safe logging
+
+Do not emit credentials or other secrets in diagnostics like logs except for temporary local debugging. Redact at the type level with custom `Debug` implementations. Do not emit raw untyped wire values to production diagnostics since they cannot be safely redacted.
+
 ### Model visible context
 
 Codex maintains a context (history of messages) that is sent to the model in inference requests.

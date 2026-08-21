@@ -365,7 +365,7 @@ async fn responses_lite_exposes_standalone_tools_for_actor_authorized_provider()
             config.model_provider.requires_openai_auth = false;
             config.model_provider.http_headers = Some(HashMap::from([(
                 "x-openai-actor-authorization".to_string(),
-                "test-actor-authorization".to_string(),
+                "test-actor-authorization".into(),
             )]));
         });
     let test = builder.build(&server).await?;

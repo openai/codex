@@ -15,6 +15,7 @@ workspace = true
 [dependencies]
 codex-api = { workspace = true }
 codex-protocol = { workspace = true }
+codex-utils-redacted-string = { workspace = true }
 http = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

@@ -7,6 +7,7 @@ use codex_config::types::FeedbackConfigToml;
 use codex_features::FeatureToml;
 use codex_login::default_client::RESIDENCY_HEADER_NAME;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use std::collections::HashMap;
 use std::path::Path;
 
 /// Applies managed requirements to regular config before final config construction.
@@ -50,14 +51,12 @@ pub(super) fn apply_to_config(
     );
     if requirements.enforce_residency.value().is_some() {
         for (provider_name, provider) in &config.model_providers {
-            let has_residency_header = [&provider.http_headers, &provider.env_http_headers]
-                .into_iter()
-                .flatten()
-                .any(|headers| {
-                    headers
-                        .keys()
-                        .any(|name| name.eq_ignore_ascii_case(RESIDENCY_HEADER_NAME))
-                });
+            let has_residency_header = provider
+                .http_headers
+                .iter()
+                .flat_map(HashMap::keys)
+                .chain(provider.env_http_headers.iter().flat_map(HashMap::keys))
+                .any(|name| name.eq_ignore_ascii_case(RESIDENCY_HEADER_NAME));
 
             if has_residency_header {
                 let warning = format!(

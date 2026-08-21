@@ -796,7 +796,7 @@ move /y tokens.next tokens.txt >nul
     fn auth(&self) -> ModelProviderAuthInfo {
         ModelProviderAuthInfo {
             command: self.command.clone(),
-            args: self.args.clone(),
+            args: self.args.iter().cloned().map(Into::into).collect(),
             // Match the model-provider default to avoid brittle shell-startup timing in CI.
             timeout_ms: non_zero_u64(/*value*/ 5_000),
             refresh_interval_ms: 60_000,
@@ -1438,7 +1438,7 @@ async fn amazon_bedrock_proxy_uses_command_auth_and_custom_headers() {
     provider
         .http_headers
         .get_or_insert_default()
-        .insert("x-some-header".to_string(), "foo".to_string());
+        .insert("x-some-header".to_string(), "foo".into());
 
     send_request_with_provider(provider).await;
 
@@ -3585,13 +3585,13 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
         aws: None,
         query_params: Some(std::collections::HashMap::from([(
             "api-version".to_string(),
-            "2025-04-01-preview".to_string(),
+            "2025-04-01-preview".into(),
         )])),
         env_key_instructions: None,
         wire_api: WireApi::Responses,
         http_headers: Some(std::collections::HashMap::from([(
             "Custom-Header".to_string(),
-            "Value".to_string(),
+            "Value".into(),
         )])),
         env_http_headers: None,
         request_max_retries: None,
@@ -3666,7 +3666,7 @@ async fn env_var_overrides_loaded_auth() {
         env_key: Some(EXISTING_ENV_VAR_WITH_NON_EMPTY_VALUE.to_string()),
         query_params: Some(std::collections::HashMap::from([(
             "api-version".to_string(),
-            "2025-04-01-preview".to_string(),
+            "2025-04-01-preview".into(),
         )])),
         env_key_instructions: None,
         experimental_bearer_token: None,
@@ -3675,7 +3675,7 @@ async fn env_var_overrides_loaded_auth() {
         wire_api: WireApi::Responses,
         http_headers: Some(std::collections::HashMap::from([(
             "Custom-Header".to_string(),
-            "Value".to_string(),
+            "Value".into(),
         )])),
         env_http_headers: None,
         request_max_retries: None,

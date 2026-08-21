@@ -1681,7 +1681,7 @@ fn realtime_api_key(auth: Option<&CodexAuth>, provider: &ModelProviderInfo) -> C
     }
 
     if let Some(token) = provider.experimental_bearer_token.clone() {
-        return Ok(token);
+        return Ok(token.into_inner());
     }
 
     if let Some(api_key) = auth.and_then(CodexAuth::api_key) {

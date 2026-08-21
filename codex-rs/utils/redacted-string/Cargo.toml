@@ -1,0 +1,16 @@
+[package]
+name = "codex-utils-redacted-string"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+
+[lib]
+test = false
+doctest = false

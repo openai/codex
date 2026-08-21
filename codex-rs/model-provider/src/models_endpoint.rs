@@ -413,7 +413,7 @@ mod tests {
         let mut provider_info = ModelProviderInfo::create_openai_provider(Some(server.uri()));
         provider_info.http_headers = Some(std::collections::HashMap::from([(
             RESIDENCY_HEADER_NAME.to_string(),
-            "eu".to_string(),
+            "eu".into(),
         )]));
         let endpoint = OpenAiModelsEndpoint {
             provider_info,
@@ -438,9 +438,8 @@ mod tests {
                 .provider_info
                 .http_headers
                 .as_ref()
-                .and_then(|headers| headers.get(RESIDENCY_HEADER_NAME))
-                .map(String::as_str),
-            Some("eu")
+                .and_then(|headers| headers.get(RESIDENCY_HEADER_NAME)),
+            Some(&"eu".into())
         );
     }
 }

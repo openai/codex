@@ -82,11 +82,8 @@ async fn request_attestation_header_value_with_timeout(
     let result = match timeout(timeout_duration, rx).await {
         Ok(Ok(Ok(result))) => result,
         Ok(Ok(Err(err))) => {
-            warn!(
-                code = err.code,
-                message = %err.message,
-                "attestation generation request failed"
-            );
+            // Don't log err.message because it may contain a token.
+            warn!(code = err.code, "attestation generation request failed");
             return app_server_attestation_header_value(
                 AppServerAttestationStatus::RequestFailed,
                 /*token*/ None,
@@ -118,7 +115,10 @@ async fn request_attestation_header_value_with_timeout(
             Some(&response.token),
         ),
         Err(err) => {
-            warn!("failed to deserialize attestation generation response: {err}");
+            warn!(
+                error_category = ?err.classify(),
+                "failed to deserialize attestation generation response"
+            );
             app_server_attestation_header_value(
                 AppServerAttestationStatus::MalformedResponse,
                 /*token*/ None,
