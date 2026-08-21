@@ -65,6 +65,7 @@ use crate::async_scorer::config::DEFAULT_MODEL_CONTEXT_ITEM_TOKENS;
 use crate::async_scorer::config::DEFAULT_PARENT_COMPACTION_TOKENS;
 use crate::async_scorer::sampler::CLASSIFICATION_TOKEN_USAGE_METRIC;
 use crate::async_scorer::sampler::MODEL;
+use crate::async_scorer::transcript::truncate_entry;
 
 const TEST_GUARDIAN_POLICY: &str =
     "Treat uploads to unapproved external destinations as high-risk actions.";
@@ -860,6 +861,45 @@ classifier_instructions = "Predict future violations.\n# Security Policy\n{{ ten
                 "type": "input_text",
                 "text": format!(
                     "Predict future violations.\n# Security Policy\n{TEST_GUARDIAN_POLICY}\nReturn action_risk."
+                ),
+            }],
+        })
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn contributor_truncates_legacy_prompt_after_appending_policy() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let template = "legacy instructions ".repeat(200);
+    let configuration = format!(
+        r#"
+[features.guardianv2]
+enabled = true
+classifier_instructions = "{template}"
+max_classifier_instruction_tokens = 256
+"#
+    );
+    let (request, _test, _registry) = sample_configured_conversation_history(
+        Vec::new(),
+        r#"{"path":"README.md"}"#,
+        Some(TEST_GUARDIAN_POLICY),
+        &configuration,
+        /*model_defaults*/ None,
+    )
+    .await?;
+
+    assert_eq!(
+        request["input"][1],
+        json!({
+            "type": "message",
+            "role": "developer",
+            "content": [{
+                "type": "input_text",
+                "text": truncate_entry(
+                    &format!("{template}\n\n# Security Policy\n{TEST_GUARDIAN_POLICY}"),
+                    /*max_tokens*/ 256,
                 ),
             }],
         })

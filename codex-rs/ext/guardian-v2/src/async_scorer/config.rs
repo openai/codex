@@ -222,22 +222,9 @@ impl GuardianV2Config {
 
         Ok(Self {
             local_overrides: configured.clone(),
-            classifier_instructions: {
-                let template = configured
-                    .classifier_instructions
-                    .as_deref()
-                    .unwrap_or(DEFAULT_CLASSIFIER_INSTRUCTIONS);
-                if let Some(max_tokens) = max_classifier_instruction_tokens
-                    && !template.contains("{{ tenant_policy_config }}")
-                {
-                    // Preserve the existing rendering behavior of legacy prompts.
-                    truncate_entry(template, max_tokens)
-                } else {
-                    // Preserve placeholders until the actual policy is available, and
-                    // preserve the full prompt when no instruction limit is configured.
-                    template.to_owned()
-                }
-            },
+            classifier_instructions: configured
+                .classifier_instructions
+                .unwrap_or_else(|| DEFAULT_CLASSIFIER_INSTRUCTIONS.to_owned()),
             review_threshold,
             max_tool_call_lag: configured
                 .max_tool_call_lag

@@ -4,7 +4,6 @@ use codex_features::GuardianV2TranscriptConfigToml;
 use codex_protocol::openai_models::GuardianV2ModelConfig;
 use codex_protocol::openai_models::GuardianV2TranscriptModelConfig;
 use codex_protocol::openai_models::ReasoningEffort;
-use codex_protocol::protocol::TruncationPolicy;
 use pretty_assertions::assert_eq;
 
 use super::DEFAULT_CLASSIFIER_INSTRUCTIONS;
@@ -81,30 +80,6 @@ fn evaluated_configuration_preserves_rendered_prompt_and_gate() {
         );
         assert_eq!(config.render_classifier_instructions(&policy), previous);
     }
-}
-
-#[test]
-fn legacy_custom_prompt_keeps_its_rendering_and_threshold() {
-    let template = "legacy instructions ".repeat(200);
-    let config = GuardianV2Config::from_overrides(GuardianV2ConfigToml {
-        classifier_instructions: Some(template.clone()),
-        max_classifier_instruction_tokens: Some(256),
-        ..Default::default()
-    })
-    .unwrap();
-    assert_eq!(config.review_threshold, 0.8);
-    let expected = truncate_entry(
-        &format!(
-            "{}\n\n# Security Policy\nTenant policy.",
-            truncate_entry(&template, /*max_tokens*/ 256),
-        ),
-        /*max_tokens*/ 256,
-    );
-    assert_eq!(
-        config.render_classifier_instructions("Tenant policy."),
-        expected
-    );
-    assert!(expected.len() <= TruncationPolicy::Tokens(256).byte_budget());
 }
 
 #[test]
