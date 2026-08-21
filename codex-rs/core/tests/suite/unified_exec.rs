@@ -917,8 +917,21 @@ async fn unified_exec_emits_output_delta_for_exec_command() -> Result<()> {
 
     let call_id = "uexec-delta-1";
     let args = json!({
-        "cmd": "printf 'HELLO-UEXEC'",
-        "yield_time_ms": 1000,
+        "cmd": "stty -echo; read start; printf 'HELLO-UEXEC\\303'; read finish; printf '\\251\\303'",
+        "yield_time_ms": 250,
+        "tty": true,
+    });
+    let start_call_id = "uexec-delta-start";
+    let start_args = json!({
+        "chars": "start\n",
+        "session_id": 1000,
+        "yield_time_ms": 250,
+    });
+    let finish_call_id = "uexec-delta-finish";
+    let finish_args = json!({
+        "chars": "finish\n",
+        "session_id": 1000,
+        "yield_time_ms": 250,
     });
 
     let responses = vec![
@@ -929,30 +942,76 @@ async fn unified_exec_emits_output_delta_for_exec_command() -> Result<()> {
         ]),
         sse(vec![
             ev_response_created("resp-2"),
-            ev_assistant_message("msg-1", "finished"),
+            ev_function_call(
+                start_call_id,
+                "write_stdin",
+                &serde_json::to_string(&start_args)?,
+            ),
             ev_completed("resp-2"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-3"),
+            ev_function_call(
+                finish_call_id,
+                "write_stdin",
+                &serde_json::to_string(&finish_args)?,
+            ),
+            ev_completed("resp-3"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-4"),
+            ev_assistant_message("msg-1", "finished"),
+            ev_completed("resp-4"),
         ]),
     ];
     mount_sse_sequence(&server, responses).await;
 
     submit_unified_exec_turn(&test, "emit delta", PermissionProfile::Disabled).await?;
 
-    let event = wait_for_event_match(&test.codex, |msg| match msg {
-        EventMsg::ExecCommandEnd(ev) if ev.call_id == call_id => Some(ev.clone()),
-        _ => None,
-    })
-    .await;
+    let mut deltas = Vec::new();
+    let mut end_event = None;
+    let mut turn_completed = false;
+    while !turn_completed || end_event.is_none() {
+        match wait_for_event(&test.codex, |_| true).await {
+            EventMsg::ExecCommandOutputDelta(event) => {
+                if event.call_id != call_id {
+                    continue;
+                }
+                deltas.push(event.chunk);
+            }
+            EventMsg::ExecCommandEnd(event) => {
+                if event.call_id != call_id {
+                    continue;
+                }
+                end_event = Some(event);
+            }
+            EventMsg::TurnComplete(_) => turn_completed = true,
+            _ => {}
+        }
+    }
 
-    let text = event.stdout;
-    assert!(
-        text.contains("HELLO-UEXEC"),
-        "delta chunk missing expected text: {text:?}",
+    assert_eq!(
+        (
+            deltas.concat(),
+            deltas
+                .iter()
+                .map(|bytes| String::from_utf8_lossy(bytes))
+                .collect::<String>(),
+        ),
+        (
+            b"HELLO-UEXEC\xc3\xa9\xc3".to_vec(),
+            "HELLO-UEXECé�".to_string(),
+        )
     );
-
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
+    let end_event = end_event.expect("expected command completion");
+    assert_eq!(
+        (
+            end_event.exit_code,
+            end_event.stdout,
+            end_event.aggregated_output
+        ),
+        (0, "HELLO-UEXECé�".to_string(), "HELLO-UEXECé�".to_string())
+    );
     Ok(())
 }
 

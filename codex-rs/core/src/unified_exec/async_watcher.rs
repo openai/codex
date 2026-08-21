@@ -1,4 +1,3 @@
-use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -41,6 +40,19 @@ pub(crate) const TRAILING_OUTPUT_GRACE: Duration = Duration::from_millis(100);
 /// process arbitrarily large delta payloads.
 const UNIFIED_EXEC_OUTPUT_DELTA_MAX_BYTES: usize = 8192;
 
+struct Emitter {
+    remaining_deltas: usize,
+    session: Arc<Session>,
+    turn: Arc<TurnContext>,
+    call_id: String,
+}
+
+struct Buffer<const MAX_BYTES: usize = UNIFIED_EXEC_OUTPUT_DELTA_MAX_BYTES> {
+    pending: Vec<u8>,
+    transcript: Arc<Mutex<HeadTailBuffer>>,
+    emitter: Emitter,
+}
+
 /// Spawn a background task that continuously reads from the PTY, appends to the
 /// shared transcript, and emits ExecCommandOutputDelta events on UTF‑8
 /// boundaries.
@@ -58,15 +70,21 @@ pub(crate) fn start_streaming_output(
         ..
     } = process.output_handles().clone();
 
-    let session_ref = Arc::clone(&context.session);
-    let turn_ref = Arc::clone(&context.step_context.turn);
-    let call_id = context.call_id.clone();
+    let emitter = Emitter {
+        remaining_deltas: MAX_EXEC_OUTPUT_DELTAS_PER_CALL,
+        session: Arc::clone(&context.session),
+        turn: Arc::clone(&context.step_context.turn),
+        call_id: context.call_id.clone(),
+    };
 
     tokio::spawn(async move {
         use tokio::sync::broadcast::error::RecvError;
 
-        let mut pending = VecDeque::<u8>::new();
-        let mut emitted_deltas: usize = 0;
+        let mut output: Buffer = Buffer {
+            pending: Vec::new(),
+            transcript,
+            emitter,
+        };
 
         let mut grace_sleep: Option<Pin<Box<Sleep>>> = None;
         let output_closed_notified = output_closed_notify.notified();
@@ -112,15 +130,7 @@ pub(crate) fn start_streaming_output(
                         }
                     };
 
-                    process_chunk(
-                        &mut pending,
-                        &transcript,
-                        &call_id,
-                        &session_ref,
-                        &turn_ref,
-                        &mut emitted_deltas,
-                        chunk,
-                    ).await;
+                    output.push(chunk).await;
                 }
             }
         }
@@ -140,18 +150,11 @@ pub(crate) fn start_streaming_output(
                     ) => break,
                 };
 
-                process_chunk(
-                    &mut pending,
-                    &transcript,
-                    &call_id,
-                    &session_ref,
-                    &turn_ref,
-                    &mut emitted_deltas,
-                    chunk,
-                )
-                .await;
+                output.push(chunk).await;
             }
         }
+
+        output.finish().await;
         output_drained.notify_one();
     });
 }
@@ -236,35 +239,92 @@ pub(crate) fn spawn_exit_watcher(
     });
 }
 
-async fn process_chunk(
-    pending: &mut VecDeque<u8>,
-    transcript: &Arc<Mutex<HeadTailBuffer>>,
-    call_id: &str,
-    session_ref: &Arc<Session>,
-    turn_ref: &Arc<TurnContext>,
-    emitted_deltas: &mut usize,
-    chunk: Vec<u8>,
-) {
-    pending.extend(chunk);
-    while let Some(prefix) = split_valid_utf8_prefix(pending) {
-        {
-            let mut guard = transcript.lock().await;
-            guard.push_chunk(&prefix);
-        }
-
-        if *emitted_deltas >= MAX_EXEC_OUTPUT_DELTAS_PER_CALL {
-            continue;
-        }
-
-        let event = ExecCommandOutputDeltaEvent {
-            call_id: call_id.to_string(),
-            stream: ExecOutputStream::Stdout,
-            chunk: prefix,
+impl<const MAX_BYTES: usize> Buffer<MAX_BYTES> {
+    async fn push(&mut self, mut bytes: Vec<u8>) {
+        const {
+            assert!(
+                MAX_BYTES >= char::MAX.len_utf8(),
+                "a frame must fit one UTF-8 scalar"
+            )
         };
-        session_ref
-            .send_event(turn_ref.as_ref(), EventMsg::ExecCommandOutputDelta(event))
-            .await;
-        *emitted_deltas += 1;
+        let Self {
+            pending,
+            transcript,
+            emitter,
+        } = self;
+
+        transcript.lock().await.push_chunk(&bytes);
+
+        // Reuse a producer chunk when it fits, retaining only an incomplete
+        // UTF-8 suffix for the next push.
+        if pending.is_empty() && bytes.len() <= MAX_BYTES {
+            emitter
+                .emit(|| {
+                    let complete = utf8_boundary(&bytes);
+                    pending.extend(bytes.drain(complete..));
+                    bytes
+                })
+                .await;
+            return;
+        }
+
+        let mut bytes = bytes.as_slice();
+        let mut next_chunk = || {
+            let space = MAX_BYTES.saturating_sub(pending.len());
+            let (prefix, rest) = bytes.split_at_checked(space).unwrap_or((bytes, &[]));
+            let mut chunk = Vec::with_capacity(pending.len().saturating_add(prefix.len()));
+            chunk.append(pending); // Empties pending.
+            chunk.extend_from_slice(prefix);
+            bytes = rest;
+
+            let complete = utf8_boundary(&chunk);
+            // Only the incomplete suffix passes through pending.
+            pending.extend(chunk.drain(complete..));
+            chunk
+        };
+        while emitter.emit(&mut next_chunk).await {}
+    }
+
+    async fn finish(self) {
+        let Self {
+            pending,
+            transcript: _,
+            mut emitter,
+        } = self;
+        debug_assert!(
+            pending.len() < char::MAX.len_utf8(),
+            "only an incomplete UTF-8 scalar can remain"
+        );
+        emitter.emit(|| pending).await;
+    }
+}
+
+impl Emitter {
+    /// Build a frame only while quota remains. Returns whether a nonempty frame was sent.
+    async fn emit(&mut self, make_chunk: impl FnOnce() -> Vec<u8>) -> bool {
+        let Self {
+            remaining_deltas,
+            session,
+            turn,
+            call_id,
+        } = self;
+        let Some(remaining) = remaining_deltas.checked_sub(1) else {
+            return false;
+        };
+        let chunk = make_chunk();
+        let emit = !chunk.is_empty();
+        if emit {
+            let event = ExecCommandOutputDeltaEvent {
+                call_id: call_id.clone(),
+                stream: ExecOutputStream::Stdout,
+                chunk,
+            };
+            session
+                .send_event(turn.as_ref(), EventMsg::ExecCommandOutputDelta(event))
+                .await;
+            *remaining_deltas = remaining;
+        }
+        emit
     }
 }
 
@@ -371,24 +431,24 @@ pub(crate) async fn emit_failed_exec_end_for_unified_exec(
         .await;
 }
 
-fn split_valid_utf8_prefix(buffer: &mut VecDeque<u8>) -> Option<Vec<u8>> {
-    split_valid_utf8_prefix_with_max(buffer, UNIFIED_EXEC_OUTPUT_DELTA_MAX_BYTES)
-}
-
-fn split_valid_utf8_prefix_with_max(
-    buffer: &mut VecDeque<u8>,
-    max_bytes: usize,
-) -> Option<Vec<u8>> {
-    if buffer.is_empty() {
-        return None;
+/// Keep only a potentially incomplete UTF-8 suffix; malformed bytes remain raw.
+/// A UTF-8 scalar spans at most four bytes, so its incomplete tail fits in three.
+fn utf8_boundary(bytes: &[u8]) -> usize {
+    let mut boundary = bytes.len().saturating_sub(char::MAX.len_utf8() - 1);
+    while boundary < bytes.len() {
+        match std::str::from_utf8(&bytes[boundary..]) {
+            Ok(s) => return boundary + s.len(),
+            Err(error) => {
+                boundary += error.valid_up_to();
+                if let Some(invalid_len) = error.error_len() {
+                    boundary += invalid_len;
+                } else {
+                    return boundary;
+                }
+            }
+        }
     }
-
-    let max_len = buffer.len().min(max_bytes);
-    let split = match std::str::from_utf8(&buffer.make_contiguous()[..max_len]) {
-        Ok(_) => max_len,
-        Err(error) => error.valid_up_to().max(1),
-    };
-    Some(buffer.drain(..split).collect())
+    bytes.len()
 }
 
 async fn resolve_aggregated_output(

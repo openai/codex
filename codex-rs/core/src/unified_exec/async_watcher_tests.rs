@@ -1,10 +1,11 @@
-use std::collections::VecDeque;
 use std::sync::Arc;
 
+use super::Buffer;
+use super::Emitter;
 use super::TRAILING_OUTPUT_GRACE;
 use super::spawn_exit_watcher;
-use super::split_valid_utf8_prefix_with_max;
 use super::start_streaming_output;
+use super::utf8_boundary;
 use crate::session::tests::make_session_and_context_with_rx;
 use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::head_tail_buffer::HeadTailBuffer;
@@ -14,6 +15,8 @@ use codex_protocol::items::CommandExecutionStatus;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
+use codex_protocol::protocol::ExecOutputStream;
 use codex_sandboxing::SandboxType;
 
 use pretty_assertions::assert_eq;
@@ -68,6 +71,49 @@ async fn streaming_output_harness() -> anyhow::Result<StreamingOutputHarness> {
 }
 
 #[tokio::test]
+async fn streaming_output_preserves_multibyte_characters_across_chunks() -> anyhow::Result<()> {
+    let StreamingOutputHarness {
+        process,
+        stdout_tx,
+        exit_tx,
+        transcript,
+        rx_event,
+        ..
+    } = streaming_output_harness().await?;
+    let output_drained = process.output_drained_notify();
+    let drained = output_drained.notified();
+    tokio::pin!(drained);
+
+    stdout_tx.send(vec![0xc3]).expect("send UTF-8 lead byte");
+    stdout_tx
+        .send(vec![0xa9])
+        .expect("send UTF-8 continuation byte");
+    drop(stdout_tx);
+    exit_tx.send(0).expect("send exit");
+    (&mut drained).await;
+
+    let event = rx_event.recv().await.expect("receive output delta");
+    let EventMsg::ExecCommandOutputDelta(delta) = event.msg else {
+        panic!("expected ExecCommandOutputDelta");
+    };
+    assert_eq!(
+        delta,
+        ExecCommandOutputDeltaEvent {
+            call_id: "streaming-output-test".to_string(),
+            stream: ExecOutputStream::Stdout,
+            chunk: "é".as_bytes().to_vec(),
+        }
+    );
+    assert_eq!(
+        transcript.lock().await.to_bytes_with_omission_marker(),
+        "é".as_bytes()
+    );
+    assert!(rx_event.try_recv().is_err());
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn streaming_output_finishes_on_close_without_waiting_for_grace() -> anyhow::Result<()> {
     let StreamingOutputHarness {
         process,
@@ -86,7 +132,7 @@ async fn streaming_output_finishes_on_close_without_waiting_for_grace() -> anyho
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(50)).await;
         stdout_tx
-            .send(b"LATE-OUTPUT-MARKER".to_vec())
+            .send(b"LATE-OUTPUT-MARKER\xc3".to_vec())
             .expect("send late output");
     });
 
@@ -100,7 +146,7 @@ async fn streaming_output_finishes_on_close_without_waiting_for_grace() -> anyho
     );
     assert_eq!(
         transcript.lock().await.to_bytes_with_omission_marker(),
-        b"LATE-OUTPUT-MARKER"
+        b"LATE-OUTPUT-MARKER\xc3"
     );
 
     Ok(())
@@ -110,8 +156,10 @@ async fn streaming_output_finishes_on_close_without_waiting_for_grace() -> anyho
 async fn streaming_output_keeps_grace_as_fallback_without_close() -> anyhow::Result<()> {
     let StreamingOutputHarness {
         process,
-        stdout_tx: _stdout_tx,
+        stdout_tx,
         exit_tx,
+        transcript,
+        rx_event,
         ..
     } = streaming_output_harness().await?;
     let output_drained = process.output_drained_notify();
@@ -120,6 +168,7 @@ async fn streaming_output_keeps_grace_as_fallback_without_close() -> anyhow::Res
 
     tokio::time::pause();
     let exited_at = Instant::now();
+    stdout_tx.send(vec![0xc3]).expect("send UTF-8 lead byte");
     exit_tx.send(0).expect("send exit");
     (&mut drained).await;
     let elapsed = Instant::now().saturating_duration_since(exited_at);
@@ -130,6 +179,23 @@ async fn streaming_output_keeps_grace_as_fallback_without_close() -> anyhow::Res
             && elapsed <= TRAILING_OUTPUT_GRACE + Duration::from_millis(10),
         "missing output close should use the grace fallback: {elapsed:?}"
     );
+    assert_eq!(
+        transcript.lock().await.to_bytes_with_omission_marker(),
+        vec![0xc3]
+    );
+    let event = rx_event.try_recv().expect("receive final output delta");
+    let EventMsg::ExecCommandOutputDelta(delta) = event.msg else {
+        panic!("expected ExecCommandOutputDelta");
+    };
+    assert_eq!(
+        delta,
+        ExecCommandOutputDeltaEvent {
+            call_id: "streaming-output-test".to_string(),
+            stream: ExecOutputStream::Stdout,
+            chunk: vec![0xc3],
+        }
+    );
+    assert!(rx_event.try_recv().is_err());
 
     Ok(())
 }
@@ -208,77 +274,70 @@ async fn exit_watcher_waits_for_late_network_denial_before_classifying_end() -> 
 }
 
 #[test]
-fn split_valid_utf8_prefix_respects_max_bytes_for_ascii() {
-    let mut buf = VecDeque::from(b"hello word!".to_vec());
+fn utf8_boundary_preserves_complete_characters() {
+    assert_eq!(utf8_boundary(b"hello"), 5);
 
-    let first =
-        split_valid_utf8_prefix_with_max(&mut buf, /*max_bytes*/ 5).expect("expected prefix");
-    assert_eq!(first, b"hello".to_vec());
-    assert_eq!(buf, VecDeque::from(b" word!".to_vec()));
+    let bytes = "ééé".as_bytes();
+    assert_eq!(utf8_boundary(&bytes[..3]), 2);
 
-    let second =
-        split_valid_utf8_prefix_with_max(&mut buf, /*max_bytes*/ 5).expect("expected prefix");
-    assert_eq!(second, b" word".to_vec());
-    assert_eq!(buf, VecDeque::from(b"!".to_vec()));
-}
-
-#[test]
-fn split_valid_utf8_prefix_avoids_splitting_utf8_codepoints() {
-    // "é" is 2 bytes in UTF-8. With a max of 3 bytes, we should only emit 1 char (2 bytes).
-    let mut buf = VecDeque::from("ééé".as_bytes().to_vec());
-
-    let first =
-        split_valid_utf8_prefix_with_max(&mut buf, /*max_bytes*/ 3).expect("expected prefix");
-    assert_eq!(std::str::from_utf8(&first).unwrap(), "é");
-    assert_eq!(buf, VecDeque::from("éé".as_bytes().to_vec()));
-}
-
-#[test]
-fn split_valid_utf8_prefix_makes_progress_on_invalid_utf8() {
-    let mut buf = VecDeque::from(vec![0xff, b'a', b'b']);
-
-    let first =
-        split_valid_utf8_prefix_with_max(&mut buf, /*max_bytes*/ 2).expect("expected prefix");
-    assert_eq!(first, vec![0xff]);
-    assert_eq!(buf, VecDeque::from(b"ab".to_vec()));
-}
-
-#[test]
-fn split_valid_utf8_prefix_consumes_all_valid_bytes_before_invalid_utf8() {
-    let mut bytes = vec![b'a'; 4096];
-    bytes.push(0xff);
-    bytes.extend(vec![b'b'; 4096]);
-    let mut buf = VecDeque::from(bytes);
-
-    let first =
-        split_valid_utf8_prefix_with_max(&mut buf, /*max_bytes*/ 8192).expect("expected prefix");
-    assert_eq!(first, vec![b'a'; 4096]);
-
-    let second =
-        split_valid_utf8_prefix_with_max(&mut buf, /*max_bytes*/ 8192).expect("expected prefix");
-    assert_eq!(second, vec![0xff]);
-
-    let third =
-        split_valid_utf8_prefix_with_max(&mut buf, /*max_bytes*/ 8192).expect("expected prefix");
-    assert_eq!(third, vec![b'b'; 4096]);
-    assert!(buf.is_empty());
-}
-
-#[test]
-fn split_invalid_utf8_advances_without_shifting_remaining_bytes() {
-    let mut buf = VecDeque::from(vec![0xff; 1024]);
-    let initial = buf.as_slices().0.as_ptr();
-
-    for offset in 0..1024 {
-        assert_eq!(
-            split_valid_utf8_prefix_with_max(&mut buf, /*max_bytes*/ 128),
-            Some(vec![0xff])
-        );
-        if let Some(first) = buf.as_slices().0.first() {
-            assert_eq!(first, &0xff);
-            assert_eq!(buf.as_slices().0.as_ptr(), initial.wrapping_add(offset + 1));
-        }
+    let bytes = "😀".as_bytes();
+    assert_eq!(utf8_boundary(bytes), bytes.len());
+    for len in 1..bytes.len() {
+        assert_eq!(utf8_boundary(&bytes[..len]), 0);
     }
+    assert_eq!(utf8_boundary(&[0xf0, 0x9f, 0x98, 0x80, 0xc3]), 4);
+}
 
-    assert!(buf.is_empty());
+#[test]
+fn utf8_boundary_batches_malformed_output() {
+    assert_eq!(utf8_boundary(&[0xff, b'a', b'b']), 3);
+    assert_eq!(utf8_boundary(&[0xff, 0xc3]), 1);
+    assert_eq!(utf8_boundary(&[0xff, 0xc3, 0xa9]), 3);
+    assert_eq!(utf8_boundary(&[0xe0, 0x80]), 2);
+
+    assert_eq!(utf8_boundary(b"a\xffbbb"), 5);
+}
+
+#[tokio::test]
+async fn streaming_output_bounds_invalid_bytes_and_keeps_the_full_transcript() {
+    let (session, turn, rx_event) = make_session_and_context_with_rx().await;
+    let transcript = Arc::new(tokio::sync::Mutex::new(HeadTailBuffer::default()));
+    let mut output = Buffer::<8> {
+        pending: Vec::new(),
+        transcript: Arc::clone(&transcript),
+        emitter: Emitter {
+            remaining_deltas: 2,
+            session,
+            turn,
+            call_id: "bounded-output-test".to_string(),
+        },
+    };
+
+    // The first frame splits 😀; the last allowed frame leaves é incomplete.
+    let bytes = b"\xff\xff\xff\xff\xff\xff\xf0\x9f\x98\x80\xff\xff\xff\xc3\xa9";
+    output.push(bytes.to_vec()).await;
+    output.push(vec![0xfe, 0xfe]).await;
+    output.finish().await;
+
+    let mut chunks = Vec::new();
+    while let Ok(event) = rx_event.try_recv() {
+        let EventMsg::ExecCommandOutputDelta(delta) = event.msg else {
+            panic!("expected ExecCommandOutputDelta");
+        };
+        chunks.push(delta.chunk);
+    }
+    assert_eq!(
+        chunks,
+        vec![
+            b"\xff\xff\xff\xff\xff\xff".to_vec(),
+            b"\xf0\x9f\x98\x80\xff\xff\xff".to_vec(),
+        ]
+    );
+
+    let mut expected_transcript = bytes.to_vec();
+    expected_transcript.extend([0xfe, 0xfe]);
+    assert_eq!(
+        transcript.lock().await.to_bytes_with_omission_marker(),
+        expected_transcript
+    );
 }
