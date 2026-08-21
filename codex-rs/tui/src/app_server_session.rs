@@ -115,6 +115,7 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
 use codex_app_server_protocol::UserInput;
+use codex_config::ConfigLayerSource;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::GuardianAssessmentEvent;
@@ -1535,7 +1536,34 @@ fn approvals_reviewer_override_from_config(
 fn config_request_overrides_from_config(
     config: &Config,
 ) -> Option<HashMap<String, serde_json::Value>> {
-    let mut overrides = HashMap::new();
+    let mut session_config = toml::Value::Table(toml::Table::new());
+    for layer in config.config_layer_stack.layers_low_to_high() {
+        if matches!(&layer.name, ConfigLayerSource::SessionFlags) {
+            codex_config::merge_toml_values(&mut session_config, &layer.config);
+        }
+    }
+    let mut overrides: HashMap<_, _> = session_config
+        .as_table()
+        .into_iter()
+        .flatten()
+        .filter(|(key, _)| {
+            matches!(
+                key.as_str(),
+                "allow_login_shell"
+                    | "default_permissions"
+                    | "features"
+                    | "network"
+                    | "permissions"
+                    | "sandbox_workspace_write"
+                    | "shell_environment_policy"
+            )
+        })
+        .filter_map(|(key, value)| {
+            serde_json::to_value(value)
+                .ok()
+                .map(|value| (key.clone(), value))
+        })
+        .collect();
     let mut insert = |key: &str, value: Option<String>| {
         if let Some(value) = value {
             overrides.insert(key.to_string(), serde_json::Value::String(value));
@@ -2369,6 +2397,88 @@ mod tests {
 
         assert_eq!(params.ephemeral, Some(true));
         assert_eq!(params.history_mode, None);
+    }
+
+    #[tokio::test]
+    async fn shared_thread_start_preserves_explicit_session_overrides() -> Result<()> {
+        let codex_home = tempfile::tempdir()?;
+        let workspace = codex_home.path().join("workspace");
+        std::fs::create_dir(&workspace)?;
+        std::fs::write(
+            codex_home.path().join("config.toml"),
+            "sandbox_mode = \"workspace-write\"\n[sandbox_workspace_write]\nnetwork_access = true\n",
+        )?;
+        let server_config = build_config(&codex_home).await;
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .harness_overrides(ConfigOverrides {
+                cwd: Some(workspace.clone()),
+                ..ConfigOverrides::default()
+            })
+            .cli_overrides(vec![
+                (
+                    "features.multi_agent_mode".to_string(),
+                    toml::Value::Boolean(true),
+                ),
+                (
+                    "sandbox_workspace_write.network_access".to_string(),
+                    toml::Value::Boolean(false),
+                ),
+                (
+                    "instructions".to_string(),
+                    toml::Value::String("unsafe ".repeat(10_000)),
+                ),
+                ("model".to_string(), "gpt-5".into()),
+                ("approval_policy".to_string(), "never".into()),
+            ])
+            .build()
+            .await?;
+
+        let params = thread_start_params_from_config(
+            &config,
+            ThreadParamsMode::Remote,
+            /*remote_cwd_override*/ None,
+            /*session_start_source*/ None,
+        );
+
+        let overrides = params.config.expect("config overrides");
+        assert_eq!(
+            (
+                overrides.get("features").cloned(),
+                overrides.get("sandbox_workspace_write").cloned(),
+                overrides.get("instructions").cloned(),
+            ),
+            (
+                Some(serde_json::json!({ "multi_agent_mode": true })),
+                Some(serde_json::json!({ "network_access": false })),
+                None,
+            )
+        );
+        for mode in [ThreadParamsMode::Embedded, ThreadParamsMode::Remote] {
+            let mut app_server =
+                crate::start_embedded_app_server_for_picker(&server_config).await?;
+            app_server.thread_params_mode = mode;
+            app_server.remote_cwd_override = Some(workspace.clone());
+
+            let started = app_server.start_thread(&config).await?;
+
+            assert_eq!(
+                (
+                    started.session.permission_profile.network_sandbox_policy(),
+                    started.session.model.as_str(),
+                    started.session.approval_policy,
+                    started.session.cwd.as_path(),
+                ),
+                (
+                    NetworkSandboxPolicy::Restricted,
+                    "gpt-5",
+                    AskForApproval::Never,
+                    workspace.as_path(),
+                )
+            );
+            app_server.shutdown().await?;
+        }
+        Ok(())
     }
 
     #[tokio::test]

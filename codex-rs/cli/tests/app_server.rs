@@ -33,19 +33,72 @@ foo = "bar"
 }
 
 #[test]
-fn agents_reject_session_overrides_before_starting_the_daemon() -> Result<()> {
+fn agents_accept_interactive_configuration_overrides() -> Result<()> {
     let codex_home = TempDir::new()?;
 
     for args in [
+        ["-c", "features.multi_agent_mode=true", "agents"].as_slice(),
+        ["--enable", "multi_agent_mode", "agents"].as_slice(),
         ["--yolo", "agents"].as_slice(),
         ["--search", "agents"].as_slice(),
         ["--model", "gpt-5", "agents"].as_slice(),
+        ["--approve-for-me", "agents"].as_slice(),
+        ["--cd", ".", "agents"].as_slice(),
+    ] {
+        let mut cmd = codex_command(codex_home.path())?;
+        cmd.env("TERM", "xterm-256color").args(args);
+        #[cfg(not(unix))]
+        cmd.args(["--remote", "ws://127.0.0.1:4512"]);
+
+        cmd.assert()
+            .failure()
+            .stderr(contains("stdin is not a terminal"));
+    }
+
+    Ok(())
+}
+
+#[test]
+fn agents_reject_inputs_that_cannot_be_applied() -> Result<()> {
+    let codex_home = TempDir::new()?;
+
+    for (args, expected_error) in [
+        (
+            ["--image=image.png", "agents"].as_slice(),
+            "does not accept an initial prompt or images",
+        ),
+        (
+            ["--oss", "agents", "--remote", "ws://127.0.0.1:4512"].as_slice(),
+            "cannot apply local provider or additional-directory overrides",
+        ),
+        (
+            [
+                "--add-dir",
+                ".",
+                "agents",
+                "--remote",
+                "ws://127.0.0.1:4512",
+            ]
+            .as_slice(),
+            "cannot apply local provider or additional-directory overrides",
+        ),
+        (
+            [
+                "-c",
+                "sandbox_workspace_write.writable_roots=[\"../shared\"]",
+                "agents",
+                "--remote",
+                "ws://127.0.0.1:4512",
+            ]
+            .as_slice(),
+            "cannot apply local provider or additional-directory overrides",
+        ),
     ] {
         let mut cmd = codex_command(codex_home.path())?;
         cmd.args(args)
             .assert()
             .failure()
-            .stderr(contains("invocation-specific configuration overrides"));
+            .stderr(contains(expected_error));
     }
 
     Ok(())

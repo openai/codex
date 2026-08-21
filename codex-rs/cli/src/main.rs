@@ -1092,25 +1092,31 @@ async fn cli_main(
     let open_agents_overview = matches!(&subcommand, Some(Subcommand::Agents(_)));
     match subcommand {
         None | Some(Subcommand::Agents(_)) => {
+            prepend_config_flags(
+                &mut interactive.config_overrides,
+                root_config_overrides.clone(),
+            );
             if open_agents_overview {
-                if !root_config_overrides.raw_overrides.is_empty()
-                    || root_strict_config
-                    || interactive.prompt.is_some()
-                    || !interactive.images.is_empty()
-                    || interactive.model.is_some()
-                    || interactive.oss
-                    || interactive.oss_provider.is_some()
-                    || interactive.config_profile_v2.is_some()
-                    || interactive.sandbox_mode.is_some()
-                    || interactive.dangerously_bypass_approvals_and_sandbox
-                    || interactive.bypass_hook_trust
-                    || interactive.cwd.is_some() && root_remote.is_none()
-                    || !interactive.add_dir.is_empty()
-                    || interactive.approval_policy.is_some()
-                    || interactive.web_search
+                if interactive.prompt.is_some() || !interactive.images.is_empty() {
+                    anyhow::bail!("`codex agents` does not accept an initial prompt or images");
+                }
+                if root_remote.is_some()
+                    && (interactive.oss
+                        || interactive.oss_provider.is_some()
+                        || !interactive.add_dir.is_empty()
+                        || interactive
+                            .config_overrides
+                            .parse_overrides()
+                            .map_err(anyhow::Error::msg)?
+                            .iter()
+                            .any(|(key, value)| {
+                                key == "sandbox_workspace_write.writable_roots"
+                                    || (key == "sandbox_workspace_write"
+                                        && value.get("writable_roots").is_some())
+                            }))
                 {
                     anyhow::bail!(
-                        "`codex agents` cannot attach to shared sessions with invocation-specific configuration overrides"
+                        "`codex agents` cannot apply local provider or additional-directory overrides to a remote server"
                     );
                 }
                 if is_workload_identity_selected() {
@@ -1128,10 +1134,6 @@ async fn cli_main(
                 }
                 interactive.agents_overview = true;
             }
-            prepend_config_flags(
-                &mut interactive.config_overrides,
-                root_config_overrides.clone(),
-            );
             let exit_info = run_interactive_tui(
                 interactive,
                 root_remote.clone(),
