@@ -100,7 +100,10 @@ impl PendingInputPreview {
 
             for steer in &self.pending_steers {
                 let wrapped = adaptive_wrap_lines(
-                    steer.lines().map(|line| Line::from(line.dim())),
+                    steer
+                        .lines()
+                        .take(PREVIEW_LINE_LIMIT + 1)
+                        .map(|line| Line::from(line.dim())),
                     RtOptions::new(width as usize)
                         .initial_indent(Line::from("  ↳ ".dim()))
                         .subsequent_indent(Line::from("    ")),
@@ -121,7 +124,10 @@ impl PendingInputPreview {
 
             for steer in &self.rejected_steers {
                 let wrapped = adaptive_wrap_lines(
-                    steer.lines().map(|line| Line::from(line.dim())),
+                    steer
+                        .lines()
+                        .take(PREVIEW_LINE_LIMIT + 1)
+                        .map(|line| Line::from(line.dim())),
                     RtOptions::new(width as usize)
                         .initial_indent(Line::from("  ↳ ".dim()))
                         .subsequent_indent(Line::from("    ")),
@@ -138,7 +144,10 @@ impl PendingInputPreview {
 
             for message in &self.queued_messages {
                 let wrapped = adaptive_wrap_lines(
-                    message.lines().map(|line| Line::from(line.dim().italic())),
+                    message
+                        .lines()
+                        .take(PREVIEW_LINE_LIMIT + 1)
+                        .map(|line| Line::from(line.dim().italic())),
                     RtOptions::new(width as usize)
                         .initial_indent(Line::from("  ↳ ".dim()))
                         .subsequent_indent(Line::from("    ")),
@@ -282,7 +291,7 @@ mod tests {
         let mut queue = PendingInputPreview::new();
         queue
             .queued_messages
-            .push("This is\na message\nwith many\nlines".to_string());
+            .push("This is\na message\nwith many\n\nlines".to_string());
         let width = 40;
         let height = queue.desired_height(width);
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
@@ -376,7 +385,7 @@ mod tests {
         let mut queue = PendingInputPreview::new();
         queue
             .pending_steers
-            .push("First line\nSecond line\nThird line\nFourth line".to_string());
+            .push("First line\nSecond line\nThird line\n\nFourth line".to_string());
         let width = 48;
         let height = queue.desired_height(width);
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
