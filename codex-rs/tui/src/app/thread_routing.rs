@@ -1448,6 +1448,16 @@ impl App {
     /// historical id now" and converted into closed picker entries instead of deleting them, so
     /// the stable traversal order remains intact for review and keyboard navigation.
     pub(super) async fn drain_active_thread_events(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        let frame_deadline = Instant::now() + tui::TARGET_FRAME_INTERVAL;
+        self.drain_active_thread_events_until(tui, frame_deadline)
+            .await
+    }
+
+    pub(super) async fn drain_active_thread_events_until(
+        &mut self,
+        tui: &mut tui::Tui,
+        frame_deadline: Instant,
+    ) -> Result<()> {
         let Some(mut rx) = self.active_thread_rx.take() else {
             return Ok(());
         };
@@ -1464,6 +1474,9 @@ impl App {
                     disconnected = true;
                     break;
                 }
+            }
+            if Instant::now() >= frame_deadline {
+                break;
             }
         }
 

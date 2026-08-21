@@ -49,6 +49,16 @@ impl App {
                 .active_thread_rx
                 .as_ref()
                 .is_some_and(|receiver| !receiver.is_empty())
+                && self
+                    .active_thread_id
+                    .and_then(|thread_id| self.thread_event_channels.get(&thread_id))
+                    .is_none_or(|channel| {
+                        // A bounded drain can leave ordinary notifications queued. Only protect
+                        // input for pending requests, or when their state cannot be inspected.
+                        channel.store.try_lock().map_or(/*default*/ true, |store| {
+                            store.side_parent_pending_status().is_some()
+                        })
+                    })
                 || self
                     .pending_primary_events
                     .iter()
@@ -651,12 +661,15 @@ See the Codex keymap documentation for supported actions and examples."
             Ok(exit_reason)
         } else {
             loop {
+                // Replay queues history and operations. A buffered closure must not switch
+                // widgets before those app events have been applied.
+                let has_pending_app_events = !app_event_rx.is_empty();
                 let initial_session_header_pending = waiting_for_initial_session_header
                     && app.primary_session_configured.is_some()
-                    && !app_event_rx.is_empty();
+                    && has_pending_app_events;
                 let block_terminal_input_for_pending_startup_events = initial_session_header_pending
                     || (pending_startup_draft.is_some() || app.startup_protected_input_boundary)
-                        && !app_event_rx.is_empty()
+                        && has_pending_app_events
                     || (!waiting_for_initial_session_configured
                         && app.has_queued_startup_protected_request());
                 let control = select! {
@@ -693,7 +706,7 @@ See the Codex keymap documentation for supported actions and examples."
                     }, if App::should_handle_active_thread_events(
                         waiting_for_initial_session_configured,
                         app.active_thread_rx.is_some()
-                    ) => {
+                    ) && !has_pending_app_events => {
                         if let Some(event) = active {
                             if let Err(err) = app.handle_active_thread_event(tui, &mut app_server, event).await {
                                 break Err(err);

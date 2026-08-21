@@ -756,6 +756,117 @@ async fn enqueue_thread_event_does_not_block_when_channel_full() -> Result<()> {
 }
 
 #[tokio::test]
+async fn active_thread_drain_yields_after_frame_deadline_without_dropping_events() -> Result<()> {
+    let mut app = make_test_app().await;
+    app.startup_protected_input_boundary = true;
+    let thread_id = ThreadId::new();
+    app.thread_event_channels
+        .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 2));
+    app.activate_thread_channel(thread_id).await;
+
+    let first_event = token_usage_notification(thread_id, "turn-1", Some(100));
+    let mut second_event = token_usage_notification(thread_id, "turn-1", Some(100));
+    if let ServerNotification::ThreadTokenUsageUpdated(notification) = &mut second_event {
+        notification.token_usage.total.output_tokens = 10;
+        notification.token_usage.total.total_tokens = 15;
+    }
+    for event in [first_event, second_event] {
+        app.enqueue_thread_notification(thread_id, event).await?;
+    }
+
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    app.drain_active_thread_events_until(&mut tui, Instant::now())
+        .await?;
+    assert_eq!(
+        app.chat_widget.token_usage(),
+        crate::token_usage::TokenUsage {
+            input_tokens: 4,
+            cached_input_tokens: 1,
+            output_tokens: 5,
+            reasoning_output_tokens: 0,
+            total_tokens: 10,
+        }
+    );
+    assert!(
+        app.active_thread_rx
+            .as_ref()
+            .is_some_and(|receiver| !receiver.is_empty()),
+        "an expired frame deadline should preserve queued notifications"
+    );
+    assert!(
+        !app.has_queued_startup_protected_request(),
+        "ordinary notifications left by the frame deadline must not block terminal input"
+    );
+
+    app.drain_active_thread_events(&mut tui).await?;
+    assert!(
+        app.active_thread_rx
+            .as_ref()
+            .is_some_and(tokio::sync::mpsc::Receiver::is_empty),
+        "the next foreground frame should deliver the preserved notification"
+    );
+    assert_eq!(
+        app.chat_widget.token_usage(),
+        crate::token_usage::TokenUsage {
+            input_tokens: 4,
+            cached_input_tokens: 1,
+            output_tokens: 10,
+            reasoning_output_tokens: 0,
+            total_tokens: 15,
+        }
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn selected_side_thread_close_is_handled_by_foreground_event_owner() -> Result<()> {
+    let mut app = make_test_app().await;
+    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    let primary = app_server.start_thread(&app.config).await?;
+    let primary_thread_id = primary.session.thread_id;
+    app.enqueue_primary_thread_session(primary.session, primary.turns)
+        .await?;
+
+    let side_thread_id = ThreadId::new();
+    let side_channel = ThreadEventChannel::new(/*capacity*/ 1);
+    side_channel.store.lock().await.set_session(
+        test_thread_session(side_thread_id, app.config.cwd.to_path_buf()),
+        Vec::new(),
+    );
+    side_channel
+        .sender
+        .try_send(ThreadBufferedEvent::Notification(Box::new(
+            thread_closed_notification(side_thread_id),
+        )))
+        .expect("closed side-thread notification should fit in its saved receiver");
+    app.thread_event_channels
+        .insert(side_thread_id, side_channel);
+    app.side_threads
+        .insert(side_thread_id, SideThreadState::new(primary_thread_id));
+
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    app.select_agent_thread(&mut tui, &mut app_server, side_thread_id)
+        .await?;
+    assert_eq!(app.active_thread_id, Some(side_thread_id));
+    let event = app
+        .active_thread_rx
+        .as_mut()
+        .expect("selected side thread should retain its receiver")
+        .try_recv()
+        .expect("thread closure should remain queued for the foreground loop");
+    app.handle_active_thread_event(&mut tui, &mut app_server, event)
+        .await?;
+
+    assert_eq!(app.active_thread_id, Some(primary_thread_id));
+    assert!(!app.side_threads.contains_key(&side_thread_id));
+    assert!(!app.thread_event_channels.contains_key(&side_thread_id));
+    assert!(app.active_thread_rx.is_some());
+    app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn active_history_batch_is_delivered_without_replay_buffering() -> Result<()> {
     let mut app = make_test_app().await;
     let thread_id = ThreadId::new();
