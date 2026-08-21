@@ -7,6 +7,7 @@ use crate::session::session::Session;
 use codex_diagnostics::Gauge;
 use codex_diagnostics::GaugeGuard;
 use codex_exec_server::SelectedCapabilityRootsStatus;
+use codex_extension_api::ConversationHistorySnapshot;
 use codex_extension_api::ThreadIdleCause;
 use codex_features::Feature;
 use codex_history::RolloutItem;
@@ -164,6 +165,35 @@ impl GuardianRootMessage {
             .map(|line| format!("{role}: {line}\n"))
             .collect()
     }
+}
+
+/// Authorization state that changes on history rewrites or genuine user messages.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GuardianAuthorizationVersion {
+    /// Conversation-history rewrite generation.
+    pub history_version: u64,
+    /// Number of genuine user messages in the conversation snapshot.
+    pub user_message_count: usize,
+}
+
+impl GuardianAuthorizationVersion {
+    /// Captures history replacement and genuine user input from the same snapshot.
+    pub fn from_history(history: &dyn ConversationHistorySnapshot) -> Self {
+        Self {
+            history_version: history.history_version(),
+            user_message_count: history
+                .items()
+                .filter(|item| item.is_user_message())
+                .count(),
+        }
+    }
+}
+
+/// Bounded root conversation and authorization state from one history snapshot.
+#[derive(Debug, Eq, PartialEq)]
+pub struct GuardianRootSnapshot {
+    pub authorization_version: GuardianAuthorizationVersion,
+    pub messages: Vec<GuardianRootMessage>,
 }
 
 pub struct CodexThread {
@@ -722,8 +752,8 @@ impl CodexThread {
         self.session.multi_agent_version()
     }
 
-    /// Returns bounded root conversation evidence only for a MultiAgent V2 worker's Guardian review.
-    pub async fn guardian_root_conversation(&self) -> Option<Vec<GuardianRootMessage>> {
+    /// Returns bounded root conversation evidence and its authorization version atomically.
+    pub async fn guardian_root_snapshot(&self) -> Option<GuardianRootSnapshot> {
         self.session
             .services
             .agent_control

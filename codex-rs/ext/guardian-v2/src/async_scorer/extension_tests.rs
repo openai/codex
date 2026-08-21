@@ -225,6 +225,10 @@ impl ExtensionMetrics for RecordingMetrics {
 struct TestConversationHistory(Vec<ResponseItem>);
 
 impl ConversationHistorySnapshot for TestConversationHistory {
+    fn history_version(&self) -> u64 {
+        0
+    }
+
     fn items(&self) -> Box<dyn Iterator<Item = &ResponseItem> + Send + '_> {
         Box::new(self.0.iter())
     }

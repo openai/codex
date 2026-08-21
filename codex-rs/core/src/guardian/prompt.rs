@@ -142,7 +142,8 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
         .services
         .agent_control
         .root_user_authorization(session.thread_id)
-        .await;
+        .await
+        .map(|snapshot| snapshot.messages);
     let transcript_entries = collect_guardian_transcript_entries(history.raw_items());
     let transcript_cursor = GuardianTranscriptCursor {
         parent_history_version: history.history_version(),

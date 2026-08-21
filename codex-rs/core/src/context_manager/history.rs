@@ -66,9 +66,14 @@ pub(crate) struct ContextManager {
 
 struct SharedConversationHistory {
     items: Arc<Vec<ResponseItemEnvelope>>,
+    history_version: u64,
 }
 
 impl ConversationHistorySnapshot for SharedConversationHistory {
+    fn history_version(&self) -> u64 {
+        self.history_version
+    }
+
     fn items(&self) -> Box<dyn Iterator<Item = &ResponseItem> + Send + '_> {
         Box::new(
             self.items
@@ -101,6 +106,7 @@ impl ContextManager {
     pub(crate) fn conversation_history_snapshot(&self) -> Arc<dyn ConversationHistorySnapshot> {
         Arc::new(SharedConversationHistory {
             items: Arc::clone(&self.items),
+            history_version: self.history_version,
         })
     }
 

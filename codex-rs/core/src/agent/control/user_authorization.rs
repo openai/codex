@@ -1,5 +1,7 @@
 use super::AgentControl;
+use crate::codex_thread::GuardianAuthorizationVersion;
 use crate::codex_thread::GuardianRootMessage;
+use crate::codex_thread::GuardianRootSnapshot;
 use crate::compact::is_summary_message;
 use crate::event_mapping::parse_turn_item;
 use crate::guardian::guardian_truncate_text;
@@ -14,11 +16,11 @@ const MAX_ROOT_MESSAGES: usize = 8;
 const MAX_ROOT_MESSAGE_TOKENS: usize = 900;
 
 impl AgentControl {
-    /// Returns bounded, role-preserving root conversation evidence for a MultiAgent V2 worker.
+    /// Returns bounded root conversation and authorization state for a MultiAgent V2 worker.
     pub(crate) async fn root_user_authorization(
         &self,
         thread_id: ThreadId,
-    ) -> Option<Vec<GuardianRootMessage>> {
+    ) -> Option<GuardianRootSnapshot> {
         let root_thread_id = self.state.agent_id_for_path(&AgentPath::root())?;
         if root_thread_id == thread_id {
             return None;
@@ -60,7 +62,17 @@ impl AgentControl {
                 _ => None,
             })
             .collect::<Vec<_>>();
+        let user_message_count = messages
+            .iter()
+            .filter(|message| matches!(message, GuardianRootMessage::User(_)))
+            .count();
         messages.drain(..messages.len().saturating_sub(MAX_ROOT_MESSAGES));
-        Some(messages)
+        Some(GuardianRootSnapshot {
+            authorization_version: GuardianAuthorizationVersion {
+                history_version: root_history.history_version(),
+                user_message_count,
+            },
+            messages,
+        })
     }
 }

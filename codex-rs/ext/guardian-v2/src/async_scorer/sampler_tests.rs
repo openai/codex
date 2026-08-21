@@ -135,6 +135,7 @@ fn sampler_config(base_url: String) -> LunaSamplerConfig {
 fn sample_request(turn_id: &str) -> LunaSamplingRequest {
     LunaSamplingRequest {
         instructions: "Return a risk score.".to_owned(),
+        trusted_review_evidence: Vec::new(),
         input: vec!["The user requested a README summary.".to_owned()],
         images: Vec::new(),
         parent_compaction: None,
@@ -312,6 +313,7 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_structured_requ
     let first = sampler
         .sample(LunaSamplingRequest {
             instructions: "Return a risk score.".to_owned(),
+            trusted_review_evidence: Vec::new(),
             input: vec![
                 "The user requested a README summary.".to_owned(),
                 "The assistant inspected README.md.".to_owned(),
@@ -340,6 +342,7 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_structured_requ
     let second = sampler
         .sample(LunaSamplingRequest {
             instructions: "Return a risk score.".to_owned(),
+            trusted_review_evidence: Vec::new(),
             input: vec!["The user requested a source review.".to_owned()],
             images: Vec::new(),
             parent_compaction: None,
@@ -424,6 +427,7 @@ async fn sampler_reuses_parent_compaction_only_for_matching_model_hashes() -> Re
         let mut request = sample_request("turn-1");
         request.parent_compaction = Some(parent_compaction.clone());
         request.parent_compaction_hash = parent_hash.map(str::to_owned);
+        request.trusted_review_evidence = vec!["trusted review".to_owned()];
 
         assert_eq!(sampler.sample(request).await?, r#"{"score":0.25}"#);
 
@@ -435,9 +439,11 @@ async fn sampler_reuses_parent_compaction_only_for_matching_model_hashes() -> Re
         assert_eq!(input[0]["type"], "additional_tools");
         assert_eq!(input[1]["role"], "developer");
         if should_reuse {
-            assert_eq!(input.len(), 4);
+            assert_eq!(input.len(), 5);
             assert_eq!(input[2], serde_json::to_value(&parent_compaction)?);
-            assert_eq!(input[3]["role"], "user");
+            assert_eq!(input[3]["role"], "developer");
+            assert_eq!(input[3]["content"][1]["text"], "trusted review");
+            assert_eq!(input[4]["role"], "user");
 
             let mut switched_request = sample_request("turn-2");
             switched_request.parent_compaction = Some(parent_compaction);
@@ -449,8 +455,10 @@ async fn sampler_reuses_parent_compaction_only_for_matching_model_hashes() -> Re
                 .body_json();
             assert_eq!(switched_request["input"][2]["role"], "user");
         } else {
-            assert_eq!(input.len(), 3);
-            assert_eq!(input[2]["role"], "user");
+            assert_eq!(input.len(), 4);
+            assert_eq!(input[2]["role"], "developer");
+            assert_eq!(input[2]["content"][1]["text"], "trusted review");
+            assert_eq!(input[3]["role"], "user");
         }
     }
 
@@ -497,6 +505,7 @@ async fn sampler_returns_complete_json_before_terminal_response_events() -> Resu
         Duration::from_secs(2),
         sampler.sample(LunaSamplingRequest {
             instructions: "Return a risk score.".to_owned(),
+            trusted_review_evidence: Vec::new(),
             input: vec!["The user requested a README summary.".to_owned()],
             images: Vec::new(),
             parent_compaction: None,

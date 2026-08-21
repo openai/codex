@@ -285,7 +285,10 @@ async fn guardian_subagent_review_preserves_late_root_user_authorization() -> Re
     })
     .await;
     assert_eq!(
-        worker_thread.guardian_root_conversation().await,
+        worker_thread
+            .guardian_root_snapshot()
+            .await
+            .map(|snapshot| snapshot.messages),
         Some(vec![
             GuardianRootMessage::User(INITIAL_PROMPT.to_string()),
             GuardianRootMessage::Assistant(root_assistant_reply),

@@ -134,6 +134,12 @@ fn conversation_history_snapshot_shares_response_items_until_history_changes() {
         raw_items(&history),
         vec![assistant_msg("original"), assistant_msg("later")],
     );
+
+    history.replace(vec![assistant_msg("replacement")]);
+    assert_ne!(
+        snapshot.history_version(),
+        history.conversation_history_snapshot().history_version()
+    );
 }
 
 #[test]

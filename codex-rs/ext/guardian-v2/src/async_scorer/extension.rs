@@ -7,9 +7,12 @@ use std::time::Duration;
 use std::time::Instant;
 use std::time::SystemTime;
 
+use codex_core::GuardianAuthorizationVersion;
 use codex_core::GuardianRootMessage;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
+use codex_core::context::ContextualUserFragment;
+use codex_core::context::GuardianReviewEvidence;
 use codex_core::context::NodeReplReviewEvidence;
 use codex_extension_api::ApprovalReviewContributor;
 use codex_extension_api::ExtensionData;
@@ -328,6 +331,7 @@ impl ThreadLifecycleContributor<Config> for GuardianV2Extension {
                         metrics: input.extension_metrics.clone(),
                         ..Default::default()
                     });
+                    input.thread_store.insert(GuardianReviewEvidence::default());
                     input.thread_store.insert(GuardianV2Enabled);
                 }
                 Err(error) => self.event_sink.emit_warning(ExtensionWarning {
@@ -573,6 +577,11 @@ impl GuardianV2Extension {
             .as_ref()
             .and_then(|model| model.auto_review_model_override.clone());
         let conversation_history = Arc::clone(&input.conversation_history);
+        // Snapshot before spawning so a delayed sample cannot see later reviews.
+        let sync_reviews = input
+            .thread_store
+            .get_or_init(GuardianReviewEvidence::default)
+            .snapshot();
         let node_repl_images = if guardian_config.transcript.include_images {
             input
                 .thread_store
@@ -584,7 +593,13 @@ impl GuardianV2Extension {
         };
 
         tokio::spawn(async move {
-            let root_conversation = thread.guardian_root_conversation().await;
+            let root_snapshot = thread.guardian_root_snapshot().await;
+            let root_authorization_version = root_snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.authorization_version);
+            let root_conversation = root_snapshot.map(|snapshot| snapshot.messages);
+            let authorization_version =
+                GuardianAuthorizationVersion::from_history(conversation_history.as_ref());
             let transcript = guardian_config
                 .transcript
                 .build(conversation_history.items());
@@ -627,8 +642,16 @@ impl GuardianV2Extension {
             }
             classification_input.push(">>> TRANSCRIPT START\n".to_owned());
             classification_input.extend(transcript);
+            classification_input.push(">>> TRANSCRIPT END\n\n".to_owned());
+            let trusted_review_evidence = sync_reviews
+                .iter()
+                .filter(|review| {
+                    review.authorization_version == authorization_version
+                        && review.root_authorization_version == root_authorization_version
+                })
+                .map(ContextualUserFragment::render)
+                .collect();
             classification_input.extend([
-                ">>> TRANSCRIPT END\n\n".to_owned(),
                 "The Codex agent has requested the following action:\n".to_owned(),
                 ">>> APPROVAL REQUEST START\n".to_owned(),
                 "Planned action JSON:\n".to_owned(),
@@ -665,6 +688,7 @@ impl GuardianV2Extension {
                 let output = match sampler
                     .sample(LunaSamplingRequest {
                         instructions,
+                        trusted_review_evidence,
                         input: classification_input,
                         images,
                         parent_compaction,
