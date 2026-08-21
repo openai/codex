@@ -1139,21 +1139,39 @@ async fn make_rmcp_client(
                 .http_client_for_server(server.config(), resolved_environment.as_ref())
                 .map_err(|error| StartupOutcomeError::from(anyhow!(error)))?;
             let http_client = maybe_with_openai_docs_source_attribution(&url, http_client);
-            let (http_client, resolved_bearer_token) =
-                if !is_local_environment && let Some(env_var) = bearer_token_env_var.as_ref() {
-                    (
-                        Arc::new(ExecutorEnvironmentHttpClient {
-                            bearer_token_env_var: env_var.clone(),
-                            http_client,
-                        }) as Arc<dyn codex_exec_server::HttpClient>,
-                        Some(StreamableHttpBearerToken::ProvidedByHttpClient),
-                    )
-                } else {
-                    let token = resolve_bearer_token(server_name, bearer_token_env_var.as_deref())
-                        .map_err(StartupOutcomeError::from)?
-                        .map(StreamableHttpBearerToken::Resolved);
-                    (http_client, token)
+            let executor_resolves_bearer_token = if !is_local_environment
+                && bearer_token_env_var.is_some()
+            {
+                let Some(environment) = resolved_environment.as_ref() else {
+                    return Err(StartupOutcomeError::from(anyhow!(
+                        "non-local HTTP MCP server `{server_name}` did not resolve an execution environment"
+                    )));
                 };
+                environment
+                    .info()
+                    .await
+                    .map_err(|error| StartupOutcomeError::from(anyhow!(error)))?
+                    .capabilities
+                    .http_header_env_vars
+            } else {
+                false
+            };
+            let (http_client, resolved_bearer_token) = if executor_resolves_bearer_token
+                && let Some(env_var) = bearer_token_env_var.as_ref()
+            {
+                (
+                    Arc::new(ExecutorEnvironmentHttpClient {
+                        bearer_token_env_var: env_var.clone(),
+                        http_client,
+                    }) as Arc<dyn codex_exec_server::HttpClient>,
+                    Some(StreamableHttpBearerToken::ProvidedByHttpClient),
+                )
+            } else {
+                let token = resolve_bearer_token(server_name, bearer_token_env_var.as_deref())
+                    .map_err(StartupOutcomeError::from)?
+                    .map(StreamableHttpBearerToken::Resolved);
+                (http_client, token)
+            };
             let redirect_mode = if server.is_agent_plugin() {
                 StreamableHttpRedirectMode::AgentPluginV1
             } else {

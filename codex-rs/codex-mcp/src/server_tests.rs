@@ -18,6 +18,17 @@ fn remote_http_connections_track_host_headers_but_not_executor_bearer_tokens() {
         vec![("PATH".to_string(), std::env::var_os("PATH"))],
     );
 
+    let remote_host_bearer: McpServerConfig = serde_json::from_value(serde_json::json!({
+        "url": "https://example.com/mcp",
+        "environment_id": "executor-1",
+        "bearer_token_env_var": "PATH",
+    }))
+    .expect("host-resolved remote MCP configuration should deserialize");
+    assert_eq!(
+        referenced_environment_variables(&remote_host_bearer),
+        vec![("PATH".to_string(), std::env::var_os("PATH"))],
+    );
+
     config.environment_id = DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string();
     assert_eq!(
         referenced_environment_variables(&config),

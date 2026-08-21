@@ -68,20 +68,24 @@ impl Environment {
         &self,
         cwd: PathUri,
     ) -> Result<Vec<(String, McpServerConfig)>, ExecServerError> {
-        let response = tokio::time::timeout(std::time::Duration::from_secs(10), async {
-            if !self.info().await?.capabilities.environment_config_read {
-                return Ok(None);
-            }
-            self.read_environment_config(EnvironmentConfigReadParams {
-                cwd,
-                config_paths: vec![vec!["mcp_servers".to_string()]],
-                requirements_paths: vec![vec!["mcp_servers".to_string()]],
+        let (response, http_header_env_vars) =
+            tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                let capabilities = self.info().await?.capabilities;
+                if !capabilities.environment_config_read {
+                    return Ok((None, false));
+                }
+                self.read_environment_config(EnvironmentConfigReadParams {
+                    cwd,
+                    config_paths: vec![vec!["mcp_servers".to_string()]],
+                    requirements_paths: vec![vec!["mcp_servers".to_string()]],
+                })
+                .await
+                .map(|response| (Some(response), capabilities.http_header_env_vars))
             })
             .await
-            .map(Some)
-        })
-        .await
-        .map_err(|_| ExecServerError::Protocol("executor MCP discovery timed out".to_string()))??;
+            .map_err(|_| {
+                ExecServerError::Protocol("executor MCP discovery timed out".to_string())
+            })??;
         let Some(response) = response else {
             return Ok(Vec::new());
         };
@@ -107,7 +111,10 @@ impl Environment {
             .cloned()
             .unwrap_or_else(|| toml::Value::Table(toml::map::Map::new()));
         if let Some(servers) = servers.as_table_mut() {
-            servers.retain(|_, server| server.get("url").is_some());
+            servers.retain(|_, server| {
+                server.get("url").is_some()
+                    && (http_header_env_vars || server.get("bearer_token_env_var").is_none())
+            });
         }
         let servers = servers
             .try_into::<HashMap<String, McpServerConfig>>()

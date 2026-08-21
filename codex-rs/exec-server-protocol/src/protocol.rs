@@ -118,6 +118,9 @@ pub struct EnvironmentCapabilities {
     /// Whether this executor supports the `environmentConfig/read` request.
     #[serde(default)]
     pub environment_config_read: bool,
+    /// Whether HTTP headers can resolve values from the executor environment.
+    #[serde(default)]
+    pub http_header_env_vars: bool,
     /// Whether filesystem streams can use the requested platform sandbox.
     #[serde(default)]
     pub sandboxed_file_streaming: bool,
@@ -185,6 +188,7 @@ impl EnvironmentInfo {
                 network_proxy_launch: true,
                 capability_discovery_sandbox: true,
                 environment_config_read: true,
+                http_header_env_vars: true,
                 sandboxed_file_streaming: true,
                 shell_snapshot_v2: false,
             },
@@ -963,6 +967,7 @@ mod tests {
                 network_proxy_launch: true,
                 capability_discovery_sandbox: true,
                 environment_config_read: false,
+                http_header_env_vars: false,
                 sandboxed_file_streaming: false,
                 shell_snapshot_v2: false,
             }
@@ -979,6 +984,7 @@ mod tests {
                 "networkProxyLaunch": false,
                 "capabilityDiscoverySandbox": false,
                 "environmentConfigRead": false,
+                "httpHeaderEnvVars": false,
                 "sandboxedFileStreaming": false,
                 "shellSnapshotV2": false,
             },
