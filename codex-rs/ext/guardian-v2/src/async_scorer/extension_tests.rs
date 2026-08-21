@@ -1604,7 +1604,7 @@ async fn contributor_uses_catalog_policy_without_a_configured_override() -> Resu
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn contributor_bounds_configured_policy_in_luna_developer_instructions() -> Result<()> {
+async fn contributor_preserves_uncapped_classifier_instructions() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let guardian_policy = format!(
@@ -1615,6 +1615,39 @@ async fn contributor_bounds_configured_policy_in_luna_developer_instructions() -
         Vec::new(),
         r#"{"path":"README.md"}"#,
         Some(&guardian_policy),
+    )
+    .await?;
+
+    assert_eq!(
+        request["input"][1],
+        json!({
+            "type": "message",
+            "role": "developer",
+            "content": [{
+                "type": "input_text",
+                "text": crate::async_scorer::config::DEFAULT_CLASSIFIER_INSTRUCTIONS
+                    .replace("{{ tenant_policy_config }}", &guardian_policy),
+            }],
+        })
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn contributor_bounds_configured_policy_in_luna_developer_instructions() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let guardian_policy = format!(
+        "Reject unsafe uploads.\n{}\nRequire explicit approval.",
+        "é".repeat(20_000)
+    );
+    let (request, _test, _registry) = sample_configured_conversation_history(
+        Vec::new(),
+        r#"{"path":"README.md"}"#,
+        Some(&guardian_policy),
+        "[features.guardianv2]\nenabled = true\nmax_classifier_instruction_tokens = 10000\n",
+        /*model_defaults*/ None,
     )
     .await?;
     let instructions = request["input"][1]["content"][0]["text"]

@@ -66,7 +66,7 @@ fn evaluated_configuration_preserves_rendered_prompt_and_gate() {
     .unwrap();
     assert_eq!(config.review_threshold, 0.5);
     assert_eq!(config.reasoning_effort, ReasoningEffort::Low);
-    assert_eq!(config.max_classifier_instruction_tokens, 30_000);
+    assert_eq!(config.max_classifier_instruction_tokens, Some(30_000));
     assert_eq!(
         config.classifier_instructions,
         DEFAULT_CLASSIFIER_INSTRUCTIONS
@@ -150,7 +150,10 @@ fn model_prompt_and_explicit_threshold_precedence_are_preserved() {
 
 #[test]
 fn model_runtime_settings_preserve_local_overrides() {
+    let prompt = "legacy instructions ".repeat(3_000);
     let defaults = GuardianV2ModelConfig {
+        classifier_instructions: Some(prompt.clone()),
+        max_classifier_instruction_tokens: Some(256),
         max_tool_call_lag: Some(1),
         reuse_parent_compaction: Some(false),
         transcript: Some(GuardianV2TranscriptModelConfig {
@@ -165,14 +168,16 @@ fn model_runtime_settings_preserve_local_overrides() {
         .unwrap();
     assert_eq!(
         (
+            inherited.max_classifier_instruction_tokens,
             inherited.max_tool_call_lag,
             inherited.reuse_parent_compaction,
             inherited.transcript.include_images,
         ),
-        (1, false, true)
+        (Some(256), 1, false, true)
     );
 
     let overridden = GuardianV2Config::from_overrides(GuardianV2ConfigToml {
+        max_classifier_instruction_tokens: Some(512),
         max_tool_call_lag: Some(4),
         reuse_parent_compaction: Some(true),
         transcript: Some(GuardianV2TranscriptConfigToml {
@@ -186,10 +191,23 @@ fn model_runtime_settings_preserve_local_overrides() {
     .unwrap();
     assert_eq!(
         (
+            overridden.max_classifier_instruction_tokens,
             overridden.max_tool_call_lag,
             overridden.reuse_parent_compaction,
             overridden.transcript.include_images,
         ),
-        (4, true, false)
+        (Some(512), 4, true, false)
+    );
+
+    let uncapped_defaults = GuardianV2ModelConfig {
+        max_classifier_instruction_tokens: None,
+        ..defaults
+    };
+    let uncapped = inherited
+        .with_model_defaults(Some(&uncapped_defaults))
+        .unwrap();
+    assert_eq!(
+        uncapped.render_classifier_instructions("Tenant policy."),
+        format!("{prompt}\n\n# Security Policy\nTenant policy.")
     );
 }
