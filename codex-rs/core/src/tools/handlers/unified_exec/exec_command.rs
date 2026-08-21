@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::exec_policy::prompt_is_rejected_by_policy;
 use crate::function_tool::FunctionCallError;
 use crate::maybe_emit_implicit_skill_invocation;
 use crate::tools::context::ExecCommandToolOutput;
@@ -279,10 +280,11 @@ impl ExecCommandHandler {
             .sandbox_permissions
             .requests_sandbox_override()
             && !effective_additional_permissions.permissions_preapproved
-            && !matches!(
+            && prompt_is_rejected_by_policy(
                 context.step_context.turn.approval_policy(),
-                codex_protocol::protocol::AskForApproval::OnRequest
+                /*prompt_is_rule*/ false,
             )
+            .is_some()
         {
             let approval_policy = context.step_context.turn.approval_policy();
             manager.release_process_id(process_id).await;

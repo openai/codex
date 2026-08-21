@@ -1075,6 +1075,34 @@ fn scenarios() -> Vec<ScenarioSpec> {
             },
         },
         ScenarioSpec {
+            name: "simple_command_escalation_granular_sandbox_enabled_requires_approval",
+            approval_policy: Granular(GranularApprovalConfig {
+                sandbox_approval: true,
+                rules: true,
+                skill_approval: true,
+                request_permissions: true,
+                mcp_elicitations: true,
+            }),
+            sandbox_policy: workspace_write(false),
+            action: ActionKind::RunCommand {
+                command: "echo known-safe-escalation",
+            },
+            sandbox_permissions: SandboxPermissions::RequireEscalated,
+            features: vec![],
+            model_override: Some("gpt-5.2"),
+            outcome: Outcome::ExecApprovalWithAmendment {
+                decision: ReviewDecision::denied("rejected by user"),
+                expected_reason: None,
+                expected_execpolicy_amendment: Some(ExpectedExecPolicyAmendment::Prefix(&[
+                    "echo",
+                    "known-safe-escalation",
+                ])),
+            },
+            expectation: Expectation::CommandFailure {
+                output_contains: "rejected by user",
+            },
+        },
+        ScenarioSpec {
             name: "simple_command_escalation_granular_sandbox_disabled_rejects",
             approval_policy: Granular(GranularApprovalConfig {
                 sandbox_approval: false,
