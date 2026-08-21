@@ -234,6 +234,25 @@ impl CodexThread {
         self.io.session_loop_termination.clone().await;
     }
 
+    pub(crate) async fn emit_thread_ready_lifecycle(&self) {
+        let config = self.config().await;
+        for contributor in self
+            .session
+            .services
+            .extensions
+            .thread_lifecycle_contributors()
+        {
+            contributor
+                .on_thread_ready(codex_extension_api::ThreadReadyInput {
+                    config: config.as_ref(),
+                    session_source: &self.session_source,
+                    session_store: &self.session.services.session_extension_data,
+                    thread_store: &self.session.services.thread_extension_data,
+                })
+                .await;
+        }
+    }
+
     pub(crate) async fn emit_thread_resume_lifecycle(&self) {
         for contributor in self
             .session

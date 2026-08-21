@@ -34,6 +34,18 @@ pub struct ThreadStartInput<'a, C> {
     pub thread_store: &'a ExtensionData,
 }
 
+/// Input supplied after the host has registered a fully initialized thread.
+pub struct ThreadReadyInput<'a, C> {
+    /// Host configuration visible after thread registration.
+    pub config: &'a C,
+    /// Source that created the session for this thread.
+    pub session_source: &'a SessionSource,
+    /// Store scoped to the host session runtime.
+    pub session_store: &'a ExtensionData,
+    /// Store scoped to this thread runtime.
+    pub thread_store: &'a ExtensionData,
+}
+
 /// Input supplied when the host resumes an existing thread.
 pub struct ThreadResumeInput<'a> {
     /// Store scoped to the host session runtime.

@@ -601,6 +601,9 @@
             "guardian_enhanced_node_repl_transcripts": {
               "type": "boolean"
             },
+            "guardian_ext": {
+              "type": "boolean"
+            },
             "guardian_node_repl_transcript_images": {
               "type": "boolean"
             },
@@ -5560,6 +5563,9 @@
           "type": "boolean"
         },
         "guardian_enhanced_node_repl_transcripts": {
+          "type": "boolean"
+        },
+        "guardian_ext": {
           "type": "boolean"
         },
         "guardian_node_repl_transcript_images": {
