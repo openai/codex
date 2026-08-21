@@ -126,6 +126,7 @@ async fn exec_command_with_tty(
     let context = UnifiedExecContext::new(
         Arc::clone(session),
         crate::session::step_context::StepContext::for_test(Arc::clone(turn)),
+        tokio_util::sync::CancellationToken::new(),
         "call".to_string(),
     );
     let started_at = Instant::now();

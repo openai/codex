@@ -2575,6 +2575,7 @@ impl Session {
             };
             let approval_context = ApprovalContext {
                 review_context: review_context.clone(),
+                cancellation_token: Some(cancellation_token.clone()),
                 call_id,
                 tool_name: ToolName::plain("request_permissions"),
                 strict_auto_review: false,
@@ -2588,7 +2589,6 @@ impl Session {
                 decision = self.request_guardian_approval(
                     action,
                     &approval_context,
-                    Some(cancellation_token.clone()),
                 ) => decision,
             };
             let response = match decision {

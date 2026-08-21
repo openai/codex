@@ -793,7 +793,7 @@ pub(crate) fn spawn_approval_request_review(
     context: impl Into<GuardianReviewContext>,
     review_id: String,
     request: GuardianApprovalRequest,
-    retry_reason: Option<String>,
+    reasons: ApprovalRequestReasons,
     options: GuardianReviewOptions,
 ) -> oneshot::Receiver<ReviewDecision> {
     let context = context.into();
@@ -802,13 +802,8 @@ pub(crate) fn spawn_approval_request_review(
     let spawn_result = std::thread::Builder::new()
         .name("codex-approval-review".to_string())
         .spawn(move || {
-            let decision = runtime.block_on(review_approval_request_with_cancel(
-                &session,
-                context,
-                review_id,
-                request,
-                retry_reason,
-                options,
+            let decision = runtime.block_on(run_guardian_review(
+                session, context, review_id, request, reasons, options,
             ));
             let _ = tx.send(decision);
         });

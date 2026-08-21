@@ -55,6 +55,7 @@ async fn streaming_output_harness() -> anyhow::Result<StreamingOutputHarness> {
     let context = UnifiedExecContext::new(
         session,
         crate::session::step_context::StepContext::for_test(turn),
+        tokio_util::sync::CancellationToken::new(),
         "streaming-output-test".to_string(),
     );
     let transcript = Arc::new(tokio::sync::Mutex::new(HeadTailBuffer::default()));

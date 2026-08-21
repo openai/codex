@@ -349,6 +349,7 @@ pub(crate) trait Sandboxable {
 pub(crate) struct ToolCtx {
     pub session: Arc<Session>,
     pub step_context: Arc<StepContext>,
+    pub cancellation_token: CancellationToken,
     pub call_id: String,
     pub tool_name: ToolName,
 }
