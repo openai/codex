@@ -59,7 +59,7 @@ async fn installed_extension_exposes_and_invokes_history_notes_tools() -> TestRe
         .await?;
     config.model_provider.base_url = Some(format!("{}/backend-api/codex", server.uri()));
     config.token_budget = Some(TokenBudgetConfig {
-        use_history_notes_history: true,
+        use_history_notes_extension: true,
         ..TokenBudgetConfig::default()
     });
 
@@ -173,7 +173,7 @@ async fn history_notes_require_an_openai_provider_and_codex_backend_auth() -> Te
         .build()
         .await?;
     config.token_budget = Some(TokenBudgetConfig {
-        use_history_notes_history: true,
+        use_history_notes_extension: true,
         ..TokenBudgetConfig::default()
     });
 

@@ -33,7 +33,7 @@ async fn app_server_registers_history_and_notes_tools_for_token_budget_threads()
         .with_provider_base_url(&format!("{}/backend-api/codex", server.uri()))
         .with_provider_config("supports_websockets = false\nrequires_openai_auth = true")
         .with_extra_config(
-            "[features.token_budget]\nenabled = true\nuse_history_notes_history = true",
+            "[features.token_budget]\nenabled = true\nuse_history_notes_extension = true",
         )
         .write(codex_home.path())?;
     write_chatgpt_auth(

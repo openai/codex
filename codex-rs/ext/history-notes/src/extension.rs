@@ -35,7 +35,7 @@ impl HistoryNotesExtension {
         if config
             .token_budget
             .as_ref()
-            .is_some_and(|token_budget| token_budget.use_history_notes_history)
+            .is_some_and(|token_budget| token_budget.use_history_notes_extension)
             && config.model_provider.is_openai()
             && self.auth_manager.current_auth_uses_codex_backend()
         {

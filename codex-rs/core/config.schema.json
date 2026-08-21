@@ -3378,7 +3378,7 @@
           "minimum": 1.0,
           "type": "integer"
         },
-        "use_history_notes_history": {
+        "use_history_notes_extension": {
           "description": "Whether to expose the built-in history and notes extension.",
           "type": "boolean"
         }
