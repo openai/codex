@@ -790,6 +790,7 @@ mod tests {
         let mapped = map_requirements_toml_to_api(ConfigRequirementsToml {
             computer_use: Some(ComputerUseRequirementsToml {
                 allow_locked_computer_use: Some(false),
+                ..ComputerUseRequirementsToml::default()
             }),
             ..ConfigRequirementsToml::default()
         });

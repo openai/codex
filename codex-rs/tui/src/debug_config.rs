@@ -953,6 +953,7 @@ interrupt_message = false
             allow_managed_hooks_only: Some(true),
             allow_appshots: Some(false),
             allow_remote_control: Some(false),
+            allow_browser_and_computer_use: None,
             computer_use: None,
             browser_use: None,
             in_app_browser: None,

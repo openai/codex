@@ -610,6 +610,114 @@ fn network_maps_use_regular_toml_merge() {
 }
 
 #[test]
+fn browser_and_computer_use_requirements_use_regular_toml_merge() {
+    let composed = compose(vec![
+        layer(
+            "req_low",
+            "Low",
+            r#"
+allow_browser_and_computer_use = true
+
+[browser_use]
+allow_history_access = true
+allow_global_persistent_approval = true
+
+[browser_use.default_origin_policy]
+access = "allow"
+access_approval_lifetime = "thread"
+
+[browser_use.origins."https://example.com"]
+access = "deny"
+downloads = "allow"
+
+[computer_use]
+allow_locked_computer_use = true
+default_app_access = "allow"
+
+[computer_use.macos.bundle_ids]
+"com.apple.Safari" = "deny"
+
+[computer_use.windows.aumids]
+"Microsoft.Paint_8wekyb3d8bbwe!App" = "allow"
+"#,
+        ),
+        layer(
+            "req_high",
+            "High",
+            r#"
+allow_browser_and_computer_use = false
+
+[browser_use]
+allow_history_access = false
+allow_global_persistent_approval = false
+
+[browser_use.default_origin_policy]
+persistent_approval = false
+access_approval_lifetime = "turn"
+
+[browser_use.origins."https://example.com"]
+downloads = "deny"
+uploads = "deny"
+
+[computer_use]
+allow_persistent_approval = false
+
+[computer_use.macos.bundle_ids]
+"com.apple.Safari" = "allow"
+
+[[computer_use.windows.exes]]
+publisher_name = "CN=Google LLC"
+product_name = "Google Chrome"
+binary_name = "chrome.exe"
+access = "deny"
+"#,
+        ),
+    ])
+    .expect("compose requirements")
+    .expect("requirements present");
+
+    assert_eq!(
+        composed,
+        expected_requirements(
+            r#"
+allow_browser_and_computer_use = false
+
+[browser_use]
+allow_history_access = false
+allow_global_persistent_approval = false
+
+[browser_use.default_origin_policy]
+access = "allow"
+persistent_approval = false
+access_approval_lifetime = "turn"
+
+[browser_use.origins."https://example.com"]
+access = "deny"
+downloads = "deny"
+uploads = "deny"
+
+[computer_use]
+allow_locked_computer_use = true
+allow_persistent_approval = false
+default_app_access = "allow"
+
+[computer_use.macos.bundle_ids]
+"com.apple.Safari" = "allow"
+
+[computer_use.windows.aumids]
+"Microsoft.Paint_8wekyb3d8bbwe!App" = "allow"
+
+[[computer_use.windows.exes]]
+publisher_name = "CN=Google LLC"
+product_name = "Google Chrome"
+binary_name = "chrome.exe"
+access = "deny"
+"#
+        )
+    );
+}
+
+#[test]
 fn windows_requirements_use_regular_toml_merge() {
     let composed = compose(vec![
         layer(

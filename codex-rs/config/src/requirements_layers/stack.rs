@@ -229,6 +229,7 @@ fn populate_merged_regular_fields_with_sources(
         remote_sandbox_config: _,
         allowed_web_search_modes,
         allow_managed_hooks_only,
+        allow_browser_and_computer_use,
         allow_appshots,
         allow_remote_control,
         computer_use,
@@ -277,6 +278,10 @@ fn populate_merged_regular_fields_with_sources(
     set_sourced!(default_permissions, &["default_permissions"]);
     set_sourced!(allowed_web_search_modes, &["allowed_web_search_modes"]);
     set_sourced!(allow_managed_hooks_only, &["allow_managed_hooks_only"]);
+    set_sourced!(
+        allow_browser_and_computer_use,
+        &["allow_browser_and_computer_use"]
+    );
     set_sourced!(allow_appshots, &["allow_appshots"]);
     set_sourced!(allow_remote_control, &["allow_remote_control"]);
     set_sourced!(auto_review, &["auto_review"]);
