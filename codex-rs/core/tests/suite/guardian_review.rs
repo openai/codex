@@ -1171,15 +1171,21 @@ async fn guardian_timeout_rejects_tool_call_with_acting_model_instructions(
             });
         })
         .with_config(|config| {
+            let rules_dir = config.codex_home.join("rules");
+            fs::create_dir_all(&rules_dir).expect("create execution policy directory");
+            fs::write(
+                rules_dir.join("default.rules"),
+                r#"prefix_rule(pattern=["touch"], decision="prompt")"#,
+            )
+            .expect("write execution policy rule");
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
             config.approvals_reviewer = ApprovalsReviewer::AutoReview;
         });
     let test = builder.build_with_auto_env(&server).await?;
     let output_file = test.cwd.path().join("guardian-timed-out.txt");
     let tool_args = json!({
-        "cmd": format!("printf should-not-run > {}", output_file.display()),
-        "sandbox_permissions": SandboxPermissions::RequireEscalated,
-        "justification": "Exercise Guardian timeout routing.",
+        "cmd": format!("touch {}", output_file.display()),
+        "sandbox_permissions": SandboxPermissions::UseDefault,
     });
     let responses = mount_sse_sequence(
         &server,

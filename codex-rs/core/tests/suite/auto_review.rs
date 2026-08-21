@@ -80,6 +80,23 @@ impl ApprovalReviewContributor for ApprovedReviewContributor {
     }
 }
 
+struct EscalationApprovingReviewContributor;
+
+impl ApprovalReviewContributor for EscalationApprovingReviewContributor {
+    fn contribute<'a>(
+        &'a self,
+        _session_store: &'a ExtensionData,
+        _thread_store: &'a ExtensionData,
+        prompt: &'a str,
+        _extension_metrics: Option<Arc<dyn ExtensionMetrics>>,
+    ) -> ExtensionFuture<'a, Option<ReviewDecision>> {
+        Box::pin(async move {
+            assert!(prompt.contains("\"sandbox_permissions\":\"require_escalated\""));
+            Some(ReviewDecision::Approved)
+        })
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn approval_review_contributor_skips_existing_guardian_model_call() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -155,6 +172,103 @@ async fn approval_review_contributor_skips_existing_guardian_model_call() -> Res
             .function_call_output(permissions_call_id)
             .to_string()
             .contains("enabled")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn require_escalated_bypasses_extension_approval_and_runs_guardian() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_wine_exec!(Ok(()), "exec_command requires host-native paths");
+
+    let server = MockServer::start().await;
+    let call_id = "require-escalated-command";
+    let justification = "run outside the sandbox after a blocked attempt";
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-parent-1"),
+                ev_function_call(
+                    call_id,
+                    "exec_command",
+                    &json!({
+                        "cmd": "pwd",
+                        "sandbox_permissions": "require_escalated",
+                        "justification": justification,
+                    })
+                    .to_string(),
+                ),
+                ev_completed("resp-parent-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-guardian"),
+                ev_assistant_message(
+                    "msg-guardian",
+                    &json!({
+                        "risk_level": "high",
+                        "user_authorization": "low",
+                        "outcome": "deny",
+                        "rationale": "The unsandboxed command is not authorized.",
+                    })
+                    .to_string(),
+                ),
+                ev_completed("resp-guardian"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-parent-2"),
+                ev_assistant_message("msg-parent", "done"),
+                ev_completed("resp-parent-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.approval_review_contributor(Arc::new(EscalationApprovingReviewContributor));
+    let mut builder = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .with_config(|config| {
+            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+            config
+                .permissions
+                .set_permission_profile(PermissionProfile::read_only())
+                .expect("set read-only permission profile");
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "retry the blocked command outside the sandbox".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+
+    loop {
+        match wait_for_event(&test.codex, |_| true).await {
+            EventMsg::ExecApprovalRequest(event) => {
+                panic!("escalated command should not prompt the user: {event:?}")
+            }
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 3);
+    let guardian_request = requests
+        .iter()
+        .find(|request| {
+            request.body_json()["client_metadata"]["x-openai-subagent"].as_str() == Some("guardian")
+        })
+        .context("expected full Guardian review for require_escalated")?;
+    assert!(guardian_request.body_contains_text(justification));
+    assert!(
+        responses
+            .function_call_output_text(call_id)
+            .context("expected exec_command output")?
+            .contains("not authorized")
     );
 
     Ok(())

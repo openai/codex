@@ -319,14 +319,23 @@ async fn run_guardian_review(
     options: GuardianReviewOptions,
 ) -> ReviewDecision {
     let turn = Arc::clone(context.turn());
-    // Required models must use Guardian, but an enabled V2 monitor can satisfy the review.
+    let requires_synchronous_review = reasons.retry.is_some()
+        || matches!(
+            &request,
+            GuardianApprovalRequest::ExecCommand {
+                sandbox_permissions,
+                ..
+            } if sandbox_permissions.requires_escalated_permissions()
+        );
+    // Guardian V2 may satisfy ordinary reviews, including required-model reviews, but broader
+    // permission requests and retries must run Guardian synchronously.
     if (!turn
         .config
         .config_layer_stack
         .requirements()
         .auto_review_required_for_model(&turn.model_info.slug)
         || turn.config.features.enabled(Feature::GuardianV2))
-        && reasons.retry.is_none()
+        && !requires_synchronous_review
         && options
             .external_cancel
             .as_ref()
