@@ -294,7 +294,7 @@ async fn token_budget_uses_model_message_defaults() -> Result<()> {
         .with_pre_build_hook(|home| {
             std::fs::write(
                 home.join("config.toml"),
-                "[features.token_budget]\nenabled = true\n",
+                "[features.token_budget]\nenabled = true\nuse_history_notes_history = true\n",
             )
             .expect("write token-budget configuration");
         })

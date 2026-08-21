@@ -54,6 +54,7 @@ codex-guardian-v2 = { workspace = true }
 codex-git-utils = { workspace = true }
 codex-file-watcher = { workspace = true }
 codex-hooks = { workspace = true }
+codex-history-notes-extension = { workspace = true }
 codex-http-client = { workspace = true }
 codex-otel = { workspace = true }
 codex-plugin = { workspace = true }
@@ -67,7 +68,6 @@ codex-file-search = { workspace = true }
 codex-chatgpt = { workspace = true }
 codex-login = { workspace = true }
 codex-image-generation-extension = { workspace = true }
-codex-internal-history-notes-extension = { workspace = true } # copybara:strip-for-public
 codex-internal-persistent-mode = { workspace = true } # copybara:strip-for-public
 codex-memories-extension = { workspace = true }
 codex-web-search-extension = { workspace = true }

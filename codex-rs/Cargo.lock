@@ -2015,11 +2015,11 @@ dependencies = [
  "codex-git-utils",
  "codex-goal-extension",
  "codex-guardian-v2",
+ "codex-history-notes-extension",
  "codex-home",
  "codex-hooks",
  "codex-http-client",
  "codex-image-generation-extension",
- "codex-internal-history-notes-extension",
  "codex-internal-persistent-mode",
  "codex-login",
  "codex-mcp",
@@ -3333,6 +3333,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-history-notes-extension"
+version = "0.0.0"
+dependencies = [
+ "codex-api",
+ "codex-client",
+ "codex-config",
+ "codex-core",
+ "codex-extension-api",
+ "codex-login",
+ "codex-model-provider",
+ "codex-model-provider-info",
+ "codex-protocol",
+ "codex-tools",
+ "codex-utils-output-truncation",
+ "http 1.4.0",
+ "pretty_assertions",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "wiremock",
+]
+
+[[package]]
 name = "codex-home"
 version = "0.0.0"
 dependencies = [
@@ -3447,29 +3470,6 @@ dependencies = [
  "schemars 0.8.22",
  "serde",
  "ts-rs",
-]
-
-[[package]]
-name = "codex-internal-history-notes-extension"
-version = "0.0.0"
-dependencies = [
- "codex-api",
- "codex-client",
- "codex-config",
- "codex-core",
- "codex-extension-api",
- "codex-login",
- "codex-model-provider",
- "codex-model-provider-info",
- "codex-protocol",
- "codex-tools",
- "codex-utils-output-truncation",
- "http 1.4.0",
- "pretty_assertions",
- "serde_json",
- "tempfile",
- "tokio",
- "wiremock",
 ]
 
 [[package]]

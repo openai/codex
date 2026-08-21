@@ -3377,6 +3377,10 @@
           "format": "int64",
           "minimum": 1.0,
           "type": "integer"
+        },
+        "use_history_notes_history": {
+          "description": "Whether to expose the built-in history and notes extension.",
+          "type": "boolean"
         }
       },
       "type": "object"

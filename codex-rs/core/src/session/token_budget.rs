@@ -13,11 +13,16 @@ pub(super) fn has_explicit_settings(config: &Config) -> bool {
         .get("features")
         .and_then(|features| features.get("token_budget"))
         .and_then(|token_budget| token_budget.as_table())
-        .is_some_and(|settings| settings.keys().any(|key| key != "enabled"))
-        || config
-            .token_budget
-            .as_ref()
-            .is_some_and(|token_budget| token_budget != &TokenBudgetConfig::default())
+        .is_some_and(|settings| {
+            settings
+                .keys()
+                .any(|key| !matches!(key.as_str(), "enabled" | "use_history_notes_history"))
+        })
+        || config.token_budget.as_ref().is_some_and(|token_budget| {
+            let mut settings = token_budget.clone();
+            settings.use_history_notes_history = false;
+            settings != TokenBudgetConfig::default()
+        })
 }
 
 pub(super) fn apply_model_defaults(config: &mut Config, model_info: &ModelInfo) {
@@ -34,6 +39,10 @@ pub(super) fn apply_model_defaults(config: &mut Config, model_info: &ModelInfo) 
     };
 
     let token_budget = TokenBudgetConfig {
+        use_history_notes_history: config
+            .token_budget
+            .as_ref()
+            .is_some_and(|token_budget| token_budget.use_history_notes_history),
         reminder_threshold_tokens: Some(model_defaults.reminder_threshold_tokens),
         reminder_message_template: model_defaults.reminder_message_template.clone(),
         guidance_message: Some(model_defaults.guidance_message.clone()),

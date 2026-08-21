@@ -3,7 +3,7 @@ use std::sync::Arc;
 use codex_config::LoaderOverrides;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
-use codex_core::config::ExtraConfig;
+use codex_core::config::TokenBudgetConfig;
 use codex_extension_api::ConversationHistory;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistry;
@@ -14,10 +14,11 @@ use codex_extension_api::ToolCall;
 use codex_extension_api::ToolExecutor;
 use codex_extension_api::ToolName;
 use codex_extension_api::ToolPayload;
-use codex_internal_history_notes_extension::install;
+use codex_history_notes_extension::install;
 use codex_login::AuthHeaders;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -57,8 +58,9 @@ async fn installed_extension_exposes_and_invokes_history_notes_tools() -> TestRe
         .build()
         .await?;
     config.model_provider.base_url = Some(format!("{}/backend-api/codex", server.uri()));
-    config.extra_config = Some(ExtraConfig {
-        persistent_mode_message: Some("continue".to_string()),
+    config.token_budget = Some(TokenBudgetConfig {
+        use_history_notes_history: true,
+        ..TokenBudgetConfig::default()
     });
 
     let mut headers = HeaderMap::new();
@@ -153,11 +155,62 @@ async fn installed_extension_exposes_and_invokes_history_notes_tools() -> TestRe
     );
 
     let mut disabled_config = config.clone();
-    disabled_config.extra_config = None;
+    disabled_config.token_budget = None;
     for contributor in registry.config_contributors() {
         contributor.on_config_changed(&session_store, &thread_store, &config, &disabled_config);
     }
     assert!(exposed_tools(&registry, &session_store, &thread_store).is_empty());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn history_notes_require_an_openai_provider_and_codex_backend_auth() -> TestResult {
+    let codex_home = TempDir::new()?;
+    let mut config = ConfigBuilder::default()
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await?;
+    config.token_budget = Some(TokenBudgetConfig {
+        use_history_notes_history: true,
+        ..TokenBudgetConfig::default()
+    });
+
+    for (provider, auth) in [
+        (
+            config.model_provider.clone(),
+            CodexAuth::from_api_key("test-api-key"),
+        ),
+        (
+            ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
+            CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+        ),
+    ] {
+        config.model_provider = provider;
+        let mut builder = ExtensionRegistryBuilder::<Config>::new();
+        install(&mut builder, AuthManager::from_auth_for_testing(auth));
+        let registry = builder.build();
+        let session_store = ExtensionData::new("session-123");
+        let thread_store = ExtensionData::new("thread-123");
+
+        for contributor in registry.thread_lifecycle_contributors() {
+            contributor
+                .on_thread_start(ThreadStartInput {
+                    config: &config,
+                    session_source: &SessionSource::Cli,
+                    persistent_thread_state_available: true,
+                    environments: &[],
+                    mcp_resource_client: None,
+                    extension_metrics: None,
+                    session_store: &session_store,
+                    thread_store: &thread_store,
+                })
+                .await;
+        }
+
+        assert!(exposed_tools(&registry, &session_store, &thread_store).is_empty());
+    }
 
     Ok(())
 }

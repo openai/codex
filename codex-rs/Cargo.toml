@@ -22,7 +22,6 @@ members = [
     "features",
     "install-context",
     "internal-extra-config", # copybara:strip-for-public
-    "internal-history-notes-extension", # copybara:strip-for-public
     "internal-persistent-mode", # copybara:strip-for-public
     "codex-backend-openapi-models",
     "code-mode",
@@ -62,6 +61,7 @@ members = [
     "ext/goal",
     "ext/git-attribution",
     "ext/guardian-v2",
+    "ext/history-notes",
     "ext/image-generation",
     "ext/items",
     "ext/memories",
@@ -200,6 +200,7 @@ codex-extension-items = { path = "ext/items" }
 codex-goal-extension = { path = "ext/goal" }
 codex-git-attribution = { path = "ext/git-attribution" }
 codex-guardian-v2 = { path = "ext/guardian-v2" }
+codex-history-notes-extension = { path = "ext/history-notes" }
 codex-image-generation-extension = { path = "ext/image-generation" }
 codex-external-agent-migration = { path = "external-agent-migration" }
 codex-experimental-api-macros = { path = "codex-experimental-api-macros" }
@@ -212,7 +213,6 @@ codex-git-utils = { path = "git-utils" }
 codex-hooks = { path = "hooks" }
 codex-history = { path = "history" }
 codex-internal-extra-config = { path = "internal-extra-config" } # copybara:strip-for-public
-codex-internal-history-notes-extension = { path = "internal-history-notes-extension" } # copybara:strip-for-public
 codex-internal-persistent-mode = { path = "internal-persistent-mode" } # copybara:strip-for-public
 codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }

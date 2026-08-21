@@ -1,11 +1,11 @@
 [package]
 edition.workspace = true
 license.workspace = true
-name = "codex-internal-history-notes-extension"
+name = "codex-history-notes-extension"
 version.workspace = true
 
 [lib]
-name = "codex_internal_history_notes_extension"
+name = "codex_history_notes_extension"
 path = "src/lib.rs"
 doctest = false
 
