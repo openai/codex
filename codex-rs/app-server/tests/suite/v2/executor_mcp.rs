@@ -46,6 +46,8 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::process::Stdio;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::io::AsyncBufReadExt;
@@ -86,20 +88,27 @@ async fn selected_executor_discovers_executor_local_http_mcp() -> Result<()> {
         Arc::new(LocalSessionManager::default()),
         StreamableHttpServerConfig::default().with_allowed_hosts(["executor-only.invalid"]),
     );
+    let browser_starting = Arc::new(AtomicBool::new(true));
     let http_router =
         Router::new()
             .nest_service("/mcp", http_mcp_service)
             .layer(axum::middleware::from_fn(
-                |request: axum::extract::Request, next: axum::middleware::Next| async move {
-                    let authorized = request
-                        .headers()
-                        .get(axum::http::header::AUTHORIZATION)
-                        .and_then(|value| value.to_str().ok())
-                        .is_some_and(|value| value == "Bearer executor-browser-token");
-                    if !authorized {
-                        return axum::http::StatusCode::UNAUTHORIZED.into_response();
+                move |request: axum::extract::Request, next: axum::middleware::Next| {
+                    let browser_starting = Arc::clone(&browser_starting);
+                    async move {
+                        if browser_starting.swap(false, Ordering::Relaxed) {
+                            tokio::time::sleep(Duration::from_secs(2)).await;
+                        }
+                        let authorized = request
+                            .headers()
+                            .get(axum::http::header::AUTHORIZATION)
+                            .and_then(|value| value.to_str().ok())
+                            .is_some_and(|value| value == "Bearer executor-browser-token");
+                        if !authorized {
+                            return axum::http::StatusCode::UNAUTHORIZED.into_response();
+                        }
+                        next.run(request).await
                     }
-                    next.run(request).await
                 },
             ));
     let http_server_handle = tokio::spawn(async move {
@@ -119,7 +128,7 @@ async fn selected_executor_discovers_executor_local_http_mcp() -> Result<()> {
     std::fs::write(
         executor_home.path().join("config.toml"),
         format!(
-            "[mcp_servers.{PROJECT_MCP_SERVER_NAME}]\nurl = \"{EXECUTOR_HTTP_MCP_URL}\"\nhttp_headers = {{ Authorization = \"Bearer {PROJECT_MCP_BEARER_TOKEN}\" }}\nstartup_timeout_sec = 10\n\n[mcp_servers.ignored_stdio]\ncommand = \"executor-local-command\"\nenv_vars = [\"EXECUTOR_ONLY_TOKEN\"]\ncwd = \"./server\"\n\n[mcp_servers.policy_unlisted]\nurl = \"{EXECUTOR_HTTP_MCP_URL}\"\n"
+            "[mcp_servers.{PROJECT_MCP_SERVER_NAME}]\nurl = \"{EXECUTOR_HTTP_MCP_URL}\"\nhttp_headers = {{ Authorization = \"Bearer {PROJECT_MCP_BEARER_TOKEN}\" }}\nrequired = true\nstartup_timeout_sec = 10\n\n[mcp_servers.ignored_stdio]\ncommand = \"executor-local-command\"\nenv_vars = [\"EXECUTOR_ONLY_TOKEN\"]\ncwd = \"./server\"\n\n[mcp_servers.policy_unlisted]\nurl = \"{EXECUTOR_HTTP_MCP_URL}\"\n"
         ),
     )?;
     let codex_bin = toml::Value::String(
@@ -143,18 +152,6 @@ async fn selected_executor_discovers_executor_local_http_mcp() -> Result<()> {
         .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
     let thread_id = start_thread(&mut app_server, /*selected_capability_roots*/ None).await?;
-    let servers = mcp_server_statuses(&mut app_server, thread_id.clone()).await?;
-    assert!(
-        servers
-            .iter()
-            .any(|server| { server.name == PROJECT_MCP_SERVER_NAME && server.plugin_id.is_none() })
-    );
-    assert!(servers.iter().all(|server| server.name != "ignored_stdio"));
-    assert!(
-        servers
-            .iter()
-            .any(|server| server.name == "policy_unlisted" && server.tools.is_empty())
-    );
 
     let namespace = format!("mcp__{PROJECT_MCP_SERVER_NAME}");
     let response_mock = responses::mount_sse_sequence(
@@ -180,7 +177,7 @@ async fn selected_executor_discovers_executor_local_http_mcp() -> Result<()> {
     .await;
     let request_id = app_server
         .send_turn_start_request(TurnStartParams {
-            thread_id,
+            thread_id: thread_id.clone(),
             input: vec![UserInput::Text {
                 text: "Use the executor browser".to_string(),
                 text_elements: Vec::new(),
@@ -204,6 +201,19 @@ async fn selected_executor_discovers_executor_local_http_mcp() -> Result<()> {
             .get("output")
             .and_then(serde_json::Value::as_str)
             .is_some_and(|output| output.contains("ECHOING: browser use works"))
+    );
+
+    let servers = mcp_server_statuses(&mut app_server, thread_id).await?;
+    assert!(
+        servers
+            .iter()
+            .any(|server| { server.name == PROJECT_MCP_SERVER_NAME && server.plugin_id.is_none() })
+    );
+    assert!(servers.iter().all(|server| server.name != "ignored_stdio"));
+    assert!(
+        servers
+            .iter()
+            .any(|server| server.name == "policy_unlisted" && server.tools.is_empty())
     );
 
     http_server_handle.abort();

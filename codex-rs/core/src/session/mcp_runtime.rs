@@ -191,8 +191,6 @@ impl Session {
                     {
                         continue;
                     }
-                    // Selected executors can attach after startup, so their MCPs are best effort.
-                    server.required = false;
                     let McpServerTransportConfig::StreamableHttp {
                         env_http_headers,
                         http_headers_helper,
