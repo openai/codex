@@ -46,6 +46,13 @@ pub fn create_test_sync_tool() -> ToolSpec {
                 Some(false.into()),
             ),
         ),
+        (
+            "wait_for_git_enrichment".to_string(),
+            JsonSchema::boolean(Some(
+                "Wait for Git enrichment for the current turn to finish, subject to a timeout."
+                    .to_string(),
+            )),
+        ),
     ]);
 
     ToolSpec::Function(ResponsesApiTool {

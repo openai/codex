@@ -164,6 +164,15 @@ async fn guardian_prewarm_and_review_skip_redundant_git_enrichment() -> Result<(
         vec![vec![ev_response_created("warm-1"), ev_completed("warm-1")]],
         vec![vec![ev_response_created("warm-2"), ev_completed("warm-2")]],
         vec![vec![
+            ev_response_created("wait-for-parent-git"),
+            ev_function_call(
+                "wait-for-parent-git",
+                "test_sync_tool",
+                r#"{"wait_for_git_enrichment":true}"#,
+            ),
+            ev_completed("wait-for-parent-git"),
+        ]],
+        vec![vec![
             ev_response_created("approval-request"),
             ev_function_call("approval-call", "exec_command", &tool_args),
             ev_completed("approval-request"),
@@ -175,11 +184,13 @@ async fn guardian_prewarm_and_review_skip_redundant_git_enrichment() -> Result<(
     ])
     .await;
     let cwd = repo.path().to_path_buf();
-    let mut builder = test_codex().with_config(move |config| {
-        config.cwd = cwd.abs();
-        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
-        config.approvals_reviewer = ApprovalsReviewer::AutoReview;
-    });
+    let mut builder = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_config(move |config| {
+            config.cwd = cwd.abs();
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+        });
     let test = builder.build_with_websocket_server(&server).await?;
 
     let (first, second) = tokio::time::timeout(Duration::from_secs(5), async {
@@ -201,19 +212,29 @@ async fn guardian_prewarm_and_review_skip_redundant_git_enrichment() -> Result<(
             text_elements: Vec::new(),
         }]))
         .await?;
-    let (user_turn, guardian_turn) = tokio::time::timeout(Duration::from_secs(5), async {
-        tokio::join!(
-            server.wait_for_request(/*connection_index*/ 2, /*request_index*/ 0),
-            server.wait_for_request(/*connection_index*/ 3, /*request_index*/ 0)
-        )
-    })
-    .await?;
+    let (initial_user_turn, user_turn, guardian_turn) =
+        tokio::time::timeout(Duration::from_secs(15), async {
+            tokio::join!(
+                server.wait_for_request(/*connection_index*/ 2, /*request_index*/ 0),
+                server.wait_for_request(/*connection_index*/ 3, /*request_index*/ 0),
+                server.wait_for_request(/*connection_index*/ 4, /*request_index*/ 0)
+            )
+        })
+        .await?;
+    let initial_user_turn = initial_user_turn.body_json();
     let user_turn = user_turn.body_json();
     let guardian_turn = guardian_turn.body_json();
+    let initial_user_turn_metadata = turn_metadata(&initial_user_turn)?;
     assert_eq!(
         turn_metadata(&user_turn)?["auto_review_enabled"].as_bool(),
         Some(true)
     );
+    if let Some(workspaces) = initial_user_turn_metadata.get("workspaces") {
+        assert_eq!(
+            workspaces,
+            &expected_workspace(repo.path(), &head, /*has_changes*/ true)
+        );
+    }
     assert_eq!(
         turn_metadata(&user_turn)?["workspaces"],
         expected_workspace(repo.path(), &head, /*has_changes*/ true)

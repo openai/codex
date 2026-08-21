@@ -126,22 +126,10 @@ async fn create_clean_git_repo(repo_name: &str) -> (TempDir, AbsolutePathBuf) {
 }
 
 async fn wait_for_git_enrichment(state: &TurnMetadataState) -> Value {
-    tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            let header = test_turn_metadata_header(state);
-            let json: Value = serde_json::from_str(&header).expect("json");
-            if json
-                .get("workspaces")
-                .and_then(Value::as_object)
-                .is_some_and(|workspaces| !workspaces.is_empty())
-            {
-                return json;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("git enrichment should complete")
+    tokio::time::timeout(Duration::from_secs(2), state.wait_for_git_enrichment())
+        .await
+        .expect("git enrichment should complete");
+    serde_json::from_str(&test_turn_metadata_header(state)).expect("json")
 }
 
 #[tokio::test]
@@ -1106,6 +1094,9 @@ async fn turn_metadata_state_git_enrichment_cancellation_is_retryable_and_errors
             .expect("enrichment task lock")
             .is_none()
     );
+    tokio::time::timeout(Duration::from_secs(2), state.wait_for_git_enrichment())
+        .await
+        .expect("cancelled git enrichment should unblock waiters");
     assert!(state.current_workspaces().is_empty());
 
     state.spawn_git_enrichment_task();
@@ -1138,20 +1129,10 @@ async fn turn_metadata_state_git_enrichment_cancellation_is_retryable_and_errors
         &model_info_from_slug("gpt-5.4"),
     ));
     invalid_state.spawn_git_enrichment_task();
-    tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            if invalid_state
-                .enrichment_task
-                .lock()
-                .expect("enrichment task lock")
-                .as_ref()
-                .is_some_and(tokio::task::JoinHandle::is_finished)
-            {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        invalid_state.wait_for_git_enrichment(),
+    )
     .await
     .expect("failed git enrichment should complete");
     assert!(invalid_state.current_workspaces().is_empty());

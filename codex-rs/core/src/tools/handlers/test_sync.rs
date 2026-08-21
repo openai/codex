@@ -23,6 +23,7 @@ use codex_tools::ToolSpec;
 pub struct TestSyncHandler;
 
 const DEFAULT_TIMEOUT_MS: u64 = 1_000;
+const GIT_ENRICHMENT_TIMEOUT: Duration = Duration::from_secs(10);
 
 static BARRIERS: OnceLock<tokio::sync::Mutex<HashMap<String, BarrierState>>> = OnceLock::new();
 
@@ -47,6 +48,8 @@ struct TestSyncArgs {
     sleep_after_ms: Option<u64>,
     #[serde(default)]
     barrier: Option<BarrierArgs>,
+    #[serde(default)]
+    wait_for_git_enrichment: bool,
 }
 
 fn default_timeout_ms() -> u64 {
@@ -80,7 +83,7 @@ impl TestSyncHandler {
         &self,
         invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
-        let ToolInvocation { payload, .. } = invocation;
+        let ToolInvocation { payload, turn, .. } = invocation;
 
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
@@ -101,6 +104,20 @@ impl TestSyncHandler {
 
         if let Some(barrier) = args.barrier {
             wait_on_barrier(barrier).await?;
+        }
+
+        if args.wait_for_git_enrichment {
+            tokio::time::timeout(
+                GIT_ENRICHMENT_TIMEOUT,
+                turn.turn_metadata_state.wait_for_git_enrichment(),
+            )
+            .await
+            .map_err(|_| {
+                FunctionCallError::RespondToModel(format!(
+                    "test_sync_tool git enrichment wait timed out after {} seconds",
+                    GIT_ENRICHMENT_TIMEOUT.as_secs()
+                ))
+            })?;
         }
 
         if let Some(delay) = args.sleep_after_ms

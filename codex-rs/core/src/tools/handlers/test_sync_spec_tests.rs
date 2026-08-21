@@ -57,6 +57,13 @@ fn test_sync_tool_matches_expected_spec() {
                             "Delay before any other action. Defaults to no delay.".to_string(),
                         )),
                     ),
+                    (
+                        "wait_for_git_enrichment".to_string(),
+                        JsonSchema::boolean(Some(
+                            "Wait for Git enrichment for the current turn to finish, subject to a timeout."
+                                .to_string(),
+                        )),
+                    ),
                 ]), /*required*/ None, Some(false.into())),
             output_schema: None,
         })
