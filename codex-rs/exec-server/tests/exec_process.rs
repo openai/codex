@@ -141,8 +141,6 @@ async fn shell_snapshot_v2_filters_profile_exports_and_stays_in_memory(
     let profile_path = home.path().join(profile_name);
     let profile_path_entry = home.path().join("profile-bin");
     let runtime_path_entry = home.path().join("runtime-bin");
-    let inherited_path = std::env::var("PATH")?;
-    let runtime_path = format!("{}:{inherited_path}", runtime_path_entry.display());
     let padding = if !use_remote && !tty && shell_name == "bash" {
         format!(
             "snapshot_padding() {{ printf '%s' '{}'; }}\n",
@@ -190,7 +188,8 @@ async fn shell_snapshot_v2_filters_profile_exports_and_stays_in_memory(
         ("profile_helper; ", "helper")
     };
     let command = format!(
-        "{command_prefix}printf '|%s|%s|%s|%s|%s|%s' \"$PROFILE_ALLOWED\" \"${{PROFILE_SECRET-missing}}\" \"${{PROFILE_DENIED-missing}}\" \"$PATH\" \"${{__CODEX_SHELL_SNAPSHOT_STATE_0-missing}}\" \"${{__CODEX_SHELL_SNAPSHOT_STATE_1-missing}}\""
+        "export PATH='{}':\"$PATH\"; {command_prefix}printf '|%s|%s|%s|%s|%s|%s' \"$PROFILE_ALLOWED\" \"${{PROFILE_SECRET-missing}}\" \"${{PROFILE_DENIED-missing}}\" \"$PATH\" \"${{__CODEX_SHELL_SNAPSHOT_STATE_0-missing}}\" \"${{__CODEX_SHELL_SNAPSHOT_STATE_1-missing}}\"",
+        runtime_path_entry.display(),
     );
     let expected_stdout = format!(
         "{expected_prefix}|profile|missing|missing|{}:{}:/usr/bin:/bin|missing|missing",
@@ -212,9 +211,8 @@ async fn shell_snapshot_v2_filters_profile_exports_and_stays_in_memory(
                         name: shell_name.to_string(),
                         path: shell_path.to_string(),
                     },
-                    runtime_path_prepends: vec![runtime_path_entry.to_string_lossy().into_owned()],
                 }),
-                env: HashMap::from([("PATH".to_string(), runtime_path.clone())]),
+                env: HashMap::new(),
                 tty,
                 pipe_stdin: false,
                 arg0: None,
@@ -293,7 +291,6 @@ async fn shell_snapshot_v2_remote_managed_proxy_uses_prepared_execution_context(
                         name: "bash".to_string(),
                         path: "/bin/bash".to_string(),
                     },
-                    runtime_path_prepends: Vec::new(),
                 }),
                 env: HashMap::new(),
                 tty: false,
@@ -362,7 +359,6 @@ async fn shell_snapshot_v2_capture_failure_falls_back_to_original_command() -> R
                 name: "bash".to_string(),
                 path: "/bin/bash".to_string(),
             },
-            runtime_path_prepends: Vec::new(),
         }),
         env: HashMap::new(),
         tty: false,

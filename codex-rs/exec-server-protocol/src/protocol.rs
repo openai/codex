@@ -269,9 +269,6 @@ pub struct ShellSnapshotRequest {
     pub scope_id: String,
     /// Executor-native shell used to capture and restore the snapshot.
     pub shell: ShellInfo,
-    /// Runtime-owned PATH entries to replay after restoring profile state.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub runtime_path_prepends: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

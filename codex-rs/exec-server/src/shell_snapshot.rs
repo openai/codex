@@ -132,15 +132,9 @@ impl ShellSnapshotCache {
             return Ok(());
         };
 
-        let restore_snapshot_path = snapshot.environment.contains_key("PATH")
-            && params
-                .env_policy
-                .as_ref()
-                .is_none_or(|policy| !policy.r#set.contains_key("PATH"));
         let request_overrides = params
             .env
             .iter()
-            .filter(|(name, _)| name.as_str() != "PATH" || !restore_snapshot_path)
             .map(|(name, value)| {
                 (
                     name.clone(),
@@ -155,20 +149,6 @@ impl ShellSnapshotCache {
                 .map(|(name, value)| (name.clone(), value.clone())),
         );
         prepared.env.extend(request_overrides);
-        if restore_snapshot_path && let Some(path) = prepared.env.get_mut("PATH") {
-            for entry in &request.runtime_path_prepends {
-                if entry.is_empty() {
-                    continue;
-                }
-                *path = std::iter::once(entry.as_str())
-                    .chain(
-                        path.split(':')
-                            .filter(|existing| !existing.is_empty() && *existing != entry),
-                    )
-                    .collect::<Vec<_>>()
-                    .join(":");
-            }
-        }
         prepared
             .env
             .retain(|name, _| !shell_environment::is_non_inheritable_env_var(name));
