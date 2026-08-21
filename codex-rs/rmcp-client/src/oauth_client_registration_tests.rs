@@ -9,6 +9,7 @@ use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
 use http::HeaderMap;
 use pretty_assertions::assert_eq;
+use rmcp::transport::auth::AuthorizationMetadata;
 use rmcp::transport::auth::OAuthState;
 use serde_json::Value;
 use serde_json::json;
@@ -23,6 +24,7 @@ use wiremock::matchers::path;
 
 use super::McpOAuthClientRegistration;
 use super::start_authorization;
+use crate::oauth::validate_authorization_server_endpoints;
 use crate::oauth_http_client::OAuthHttpClientAdapter;
 use crate::utils::MCP_USER_AGENT;
 use crate::utils::build_default_headers;
@@ -206,6 +208,136 @@ async fn registration_selection_preserves_dcr_capabilities_and_exact_redirects()
         assert_eq!(registration["redirect_uris"], json!([expected_redirect]));
     }
 
+    Ok(())
+}
+
+#[test]
+fn legacy_provider_exceptions_require_exact_issuer_and_endpoint_origins() -> Result<()> {
+    for (issuer, authorization_endpoint, token_endpoint, accepted) in [
+        (
+            "https://api.figma.com",
+            "https://www.figma.com/oauth/mcp",
+            "https://api.figma.com/v1/oauth/token",
+            true,
+        ),
+        (
+            "https://agent.robinhood.com/mcp/trading",
+            "https://robinhood.com/oauth",
+            "https://api.robinhood.com/oauth2/token/",
+            true,
+        ),
+        (
+            "https://api.figma.com.attacker.example",
+            "https://www.figma.com/oauth/mcp",
+            "https://api.figma.com.attacker.example/token",
+            false,
+        ),
+        (
+            "https://api.figma.com",
+            "https://www.figma.com/oauth/mcp",
+            "https://attacker.example/token",
+            false,
+        ),
+        (
+            "http://api.figma.com",
+            "https://www.figma.com/oauth/mcp",
+            "http://api.figma.com/v1/oauth/token",
+            false,
+        ),
+        (
+            "https://agent.robinhood.com/mcp/attacker",
+            "https://robinhood.com/oauth",
+            "https://api.robinhood.com/oauth2/token/",
+            false,
+        ),
+        (
+            "https://agent.robinhood.com/mcp/trading",
+            "https://robinhood.com.attacker.example/oauth",
+            "https://api.robinhood.com/oauth2/token/",
+            false,
+        ),
+    ] {
+        let metadata: AuthorizationMetadata = serde_json::from_value(json!({
+            "issuer": issuer,
+            "authorization_endpoint": authorization_endpoint,
+            "token_endpoint": token_endpoint,
+        }))?;
+        assert_eq!(
+            validate_authorization_server_endpoints(&metadata).is_ok(),
+            accepted,
+            "unexpected validation result for issuer {issuer}",
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn verified_issuer_can_delegate_authorization_and_token_to_one_origin() -> Result<()> {
+    let issuer_server = MockServer::start().await;
+    let endpoint_server = MockServer::start().await;
+    let issuer = format!("{}/mcp", issuer_server.uri());
+    let redirect_uri = format!("http://127.0.0.1:43123/callback/{CALLBACK_ID}");
+
+    Mock::given(method("GET"))
+        .and(path("/.well-known/oauth-authorization-server/mcp"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "issuer": issuer,
+            "authorization_endpoint": format!("{}/authorize", endpoint_server.uri()),
+            "token_endpoint": format!("{}/token", endpoint_server.uri()),
+            "registration_endpoint": format!("{}/register", endpoint_server.uri()),
+            "token_endpoint_auth_methods_supported": ["none"],
+            "code_challenge_methods_supported": ["S256"],
+        })))
+        .expect(1)
+        .mount(&issuer_server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/register"))
+        .respond_with(|request: &Request| {
+            let registration: Value = serde_json::from_slice(&request.body)
+                .expect("dynamic registration should contain JSON");
+            ResponseTemplate::new(200).set_body_json(json!({
+                "client_id": "delegated-provider-client",
+                "redirect_uris": registration["redirect_uris"],
+            }))
+        })
+        .expect(1)
+        .mount(&endpoint_server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "delegated-provider-token",
+            "token_type": "Bearer",
+        })))
+        .expect(1)
+        .mount(&endpoint_server)
+        .await;
+
+    let (mut state, query) = authorization(
+        &issuer_server,
+        &redirect_uri,
+        McpOAuthClientRegistration::Dcr,
+    )
+    .await?;
+    assert_eq!(query["client_id"], "delegated-provider-client");
+    assert_eq!(
+        Url::parse(&state.get_authorization_url().await?)?.origin(),
+        Url::parse(&endpoint_server.uri())?.origin(),
+    );
+
+    state
+        .handle_callback_with_issuer("valid-authorization-code", &query["state"], None)
+        .await?;
+    let token_requests = requests_to(&endpoint_server, "/token").await;
+    assert_eq!(token_requests.len(), 1);
+    assert!(
+        url::form_urlencoded::parse(&token_requests[0].body)
+            .any(|(name, _)| name == "code_verifier")
+    );
+    issuer_server.verify().await;
+    endpoint_server.verify().await;
     Ok(())
 }
 

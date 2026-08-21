@@ -9,6 +9,8 @@ use rmcp::transport::auth::OAuthHttpClient;
 use rmcp::transport::auth::OAuthState;
 use url::Url;
 
+use crate::oauth::validate_authorization_server_endpoints;
+
 /// OAuth client-registration strategy for one interactive HTTP MCP login.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum McpOAuthClientRegistration {
@@ -39,6 +41,7 @@ pub(crate) async fn start_authorization(
         AuthorizationManager::new_with_oauth_http_client(server_url, http_client).await?;
     auth_manager.set_allow_missing_issuer(true);
     let metadata = auth_manager.resolve_metadata().await?.metadata;
+    validate_authorization_server_endpoints(&metadata)?;
     let authorization_server_issuer = metadata.issuer.clone();
 
     let cimd_advertised = metadata

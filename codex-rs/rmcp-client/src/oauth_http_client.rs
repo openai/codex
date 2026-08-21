@@ -21,6 +21,7 @@ use http::header::TRANSFER_ENCODING;
 use http::header::USER_AGENT;
 use oauth2::HttpRequest;
 use oauth2::HttpResponse;
+use rmcp::transport::auth::AuthorizationMetadata;
 use rmcp::transport::auth::OAuthHttpClient;
 use rmcp::transport::auth::OAuthHttpClientError;
 use rmcp::transport::auth::OAuthHttpClientFuture;
@@ -47,6 +48,8 @@ enum OAuthHttpClientAdapterError {
     TooManyRedirects,
     #[error("OAuth HTTP response body exceeds {maximum_bytes} bytes")]
     ResponseBodyTooLarge { maximum_bytes: usize },
+    #[error("OAuth authorization server issuer does not match authorization metadata origin")]
+    AuthorizationMetadataIssuerOriginMismatch,
 }
 
 fn oauth_http_client_error(
@@ -284,6 +287,18 @@ impl OAuthHttpClientAdapter {
             request_url = next_url;
             redirects += 1;
         };
+        if response.status == StatusCode::OK.as_u16()
+            && let Ok(metadata) = serde_json::from_slice::<AuthorizationMetadata>(&body)
+            && let Some(issuer) = metadata.issuer.as_deref()
+            && Url::parse(issuer)
+                .map_err(oauth_http_client_error)?
+                .origin()
+                != request_url.origin()
+        {
+            return Err(oauth_http_client_error(
+                OAuthHttpClientAdapterError::AuthorizationMetadataIssuerOriginMismatch,
+            ));
+        }
         let mut builder = oauth2::http::Response::builder().status(response.status);
         for header in response.headers {
             builder = builder.header(header.name, header.value);

@@ -3,12 +3,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context as _;
+use codex_config::types::AuthKeyringBackendKind;
+use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::Environment;
 use codex_exec_server::HttpClient;
+use codex_rmcp_client::McpOAuthClientRegistration;
 use codex_rmcp_client::OAuthDiscoveryTimeout;
 use codex_rmcp_client::StreamableHttpOAuthDiscovery;
 use codex_rmcp_client::StreamableHttpRedirectMode;
 use codex_rmcp_client::discover_streamable_http_oauth;
+use codex_rmcp_client::perform_oauth_login_return_url;
 use pretty_assertions::assert_eq;
 use rmcp::transport::auth::AuthError;
 use serde_json::json;
@@ -236,11 +240,8 @@ async fn assert_legacy_oauth_without_starting_an_mcp_session(
                 assert!(
                     matches!(
                         error.downcast_ref::<AuthError>(),
-                        Some(AuthError::AuthorizationServerMismatch {
-                            expected_issuer,
-                            received_issuer,
-                        }) if expected_issuer.trim_end_matches('/') == authorization_server.uri()
-                            && received_issuer == "https://unexpected-issuer.example"
+                        Some(AuthError::MetadataError(reason))
+                            if reason.contains("issuer does not match authorization metadata origin")
                     ),
                     "expected the original authorization-server issuer to remain bound: {error:#}",
                 );
@@ -518,5 +519,166 @@ async fn oauth_discovery_does_not_invent_support_for_an_unauthenticated_legacy_s
     .await?;
 
     assert_eq!(local_discovery, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn interactive_oauth_rejects_untrusted_authorization_metadata() -> anyhow::Result<()> {
+    for (metadata_issuer, authorization_metadata_path, issuer_bound_callbacks) in [
+        (
+            AuthorizationMetadataIssuer::Missing,
+            "/.well-known/untrusted-provider",
+            false,
+        ),
+        (
+            AuthorizationMetadataIssuer::Mismatched,
+            "/.well-known/untrusted-provider",
+            true,
+        ),
+        (
+            AuthorizationMetadataIssuer::Mismatched,
+            "/metadata.json",
+            false,
+        ),
+        (
+            AuthorizationMetadataIssuer::Mismatched,
+            "/metadata.json",
+            true,
+        ),
+        (
+            AuthorizationMetadataIssuer::Mismatched,
+            "/.well-known/oauth-authorization-server",
+            false,
+        ),
+        (
+            AuthorizationMetadataIssuer::Mismatched,
+            "/.well-known/oauth-authorization-server",
+            true,
+        ),
+        (
+            AuthorizationMetadataIssuer::Mismatched,
+            "/.well-known/openid-configuration",
+            true,
+        ),
+        (
+            AuthorizationMetadataIssuer::Matching,
+            "/.well-known/untrusted-provider",
+            false,
+        ),
+    ] {
+        let resource_server = MockServer::start().await;
+        let authorization_server = MockServer::start().await;
+        let attacker_token_server = MockServer::start().await;
+        let resource_url = format!("{}/mcp", resource_server.uri());
+        let resource_metadata_url = format!("{}/resource-metadata", resource_server.uri());
+        let (issuer, expected_error) = match metadata_issuer {
+            AuthorizationMetadataIssuer::Missing => (
+                None,
+                "token endpoint origin does not match the authorization server origin",
+            ),
+            AuthorizationMetadataIssuer::Mismatched => (
+                Some(authorization_server.uri()),
+                "issuer does not match authorization metadata origin",
+            ),
+            AuthorizationMetadataIssuer::Matching => (
+                Some(resource_server.uri()),
+                "authorization endpoint origin does not match the authorization server origin",
+            ),
+        };
+        let mut authorization_metadata = json!({
+            "authorization_endpoint": format!("{}/authorize", authorization_server.uri()),
+            "registration_endpoint": format!("{}/register", authorization_server.uri()),
+            "token_endpoint": format!("{}/token", attacker_token_server.uri()),
+            "authorization_response_iss_parameter_supported": issuer_bound_callbacks,
+            "code_challenge_methods_supported": ["S256"],
+        });
+        if let Some(issuer) = issuer {
+            authorization_metadata["issuer"] = json!(issuer);
+        }
+
+        Mock::given(method("GET"))
+            .and(path("/mcp"))
+            .respond_with(ResponseTemplate::new(401).insert_header(
+                "www-authenticate",
+                format!("Bearer resource_metadata=\"{resource_metadata_url}\""),
+            ))
+            .expect(2)
+            .mount(&resource_server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/resource-metadata"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "resource": resource_url,
+                "authorization_servers": [format!(
+                    "{}/.well-known/untrusted-provider",
+                    resource_server.uri()
+                )],
+            })))
+            .expect(2)
+            .mount(&resource_server)
+            .await;
+        if authorization_metadata_path != "/.well-known/untrusted-provider" {
+            Mock::given(method("GET"))
+                .and(path("/.well-known/untrusted-provider"))
+                .respond_with(
+                    ResponseTemplate::new(302)
+                        .insert_header("location", authorization_metadata_path),
+                )
+                .expect(2)
+                .mount(&resource_server)
+                .await;
+        }
+        Mock::given(method("GET"))
+            .and(path(authorization_metadata_path))
+            .respond_with(ResponseTemplate::new(200).set_body_json(authorization_metadata))
+            .expect(2)
+            .mount(&resource_server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&attacker_token_server)
+            .await;
+
+        for oauth_client_id in [None, Some("preregistered-client")] {
+            let error = perform_oauth_login_return_url(
+                "untrusted-oauth-metadata",
+                &resource_url,
+                OAuthCredentialsStoreMode::File,
+                AuthKeyringBackendKind::Direct,
+                /*http_headers*/ None,
+                /*env_http_headers*/ None,
+                /*scopes*/ &[],
+                oauth_client_id,
+                McpOAuthClientRegistration::Dcr,
+                /*oauth_resource*/ None,
+                Some(/*timeout_secs*/ 5),
+                /*callback_port*/ None,
+                /*callback_url*/ None,
+                local_http_client(),
+                StreamableHttpRedirectMode::Legacy,
+            )
+            .await
+            .err()
+            .context("untrusted OAuth authorization metadata must fail")?;
+
+            assert!(
+                format!("{error:#}").contains(expected_error),
+                "unexpected authorization failure for {oauth_client_id:?}: {error:#}",
+            );
+        }
+
+        assert!(
+            attacker_token_server
+                .received_requests()
+                .await
+                .context("attacker token server request recording should be enabled")?
+                .is_empty(),
+            "the attacker must never receive an authorization code or PKCE verifier",
+        );
+        attacker_token_server.verify().await;
+        authorization_server.verify().await;
+        resource_server.verify().await;
+    }
     Ok(())
 }
