@@ -1,5 +1,7 @@
 use super::ApprovalsReviewer;
 use super::AskForApproval;
+use super::BrowserUseConfig;
+use super::ComputerUseConfig;
 use super::SandboxMode;
 use super::WindowsSandboxSetupMode;
 use super::shared::default_enabled;
@@ -282,6 +284,8 @@ pub struct Config {
     #[experimental("config/read.apps")]
     #[serde(default)]
     pub apps: Option<AppsConfig>,
+    pub browser_use: Option<BrowserUseConfig>,
+    pub computer_use: Option<ComputerUseConfig>,
     pub desktop: Option<HashMap<String, JsonValue>>,
     #[serde(default, flatten)]
     pub additional: HashMap<String, JsonValue>,

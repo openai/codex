@@ -1,7 +1,9 @@
+use schemars::JsonSchema;
 use serde::Deserialize;
+use serde::Serialize;
 use std::collections::BTreeMap;
 
-#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum AllowDenyRequirementToml {
     Allow,

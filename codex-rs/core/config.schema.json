@@ -70,6 +70,13 @@
       },
       "type": "object"
     },
+    "AllowDenyRequirementToml": {
+      "enum": [
+        "allow",
+        "deny"
+      ],
+      "type": "string"
+    },
     "AltScreenMode": {
       "description": "Controls whether the TUI uses the terminal's alternate screen buffer.\n\n- `auto` (default): Use alternate screen mode. - `always`: Always use alternate screen mode. - `never`: Never use alternate screen mode. Runs in inline mode, preserving scrollback.\n\nThe CLI flag `--no-alt-screen` can override this setting at runtime.",
       "oneOf": [
@@ -374,6 +381,42 @@
       ],
       "type": "object"
     },
+    "BrowserUseConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "allow_history_access": {
+          "type": "boolean"
+        },
+        "default_origin_policy": {
+          "$ref": "#/definitions/BrowserUseOriginPolicyConfigToml"
+        },
+        "origins": {
+          "additionalProperties": {
+            "$ref": "#/definitions/BrowserUseOriginPolicyConfigToml"
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "BrowserUseOriginPolicyConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "access": {
+          "$ref": "#/definitions/AllowDenyRequirementToml"
+        },
+        "downloads": {
+          "$ref": "#/definitions/AllowDenyRequirementToml"
+        },
+        "full_cdp_access": {
+          "$ref": "#/definitions/AllowDenyRequirementToml"
+        },
+        "uploads": {
+          "$ref": "#/definitions/AllowDenyRequirementToml"
+        }
+      },
+      "type": "object"
+    },
     "BundledSkillsConfig": {
       "additionalProperties": false,
       "properties": {
@@ -424,6 +467,74 @@
           "type": "boolean"
         }
       },
+      "type": "object"
+    },
+    "ComputerUseConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "default_app_access": {
+          "$ref": "#/definitions/AllowDenyRequirementToml"
+        },
+        "macos": {
+          "$ref": "#/definitions/ComputerUseMacosConfigToml"
+        },
+        "windows": {
+          "$ref": "#/definitions/ComputerUseWindowsConfigToml"
+        }
+      },
+      "type": "object"
+    },
+    "ComputerUseMacosConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "bundle_ids": {
+          "additionalProperties": {
+            "$ref": "#/definitions/AllowDenyRequirementToml"
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "ComputerUseWindowsConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "aumids": {
+          "additionalProperties": {
+            "$ref": "#/definitions/AllowDenyRequirementToml"
+          },
+          "type": "object"
+        },
+        "exes": {
+          "items": {
+            "$ref": "#/definitions/ComputerUseWindowsExeConfigToml"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "ComputerUseWindowsExeConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "access": {
+          "$ref": "#/definitions/AllowDenyRequirementToml"
+        },
+        "binary_name": {
+          "type": "string"
+        },
+        "product_name": {
+          "type": "string"
+        },
+        "publisher_name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "access",
+        "product_name",
+        "publisher_name"
+      ],
       "type": "object"
     },
     "ConfigProfile": {
@@ -5334,6 +5445,9 @@
       "minimum": 0.0,
       "type": "integer"
     },
+    "browser_use": {
+      "$ref": "#/definitions/BrowserUseConfigToml"
+    },
     "chatgpt_base_url": {
       "description": "Base URL for requests to ChatGPT (as opposed to the OpenAI API).",
       "type": "string"
@@ -5354,6 +5468,9 @@
     "compact_prompt": {
       "description": "Compact prompt used for history compaction.",
       "type": "string"
+    },
+    "computer_use": {
+      "$ref": "#/definitions/ComputerUseConfigToml"
     },
     "default_permissions": {
       "description": "Default permissions profile to apply. Names starting with `:` refer to built-in profiles; other names are resolved from the `[permissions]` table.",

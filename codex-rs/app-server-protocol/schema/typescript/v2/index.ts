@@ -45,7 +45,9 @@ export type { AttestationGenerateResponse } from "./AttestationGenerateResponse"
 export type { AutoReviewDecisionSource } from "./AutoReviewDecisionSource";
 export type { AutoReviewRequirements } from "./AutoReviewRequirements";
 export type { BrowserUseAccessApprovalLifetime } from "./BrowserUseAccessApprovalLifetime";
+export type { BrowserUseConfig } from "./BrowserUseConfig";
 export type { BrowserUseOriginPolicy } from "./BrowserUseOriginPolicy";
+export type { BrowserUseOriginPolicyConfig } from "./BrowserUseOriginPolicyConfig";
 export type { BrowserUseRequirements } from "./BrowserUseRequirements";
 export type { ByteRange } from "./ByteRange";
 export type { CancelLoginAccountParams } from "./CancelLoginAccountParams";
@@ -81,8 +83,12 @@ export type { CommandExecutionRequestApprovalResponse } from "./CommandExecution
 export type { CommandExecutionSource } from "./CommandExecutionSource";
 export type { CommandExecutionStatus } from "./CommandExecutionStatus";
 export type { CommandMigration } from "./CommandMigration";
+export type { ComputerUseConfig } from "./ComputerUseConfig";
+export type { ComputerUseMacosConfig } from "./ComputerUseMacosConfig";
 export type { ComputerUseMacosRequirements } from "./ComputerUseMacosRequirements";
 export type { ComputerUseRequirements } from "./ComputerUseRequirements";
+export type { ComputerUseWindowsConfig } from "./ComputerUseWindowsConfig";
+export type { ComputerUseWindowsExeConfig } from "./ComputerUseWindowsExeConfig";
 export type { ComputerUseWindowsExeRequirement } from "./ComputerUseWindowsExeRequirement";
 export type { ComputerUseWindowsRequirements } from "./ComputerUseWindowsRequirements";
 export type { Config } from "./Config";

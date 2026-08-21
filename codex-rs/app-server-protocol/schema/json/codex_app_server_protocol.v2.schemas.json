@@ -1294,6 +1294,36 @@
       ],
       "type": "string"
     },
+    "BrowserUseConfig": {
+      "properties": {
+        "allow_history_access": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "default_origin_policy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BrowserUseOriginPolicyConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "origins": {
+          "additionalProperties": {
+            "$ref": "#/definitions/BrowserUseOriginPolicyConfig"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "BrowserUseOriginPolicy": {
       "properties": {
         "access": {
@@ -1350,6 +1380,51 @@
           "type": [
             "boolean",
             "null"
+          ]
+        },
+        "uploads": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AllowDenyRequirement"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "BrowserUseOriginPolicyConfig": {
+      "properties": {
+        "access": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AllowDenyRequirement"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "downloads": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AllowDenyRequirement"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "full_cdp_access": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AllowDenyRequirement"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "uploads": {
@@ -4519,6 +4594,55 @@
       ],
       "type": "object"
     },
+    "ComputerUseConfig": {
+      "properties": {
+        "default_app_access": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AllowDenyRequirement"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "macos": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ComputerUseMacosConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "windows": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ComputerUseWindowsConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ComputerUseMacosConfig": {
+      "properties": {
+        "bundle_ids": {
+          "additionalProperties": {
+            "$ref": "#/definitions/AllowDenyRequirement"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "ComputerUseMacosRequirements": {
       "properties": {
         "bundleIds": {
@@ -4578,6 +4702,54 @@
           ]
         }
       },
+      "type": "object"
+    },
+    "ComputerUseWindowsConfig": {
+      "properties": {
+        "aumids": {
+          "additionalProperties": {
+            "$ref": "#/definitions/AllowDenyRequirement"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "exes": {
+          "items": {
+            "$ref": "#/definitions/ComputerUseWindowsExeConfig"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ComputerUseWindowsExeConfig": {
+      "properties": {
+        "access": {
+          "$ref": "#/definitions/AllowDenyRequirement"
+        },
+        "binary_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "product_name": {
+          "type": "string"
+        },
+        "publisher_name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "access",
+        "product_name",
+        "publisher_name"
+      ],
       "type": "object"
     },
     "ComputerUseWindowsExeRequirement": {
@@ -4662,10 +4834,30 @@
           ],
           "description": "[UNSTABLE] Optional default for where approval requests are routed for review."
         },
+        "browser_use": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BrowserUseConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "compact_prompt": {
           "type": [
             "string",
             "null"
+          ]
+        },
+        "computer_use": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ComputerUseConfig"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "desktop": {

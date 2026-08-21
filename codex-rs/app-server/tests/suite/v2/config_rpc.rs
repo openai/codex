@@ -10,11 +10,17 @@ use codex_app_server_protocol::AppsConfig;
 use codex_app_server_protocol::AppsDefaultConfig;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::BrowserUseAccessApprovalLifetime;
+use codex_app_server_protocol::BrowserUseConfig;
 use codex_app_server_protocol::BrowserUseOriginPolicy;
+use codex_app_server_protocol::BrowserUseOriginPolicyConfig;
 use codex_app_server_protocol::BrowserUseRequirements;
 use codex_app_server_protocol::CliAuthCredentialsStoreMode;
+use codex_app_server_protocol::ComputerUseConfig;
+use codex_app_server_protocol::ComputerUseMacosConfig;
 use codex_app_server_protocol::ComputerUseMacosRequirements;
 use codex_app_server_protocol::ComputerUseRequirements;
+use codex_app_server_protocol::ComputerUseWindowsConfig;
+use codex_app_server_protocol::ComputerUseWindowsExeConfig;
 use codex_app_server_protocol::ComputerUseWindowsExeRequirement;
 use codex_app_server_protocol::ComputerUseWindowsRequirements;
 use codex_app_server_protocol::ConfigBatchWriteParams;
@@ -609,6 +615,236 @@ allowed_domains = ["example.com"]
     );
     let layers = layers.expect("layers present");
     assert_layers_user_then_optional_system(&layers, user_file)?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_read_includes_browser_and_computer_use_config() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_config(
+        &codex_home,
+        r#"
+[browser_use]
+allow_history_access = true
+
+[browser_use.default_origin_policy]
+access = "deny"
+downloads = "allow"
+
+[browser_use.origins."https://example.com"]
+downloads = "deny"
+uploads = "allow"
+
+[computer_use]
+default_app_access = "deny"
+
+[computer_use.macos.bundle_ids]
+"com.apple.Safari" = "allow"
+
+[computer_use.windows.aumids]
+"Microsoft.Paint_8wekyb3d8bbwe!App" = "deny"
+
+[[computer_use.windows.exes]]
+publisher_name = "CN=Google LLC"
+product_name = "Google Chrome"
+binary_name = "chrome.exe"
+access = "allow"
+"#,
+    )?;
+    std::fs::write(
+        codex_home.path().join("requirements.toml"),
+        r#"
+allow_browser_and_computer_use = false
+
+[browser_use]
+allow_history_access = false
+allow_global_persistent_approval = false
+
+[browser_use.default_origin_policy]
+access = "allow"
+
+[computer_use]
+default_app_access = "allow"
+"#,
+    )?;
+
+    let workspace = TempDir::new()?;
+    let project_config_dir = workspace.path().join(".codex");
+    std::fs::create_dir_all(&project_config_dir)?;
+    std::fs::write(
+        project_config_dir.join("config.toml"),
+        r#"
+[browser_use.default_origin_policy]
+uploads = "deny"
+full_cdp_access = "allow"
+
+[browser_use.origins."https://example.com"]
+access = "allow"
+full_cdp_access = "deny"
+
+[computer_use.macos.bundle_ids]
+"com.apple.TextEdit" = "allow"
+"com.apple.Safari" = "deny"
+
+[computer_use.windows.aumids]
+"Microsoft.WindowsCalculator_8wekyb3d8bbwe!App" = "allow"
+
+[[computer_use.windows.exes]]
+publisher_name = "CN=Microsoft Corporation"
+product_name = "Microsoft Visual Studio Code"
+access = "deny"
+"#,
+    )?;
+    set_project_trust_level(codex_home.path(), workspace.path(), TrustLevel::Trusted)?;
+    let codex_home_path = codex_home.path().canonicalize()?;
+    let user_file = AbsolutePathBuf::try_from(codex_home_path.join("config.toml"))?;
+    let project_config = AbsolutePathBuf::try_from(project_config_dir)?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+
+    let request_id = mcp
+        .send_config_read_request(ConfigReadParams {
+            include_layers: false,
+            cwd: Some(workspace.path().to_string_lossy().into_owned()),
+        })
+        .await?;
+    let ConfigReadResponse {
+        config, origins, ..
+    } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
+
+    assert_eq!(
+        config.browser_use,
+        Some(BrowserUseConfig {
+            allow_history_access: Some(true),
+            default_origin_policy: Some(BrowserUseOriginPolicyConfig {
+                access: Some(AllowDenyRequirement::Deny),
+                downloads: Some(AllowDenyRequirement::Allow),
+                uploads: Some(AllowDenyRequirement::Deny),
+                full_cdp_access: Some(AllowDenyRequirement::Allow),
+            }),
+            origins: Some(BTreeMap::from([(
+                "https://example.com".to_string(),
+                BrowserUseOriginPolicyConfig {
+                    access: Some(AllowDenyRequirement::Allow),
+                    downloads: Some(AllowDenyRequirement::Deny),
+                    uploads: Some(AllowDenyRequirement::Allow),
+                    full_cdp_access: Some(AllowDenyRequirement::Deny),
+                },
+            )])),
+        })
+    );
+    assert_eq!(
+        config.computer_use,
+        Some(ComputerUseConfig {
+            default_app_access: Some(AllowDenyRequirement::Deny),
+            macos: Some(ComputerUseMacosConfig {
+                bundle_ids: Some(BTreeMap::from([
+                    ("com.apple.Safari".to_string(), AllowDenyRequirement::Deny,),
+                    (
+                        "com.apple.TextEdit".to_string(),
+                        AllowDenyRequirement::Allow,
+                    ),
+                ])),
+            }),
+            windows: Some(ComputerUseWindowsConfig {
+                aumids: Some(BTreeMap::from([
+                    (
+                        "Microsoft.Paint_8wekyb3d8bbwe!App".to_string(),
+                        AllowDenyRequirement::Deny,
+                    ),
+                    (
+                        "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App".to_string(),
+                        AllowDenyRequirement::Allow,
+                    ),
+                ])),
+                exes: Some(vec![ComputerUseWindowsExeConfig {
+                    publisher_name: "CN=Microsoft Corporation".to_string(),
+                    product_name: "Microsoft Visual Studio Code".to_string(),
+                    binary_name: None,
+                    access: AllowDenyRequirement::Deny,
+                }]),
+            }),
+        })
+    );
+    assert_eq!(
+        origins
+            .get("browser_use.default_origin_policy.access")
+            .expect("user policy origin")
+            .name,
+        ConfigLayerSource::User {
+            file: user_file.clone(),
+            profile: None,
+        }
+    );
+    assert_eq!(
+        origins
+            .get("browser_use.default_origin_policy.full_cdp_access")
+            .expect("project policy origin")
+            .name,
+        ConfigLayerSource::Project {
+            dot_codex_folder: project_config.clone(),
+        }
+    );
+    assert_eq!(
+        origins
+            .get("browser_use.allow_history_access")
+            .expect("user browser use origin")
+            .name,
+        ConfigLayerSource::User {
+            file: user_file,
+            profile: None,
+        }
+    );
+    assert_eq!(
+        origins
+            .get("computer_use.windows.exes.0.access")
+            .expect("project computer use origin")
+            .name,
+        ConfigLayerSource::Project {
+            dot_codex_folder: project_config,
+        }
+    );
+
+    let request_id = mcp.send_config_requirements_read_request().await?;
+    let response: ConfigRequirementsReadResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
+    let requirements = response
+        .requirements
+        .expect("managed requirements should be returned");
+    assert_eq!(requirements.allow_browser_and_computer_use, Some(false));
+    assert_eq!(
+        requirements.browser_use,
+        Some(BrowserUseRequirements {
+            allow_history_access: Some(false),
+            disable_auto_review: None,
+            allow_global_persistent_approval: Some(false),
+            default_origin_policy: Some(BrowserUseOriginPolicy {
+                access: Some(AllowDenyRequirement::Allow),
+                downloads: None,
+                uploads: None,
+                full_cdp_access: None,
+                auto_review: None,
+                persistent_approval: None,
+                access_approval_lifetime: None,
+            }),
+            origins: None,
+        })
+    );
+    assert_eq!(
+        requirements.computer_use,
+        Some(ComputerUseRequirements {
+            allow_locked_computer_use: None,
+            allow_persistent_approval: None,
+            default_app_access: Some(AllowDenyRequirement::Allow),
+            macos: None,
+            windows: None,
+        })
+    );
 
     Ok(())
 }
@@ -1418,6 +1654,238 @@ async fn config_batch_write_applies_multiple_edits() -> Result<()> {
         .expect("sandbox workspace write");
     assert_eq!(sandbox.writable_roots, vec![writable_root]);
     assert!(!sandbox.network_access);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_batch_write_round_trips_browser_and_computer_use_config() -> Result<()> {
+    let tmp_dir = TempDir::new()?;
+    let codex_home = tmp_dir.path().canonicalize()?;
+    write_config(
+        &tmp_dir,
+        r#"
+model = "gpt-existing"
+
+[browser_use.origins."https://stale.example"]
+access = "deny"
+
+[computer_use.macos.bundle_ids]
+"com.example.Stale" = "deny"
+
+[computer_use.windows.aumids]
+"Stale.App_123!App" = "allow"
+
+[[computer_use.windows.exes]]
+publisher_name = "CN=Stale"
+product_name = "Stale App"
+binary_name = "stale.exe"
+access = "deny"
+"#,
+    )?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(&codex_home)
+        .without_auto_env()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+
+    let batch_id = mcp
+        .send_config_batch_write_request(ConfigBatchWriteParams {
+            file_path: None,
+            edits: vec![
+                ConfigEdit {
+                    key_path: "browser_use.allow_history_access".to_string(),
+                    value: json!(true),
+                    merge_strategy: MergeStrategy::Replace,
+                },
+                ConfigEdit {
+                    key_path: "browser_use.default_origin_policy".to_string(),
+                    value: json!({
+                        "access": "allow",
+                        "downloads": "deny",
+                        "uploads": "allow",
+                        "full_cdp_access": "deny",
+                    }),
+                    merge_strategy: MergeStrategy::Replace,
+                },
+                ConfigEdit {
+                    key_path: "browser_use.origins.\"https://example.com\"".to_string(),
+                    value: json!({
+                        "access": "deny",
+                        "downloads": "allow",
+                        "uploads": "deny",
+                        "full_cdp_access": "allow",
+                    }),
+                    merge_strategy: MergeStrategy::Replace,
+                },
+                ConfigEdit {
+                    key_path: "browser_use.origins.\"https://stale.example\"".to_string(),
+                    value: json!(null),
+                    merge_strategy: MergeStrategy::Replace,
+                },
+                ConfigEdit {
+                    key_path: "computer_use.default_app_access".to_string(),
+                    value: json!("deny"),
+                    merge_strategy: MergeStrategy::Replace,
+                },
+                ConfigEdit {
+                    key_path: "computer_use.macos.bundle_ids.\"com.apple.Safari\"".to_string(),
+                    value: json!("allow"),
+                    merge_strategy: MergeStrategy::Replace,
+                },
+                ConfigEdit {
+                    key_path: "computer_use.macos.bundle_ids.\"com.example.Stale\"".to_string(),
+                    value: json!(null),
+                    merge_strategy: MergeStrategy::Replace,
+                },
+                ConfigEdit {
+                    key_path: "computer_use.windows.aumids.\"Microsoft.Paint_8wekyb3d8bbwe!App\""
+                        .to_string(),
+                    value: json!("deny"),
+                    merge_strategy: MergeStrategy::Replace,
+                },
+                ConfigEdit {
+                    key_path: "computer_use.windows.aumids.\"Stale.App_123!App\"".to_string(),
+                    value: json!(null),
+                    merge_strategy: MergeStrategy::Replace,
+                },
+                ConfigEdit {
+                    key_path: "computer_use.windows.exes".to_string(),
+                    value: json!([
+                        {
+                            "publisher_name": "CN=Google LLC",
+                            "product_name": "Google Chrome",
+                            "binary_name": "chrome.exe",
+                            "access": "allow",
+                        },
+                        {
+                            "publisher_name": "CN=Microsoft Corporation",
+                            "product_name": "Microsoft Visual Studio Code",
+                            "access": "deny",
+                        },
+                    ]),
+                    merge_strategy: MergeStrategy::Replace,
+                },
+            ],
+            expected_version: None,
+            reload_user_config: false,
+        })
+        .await?;
+    let batch_write: ConfigWriteResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(batch_id)).await??;
+    assert_eq!(batch_write.status, WriteStatus::Ok);
+    assert_eq!(
+        batch_write.file_path,
+        AbsolutePathBuf::resolve_path_against_base("config.toml", &codex_home)
+    );
+    assert_eq!(batch_write.overridden_metadata, None);
+
+    let persisted: toml::Value =
+        toml::from_str(&std::fs::read_to_string(codex_home.join("config.toml"))?)?;
+    let expected_persisted: toml::Value = toml::from_str(
+        r#"
+model = "gpt-existing"
+
+[browser_use]
+allow_history_access = true
+
+[browser_use.default_origin_policy]
+access = "allow"
+downloads = "deny"
+uploads = "allow"
+full_cdp_access = "deny"
+
+[browser_use.origins."https://example.com"]
+access = "deny"
+downloads = "allow"
+uploads = "deny"
+full_cdp_access = "allow"
+
+[computer_use]
+default_app_access = "deny"
+
+[computer_use.macos.bundle_ids]
+"com.apple.Safari" = "allow"
+
+[computer_use.windows.aumids]
+"Microsoft.Paint_8wekyb3d8bbwe!App" = "deny"
+
+[[computer_use.windows.exes]]
+publisher_name = "CN=Google LLC"
+product_name = "Google Chrome"
+binary_name = "chrome.exe"
+access = "allow"
+
+[[computer_use.windows.exes]]
+publisher_name = "CN=Microsoft Corporation"
+product_name = "Microsoft Visual Studio Code"
+access = "deny"
+"#,
+    )?;
+    assert_eq!(persisted, expected_persisted);
+
+    let read_id = mcp
+        .send_config_read_request(ConfigReadParams {
+            include_layers: false,
+            cwd: None,
+        })
+        .await?;
+    let read: ConfigReadResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(read_id)).await??;
+    assert_eq!(
+        read.config.browser_use,
+        Some(BrowserUseConfig {
+            allow_history_access: Some(true),
+            default_origin_policy: Some(BrowserUseOriginPolicyConfig {
+                access: Some(AllowDenyRequirement::Allow),
+                downloads: Some(AllowDenyRequirement::Deny),
+                uploads: Some(AllowDenyRequirement::Allow),
+                full_cdp_access: Some(AllowDenyRequirement::Deny),
+            }),
+            origins: Some(BTreeMap::from([(
+                "https://example.com".to_string(),
+                BrowserUseOriginPolicyConfig {
+                    access: Some(AllowDenyRequirement::Deny),
+                    downloads: Some(AllowDenyRequirement::Allow),
+                    uploads: Some(AllowDenyRequirement::Deny),
+                    full_cdp_access: Some(AllowDenyRequirement::Allow),
+                },
+            )])),
+        })
+    );
+    assert_eq!(
+        read.config.computer_use,
+        Some(ComputerUseConfig {
+            default_app_access: Some(AllowDenyRequirement::Deny),
+            macos: Some(ComputerUseMacosConfig {
+                bundle_ids: Some(BTreeMap::from([(
+                    "com.apple.Safari".to_string(),
+                    AllowDenyRequirement::Allow,
+                )])),
+            }),
+            windows: Some(ComputerUseWindowsConfig {
+                aumids: Some(BTreeMap::from([(
+                    "Microsoft.Paint_8wekyb3d8bbwe!App".to_string(),
+                    AllowDenyRequirement::Deny,
+                )])),
+                exes: Some(vec![
+                    ComputerUseWindowsExeConfig {
+                        publisher_name: "CN=Google LLC".to_string(),
+                        product_name: "Google Chrome".to_string(),
+                        binary_name: Some("chrome.exe".to_string()),
+                        access: AllowDenyRequirement::Allow,
+                    },
+                    ComputerUseWindowsExeConfig {
+                        publisher_name: "CN=Microsoft Corporation".to_string(),
+                        product_name: "Microsoft Visual Studio Code".to_string(),
+                        binary_name: None,
+                        access: AllowDenyRequirement::Deny,
+                    },
+                ]),
+            }),
+        })
+    );
 
     Ok(())
 }
