@@ -16,6 +16,7 @@ export type { AdditionalNetworkPermissions } from "./AdditionalNetworkPermission
 export type { AdditionalPermissionProfile } from "./AdditionalPermissionProfile";
 export type { AgentMessageDelivery } from "./AgentMessageDelivery";
 export type { AgentMessageDeltaNotification } from "./AgentMessageDeltaNotification";
+export type { AllowDenyRequirement } from "./AllowDenyRequirement";
 export type { AnalyticsConfig } from "./AnalyticsConfig";
 export type { AppBranding } from "./AppBranding";
 export type { AppInfo } from "./AppInfo";
@@ -43,6 +44,8 @@ export type { AttestationGenerateParams } from "./AttestationGenerateParams";
 export type { AttestationGenerateResponse } from "./AttestationGenerateResponse";
 export type { AutoReviewDecisionSource } from "./AutoReviewDecisionSource";
 export type { AutoReviewRequirements } from "./AutoReviewRequirements";
+export type { BrowserUseAccessApprovalLifetime } from "./BrowserUseAccessApprovalLifetime";
+export type { BrowserUseOriginPolicy } from "./BrowserUseOriginPolicy";
 export type { BrowserUseRequirements } from "./BrowserUseRequirements";
 export type { ByteRange } from "./ByteRange";
 export type { CancelLoginAccountParams } from "./CancelLoginAccountParams";
@@ -78,7 +81,10 @@ export type { CommandExecutionRequestApprovalResponse } from "./CommandExecution
 export type { CommandExecutionSource } from "./CommandExecutionSource";
 export type { CommandExecutionStatus } from "./CommandExecutionStatus";
 export type { CommandMigration } from "./CommandMigration";
+export type { ComputerUseMacosRequirements } from "./ComputerUseMacosRequirements";
 export type { ComputerUseRequirements } from "./ComputerUseRequirements";
+export type { ComputerUseWindowsExeRequirement } from "./ComputerUseWindowsExeRequirement";
+export type { ComputerUseWindowsRequirements } from "./ComputerUseWindowsRequirements";
 export type { Config } from "./Config";
 export type { ConfigBatchWriteParams } from "./ConfigBatchWriteParams";
 export type { ConfigEdit } from "./ConfigEdit";

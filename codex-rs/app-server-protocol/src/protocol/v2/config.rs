@@ -396,6 +396,7 @@ pub struct ConfigRequirements {
     pub default_permissions: Option<String>,
     pub allowed_web_search_modes: Option<Vec<WebSearchMode>>,
     pub allow_managed_hooks_only: Option<bool>,
+    pub allow_browser_and_computer_use: Option<bool>,
     pub allow_appshots: Option<bool>,
     pub allow_remote_control: Option<bool>,
     pub computer_use: Option<ComputerUseRequirements>,
@@ -467,13 +468,75 @@ pub struct FeedbackRequirements {
 #[ts(export_to = "v2/")]
 pub struct ComputerUseRequirements {
     pub allow_locked_computer_use: Option<bool>,
+    pub allow_persistent_approval: Option<bool>,
+    pub default_app_access: Option<AllowDenyRequirement>,
+    pub macos: Option<ComputerUseMacosRequirements>,
+    pub windows: Option<ComputerUseWindowsRequirements>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct BrowserUseRequirements {
+    pub allow_history_access: Option<bool>,
     pub disable_auto_review: Option<bool>,
+    pub allow_global_persistent_approval: Option<bool>,
+    pub default_origin_policy: Option<BrowserUseOriginPolicy>,
+    pub origins: Option<BTreeMap<String, BrowserUseOriginPolicy>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct BrowserUseOriginPolicy {
+    pub access: Option<AllowDenyRequirement>,
+    pub downloads: Option<AllowDenyRequirement>,
+    pub uploads: Option<AllowDenyRequirement>,
+    pub full_cdp_access: Option<AllowDenyRequirement>,
+    pub auto_review: Option<AllowDenyRequirement>,
+    pub persistent_approval: Option<bool>,
+    pub access_approval_lifetime: Option<BrowserUseAccessApprovalLifetime>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase", export_to = "v2/")]
+pub enum AllowDenyRequirement {
+    Allow,
+    Deny,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase", export_to = "v2/")]
+pub enum BrowserUseAccessApprovalLifetime {
+    Turn,
+    Thread,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ComputerUseMacosRequirements {
+    pub bundle_ids: Option<BTreeMap<String, AllowDenyRequirement>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ComputerUseWindowsRequirements {
+    pub aumids: Option<BTreeMap<String, AllowDenyRequirement>>,
+    pub exes: Option<Vec<ComputerUseWindowsExeRequirement>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ComputerUseWindowsExeRequirement {
+    pub publisher_name: String,
+    pub product_name: String,
+    pub binary_name: Option<String>,
+    pub access: AllowDenyRequirement,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

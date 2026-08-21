@@ -2,13 +2,21 @@ use anyhow::Result;
 use app_test_support::TestAppServer;
 use app_test_support::test_path_buf_with_windows;
 use app_test_support::test_tmp_path_buf;
+use codex_app_server_protocol::AllowDenyRequirement;
 use codex_app_server_protocol::AppConfig;
 use codex_app_server_protocol::AppToolApproval;
 use codex_app_server_protocol::ApprovalsReviewer;
 use codex_app_server_protocol::AppsConfig;
 use codex_app_server_protocol::AppsDefaultConfig;
 use codex_app_server_protocol::AskForApproval;
+use codex_app_server_protocol::BrowserUseAccessApprovalLifetime;
+use codex_app_server_protocol::BrowserUseOriginPolicy;
+use codex_app_server_protocol::BrowserUseRequirements;
 use codex_app_server_protocol::CliAuthCredentialsStoreMode;
+use codex_app_server_protocol::ComputerUseMacosRequirements;
+use codex_app_server_protocol::ComputerUseRequirements;
+use codex_app_server_protocol::ComputerUseWindowsExeRequirement;
+use codex_app_server_protocol::ComputerUseWindowsRequirements;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigEdit;
 use codex_app_server_protocol::ConfigLayerSource;
@@ -34,6 +42,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::collections::BTreeMap;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -215,13 +224,52 @@ statusMessage = "Scanning file"
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn config_requirements_read_includes_browser_use_auto_review_setting() -> Result<()> {
+async fn config_requirements_read_includes_browser_and_computer_use_schema() -> Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(
         codex_home.path().join("requirements.toml"),
         r#"
+allow_browser_and_computer_use = false
+
 [browser_use]
+allow_history_access = false
 disable_auto_review = true
+allow_global_persistent_approval = false
+
+[browser_use.default_origin_policy]
+access = "deny"
+downloads = "allow"
+uploads = "deny"
+full_cdp_access = "allow"
+auto_review = "deny"
+persistent_approval = false
+access_approval_lifetime = "turn"
+
+[browser_use.origins."https://example.com"]
+access = "allow"
+downloads = "deny"
+uploads = "allow"
+full_cdp_access = "deny"
+auto_review = "deny"
+persistent_approval = true
+access_approval_lifetime = "thread"
+
+[computer_use]
+allow_locked_computer_use = false
+allow_persistent_approval = false
+default_app_access = "deny"
+
+[computer_use.macos.bundle_ids]
+"com.apple.Safari" = "allow"
+
+[computer_use.windows.aumids]
+"Microsoft.Paint_8wekyb3d8bbwe!App" = "allow"
+
+[[computer_use.windows.exes]]
+publisher_name = "CN=Google LLC"
+product_name = "Google Chrome"
+binary_name = "chrome.exe"
+access = "deny"
 "#,
     )?;
     let mut mcp = TestAppServer::builder()
@@ -234,12 +282,64 @@ disable_auto_review = true
     let request_id = mcp.send_config_requirements_read_request().await?;
     let response: ConfigRequirementsReadResponse =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
+    let requirements = response
+        .requirements
+        .expect("managed requirements should be returned");
+    assert_eq!(requirements.allow_browser_and_computer_use, Some(false));
     assert_eq!(
-        response
-            .requirements
-            .and_then(|requirements| requirements.browser_use)
-            .and_then(|browser_use| browser_use.disable_auto_review),
-        Some(true)
+        requirements.browser_use,
+        Some(BrowserUseRequirements {
+            allow_history_access: Some(false),
+            disable_auto_review: Some(true),
+            allow_global_persistent_approval: Some(false),
+            default_origin_policy: Some(BrowserUseOriginPolicy {
+                access: Some(AllowDenyRequirement::Deny),
+                downloads: Some(AllowDenyRequirement::Allow),
+                uploads: Some(AllowDenyRequirement::Deny),
+                full_cdp_access: Some(AllowDenyRequirement::Allow),
+                auto_review: Some(AllowDenyRequirement::Deny),
+                persistent_approval: Some(false),
+                access_approval_lifetime: Some(BrowserUseAccessApprovalLifetime::Turn),
+            }),
+            origins: Some(BTreeMap::from([(
+                "https://example.com".to_string(),
+                BrowserUseOriginPolicy {
+                    access: Some(AllowDenyRequirement::Allow),
+                    downloads: Some(AllowDenyRequirement::Deny),
+                    uploads: Some(AllowDenyRequirement::Allow),
+                    full_cdp_access: Some(AllowDenyRequirement::Deny),
+                    auto_review: Some(AllowDenyRequirement::Deny),
+                    persistent_approval: Some(true),
+                    access_approval_lifetime: Some(BrowserUseAccessApprovalLifetime::Thread),
+                },
+            )])),
+        })
+    );
+    assert_eq!(
+        requirements.computer_use,
+        Some(ComputerUseRequirements {
+            allow_locked_computer_use: Some(false),
+            allow_persistent_approval: Some(false),
+            default_app_access: Some(AllowDenyRequirement::Deny),
+            macos: Some(ComputerUseMacosRequirements {
+                bundle_ids: Some(BTreeMap::from([(
+                    "com.apple.Safari".to_string(),
+                    AllowDenyRequirement::Allow,
+                )])),
+            }),
+            windows: Some(ComputerUseWindowsRequirements {
+                aumids: Some(BTreeMap::from([(
+                    "Microsoft.Paint_8wekyb3d8bbwe!App".to_string(),
+                    AllowDenyRequirement::Allow,
+                )])),
+                exes: Some(vec![ComputerUseWindowsExeRequirement {
+                    publisher_name: "CN=Google LLC".to_string(),
+                    product_name: "Google Chrome".to_string(),
+                    binary_name: Some("chrome.exe".to_string()),
+                    access: AllowDenyRequirement::Deny,
+                }]),
+            }),
+        })
     );
     Ok(())
 }
