@@ -71,6 +71,7 @@ pub struct UnifiedExecRequest {
     pub turn_environment: TurnEnvironment,
     pub env: HashMap<String, String>,
     pub exec_server_env_config: Option<ExecServerEnvConfig>,
+    pub shell_snapshot: Option<codex_exec_server::ShellSnapshotRequest>,
     pub explicit_env_overrides: HashMap<String, String>,
     pub network: Option<NetworkProxy>,
     pub tty: bool,
@@ -201,7 +202,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecAttempt> for UnifiedExecRunt
     }
 
     fn uses_executor_managed_process_sandbox(&self, req: &UnifiedExecRequest) -> bool {
-        req.turn_environment.environment.is_remote()
+        req.turn_environment.environment.is_remote() || req.shell_snapshot.is_some()
     }
 
     fn sandbox_cwd<'b>(&self, req: &'b UnifiedExecRequest) -> Option<&'b PathUri> {
@@ -368,7 +369,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecAttempt> for UnifiedExecRunt
         };
         #[cfg(not(unix))]
         let runtime_path_prepends = RuntimePathPrepends::default();
-        let command = if environment_is_remote {
+        let mut command = if environment_is_remote {
             base_command.to_vec()
         } else {
             maybe_wrap_shell_lc_with_snapshot(
@@ -380,6 +381,15 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecAttempt> for UnifiedExecRunt
                 &runtime_path_prepends,
             )
         };
+        if req.shell_snapshot.is_some() {
+            let exports =
+                runtime_path_prepends.shell_exports_after_snapshot(&explicit_env_overrides);
+            if !exports.is_empty()
+                && let Some(script) = command.get_mut(2)
+            {
+                *script = format!("{exports}\n{script}");
+            }
+        }
         let command = disable_powershell_profile_for_elevated_windows_sandbox(
             &command,
             Some(&req.shell_type),
@@ -491,6 +501,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecAttempt> for UnifiedExecRunt
                 network_proxy_launch,
                 /*environment_id*/ Some(&req.turn_environment.selection.environment_id),
                 req.exec_server_env_config.clone(),
+                req.shell_snapshot.clone(),
                 windows_sandbox_proxy_settings_mode,
                 req.tty,
                 Box::new(NoopSpawnLifecycle),
@@ -616,6 +627,7 @@ mod tests {
             turn_environment: test_turn_environment(sandbox_cwd.clone().into()),
             env: HashMap::new(),
             exec_server_env_config: None,
+            shell_snapshot: None,
             explicit_env_overrides: HashMap::new(),
             network: None,
             tty: false,
@@ -718,6 +730,7 @@ mod tests {
             turn_environment: test_turn_environment(cwd.into()),
             env: HashMap::new(),
             exec_server_env_config: None,
+            shell_snapshot: None,
             explicit_env_overrides: HashMap::new(),
             network: None,
             tty: false,

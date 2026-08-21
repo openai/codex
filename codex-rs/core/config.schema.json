@@ -754,6 +754,9 @@
             "shell_snapshot": {
               "type": "boolean"
             },
+            "shell_snapshot_v2": {
+              "type": "boolean"
+            },
             "shell_tool": {
               "type": "boolean"
             },
@@ -5710,6 +5713,9 @@
           "type": "boolean"
         },
         "shell_snapshot": {
+          "type": "boolean"
+        },
+        "shell_snapshot_v2": {
           "type": "boolean"
         },
         "shell_tool": {

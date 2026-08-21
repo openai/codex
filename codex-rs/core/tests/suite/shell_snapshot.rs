@@ -1,6 +1,6 @@
 use anyhow::Result;
 use codex_core::TurnInputRequest;
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 use codex_core::shell::get_shell_by_model_provided_path;
 use codex_features::Feature;
 use codex_protocol::config_types::CollaborationMode;
@@ -20,6 +20,8 @@ use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
+#[cfg(unix)]
+use core_test_support::skip_if_remote;
 use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
@@ -288,6 +290,112 @@ fn assert_posix_snapshot_sections(snapshot: &str) {
         snapshot.contains("PATH"),
         "snapshot should include PATH exports; snapshot={snapshot:?}"
     );
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shell_snapshot_v2_filters_profile_secrets_without_creating_files() -> Result<()> {
+    skip_if_remote!(Ok(()), "profile fixture uses a host-local HOME directory");
+    let profile_home = tempfile::tempdir()?;
+    fs::write(
+        profile_home.path().join(".bashrc"),
+        "printf x >> \"$HOME/captures\"\nexport PATH=\"$HOME/profile-bin:$PATH\"\nexport PROFILE_ALLOWED=profile\nexport PROFILE_SECRET=secret\nprofile_helper() { printf helper; }\n",
+    )
+    .await?;
+    fs::write(
+        profile_home.path().join(".bash_profile"),
+        "export PROFILE_SECRET=secret\n",
+    )
+    .await?;
+    let configured_home = profile_home.path().to_string_lossy().into_owned();
+    let shell = get_shell_by_model_provided_path(&PathBuf::from("/bin/sh"));
+    let builder = test_codex()
+        .with_user_shell(shell)
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("test config should enable unified exec");
+            config
+                .features
+                .enable(Feature::ShellSnapshotV2)
+                .expect("test config should enable in-memory snapshots");
+            config
+                .permissions
+                .shell_environment_policy
+                .ignore_default_excludes = false;
+            config.permissions.shell_environment_policy.r#set = HashMap::from([
+                ("HOME".to_string(), configured_home),
+                ("PROFILE_ALLOWED".to_string(), "policy".to_string()),
+            ]);
+        });
+    let harness = TestCodexHarness::with_auto_env_builder(builder).await?;
+
+    for attempt in 0..2 {
+        let end = run_tool_turn_on_harness(
+            &harness,
+            "run an in-memory shell snapshot",
+            &format!("shell-snapshot-v2-{attempt}"),
+            "exec_command",
+            json!({
+                "cmd": "profile_helper; case \":$PATH:\" in *\":$HOME/profile-bin:\"*) printf '|path';; *) printf '|missing';; esac; printf '|%s|%s' \"$PROFILE_ALLOWED\" \"${PROFILE_SECRET-missing}\"",
+                "shell": "/bin/bash",
+                "yield_time_ms": 1_000,
+            }),
+        )
+        .await?;
+
+        assert_eq!(end.exit_code, 0);
+        assert_eq!(
+            normalize_newlines(&end.stdout).trim(),
+            "helper|path|policy|missing"
+        );
+    }
+
+    assert_eq!(
+        fs::read_to_string(profile_home.path().join("captures")).await?,
+        "x"
+    );
+    assert!(!harness.test().home.path().join("shell_snapshots").exists());
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shell_snapshot_v2_preserves_legacy_snapshots_for_user_shell() -> Result<()> {
+    skip_if_remote!(Ok(()), "legacy shell snapshots require a local environment");
+    let builder = test_codex().with_config(|config| {
+        config
+            .features
+            .disable(Feature::ShellTool)
+            .expect("test config should disable model shell tools");
+        config
+            .features
+            .enable(Feature::ShellSnapshot)
+            .expect("test config should enable legacy snapshots");
+        config
+            .features
+            .enable(Feature::ShellSnapshotV2)
+            .expect("test config should enable in-memory snapshots");
+    });
+    let harness = TestCodexHarness::with_auto_env_builder(builder).await?;
+    let snapshot_path = wait_for_snapshot(harness.test().home.path()).await?;
+    assert_posix_snapshot_sections(&fs::read_to_string(snapshot_path).await?);
+    let codex = &harness.test().codex;
+    codex
+        .submit(Op::RunUserShellCommand {
+            command: "printf legacy".to_string(),
+        })
+        .await?;
+    let end = wait_for_event_match(codex, |event| match event {
+        EventMsg::ExecCommandEnd(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+
+    assert_eq!(end.exit_code, 0);
+    assert_eq!(normalize_newlines(&end.stdout).trim(), "legacy");
+    Ok(())
 }
 
 #[cfg_attr(not(target_os = "linux"), ignore)]

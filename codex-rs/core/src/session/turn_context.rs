@@ -42,6 +42,7 @@ pub(crate) struct TurnEnvironment {
     pub(crate) environment: Arc<Environment>,
     pub(crate) shell: Option<shell::Shell>,
     pub(crate) shell_snapshot: ShellSnapshotTask,
+    pub(crate) shell_snapshot_v2_supported: bool,
 }
 
 impl TurnEnvironment {
@@ -58,6 +59,7 @@ impl TurnEnvironment {
             environment,
             shell,
             shell_snapshot: futures::future::ready(None).boxed().shared(),
+            shell_snapshot_v2_supported: false,
         }
     }
 

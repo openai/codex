@@ -137,6 +137,7 @@ struct ResolvedEnvironment {
     environment: Arc<Environment>,
     shell: Option<Shell>,
     shell_snapshot: ShellSnapshotTask,
+    shell_snapshot_v2_supported: bool,
     installed_config: Option<EnvironmentConfig>,
 }
 
@@ -239,6 +240,7 @@ impl ThreadEnvironments {
                         environment: environment.environment,
                         shell: environment.shell,
                         shell_snapshot: environment.shell_snapshot,
+                        shell_snapshot_v2_supported: environment.shell_snapshot_v2_supported,
                         installed_config: None,
                     }))
                     .boxed()
@@ -602,24 +604,27 @@ impl ThreadEnvironments {
         };
         // Resolve the attachment only after both prerequisites are ready.
         let ((), installed_config) = tokio::try_join!(connection_ready, configuration_ready)?;
-        let shell = if environment.is_remote() {
+        let (shell, shell_snapshot_v2_supported) = if environment.is_remote() {
             match environment.info().await {
-                Ok(info) => match Shell::from_environment_shell_info(info.shell) {
-                    Ok(shell) => Some(shell),
-                    Err(err) => {
-                        tracing::warn!(
-                            "failed to resolve shell for environment `{environment_id}`: {err}"
-                        );
-                        None
-                    }
-                },
+                Ok(info) => (
+                    match Shell::from_environment_shell_info(info.shell) {
+                        Ok(shell) => Some(shell),
+                        Err(err) => {
+                            tracing::warn!(
+                                "failed to resolve shell for environment `{environment_id}`: {err}"
+                            );
+                            None
+                        }
+                    },
+                    info.capabilities.shell_snapshot_v2,
+                ),
                 Err(err) => {
                     tracing::warn!("failed to get info for environment `{environment_id}`: {err}");
-                    None
+                    (None, false)
                 }
             }
         } else {
-            Some(local_shell)
+            (Some(local_shell), cfg!(unix))
         };
         let task = shell_snapshot
             .build(Arc::clone(&environment), selection.cwd, shell.clone())
@@ -632,6 +637,7 @@ impl ThreadEnvironments {
             environment,
             shell,
             shell_snapshot: task,
+            shell_snapshot_v2_supported,
             installed_config,
         })
     }
@@ -707,6 +713,8 @@ impl TurnEnvironmentState {
                     environment.shell,
                 );
                 turn_environment.shell_snapshot = environment.shell_snapshot;
+                turn_environment.shell_snapshot_v2_supported =
+                    environment.shell_snapshot_v2_supported;
                 Some(Self::Ready(turn_environment))
             }
             Some(Err(err)) => {

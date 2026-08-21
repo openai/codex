@@ -145,6 +145,8 @@ pub enum Feature {
     UseLegacyLandlock,
     /// Experimental shell snapshotting.
     ShellSnapshot,
+    /// Keep policy-filtered shell snapshots entirely in executor memory.
+    ShellSnapshotV2,
     /// Allow turns to start while selected executors are still starting.
     DeferredExecutor,
     /// Use the current working directory for turn diff display paths.
@@ -870,6 +872,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "shell_snapshot",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::ShellSnapshotV2,
+        key: "shell_snapshot_v2",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::DeferredExecutor,

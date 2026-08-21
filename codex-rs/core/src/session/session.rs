@@ -1165,7 +1165,21 @@ impl Session {
             } else {
                 shell::default_user_shell()
             };
-            let shell_snapshot = if config.features.enabled(Feature::ShellSnapshot) {
+            let use_executor_shell_snapshots = config.features.enabled(Feature::ShellSnapshotV2)
+                && config.features.enabled(Feature::ShellTool)
+                && config.features.enabled(Feature::UnifiedExec)
+                && matches!(
+                    codex_tools::UnifiedExecShellMode::for_session(
+                        config.features.get(),
+                        crate::tools::tool_user_shell_type(&default_shell),
+                        config.zsh_path.as_ref(),
+                        config.main_execve_wrapper_exe.as_ref(),
+                    ),
+                    codex_tools::UnifiedExecShellMode::Direct
+                );
+            let shell_snapshot = if config.features.enabled(Feature::ShellSnapshot)
+                && !use_executor_shell_snapshots
+            {
                 ShellSnapshot::new(
                     config.codex_home.clone(),
                     thread_id,

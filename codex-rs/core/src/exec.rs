@@ -408,6 +408,7 @@ pub(crate) async fn execute_exec_request(
         cwd,
         env,
         exec_server_env_config: _,
+        exec_server_shell_snapshot: _,
         network,
         expiration,
         capture_policy,

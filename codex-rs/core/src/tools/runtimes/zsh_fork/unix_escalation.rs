@@ -632,6 +632,7 @@ impl CoreShellCommandExecutor {
                 cwd: self.cwd.clone().into(),
                 env: exec_env,
                 exec_server_env_config: None,
+                exec_server_shell_snapshot: None,
                 network: self.network.clone(),
                 network_environment_id: self.network_environment_id.clone(),
                 expiration: ExecExpiration::Cancellation(cancel_rx),

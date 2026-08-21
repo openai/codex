@@ -184,6 +184,7 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
                 ),
             ]),
         }),
+        exec_server_shell_snapshot: None,
         network: None,
         network_environment_id: None,
         expiration: crate::exec::ExecExpiration::DefaultTimeout,
@@ -230,6 +231,18 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
             ("CODEX_NETWORK_PROXY_ACTIVE".to_string(), "1".to_string(),),
         ])
     );
+    request.exec_server_shell_snapshot = Some(codex_exec_server::ShellSnapshotRequest {
+        scope_id: "attachment-1".to_string(),
+        shell: codex_exec_server::ShellInfo {
+            name: "bash".to_string(),
+            path: "/bin/bash".to_string(),
+        },
+    });
+    let mut snapshot_env = params.env;
+    snapshot_env.remove("PATH");
+    assert_eq!(params_for_request(&request).env, snapshot_env);
+    request.exec_server_shell_snapshot = None;
+
     request.exec_server_sandbox = Some(
         codex_exec_server::FileSystemSandboxContext::from_permission_profile(permission_profile),
     );
