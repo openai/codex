@@ -52,7 +52,7 @@ impl ThreadLifecycleContributor<Config> for PersistentModeExtension {
             };
             let continue_without_message = matches!(
                 stored_thread.model.as_deref(),
-                Some("nathree" | "nathree-aeon")
+                Some("nathree" | "nathree-aeon" | "natu" | "natu-aeon")
             );
             let Some(message) = stored_thread
                 .extra_config

@@ -51,6 +51,11 @@ async fn nathree_continues_after_final_without_injecting_a_user_message() -> Tes
     assert_persistent_turn_after_idle("nathree", &[]).await
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn natu_aeon_continues_after_final_without_injecting_a_user_message() -> TestResult {
+    assert_persistent_turn_after_idle("natu-aeon", &[]).await
+}
+
 async fn assert_persistent_turn_after_idle(
     model: &str,
     expected_continuation_messages: &[&str],
