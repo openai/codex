@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -24,6 +25,7 @@ use crate::NoiseRendezvousConnectProvider;
 use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT;
 use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT;
 
+#[derive(Default)]
 struct SequenceNoiseConnectProvider {
     bundles:
         Mutex<VecDeque<BoxFuture<'static, Result<NoiseRendezvousConnectBundle, ExecServerError>>>>,
@@ -32,17 +34,29 @@ struct SequenceNoiseConnectProvider {
 }
 
 impl SequenceNoiseConnectProvider {
-    fn new(bundles: Vec<Result<NoiseRendezvousConnectBundle, ExecServerError>>) -> Self {
-        Self {
-            bundles: Mutex::new(
-                bundles
-                    .into_iter()
-                    .map(|bundle| futures::future::ready(bundle).boxed())
-                    .collect(),
-            ),
-            returned_urls: Mutex::new(Vec::new()),
-            requested_keys: Mutex::new(Vec::new()),
-        }
+    fn push_response(
+        &self,
+        response: impl Future<Output = Result<NoiseRendezvousConnectBundle, ExecServerError>>
+        + Send
+        + 'static,
+    ) {
+        self.bundles.lock().unwrap().push_back(response.boxed());
+    }
+
+    fn push_error(&self, error: ExecServerError) {
+        self.push_response(futures::future::ready(Err(error)));
+    }
+
+    fn push_pending(&self) {
+        self.push_response(futures::future::pending());
+    }
+
+    fn requested_keys(&self) -> Vec<NoiseChannelPublicKey> {
+        self.requested_keys.lock().unwrap().clone()
+    }
+
+    fn assert_requested_identity(&self, identity: &NoiseChannelIdentity, requests: usize) {
+        assert_eq!(self.requested_keys(), vec![identity.public_key(); requests]);
     }
 
     fn returned_urls(&self) -> Vec<String> {
@@ -50,6 +64,27 @@ impl SequenceNoiseConnectProvider {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
+    }
+
+    async fn connect(
+        self: &Arc<Self>,
+        identity: &NoiseChannelIdentity,
+    ) -> Result<
+        (
+            super::JsonRpcConnection,
+            super::ExecServerClientConnectOptions,
+        ),
+        ExecServerError,
+    > {
+        let provider: Arc<dyn NoiseRendezvousConnectProvider> = self.clone();
+        ExecServerClient::open_initial_noise_rendezvous_connection(
+            &provider,
+            identity,
+            codex_http_client::HttpClientFactory::new(
+                codex_http_client::OutboundProxyPolicy::ReqwestDefault,
+            ),
+        )
+        .await
     }
 }
 
@@ -98,147 +133,97 @@ fn registry_error(status: http::StatusCode, code: &str) -> ExecServerError {
 
 #[tokio::test(start_paused = true)]
 async fn initial_noise_connection_bounds_offline_retries() -> Result<()> {
-    let sequence = Arc::new(SequenceNoiseConnectProvider::new(
-        (0..=INITIAL_REGISTRY_MAX_RETRIES)
-            .map(|_| {
-                Err(registry_error(
-                    http::StatusCode::CONFLICT,
-                    "environment_offline",
-                ))
-            })
-            .collect(),
-    ));
-    let provider: Arc<dyn NoiseRendezvousConnectProvider> = sequence.clone();
+    let sequence = Arc::new(SequenceNoiseConnectProvider::default());
+    for _ in 0..=INITIAL_REGISTRY_MAX_RETRIES {
+        sequence.push_error(registry_error(
+            http::StatusCode::CONFLICT,
+            "environment_offline",
+        ));
+    }
     let identity = NoiseChannelIdentity::generate()?;
     let started = tokio::time::Instant::now();
-    let error = ExecServerClient::open_initial_noise_rendezvous_connection(
-        &provider,
-        &identity,
-        codex_http_client::HttpClientFactory::new(
-            codex_http_client::OutboundProxyPolicy::ReqwestDefault,
-        ),
-    )
-    .await
-    .err()
-    .expect("offline retries must end");
+    let error = sequence
+        .connect(&identity)
+        .await
+        .err()
+        .expect("offline retries must end");
 
     assert!(crate::client::is_environment_offline_error(&error));
-    let requested_keys = sequence.requested_keys.lock().unwrap();
-    assert!((4..=INITIAL_REGISTRY_MAX_RETRIES as usize + 1).contains(&requested_keys.len()));
-    assert_eq!(
-        *requested_keys,
-        vec![identity.public_key(); requested_keys.len()]
-    );
+    let requests = sequence.requested_keys().len();
+    assert!((4..=INITIAL_REGISTRY_MAX_RETRIES as usize + 1).contains(&requests));
+    sequence.assert_requested_identity(&identity, requests);
     assert!(started.elapsed() <= INITIAL_REGISTRY_OPERATION_TIMEOUT);
     Ok(())
 }
 
 #[tokio::test(start_paused = true)]
 async fn initial_noise_connection_bounds_a_stalled_retry_request() -> Result<()> {
-    let sequence = Arc::new(SequenceNoiseConnectProvider::new(vec![Err(
-        registry_error(http::StatusCode::CONFLICT, "environment_offline"),
-    )]));
-    sequence
-        .bundles
-        .lock()
-        .unwrap()
-        .extend((0..INITIAL_REGISTRY_MAX_RETRIES).map(|_| {
-            futures::future::pending::<Result<NoiseRendezvousConnectBundle, ExecServerError>>()
-                .boxed()
-        }));
-    let provider: Arc<dyn NoiseRendezvousConnectProvider> = sequence.clone();
+    let sequence = Arc::new(SequenceNoiseConnectProvider::default());
+    sequence.push_error(registry_error(
+        http::StatusCode::CONFLICT,
+        "environment_offline",
+    ));
+    for _ in 0..INITIAL_REGISTRY_MAX_RETRIES {
+        sequence.push_pending();
+    }
     let identity = NoiseChannelIdentity::generate()?;
     let started = tokio::time::Instant::now();
-    let error = ExecServerClient::open_initial_noise_rendezvous_connection(
-        &provider,
-        &identity,
-        codex_http_client::HttpClientFactory::new(
-            codex_http_client::OutboundProxyPolicy::ReqwestDefault,
-        ),
-    )
-    .await
-    .err()
-    .expect("stalled retry must time out");
+    let error = sequence
+        .connect(&identity)
+        .await
+        .err()
+        .expect("stalled retry must time out");
 
     assert!(matches!(
         error,
         ExecServerError::EnvironmentRegistryRequest(error) if error.is_timeout()
     ));
     assert_eq!(started.elapsed(), INITIAL_REGISTRY_OPERATION_TIMEOUT);
-    let requested_keys = sequence.requested_keys.lock().unwrap();
-    assert!((2..=3).contains(&requested_keys.len()));
-    assert_eq!(
-        *requested_keys,
-        vec![identity.public_key(); requested_keys.len()]
-    );
+    let requests = sequence.requested_keys().len();
+    assert!((2..=3).contains(&requests));
+    sequence.assert_requested_identity(&identity, requests);
     Ok(())
 }
 
 #[tokio::test(start_paused = true)]
 async fn initial_noise_connection_bounds_a_stalled_initial_request() -> Result<()> {
-    let sequence = Arc::new(SequenceNoiseConnectProvider::new(vec![]));
-    sequence
-        .bundles
-        .lock()
-        .unwrap()
-        .extend((0..=INITIAL_REGISTRY_MAX_RETRIES).map(|_| {
-            futures::future::pending::<Result<NoiseRendezvousConnectBundle, ExecServerError>>()
-                .boxed()
-        }));
-    let provider: Arc<dyn NoiseRendezvousConnectProvider> = sequence.clone();
+    let sequence = Arc::new(SequenceNoiseConnectProvider::default());
+    for _ in 0..=INITIAL_REGISTRY_MAX_RETRIES {
+        sequence.push_pending();
+    }
     let identity = NoiseChannelIdentity::generate()?;
     let started = tokio::time::Instant::now();
 
-    let error = ExecServerClient::open_initial_noise_rendezvous_connection(
-        &provider,
-        &identity,
-        codex_http_client::HttpClientFactory::new(
-            codex_http_client::OutboundProxyPolicy::ReqwestDefault,
-        ),
-    )
-    .await
-    .err()
-    .expect("stalled initial request must time out");
+    let error = sequence
+        .connect(&identity)
+        .await
+        .err()
+        .expect("stalled initial request must time out");
 
     assert!(matches!(
         error,
         ExecServerError::EnvironmentRegistryRequest(error) if error.is_timeout()
     ));
     assert_eq!(started.elapsed(), INITIAL_REGISTRY_OPERATION_TIMEOUT);
-    let requested_keys = sequence.requested_keys.lock().unwrap();
-    assert!((2..=3).contains(&requested_keys.len()));
-    assert_eq!(
-        *requested_keys,
-        vec![identity.public_key(); requested_keys.len()]
-    );
+    let requests = sequence.requested_keys().len();
+    assert!((2..=3).contains(&requests));
+    sequence.assert_requested_identity(&identity, requests);
     Ok(())
 }
 
 #[tokio::test(start_paused = true)]
 async fn initial_noise_connection_retries_a_stalled_initial_request() -> Result<()> {
-    let sequence = Arc::new(SequenceNoiseConnectProvider::new(vec![]));
-    sequence.bundles.lock().unwrap().extend([
-        futures::future::pending::<Result<NoiseRendezvousConnectBundle, ExecServerError>>().boxed(),
-        futures::future::ready(Err(registry_error(
-            http::StatusCode::FORBIDDEN,
-            "forbidden",
-        )))
-        .boxed(),
-    ]);
-    let provider: Arc<dyn NoiseRendezvousConnectProvider> = sequence.clone();
+    let sequence = Arc::new(SequenceNoiseConnectProvider::default());
+    sequence.push_pending();
+    sequence.push_error(registry_error(http::StatusCode::FORBIDDEN, "forbidden"));
     let identity = NoiseChannelIdentity::generate()?;
     let started = tokio::time::Instant::now();
 
-    let error = ExecServerClient::open_initial_noise_rendezvous_connection(
-        &provider,
-        &identity,
-        codex_http_client::HttpClientFactory::new(
-            codex_http_client::OutboundProxyPolicy::ReqwestDefault,
-        ),
-    )
-    .await
-    .err()
-    .expect("terminal response must stop the retry sequence");
+    let error = sequence
+        .connect(&identity)
+        .await
+        .err()
+        .expect("terminal response must stop the retry sequence");
 
     assert!(matches!(
         error,
@@ -249,10 +234,7 @@ async fn initial_noise_connection_retries_a_stalled_initial_request() -> Result<
     ));
     assert!(started.elapsed() >= INITIAL_REGISTRY_REQUEST_TIMEOUT);
     assert!(started.elapsed() < INITIAL_REGISTRY_OPERATION_TIMEOUT);
-    assert_eq!(
-        *sequence.requested_keys.lock().unwrap(),
-        vec![identity.public_key(); 2]
-    );
+    sequence.assert_requested_identity(&identity, /*requests*/ 2);
     Ok(())
 }
 
@@ -265,23 +247,16 @@ async fn initial_noise_connection_retries_transient_registry_statuses() -> Resul
         http::StatusCode::BAD_GATEWAY,
         http::StatusCode::SERVICE_UNAVAILABLE,
     ] {
-        let sequence = Arc::new(SequenceNoiseConnectProvider::new(vec![
-            Err(registry_error(status, "temporarily_unavailable")),
-            Err(registry_error(http::StatusCode::FORBIDDEN, "forbidden")),
-        ]));
-        let provider: Arc<dyn NoiseRendezvousConnectProvider> = sequence.clone();
+        let sequence = Arc::new(SequenceNoiseConnectProvider::default());
+        sequence.push_error(registry_error(status, "temporarily_unavailable"));
+        sequence.push_error(registry_error(http::StatusCode::FORBIDDEN, "forbidden"));
         let identity = NoiseChannelIdentity::generate()?;
 
-        let error = ExecServerClient::open_initial_noise_rendezvous_connection(
-            &provider,
-            &identity,
-            codex_http_client::HttpClientFactory::new(
-                codex_http_client::OutboundProxyPolicy::ReqwestDefault,
-            ),
-        )
-        .await
-        .err()
-        .expect("terminal response must stop the retry sequence");
+        let error = sequence
+            .connect(&identity)
+            .await
+            .err()
+            .expect("terminal response must stop the retry sequence");
 
         assert!(matches!(
             error,
@@ -290,36 +265,25 @@ async fn initial_noise_connection_retries_transient_registry_statuses() -> Resul
                 ..
             }
         ));
-        assert_eq!(
-            *sequence.requested_keys.lock().unwrap(),
-            vec![identity.public_key(); 2],
-            "registry status {status} should be retried"
-        );
+        sequence.assert_requested_identity(&identity, /*requests*/ 2);
     }
     Ok(())
 }
 
 #[tokio::test(start_paused = true)]
 async fn initial_noise_connection_retries_registry_request_timeouts() -> Result<()> {
-    let sequence = Arc::new(SequenceNoiseConnectProvider::new(vec![
-        Err(ExecServerError::EnvironmentRegistryRequest(
-            codex_http_client::RouteAwareRequestError::Timeout,
-        )),
-        Err(registry_error(http::StatusCode::FORBIDDEN, "forbidden")),
-    ]));
-    let provider: Arc<dyn NoiseRendezvousConnectProvider> = sequence.clone();
+    let sequence = Arc::new(SequenceNoiseConnectProvider::default());
+    sequence.push_error(ExecServerError::EnvironmentRegistryRequest(
+        codex_http_client::RouteAwareRequestError::Timeout,
+    ));
+    sequence.push_error(registry_error(http::StatusCode::FORBIDDEN, "forbidden"));
     let identity = NoiseChannelIdentity::generate()?;
 
-    let error = ExecServerClient::open_initial_noise_rendezvous_connection(
-        &provider,
-        &identity,
-        codex_http_client::HttpClientFactory::new(
-            codex_http_client::OutboundProxyPolicy::ReqwestDefault,
-        ),
-    )
-    .await
-    .err()
-    .expect("terminal response must stop the retry sequence");
+    let error = sequence
+        .connect(&identity)
+        .await
+        .err()
+        .expect("terminal response must stop the retry sequence");
 
     assert!(matches!(
         error,
@@ -328,10 +292,7 @@ async fn initial_noise_connection_retries_registry_request_timeouts() -> Result<
             ..
         }
     ));
-    assert_eq!(
-        *sequence.requested_keys.lock().unwrap(),
-        vec![identity.public_key(); 2]
-    );
+    sequence.assert_requested_identity(&identity, /*requests*/ 2);
     Ok(())
 }
 
@@ -347,34 +308,24 @@ async fn initial_noise_connection_does_not_retry_permanent_registry_errors() -> 
     ] {
         // A terminal error must also stop a retry sequence already in progress.
         for initial_offline in [false, true] {
-            let mut responses = Vec::new();
+            let sequence = Arc::new(SequenceNoiseConnectProvider::default());
             if initial_offline {
-                responses.push(Err(registry_error(
+                sequence.push_error(registry_error(
                     http::StatusCode::CONFLICT,
                     "environment_offline",
-                )));
+                ));
             }
-            responses.push(Err(registry_error(status, code)));
-            let sequence = Arc::new(SequenceNoiseConnectProvider::new(responses));
-            let provider: Arc<dyn NoiseRendezvousConnectProvider> = sequence.clone();
+            sequence.push_error(registry_error(status, code));
             let identity = NoiseChannelIdentity::generate()?;
-            let error = ExecServerClient::open_initial_noise_rendezvous_connection(
-                &provider,
-                &identity,
-                codex_http_client::HttpClientFactory::new(
-                    codex_http_client::OutboundProxyPolicy::ReqwestDefault,
-                ),
-            )
-            .await
-            .err()
-            .expect("other errors must propagate");
+            let error = sequence
+                .connect(&identity)
+                .await
+                .err()
+                .expect("other errors must propagate");
             assert!(
                 matches!(error, ExecServerError::EnvironmentRegistryHttp { status: actual_status, code: Some(actual_code), .. } if actual_status == status && actual_code == code)
             );
-            assert_eq!(
-                sequence.requested_keys.lock().unwrap().len(),
-                1 + usize::from(initial_offline)
-            );
+            sequence.assert_requested_identity(&identity, 1 + usize::from(initial_offline));
         }
     }
     Ok(())
@@ -382,9 +333,11 @@ async fn initial_noise_connection_does_not_retry_permanent_registry_errors() -> 
 
 #[tokio::test(start_paused = true)]
 async fn noise_session_resume_leaves_offline_retries_to_recovery() -> Result<()> {
-    let sequence = Arc::new(SequenceNoiseConnectProvider::new(vec![Err(
-        registry_error(http::StatusCode::CONFLICT, "environment_offline"),
-    )]));
+    let sequence = Arc::new(SequenceNoiseConnectProvider::default());
+    sequence.push_error(registry_error(
+        http::StatusCode::CONFLICT,
+        "environment_offline",
+    ));
     let identity = NoiseChannelIdentity::generate()?;
     let strategy = ExecServerReconnectStrategy::NoiseRendezvous {
         provider: sequence.clone(),
@@ -404,15 +357,13 @@ async fn noise_session_resume_leaves_offline_retries_to_recovery() -> Result<()>
         .expect("resume must return the offline error");
     assert!(crate::client::is_environment_offline_error(&error));
     assert_eq!(started.elapsed(), std::time::Duration::ZERO);
-    assert_eq!(
-        *sequence.requested_keys.lock().unwrap(),
-        vec![identity.public_key()]
-    );
+    sequence.assert_requested_identity(&identity, /*requests*/ 1);
     Ok(())
 }
 
 #[tokio::test]
-async fn initial_noise_connection_refreshes_bundle_after_unauthorized_handshake() -> Result<()> {
+async fn initial_noise_connection_refreshes_bundle_after_exhausting_initial_retries() -> Result<()>
+{
     let unauthorized_listener = TcpListener::bind("127.0.0.1:0").await?;
     let unauthorized_url = format!("ws://{}", unauthorized_listener.local_addr()?);
     let unauthorized_server = tokio::spawn(async move {
@@ -434,57 +385,46 @@ async fn initial_noise_connection_refreshes_bundle_after_unauthorized_handshake(
         let _websocket = accept_async(socket).await?;
         anyhow::Ok(())
     });
-    let sequence = Arc::new(SequenceNoiseConnectProvider::new(vec![]));
+    let sequence = Arc::new(SequenceNoiseConnectProvider::default());
     let unauthorized_bundle = test_bundle(unauthorized_url.clone())?;
     let accepted_bundle = test_bundle(accepted_url.clone())?;
-    sequence.bundles.lock().unwrap().extend([
-        async {
-            tokio::time::pause();
-            Err(registry_error(
-                http::StatusCode::CONFLICT,
-                "environment_offline",
-            ))
-        }
-        .boxed(),
-        async move {
-            tokio::time::resume();
-            Ok(unauthorized_bundle)
-        }
-        .boxed(),
-        async {
-            tokio::time::pause();
-            Err(registry_error(
-                http::StatusCode::CONFLICT,
-                "environment_offline",
-            ))
-        }
-        .boxed(),
-        async move {
-            tokio::time::resume();
-            Ok(accepted_bundle)
-        }
-        .boxed(),
-    ]);
-    let provider: Arc<dyn NoiseRendezvousConnectProvider> = sequence.clone();
+    sequence.push_response(async {
+        tokio::time::pause();
+        Err(registry_error(
+            http::StatusCode::CONFLICT,
+            "environment_offline",
+        ))
+    });
+    for _ in 1..INITIAL_REGISTRY_MAX_RETRIES {
+        sequence.push_error(registry_error(
+            http::StatusCode::CONFLICT,
+            "environment_offline",
+        ));
+    }
+    sequence.push_response(async move {
+        tokio::time::resume();
+        Ok(unauthorized_bundle)
+    });
+    sequence.push_response(async {
+        tokio::time::pause();
+        Err(registry_error(
+            http::StatusCode::CONFLICT,
+            "environment_offline",
+        ))
+    });
+    sequence.push_response(async move {
+        tokio::time::resume();
+        Ok(accepted_bundle)
+    });
     let identity = NoiseChannelIdentity::generate()?;
 
-    let _connection = ExecServerClient::open_initial_noise_rendezvous_connection(
-        &provider,
-        &identity,
-        codex_http_client::HttpClientFactory::new(
-            codex_http_client::OutboundProxyPolicy::ReqwestDefault,
-        ),
-    )
-    .await?;
+    let _connection = sequence.connect(&identity).await?;
 
     assert_eq!(
         sequence.returned_urls(),
         vec![unauthorized_url, accepted_url]
     );
-    assert_eq!(
-        *sequence.requested_keys.lock().unwrap(),
-        vec![identity.public_key(); 4]
-    );
+    sequence.assert_requested_identity(&identity, INITIAL_REGISTRY_MAX_RETRIES as usize + 3);
     unauthorized_server.await??;
     accepted_server.await??;
     Ok(())

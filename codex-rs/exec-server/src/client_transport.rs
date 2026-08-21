@@ -314,6 +314,7 @@ impl ExecServerClient {
                 {
                     refreshed_unauthorized_bundle = true;
                     deadline = Instant::now() + INITIAL_REGISTRY_OPERATION_TIMEOUT;
+                    retries = 0;
                     result = connect_bundle().await;
                 }
                 result => return result,

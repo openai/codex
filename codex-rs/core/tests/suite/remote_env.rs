@@ -1169,16 +1169,26 @@ impl NoiseRendezvousConnectProvider for FailingNoiseConnectProvider {
     }
 }
 
-struct ReadyNoiseConnectProvider {
+struct OfflineThenReadyNoiseConnectProvider {
     websocket_url: String,
     executor_public_key: NoiseChannelPublicKey,
+    calls: AtomicUsize,
 }
 
-impl NoiseRendezvousConnectProvider for ReadyNoiseConnectProvider {
+impl NoiseRendezvousConnectProvider for OfflineThenReadyNoiseConnectProvider {
     fn connect_bundle(
         &self,
         _: NoiseChannelPublicKey,
     ) -> BoxFuture<'_, std::result::Result<NoiseRendezvousConnectBundle, ExecServerError>> {
+        if self.calls.fetch_add(1, Ordering::Relaxed) == 0 {
+            return Box::pin(async {
+                Err(ExecServerError::EnvironmentRegistryHttp {
+                    status: http::StatusCode::CONFLICT,
+                    code: Some("environment_offline".to_string()),
+                    message: "test environment is offline".to_string(),
+                })
+            });
+        }
         let bundle = NoiseRendezvousConnectBundle {
             websocket_url: self.websocket_url.clone(),
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
@@ -1824,6 +1834,11 @@ async fn ready_before_selection_resolves_resumed_thread_capability_root_after_wa
     } else {
         stale_root.clone()
     };
+    let provider = Arc::new(OfflineThenReadyNoiseConnectProvider {
+        websocket_url: format!("{rendezvous_url}/relay?role=harness"),
+        executor_public_key,
+        calls: AtomicUsize::new(0),
+    });
     let environment = test
         .thread_manager
         .environment_manager()
@@ -1836,10 +1851,7 @@ async fn ready_before_selection_resolves_resumed_thread_capability_root_after_wa
                     Vec::new()
                 },
             }),
-            Arc::new(ReadyNoiseConnectProvider {
-                websocket_url: format!("{rendezvous_url}/relay?role=harness"),
-                executor_public_key,
-            }),
+            provider.clone(),
         )?
         .context("Ready-first report should create the environment")?;
 
@@ -1914,6 +1926,7 @@ async fn ready_before_selection_resolves_resumed_thread_capability_root_after_wa
 
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 2);
+    assert_eq!(provider.calls.load(Ordering::Relaxed), 2);
     // Provisioning was reported ready before selection, but selection materialization remains
     // nonblocking while the transport starts.
     // The first request may legally see either Starting or Ready; the wait makes step two ready.
