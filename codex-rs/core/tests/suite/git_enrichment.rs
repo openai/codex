@@ -376,32 +376,43 @@ async fn concurrent_turns_keep_distinct_worktree_and_repository_metadata() -> Re
     let worktree_head = run_git(&worktree, &["rev-parse", "HEAD"])?;
     let (other_repo, other_head) = create_git_repo()?;
 
+    let initial_turn = |name: &str| {
+        vec![vec![
+            ev_response_created(&format!("turn-{name}")),
+            ev_function_call(
+                &format!("wait-for-git-{name}"),
+                "test_sync_tool",
+                r#"{"barrier":{"id":"concurrent-git-enrichment","participants":3,"timeout_ms":10000},"wait_for_git_enrichment":true}"#,
+            ),
+            ev_completed(&format!("turn-{name}")),
+        ]]
+    };
+    let follow_up_turn = |name: &str| {
+        vec![vec![
+            ev_response_created(&format!("follow-up-{name}")),
+            ev_assistant_message(&format!("msg-{name}"), "done"),
+            ev_completed(&format!("follow-up-{name}")),
+        ]]
+    };
     let server = start_websocket_server(vec![
         vec![vec![ev_response_created("warm-1"), ev_completed("warm-1")]],
         vec![vec![ev_response_created("warm-2"), ev_completed("warm-2")]],
         vec![vec![ev_response_created("warm-3"), ev_completed("warm-3")]],
-        vec![vec![
-            ev_response_created("resp-1"),
-            ev_assistant_message("msg-1", "done"),
-            ev_completed("resp-1"),
-        ]],
-        vec![vec![
-            ev_response_created("resp-2"),
-            ev_assistant_message("msg-2", "done"),
-            ev_completed("resp-2"),
-        ]],
-        vec![vec![
-            ev_response_created("resp-3"),
-            ev_assistant_message("msg-3", "done"),
-            ev_completed("resp-3"),
-        ]],
+        initial_turn("repo"),
+        initial_turn("worktree"),
+        initial_turn("other-repo"),
+        follow_up_turn("repo"),
+        follow_up_turn("worktree"),
+        follow_up_turn("other-repo"),
     ])
     .await;
 
     let repo_cwd = repo.path().to_path_buf();
-    let mut builder = test_codex().with_config(move |config| {
-        config.cwd = repo_cwd.abs();
-    });
+    let mut builder = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_config(move |config| {
+            config.cwd = repo_cwd.abs();
+        });
     let test = builder.build_with_websocket_server(&server).await?;
 
     let mut worktree_config = test.config.clone();
@@ -469,19 +480,35 @@ async fn concurrent_turns_keep_distinct_worktree_and_repository_metadata() -> Re
     let mut actual_workspaces = server
         .connections()
         .into_iter()
-        .skip(3)
+        .skip(6)
         .map(|connection| {
-            let request = connection.first().context("turn request")?.body_json();
-            Ok(turn_metadata(&request)?["workspaces"].clone())
+            let request = connection
+                .first()
+                .context("synchronized turn follow-up request")?
+                .body_json();
+            let thread_id = request["client_metadata"]["thread_id"]
+                .as_str()
+                .context("follow-up thread id")?
+                .to_string();
+            Ok((thread_id, turn_metadata(&request)?["workspaces"].clone()))
         })
         .collect::<Result<Vec<_>>>()?;
     let mut expected_workspaces = vec![
-        expected_workspace(repo.path(), &repo_head, /*has_changes*/ true),
-        expected_workspace(&worktree, &worktree_head, /*has_changes*/ false),
-        expected_workspace(other_repo.path(), &other_head, /*has_changes*/ true),
+        (
+            test.session_configured.thread_id.to_string(),
+            expected_workspace(repo.path(), &repo_head, /*has_changes*/ true),
+        ),
+        (
+            worktree_thread.thread_id.to_string(),
+            expected_workspace(&worktree, &worktree_head, /*has_changes*/ false),
+        ),
+        (
+            other_thread.thread_id.to_string(),
+            expected_workspace(other_repo.path(), &other_head, /*has_changes*/ true),
+        ),
     ];
-    actual_workspaces.sort_by_key(Value::to_string);
-    expected_workspaces.sort_by_key(Value::to_string);
+    actual_workspaces.sort_by(|(left, _), (right, _)| left.cmp(right));
+    expected_workspaces.sort_by(|(left, _), (right, _)| left.cmp(right));
     assert_eq!(actual_workspaces, expected_workspaces);
 
     worktree_thread.thread.shutdown_and_wait().await?;
