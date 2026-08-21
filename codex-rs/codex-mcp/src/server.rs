@@ -329,15 +329,13 @@ fn referenced_environment_variables(config: &McpServerConfig) -> Vec<(String, Op
             .filter(|env_var| !env_var.is_remote_source())
             .map(|env_var| env_var.name().to_string())
             .collect::<Vec<_>>(),
-        McpServerTransportConfig::StreamableHttp { .. } if !config.is_local_environment() => {
-            Vec::new()
-        }
         McpServerTransportConfig::StreamableHttp {
             bearer_token_env_var,
             env_http_headers,
             ..
         } => bearer_token_env_var
             .iter()
+            .filter(|_| config.is_local_environment())
             .chain(env_http_headers.iter().flat_map(|headers| headers.values()))
             .cloned()
             .collect(),
@@ -421,3 +419,7 @@ impl From<&EffectiveMcpServer> for McpServerMetadata {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "server_tests.rs"]
+mod tests;
