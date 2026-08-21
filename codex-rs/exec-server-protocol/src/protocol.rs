@@ -186,7 +186,7 @@ impl EnvironmentInfo {
                 capability_discovery_sandbox: true,
                 environment_config_read: true,
                 sandboxed_file_streaming: true,
-                shell_snapshot_v2: cfg!(unix),
+                shell_snapshot_v2: false,
             },
         }
     }
