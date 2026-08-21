@@ -1,5 +1,5 @@
 use super::bedrock_auth::clear_user_model_provider_if_bedrock;
-use super::bedrock_auth::set_user_model_provider_to_bedrock;
+use super::bedrock_auth::configure_bedrock_for_managed_auth;
 use super::*;
 use crate::auth_mode::auth_mode_to_api;
 use crate::external_auth::ExternalAuthBridge;
@@ -8,6 +8,7 @@ use codex_app_server_protocol::DesktopOnboardingEntrypoint;
 use codex_login::LoginOnboardingEntrypoint;
 use codex_model_provider::is_supported_amazon_bedrock_region;
 
+mod bedrock_setup;
 mod rate_limit_resets;
 
 // Duration before a browser ChatGPT login attempt is abandoned.
@@ -344,6 +345,24 @@ impl AccountRequestProcessor {
         )
     }
 
+    fn ensure_bedrock_login_allowed(&self) -> Result<(), JSONRPCErrorError> {
+        if self.auth_manager.is_workload_identity_selected() {
+            return Err(self.configured_auth_owned_by_host_error());
+        }
+        if self.auth_manager.is_external_chatgpt_auth_active() {
+            return Err(self.external_auth_active_error());
+        }
+        if !self
+            .auth_manager
+            .is_login_method_allowed(ForcedLoginMethod::Api)
+        {
+            return Err(invalid_request(
+                "Amazon Bedrock login is disabled. Use ChatGPT login instead.",
+            ));
+        }
+        Ok(())
+    }
+
     async fn login_api_key_common(
         &self,
         params: &LoginApiKeyParams,
@@ -405,17 +424,7 @@ impl AccountRequestProcessor {
         region: String,
     ) {
         let result = async {
-            if self.auth_manager.is_external_chatgpt_auth_active() {
-                return Err(self.external_auth_active_error());
-            }
-            if !self
-                .auth_manager
-                .is_login_method_allowed(ForcedLoginMethod::Api)
-            {
-                return Err(invalid_request(
-                    "Amazon Bedrock login is disabled. Use ChatGPT login instead.",
-                ));
-            }
+            self.ensure_bedrock_login_allowed()?;
 
             let api_key = api_key.trim();
             if api_key.is_empty() {
@@ -435,7 +444,7 @@ impl AccountRequestProcessor {
                 }
             }
 
-            set_user_model_provider_to_bedrock(&self.config_manager).await?;
+            configure_bedrock_for_managed_auth(&self.config_manager).await?;
             login_with_bedrock_api_key(
                 &self.config.codex_home,
                 api_key,

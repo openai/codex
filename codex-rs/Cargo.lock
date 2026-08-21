@@ -1995,6 +1995,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-app-server-transport",
  "codex-arg0",
+ "codex-aws-auth",
  "codex-backend-client",
  "codex-chatgpt",
  "codex-cloud-config",

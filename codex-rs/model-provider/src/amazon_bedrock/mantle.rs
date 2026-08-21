@@ -5,6 +5,7 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
 
 use super::BedrockEndpoint;
+use super::auth::BedrockAuthSource;
 use super::auth::resolve_region;
 
 const BEDROCK_MANTLE_SERVICE_NAME: &str = "bedrock-mantle";
@@ -55,10 +56,11 @@ pub(super) fn base_url(region: &str) -> Result<String> {
 }
 
 pub(super) async fn bedrock_mantle_runtime_base_url(
+    source: BedrockAuthSource,
     managed_auth: Option<&BedrockApiKeyAuth>,
     aws: &ModelProviderAwsAuthInfo,
 ) -> Result<String> {
-    let region = resolve_region(managed_auth, aws, BedrockEndpoint::Mantle).await?;
+    let region = resolve_region(source, managed_auth, aws, BedrockEndpoint::Mantle).await?;
     base_url(&region)
 }
 

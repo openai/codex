@@ -1541,9 +1541,12 @@ impl MessageProcessor {
                     .login_account(request_id.clone(), params)
                     .await
             }
-            ClientRequest::BedrockDiscover { .. } | ClientRequest::BedrockSetup { .. } => Err(
-                crate::error_code::method_not_found("Amazon Bedrock setup is not implemented"),
-            ),
+            ClientRequest::BedrockDiscover { params, .. } => {
+                self.account_processor.bedrock_discover(params).await
+            }
+            ClientRequest::BedrockSetup { params, .. } => {
+                self.account_processor.bedrock_setup(params).await
+            }
             ClientRequest::LogoutAccount { .. } => {
                 self.account_processor
                     .logout_account(request_id.clone())

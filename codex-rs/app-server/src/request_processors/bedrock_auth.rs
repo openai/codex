@@ -2,7 +2,8 @@ use super::config_processor::map_error as map_config_error;
 use crate::config_manager::ConfigManager;
 use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
-use codex_app_server_protocol::ConfigValueWriteParams;
+use codex_app_server_protocol::ConfigBatchWriteParams;
+use codex_app_server_protocol::ConfigEdit;
 use codex_app_server_protocol::ConfigWriteErrorCode;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::MergeStrategy;
@@ -11,7 +12,40 @@ use codex_config::ConfigLayerSource;
 use codex_config::format_config_layer_source;
 use codex_model_provider::AMAZON_BEDROCK_PROVIDER_ID;
 
-pub(super) async fn set_user_model_provider_to_bedrock(
+pub(super) async fn configure_bedrock_for_managed_auth(
+    config_manager: &ConfigManager,
+) -> Result<(), JSONRPCErrorError> {
+    ensure_user_model_provider_can_be_bedrock(config_manager).await?;
+
+    config_manager
+        .batch_write(ConfigBatchWriteParams {
+            edits: [
+                (
+                    "model_provider",
+                    serde_json::json!(AMAZON_BEDROCK_PROVIDER_ID),
+                ),
+                (
+                    "model_providers.amazon-bedrock.aws.profile",
+                    serde_json::Value::Null,
+                ),
+            ]
+            .into_iter()
+            .map(|(key_path, value)| ConfigEdit {
+                key_path: key_path.to_string(),
+                value,
+                merge_strategy: MergeStrategy::Replace,
+            })
+            .collect(),
+            file_path: None,
+            expected_version: None,
+            reload_user_config: false,
+        })
+        .await
+        .map(|_| ())
+        .map_err(map_config_error)
+}
+
+pub(super) async fn ensure_user_model_provider_can_be_bedrock(
     config_manager: &ConfigManager,
 ) -> Result<(), JSONRPCErrorError> {
     let layers = config_manager
@@ -45,17 +79,7 @@ pub(super) async fn set_user_model_provider_to_bedrock(
         )));
     }
 
-    config_manager
-        .write_value(ConfigValueWriteParams {
-            key_path: "model_provider".to_string(),
-            value: serde_json::json!(AMAZON_BEDROCK_PROVIDER_ID),
-            merge_strategy: MergeStrategy::Replace,
-            file_path: None,
-            expected_version: None,
-        })
-        .await
-        .map(|_| ())
-        .map_err(map_config_error)
+    Ok(())
 }
 
 pub(super) async fn clear_user_model_provider_if_bedrock(

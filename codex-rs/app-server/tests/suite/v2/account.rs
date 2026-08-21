@@ -1099,6 +1099,18 @@ async fn login_account_api_key_succeeds_and_notifies() -> Result<()> {
 async fn login_amazon_bedrock_replaces_primary_auth_and_persists_provider() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
+    let config_path = codex_home.path().join("config.toml");
+    let original_config = std::fs::read_to_string(&config_path)?;
+    std::fs::write(
+        &config_path,
+        format!(
+            "{original_config}\n[model_providers.amazon-bedrock]\n\
+             http_headers = {{ X-Existing = \"preserved\" }}\n\
+             [model_providers.amazon-bedrock.aws]\n\
+             profile = \"stale-profile\"\n\
+             region = \"us-east-1\"\n"
+        ),
+    )?;
     login_with_api_key(
         codex_home.path(),
         "sk-test-key",
@@ -1119,6 +1131,10 @@ async fn login_amazon_bedrock_replaces_primary_auth_and_persists_provider() -> R
             "model_provider".to_string(),
             toml::Value::String("amazon-bedrock".to_string()),
         );
+    expected_config["model_providers"]["amazon-bedrock"]["aws"]
+        .as_table_mut()
+        .expect("AWS configuration should be a table")
+        .remove("profile");
     let request_id = mcp
         .send_login_account_amazon_bedrock_request(" managed-bedrock-api-key ", " us-west-2 ")
         .await?;
@@ -1167,6 +1183,15 @@ async fn login_amazon_bedrock_replaces_primary_auth_and_persists_provider() -> R
         }
     );
     assert_account_updated(&mut mcp, Some(AuthMode::BedrockApiKey)).await?;
+    assert_eq!(
+        read_account(&mut mcp).await?,
+        GetAccountResponse {
+            account: Some(Account::AmazonBedrock {
+                uses_codex_managed_credentials: true,
+            }),
+            requires_openai_auth: false,
+        }
+    );
 
     Ok(())
 }

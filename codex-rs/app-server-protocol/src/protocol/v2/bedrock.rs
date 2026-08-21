@@ -53,10 +53,7 @@ pub enum BedrockSetupParams {
     Profile { profile: String, region: String },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    Environment {
-        credential_type: AwsCredentialType,
-        region: String,
-    },
+    Environment { region: String },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     AccessKeys {
