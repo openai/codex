@@ -9,24 +9,24 @@ Remove custom binding | Restore the default keymap binding. | enabled
 Back to shortcuts | Return to the shortcut list. | enabled
 
 single:
-Replace binding | Capture a replacement key. | enabled
-Add alternate binding | Keep the current binding and add another key. | enabled
-Replace with key chord | Replace current bindings with a two-stroke key chord. | enabled
-Add alternate key chord | Keep current bindings and add a two-stroke key chord. | enabled
+Replace binding | Capture a replacement key for `ctrl-enter`. | enabled
+Add alternate binding | Keep `ctrl-enter` and add another key. | enabled
+Replace with key chord | Replace `ctrl-enter` with a two-stroke key chord. | enabled
+Add alternate key chord | Keep `ctrl-enter` and add a two-stroke key chord. | enabled
 Remove custom binding | Restore the default keymap binding. | enabled
 Back to shortcuts | Return to the shortcut list. | enabled
 
 multi:
 Replace one binding... | Choose which existing binding to replace. | enabled
-Replace all bindings | Replace every current binding with one key. | enabled
-Add alternate binding | Keep current bindings and add another key. | enabled
-Replace with key chord | Replace current bindings with a two-stroke key chord. | enabled
-Add alternate key chord | Keep current bindings and add a two-stroke key chord. | enabled
+Replace all bindings | Replace `ctrl-enter, alt-shift-enter` with one key. | enabled
+Add alternate binding | Keep `ctrl-enter, alt-shift-enter` and add another key. | enabled
+Replace with key chord | Replace `ctrl-enter, alt-shift-enter` with a two-stroke key chord. | enabled
+Add alternate key chord | Keep `ctrl-enter, alt-shift-enter` and add a two-stroke key chord. | enabled
 Remove custom binding | Restore the default keymap binding. | enabled
 Back to shortcuts | Return to the shortcut list. | enabled
 
 replace picker:
-ctrl-enter | Replace this binding. | enabled
-ctrl-enter (key chord) | Replace this binding with a key chord. | enabled
-alt-shift-enter | Replace this binding. | enabled
-alt-shift-enter (key chord) | Replace this binding with a key chord. | enabled
+ctrl-enter | Replace `ctrl-enter` with another key. | enabled
+ctrl-enter (key chord) | Replace `ctrl-enter` with a two-stroke key chord. | enabled
+alt-shift-enter | Replace `alt-shift-enter` with another key. | enabled
+alt-shift-enter (key chord) | Replace `alt-shift-enter` with a two-stroke key chord. | enabled
