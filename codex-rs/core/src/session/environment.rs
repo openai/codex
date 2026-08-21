@@ -1,7 +1,9 @@
 use std::collections::HashSet;
 
+use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_exec_server::MAX_SELECTED_CAPABILITY_ROOTS;
 use codex_exec_server::SelectedCapabilityRootsStatus;
+use codex_execpolicy::Policy;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
@@ -11,6 +13,7 @@ use codex_protocol::protocol::TurnEnvironmentSelection;
 
 use crate::config::ConstraintError;
 use crate::config::ConstraintResult;
+use crate::config::NetworkProxySpec;
 use crate::session::session::Session;
 use crate::session::session::SessionConfiguration;
 use crate::session::session::SessionSettingsUpdate;
@@ -35,12 +38,31 @@ fn validate_environment_config(
     selection: &TurnEnvironmentSelection,
     config: &EnvironmentConfig,
 ) -> CodexResult<()> {
-    // The public type can be used by owners before runtime enforcement lands. Do not
-    // accept restrictions here until the managed proxy can actually enforce them.
-    if config.network_policy.is_some() {
-        return Err(CodexErr::InvalidRequest(
-            "attachment-owned network policy is not supported yet".to_string(),
-        ));
+    if let Some(policy) = config.network_policy.as_ref() {
+        if selection.environment_id == LOCAL_ENVIRONMENT_ID {
+            return Err(CodexErr::InvalidRequest(
+                "attachment-owned network policy requires a remote executor".to_string(),
+            ));
+        }
+        if config
+            .exec_policy
+            .as_ref()
+            .is_some_and(|policy| !policy.as_ref().network_rules().is_empty())
+        {
+            return Err(CodexErr::InvalidRequest(
+                "environment network restrictions must use network_policy".to_string(),
+            ));
+        }
+        // Validate owner policy on its own; controller compatibility is checked at execution.
+        NetworkProxySpec::for_environment(
+            /*controller*/ None,
+            policy,
+            config.permission_profile.permission_profile(),
+            &Policy::empty(),
+        )
+        .map_err(|error| {
+            CodexErr::InvalidRequest(format!("invalid environment network policy: {error}"))
+        })?;
     }
     if config.selected_capability_roots.len() > MAX_SELECTED_CAPABILITY_ROOTS {
         return Err(CodexErr::InvalidRequest(format!(

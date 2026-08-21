@@ -1,8 +1,11 @@
 use anyhow::Context;
 use anyhow::Result;
 use codex_config::types::ApprovalsReviewer;
+use codex_core::EnvironmentConfig;
+use codex_core::EnvironmentNetworkPolicy;
 use codex_core::TurnInputRequest;
 use codex_core::config::Constrained;
+use codex_core::config::NetworkProxySpec;
 use codex_core::shell::ShellType;
 use codex_core::shell::get_shell;
 use codex_exec_server::CreateDirectoryOptions;
@@ -10,6 +13,7 @@ use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_exec_server::REMOTE_ENVIRONMENT_ID;
 use codex_exec_server::RemoveOptions;
 use codex_features::Feature;
+use codex_network_proxy::NetworkProxyConfig;
 use codex_protocol::approvals::NetworkApprovalContext;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::approvals::NetworkPolicyAmendment;
@@ -19,6 +23,7 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::PermissionProfileSnapshot;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EnvironmentConfigState;
@@ -1930,6 +1935,198 @@ async fn remote_guardian_network_decisions_are_scoped_to_each_request_and_enviro
         } else {
             assert!(output.contains(rationale));
             assert!(!output.contains("HTTP/1.1 502"));
+        }
+    }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn owner_network_policy_follows_the_selected_remote_command() -> Result<()> {
+    skip_if_target_windows!(Ok(()), "uses the POSIX/Python network fixture");
+    skip_if_host_windows!(Ok(()));
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_no_remote_env!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut scenarios = vec![("ROOTED", managed_network_unified_exec_test(&server).await?)];
+    for (scenario, configured_controller) in [("ROOTLESS", false), ("USER_ROOTED", true)] {
+        let mut builder = test_codex().with_config(move |config| {
+            for feature in [Feature::UnifiedExec, Feature::ExecPermissionApprovals] {
+                config
+                    .features
+                    .enable(feature)
+                    .expect("test config should allow feature update");
+            }
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+            config
+                .permissions
+                .set_permission_profile(PermissionProfile::workspace_write_with(
+                    &[],
+                    NetworkSandboxPolicy::Enabled,
+                    /*exclude_tmpdir_env_var*/ false,
+                    /*exclude_slash_tmp*/ false,
+                ))
+                .expect("set permission profile");
+            config.permissions.network = configured_controller.then(|| {
+                NetworkProxySpec::from_config_and_constraints(
+                    NetworkProxyConfig {
+                        enabled: true,
+                        allow_local_binding: true,
+                        ..NetworkProxyConfig::default()
+                    },
+                    /*requirements*/ None,
+                    config.permissions.permission_profile(),
+                )
+                .expect("build user-configured controller proxy")
+            });
+        });
+        let test = builder.build_with_remote_and_local_env(&server).await?;
+        assert!(!test.config.managed_network_requirements_enabled());
+        assert_eq!(
+            test.session_configured.network_proxy.is_some(),
+            configured_controller
+        );
+        scenarios.push((scenario, test));
+    }
+
+    for (scenario, test) in scenarios {
+        let mut remote = test.executor_environment().selection().clone();
+
+        for (suffix, allowed_domain, expected) in [
+            ("ALLOWED", NETWORK_TEST_HOST, "HTTP/1.1 502"),
+            ("DENIED", "owner-only.invalid", "HTTP/1.1 403"),
+            ("REVIEWED", "owner-only.invalid", "HTTP/1.1 502"),
+            (
+                "ESCALATED",
+                NETWORK_TEST_HOST,
+                "attachment-owned network policy cannot be bypassed",
+            ),
+            ("OFFLINE", "owner-only.invalid", "ROOTLESS_OWNER_OFFLINE"),
+            ("GRANTED_DENIED", "owner-only.invalid", "HTTP/1.1 403"),
+        ] {
+            let restricted = matches!(suffix, "OFFLINE" | "GRANTED_DENIED");
+            if scenario != "ROOTLESS" && (restricted || suffix == "ESCALATED") {
+                continue;
+            }
+            let marker = format!("{scenario}_OWNER_{suffix}");
+            let mut proxy_config = NetworkProxyConfig {
+                allow_local_binding: true,
+                ..NetworkProxyConfig::default()
+            };
+            proxy_config.set_allowed_domains(vec![allowed_domain.to_string()]);
+            let owner_config = EnvironmentConfig {
+                allow_login_shell: test.config.permissions.allow_login_shell,
+                permission_profile: PermissionProfileSnapshot::legacy(if restricted {
+                    PermissionProfile::workspace_write()
+                } else {
+                    test.config.permissions.permission_profile().clone()
+                }),
+                shell_environment_policy: test.config.permissions.shell_environment_policy.clone(),
+                exec_policy: None,
+                mcp_policy: None,
+                network_policy: Some(EnvironmentNetworkPolicy::from_config(
+                    &proxy_config,
+                    /*managed_allowed_domains_only*/ suffix != "REVIEWED",
+                )),
+                selected_capability_roots: Vec::new(),
+            };
+            let mut primary = local(test.cwd.path().abs());
+            primary.config = EnvironmentConfigState::Ready(EnvironmentConfig {
+                permission_profile: PermissionProfileSnapshot::legacy(PermissionProfile::Disabled),
+                network_policy: None,
+                ..owner_config.clone()
+            });
+            remote.config = EnvironmentConfigState::Ready(owner_config);
+
+            // Restricted owners run offline until an approved grant enables their filtered proxy.
+            let command = if suffix == "OFFLINE" {
+                format!(
+                    "python3 -c \"import socket; sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); sock.connect(('198.51.100.1', 9))\" 2>/dev/null || printf {marker}"
+                )
+            } else {
+                remote_network_proxy_request_command(&marker)
+            };
+            let mut args = network_exec_args(&command);
+            args["environment_id"] = json!(REMOTE_ENVIRONMENT_ID);
+            if suffix == "ESCALATED" {
+                args["sandbox_permissions"] = json!("require_escalated");
+                args["justification"] = json!("attempt to bypass the owner network policy");
+            } else if suffix == "GRANTED_DENIED" {
+                args["sandbox_permissions"] = json!("with_additional_permissions");
+                args["additional_permissions"] = json!({"network": {"enabled": true}});
+                args["justification"] = json!("exercise attachment-scoped network access");
+            }
+            let guardian = if suffix == "REVIEWED" {
+                Some(
+                    mount_sse_once_match(
+                        &server,
+                        is_guardian_request,
+                        sse(vec![
+                            ev_response_created("resp-owner-network-guardian"),
+                            ev_assistant_message(
+                                "msg-owner-network-guardian",
+                                r#"{"outcome":"allow"}"#,
+                            ),
+                            ev_completed("resp-owner-network-guardian"),
+                        ]),
+                    )
+                    .await,
+                )
+            } else {
+                None
+            };
+            let responses = mount_exec_network_turn(&server, &marker, &marker, args).await?;
+            submit_managed_network_turn(
+                &test,
+                "exercise the selected environment's network policy",
+                vec![primary, remote.clone()],
+                if suffix == "REVIEWED" {
+                    ApprovalsReviewer::AutoReview
+                } else {
+                    ApprovalsReviewer::User
+                },
+                if matches!(suffix, "REVIEWED" | "ESCALATED" | "GRANTED_DENIED") {
+                    AskForApproval::OnRequest
+                } else {
+                    AskForApproval::Never
+                },
+            )
+            .await?;
+            if suffix == "GRANTED_DENIED" {
+                let event = wait_for_event(&test.codex, |event| {
+                    matches!(
+                        event,
+                        EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
+                    )
+                })
+                .await;
+                let EventMsg::ExecApprovalRequest(approval) = event else {
+                    anyhow::bail!("expected additional permissions approval before completion")
+                };
+                test.codex
+                    .submit(Op::ExecApproval {
+                        id: approval.effective_approval_id(),
+                        turn_id: Some(approval.turn_id),
+                        decision: ReviewDecision::Approved,
+                    })
+                    .await?;
+            }
+            wait_for_completion_without_network_prompt(&test).await;
+            if let Some(guardian) = guardian {
+                assert_eq!(
+                    guardian_network_triggers(&[&guardian])?,
+                    vec![(marker.clone(), command)]
+                );
+            }
+            let output = responses
+                .function_call_output_text(&marker)
+                .context("expected remote network output")?;
+            assert!(
+                output.contains(expected),
+                "unexpected network output for {marker}: {output}"
+            );
         }
     }
 

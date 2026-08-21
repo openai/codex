@@ -867,6 +867,7 @@ impl NetworkProxy {
     pub async fn remote_launch_config(&self) -> Result<crate::RemoteNetworkProxyLaunchConfig> {
         let (mut config, brokerage_created_default_allowlist) =
             self.state.current_cfg_with_brokerage_provenance().await?;
+        // Proxy enablement and credential brokerage remain controller-owned.
         let mut broker_only_config = config::NetworkProxyConfig {
             enabled: config.enabled,
             credential_broker_openai_host: config.credential_broker_openai_host.clone(),
@@ -877,6 +878,14 @@ impl NetworkProxy {
         broker_only_config.set_credential_broker_enabled(/*enabled*/ true);
         broker_only_config.set_allowed_domains(vec!["*".to_string()]);
         let broker_only = brokerage_created_default_allowlist && config == broker_only_config;
+
+        let environment_policy = self
+            .execution_scope
+            .as_ref()
+            .and_then(|scope| scope.environment_policy.as_ref());
+        if let Some(policy) = environment_policy {
+            policy.apply_to(&mut config);
+        }
         if config.credential_broker {
             config.enabled &= !broker_only;
             config.credential_broker = false;
@@ -885,6 +894,10 @@ impl NetworkProxy {
                 config.mitm = false;
             }
         }
+        anyhow::ensure!(
+            environment_policy.is_none() || config.enabled,
+            "environment network policy requires an enabled executor proxy"
+        );
         let proxy = crate::RemoteNetworkProxyConfig::from_effective_config(&config)?;
         let (environment_id, execution_id) = self
             .execution_scope
@@ -913,6 +926,7 @@ impl NetworkProxy {
         let state = Arc::clone(&self.state);
         let environment_id = scope.environment_id.clone();
         let execution_id = scope.execution_id.clone();
+        let environment_policy_applies = scope.environment_policy.is_some();
         let execution_lifetime = scope.lifetime_tx.subscribe();
         Some(Arc::new(move |mut request: crate::NetworkPolicyRequest| {
             let decider = Arc::clone(&decider);
@@ -928,8 +942,12 @@ impl NetworkProxy {
                     }
                     decision = async {
                         match state.host_blocked(&request.host, request.port).await {
-                            Ok(HostBlockDecision::Allowed) => NetworkDecision::Allow,
-                            Ok(HostBlockDecision::Blocked(HostBlockReason::NotAllowed)) => {
+                            // Controller approval alone cannot bypass attachment policy.
+                            Ok(HostBlockDecision::Allowed) if !environment_policy_applies => {
+                                NetworkDecision::Allow
+                            }
+                            Ok(HostBlockDecision::Allowed)
+                            | Ok(HostBlockDecision::Blocked(HostBlockReason::NotAllowed)) => {
                                 decider.decide(request).await
                             }
                             Ok(HostBlockDecision::Blocked(reason)) => {
@@ -1710,13 +1728,15 @@ mod tests {
     async fn remote_policy_decider_rechecks_live_policy_and_restores_attribution() -> Result<()> {
         let captured = Arc::new(Mutex::new(None));
         let captured_request = Arc::clone(&captured);
-        let config = NetworkProxyConfig {
+        let mut config = NetworkProxyConfig {
             allow_local_binding: true,
             ..NetworkProxyConfig::default()
         };
-        let proxy = NetworkProxy::builder()
-            .state(Arc::new(network_proxy_state_for_policy(config)))
-            .policy_decider(move |request: crate::NetworkPolicyRequest| {
+        config.set_allowed_domains(vec!["controller.example".to_string()]);
+        let mut owner_config = NetworkProxyConfig::default();
+        owner_config.set_allowed_domains(vec!["owner.example".to_string()]);
+        let fallback_policy_decider: Arc<dyn NetworkPolicyDecider> =
+            Arc::new(move |request: crate::NetworkPolicyRequest| {
                 let captured = Arc::clone(&captured_request);
                 async move {
                     *captured
@@ -1725,15 +1745,26 @@ mod tests {
                         Some((request.host, request.environment_id, request.execution_id));
                     crate::NetworkDecision::Allow
                 }
-            })
+            });
+        let proxy = NetworkProxy::builder()
+            .state(Arc::new(network_proxy_state_for_policy(config)))
             .managed_by_codex(/*managed_by_codex*/ false)
             .build()
             .await?;
-        let scoped = proxy.for_execution("remote", "execution-1", "token-1".to_string())?;
+        let scoped = proxy.for_execution(
+            "remote",
+            "execution-1",
+            "token-1".to_string(),
+            Some(crate::EnvironmentNetworkPolicy::from_config(
+                &owner_config,
+                /*managed_allowed_domains_only*/ false,
+            )),
+            Some(Arc::clone(&fallback_policy_decider)),
+        )?;
         let decider = scoped
             .remote_policy_decider()
             .expect("execution-scoped proxy should expose its policy decider");
-        let mut request = https_request("allowed.example");
+        let mut request = https_request("controller.example");
         request.environment_id = Some("forged-environment".to_string());
         request.execution_id = Some("forged-execution".to_string());
 
@@ -1743,7 +1774,7 @@ mod tests {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
             Some((
-                "allowed.example".to_string(),
+                "controller.example".to_string(),
                 Some("remote".to_string()),
                 Some("execution-1".to_string())
             ))
@@ -1762,11 +1793,28 @@ mod tests {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
             Some((
-                "allowed.example".to_string(),
+                "controller.example".to_string(),
                 Some("remote".to_string()),
                 Some("execution-1".to_string())
             ))
         );
+
+        owner_config.set_denied_domains(vec!["denied.example".to_string()]);
+        assert_eq!(
+            scoped.remote_launch_config().await?.proxy.domains,
+            owner_config.domains
+        );
+        let strict_scoped = proxy.for_execution(
+            "owner-environment",
+            "execution-3",
+            "token-3".to_string(),
+            Some(crate::EnvironmentNetworkPolicy::from_config(
+                &owner_config,
+                /*managed_allowed_domains_only*/ true,
+            )),
+            Some(fallback_policy_decider),
+        )?;
+        assert!(strict_scoped.remote_policy_decider().is_none());
         Ok(())
     }
 
@@ -1790,7 +1838,13 @@ mod tests {
             .managed_by_codex(/*managed_by_codex*/ false)
             .build()
             .await?;
-        let scoped = proxy.for_execution("remote", "execution-1", "token-1".to_string())?;
+        let scoped = proxy.for_execution(
+            "remote",
+            "execution-1",
+            "token-1".to_string(),
+            /*environment_policy*/ None,
+            /*fallback_policy_decider*/ None,
+        )?;
         let decider = scoped
             .remote_policy_decider()
             .expect("execution-scoped proxy should expose its policy decider");
@@ -2052,7 +2106,13 @@ mod tests {
             }
         };
 
-        let scoped = proxy.for_execution("remote-env", "execution-1", "token-1".to_string())?;
+        let scoped = proxy.for_execution(
+            "remote-env",
+            "execution-1",
+            "token-1".to_string(),
+            /*environment_policy*/ None,
+            /*fallback_policy_decider*/ None,
+        )?;
         let launch = scoped.remote_launch_config().await?;
         let prepared = scoped.prepare_for_optional_environment(
             HashMap::from([(
@@ -2065,6 +2125,20 @@ mod tests {
         assert_eq!(launch.environment_id.as_deref(), Some("remote-env"));
         assert_eq!(launch.execution_id.as_deref(), Some("execution-1"));
         assert!(!launch.proxy.enabled);
+
+        let mut owner_config = NetworkProxyConfig::default();
+        owner_config.set_allowed_domains(vec!["owner.example".to_string()]);
+        let owner_scoped = proxy.for_execution(
+            "remote-env",
+            "execution-2",
+            "token-2".to_string(),
+            Some(crate::EnvironmentNetworkPolicy::from_config(
+                &owner_config,
+                /*managed_allowed_domains_only*/ false,
+            )),
+            /*fallback_policy_decider*/ None,
+        )?;
+        assert!(owner_scoped.remote_launch_config().await.is_err());
         for (enabled, mode, allowed_domain, proxy_url) in [
             (false, config::NetworkMode::Full, Some("*"), None),
             (false, config::NetworkMode::Full, Some("example.com"), None),

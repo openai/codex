@@ -223,9 +223,14 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecAttempt> for UnifiedExecRunt
             &file_system_sandbox_policy,
         );
         let network =
-            managed_network_for_sandbox_permissions(req.network.as_ref(), sandbox_permissions)?;
+            managed_network_for_sandbox_permissions(req.network.as_ref(), sandbox_permissions)
+                .cloned();
+        // No-proxy fast path; owners still need a spec for execution-only proxies.
+        if network.is_none() && req.turn_environment.config().network_policy.is_none() {
+            return None;
+        }
         Some(NetworkApprovalSpec {
-            network: Some(network.clone()),
+            network,
             tool_name: ctx.tool_name.clone(),
             trigger: GuardianNetworkAccessTrigger {
                 call_id: ctx.call_id.clone(),
@@ -240,6 +245,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecAttempt> for UnifiedExecRunt
             command: req.hook_command.clone(),
             environment_id: req.turn_environment.selection.environment_id.clone(),
             permission_profile: req.turn_environment.permission_profile().clone(),
+            network_policy: req.turn_environment.config().network_policy.clone(),
         })
     }
 

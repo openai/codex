@@ -179,6 +179,75 @@ impl NetworkProxySpec {
         EnvironmentNetworkPolicy::from_config(&self.config, self.hard_deny_allowlist_misses)
     }
 
+    pub(crate) fn for_environment(
+        controller: Option<&Self>,
+        policy: &EnvironmentNetworkPolicy,
+        permission_profile: &PermissionProfile,
+        exec_policy: &Policy,
+    ) -> std::io::Result<Self> {
+        if matches!(permission_profile, PermissionProfile::Disabled) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "environment network policy requires managed network enforcement",
+            ));
+        }
+        if controller.is_some_and(|controller| !controller.enabled()) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "environment network policy cannot override a disabled controller proxy",
+            ));
+        }
+        let mut spec = match controller {
+            Some(controller) => controller.recompute_for_permission_profile(permission_profile)?,
+            None => Self::from_config_and_constraints(
+                NetworkProxyConfig {
+                    enabled: true,
+                    // Without a controller, the owner supplies the entire permission ceiling.
+                    dangerously_allow_all_unix_sockets: true,
+                    allow_local_binding: true,
+                    ..NetworkProxyConfig::default()
+                },
+                /*requirements*/ None,
+                permission_profile,
+            )?,
+        };
+        policy.apply_to(&mut spec.config);
+        let protected_denials = spec.config.denied_domains().unwrap_or_default();
+
+        // A fixed controller allowlist remains a ceiling; an expandable one is only a baseline.
+        // Profiles without managed approvals must not reuse approvals cached by another profile.
+        let fixed_allowlist = spec.hard_deny_allowlist_misses
+            || spec.constraints.allowlist_expansion_enabled == Some(false);
+        spec.hard_deny_allowlist_misses |= policy.managed_allowed_domains_only
+            || !Self::managed_sandbox_active(permission_profile);
+        let allow_owner_grants = !spec.hard_deny_allowlist_misses && !fixed_allowlist;
+        if fixed_allowlist {
+            spec.constraints.allowlist_expansion_enabled = None;
+        } else {
+            spec.constraints.allowed_domains =
+                Some(spec.config.allowed_domains().unwrap_or_default());
+            spec.constraints.allowlist_expansion_enabled = Some(allow_owner_grants);
+        }
+        spec.constraints.denylist_expansion_enabled = Some(true);
+
+        // Saved grants can extend a reviewable owner policy; owner denials are restored last.
+        let (allowed_domains, denied_domains) = exec_policy.compiled_network_domains();
+        if allow_owner_grants {
+            upsert_network_domains(&mut spec.config, allowed_domains, /*allow*/ true);
+        }
+        upsert_network_domains(&mut spec.config, denied_domains, /*allow*/ false);
+        upsert_network_domains(&mut spec.config, protected_denials, /*allow*/ false);
+        spec.constraints.denied_domains = spec.config.denied_domains();
+
+        validate_policy_against_constraints(&spec.config, &spec.constraints).map_err(|error| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("environment network policy violates managed requirements: {error}"),
+            )
+        })?;
+        Ok(spec)
+    }
+
     pub(crate) fn with_exec_policy_network_rules(
         &self,
         exec_policy: &Policy,
@@ -208,7 +277,7 @@ impl NetworkProxySpec {
             })
     }
 
-    fn build_state_with_audit_metadata(
+    pub(crate) fn build_state_with_audit_metadata(
         &self,
         audit_metadata: NetworkProxyAuditMetadata,
     ) -> std::io::Result<NetworkProxyState> {

@@ -33,7 +33,6 @@ pub struct EnvironmentConfig {
     /// Additional managed MCP restrictions for this environment attachment.
     pub mcp_policy: Option<EnvironmentMcpPolicy>,
     /// Owner-provided traffic restrictions. `None` keeps the existing controller policy.
-    /// Core rejects `Some` until attachment-owned network enforcement is implemented.
     pub network_policy: Option<EnvironmentNetworkPolicy>,
     /// Capability roots selected for this thread's environment attachment.
     pub selected_capability_roots: Vec<SelectedCapabilityRoot>,

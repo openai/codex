@@ -1425,7 +1425,7 @@ async fn shared_executor_keeps_ready_capability_roots_scoped_to_each_attachment(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn owner_network_policy_is_rejected_until_runtime_enforcement_exists() -> Result<()> {
+async fn owner_network_policy_rejects_unsupported_environment_authority() -> Result<()> {
     let server = start_mock_server().await;
     let test = test_codex().build_with_auto_env(&server).await?;
     let selections = test.codex.environment_selections().await;
@@ -1434,9 +1434,7 @@ async fn owner_network_policy_is_rejected_until_runtime_enforcement_exists() -> 
         .context("thread should select its executor environment")?;
     let owner_config = EnvironmentConfig {
         allow_login_shell: test.config.permissions.allow_login_shell,
-        permission_profile: PermissionProfileSnapshot::legacy(
-            test.config.permissions.permission_profile().clone(),
-        ),
+        permission_profile: PermissionProfileSnapshot::legacy(PermissionProfile::Disabled),
         shell_environment_policy: test.config.permissions.shell_environment_policy.clone(),
         exec_policy: None,
         mcp_policy: None,
@@ -1460,15 +1458,23 @@ async fn owner_network_policy_is_rejected_until_runtime_enforcement_exists() -> 
         })
         .await
         .err()
-        .context("preview must not accept an unenforced policy")?;
+        .context("preview must not accept an unsupported environment policy")?;
     let ready_error = test
         .codex
         .environment_ready(selection, owner_config)
         .await
-        .expect_err("readiness must not accept an unenforced policy");
+        .expect_err("readiness must not accept an unsupported environment policy");
 
+    let expected = if selection.environment_id == LOCAL_ENVIRONMENT_ID {
+        "attachment-owned network policy requires a remote executor"
+    } else {
+        "environment network policy requires managed network enforcement"
+    };
     for error in [preview_error.to_string(), ready_error.to_string()] {
-        assert!(error.contains("attachment-owned network policy is not supported yet"));
+        assert!(
+            error.contains(expected),
+            "unexpected validation error: {error}"
+        );
     }
     assert_eq!(test.codex.environment_selections().await, selections);
     Ok(())

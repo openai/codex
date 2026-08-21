@@ -6,12 +6,14 @@ simple sequence for any ToolRuntime: approval → select sandbox → attempt →
 retry with an escalated sandbox strategy on denial (no re‑approval thanks to
 caching).
 */
+use crate::config::NetworkProxySpec;
 use crate::guardian::GuardianReviewContext;
 use crate::network_policy_decision::network_approval_context_from_payload;
 use crate::tools::approvals::ApprovalContext;
 use crate::tools::flat_tool_name;
 use crate::tools::network_approval::ActiveNetworkApproval;
 use crate::tools::network_approval::DeferredNetworkApproval;
+use crate::tools::network_approval::NetworkApprovalSpec;
 use crate::tools::network_approval::begin_network_approval;
 use crate::tools::network_approval::finish_deferred_network_approval;
 use crate::tools::sandboxing::ExecApprovalRequirement;
@@ -31,6 +33,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxType;
+use codex_sandboxing::policy_transforms::effective_network_sandbox_policy;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -55,16 +58,16 @@ impl ToolOrchestrator {
         req: &Rq,
         tool_ctx: &ToolCtx,
         attempt: &SandboxAttempt<'_>,
-        managed_network_active: bool,
+        network_approval_spec: Option<NetworkApprovalSpec>,
     ) -> (Result<Out, ToolError>, Option<DeferredNetworkApproval>)
     where
         T: ToolRuntime<Rq, Out>,
     {
         let network_approval = match begin_network_approval(
             &tool_ctx.session,
-            &tool_ctx.step_context.turn.sub_id,
-            managed_network_active,
-            tool.network_approval_spec(req, tool_ctx),
+            &tool_ctx.step_context.turn,
+            attempt.enforce_managed_network,
+            network_approval_spec,
         )
         .await
         {
@@ -141,6 +144,17 @@ impl ToolOrchestrator {
         let mut already_approved = false;
 
         let environment = tool.turn_environment(req);
+        let owner_network_policy = environment.config().network_policy.is_some();
+        if owner_network_policy
+            && tool
+                .sandbox_permissions(req)
+                .requires_escalated_permissions()
+        {
+            return Err(ToolError::Rejected(
+                "attachment-owned network policy cannot be bypassed by sandbox escalation"
+                    .to_string(),
+            ));
+        }
         let workspace_roots = environment.workspace_roots();
         let executor_managed_process_sandbox = tool.uses_executor_managed_process_sandbox(req);
         let permission_profile = environment.permission_profile();
@@ -212,12 +226,37 @@ impl ToolOrchestrator {
         }
 
         // 2) First attempt under the selected sandbox.
-        let sandbox_override = sandbox_override_for_first_attempt(
-            tool.sandbox_permissions(req),
-            &requirement,
-            &file_system_sandbox_policy,
-        );
-        let managed_network_active = turn_ctx.network.is_some();
+        let unsandboxed_allowed =
+            !owner_network_policy && unsandboxed_execution_allowed(&file_system_sandbox_policy);
+        let sandbox_override = if unsandboxed_allowed {
+            sandbox_override_for_first_attempt(
+                tool.sandbox_permissions(req),
+                &requirement,
+                &file_system_sandbox_policy,
+            )
+        } else {
+            SandboxOverride::NoOverride
+        };
+        let network_approval_spec = tool.network_approval_spec(req, tool_ctx);
+        // Offline owner attachments stay offline unless approved command permissions grant
+        // networking. Existing enabled controller proxies remain independently authoritative.
+        let managed_network_active = if owner_network_policy {
+            turn_ctx
+                .config
+                .permissions
+                .network
+                .as_ref()
+                .is_some_and(NetworkProxySpec::enabled)
+                || network_approval_spec.as_ref().is_some_and(|spec| {
+                    effective_network_sandbox_policy(
+                        permission_profile.network_sandbox_policy(),
+                        spec.trigger.additional_permissions.as_ref(),
+                    )
+                    .is_enabled()
+                })
+        } else {
+            turn_ctx.network.is_some()
+        };
         let sandbox_preference = tool.sandbox_preference();
         let sandbox_requested = match sandbox_override {
             SandboxOverride::BypassSandboxFirstAttempt => false,
@@ -265,14 +304,8 @@ impl ToolOrchestrator {
         };
 
         let initial_attempt_start = Instant::now();
-        let (first_result, first_deferred_network_approval) = Self::run_attempt(
-            tool,
-            req,
-            tool_ctx,
-            &initial_attempt,
-            managed_network_active,
-        )
-        .await;
+        let (first_result, first_deferred_network_approval) =
+            Self::run_attempt(tool, req, tool_ctx, &initial_attempt, network_approval_spec).await;
         let initial_duration = initial_attempt_start.elapsed();
         match first_result {
             Ok(out) => {
@@ -327,8 +360,6 @@ impl ToolOrchestrator {
                     );
                     return Err(ToolError::Codex(err));
                 }
-                let unsandboxed_allowed =
-                    unsandboxed_execution_allowed(&file_system_sandbox_policy);
                 // Under `Never` or `OnRequest`, do not retry without sandbox;
                 // surface a concise sandbox denial that preserves the
                 // original output.
@@ -449,9 +480,10 @@ impl ToolOrchestrator {
                 };
 
                 // Second attempt.
+                let network_approval_spec = tool.network_approval_spec(req, tool_ctx);
                 let escalated_attempt_start = Instant::now();
                 let (retry_result, retry_deferred_network_approval) =
-                    Self::run_attempt(tool, req, tool_ctx, &retry_attempt, managed_network_active)
+                    Self::run_attempt(tool, req, tool_ctx, &retry_attempt, network_approval_spec)
                         .await;
                 let escalated_duration = escalated_attempt_start.elapsed();
                 match retry_result {
