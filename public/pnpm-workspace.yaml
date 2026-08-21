@@ -16,4 +16,4 @@ trustPolicyIgnoreAfter: 10080
 trustPolicyExclude: []
 allowBuilds:
   # Build only the official MCP conformance CLI pinned by the TypeScript SDK.
-  "@modelcontextprotocol/conformance": true
+  "@modelcontextprotocol/conformance@https://codeload.github.com/modelcontextprotocol/conformance/tar.gz/49103de6ed70804e940637bf3e9e29e4a3f54e64": true
