@@ -144,6 +144,28 @@ pub struct CodexThreadSettingsOverrides {
     pub personality: Option<Personality>,
 }
 
+/// One root conversation message exposed only to a worker's Guardian reviewers.
+#[derive(Debug, Eq, PartialEq)]
+pub enum GuardianRootMessage {
+    /// Genuine root-user input that can establish or revoke authorization.
+    User(String),
+    /// Root assistant final output that provides untrusted conversational context.
+    Assistant(String),
+}
+
+impl GuardianRootMessage {
+    /// Renders every line with its original role so message content cannot impersonate another role.
+    pub fn render(self) -> String {
+        let (role, text) = match self {
+            Self::User(text) => ("user", text),
+            Self::Assistant(text) => ("assistant", text),
+        };
+        text.lines()
+            .map(|line| format!("{role}: {line}\n"))
+            .collect()
+    }
+}
+
 pub struct CodexThread {
     pub(crate) session: Arc<Session>,
     pub(crate) io: SessionIo,
@@ -679,6 +701,15 @@ impl CodexThread {
 
     pub fn multi_agent_version(&self) -> Option<MultiAgentVersion> {
         self.session.multi_agent_version()
+    }
+
+    /// Returns bounded root conversation evidence only for a MultiAgent V2 worker's Guardian review.
+    pub async fn guardian_root_conversation(&self) -> Option<Vec<GuardianRootMessage>> {
+        self.session
+            .services
+            .agent_control
+            .root_user_authorization(self.session.thread_id)
+            .await
     }
 
     /// Refresh the thread's layer-backed user config state from a caller-supplied
