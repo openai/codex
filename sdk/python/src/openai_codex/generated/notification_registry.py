@@ -40,12 +40,14 @@ from .v2_all import ModelVerificationNotification
 from .v2_all import PlanDeltaNotification
 from .v2_all import ProcessExitedNotification
 from .v2_all import ProcessOutputDeltaNotification
+from .v2_all import ProjectChangedNotification
 from .v2_all import ReasoningSummaryPartAddedNotification
 from .v2_all import ReasoningSummaryTextDeltaNotification
 from .v2_all import ReasoningTextDeltaNotification
 from .v2_all import RemoteControlStatusChangedNotification
 from .v2_all import ServerRequestResolvedNotification
 from .v2_all import SkillsChangedNotification
+from .v2_all import StrictReviewRequiredNotification
 from .v2_all import TerminalInteractionNotification
 from .v2_all import ThreadArchivedNotification
 from .v2_all import ThreadClosedNotification
@@ -53,6 +55,8 @@ from .v2_all import ThreadDeletedNotification
 from .v2_all import ThreadGoalClearedNotification
 from .v2_all import ThreadGoalUpdatedNotification
 from .v2_all import ThreadNameUpdatedNotification
+from .v2_all import ThreadProjectUpdatedNotification
+from .v2_all import ThreadQueueChangedNotification
 from .v2_all import ThreadRealtimeClosedNotification
 from .v2_all import ThreadRealtimeErrorNotification
 from .v2_all import ThreadRealtimeItemAddedNotification
@@ -61,6 +65,7 @@ from .v2_all import ThreadRealtimeSdpNotification
 from .v2_all import ThreadRealtimeStartedNotification
 from .v2_all import ThreadRealtimeTranscriptDeltaNotification
 from .v2_all import ThreadRealtimeTranscriptDoneNotification
+from .v2_all import ThreadRevertedNotification
 from .v2_all import ThreadSettingsUpdatedNotification
 from .v2_all import ThreadStartedNotification
 from .v2_all import ThreadStatusChangedNotification
@@ -80,6 +85,7 @@ NOTIFICATION_MODELS: dict[str, type[BaseModel]] = {
     "account/rateLimits/updated": AccountRateLimitsUpdatedNotification,
     "account/updated": AccountUpdatedNotification,
     "app/list/updated": AppListUpdatedNotification,
+    "autoApprovalReview/strictReviewRequired": StrictReviewRequiredNotification,
     "command/exec/outputDelta": CommandExecOutputDeltaNotification,
     "configWarning": ConfigWarningNotification,
     "deprecationNotice": DeprecationNoticeNotification,
@@ -113,6 +119,7 @@ NOTIFICATION_MODELS: dict[str, type[BaseModel]] = {
     "model/verification": ModelVerificationNotification,
     "process/exited": ProcessExitedNotification,
     "process/outputDelta": ProcessOutputDeltaNotification,
+    "project/changed": ProjectChangedNotification,
     "remoteControl/status/changed": RemoteControlStatusChangedNotification,
     "serverRequest/resolved": ServerRequestResolvedNotification,
     "skills/changed": SkillsChangedNotification,
@@ -125,6 +132,8 @@ NOTIFICATION_MODELS: dict[str, type[BaseModel]] = {
     "thread/goal/cleared": ThreadGoalClearedNotification,
     "thread/goal/updated": ThreadGoalUpdatedNotification,
     "thread/name/updated": ThreadNameUpdatedNotification,
+    "thread/project/updated": ThreadProjectUpdatedNotification,
+    "thread/queue/changed": ThreadQueueChangedNotification,
     "thread/realtime/closed": ThreadRealtimeClosedNotification,
     "thread/realtime/error": ThreadRealtimeErrorNotification,
     "thread/realtime/itemAdded": ThreadRealtimeItemAddedNotification,
@@ -133,6 +142,7 @@ NOTIFICATION_MODELS: dict[str, type[BaseModel]] = {
     "thread/realtime/started": ThreadRealtimeStartedNotification,
     "thread/realtime/transcript/delta": ThreadRealtimeTranscriptDeltaNotification,
     "thread/realtime/transcript/done": ThreadRealtimeTranscriptDoneNotification,
+    "thread/reverted": ThreadRevertedNotification,
     "thread/settings/updated": ThreadSettingsUpdatedNotification,
     "thread/started": ThreadStartedNotification,
     "thread/status/changed": ThreadStatusChangedNotification,
@@ -169,6 +179,7 @@ DIRECT_TURN_ID_NOTIFICATION_TYPES: tuple[type[BaseModel], ...] = (
     ReasoningSummaryPartAddedNotification,
     ReasoningSummaryTextDeltaNotification,
     ReasoningTextDeltaNotification,
+    StrictReviewRequiredNotification,
     TerminalInteractionNotification,
     ThreadGoalUpdatedNotification,
     ThreadTokenUsageUpdatedNotification,
