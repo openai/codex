@@ -12,11 +12,15 @@ use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::Environment;
 use codex_exec_server::ExecServerError;
 use codex_exec_server::HttpClient;
+use codex_exec_server::HttpRedirectPolicy;
 use codex_exec_server::HttpRequestParams;
 use codex_exec_server::HttpRequestResponse;
 use codex_exec_server::HttpResponseBodyStream;
+use codex_rmcp_client::McpProtocolMode;
 use codex_rmcp_client::RmcpClient;
 use codex_rmcp_client::StoredOAuthTokens;
+use codex_rmcp_client::StreamableHttpBearerToken;
+use codex_rmcp_client::StreamableHttpRedirectMode;
 use codex_rmcp_client::WrappedOAuthTokenResponse;
 use codex_rmcp_client::save_oauth_tokens;
 use codex_rmcp_client::stored_oauth_credential_snapshot;
@@ -48,6 +52,7 @@ const FILE_ACCESS_TOKEN: &str = "stale-file-access-token";
 struct RecordingHttpClient {
     inner: Arc<dyn HttpClient>,
     bearer_tokens: Arc<Mutex<Vec<String>>>,
+    redirect_policies: Arc<Mutex<Vec<HttpRedirectPolicy>>>,
 }
 
 impl RecordingHttpClient {
@@ -55,10 +60,15 @@ impl RecordingHttpClient {
         Self {
             inner,
             bearer_tokens: Arc::new(Mutex::new(Vec::new())),
+            redirect_policies: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
-    fn record_bearer_token(&self, params: &HttpRequestParams) {
+    fn record_request(&self, params: &HttpRequestParams) {
+        self.redirect_policies
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(params.redirect_policy);
         let Some(header) = params
             .headers
             .iter()
@@ -85,7 +95,7 @@ impl HttpClient for RecordingHttpClient {
         &self,
         params: HttpRequestParams,
     ) -> BoxFuture<'_, Result<HttpRequestResponse, ExecServerError>> {
-        self.record_bearer_token(&params);
+        self.record_request(&params);
         self.inner.http_request(params)
     }
 
@@ -93,7 +103,7 @@ impl HttpClient for RecordingHttpClient {
         &self,
         params: HttpRequestParams,
     ) -> BoxFuture<'_, Result<(HttpRequestResponse, HttpResponseBodyStream), ExecServerError>> {
-        self.record_bearer_token(&params);
+        self.record_request(&params);
         self.inner.http_request_stream(params)
     }
 }
@@ -174,6 +184,47 @@ impl CredentialBuilderApi for TestCredentialBuilder {
     fn persistence(&self) -> CredentialPersistence {
         CredentialPersistence::ProcessOnly
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn transport_provided_bearer_token_avoids_placeholder_headers_and_redirects()
+-> anyhow::Result<()> {
+    let (_server, base_url) = spawn_streamable_http_server().await?;
+    let http_client = RecordingHttpClient::new(Environment::default_for_tests().get_http_client());
+    let client = RmcpClient::new_streamable_http_client_with_protocol_mode_and_redirect_mode(
+        "transport-provided-bearer-token",
+        &format!("{base_url}/mcp"),
+        Some(StreamableHttpBearerToken::ProvidedByHttpClient),
+        /*http_headers*/ None,
+        /*env_http_headers*/ None,
+        OAuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::Direct,
+        Arc::new(http_client.clone()),
+        /*auth_provider*/ None,
+        McpProtocolMode::Legacy,
+        StreamableHttpRedirectMode::AgentPluginV1,
+    )
+    .await?;
+
+    initialize_client(&client).await?;
+    assert_eq!(
+        call_echo_tool(&client, "transport-provided").await?,
+        expected_echo_result("transport-provided")
+    );
+    assert_eq!(http_client.bearer_tokens(), Vec::<String>::new());
+
+    let redirect_policies = http_client
+        .redirect_policies
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    assert!(!redirect_policies.is_empty());
+    assert_eq!(
+        redirect_policies,
+        vec![HttpRedirectPolicy::Stop; redirect_policies.len()]
+    );
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]

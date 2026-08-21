@@ -136,6 +136,7 @@ async fn http_response_body_stream_uses_generated_ids_and_receives_ordered_delta
                 headers: vec![HttpHeader {
                     name: "accept".to_string(),
                     value: "text/event-stream".to_string(),
+                    value_env_var: None,
                 }],
                 body: None,
                 timeout_ms: None,
@@ -154,6 +155,7 @@ async fn http_response_body_stream_uses_generated_ids_and_receives_ordered_delta
                 headers: vec![HttpHeader {
                     name: "content-type".to_string(),
                     value: "text/event-stream".to_string(),
+                    value_env_var: None,
                 }],
                 body: Vec::new().into(),
             },
@@ -222,6 +224,7 @@ async fn http_response_body_stream_uses_generated_ids_and_receives_ordered_delta
             headers: vec![HttpHeader {
                 name: "accept".to_string(),
                 value: "text/event-stream".to_string(),
+                value_env_var: None,
             }],
             body: None,
             timeout_ms: None,
@@ -239,6 +242,7 @@ async fn http_response_body_stream_uses_generated_ids_and_receives_ordered_delta
             headers: vec![HttpHeader {
                 name: "content-type".to_string(),
                 value: "text/event-stream".to_string(),
+                value_env_var: None,
             }],
             body: Vec::new().into(),
         }

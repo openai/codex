@@ -23,6 +23,7 @@ use crate::codex_apps::normalize_codex_apps_callable_namespace;
 use crate::codex_apps::normalize_codex_apps_tool_title;
 use crate::codex_apps::prepare_openai_file_params_for_model;
 use crate::elicitation::ElicitationRequestManager;
+use crate::executor_environment_http_client::ExecutorEnvironmentHttpClient;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::ToolPluginProvenance;
 use crate::openai_docs_source_attribution::maybe_with_openai_docs_source_attribution;
@@ -59,6 +60,7 @@ use codex_rmcp_client::LocalStdioServerLauncher;
 use codex_rmcp_client::McpProtocolMode;
 use codex_rmcp_client::RmcpClient;
 use codex_rmcp_client::StdioServerLauncher;
+use codex_rmcp_client::StreamableHttpBearerToken;
 use codex_rmcp_client::StreamableHttpRedirectMode;
 use codex_rmcp_client::ToolWithConnectorId;
 use codex_rmcp_client::is_authentication_required_error;
@@ -1137,10 +1139,20 @@ async fn make_rmcp_client(
                 .http_client_for_server(server.config(), resolved_environment.as_ref())
                 .map_err(|error| StartupOutcomeError::from(anyhow!(error)))?;
             let http_client = maybe_with_openai_docs_source_attribution(&url, http_client);
-            let resolved_bearer_token =
-                match resolve_bearer_token(server_name, bearer_token_env_var.as_deref()) {
-                    Ok(token) => token,
-                    Err(error) => return Err(error.into()),
+            let (http_client, resolved_bearer_token) =
+                if !is_local_environment && let Some(env_var) = bearer_token_env_var.as_ref() {
+                    (
+                        Arc::new(ExecutorEnvironmentHttpClient {
+                            bearer_token_env_var: env_var.clone(),
+                            http_client,
+                        }) as Arc<dyn codex_exec_server::HttpClient>,
+                        Some(StreamableHttpBearerToken::ProvidedByHttpClient),
+                    )
+                } else {
+                    let token = resolve_bearer_token(server_name, bearer_token_env_var.as_deref())
+                        .map_err(StartupOutcomeError::from)?
+                        .map(StreamableHttpBearerToken::Resolved);
+                    (http_client, token)
                 };
             let redirect_mode = if server.is_agent_plugin() {
                 StreamableHttpRedirectMode::AgentPluginV1

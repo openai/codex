@@ -107,10 +107,12 @@ fn selects_bearer_challenge_from_a_later_www_authenticate_field_value() {
         HttpHeader {
             name: "www-authenticate".to_string(),
             value: r#"Basic realm="example""#.to_string(),
+            value_env_var: None,
         },
         HttpHeader {
             name: "WWW-Authenticate".to_string(),
             value: r#"Bearer error="insufficient_scope", scope="files:read""#.to_string(),
+            value_env_var: None,
         },
     ];
 

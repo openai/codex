@@ -711,6 +711,7 @@ fn protocol_headers(headers: &HeaderMap) -> Vec<HttpHeader> {
             Some(HttpHeader {
                 name: name.as_str().to_string(),
                 value: std::str::from_utf8(value.as_bytes()).ok()?.to_string(),
+                value_env_var: None,
             })
         })
         .collect()

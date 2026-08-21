@@ -12,6 +12,10 @@ use codex_http_client::ClientRouteClass;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::RouteAwareClientPool;
 use codex_http_client::RouteAwareRequestError;
+use codex_protocol::shell_environment::CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR;
+use codex_protocol::shell_environment::OPENAI_FEDERATION_RULE_ID_ENV_VAR;
+use codex_protocol::shell_environment::OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR;
+use codex_protocol::shell_environment::OPENAI_WORKLOAD_IDENTITY_CONTEXT_ENV_VAR;
 use futures::FutureExt;
 use futures::StreamExt;
 use futures::future::BoxFuture;
@@ -35,6 +39,23 @@ use crate::protocol::MAX_HTTP_BODY_DELTA_BYTES;
 use crate::rpc::RpcNotificationSender;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_params;
+
+const HTTP_HEADER_ENV_DENYLIST: &[&str] = &[
+    CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR,
+    OPENAI_FEDERATION_RULE_ID_ENV_VAR,
+    OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR,
+    OPENAI_WORKLOAD_IDENTITY_CONTEXT_ENV_VAR,
+    "OPENAI_API_KEY",
+    "CODEX_API_KEY",
+    "CODEX_ACCESS_TOKEN",
+    "CODEX_CONNECTORS_TOKEN",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AZURE_CLIENT_SECRET",
+    "AZURE_FEDERATED_TOKEN_FILE",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+];
 
 /// HTTP capability implementation backed by the shared route-aware transport.
 #[derive(Clone)]
@@ -288,7 +309,34 @@ impl RouteAwareHttpRequestRunner {
             let name = HeaderName::from_bytes(header.name.as_bytes()).map_err(|error| {
                 invalid_params(format!("http/request header name is invalid: {error}"))
             })?;
-            let value = HeaderValue::from_str(&header.value).map_err(|error| {
+            let value = match header.value_env_var {
+                Some(env_var) => {
+                    if HTTP_HEADER_ENV_DENYLIST
+                        .iter()
+                        .any(|denied| denied.eq_ignore_ascii_case(&env_var))
+                    {
+                        return Err(invalid_params(format!(
+                            "http/request header {} cannot use executor environment variable {env_var}",
+                            header.name
+                        )));
+                    }
+                    let env_value = std::env::var(&env_var).map_err(|_| {
+                        invalid_params(format!(
+                            "http/request header {} requires executor environment variable {env_var}",
+                            header.name
+                        ))
+                    })?;
+                    if env_value.is_empty() {
+                        return Err(invalid_params(format!(
+                            "http/request header {} requires a non-empty executor environment variable {env_var}",
+                            header.name
+                        )));
+                    }
+                    format!("{}{env_value}", header.value)
+                }
+                None => header.value,
+            };
+            let value = HeaderValue::from_str(&value).map_err(|error| {
                 invalid_params(format!(
                     "http/request header value is invalid for {}: {error}",
                     header.name
@@ -306,6 +354,7 @@ impl RouteAwareHttpRequestRunner {
                 Some(HttpHeader {
                     name: name.as_str().to_string(),
                     value: value.to_str().ok()?.to_string(),
+                    value_env_var: None,
                 })
             })
             .collect()

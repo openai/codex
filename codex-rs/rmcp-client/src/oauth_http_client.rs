@@ -169,6 +169,7 @@ impl OAuthHttpClientAdapter {
                 Ok(HttpHeader {
                     name: name.as_str().to_string(),
                     value: value.to_str().map_err(oauth_http_client_error)?.to_string(),
+                    value_env_var: None,
                 })
             })
             .collect::<Result<Vec<_>, OAuthHttpClientError>>()?;

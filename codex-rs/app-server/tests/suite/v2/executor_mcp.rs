@@ -4,6 +4,7 @@ use app_test_support::TestAppServer;
 use axum::Json;
 use axum::Router;
 use axum::body::Bytes;
+use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::routing::post;
 use codex_app_server_protocol::CapabilityRootLocation;
@@ -43,10 +44,14 @@ use rmcp::transport::streamable_http_server::session::local::LocalSessionManager
 use serde_json::json;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
+use tokio::io::AsyncBufReadExt;
+use tokio::io::BufReader;
 use tokio::net::TcpListener;
+use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 use url::Url;
@@ -62,12 +67,15 @@ const HOST_OAUTH_ACCESS_TOKEN: &str = "host-access-token";
 const EXECUTOR_OAUTH_ACCESS_TOKEN: &str = "executor-access-token";
 const EXECUTOR_ENV_NAME: &str = "MCP_EXECUTOR_MARKER";
 const EXECUTOR_ENV_VALUE: &str = "executor-only";
+const EXECUTOR_HTTP_AUTH_ENV_NAME: &str = "NODE_REPL_AUTH_TOKEN";
+const EXECUTOR_HTTP_AUTH_ENV_VALUE: &str = "executor-only-http-token";
 const EXECUTOR_ID: &str = "executor-1";
 const REFRESH_PROBE_SERVER_NAME: &str = "refresh_probe";
 const TOOL_CALL_ID: &str = "executor-mcp-call";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn selected_executor_plugin_exposes_its_mcps_only_to_that_thread() -> Result<()> {
+    assert!(std::env::var_os(EXECUTOR_HTTP_AUTH_ENV_NAME).is_none());
     let responses_server = responses::start_mock_server().await;
     let http_listener = TcpListener::bind("127.0.0.1:0").await?;
     let http_addr = http_listener.local_addr()?;
@@ -83,6 +91,24 @@ async fn selected_executor_plugin_exposes_its_mcps_only_to_that_thread() -> Resu
         Arc::new(LocalSessionManager::default()),
         http_server_config,
     );
+    let http_mcp_router =
+        Router::new()
+            .nest_service("/mcp", http_mcp_service)
+            .layer(axum::middleware::from_fn(
+                move |request: axum::extract::Request, next: axum::middleware::Next| async move {
+                    let authorized = request
+                        .headers()
+                        .get(axum::http::header::AUTHORIZATION)
+                        .and_then(|value| value.to_str().ok())
+                        .is_some_and(|value| {
+                            value == format!("Bearer {EXECUTOR_HTTP_AUTH_ENV_VALUE}")
+                        });
+                    if !authorized {
+                        return axum::http::StatusCode::UNAUTHORIZED.into_response();
+                    }
+                    next.run(request).await
+                },
+            ));
     let (oauth_authorization_tx, mut oauth_authorization_rx) = mpsc::unbounded_channel();
     let oauth_mcp_router = Router::new()
         .nest_service("/oauth-mcp", oauth_mcp_service)
@@ -147,7 +173,7 @@ async fn selected_executor_plugin_exposes_its_mcps_only_to_that_thread() -> Resu
                 }
             }),
         )
-        .nest_service("/mcp", http_mcp_service)
+        .merge(http_mcp_router)
         .merge(oauth_mcp_router);
     let http_server_handle = tokio::spawn(async move {
         let _ = axum::serve(http_listener, http_router).await;
@@ -183,12 +209,20 @@ async fn selected_executor_plugin_exposes_its_mcps_only_to_that_thread() -> Resu
         &oauth_credentials_path,
         serde_json::to_vec(&json!({"host": host_oauth_credential.clone()}))?,
     )?;
-    let codex_bin = toml::Value::String(
-        codex_utils_cargo_bin::cargo_bin("codex")?
-            .to_string_lossy()
-            .into_owned(),
-    );
-    let http_proxy = toml::Value::String(format!("http://{http_addr}"));
+    let mut executor = Command::new(codex_utils_cargo_bin::cargo_bin("codex")?)
+        .args(["exec-server", "--listen", "ws://127.0.0.1:0"])
+        .stdout(Stdio::piped())
+        .kill_on_drop(true)
+        .env("CODEX_HOME", codex_home.path())
+        .env(EXECUTOR_ENV_NAME, EXECUTOR_ENV_VALUE)
+        .env(EXECUTOR_HTTP_AUTH_ENV_NAME, EXECUTOR_HTTP_AUTH_ENV_VALUE)
+        .env("HTTP_PROXY", format!("http://{http_addr}"))
+        .spawn()?;
+    let stdout = executor.stdout.take().expect("executor stdout is piped");
+    let mut lines = BufReader::new(stdout).lines();
+    let executor_url = timeout(DEFAULT_READ_TIMEOUT, lines.next_line())
+        .await??
+        .expect("executor emits its websocket URL");
     std::fs::write(
         codex_home.path().join("environments.toml"),
         format!(
@@ -197,11 +231,7 @@ include_local = true
 
 [[environments]]
 id = "{EXECUTOR_ID}"
-program = {codex_bin}
-args = ["exec-server", "--listen", "stdio"]
-[environments.env]
-{EXECUTOR_ENV_NAME} = "{EXECUTOR_ENV_VALUE}"
-HTTP_PROXY = {http_proxy}
+url = "{executor_url}"
 "#
         ),
     )?;
@@ -224,6 +254,7 @@ HTTP_PROXY = {http_proxy}
                 (HTTP_MCP_SERVER_NAME): {
                     "url": EXECUTOR_HTTP_MCP_URL,
                     "environment_id": "local",
+                    "bearer_token_env_var": EXECUTOR_HTTP_AUTH_ENV_NAME,
                     "startup_timeout_sec": 10,
                 },
                 (OAUTH_MCP_SERVER_NAME): {

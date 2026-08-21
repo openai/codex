@@ -329,6 +329,9 @@ fn referenced_environment_variables(config: &McpServerConfig) -> Vec<(String, Op
             .filter(|env_var| !env_var.is_remote_source())
             .map(|env_var| env_var.name().to_string())
             .collect::<Vec<_>>(),
+        McpServerTransportConfig::StreamableHttp { .. } if !config.is_local_environment() => {
+            Vec::new()
+        }
         McpServerTransportConfig::StreamableHttp {
             bearer_token_env_var,
             env_http_headers,

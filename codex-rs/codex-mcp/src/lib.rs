@@ -99,6 +99,7 @@ mod client_capabilities;
 pub(crate) mod codex_apps;
 pub(crate) mod connection_manager;
 pub(crate) mod elicitation;
+mod executor_environment_http_client;
 pub(crate) mod mcp;
 mod openai_docs_source_attribution;
 mod pagination;

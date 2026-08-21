@@ -677,8 +677,11 @@ impl ExecutorCapabilityDiscoverySnapshot {
 pub struct HttpHeader {
     /// Header name as it appears on the HTTP wire.
     pub name: String,
-    /// Header value after UTF-8 conversion.
+    /// Literal header value, or prefix for an executor-local environment value.
     pub value: String,
+    /// Environment variable resolved by the process that sends the HTTP request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value_env_var: Option<String>,
 }
 
 /// Redirect behavior for an executor-side HTTP request.

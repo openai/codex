@@ -786,7 +786,7 @@ fn environment_placement_rejects_orchestrator_env_vars() {
 }
 
 #[test]
-fn remote_environment_placement_rejects_http_env_references() {
+fn remote_environment_placement_preserves_bearer_and_rejects_header_env_references() {
     let plugin_root = plugin_root();
     let outcome = parse_executor_plugin_mcp_config(
         &plugin_root_uri(&plugin_root),
@@ -807,19 +807,20 @@ fn remote_environment_placement_rejects_http_env_references() {
     assert_eq!(
         outcome,
         PluginMcpConfigParseOutcome {
-            servers: BTreeMap::new(),
-            errors: vec![
-                PluginMcpServerParseError {
-                    name: "bearer".to_string(),
-                    message: "`bearer_token_env_var` requires executor-side environment resolution for an executor-owned HTTP MCP"
-                        .to_string(),
-                },
-                PluginMcpServerParseError {
-                    name: "headers".to_string(),
-                    message: "`env_http_headers` requires executor-side environment resolution for an executor-owned HTTP MCP"
-                        .to_string(),
-                },
-            ],
+            servers: BTreeMap::from([(
+                "bearer".to_string(),
+                serde_json::from_value(serde_json::json!({
+                    "url": "https://example.com/bearer",
+                    "bearer_token_env_var": "TOKEN",
+                    "environment_id": "executor-1",
+                }))
+                .expect("executor-owned bearer configuration"),
+            )]),
+            errors: vec![PluginMcpServerParseError {
+                name: "headers".to_string(),
+                message: "`env_http_headers` requires executor-side environment resolution for an executor-owned HTTP MCP"
+                    .to_string(),
+            }],
         }
     );
 }

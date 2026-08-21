@@ -49,7 +49,14 @@ struct CapturedHttpRequest {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_server_http_request_buffers_response_body() -> anyhow::Result<()> {
     // Phase 1: start exec-server and complete the JSON-RPC handshake.
-    let mut server = exec_server().await?;
+    let mut server = exec_server_with_env(
+        [
+            ("NODE_REPL_AUTH_TOKEN", "executor-token"),
+            ("LINEAR_API_KEY", "linear-token"),
+        ],
+        &[],
+    )
+    .await?;
     initialize_exec_server(&mut server).await?;
 
     // Phase 2: start a local HTTP peer and ask exec-server to POST to it.
@@ -61,10 +68,23 @@ async fn exec_server_http_request_buffers_response_body() -> anyhow::Result<()> 
             serde_json::to_value(HttpRequestParams {
                 method: "POST".to_string(),
                 url,
-                headers: vec![HttpHeader {
-                    name: "x-codex-test".to_string(),
-                    value: "buffered".to_string(),
-                }],
+                headers: vec![
+                    HttpHeader {
+                        name: "x-codex-test".to_string(),
+                        value: "buffered".to_string(),
+                        value_env_var: None,
+                    },
+                    HttpHeader {
+                        name: "authorization".to_string(),
+                        value: "Bearer ".to_string(),
+                        value_env_var: Some("NODE_REPL_AUTH_TOKEN".to_string()),
+                    },
+                    HttpHeader {
+                        name: "x-linear-authorization".to_string(),
+                        value: "Bearer ".to_string(),
+                        value_env_var: Some("LINEAR_API_KEY".to_string()),
+                    },
+                ],
                 body: Some(b"request-body".to_vec().into()),
                 timeout_ms: Some(5_000),
                 redirect_policy: HttpRedirectPolicy::Follow,
@@ -81,11 +101,18 @@ async fn exec_server_http_request_buffers_response_body() -> anyhow::Result<()> 
         (
             captured.request_line.as_str(),
             captured.headers.get("x-codex-test").map(String::as_str),
+            captured.headers.get("authorization").map(String::as_str),
+            captured
+                .headers
+                .get("x-linear-authorization")
+                .map(String::as_str),
             captured.body.as_slice(),
         ),
         (
             "POST /mcp?case=buffered HTTP/1.1",
             Some("buffered"),
+            Some("Bearer executor-token"),
+            Some("Bearer linear-token"),
             b"request-body".as_slice(),
         )
     );
@@ -107,6 +134,70 @@ async fn exec_server_http_request_buffers_response_body() -> anyhow::Result<()> 
             response.body.into_inner(),
         ),
         (201, Some("buffered".to_string()), b"response-body".to_vec(),)
+    );
+
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_server_http_request_rejects_protected_environment_headers() -> anyhow::Result<()> {
+    let mut server = exec_server_with_env(
+        [(
+            "CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN",
+            "executor-internal-token",
+        )],
+        &[],
+    )
+    .await?;
+    initialize_exec_server(&mut server).await?;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    for (index, env_var) in [
+        "CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN",
+        "codex_exec_server_noise_auth_token",
+        "OPENAI_API_KEY",
+        "CODEX_ACCESS_TOKEN",
+        "CODEX_CONNECTORS_TOKEN",
+        "AWS_SECRET_ACCESS_KEY",
+        "AZURE_FEDERATED_TOKEN_FILE",
+        "OPENAI_IDENTITY_TOKEN_FILE",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let request_id = server
+            .send_request(
+                "http/request",
+                serde_json::to_value(HttpRequestParams {
+                    method: "GET".to_string(),
+                    url: format!("http://{}/mcp", listener.local_addr()?),
+                    headers: vec![HttpHeader {
+                        name: "authorization".to_string(),
+                        value: "Bearer ".to_string(),
+                        value_env_var: Some(env_var.to_string()),
+                    }],
+                    body: None,
+                    timeout_ms: Some(5_000),
+                    redirect_policy: HttpRedirectPolicy::Follow,
+                    request_id: format!("protected-header-request-{index}"),
+                    stream_response: false,
+                })?,
+            )
+            .await?;
+        let error = wait_for_error_response(&mut server, request_id).await?;
+        assert_eq!(error.code, -32602);
+        assert_eq!(
+            error.message,
+            format!(
+                "http/request header authorization cannot use executor environment variable {env_var}"
+            )
+        );
+    }
+    assert!(
+        timeout(Duration::from_millis(50), listener.accept())
+            .await
+            .is_err()
     );
 
     server.shutdown().await?;
@@ -417,6 +508,7 @@ async fn exec_server_http_request_streams_response_body_notifications() -> anyho
                 headers: vec![HttpHeader {
                     name: "accept".to_string(),
                     value: "text/event-stream".to_string(),
+                    value_env_var: None,
                 }],
                 body: None,
                 timeout_ms: Some(5_000),
