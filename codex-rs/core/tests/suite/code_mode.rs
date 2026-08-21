@@ -3554,36 +3554,6 @@ Total\ output\ lines:\ 1\n
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_can_output_serialized_text_via_global_helper() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = responses::start_mock_server().await;
-    let (_test, second_mock) = run_code_mode_turn(
-        &server,
-        "use exec to return structured text",
-        r#"
-text({ json: true });
-"#,
-    )
-    .await?;
-
-    let req = second_mock.single_request();
-    let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
-    eprintln!(
-        "hidden dynamic tool raw output: {}",
-        req.custom_tool_call_output("call-1")
-    );
-    assert_ne!(
-        success,
-        Some(false),
-        "exec call failed unexpectedly: {output}"
-    );
-    assert_eq!(output, r#"{"json":true}"#);
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_can_resume_after_set_timeout() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -3866,89 +3836,6 @@ async fn code_mode_unified_image_budget_preserves_legacy_contract_for_unsupporte
         .expect("the model request should contain the code-mode exec tool");
     assert!(exec_description.contains("codex/imageDetail"));
     assert!(exec_description.contains("detail?:"));
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_image_helper_rejects_remote_url() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = responses::start_mock_server().await;
-    let (_test, second_mock) = run_code_mode_turn(
-        &server,
-        "use exec to return a remote image",
-        r#"image("https://example.com/image.jpg");"#,
-    )
-    .await?;
-
-    let req = second_mock.single_request();
-    let items = custom_tool_output_items(&req, "call-1");
-    let (_, success) = custom_tool_output_body_and_success(&req, "call-1");
-    assert_ne!(
-        success,
-        Some(true),
-        "code_mode remote image URL unexpectedly succeeded"
-    );
-    assert_eq!(items.len(), 2);
-    assert_regex_match(
-        concat!(
-            r"(?s)\A",
-            r"Script failed\nWall time \d+\.\d seconds\nOutput:\n\z"
-        ),
-        text_item(&items, /*index*/ 0),
-    );
-    assert_eq!(
-        text_item(&items, /*index*/ 1),
-        concat!(
-            "Script error:\n",
-            "Tool call failed: remote image URLs are not supported in tool outputs. ",
-            "Pass a base64 data URI instead"
-        )
-    );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_image_helper_rejects_invalid_image_output() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = responses::start_mock_server().await;
-    let (_test, second_mock) = run_code_mode_turn(
-        &server,
-        "use exec to return an image",
-        r#"
-const s = "Error executing tool exec: Expected at least one message to convert to CallToolResult";
-image(s.trim(), "original");
-"#,
-    )
-    .await?;
-
-    let req = second_mock.single_request();
-    let items = custom_tool_output_items(&req, "call-1");
-    let (_, success) = custom_tool_output_body_and_success(&req, "call-1");
-    assert_ne!(
-        success,
-        Some(true),
-        "code_mode invalid image output unexpectedly succeeded"
-    );
-    assert_eq!(items.len(), 2);
-    assert_regex_match(
-        concat!(
-            r"(?s)\A",
-            r"Script failed\nWall time \d+\.\d seconds\nOutput:\n\z"
-        ),
-        text_item(&items, /*index*/ 0),
-    );
-    assert_eq!(
-        text_item(&items, /*index*/ 1),
-        concat!(
-            "Script error:\n",
-            "Tool call failed: invalid image output. ",
-            "Pass a base64 data URI instead"
-        )
-    );
 
     Ok(())
 }

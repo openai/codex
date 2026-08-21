@@ -1056,6 +1056,32 @@ text(JSON.stringify(returnsUndefined));
 }
 
 #[tokio::test]
+async fn text_helper_serializes_objects() {
+    let service = InProcessCodeModeSession::new();
+
+    let response = execute(
+        &service,
+        ExecuteRequest {
+            source: "text({ json: true });".to_string(),
+            yield_time_ms: None,
+            ..execute_request("")
+        },
+    )
+    .await;
+
+    assert_eq!(
+        response,
+        RuntimeResponse::Result {
+            cell_id: cell_id("1"),
+            content_items: vec![FunctionCallOutputContentItem::InputText {
+                text: r#"{"json":true}"#.to_string(),
+            }],
+            error_text: None,
+        }
+    );
+}
+
+#[tokio::test]
 async fn text_helper_surfaces_stringify_errors() {
     let service = InProcessCodeModeSession::new();
 
