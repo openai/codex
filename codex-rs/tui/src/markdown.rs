@@ -19,10 +19,15 @@
 //! buffers the entire fence body before deciding, only unwraps fences whose
 //! info string is `md` or `markdown` AND whose body contains a
 //! header+delimiter pair, and degrades gracefully on unclosed fences.
+use pulldown_cmark::CodeBlockKind;
+use pulldown_cmark::Event;
+use pulldown_cmark::Tag;
+use pulldown_cmark::TagEnd;
 use ratatui::text::Line;
 use std::borrow::Cow;
 use std::ops::Range;
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::inline_visualization::InlineVisualizationContext;
 use crate::inline_visualization::rewrite_inline_visualizations;
@@ -132,6 +137,93 @@ pub(crate) fn render_streaming_markdown_agent_with_links_and_cwd(
             .map(str::len);
     }
     rendered
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CopyTarget {
+    Code {
+        language: Option<String>,
+        content: Arc<str>,
+    },
+    Quote(Arc<str>),
+}
+
+pub(crate) fn extract_copy_targets(markdown_source: &str) -> Vec<CopyTarget> {
+    let mut targets = Vec::new();
+    let mut quote: Option<(Range<usize>, usize, bool)> = None;
+    let mut quote_depth = 0usize;
+    let mut in_code_block = false;
+    let mut code = None;
+
+    for (event, range) in pulldown_cmark::Parser::new(markdown_source).into_offset_iter() {
+        match event {
+            Event::Start(Tag::BlockQuote) => {
+                if quote_depth == 0 {
+                    quote = Some((range, targets.len(), false));
+                }
+                quote_depth += 1;
+            }
+            Event::End(TagEnd::BlockQuote) => {
+                quote_depth = quote_depth.saturating_sub(1);
+                if quote_depth == 0 {
+                    quote = None;
+                }
+            }
+            Event::Start(Tag::CodeBlock(kind)) => {
+                in_code_block = true;
+                if let CodeBlockKind::Fenced(info) = kind {
+                    let language = info
+                        .split([',', ' ', '\t'])
+                        .next()
+                        .filter(|language| !language.is_empty())
+                        .map(str::to_owned);
+                    code = Some((language, String::new()));
+                }
+            }
+            Event::Text(text) | Event::Code(text) => {
+                if in_code_block {
+                    if let Some((_, content)) = &mut code {
+                        if text.starts_with('\n')
+                            && range.start > 0
+                            && markdown_source.as_bytes()[range.start - 1] == b'\r'
+                        {
+                            content.push('\r');
+                        }
+                        content.push_str(&text);
+                    }
+                } else if let Some((span, position, emitted)) = &mut quote
+                    && !*emitted
+                    && !crate::git_action_directives::strip_line_directives(&text)
+                        .0
+                        .trim()
+                        .is_empty()
+                {
+                    let content = markdown_source[span.clone()]
+                        .split_inclusive('\n')
+                        .map(|line| {
+                            line.trim_start_matches(' ')
+                                .strip_prefix('>')
+                                .map_or(line, |line| line.strip_prefix(' ').unwrap_or(line))
+                        })
+                        .collect::<String>();
+                    targets.insert(*position, CopyTarget::Quote(content.into()));
+                    *emitted = true;
+                }
+            }
+            Event::End(TagEnd::CodeBlock) => {
+                in_code_block = false;
+                if let Some((language, content)) = code.take() {
+                    targets.push(CopyTarget::Code {
+                        language,
+                        content: content.into(),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    targets
 }
 
 /// Strip `` ```md ``/`` ```markdown `` fences that contain tables, emitting their content as bare
@@ -358,6 +450,68 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use ratatui::text::Line;
+
+    #[test]
+    fn copy_targets_preserve_fenced_code_language_and_exact_content() {
+        let markdown =
+            "```python title=example\nprint('hi')\n```\n\n    ignored()\n\n~~~\nplain()\n~~~";
+        assert_eq!(
+            extract_copy_targets(markdown),
+            vec![
+                CopyTarget::Code {
+                    language: Some("python".to_string()),
+                    content: Arc::from("print('hi')\n"),
+                },
+                CopyTarget::Code {
+                    language: None,
+                    content: Arc::from("plain()\n"),
+                },
+            ]
+        );
+        assert_eq!(
+            extract_copy_targets("```powershell\r\nGet-Item .\r\nWrite-Output ok\r\n```\r\n"),
+            vec![CopyTarget::Code {
+                language: Some("powershell".to_string()),
+                content: Arc::from("Get-Item .\r\nWrite-Output ok\r\n"),
+            }]
+        );
+    }
+
+    #[test]
+    fn copy_targets_preserve_nested_quote_markdown_and_source_order() {
+        let markdown = "> outer **bold**\n> > inner *quote*\n> ```sh\n> nested()\n> ```\n";
+        assert_eq!(
+            extract_copy_targets(markdown),
+            vec![
+                CopyTarget::Quote(Arc::from(
+                    "outer **bold**\n> inner *quote*\n```sh\nnested()\n```\n"
+                )),
+                CopyTarget::Code {
+                    language: Some("sh".to_string()),
+                    content: Arc::from("nested()\n"),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn copy_targets_exclude_blockquotes_without_prose() {
+        let markdown = concat!(
+            "> > ::git-stage{cwd=\"/repo\"}\n\n",
+            "> ::git-stage{cwd=\"/repo\"}\n> ```sh\n> code()\n> ```\n\n",
+            "> quoted prose\n"
+        );
+        assert_eq!(
+            extract_copy_targets(markdown),
+            vec![
+                CopyTarget::Code {
+                    language: Some("sh".to_string()),
+                    content: Arc::from("code()\n"),
+                },
+                CopyTarget::Quote(Arc::from("quoted prose\n")),
+            ]
+        );
+    }
 
     fn lines_to_strings(lines: &[Line<'static>]) -> Vec<String> {
         lines

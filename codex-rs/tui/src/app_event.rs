@@ -287,6 +287,12 @@ pub(crate) enum AppEvent {
         destination: TranscriptExportDestination,
     },
 
+    /// Copy a picker selection while retaining its clipboard lease in the chat widget.
+    CopySelection {
+        text: Arc<str>,
+        label: String,
+    },
+
     /// Persist a submitted prompt in the cross-session message history.
     AppendMessageHistoryEntry {
         thread_id: ThreadId,

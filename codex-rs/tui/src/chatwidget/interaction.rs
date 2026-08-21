@@ -326,6 +326,99 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    pub(super) fn show_copy_picker(&mut self) {
+        let Some(markdown) = self
+            .transcript
+            .last_agent_markdown
+            .clone()
+            .filter(|markdown| !markdown.is_empty())
+        else {
+            self.copy_last_agent_markdown();
+            return;
+        };
+
+        let mut choices = vec![(
+            "Whole response".to_string(),
+            Arc::<str>::from(markdown.as_str()),
+        )];
+        let source = self
+            .transcript
+            .last_agent_source
+            .as_deref()
+            .unwrap_or(&markdown);
+        choices.extend(
+            crate::markdown::extract_copy_targets(source)
+                .into_iter()
+                .filter_map(|target| match target {
+                    crate::markdown::CopyTarget::Code { language, content } => Some((
+                        language.map_or_else(
+                            || "Code block".to_string(),
+                            |language| format!("{language} code"),
+                        ),
+                        content,
+                    )),
+                    crate::markdown::CopyTarget::Quote(content) => {
+                        let content: String = content
+                            .split_inclusive('\n')
+                            .map(|line| crate::git_action_directives::strip_line_directives(line).0)
+                            .collect();
+                        (!content.trim().is_empty())
+                            .then(|| ("Blockquote".to_string(), Arc::from(content)))
+                    }
+                }),
+        );
+
+        let items = choices
+            .into_iter()
+            .map(|(label, text)| {
+                let description = text
+                    .lines()
+                    .find(|line| !line.trim().is_empty())
+                    .map(|line| line.trim().chars().take(72).collect());
+                SelectionItem {
+                    name: label.clone(),
+                    description,
+                    actions: vec![Box::new(move |tx| {
+                        tx.send(AppEvent::CopySelection {
+                            text: Arc::clone(&text),
+                            label: label.clone(),
+                        });
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                }
+            })
+            .collect();
+
+        self.show_selection_view(SelectionViewParams {
+            title: Some("Copy from response".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+        self.defer_input_until_settings_applied();
+    }
+
+    pub(crate) fn copy_selection(&mut self, text: Arc<str>, label: String) {
+        self.copy_selection_with(&text, &label, crate::clipboard_copy::copy_to_clipboard);
+    }
+
+    pub(super) fn copy_selection_with(
+        &mut self,
+        text: &str,
+        label: &str,
+        copy_fn: impl FnOnce(&str) -> Result<Option<crate::clipboard_copy::ClipboardLease>, String>,
+    ) {
+        match copy_fn(text) {
+            Ok(lease) => {
+                self.clipboard_lease = lease;
+                self.add_info_message(format!("Copied {label} to clipboard"), /*hint*/ None);
+            }
+            Err(error) => self.add_error_message(format!("Copy failed: {error}")),
+        }
+        self.request_redraw();
+    }
+
     #[cfg(test)]
     pub(crate) fn last_agent_markdown_text(&self) -> Option<&str> {
         self.transcript.last_agent_markdown.as_deref()

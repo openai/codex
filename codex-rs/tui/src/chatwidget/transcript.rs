@@ -32,8 +32,10 @@ pub(super) struct TranscriptState {
     pub(super) active_cell_revision: u64,
     /// One bounded entry shared by layout and paint across unchanged active-cell frames.
     pub(super) active_cell_layout: Cell<Option<ActiveCellLayoutCache>>,
-    /// Raw markdown of the most recently completed agent response.
+    /// Markdown of the most recently completed agent response for whole-response copying.
     pub(super) last_agent_markdown: Option<String>,
+    /// Original source of that response, before display sanitization, for exact block copying.
+    pub(super) last_agent_source: Option<String>,
     pub(super) last_completed_agent_message: Option<(String, String)>,
     /// Raw markdown of the most recently completed proposed plan.
     pub(super) latest_proposed_plan_markdown: Option<String>,
@@ -80,13 +82,15 @@ impl TranscriptState {
         active_cell
     }
 
-    pub(super) fn record_agent_markdown(&mut self, markdown: String) {
+    pub(super) fn record_agent_markdown(&mut self, markdown: String, source: String) {
         self.last_agent_markdown = Some(markdown);
+        self.last_agent_source = Some(source);
         self.saw_copy_source_this_turn = true;
     }
 
     pub(super) fn reset_copy_history(&mut self) {
         self.last_agent_markdown = None;
+        self.last_agent_source = None;
         self.saw_copy_source_this_turn = false;
     }
 

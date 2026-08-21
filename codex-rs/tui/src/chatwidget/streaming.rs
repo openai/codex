@@ -174,14 +174,17 @@ impl ChatWidget {
     }
 
     pub(super) fn on_plan_item_completed(&mut self, text: String) {
-        let streamed_plan = self.transcript.plan_delta_buffer.trim().to_string();
-        let plan_text = if text.trim().is_empty() {
-            streamed_plan
+        let (plan_text, source) = if text.trim().is_empty() {
+            (
+                self.transcript.plan_delta_buffer.trim().to_string(),
+                self.transcript.plan_delta_buffer.clone(),
+            )
         } else {
-            text
+            (text.clone(), text)
         };
         if !plan_text.trim().is_empty() {
-            self.record_agent_markdown(&plan_text);
+            self.transcript
+                .record_agent_markdown(plan_text.clone(), source);
             self.transcript.latest_proposed_plan_markdown = Some(plan_text.clone());
         }
         // Plan commit ticks can hide the status row; remember whether we streamed plan output so
@@ -331,7 +334,8 @@ impl ChatWidget {
         if matches!(item.phase, Some(MessagePhase::FinalAnswer) | None)
             && !parsed.visible_markdown.is_empty()
         {
-            self.record_agent_markdown(&parsed.visible_markdown);
+            self.transcript
+                .record_agent_markdown(parsed.visible_markdown.clone(), message);
         }
         if !from_replay
             && let Some(cwd) = parsed.last_created_branch_cwd()
