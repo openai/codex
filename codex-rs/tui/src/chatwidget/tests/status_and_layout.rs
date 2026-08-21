@@ -3806,7 +3806,8 @@ async fn completed_turn_clears_visible_running_hook() {
 
 #[tokio::test]
 async fn status_line_fast_mode_renders_on_and_off() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    set_fast_mode_test_catalog(&mut chat);
     chat.config.tui_status_line = Some(vec!["fast-mode".to_string()]);
 
     chat.refresh_status_line();
@@ -3818,14 +3819,39 @@ async fn status_line_fast_mode_renders_on_and_off() {
 }
 
 #[tokio::test]
+async fn status_line_fast_mode_updates_visibility_on_model_change() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    set_fast_mode_test_catalog(&mut chat);
+    chat.config.tui_status_line = Some(vec!["fast-mode".to_string()]);
+
+    chat.refresh_status_line();
+    assert_eq!(status_line_text(&chat), Some("Fast off".to_string()));
+
+    chat.set_model("gpt-5.2");
+    assert_eq!(status_line_text(&chat), None);
+
+    chat.set_model("gpt-5.4");
+    assert_eq!(status_line_text(&chat), Some("Fast off".to_string()));
+
+    chat.set_model("uncatalogued-model");
+    assert_eq!(status_line_text(&chat), Some("Fast off".to_string()));
+    chat.set_service_tier(Some(ServiceTier::Fast.request_value().to_string()));
+    assert_eq!(status_line_text(&chat), Some("Fast on".to_string()));
+}
+
+#[tokio::test]
 async fn status_line_fast_mode_footer_snapshot() {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    set_fast_mode_test_catalog(&mut chat);
     chat.show_welcome_banner = false;
-    chat.config.tui_status_line = Some(vec!["fast-mode".to_string()]);
-    chat.set_service_tier(Some(ServiceTier::Fast.request_value().to_string()));
+    chat.config.tui_status_line = Some(vec![
+        "model-with-reasoning".to_string(),
+        "fast-mode".to_string(),
+    ]);
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
     chat.refresh_status_line();
 
     let width = 80;

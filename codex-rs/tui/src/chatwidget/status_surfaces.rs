@@ -760,13 +760,23 @@ impl ChatWidget {
                 .and_then(|usage| usage.estimated_usage_usd_micros)
                 .and_then(format_estimated_usd_micros),
             StatusLineItem::SessionId => self.thread_id.map(|id| id.to_string()),
-            StatusLineItem::FastMode => Some(
-                if self.current_service_tier() == Some(ServiceTier::Fast.request_value()) {
-                    "Fast on".to_string()
-                } else {
-                    "Fast off".to_string()
-                },
-            ),
+            StatusLineItem::FastMode => self
+                .model_catalog
+                .try_list_models()
+                .ok()
+                .and_then(|models| {
+                    models
+                        .into_iter()
+                        .find(|preset| preset.model == self.current_model())
+                })
+                .is_none_or(|preset| preset.supports_fast_mode())
+                .then(|| {
+                    if self.current_service_tier() == Some(ServiceTier::Fast.request_value()) {
+                        "Fast on".to_string()
+                    } else {
+                        "Fast off".to_string()
+                    }
+                }),
             StatusLineItem::RawOutput => self.raw_output_mode().then(|| "raw output".to_string()),
             StatusLineItem::ThreadTitle => self.thread_name.as_ref().map_or_else(
                 || self.thread_id.map(|id| id.to_string()),
