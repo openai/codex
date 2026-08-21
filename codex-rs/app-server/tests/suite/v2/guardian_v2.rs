@@ -33,6 +33,8 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput;
 use codex_features::Feature;
+use codex_state::StateRuntime;
+use codex_utils_absolute_path::test_support::PathExt;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
@@ -620,6 +622,43 @@ async fn guardian_v2_routes_tool_approvals(
                 turn_id: review_started.turn_id,
                 started_at_ms: review_started.started_at_ms,
             }
+        );
+    }
+
+    if matches!(requirement, ModelReviewRequirement::Optional) {
+        let state_db = StateRuntime::init(
+            codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
+            "mock_provider".to_owned(),
+        )
+        .await?;
+        // Exercise the same log export used by feedback/upload, including async
+        // classifier events that cannot rely on inheriting a thread tracing span.
+        let logs = timeout(TIMEOUT, async {
+            loop {
+                let logs = String::from_utf8(
+                    state_db
+                        .query_feedback_logs_for_threads(&[&reviewed_thread_id])
+                        .await?,
+                )?;
+                if logs.contains("Guardian V2 classification result") {
+                    return anyhow::Ok(logs);
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await??;
+        let expected = [
+            "Guardian V2 classification result".to_owned(),
+            "call_id=guardian-action-0".into(),
+            format!("thread_id={reviewed_thread_id}"),
+            format!("action_risk={luna_score}"),
+            "review_threshold=0.5".into(),
+            "accepted=true".into(),
+        ];
+        assert!(
+            logs.lines()
+                .any(|line| expected.iter().all(|field| line.contains(field))),
+            "missing feedback log with fields: {expected:?}"
         );
     }
 

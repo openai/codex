@@ -566,6 +566,7 @@ impl GuardianV2Extension {
             );
             return;
         }
+        let call_id = input.call_id.to_owned();
         let action = GuardianAction {
             tool_name: input.tool_name.clone(),
             payload: input.payload.clone(),
@@ -741,12 +742,24 @@ impl GuardianV2Extension {
                     scores,
                     sampled_at: Some(sampled_at.into()),
                 };
-                if !thread
-                    .thread_extension_data()
-                    .insert_if(score.clone(), |previous| {
-                        previous.is_none_or(|previous| previous.sampled_at < score.sampled_at)
-                    })
-                {
+                let accepted =
+                    thread
+                        .thread_extension_data()
+                        .insert_if(score.clone(), |previous| {
+                            previous.is_none_or(|previous| previous.sampled_at < score.sampled_at)
+                        });
+                tracing::info!(
+                    %thread_id,
+                    %turn_id,
+                    %call_id,
+                    tool_call_index,
+                    action_risk = score.scores.get("action_risk").copied(),
+                    review_threshold = guardian_config.review_threshold,
+                    sampled_at = ?score.sampled_at,
+                    accepted,
+                    "Guardian V2 classification result"
+                );
+                if !accepted {
                     return Ok("superseded");
                 }
                 score_progress
