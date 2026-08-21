@@ -5,6 +5,7 @@ use std::time::Duration;
 use codex_analytics::CompactionTrigger;
 use codex_analytics::HookRunFact;
 use codex_analytics::build_track_events_context;
+use codex_core_plugins::executor_plugin_hook_sources;
 use codex_hooks::PermissionRequestDecision;
 use codex_hooks::PermissionRequestOutcome;
 use codex_hooks::PermissionRequestRequest;
@@ -52,6 +53,7 @@ use crate::context::HookAdditionalContext;
 use crate::event_mapping::parse_turn_item;
 use crate::session::TurnInput;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::sandboxing::PermissionRequestPayload;
@@ -305,10 +307,11 @@ pub(crate) async fn run_post_tool_use_hooks(
 #[instrument(level = "trace", skip_all)]
 pub(crate) async fn run_turn_stop_hooks(
     sess: &Arc<Session>,
-    turn_context: &Arc<TurnContext>,
+    step_context: &Arc<StepContext>,
     stop_hook_active: bool,
     last_assistant_message: Option<String>,
 ) -> StopOutcome {
+    let turn_context = &step_context.turn;
     // Resolve the stop hook kind from the session source before building the
     // request. Root turns run Stop; thread-spawned child turns run SubagentStop.
     let (target, transcript_path) = match &turn_context.session_source {
@@ -365,7 +368,12 @@ pub(crate) async fn run_turn_stop_hooks(
         last_assistant_message,
         target,
     };
-    let hooks = sess.hooks();
+    let executor_hook_sources = step_context
+        .executor_capability_discovery
+        .as_deref()
+        .map(executor_plugin_hook_sources)
+        .unwrap_or_default();
+    let hooks = sess.hooks().with_executor_hooks(executor_hook_sources);
     emit_hook_started_events(sess, turn_context, hooks.preview_stop(&request)).await;
 
     let mut outcome = hooks.run_stop(request).await;

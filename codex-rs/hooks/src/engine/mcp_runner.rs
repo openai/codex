@@ -69,7 +69,7 @@ pub(crate) async fn run_mcp_tool(
 /// text is rendered as a string. Missing fields fail the hook instead of passing unresolved
 /// arguments to the server. For example, the template `{"count":"${tool_input.count}"}`
 /// becomes `{"count":3}` when the event contains `{"tool_input":{"count":3}}`.
-fn expand_mcp_argument_template(
+pub(crate) fn expand_mcp_argument_template(
     argument_template: &Map<String, Value>,
     hook_event: &Value,
 ) -> Result<Map<String, Value>> {

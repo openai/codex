@@ -14,6 +14,7 @@ use super::common;
 use crate::engine::ClaudeHooksEngine;
 use crate::engine::ConfiguredHandler;
 use crate::engine::HandlerRunResult;
+use crate::engine::HandlerSourcePath;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
 use crate::schema::NullableString;
@@ -88,6 +89,7 @@ pub(crate) fn preview(
         request.target.matcher_input(),
     )
     .into_iter()
+    .filter(|handler| matches!(handler.source_path, HandlerSourcePath::Local(_)))
     .map(|handler| dispatcher::running_summary(&handler))
     .collect()
 }
@@ -645,7 +647,7 @@ mod tests {
             timeout_sec: 600,
             status_message: None,
             additional_context_limit: Default::default(),
-            source_path: test_path_buf("/tmp/hooks.json").abs(),
+            source_path: test_path_buf("/tmp/hooks.json").abs().into(),
             source: codex_protocol::protocol::HookSource::User,
             display_order: 0,
             kind: crate::engine::ConfiguredHandlerKind::Command {

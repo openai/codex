@@ -21,6 +21,7 @@ codex-plugin = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-output-truncation = { workspace = true }
+codex-utils-path-uri = { workspace = true }
 futures = { workspace = true, features = ["alloc"] }
 regex = { workspace = true }
 schemars = { workspace = true }

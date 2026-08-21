@@ -501,7 +501,7 @@ pub(crate) async fn run_turn(
                     last_agent_message = sampling_request_last_agent_message;
                     let stop_outcome = run_turn_stop_hooks(
                         &sess,
-                        &turn_context,
+                        &step_context,
                         stop_hook_active,
                         last_agent_message.clone(),
                     )

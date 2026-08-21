@@ -705,7 +705,7 @@ fn append_matcher_groups(
                     additional_context_limit: AdditionalContextLimit::from_config(
                         additional_context_limit,
                     ),
-                    source_path: source.path.clone(),
+                    source_path: source.path.clone().into(),
                     source: source.source,
                     display_order: *display_order,
                     kind,
@@ -1166,7 +1166,7 @@ mod tests {
                 timeout_sec: 600,
                 status_message: None,
                 additional_context_limit: Default::default(),
-                source_path: source_path.clone(),
+                source_path: source_path.clone().into(),
                 source: hook_source(),
                 display_order: 0,
                 kind: ConfiguredHandlerKind::Command {
@@ -1205,7 +1205,7 @@ mod tests {
                 timeout_sec: 600,
                 status_message: None,
                 additional_context_limit: Default::default(),
-                source_path: source_path.clone(),
+                source_path: source_path.clone().into(),
                 source: hook_source(),
                 display_order: 0,
                 kind: ConfiguredHandlerKind::Command {

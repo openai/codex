@@ -58,7 +58,7 @@ async fn cmd_shell_runs_quoted_hook_command_path() {
         timeout_sec: 10,
         status_message: None,
         additional_context_limit: Default::default(),
-        source_path,
+        source_path: source_path.into(),
         source: HookSource::User,
         display_order: 0,
         kind: ConfiguredHandlerKind::Command {
@@ -107,7 +107,7 @@ async fn fast_exiting_hook_preserves_stdout_when_stdin_is_not_consumed() {
         timeout_sec: 10,
         status_message: None,
         additional_context_limit: Default::default(),
-        source_path,
+        source_path: source_path.into(),
         source: HookSource::User,
         display_order: 0,
         kind: ConfiguredHandlerKind::Command {
@@ -145,7 +145,7 @@ async fn command_hook_does_not_expose_configured_noise_auth_token() {
         timeout_sec: 10,
         status_message: None,
         additional_context_limit: Default::default(),
-        source_path,
+        source_path: source_path.into(),
         source: HookSource::User,
         display_order: 0,
         kind: ConfiguredHandlerKind::Command {
@@ -304,7 +304,8 @@ fn write_handler(temp: &TempDir, source: &str) -> ConfiguredHandler {
         status_message: None,
         additional_context_limit: Default::default(),
         source_path: AbsolutePathBuf::try_from(temp.path().join("hooks.json"))
-            .expect("absolute test hook path"),
+            .expect("absolute test hook path")
+            .into(),
         source: HookSource::User,
         display_order: 0,
         kind: ConfiguredHandlerKind::Command {

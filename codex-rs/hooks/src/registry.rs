@@ -27,6 +27,7 @@ use crate::types::HookPayload;
 use crate::types::HookResponse;
 use async_channel::Receiver;
 use codex_config::ConfigLayerStack;
+use codex_plugin::ExecutorPluginHookSource;
 use codex_plugin::PluginHookSource;
 use codex_protocol::ThreadId;
 use codex_protocol::shell_environment::scrub_non_inheritable_env_vars;
@@ -93,6 +94,12 @@ impl Hooks {
             Arc::clone(&self.environment),
             |shell| self.engine.command_runtime.reconfigured(shell),
         )
+    }
+
+    pub fn with_executor_hooks(&self, executor_hooks: Vec<ExecutorPluginHookSource>) -> Self {
+        let mut hooks = self.clone();
+        hooks.engine.set_executor_hooks(executor_hooks);
+        hooks
     }
 
     fn from_config(

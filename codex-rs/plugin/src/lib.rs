@@ -11,6 +11,7 @@ mod provider;
 
 use codex_config::HookEventsToml;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 pub use load_outcome::LoadedPlugin;
 pub use load_outcome::PluginLoadOutcome;
 pub use load_outcome::prompt_safe_plugin_description;
@@ -63,6 +64,17 @@ pub struct PluginHookSource {
     pub plugin_root: AbsolutePathBuf,
     pub plugin_data_root: AbsolutePathBuf,
     pub source_path: AbsolutePathBuf,
+    pub source_relative_path: String,
+    pub hooks: HookEventsToml,
+}
+
+/// Inline plugin hooks whose paths and MCP target belong to an executor environment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutorPluginHookSource {
+    pub plugin_id: PluginId,
+    pub environment_id: String,
+    pub plugin_root: PathUri,
+    pub manifest_path: PathUri,
     pub source_relative_path: String,
     pub hooks: HookEventsToml,
 }

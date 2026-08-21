@@ -26,7 +26,10 @@ use crate::events::user_prompt_submit::UserPromptSubmitRequest;
 use crate::mcp::HookMcpExecutor;
 use crate::output_spill::AdditionalContextLimit;
 use codex_config::ConfigLayerStack;
+use codex_config::HookHandlerConfig;
+use codex_plugin::ExecutorPluginHookSource;
 use codex_plugin::PluginHookSource;
+use codex_plugin::PluginId;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookExecutionMode;
 use codex_protocol::protocol::HookHandlerType;
@@ -34,6 +37,7 @@ use codex_protocol::protocol::HookRunSummary;
 use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::HookTrustStatus;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -53,10 +57,51 @@ pub(crate) struct ConfiguredHandler {
     pub timeout_sec: u64,
     pub status_message: Option<String>,
     pub additional_context_limit: AdditionalContextLimit,
-    pub source_path: AbsolutePathBuf,
+    pub source_path: HandlerSourcePath,
     pub source: HookSource,
     pub display_order: i64,
     pub kind: ConfiguredHandlerKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum HandlerSourcePath {
+    Local(AbsolutePathBuf),
+    /// Executor-scoped handlers are currently excluded from user-visible hook reporting
+    /// (events, summary, telemetry) because the only supported 1p hook is
+    /// coupled to executor-scoped execution. Their handlers are always executed async.
+    ///
+    /// TODO: With CCA, all hooks will be executor-scoped, so user visibility
+    /// (participation in lifecycle events and summaries) and execution behavior
+    /// (non-blocking) will need to be determined independently.
+    ExecutorScoped {
+        plugin_id: PluginId,
+        environment_id: String,
+        manifest_path: PathUri,
+        source_relative_path: String,
+    },
+}
+
+impl From<AbsolutePathBuf> for HandlerSourcePath {
+    fn from(path: AbsolutePathBuf) -> Self {
+        Self::Local(path)
+    }
+}
+
+impl std::fmt::Display for HandlerSourcePath {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Local(path) => write!(formatter, "{}", path.display()),
+            Self::ExecutorScoped {
+                environment_id,
+                manifest_path,
+                source_relative_path,
+                ..
+            } => write!(
+                formatter,
+                "{environment_id}:{manifest_path}:{source_relative_path}"
+            ),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,6 +131,10 @@ pub(crate) struct HandlerRunResult {
 
 impl ConfiguredHandler {
     pub(crate) fn execution_mode(&self) -> HookExecutionMode {
+        if matches!(self.source_path, HandlerSourcePath::ExecutorScoped { .. }) {
+            return HookExecutionMode::Async;
+        }
+
         match self.kind {
             ConfiguredHandlerKind::Command { r#async: true, .. } => HookExecutionMode::Async,
             ConfiguredHandlerKind::Command { r#async: false, .. }
@@ -103,7 +152,7 @@ impl ConfiguredHandler {
             "{}:{}:{}",
             self.event_name_label(),
             self.display_order,
-            self.source_path.display()
+            self.source_path
         )
     }
 
@@ -203,6 +252,72 @@ impl ClaudeHooksEngine {
 
     pub(crate) fn warnings(&self) -> &[String] {
         &self.warnings
+    }
+
+    pub(crate) fn set_executor_hooks(&mut self, executor_hooks: Vec<ExecutorPluginHookSource>) {
+        self.handlers.retain(|handler| {
+            !matches!(
+                handler.source_path,
+                HandlerSourcePath::ExecutorScoped { .. }
+            )
+        });
+
+        // FIXME: Remove this restriction once executor hooks support multiple environments.
+        if executor_hooks.len() > 1 {
+            tracing::warn!(
+                executor_hook_count = executor_hooks.len(),
+                "multiple executor hooks found; only executing the first"
+            );
+        }
+        let Some(source) = executor_hooks.into_iter().next() else {
+            return;
+        };
+        let Some(handler) = source
+            .hooks
+            .stop
+            .into_iter()
+            .flat_map(|group| group.hooks)
+            .next()
+        else {
+            unreachable!("allowlisted executor hook source must contain a Stop handler");
+        };
+        let HookHandlerConfig::McpTool {
+            server,
+            tool,
+            input,
+            timeout_sec,
+            status_message,
+        } = handler
+        else {
+            unreachable!("allowlisted executor Stop handler must be an MCP tool");
+        };
+
+        let display_order = self
+            .handlers
+            .iter()
+            .map(|handler| handler.display_order)
+            .max()
+            .map_or(0, |display_order| display_order.saturating_add(1));
+        self.handlers.push(ConfiguredHandler {
+            event_name: HookEventName::Stop,
+            matcher: None,
+            timeout_sec: timeout_sec.unwrap_or(5).max(1),
+            status_message,
+            additional_context_limit: Default::default(),
+            source_path: HandlerSourcePath::ExecutorScoped {
+                plugin_id: source.plugin_id,
+                environment_id: source.environment_id,
+                manifest_path: source.manifest_path,
+                source_relative_path: source.source_relative_path,
+            },
+            source: HookSource::Plugin,
+            display_order,
+            kind: ConfiguredHandlerKind::McpTool {
+                server,
+                tool,
+                input,
+            },
+        });
     }
 
     pub(crate) fn required_load_errors(&self) -> &[String] {
