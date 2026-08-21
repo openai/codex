@@ -3635,6 +3635,7 @@ impl Session {
                 .latest_call_tool(
                     "notes",
                     "thread_hint",
+                    /*environment_id*/ None,
                     /*arguments*/ None,
                     Some(serde_json::json!({
                         "threadId": self.thread_id().to_string(),

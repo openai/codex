@@ -2057,6 +2057,10 @@ fn executor_stop_hook_fixture() -> (
         HookExecutionMode::Async
     );
     assert!(!engine.handlers[0].can_apply_control_effects());
+    let request_metadata = Some(serde_json::Map::from_iter([(
+        "x-codex-turn-metadata".to_string(),
+        serde_json::json!({ "turn_id": "turn-1" }),
+    )]));
     let request = StopRequest {
         session_id: ThreadId::new(),
         turn_id: "turn-1".to_string(),
@@ -2064,6 +2068,7 @@ fn executor_stop_hook_fixture() -> (
         transcript_path: None,
         model: "test-model".to_string(),
         permission_mode: "default".to_string(),
+        request_metadata: request_metadata.clone(),
         stop_hook_active: false,
         last_assistant_message: None,
         target: StopHookTarget::Stop,
@@ -2072,6 +2077,8 @@ fn executor_stop_hook_fixture() -> (
     let expected_executor_call = HookMcpCall {
         server: "node_repl".to_string(),
         tool: "turn_ended".to_string(),
+        environment_id: Some("executor-a".to_string()),
+        metadata: request_metadata,
         input: serde_json::from_value(serde_json::json!({ "turn_id": "turn-1" }))
             .expect("expanded executor hook input"),
         timeout: Duration::from_secs(5),
@@ -2131,6 +2138,8 @@ async fn executor_stop_hooks_run_unless_regular_hooks_block_without_stopping() {
             HookMcpCall {
                 server: "security".to_string(),
                 tool: "check".to_string(),
+                environment_id: None,
+                metadata: None,
                 input: Default::default(),
                 timeout: Duration::from_secs(30),
             },
@@ -2165,18 +2174,24 @@ async fn executor_stop_hooks_run_unless_regular_hooks_block_without_stopping() {
             HookMcpCall {
                 server: "security".to_string(),
                 tool: "check".to_string(),
+                environment_id: None,
+                metadata: None,
                 input: Default::default(),
                 timeout: Duration::from_secs(30),
             },
             HookMcpCall {
                 server: "security".to_string(),
                 tool: "check".to_string(),
+                environment_id: None,
+                metadata: None,
                 input: Default::default(),
                 timeout: Duration::from_secs(30),
             },
             HookMcpCall {
                 server: "security".to_string(),
                 tool: "terminate".to_string(),
+                environment_id: None,
+                metadata: None,
                 input: Default::default(),
                 timeout: Duration::from_secs(30),
             },
@@ -2316,6 +2331,8 @@ async fn mcp_tool_hooks_expand_event_input_and_apply_pre_tool_decisions() {
         vec![HookMcpCall {
             server: "security".to_string(),
             tool: "scan".to_string(),
+            environment_id: None,
+            metadata: None,
             input: serde_json::from_value(serde_json::json!({
                 "command": "rm important.txt",
             }))

@@ -9,6 +9,8 @@ use serde_json::Value;
 pub struct HookMcpCall {
     pub server: String,
     pub tool: String,
+    pub environment_id: Option<String>,
+    pub metadata: Option<Map<String, Value>>,
     pub input: Map<String, Value>,
     pub timeout: Duration,
 }

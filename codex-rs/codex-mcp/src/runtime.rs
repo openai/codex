@@ -471,10 +471,12 @@ impl McpRuntime {
         self.latest_connections().list_all_tools().await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn latest_call_tool(
         &self,
         server: &str,
         tool: &str,
+        environment_id: Option<&str>,
         arguments: Option<serde_json::Value>,
         meta: Option<serde_json::Value>,
         requested_timeout: Option<Duration>,
@@ -484,6 +486,7 @@ impl McpRuntime {
             .call_tool(
                 server,
                 tool,
+                environment_id,
                 arguments,
                 meta,
                 requested_timeout,

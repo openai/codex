@@ -2,6 +2,8 @@ use std::path::Path;
 
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
+use serde_json::Map;
+use serde_json::Value;
 
 use codex_protocol::protocol::HookCompletedEvent;
 use codex_protocol::protocol::HookEventName;
@@ -101,6 +103,21 @@ pub(crate) async fn execute_handlers<T: 'static>(
     turn_id: Option<String>,
     parse: fn(&ConfiguredHandler, HandlerRunResult, Option<String>) -> ParsedHandler<T>,
 ) -> Vec<ParsedHandler<T>> {
+    execute_handlers_with_metadata(
+        engine, handlers, input_json, cwd, turn_id, /*metadata*/ None, parse,
+    )
+    .await
+}
+
+pub(crate) async fn execute_handlers_with_metadata<T: 'static>(
+    engine: &ClaudeHooksEngine,
+    handlers: Vec<ConfiguredHandler>,
+    input_json: String,
+    cwd: &Path,
+    turn_id: Option<String>,
+    metadata: Option<&Map<String, Value>>,
+    parse: fn(&ConfiguredHandler, HandlerRunResult, Option<String>) -> ParsedHandler<T>,
+) -> Vec<ParsedHandler<T>> {
     let mut executor_handlers = Vec::new();
     let mut pending = FuturesUnordered::new();
     for (configured_order, handler) in handlers.into_iter().enumerate() {
@@ -124,7 +141,8 @@ pub(crate) async fn execute_handlers<T: 'static>(
         let input_json = input_json.clone();
         let turn_id = turn_id.clone();
         pending.push(async move {
-            let result = execute_handler(engine, &handler, &input_json, cwd).await;
+            let result =
+                execute_handler(engine, &handler, &input_json, cwd, /*metadata*/ None).await;
             (configured_order, parse(&handler, result, turn_id))
         });
     }
@@ -147,8 +165,11 @@ pub(crate) async fn execute_handlers<T: 'static>(
             let task_engine = engine.clone();
             let input_json = input_json.clone();
             let cwd = cwd.to_path_buf();
+            let metadata = metadata.cloned();
             engine.command_runtime.schedule_async_task(async move {
-                let result = execute_handler(&task_engine, &handler, &input_json, &cwd).await;
+                let result =
+                    execute_handler(&task_engine, &handler, &input_json, &cwd, metadata.as_ref())
+                        .await;
                 if let Some(error) = result.error {
                     tracing::warn!(
                         source_path = %handler.source_path,
@@ -168,6 +189,7 @@ async fn execute_handler(
     handler: &ConfiguredHandler,
     input_json: &str,
     cwd: &Path,
+    metadata: Option<&Map<String, Value>>,
 ) -> HandlerRunResult {
     match &handler.kind {
         ConfiguredHandlerKind::Command { command, env, .. } => {
@@ -193,6 +215,7 @@ async fn execute_handler(
                 tool,
                 input,
                 input_json,
+                metadata,
             )
             .await
         }

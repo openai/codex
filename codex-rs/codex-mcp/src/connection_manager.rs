@@ -854,10 +854,12 @@ impl McpConnectionSet {
     }
 
     /// Invoke the tool indicated by the (server, tool) pair.
+    #[allow(clippy::too_many_arguments)]
     pub async fn call_tool(
         &self,
         server: &str,
         tool: &str,
+        environment_id: Option<&str>,
         arguments: Option<serde_json::Value>,
         meta: Option<serde_json::Value>,
         requested_timeout: Option<Duration>,
@@ -867,6 +869,14 @@ impl McpConnectionSet {
             .servers
             .get(server)
             .ok_or_else(|| anyhow!("unknown MCP server '{server}'"))?;
+        if let Some(environment_id) = environment_id
+            && view.metadata.environment_id != environment_id
+        {
+            bail!(
+                "MCP server `{server}` is running in environment `{}`, expected `{environment_id}`",
+                view.metadata.environment_id
+            );
+        }
         if !view.tool_filter.allows(tool) {
             return Err(anyhow!(
                 "tool '{tool}' is disabled for MCP server '{server}'"

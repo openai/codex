@@ -9,6 +9,7 @@ use serde_json::Value;
 
 use super::ConfiguredHandler;
 use super::HandlerRunResult;
+use super::HandlerSourcePath;
 use crate::mcp::HookMcpCall;
 use crate::mcp::HookMcpExecutor;
 
@@ -30,6 +31,7 @@ pub(crate) async fn run_mcp_tool(
     tool: &str,
     argument_template: &Map<String, Value>,
     hook_event_json: &str,
+    metadata: Option<&Map<String, Value>>,
 ) -> HandlerRunResult {
     let started_at = chrono::Utc::now().timestamp();
     let started = Instant::now();
@@ -41,6 +43,13 @@ pub(crate) async fn run_mcp_tool(
             .execute(HookMcpCall {
                 server: server.to_string(),
                 tool: tool.to_string(),
+                environment_id: match &handler.source_path {
+                    HandlerSourcePath::Local(_) => None,
+                    HandlerSourcePath::ExecutorScoped { environment_id, .. } => {
+                        Some(environment_id.clone())
+                    }
+                },
+                metadata: metadata.cloned(),
                 input,
                 timeout: Duration::from_secs(handler.timeout_sec),
             })

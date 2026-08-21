@@ -2674,6 +2674,7 @@ async fn call_tool_requires_connection_without_waiting_for_startup() {
         manager.call_tool(
             "docs",
             "search",
+            /*environment_id*/ None,
             /*arguments*/ None,
             /*meta*/ None,
             Some(Duration::from_secs(5)),
@@ -2697,6 +2698,7 @@ async fn call_tool_requires_connection_without_waiting_for_startup() {
         .call_tool(
             "docs",
             "search",
+            /*environment_id*/ None,
             /*arguments*/ None,
             /*meta*/ None,
             Some(Duration::from_secs(5)),
@@ -2731,6 +2733,7 @@ async fn connected_call_respects_server_tool_filters() {
         .call_tool(
             "docs",
             "search",
+            /*environment_id*/ None,
             /*arguments*/ None,
             /*meta*/ None,
             Some(Duration::from_secs(5)),
@@ -2739,6 +2742,60 @@ async fn connected_call_respects_server_tool_filters() {
         .await
         .expect_err("disabled tools should not be callable");
     assert!(filtered_error.to_string().contains("disabled"));
+}
+
+#[tokio::test]
+async fn call_tool_validates_environment_without_waiting_for_ready_connections() {
+    let client = create_test_managed_client(vec![create_test_tool("docs", "search")]).await;
+    let (client, _, _) = create_gated_async_managed_client(client);
+    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionSet::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    manager.insert_test_client("docs", client);
+    manager
+        .servers
+        .get_mut("docs")
+        .expect("test server should exist")
+        .metadata
+        .environment_id = "executor-a".to_string();
+
+    let mismatched_environment = manager
+        .call_tool(
+            "docs",
+            "search",
+            Some("executor-b"),
+            /*arguments*/ None,
+            /*meta*/ None,
+            Some(Duration::from_secs(5)),
+            /*wait_for_server*/ false,
+        )
+        .await
+        .expect_err("calls must reject a server from a different environment");
+    assert_eq!(
+        mismatched_environment.to_string(),
+        "MCP server `docs` is running in environment `executor-a`, expected `executor-b`"
+    );
+
+    let pending_call = tokio::time::timeout(
+        Duration::from_millis(50),
+        manager.call_tool(
+            "docs",
+            "search",
+            Some("executor-a"),
+            /*arguments*/ None,
+            /*meta*/ None,
+            Some(Duration::from_secs(5)),
+            /*wait_for_server*/ false,
+        ),
+    )
+    .await
+    .expect("environment-scoped calls must not wait for pending server startup")
+    .expect_err("pending server must not accept environment-scoped calls");
+    assert!(pending_call.to_string().contains("not connected"));
 }
 
 #[tokio::test]

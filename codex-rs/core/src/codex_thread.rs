@@ -835,8 +835,8 @@ impl CodexThread {
             .services
             .mcp_runtime
             .latest_call_tool(
-                server, tool, arguments, meta, /*requested_timeout*/ None,
-                /*wait_for_server*/ true,
+                server, tool, /*environment_id*/ None, arguments, meta,
+                /*requested_timeout*/ None, /*wait_for_server*/ true,
             )
             .await
     }

@@ -118,6 +118,7 @@ async fn mcp_tool_results_use_command_hook_output_contract() {
         "scan",
         &configured_input,
         r#"{"tool_input":{"file_path":"/tmp/example.rs"}}"#,
+        /*metadata*/ None,
     )
     .await;
 
@@ -129,6 +130,8 @@ async fn mcp_tool_results_use_command_hook_output_contract() {
         vec![HookMcpCall {
             server: "security".to_string(),
             tool: "scan".to_string(),
+            environment_id: None,
+            metadata: None,
             input: serde_json::from_value(json!({ "file_path": "/tmp/example.rs" }))
                 .expect("object input"),
             timeout: Duration::from_secs(30),

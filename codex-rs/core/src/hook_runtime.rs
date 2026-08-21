@@ -57,6 +57,7 @@ use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::sandboxing::PermissionRequestPayload;
+use crate::turn_metadata::McpTurnMetadataContext;
 
 pub(crate) struct HookRuntimeOutcome {
     pub should_stop: bool,
@@ -356,6 +357,18 @@ pub(crate) async fn run_turn_stop_hooks(
         SessionSource::SubAgent(_) => return StopOutcome::default(),
         _ => (StopHookTarget::Stop, sess.hook_transcript_path().await),
     };
+    let request_metadata = turn_context
+        .turn_metadata_state
+        .current_meta_value_for_mcp_request(McpTurnMetadataContext {
+            model: step_context.model_info.slug.as_str(),
+            reasoning_effort: step_context.reasoning_effort.clone(),
+        })
+        .map(|turn_metadata| {
+            serde_json::Map::from_iter([(
+                crate::X_CODEX_TURN_METADATA_HEADER.to_string(),
+                turn_metadata,
+            )])
+        });
     let request = codex_hooks::StopRequest {
         session_id: sess.session_id().into(),
         turn_id: turn_context.sub_id.clone(),
@@ -364,6 +377,7 @@ pub(crate) async fn run_turn_stop_hooks(
         transcript_path,
         model: turn_context.model_info.slug.clone(),
         permission_mode: hook_permission_mode(turn_context),
+        request_metadata,
         stop_hook_active,
         last_assistant_message,
         target,
