@@ -146,6 +146,7 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
         turn_environment.clone(),
         session.clone(),
         Arc::clone(&step_context),
+        cancellation_token.clone(),
         Some(&tracker),
         &call_id,
         tool_name.name.as_str(),
@@ -198,7 +199,7 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
         hook_command,
         cwd: exec_params.cwd.clone(),
         timeout_ms: exec_params.expiration.timeout_ms(),
-        cancellation_token,
+        cancellation_token: cancellation_token.clone(),
         env,
         explicit_env_overrides,
         network: exec_params.network.clone(),
@@ -217,6 +218,7 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
         step_context,
         call_id: call_id.clone(),
         tool_name,
+        cancellation_token,
     };
     let out = orchestrator
         .run(&mut runtime, &req, &tool_ctx, &turn, turn.approval_policy())
