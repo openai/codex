@@ -80,8 +80,7 @@ fn assert_connection_metadata(server: &responses::WebSocketTestServer) -> Result
                     "thread_id": thread_id,
                     "guardian_classifier_source_thread_id": "thread-1",
                     "turn_id": turn_id,
-                    "request_kind": "guardian_classifier",
-                    "is_guardian_mode": true,
+                    "thread_source": "guardian_classifier",
                 },
             })
         );

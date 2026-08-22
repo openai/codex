@@ -1478,8 +1478,7 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
             "thread_id": classifier_thread_id,
             "guardian_classifier_source_thread_id": thread_id.to_string(),
             "turn_id": "turn-1",
-            "request_kind": "guardian_classifier",
-            "is_guardian_mode": true,
+            "thread_source": "guardian_classifier",
         })
     );
     assert_eq!(request["client_metadata"]["x-openai-subagent"], "guardian");

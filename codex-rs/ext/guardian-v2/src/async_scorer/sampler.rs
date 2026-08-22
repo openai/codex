@@ -549,8 +549,7 @@ impl LunaSampler {
                 "thread_id": thread_id,
                 "guardian_classifier_source_thread_id": self.config.thread_id,
                 "turn_id": turn_id,
-                "request_kind": "guardian_classifier",
-                "is_guardian_mode": true,
+                "thread_source": "guardian_classifier",
             })
             .to_string();
             request.client_metadata = Some(HashMap::from([
