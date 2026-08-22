@@ -221,7 +221,7 @@ jobs:
             --target "$target"
             --code-mode-host-bin "${release_dir}/codex-code-mode-host${exe_suffix}"
             --cargo-profile release
-            --package-version "0.0.0-internal.${branch_slug}-${GITHUB_SHA}"
+            --package-version "0.0.${GITHUB_RUN_NUMBER}-internal.${branch_slug}-${GITHUB_SHA}"
             --force
           )
           if [[ "$RUNNER_OS" == "Linux" ]]; then
