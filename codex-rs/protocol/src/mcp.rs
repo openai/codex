@@ -9,6 +9,20 @@ use serde::Serialize;
 use std::collections::HashMap;
 use ts_rs::TS;
 
+/// Observed state of an MCP connection in a published thread runtime.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub enum McpServerConnectionStatus {
+    NotStarted,
+    Starting,
+    Connected,
+    AuthenticationRequired,
+    Failed,
+    Cancelled,
+    Disabled,
+}
+
 /// Extension ID for OpenAI form elicitation.
 pub const OPENAI_FORM_EXTENSION_ID: &str = "openai/form";
 /// Extension ID for standard MCP form elicitations that require user-entered input.

@@ -1,0 +1,18 @@
+---
+source: tui/src/history_cell/mcp_tests.rs
+expression: rendered
+---
+/mcp
+
+🔌  MCP Tools
+
+  • auth: authentication required (0 tools)
+  • cancelled: cancelled (0 tools)
+  • connected-empty: connected (0 tools)
+  • deferred: not started (0 tools)
+  • disabled: disabled (0 tools)
+  • failed: failed (0 tools)
+  • starting: starting (0 tools)
+  • unknown: unknown (0 tools)
+
+  Use /mcp verbose for tools and resources.

@@ -10026,6 +10026,18 @@
       "title": "McpResourceReadResponse",
       "type": "object"
     },
+    "McpServerConnectionStatus": {
+      "enum": [
+        "notStarted",
+        "starting",
+        "connected",
+        "authenticationRequired",
+        "failed",
+        "cancelled",
+        "disabled"
+      ],
+      "type": "string"
+    },
     "McpServerEventNotification": {
       "properties": {
         "method": {
@@ -10249,6 +10261,17 @@
             "$ref": "#/definitions/Resource"
           },
           "type": "array"
+        },
+        "runtimeStatus": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/McpServerConnectionStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Current thread-runtime connection state; null when unavailable or the configuration changed."
         },
         "serverInfo": {
           "anyOf": [

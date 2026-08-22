@@ -1020,8 +1020,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let service = TestToolServer::new();
     let running = service.serve(stdio()).await?;
 
-    // Wait for the client to finish interacting with the server.
-    running.waiting().await?;
+    // A test can close an initialized transport without killing an arbitrary PID.
+    let exit_file = std::env::var_os("MCP_TEST_EXIT_FILE");
+    tokio::select! {
+        result = running.waiting() => { result?; }
+        _ = async {
+            let Some(exit_file) = exit_file else {
+                return std::future::pending::<()>().await;
+            };
+            while !std::path::Path::new(&exit_file).exists() {
+                sleep(Duration::from_millis(/*millis*/ 20)).await;
+            }
+        } => std::process::exit(0),
+    }
     // Drain background tasks to ensure clean shutdown.
     task::yield_now().await;
     Ok(())

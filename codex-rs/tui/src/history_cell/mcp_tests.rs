@@ -7,6 +7,121 @@ use serde_json::json;
 
 const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
 
+#[test]
+fn mcp_inventory_connection_states() {
+    use McpServerConnectionStatus as Status;
+
+    let statuses = [
+        ("unknown", None),
+        ("starting", Some(Status::Starting)),
+        ("failed", Some(Status::Failed)),
+        ("disabled", Some(Status::Disabled)),
+        ("deferred", Some(Status::NotStarted)),
+        ("connected-empty", Some(Status::Connected)),
+        ("cancelled", Some(Status::Cancelled)),
+        ("auth", Some(Status::AuthenticationRequired)),
+    ]
+    .into_iter()
+    .map(|(name, runtime_status)| McpServerStatus {
+        name: name.to_string(),
+        runtime_status,
+        plugin_id: None,
+        server_info: None,
+        tools: HashMap::new(),
+        resources: Vec::new(),
+        resource_templates: Vec::new(),
+        auth_status: McpAuthStatus::Unknown,
+    })
+    .collect::<Vec<_>>();
+    let cell =
+        new_mcp_tools_output_from_statuses(&statuses, McpServerStatusDetail::ToolsAndAuthOnly);
+    let rendered = cell
+        .display_lines(/*width*/ 100)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!(rendered);
+    for (name, expected) in [
+        ("auth", status_style(StatusTone::Attention)),
+        ("cancelled", Style::default().dim()),
+        ("connected-empty", status_style(StatusTone::Success)),
+        ("deferred", Style::default().dim()),
+        ("disabled", Style::default().dim()),
+        ("failed", status_style(StatusTone::Failure)),
+        ("starting", accent_style()),
+        ("unknown", Style::default().dim()),
+    ] {
+        let row = cell
+            .lines
+            .iter()
+            .find(|line| line.spans.get(1).is_some_and(|span| span.content == name))
+            .expect("connection-state row");
+        assert_eq!(
+            (row.spans[0].style, row.spans[3].style),
+            (expected, expected)
+        );
+    }
+}
+
+#[test]
+fn mcp_inventory_older_app_server_authentication() {
+    let statuses = serde_json::from_value::<Vec<McpServerStatus>>(json!([
+        {
+            "name": "legacy-auth",
+            "tools": {},
+            "resources": [],
+            "resourceTemplates": [],
+            "authStatus": "notLoggedIn"
+        },
+        {
+            "name": "legacy-healthy",
+            "tools": {"lookup": {"name": "lookup", "inputSchema": {"type": "object"}}},
+            "resources": [],
+            "resourceTemplates": [],
+            "authStatus": "oAuth"
+        },
+        {
+            "name": "runtime-disabled",
+            "runtimeStatus": "disabled",
+            "tools": {},
+            "resources": [],
+            "resourceTemplates": [],
+            "authStatus": "notLoggedIn"
+        }
+    ]))
+    .expect("mixed-version MCP statuses");
+    let cell =
+        new_mcp_tools_output_from_statuses(&statuses, McpServerStatusDetail::ToolsAndAuthOnly);
+    let rendered = cell
+        .display_lines(/*width*/ 100)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!(rendered);
+    let styles = cell
+        .lines
+        .iter()
+        .filter(|line| {
+            line.spans
+                .get(1)
+                .is_some_and(|span| statuses.iter().any(|status| span.content == status.name))
+        })
+        .map(|line| (line.spans[0].style, line.spans[3].style))
+        .collect::<Vec<_>>();
+    let attention = status_style(StatusTone::Attention);
+    let neutral = Style::default().dim();
+    assert_eq!(
+        styles,
+        vec![
+            (attention, attention),
+            (neutral, neutral),
+            (neutral, neutral)
+        ]
+    );
+}
+
 fn result(content: Vec<Value>) -> CallToolResult {
     CallToolResult {
         content,

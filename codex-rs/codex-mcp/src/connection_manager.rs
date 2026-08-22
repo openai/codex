@@ -11,6 +11,8 @@ mod required;
 mod resources;
 #[path = "connection_manager/startup.rs"]
 mod startup;
+#[path = "connection_manager/status.rs"]
+mod status;
 #[path = "connection_manager/tool_catalog.rs"]
 mod tool_catalog;
 
@@ -178,6 +180,7 @@ impl McpServerView {
 /// A published view over a set of running MCP server connections.
 pub(crate) struct McpConnectionSet {
     servers: HashMap<String, McpServerView>,
+    disabled_servers: Vec<String>,
     protocol_mode: crate::McpProtocolMode,
     required_servers: Vec<String>,
     optional_startup_deadline: OnceLock<tokio::time::Instant>,
@@ -230,6 +233,11 @@ impl McpConnectionSet {
         let tool_plugin_provenance = crate::mcp::tool_plugin_provenance(&config);
         let auth = auth.as_ref();
         let mut servers = HashMap::new();
+        let disabled_servers = mcp_servers
+            .iter()
+            .filter(|(_, server)| !server.enabled())
+            .map(|(name, _)| name.clone())
+            .collect();
         let mut required_servers = mcp_servers
             .iter()
             .filter(|(_, server)| server.enabled() && server.required())
@@ -661,6 +669,7 @@ impl McpConnectionSet {
         }
         let manager = Self {
             servers,
+            disabled_servers,
             protocol_mode,
             required_servers,
             optional_startup_deadline: OnceLock::new(),
@@ -720,6 +729,7 @@ impl McpConnectionSet {
     pub fn empty(prefix_mcp_tool_names: bool) -> Self {
         Self {
             servers: HashMap::new(),
+            disabled_servers: Vec::new(),
             protocol_mode: crate::McpProtocolMode::Legacy,
             required_servers: Vec::new(),
             optional_startup_deadline: OnceLock::new(),

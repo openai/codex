@@ -30,6 +30,19 @@ v2_enum_from_core!(
     }
 );
 
+v2_enum_from_core!(
+    #[ts(rename_all = "camelCase")]
+    pub enum McpServerConnectionStatus from codex_protocol::mcp::McpServerConnectionStatus {
+        NotStarted,
+        Starting,
+        Connected,
+        AuthenticationRequired,
+        Failed,
+        Cancelled,
+        Disabled
+    }
+);
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -61,6 +74,8 @@ pub enum McpServerStatusDetail {
 #[ts(export_to = "v2/")]
 pub struct McpServerStatus {
     pub name: String,
+    /// Current thread-runtime connection state; null when unavailable or the configuration changed.
+    pub runtime_status: Option<McpServerConnectionStatus>,
     pub plugin_id: Option<String>,
     pub server_info: Option<McpServerInfo>,
     pub tools: std::collections::HashMap<String, McpTool>,

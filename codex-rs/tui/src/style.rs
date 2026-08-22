@@ -4,12 +4,42 @@ use crate::terminal_palette::StdoutColorLevel;
 use crate::terminal_palette::best_color;
 use crate::terminal_palette::default_bg;
 use crate::terminal_palette::default_fg;
+use crate::terminal_palette::effective_stdout_color_level;
 use crate::terminal_palette::rgb_color;
 use crate::terminal_palette::stdout_color_level;
 use ratatui::style::Color;
 use ratatui::style::Style;
 
 const LIGHT_BG_ACCENT_RGB: (u8, u8, u8) = (0, 95, 135);
+
+#[derive(Clone, Copy)]
+pub(crate) enum StatusTone {
+    Success,
+    Attention,
+    Failure,
+}
+
+/// Semantic status colors that preserve the terminal's configured palette.
+pub(crate) fn status_style(tone: StatusTone) -> Style {
+    status_style_for(tone, default_bg(), effective_stdout_color_level())
+}
+
+fn status_style_for(
+    tone: StatusTone,
+    terminal_bg: Option<(u8, u8, u8)>,
+    color_level: StdoutColorLevel,
+) -> Style {
+    let light = terminal_bg.is_some_and(is_light);
+    let color = match (tone, color_level) {
+        (_, StdoutColorLevel::Unknown) => Color::Reset,
+        (StatusTone::Success, _) => Color::Green,
+        (StatusTone::Failure, _) => Color::Red,
+        // Yellow can disappear on light themes; use it only with a known dark background.
+        (StatusTone::Attention, _) if light || terminal_bg.is_none() => Color::Reset,
+        (StatusTone::Attention, _) => Color::Yellow,
+    };
+    Style::default().fg(color).bold()
+}
 // Decorative table rules should remain visible without competing with cell content.
 const TABLE_SEPARATOR_FG_ALPHA: f32 = 0.20;
 
@@ -95,6 +125,54 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use ratatui::style::Modifier;
+
+    #[test]
+    fn status_colors_preserve_light_terminal_themes() {
+        for level in [StdoutColorLevel::TrueColor, StdoutColorLevel::Ansi256] {
+            for bg in [(255, 255, 255), (130, 130, 130), (220, 210, 180)] {
+                for (tone, color) in [
+                    (StatusTone::Success, Color::Green),
+                    (StatusTone::Attention, Color::Reset),
+                    (StatusTone::Failure, Color::Red),
+                ] {
+                    assert_eq!(
+                        status_style_for(tone, Some(bg), level),
+                        Style::default().fg(color).bold(),
+                    );
+                }
+            }
+            for bg in [(0, 0, 0), (0, 218, 0)] {
+                assert_eq!(
+                    status_style_for(StatusTone::Attention, Some(bg), level),
+                    Style::default().fg(Color::Yellow).bold(),
+                );
+            }
+            assert_eq!(
+                status_style_for(StatusTone::Attention, /*terminal_bg*/ None, level),
+                Style::default().fg(Color::Reset).bold(),
+            );
+        }
+    }
+
+    #[test]
+    fn status_colors_preserve_ansi16_and_no_color_fallbacks() {
+        for (tone, light, dark) in [
+            (StatusTone::Success, Color::Green, Color::Green),
+            (StatusTone::Attention, Color::Reset, Color::Yellow),
+            (StatusTone::Failure, Color::Red, Color::Red),
+        ] {
+            for (bg, expected) in [((255, 255, 255), light), ((0, 0, 0), dark)] {
+                assert_eq!(
+                    status_style_for(tone, Some(bg), StdoutColorLevel::Ansi16),
+                    Style::default().fg(expected).bold()
+                );
+                assert_eq!(
+                    status_style_for(tone, Some(bg), StdoutColorLevel::Unknown),
+                    Style::default().fg(Color::Reset).bold()
+                );
+            }
+        }
+    }
 
     #[test]
     fn accent_style_uses_darker_cyan_on_light_backgrounds() {

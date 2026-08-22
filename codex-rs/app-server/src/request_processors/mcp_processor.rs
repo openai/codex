@@ -278,7 +278,7 @@ impl McpRequestProcessor {
         let environment_manager = self.thread_manager.environment_manager();
 
         tokio::spawn(async move {
-            let (mcp_config, runtime_context) = match thread {
+            let (mcp_config, runtime_context) = match thread.as_ref() {
                 Some(thread) => thread.runtime_mcp_config_and_context(&config).await,
                 None => {
                     let mcp_config = mcp_manager.runtime_config(&config).await;
@@ -288,39 +288,19 @@ impl McpRequestProcessor {
                 }
             };
 
-            Self::list_mcp_server_status_task(
-                outgoing,
-                request,
+            let result = Self::list_mcp_server_status_response(
+                request.request_id.to_string(),
                 params,
                 mcp_config,
                 auth,
                 runtime_context,
                 mcp_manager,
+                thread,
             )
             .await;
+            outgoing.send_result(request, result).await;
         });
         Ok(())
-    }
-
-    async fn list_mcp_server_status_task(
-        outgoing: Arc<OutgoingMessageSender>,
-        request_id: ConnectionRequestId,
-        params: ListMcpServerStatusParams,
-        mcp_config: codex_mcp::McpConfig,
-        auth: Option<CodexAuth>,
-        runtime_context: McpRuntimeContext,
-        mcp_manager: Arc<McpManager>,
-    ) {
-        let result = Self::list_mcp_server_status_response(
-            request_id.request_id.to_string(),
-            params,
-            mcp_config,
-            auth,
-            runtime_context,
-            mcp_manager,
-        )
-        .await;
-        outgoing.send_result(request_id, result).await;
     }
 
     async fn list_mcp_server_status_response(
@@ -330,6 +310,7 @@ impl McpRequestProcessor {
         auth: Option<CodexAuth>,
         runtime_context: McpRuntimeContext,
         mcp_manager: Arc<McpManager>,
+        thread: Option<Arc<codex_core::CodexThread>>,
     ) -> Result<ListMcpServerStatusResponse, JSONRPCErrorError> {
         let detail = match params.detail.unwrap_or(McpServerStatusDetail::Full) {
             McpServerStatusDetail::Full => McpSnapshotDetail::Full,
@@ -347,6 +328,10 @@ impl McpRequestProcessor {
         )
         .await;
 
+        let runtime_statuses = match thread {
+            Some(thread) => thread.mcp_connection_statuses(&mcp_config).await,
+            None => HashMap::new(),
+        };
         let McpServerStatusSnapshot {
             server_infos,
             tools_by_server,
@@ -355,6 +340,7 @@ impl McpRequestProcessor {
             auth_statuses,
             mut server_names,
         } = snapshot;
+        server_names.extend(runtime_statuses.keys().cloned());
         server_names.extend(
             auth_statuses
                 .keys()
@@ -388,6 +374,7 @@ impl McpRequestProcessor {
             .iter()
             .map(|name| McpServerStatus {
                 name: name.clone(),
+                runtime_status: runtime_statuses.get(name).copied().map(Into::into),
                 plugin_id: mcp_config.mcp_server_catalog.server(name).and_then(
                     |server| match server.source() {
                         McpServerSource::Plugin(plugin)

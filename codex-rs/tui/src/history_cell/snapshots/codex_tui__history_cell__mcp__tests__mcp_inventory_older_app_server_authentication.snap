@@ -1,0 +1,13 @@
+---
+source: tui/src/history_cell/mcp_tests.rs
+expression: rendered
+---
+/mcp
+
+🔌  MCP Tools
+
+  • legacy-auth: authentication required (0 tools)
+  • legacy-healthy: unknown (1 tool)
+  • runtime-disabled: disabled (0 tools)
+
+  Use /mcp verbose for tools and resources.

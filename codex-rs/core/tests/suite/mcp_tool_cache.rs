@@ -10,6 +10,7 @@ use codex_core::StartThreadOptions;
 use codex_core::TurnInputRequest;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::RemoveOptions;
+use codex_protocol::mcp::McpServerConnectionStatus;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -546,6 +547,14 @@ async fn cached_mcp_startup_is_eager_for_root_and_lazy_for_subagents() -> anyhow
         &unused_response,
         &format!("Use the tools from {cached_process}."),
         &format!("Echo from {cached_process}."),
+    );
+    let (mcp_config, _) = second_thread.current_mcp_config_and_runtime_context().await;
+    assert_eq!(
+        second_thread
+            .mcp_connection_statuses(&mcp_config)
+            .await
+            .get(SERVER_NAME),
+        Some(&McpServerConnectionStatus::NotStarted),
     );
     assert_eq!(
         fs.read_file_text(&pid_file, Default::default(), /*sandbox*/ None)

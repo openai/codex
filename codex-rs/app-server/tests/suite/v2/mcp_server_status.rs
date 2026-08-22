@@ -21,6 +21,7 @@ use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
+use codex_app_server_protocol::McpServerConnectionStatus;
 use codex_app_server_protocol::McpServerOauthLoginCompletedNotification;
 use codex_app_server_protocol::McpServerOauthLoginResponse;
 use codex_app_server_protocol::McpServerStatusDetail;
@@ -30,6 +31,7 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_core::config::set_project_trust_level;
 use codex_http_client::HttpClientBuilder;
 use codex_protocol::config_types::TrustLevel;
+use core_test_support::skip_if_remote;
 use core_test_support::stdio_server_bin;
 use pretty_assertions::assert_eq;
 use rmcp::handler::server::ServerHandler;
@@ -465,6 +467,7 @@ async fn mcp_server_status_list_returns_raw_server_and_tool_names() -> Result<()
     assert_eq!(response.data.len(), 1);
     let status = &response.data[0];
     assert_eq!(status.name, "some-server");
+    assert_eq!(status.runtime_status, None);
     assert_eq!(status.plugin_id, None);
     assert_eq!(
         status.tools.keys().cloned().collect::<BTreeSet<_>>(),
@@ -626,6 +629,7 @@ url = "{mcp_server_url}/mcp"
     assert_eq!(thread_response.data.len(), 1);
     let status = &thread_response.data[0];
     assert_eq!(status.name, "project-server");
+    assert_eq!(status.runtime_status, None);
     assert_eq!(
         status.tools.keys().cloned().collect::<BTreeSet<_>>(),
         BTreeSet::from(["project_lookup".to_string()])
@@ -634,6 +638,179 @@ url = "{mcp_server_url}/mcp"
     mcp_server_handle.abort();
     let _ = mcp_server_handle.await;
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn mcp_server_status_list_reports_thread_runtime_connections() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let (mcp_server_url, mcp_server_handle) = start_mcp_server("lookup").await?;
+    let codex_home = TempDir::new()?;
+    mock_responses_config(&server.uri())
+        .with_extra_config(&format!(
+            "[mcp_servers.connected]\nurl = \"{mcp_server_url}/mcp\"\n\
+             [mcp_servers.disabled]\nurl = \"{mcp_server_url}/mcp\"\nenabled = false\n"
+        ))
+        .write(codex_home.path())?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let ThreadStartResponse { thread, .. } = mcp.start_thread(ThreadStartParams::default()).await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_matching_notification("connected MCP server ready", |notification| {
+            notification.method == "mcpServer/startupStatus/updated"
+                && notification.params.as_ref().is_some_and(|params| {
+                    params["name"] == "connected" && params["status"] == "ready"
+                })
+        }),
+    )
+    .await??;
+    let response: ListMcpServerStatusResponse = mcp
+        .request(|request_id| ClientRequest::McpServerStatusList {
+            request_id,
+            params: ListMcpServerStatusParams {
+                cursor: None,
+                limit: None,
+                detail: Some(McpServerStatusDetail::ToolsAndAuthOnly),
+                thread_id: Some(thread.id.clone()),
+            },
+        })
+        .await?;
+    assert_eq!(
+        response
+            .data
+            .into_iter()
+            .map(|status| (status.name, status.runtime_status))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                "connected".to_string(),
+                Some(McpServerConnectionStatus::Connected)
+            ),
+            (
+                "disabled".to_string(),
+                Some(McpServerConnectionStatus::Disabled)
+            ),
+        ]
+    );
+    // Inventory uses the latest config, but a same-name replacement is not the
+    // connection that this thread started. Unchanged registrations retain status.
+    let (replacement_url, replacement_handle) = start_mcp_server("replacement_lookup").await?;
+    mock_responses_config(&server.uri())
+        .with_extra_config(&format!(
+            "[mcp_servers.connected]\nurl = \"{replacement_url}/mcp\"\n\
+             [mcp_servers.disabled]\nurl = \"{mcp_server_url}/mcp\"\nenabled = false\n"
+        ))
+        .write(codex_home.path())?;
+    let response: ListMcpServerStatusResponse = mcp
+        .request(|request_id| ClientRequest::McpServerStatusList {
+            request_id,
+            params: ListMcpServerStatusParams {
+                cursor: None,
+                limit: None,
+                detail: Some(McpServerStatusDetail::ToolsAndAuthOnly),
+                thread_id: Some(thread.id),
+            },
+        })
+        .await?;
+    assert_eq!(
+        response
+            .data
+            .into_iter()
+            .map(|status| (
+                status.name,
+                status.runtime_status,
+                status.tools.into_keys().collect::<BTreeSet<_>>()
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                "connected".to_string(),
+                None,
+                BTreeSet::from(["replacement_lookup".to_string()])
+            ),
+            (
+                "disabled".to_string(),
+                Some(McpServerConnectionStatus::Disabled),
+                BTreeSet::new()
+            ),
+        ]
+    );
+    replacement_handle.abort();
+    let _ = replacement_handle.await;
+    mcp_server_handle.abort();
+    let _ = mcp_server_handle.await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn mcp_server_status_list_reports_disconnected_stdio_transport() -> Result<()> {
+    skip_if_remote!(
+        Ok(()),
+        "the stdio executable and shutdown marker are host-local"
+    );
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    let exit_file = codex_home.path().join("exit-mcp-server");
+    mock_responses_config(&server.uri())
+        .with_extra_config(&format!(
+            "[mcp_servers.stdio]\ncommand = {}\nstartup_timeout_sec = 2\n\
+             [mcp_servers.stdio.env]\nMCP_TEST_EXIT_FILE = {}\n",
+            toml::Value::String(stdio_server_bin()?),
+            toml::Value::String(exit_file.to_string_lossy().into_owned()),
+        ))
+        .write(codex_home.path())?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let ThreadStartResponse { thread, .. } = mcp.start_thread(ThreadStartParams::default()).await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_matching_notification("stdio MCP server ready", |notification| {
+            notification.method == "mcpServer/startupStatus/updated"
+                && notification
+                    .params
+                    .as_ref()
+                    .is_some_and(|params| params["name"] == "stdio" && params["status"] == "ready")
+        }),
+    )
+    .await??;
+    for expected in [
+        McpServerConnectionStatus::Connected,
+        McpServerConnectionStatus::Failed,
+    ] {
+        if expected == McpServerConnectionStatus::Failed {
+            std::fs::write(&exit_file, "exit")?;
+        }
+        timeout(DEFAULT_READ_TIMEOUT, async {
+            loop {
+                let response: ListMcpServerStatusResponse = mcp
+                    .request(|request_id| ClientRequest::McpServerStatusList {
+                        request_id,
+                        params: ListMcpServerStatusParams {
+                            cursor: None,
+                            limit: None,
+                            detail: Some(McpServerStatusDetail::ToolsAndAuthOnly),
+                            thread_id: Some(thread.id.clone()),
+                        },
+                    })
+                    .await?;
+                let statuses = response
+                    .data
+                    .into_iter()
+                    .map(|status| (status.name, status.runtime_status))
+                    .collect::<Vec<_>>();
+                if statuses == vec![("stdio".to_string(), Some(expected))] {
+                    return Ok::<(), anyhow::Error>(());
+                }
+                sleep(Duration::from_millis(/*millis*/ 20)).await;
+            }
+        })
+        .await??;
+    }
     Ok(())
 }
 
