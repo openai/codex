@@ -199,6 +199,7 @@ async fn exec_resume_last_appends_to_existing_file() -> anyhow::Result<()> {
             .expect("rollout should contain session metadata"),
     )?;
     assert_eq!(meta["payload"]["history_mode"], "paginated");
+    assert_eq!(meta["payload"]["thread_source"], "user");
 
     // 2) Second run: resume the most recent file with a new marker.
     let marker2 = format!("resume-last-2-{}", Uuid::new_v4());

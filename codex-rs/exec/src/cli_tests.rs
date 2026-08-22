@@ -102,7 +102,6 @@ fn parses_config_isolation_flags() {
 
     assert!(cli.ignore_user_config);
     assert!(cli.ignore_rules);
-    assert_eq!(cli.thread_source, None);
 }
 
 #[test]
