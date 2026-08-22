@@ -19,6 +19,7 @@ pub use codex_protocol::turn_input::NotSubmittedReason;
 pub use codex_protocol::turn_input::RecoverTurnRequest;
 pub use codex_protocol::turn_input::StartIfIdleSubmission;
 pub use codex_protocol::turn_input::SteerSubmission;
+pub use codex_protocol::turn_input::SuspendTurnOutcome;
 pub use codex_protocol::turn_input::TurnInput;
 pub use codex_protocol::turn_input::TurnInputRequest;
 pub use codex_protocol::turn_input::TurnInputSubmission;

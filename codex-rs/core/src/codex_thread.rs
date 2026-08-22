@@ -3,6 +3,7 @@ use crate::config::ConstraintResult;
 use crate::elicitation::ElicitationRegistration;
 use crate::session::SessionIo;
 use crate::session::SessionSettingsUpdate;
+use crate::session::new_submission_id;
 use crate::session::session::Session;
 use codex_diagnostics::Gauge;
 use codex_diagnostics::GaugeGuard;
@@ -12,6 +13,7 @@ use codex_extension_api::ThreadIdleCause;
 use codex_features::Feature;
 use codex_history::RolloutItem;
 use codex_otel::SessionTelemetry;
+use codex_otel::current_span_w3c_trace_context;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
@@ -36,6 +38,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
@@ -47,6 +50,7 @@ use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::turn_input::RecoverTurnRequest;
 use codex_protocol::turn_input::StartIfIdleSubmission;
 use codex_protocol::turn_input::SteerSubmission;
+use codex_protocol::turn_input::SuspendTurnOutcome;
 use codex_protocol::turn_input::TurnInputMode;
 use codex_protocol::turn_input::TurnInputRequest;
 use codex_protocol::turn_input::TurnInputSubmission;
@@ -64,6 +68,7 @@ use rmcp::model::ReadResourceRequestParams;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
@@ -397,6 +402,47 @@ impl CodexThread {
                 unreachable!("recovered turn submission cannot steer")
             }
         }
+    }
+
+    /// Stops the active unfinished root turn without recording TurnAborted or
+    /// TurnComplete, so another worker can recover its original turn ID.
+    ///
+    /// Suspension is refused while a currently loaded descendant exists. Past
+    /// descendants do not prevent recovery, and concurrent descendant admission
+    /// is not sealed. Queued user input and outstanding approval, elicitation,
+    /// or server-request waiters remain best effort and may be discarded.
+    ///
+    /// The session processes an accepted request even if its caller disconnects.
+    /// Callers must not transfer ownership until suspension succeeds, which
+    /// requires stopping execution, flushing history, and closing its writer.
+    pub async fn suspend_turn_and_shutdown(&self) -> CodexResult<SuspendTurnOutcome> {
+        if self.session_source.is_non_root_agent() {
+            return Err(CodexErr::UnsupportedOperation(
+                "turn suspension requires the owning root thread".to_string(),
+            ));
+        }
+
+        // The session owns accepted suspension, so dropping this caller cannot interrupt
+        // cancellation, persistence, or writer shutdown halfway through a handoff.
+        let (reply, result) = oneshot::channel();
+        self.io
+            .tx_sub
+            .send(Submission {
+                id: new_submission_id(),
+                op: Op::SuspendTurnAndShutdown { reply },
+                trace: current_span_w3c_trace_context(),
+                parent_turn_id: None,
+                root_turn_id: None,
+            })
+            .await
+            .map_err(|_| CodexErr::Fatal("thread session has stopped".to_string()))?;
+        let outcome = result
+            .await
+            .map_err(|_| CodexErr::Fatal("thread suspension reply was lost".to_string()))??;
+        if matches!(&outcome, SuspendTurnOutcome::Suspended { .. }) {
+            self.io.session_loop_termination.clone().await;
+        }
+        Ok(outcome)
     }
 
     /// Steers only if `expected_turn_id` is still the active regular turn.

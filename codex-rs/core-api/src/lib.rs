@@ -46,6 +46,7 @@ pub use codex_core::StartIfIdleSubmission;
 pub use codex_core::StartThreadOptions;
 pub use codex_core::StateDbHandle;
 pub use codex_core::SteerSubmission;
+pub use codex_core::SuspendTurnOutcome;
 pub use codex_core::ThreadManager;
 pub use codex_core::ThreadShutdownReport;
 pub use codex_core::TurnInput;

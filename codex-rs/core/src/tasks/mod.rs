@@ -63,7 +63,7 @@ pub(crate) use user_shell::UserShellCommandMode;
 pub(crate) use user_shell::UserShellCommandTask;
 pub(crate) use user_shell::execute_user_shell_command;
 
-const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
+pub(crate) const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
 const TASK_COMPACT_METRIC: &str = "codex.task.compact";
 static ACTIVE_TURNS: Gauge = Gauge::new("core.turns.active");
 

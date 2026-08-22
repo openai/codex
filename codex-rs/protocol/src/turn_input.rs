@@ -13,6 +13,18 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
+/// Result of stopping an unfinished root turn so another worker can recover it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SuspendTurnOutcome {
+    Suspended {
+        turn_id: String,
+    },
+    NotActive,
+    /// A currently loaded descendant would remain running after root handoff.
+    HasLiveDescendants,
+    UnsupportedTask,
+}
+
 /// Input consumed by a regular turn.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum TurnInput {
