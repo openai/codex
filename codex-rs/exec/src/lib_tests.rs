@@ -460,7 +460,7 @@ async fn thread_start_params_include_review_policy_when_review_policy_is_manual_
         .await
         .expect("build config with manual-only review policy");
 
-    let params = thread_start_params_from_config(&config);
+    let params = thread_start_params_from_config(&config, &ThreadSource::User);
 
     assert_eq!(
         params.approvals_reviewer,
@@ -488,7 +488,7 @@ async fn thread_start_params_include_review_policy_when_auto_review_is_enabled()
         .await
         .expect("build config with guardian review policy");
 
-    let params = thread_start_params_from_config(&config);
+    let params = thread_start_params_from_config(&config, &ThreadSource::User);
 
     assert_eq!(
         params.approvals_reviewer,
@@ -626,7 +626,7 @@ async fn thread_start_params_match_history_to_persistence() {
         .await
         .expect("build config");
 
-    let params = thread_start_params_from_config(&config);
+    let params = thread_start_params_from_config(&config, &ThreadSource::User);
 
     assert_eq!(
         params.thread_source,
@@ -634,8 +634,12 @@ async fn thread_start_params_match_history_to_persistence() {
     );
     assert_eq!(params.history_mode, Some(ThreadHistoryMode::Paginated));
 
+    let thread_source = ThreadSource::Feature("automated_review".to_string());
+    let params = thread_start_params_from_config(&config, &thread_source);
+    assert_eq!(params.thread_source, Some(thread_source));
+
     config.ephemeral = true;
-    let params = thread_start_params_from_config(&config);
+    let params = thread_start_params_from_config(&config, &ThreadSource::User);
 
     assert_eq!(params.ephemeral, Some(true));
     assert_eq!(params.history_mode, None);
@@ -660,7 +664,7 @@ async fn thread_lifecycle_params_preserve_hook_trust_bypass() {
         serde_json::Value::Bool(true),
     )]));
 
-    let start_params = thread_start_params_from_config(&config);
+    let start_params = thread_start_params_from_config(&config, &ThreadSource::User);
     let resume_params = thread_resume_params_from_config(
         &config,
         "thread-id".to_string(),
@@ -696,7 +700,7 @@ async fn thread_lifecycle_params_include_legacy_sandbox_when_no_active_profile()
         .await
         .expect("build config with legacy sandbox override");
 
-    let start_params = thread_start_params_from_config(&config);
+    let start_params = thread_start_params_from_config(&config, &ThreadSource::User);
     let resume_params = thread_resume_params_from_config(
         &config,
         "thread-id".to_string(),

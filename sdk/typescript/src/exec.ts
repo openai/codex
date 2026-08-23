@@ -13,6 +13,8 @@ export type CodexExecArgs = {
   baseUrl?: string;
   apiKey?: string;
   threadId?: string | null;
+  // --thread-source; only applies when creating a new thread
+  threadSource?: string;
   images?: string[];
   // --model
   model?: string;
@@ -110,6 +112,10 @@ export class CodexExec {
 
     if (args.model) {
       commandArgs.push("--model", args.model);
+    }
+
+    if (args.threadSource !== undefined && !args.threadId) {
+      commandArgs.push("--thread-source", args.threadSource);
     }
 
     if (args.sandboxMode) {

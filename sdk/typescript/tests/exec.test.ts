@@ -185,6 +185,31 @@ describe("CodexExec", () => {
     },
   );
 
+  it("passes the thread source when starting a new thread", async () => {
+    const { CodexExec } = await import("../src/exec");
+    spawnMock.mockClear();
+    const child = new FakeChildProcess();
+    spawnMock.mockReturnValue(child as unknown as child_process.ChildProcess);
+
+    setImmediate(() => {
+      child.stdout.end();
+      child.stderr.end();
+      child.emit("exit", 0, null);
+    });
+
+    const exec = new CodexExec("codex");
+    for await (const _ of exec.run({ input: "hi", threadSource: "automated_review" })) {
+      // no-op
+    }
+
+    expect(spawnMock.mock.calls[0]?.[1]).toEqual([
+      "exec",
+      "--experimental-json",
+      "--thread-source",
+      "automated_review",
+    ]);
+  });
+
   it("lets SDK-managed and thread settings override raw configuration when resuming", async () => {
     const { CodexExec } = await import("../src/exec");
     spawnMock.mockClear();
@@ -205,6 +230,7 @@ describe("CodexExec", () => {
     for await (const _ of exec.run({
       input: "resume with overrides",
       threadId: "thread-id",
+      threadSource: "should_not_override",
       baseUrl: "https://managed.example.test",
       approvalPolicy: "on-request",
       networkAccessEnabled: false,

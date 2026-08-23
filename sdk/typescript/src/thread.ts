@@ -81,6 +81,7 @@ export class Thread {
       threadId: this._id,
       images,
       model: options?.model,
+      threadSource: options?.threadSource,
       sandboxMode: options?.sandboxMode,
       workingDirectory: options?.workingDirectory,
       skipGitRepoCheck: options?.skipGitRepoCheck,
