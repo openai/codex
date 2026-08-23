@@ -332,7 +332,9 @@ fn build_compacted_history_preserves_user_message_passthrough_metadata() {
                 },
                 metadata: Some(CodexHarnessMetadata::default()),
             },
-            ResponseItemEnvelope::new(user_message("summary text")),
+            ResponseItemEnvelope::new(ContextualUserFragment::into(CompactionSummary::new(
+                "summary text",
+            ))),
         ]
     );
 }

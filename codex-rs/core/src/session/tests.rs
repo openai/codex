@@ -11215,9 +11215,7 @@ async fn sample_rollout(
     rollout_items.push(RolloutItem::ResponseItem(assistant1.clone().into()));
 
     let summary1 = "summary one";
-    let snapshot1 = live_history
-        .clone()
-        .for_prompt(&reconstruction_turn.model_info.input_modalities);
+    let snapshot1 = raw_history_items(&live_history);
     let user_messages1 = collect_user_messages(&snapshot1);
     let rebuilt1 = compact::build_compacted_history(Vec::new(), &user_messages1, summary1);
     live_history.replace_annotated(rebuilt1);
@@ -11263,9 +11261,7 @@ async fn sample_rollout(
     rollout_items.push(RolloutItem::ResponseItem(assistant2.clone().into()));
 
     let summary2 = "summary two";
-    let snapshot2 = live_history
-        .clone()
-        .for_prompt(&reconstruction_turn.model_info.input_modalities);
+    let snapshot2 = raw_history_items(&live_history);
     let user_messages2 = collect_user_messages(&snapshot2);
     let rebuilt2 = compact::build_compacted_history(Vec::new(), &user_messages2, summary2);
     live_history.replace_annotated(rebuilt2);
@@ -11310,10 +11306,7 @@ async fn sample_rollout(
     );
     rollout_items.push(RolloutItem::ResponseItem(assistant3.into()));
 
-    (
-        rollout_items,
-        strip_metadata_from_items(&raw_history_items(&live_history)),
-    )
+    (rollout_items, raw_history_items(&live_history))
 }
 
 #[tokio::test]

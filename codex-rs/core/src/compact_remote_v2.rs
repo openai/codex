@@ -62,6 +62,15 @@ mod attempt;
 use attempt::RemoteCompactV2Attempt;
 use attempt::run_remote_compact_v2_attempt;
 
+#[path = "compact_remote_v2_images.rs"]
+mod images;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RetainedImageBudget {
+    Disabled,
+    Enabled,
+}
+
 // Mirror the current /responses/compact retained-message default while the
 // server-side path remains the reference implementation.
 pub(crate) const RETAINED_MESSAGE_TOKEN_BUDGET: usize = 64_000;
@@ -301,6 +310,11 @@ async fn run_remote_compact_task_inner_impl(
         prompt_input_metadata,
         compaction_output,
         sess.enabled(Feature::RetainClientDeveloperMessages),
+        if sess.enabled(Feature::CompactionImageBudget) {
+            RetainedImageBudget::Enabled
+        } else {
+            RetainedImageBudget::Disabled
+        },
     );
     analytics_details.retained_image_count = Some(retained_images);
     let (new_window_number, new_window_ids) = sess.advance_auto_compact_window().await;
@@ -463,6 +477,7 @@ fn build_v2_compacted_history(
     prompt_input_metadata: Vec<Option<CodexHarnessMetadata>>,
     compaction_output: ResponseItem,
     retain_client_developer_messages: bool,
+    image_budget: RetainedImageBudget,
 ) -> (Vec<ResponseItemEnvelope>, usize) {
     debug_assert_eq!(prompt_input.len(), prompt_input_metadata.len());
     let prompt_input = prompt_input
@@ -480,7 +495,7 @@ fn build_v2_compacted_history(
         .flat_map(HistoryItemGroup::into_items)
         .collect::<Vec<_>>();
     let mut retained =
-        truncate_retained_messages_for_remote_compaction(retained, RETAINED_MESSAGE_TOKEN_BUDGET);
+        truncate_retained_messages(retained, RETAINED_MESSAGE_TOKEN_BUDGET, image_budget);
     let retained_image_count = retained
         .iter()
         .map(|envelope| retained_input_image_count(&envelope.item))
@@ -559,6 +574,14 @@ pub(crate) fn truncate_retained_messages_for_remote_compaction(
     items: Vec<ResponseItemEnvelope>,
     max_tokens: usize,
 ) -> Vec<ResponseItemEnvelope> {
+    truncate_retained_messages(items, max_tokens, RetainedImageBudget::Disabled)
+}
+
+fn truncate_retained_messages(
+    items: Vec<ResponseItemEnvelope>,
+    max_tokens: usize,
+    image_budget: RetainedImageBudget,
+) -> Vec<ResponseItemEnvelope> {
     let mut remaining = max_tokens;
     let mut truncated_reversed = Vec::with_capacity(items.len());
     for group in v2_history_item_groups(items)
@@ -571,14 +594,22 @@ pub(crate) fn truncate_retained_messages_for_remote_compaction(
         }
 
         let client_developer = is_client_authored_developer_message(&group.source);
+        let charge_images = image_budget == RetainedImageBudget::Enabled && !client_developer;
         let notice_tokens = group
             .attached_notice
             .as_ref()
             .map_or(0, |notice| message_text_token_count(&notice.item).max(1));
+        // Client-authored developer messages already charge non-text content via
+        // the serialized estimate. Preserve their text-only boundary correction.
+        let content_tokens = if charge_images {
+            message_content_token_count(&group.source.item)
+        } else {
+            message_text_token_count(&group.source.item)
+        };
         let source_tokens = if client_developer {
             usize::try_from(estimate_item_token_count(&group.source.item)).unwrap_or(usize::MAX)
         } else {
-            message_text_token_count(&group.source.item).max(1)
+            content_tokens.max(1)
         };
         let token_count = source_tokens.saturating_add(notice_tokens);
         if token_count <= remaining {
@@ -589,23 +620,30 @@ pub(crate) fn truncate_retained_messages_for_remote_compaction(
             remaining = remaining.saturating_sub(token_count);
         } else if remaining > notice_tokens {
             let available_tokens = remaining - notice_tokens;
-            let text_budget = if client_developer {
-                available_tokens.saturating_sub(
-                    source_tokens.saturating_sub(message_text_token_count(&group.source.item)),
-                )
+            let content_budget = if client_developer {
+                available_tokens.saturating_sub(source_tokens.saturating_sub(content_tokens))
             } else {
                 available_tokens
             };
-            let Some(mut truncated_item) =
-                truncate_message_text_to_token_budget(group.source, text_budget)
-            else {
+            let image_count = retained_input_image_count(&group.source.item);
+            if charge_images && image_count > 0 {
+                // An oversized image can leave no boundary content. Do not backfill
+                // the remaining budget with older messages in that case.
+                remaining = 0;
+            }
+            let truncated_item = if charge_images && image_count > 0 {
+                images::truncate_message_to_token_budget(group.source, content_budget)
+            } else {
+                truncate_message_text_to_token_budget(group.source, content_budget)
+            };
+            let Some(mut truncated_item) = truncated_item else {
                 continue;
             };
             if client_developer {
                 let item_tokens = usize::try_from(estimate_item_token_count(&truncated_item.item))
                     .unwrap_or(usize::MAX);
                 if item_tokens > available_tokens {
-                    let adjusted_budget = text_budget
+                    let adjusted_budget = content_budget
                         .saturating_sub(item_tokens - available_tokens)
                         .saturating_sub(1);
                     let Some(adjusted) =
@@ -627,10 +665,20 @@ pub(crate) fn truncate_retained_messages_for_remote_compaction(
             }
             truncated_reversed.push(truncated_item);
             remaining = 0;
+        } else if charge_images && retained_input_image_count(&group.source.item) > 0 {
+            remaining = 0;
         }
     }
     truncated_reversed.reverse();
     truncated_reversed
+}
+
+fn message_content_token_count(item: &ResponseItem) -> usize {
+    let ResponseItem::Message { content, .. } = item else {
+        return usize::try_from(estimate_item_token_count(item)).unwrap_or(usize::MAX);
+    };
+
+    content.iter().map(images::content_item_token_count).sum()
 }
 
 fn message_text_token_count(item: &ResponseItem) -> usize {
@@ -718,7 +766,11 @@ mod tests {
     ) -> (Vec<ResponseItemEnvelope>, usize) {
         let metadata = vec![None; input.len()];
         build_v2_compacted_history(
-            input, metadata, output, /*retain_client_developer_messages*/ false,
+            input,
+            metadata,
+            output,
+            /*retain_client_developer_messages*/ false,
+            RetainedImageBudget::Disabled,
         )
     }
 
@@ -829,6 +881,7 @@ mod tests {
                 ],
                 output.clone(),
                 enabled,
+                RetainedImageBudget::Disabled,
             );
             let mut expected = vec![
                 ResponseItemEnvelope {
@@ -1132,3 +1185,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "compact_remote_v2_image_budget_tests.rs"]
+mod image_budget_tests;
