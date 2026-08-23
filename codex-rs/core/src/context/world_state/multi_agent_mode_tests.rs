@@ -2,6 +2,7 @@ use super::super::test_support::render_section_cases;
 use super::*;
 use crate::context::MultiAgentRoleInstructions;
 use crate::context::world_state::WorldState;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_utils_output_truncation::approx_token_count;
 
@@ -112,10 +113,20 @@ fn catalog_role_updates_remain_separate_from_active_mode() {
     let expected_mode = MultiAgentModeInstructions::from_mode(MultiAgentMode::Proactive)
         .expect("proactive mode should render");
     assert_eq!(
-        updates,
+        updates
+            .into_iter()
+            .map(|item| match item {
+                ResponseItem::Message { content, .. } => content,
+                _ => panic!("expected world-state message"),
+            })
+            .collect::<Vec<_>>(),
         vec![
-            ContextualUserFragment::into(current_role),
-            ContextualUserFragment::into(expected_mode),
+            vec![ContentItem::InputText {
+                text: current_role.render(),
+            }],
+            vec![ContentItem::InputText {
+                text: expected_mode.render(),
+            }],
         ],
     );
 }

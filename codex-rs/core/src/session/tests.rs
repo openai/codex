@@ -126,6 +126,7 @@ use codex_protocol::items::HookPromptFragment;
 use codex_protocol::items::build_hook_prompt_message;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
@@ -3323,7 +3324,18 @@ async fn record_initial_history_assigns_and_persists_id_for_forked_response_item
         "Subagent guidance.".to_string(),
     ])
     .expect("developer message");
-    let mut expected_item = response_item.clone();
+    let mut expected_item = ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "Subagent guidance.".to_string(),
+        }],
+        phase: None,
+        internal_chat_message_metadata_passthrough: Some(InternalChatMessageMetadataPassthrough {
+            content_item_kinds: Some(vec![ContentItemKind("unknown".to_string())]),
+            ..Default::default()
+        }),
+    };
     let response_item = ResponseItemEnvelope {
         item: response_item,
         metadata: Some(CodexHarnessMetadata::default()),

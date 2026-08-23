@@ -56,6 +56,8 @@ use codex_analytics::SubAgentThreadStartedInput;
 use codex_analytics::TurnCodexErrorFact;
 use codex_async_utils::OrCancelExt;
 use codex_connectors::connector_runtime_context_key;
+use codex_context_fragments::AnnotatedContent;
+use codex_context_fragments::RenderedFragment;
 use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
 use codex_execpolicy::prefix_rule_migration;
@@ -104,6 +106,7 @@ use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::BaseInstructionsProvenance;
+use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::openai_models::ModelInfo;
@@ -3479,11 +3482,11 @@ impl Session {
                 })
                 .await
             {
-                developer_sections.push(fragment.text().to_string());
+                developer_sections.push(fragment.into());
             }
         }
 
-        crate::context_manager::updates::build_developer_update_item(developer_sections)
+        crate::context_manager::updates::build_rendered_message(developer_sections)
             .into_iter()
             .collect()
     }
@@ -3493,9 +3496,9 @@ impl Session {
         turn_context: &TurnContext,
         world_state: &WorldState,
     ) -> Vec<ResponseItem> {
-        let mut developer_sections = Vec::<String>::with_capacity(8);
-        let mut contextual_user_sections = Vec::<String>::with_capacity(2);
-        let mut separate_developer_sections = Vec::<String>::new();
+        let mut developer_sections = Vec::<RenderedFragment>::with_capacity(8);
+        let mut contextual_user_sections = Vec::<RenderedFragment>::with_capacity(2);
+        let mut separate_developer_sections = Vec::<RenderedFragment>::new();
         let (session_source, auto_compact_window_ids) = {
             let state = self.state.lock().await;
             (
@@ -3511,7 +3514,13 @@ impl Session {
             && let Some(developer_instructions) = turn_context.developer_instructions.as_deref()
             && !developer_instructions.is_empty()
         {
-            developer_sections.push(developer_instructions.to_string());
+            developer_sections.push(RenderedFragment::new(
+                "developer",
+                AnnotatedContent::input_text(
+                    developer_instructions,
+                    ContentItemKind("generic.developer_instructions".to_string()),
+                ),
+            ));
         }
         let loaded_plugins = self
             .services
@@ -3543,7 +3552,7 @@ impl Session {
             .as_deref()
             .and_then(RecommendedPluginsInstructions::from_plugins)
         {
-            contextual_user_sections.push(recommended_plugins.render());
+            contextual_user_sections.push(recommended_plugins.render_fragment());
         }
         let context_contributors = self.services.extensions.context_contributors().to_vec();
         for contributor in &context_contributors {
@@ -3554,7 +3563,7 @@ impl Session {
                 )
                 .await
             {
-                developer_sections.push(fragment.text().to_string());
+                developer_sections.push(fragment.into());
             }
         }
         for contributor in &context_contributors {
@@ -3569,7 +3578,7 @@ impl Session {
                 })
                 .await
             {
-                developer_sections.push(fragment.text().to_string());
+                developer_sections.push(fragment.into());
             }
         }
         // This is full-context metadata. Steady-state context diffs should not re-emit it.
@@ -3614,7 +3623,7 @@ impl Session {
                     auto_compact_window_ids.window_id,
                     mcp_result,
                 )
-                .render(),
+                .render_fragment(),
             );
         }
         // Render the active mode after the usage hint so it can override that hint.
@@ -3626,7 +3635,7 @@ impl Session {
                     if fragment.markers().0 == ModelSwitchInstructions::type_markers().0 =>
                 {
                     // New-model instructions must precede the rest of the developer context.
-                    developer_sections.insert(0, fragment.render());
+                    developer_sections.insert(0, fragment.render_fragment());
                 }
                 "developer" if fragment.markers().0 == MULTI_AGENT_MODE_OPEN_TAG => {
                     initial_multi_agent_mode = Some(fragment);
@@ -3639,37 +3648,41 @@ impl Session {
                 "developer"
                     if fragment.markers().0 == MultiAgentRoleInstructions::type_markers().0 =>
                 {
-                    separate_developer_sections.push(fragment.render());
+                    separate_developer_sections.push(fragment.render_fragment());
                 }
                 "developer"
                     if fragment.requires_separate_message() && fragment.markers().0.is_empty() =>
                 {
-                    separate_developer_sections.push(fragment.render());
+                    separate_developer_sections.push(fragment.render_fragment());
                 }
-                "developer" => developer_sections.push(fragment.render()),
-                "user" => contextual_user_sections.push(fragment.render()),
+                "developer" => developer_sections.push(fragment.render_fragment()),
+                "user" => contextual_user_sections.push(fragment.render_fragment()),
                 _ => {}
             }
         }
 
         let mut items = Vec::with_capacity(4);
         if let Some(developer_message) =
-            crate::context_manager::updates::build_developer_update_item(developer_sections)
+            crate::context_manager::updates::build_rendered_message(developer_sections)
         {
             items.push(developer_message);
         }
         for section in separate_developer_sections {
             if let Some(developer_message) =
-                crate::context_manager::updates::build_developer_update_item(vec![section])
+                crate::context_manager::updates::build_rendered_message(vec![section])
             {
                 items.push(developer_message);
             }
         }
-        if let Some(initial_multi_agent_mode) = initial_multi_agent_mode {
-            items.push(initial_multi_agent_mode.into_boxed_response_item());
+        if let Some(initial_multi_agent_mode) = initial_multi_agent_mode
+            && let Some(message) = crate::context_manager::updates::build_rendered_message(vec![
+                initial_multi_agent_mode.render_fragment(),
+            ])
+        {
+            items.push(message);
         }
         if let Some(contextual_user_message) =
-            crate::context_manager::updates::build_contextual_user_message(contextual_user_sections)
+            crate::context_manager::updates::build_rendered_message(contextual_user_sections)
         {
             items.push(contextual_user_message);
         }
@@ -3679,14 +3692,24 @@ impl Session {
             && let Some(developer_instructions) = turn_context.developer_instructions.as_deref()
             && !developer_instructions.is_empty()
             && let Some(guardian_developer_message) =
-                crate::context_manager::updates::build_developer_update_item(vec![
-                    developer_instructions.to_string(),
+                crate::context_manager::updates::build_rendered_message(vec![
+                    RenderedFragment::new(
+                        "developer",
+                        AnnotatedContent::input_text(
+                            developer_instructions,
+                            ContentItemKind("guardian.policy".to_string()),
+                        ),
+                    ),
                 ])
         {
             items.push(guardian_developer_message);
         }
-        if let Some(managed_developer_instructions) = managed_developer_instructions {
-            items.push(managed_developer_instructions.into_boxed_response_item());
+        if let Some(managed_developer_instructions) = managed_developer_instructions
+            && let Some(message) = crate::context_manager::updates::build_rendered_message(vec![
+                managed_developer_instructions.render_fragment(),
+            ])
+        {
+            items.push(message);
         }
         // New context windows and compaction install these items directly into replacement history.
         for item in &mut items {

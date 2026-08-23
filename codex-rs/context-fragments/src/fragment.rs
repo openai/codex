@@ -12,6 +12,11 @@ pub struct RenderedFragment {
 }
 
 impl RenderedFragment {
+    /// Creates a rendered fragment without separating its role and annotated content.
+    pub fn new(role: &'static str, content: AnnotatedContent) -> Self {
+        Self { role, content }
+    }
+
     /// Returns the response role associated with this fragment.
     pub fn role(&self) -> &'static str {
         self.role
@@ -76,10 +81,10 @@ pub trait ContextualUserFragment {
 
     /// Renders the role, model-visible content, and classification together.
     fn render_fragment(&self) -> RenderedFragment {
-        RenderedFragment {
-            role: self.role(),
-            content: AnnotatedContent::input_text(self.render(), self.content_kind()),
-        }
+        RenderedFragment::new(
+            self.role(),
+            AnnotatedContent::input_text(self.render(), self.content_kind()),
+        )
     }
 
     fn into(self) -> ResponseItem
