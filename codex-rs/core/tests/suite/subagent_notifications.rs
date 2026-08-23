@@ -131,12 +131,6 @@ fn log_field<'a>(line: &'a str, name: &str) -> Option<&'a str> {
         .map(|value| value.trim_matches('"'))
 }
 
-fn has_subagent_notification(req: &ResponsesRequest) -> bool {
-    req.message_input_texts("user")
-        .iter()
-        .any(|text| text.contains("<subagent_notification>"))
-}
-
 fn tool_parameter_description(tool: &Value, parameter_name: &str) -> Option<String> {
     tool.get("parameters")
         .and_then(|parameters| parameters.get("properties"))
@@ -884,7 +878,11 @@ async fn subagent_notification_is_included_without_wait() -> Result<()> {
     test.submit_turn(TURN_2_NO_WAIT_PROMPT).await?;
 
     let turn2_requests = wait_for_requests(&turn2).await?;
-    assert!(turn2_requests.iter().any(has_subagent_notification));
+    assert!(
+        turn2_requests
+            .iter()
+            .any(|request| request.has_content_kinds(&["multi_agent.subagent_notification"]))
+    );
 
     Ok(())
 }

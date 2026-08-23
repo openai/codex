@@ -15,6 +15,8 @@ use crate::session::thread_settings;
 use crate::session::turn_input;
 
 use crate::config::Config;
+use crate::context::ContextualUserFragment;
+use crate::context::GuardianApprovedAction;
 use crate::context::NodeReplReviewEvidence;
 use crate::review_prompts::resolve_review_request;
 use crate::session::spawn_review_thread;
@@ -23,9 +25,6 @@ use crate::tasks::UserShellCommandMode;
 use crate::tasks::UserShellCommandTask;
 use crate::tasks::execute_user_shell_command;
 use codex_history::RolloutItem;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseInputItem;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
@@ -725,21 +724,9 @@ async fn approve_guardian_denied_action(sess: &Arc<Session>, event: GuardianAsse
             return;
         }
     };
-    let approval_prefix = crate::guardian::AUTO_REVIEW_DENIED_ACTION_APPROVAL_DEVELOPER_PREFIX;
-    let text = format!(
-        r#"{approval_prefix}
-
-Treat this as approval to perform that exact action in the same context in which it was originally requested.
-Do not assume this also authorizes similar operations with different payloads.
-
-Approved action:
-{approved_action_json}"#,
-    );
-    let items = vec![ResponseItem::from(ResponseInputItem::Message {
-        role: "developer".to_string(),
-        content: vec![ContentItem::InputText { text }],
-        phase: None,
-    })];
+    let items = vec![ContextualUserFragment::into(GuardianApprovedAction::new(
+        approved_action_json,
+    ))];
 
     sess.inject_no_new_turn(items, /*current_turn_context*/ None)
         .await;

@@ -4,6 +4,8 @@ use std::time::Instant;
 use crate::Prompt;
 use crate::client::ModelClientSession;
 use crate::client_common::ResponseEvent;
+use crate::context::CompactionSummary;
+use crate::context::ContextualUserFragment;
 use crate::context::world_state::WorldState;
 use crate::hook_runtime::PostCompactHookOutcome;
 use crate::hook_runtime::PreCompactHookOutcome;
@@ -723,13 +725,9 @@ fn build_compacted_history_with_limit(
         summary_text.to_string()
     };
 
-    history.push(ResponseItemEnvelope::new(ResponseItem::Message {
-        id: None,
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText { text: summary_text }],
-        phase: None,
-        internal_chat_message_metadata_passthrough: None,
-    }));
+    history.push(ResponseItemEnvelope::new(ContextualUserFragment::into(
+        CompactionSummary::new(summary_text),
+    )));
 
     history
 }

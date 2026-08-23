@@ -5,7 +5,6 @@ use codex_utils_output_truncation::truncate_text;
 
 use crate::context::ContextualUserFragment;
 use crate::context::InterAgentCompletionMessage;
-use crate::context::SubagentNotification;
 
 const COMPLETION_MESSAGE_MAX_TOKENS: usize = 1_000;
 const COMPLETION_MESSAGE_ENVELOPE_TOKEN_RESERVE: usize = 100;
@@ -17,13 +16,6 @@ const ERROR_NEXT_ACTION: &str = "This agent's turn failed. If you still need thi
 // messages but are not user intent.
 
 // TODO(jif) unify with structured schema
-pub(crate) fn format_subagent_notification_message(
-    agent_reference: &str,
-    status: &AgentStatus,
-) -> String {
-    SubagentNotification::new(agent_reference, status.clone()).render()
-}
-
 pub(crate) fn format_inter_agent_completion_message(
     task_name: AgentPath,
     sender: AgentPath,

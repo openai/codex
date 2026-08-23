@@ -710,6 +710,29 @@ async fn summarize_context_three_requests_and_instructions() {
                 regular_turn_context_count += 1;
             }
             RolloutItem::Compacted(ci) if ci.message == expected_summary_message => {
+                let summary_item = ci
+                    .replacement_history
+                    .as_ref()
+                    .and_then(|history| history.last())
+                    .expect("compacted history should retain its summary");
+                let summary_item =
+                    serde_json::to_value(&summary_item.item).expect("serialize compacted summary");
+                assert_eq!(
+                    json!({
+                        "role": summary_item["role"],
+                        "content": summary_item["content"],
+                        "content_item_kinds": summary_item
+                            ["internal_chat_message_metadata_passthrough"]["content_item_kinds"],
+                    }),
+                    json!({
+                        "role": "user",
+                        "content": [{
+                            "type": "input_text",
+                            "text": expected_summary_message,
+                        }],
+                        "content_item_kinds": ["compaction.summary"],
+                    })
+                );
                 saw_compacted_summary = true;
             }
             _ => {}

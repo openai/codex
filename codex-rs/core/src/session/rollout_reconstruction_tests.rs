@@ -3,6 +3,8 @@ use super::*;
 use super::tests::build_world_state_from_turn_context;
 use super::tests::make_session_and_context;
 use super::tests::raw_history_items;
+use crate::context::CompactionSummary;
+use crate::context::ContextualUserFragment;
 use codex_history::CompactedItem;
 use codex_history::InitialHistory;
 use codex_history::ResponseItemEnvelope;
@@ -1268,7 +1270,7 @@ async fn reconstruct_history_legacy_compaction_without_replacement_history_does_
         reconstructed.history,
         annotated(vec![
             user_message("before compact"),
-            user_message("legacy summary"),
+            ContextualUserFragment::into(CompactionSummary::new("legacy summary")),
         ])
     );
     assert!(reconstructed.reference_context_item.is_none());

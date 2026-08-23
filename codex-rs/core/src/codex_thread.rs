@@ -1,5 +1,6 @@
 use crate::agent::AgentStatus;
 use crate::config::ConstraintResult;
+use crate::context::ContextualUserFragment;
 use crate::elicitation::ElicitationRegistration;
 use crate::session::SessionIo;
 use crate::session::SessionSettingsUpdate;
@@ -25,7 +26,6 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::models::ActivePermissionProfile;
-use codex_protocol::models::ContentItem;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -610,15 +610,9 @@ impl CodexThread {
         self.session.token_usage_info().await
     }
 
-    /// Records a user-role session-prefix message without creating a new user turn boundary.
-    pub(crate) async fn inject_user_message_without_turn(&self, message: String) {
-        let item = ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText { text: message }],
-            phase: None,
-            internal_chat_message_metadata_passthrough: None,
-        };
+    /// Records a context fragment without creating a new user turn boundary.
+    pub(crate) async fn inject_fragment_without_turn(&self, fragment: impl ContextualUserFragment) {
+        let item = ContextualUserFragment::into(fragment);
         self.session
             .inject_no_new_turn(vec![item], /*current_turn_context*/ None)
             .await;

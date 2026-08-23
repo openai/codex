@@ -12,13 +12,13 @@ use crate::agent_communication::AgentCommunicationKind;
 use crate::codex_thread::ThreadConfigSnapshot;
 use crate::config::Config;
 use crate::config::RolloutBudgetConfig;
+use crate::context::SubagentNotification;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::rollout_budget::RolloutBudget;
 use crate::session::emit_subagent_session_started;
 use crate::session::multi_agents::ResolvedMultiAgentV2UsageHints;
 use crate::session_prefix::format_inter_agent_completion_message;
 use crate::session_prefix::format_subagent_context_line;
-use crate::session_prefix::format_subagent_notification_message;
 use crate::thread_manager::ResumeThreadWithHistoryOptions;
 use crate::thread_manager::ThreadIdGenerator;
 use crate::thread_manager::ThreadManagerState;
@@ -592,12 +592,14 @@ impl AgentControl {
                     .await;
                 return;
             }
-            let message = format_subagent_notification_message(child_reference.as_str(), &status);
             let Ok(parent_thread) = state.get_thread(parent_thread_id).await else {
                 return;
             };
             parent_thread
-                .inject_user_message_without_turn(message)
+                .inject_fragment_without_turn(SubagentNotification::new(
+                    child_reference.as_str(),
+                    status,
+                ))
                 .await;
         });
     }

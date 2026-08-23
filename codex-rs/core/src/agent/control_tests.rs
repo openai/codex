@@ -119,6 +119,18 @@ fn rollout_response_item(item: ResponseItem) -> RolloutItem {
     RolloutItem::ResponseItem(item.into())
 }
 
+fn user_message(text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: text.to_string(),
+        }],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    }
+}
+
 fn assistant_message(text: &str, phase: Option<MessagePhase>) -> ResponseItem {
     ResponseItem::Message {
         id: None,
@@ -370,8 +382,9 @@ async fn persist_thread_for_tree_resume(thread: &Arc<CodexThread>, message: &str
         .abort_all_tasks(TurnAbortReason::Interrupted)
         .await;
     thread
-        .inject_user_message_without_turn(message.to_string())
-        .await;
+        .inject_response_items(vec![user_message(message)])
+        .await
+        .expect("inject thread resume context");
     thread
         .session
         .ensure_rollout_materialized(PersistContext::Standard)
@@ -1013,8 +1026,9 @@ async fn spawn_agent_fork_from_paginated_parent_uses_model_context_prefix() {
     let harness = AgentControlHarness::new().await;
     let (parent_thread_id, parent_thread) = harness.start_paginated_thread().await;
     parent_thread
-        .inject_user_message_without_turn("paginated parent context".to_string())
-        .await;
+        .inject_response_items(vec![user_message("paginated parent context")])
+        .await
+        .expect("inject paginated parent context");
     let turn_context = parent_thread.session.new_default_turn().await;
     let parent_spawn_call_id = "spawn-call-paginated".to_string();
     parent_thread
@@ -1181,8 +1195,9 @@ async fn spawn_agent_without_fork_from_paginated_parent_stays_fresh_and_paginate
     let harness = AgentControlHarness::new().await;
     let (parent_thread_id, parent_thread) = harness.start_paginated_thread().await;
     parent_thread
-        .inject_user_message_without_turn("parent-only context".to_string())
-        .await;
+        .inject_response_items(vec![user_message("parent-only context")])
+        .await
+        .expect("inject parent-only context");
 
     let child_thread_id = harness
         .spawn_anonymous_child(
@@ -1336,7 +1351,11 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
     let parent_thread_id = new_thread.thread_id;
     let parent_thread = new_thread.thread;
     parent_thread
-        .inject_user_message_without_turn("parent seed context".to_string())
+        .session
+        .inject_no_new_turn(
+            vec![user_message("parent seed context")],
+            /*current_turn_context*/ None,
+        )
         .await;
     let expected_parent_seed = parent_thread
         .session
@@ -2240,8 +2259,9 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
     let (parent_thread_id, parent_thread) = harness.start_thread().await;
 
     parent_thread
-        .inject_user_message_without_turn("old parent context".to_string())
-        .await;
+        .inject_response_items(vec![user_message("old parent context")])
+        .await
+        .expect("inject old parent context");
     let queued_communication = InterAgentCommunication::new(
         AgentPath::root(),
         AgentPath::try_from("/root/worker").expect("agent path"),
@@ -2274,8 +2294,9 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
         )
         .await;
     parent_thread
-        .inject_user_message_without_turn("current parent task".to_string())
-        .await;
+        .inject_response_items(vec![user_message("current parent task")])
+        .await
+        .expect("inject current parent task");
     let spawn_turn_context = parent_thread.session.new_default_turn().await;
     let parent_spawn_call_id = "spawn-call-last-n".to_string();
     parent_thread
@@ -2406,8 +2427,9 @@ async fn spawn_agent_fork_last_n_turns_drops_parent_startup_prefix_when_under_li
         )
         .await;
     parent_thread
-        .inject_user_message_without_turn("current parent task".to_string())
-        .await;
+        .inject_response_items(vec![user_message("current parent task")])
+        .await
+        .expect("inject current parent task");
     let spawn_turn_context = parent_thread.session.new_default_turn().await;
     let parent_spawn_call_id = "spawn-call-last-n-under-limit".to_string();
     parent_thread
@@ -2510,8 +2532,9 @@ async fn spawn_agent_fork_last_n_turns_strips_parent_usage_hints() {
     let parent_thread_id = new_thread.thread_id;
     let parent_thread = new_thread.thread;
     parent_thread
-        .inject_user_message_without_turn("parent task".to_string())
-        .await;
+        .inject_response_items(vec![user_message("parent task")])
+        .await
+        .expect("inject parent task");
     let turn_context = parent_thread.session.new_default_turn().await;
     let parent_spawn_call_id = "spawn-call-last-n-usage-hints".to_string();
     parent_thread
