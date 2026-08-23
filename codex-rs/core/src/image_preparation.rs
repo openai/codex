@@ -6,8 +6,12 @@ use crate::context::ResizedImage;
 use crate::original_image_detail::can_request_original_image_detail;
 use codex_analytics::ImageDetailSetting;
 use codex_analytics::ImagePreparationMetadata;
+use codex_context_fragments::AnnotatedContent;
+use codex_context_fragments::set_annotated_content;
+use codex_context_fragments::to_annotated_content;
 use codex_features::Feature;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
@@ -121,15 +125,19 @@ pub(crate) fn prepare_response_items(
             })
         };
     for mut item in std::mem::take(items) {
+        let mut annotated_content = to_annotated_content(&mut item);
         let resize_notice = match &mut item {
-            ResponseItem::Message { role, content, .. } => {
+            ResponseItem::Message { role, .. } => {
+                let Some(mut content) = annotated_content.take() else {
+                    continue;
+                };
                 let resized_images = prepare_message_content(
-                    content,
+                    &mut content,
                     ImageOrigin {
-                        message_role: Some(role),
+                        message_role: Some(role.as_str()),
                         item_id: None,
                     },
-                    if role == "user" {
+                    if role.as_str() == "user" {
                         resize_notice_mode
                     } else {
                         ImageResizeNoticeMode::Disabled
@@ -137,6 +145,7 @@ pub(crate) fn prepare_response_items(
                     &mut metadata,
                     mode,
                 );
+                let _ = set_annotated_content(&mut item, content);
                 (!resized_images.is_empty()).then(|| {
                     ImageResizeNotice::new(ImageResizeNoticeSource::UserMessage, resized_images)
                 })
@@ -172,7 +181,7 @@ pub(crate) fn prepare_response_items(
 }
 
 fn prepare_message_content(
-    items: &mut [ContentItem],
+    items: &mut [AnnotatedContent],
     origin: ImageOrigin<'_>,
     resize_notice_mode: ImageResizeNoticeMode,
     metadata: &mut Vec<ImagePreparationMetadata>,
@@ -180,12 +189,12 @@ fn prepare_message_content(
 ) -> Vec<ResizedImage> {
     let image_count = items
         .iter()
-        .filter(|item| matches!(item, ContentItem::InputImage { .. }))
+        .filter(|item| matches!(item.content(), ContentItem::InputImage { .. }))
         .count();
     let mut image_number = 0;
     let mut resized_images = Vec::new();
     for item in items {
-        if let ContentItem::InputImage { image_url, detail } = item {
+        if let ContentItem::InputImage { image_url, detail } = item.content_mut() {
             image_number += 1;
             match prepare_image(image_url, detail, origin, metadata, mode) {
                 Ok(Some(resize)) if resize_notice_mode == ImageResizeNoticeMode::Enabled => {
@@ -201,9 +210,10 @@ fn prepare_message_content(
                 Ok(_) => {}
                 Err(error) => {
                     warn!(%error, "failed to prepare message image");
-                    *item = ContentItem::InputText {
-                        text: error.placeholder().to_string(),
-                    };
+                    *item = AnnotatedContent::input_text(
+                        error.placeholder(),
+                        ContentItemKind("images.preparation_error".to_string()),
+                    );
                 }
             }
         }

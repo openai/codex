@@ -259,7 +259,10 @@ fn user_message(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
-        internal_chat_message_metadata_passthrough: None,
+        internal_chat_message_metadata_passthrough: Some(InternalChatMessageMetadataPassthrough {
+            content_item_kinds: Some(vec![ContentItemKind("unknown".to_string())]),
+            ..Default::default()
+        }),
     }
 }
 
@@ -322,7 +325,10 @@ fn assistant_message(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
-        internal_chat_message_metadata_passthrough: None,
+        internal_chat_message_metadata_passthrough: Some(InternalChatMessageMetadataPassthrough {
+            content_item_kinds: Some(vec![ContentItemKind("unknown".to_string())]),
+            ..Default::default()
+        }),
     }
 }
 
@@ -2504,7 +2510,16 @@ async fn prepares_resumed_history_before_installing_it() {
                 },
             ],
             phase: None,
-            internal_chat_message_metadata_passthrough: None,
+            internal_chat_message_metadata_passthrough: Some(
+                InternalChatMessageMetadataPassthrough {
+                    content_item_kinds: Some(vec![
+                        ContentItemKind("images.preparation_error".to_string()),
+                        ContentItemKind("images.preparation_error".to_string()),
+                        ContentItemKind("unknown".to_string()),
+                    ]),
+                    ..Default::default()
+                },
+            ),
         }]
     );
     assert_eq!(
@@ -11184,30 +11199,14 @@ async fn sample_rollout(
         reconstruction_turn.model_info.truncation_policy.into(),
     );
 
-    let user1 = ResponseItem::Message {
-        id: None,
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
-            text: "first user".to_string(),
-        }],
-        phase: None,
-        internal_chat_message_metadata_passthrough: None,
-    };
+    let user1 = user_message("first user");
     live_history.record_items(
         std::iter::once(&user1),
         reconstruction_turn.model_info.truncation_policy.into(),
     );
     rollout_items.push(RolloutItem::ResponseItem(user1.clone().into()));
 
-    let assistant1 = ResponseItem::Message {
-        id: None,
-        role: "assistant".to_string(),
-        content: vec![ContentItem::OutputText {
-            text: "assistant reply one".to_string(),
-        }],
-        phase: None,
-        internal_chat_message_metadata_passthrough: None,
-    };
+    let assistant1 = assistant_message("assistant reply one");
     live_history.record_items(
         std::iter::once(&assistant1),
         reconstruction_turn.model_info.truncation_policy.into(),
@@ -11230,30 +11229,14 @@ async fn sample_rollout(
         window_id: Some(window_ids.window_id.to_string()),
     }));
 
-    let user2 = ResponseItem::Message {
-        id: None,
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
-            text: "second user".to_string(),
-        }],
-        phase: None,
-        internal_chat_message_metadata_passthrough: None,
-    };
+    let user2 = user_message("second user");
     live_history.record_items(
         std::iter::once(&user2),
         reconstruction_turn.model_info.truncation_policy.into(),
     );
     rollout_items.push(RolloutItem::ResponseItem(user2.clone().into()));
 
-    let assistant2 = ResponseItem::Message {
-        id: None,
-        role: "assistant".to_string(),
-        content: vec![ContentItem::OutputText {
-            text: "assistant reply two".to_string(),
-        }],
-        phase: None,
-        internal_chat_message_metadata_passthrough: None,
-    };
+    let assistant2 = assistant_message("assistant reply two");
     live_history.record_items(
         std::iter::once(&assistant2),
         reconstruction_turn.model_info.truncation_policy.into(),
@@ -11276,30 +11259,14 @@ async fn sample_rollout(
         window_id: Some(window_ids.window_id.to_string()),
     }));
 
-    let user3 = ResponseItem::Message {
-        id: None,
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
-            text: "third user".to_string(),
-        }],
-        phase: None,
-        internal_chat_message_metadata_passthrough: None,
-    };
+    let user3 = user_message("third user");
     live_history.record_items(
         std::iter::once(&user3),
         reconstruction_turn.model_info.truncation_policy.into(),
     );
     rollout_items.push(RolloutItem::ResponseItem(user3.into()));
 
-    let assistant3 = ResponseItem::Message {
-        id: None,
-        role: "assistant".to_string(),
-        content: vec![ContentItem::OutputText {
-            text: "assistant reply three".to_string(),
-        }],
-        phase: None,
-        internal_chat_message_metadata_passthrough: None,
-    };
+    let assistant3 = assistant_message("assistant reply three");
     live_history.record_items(
         std::iter::once(&assistant3),
         reconstruction_turn.model_info.truncation_policy.into(),

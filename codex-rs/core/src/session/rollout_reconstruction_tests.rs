@@ -19,6 +19,7 @@ use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::WorldStateItem;
 use codex_protocol::security_risk::SecurityRiskScore;
+use core_test_support::responses::strip_metadata_from_items;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -171,7 +172,9 @@ async fn record_initial_history_ignores_security_risk_scores() {
         .await;
 
     assert_eq!(
-        raw_history_items(&session.state.lock().await.clone_history()),
+        strip_metadata_from_items(&raw_history_items(
+            &session.state.lock().await.clone_history()
+        )),
         vec![user_item]
     );
 }

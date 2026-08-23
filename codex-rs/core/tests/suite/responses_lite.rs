@@ -266,6 +266,7 @@ async fn responses_lite_prepares_images() -> Result<()> {
     .await;
 
     let request = response_mock.single_request();
+    assert!(request.has_content_kinds(&["user.image", "images.preparation_error"]));
     let user_content = request
         .input()
         .into_iter()

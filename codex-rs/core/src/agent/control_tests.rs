@@ -1511,9 +1511,23 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
     );
     let history = child_thread.session.clone_history().await;
     let history_items = history.raw_items().cloned().collect::<Vec<_>>();
-    let mut expected_final_answer =
-        assistant_message("parent final answer", Some(MessagePhase::FinalAnswer));
-    expected_final_answer.set_turn_id_if_missing(&turn_context.sub_id);
+    let expected_final_answer = parent_thread
+        .session
+        .clone_history()
+        .await
+        .raw_items()
+        .find(|item| {
+            matches!(
+                item,
+                ResponseItem::Message {
+                    role,
+                    phase: Some(MessagePhase::FinalAnswer),
+                    ..
+                } if role == "assistant"
+            )
+        })
+        .cloned()
+        .expect("parent final answer should be recorded");
     let mut expected_developer_message = ResponseItem::Message {
         id: None,
         role: "developer".to_string(),
