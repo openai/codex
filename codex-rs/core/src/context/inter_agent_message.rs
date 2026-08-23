@@ -1,6 +1,7 @@
 use codex_protocol::AgentPath;
 
 use super::ContextualUserFragment;
+use codex_protocol::models::ContentItemKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InterAgentMessageType {
@@ -42,6 +43,10 @@ impl InterAgentMessage {
 }
 
 impl ContextualUserFragment for InterAgentMessage {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("multi_agent.inter_agent_message".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "assistant"
     }

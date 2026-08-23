@@ -1,4 +1,5 @@
 use super::ContextualUserFragment;
+use codex_protocol::models::ContentItemKind;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MultiAgentRoleInstructions {
@@ -23,6 +24,10 @@ impl MultiAgentRoleInstructions {
 }
 
 impl ContextualUserFragment for MultiAgentRoleInstructions {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("multi_agent.role_instructions".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "developer"
     }

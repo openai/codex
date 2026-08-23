@@ -1,4 +1,5 @@
 use super::ContextualUserFragment;
+use codex_protocol::models::ContentItemKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ImageResizeNoticeSource {
@@ -32,6 +33,10 @@ impl ImageResizeNotice {
 }
 
 impl ContextualUserFragment for ImageResizeNotice {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("images.resize_notice".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "developer"
     }

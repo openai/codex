@@ -8,6 +8,7 @@ use serde_json::json;
 use super::ContextualUserFragment;
 use crate::codex_thread::GuardianAuthorizationVersion;
 use crate::guardian::guardian_truncate_text;
+use codex_protocol::models::ContentItemKind;
 
 const MAX_RETAINED_REVIEWS: usize = 8;
 // Including markers, each rendered fragment stays below 1,000 approximate tokens.
@@ -108,6 +109,10 @@ pub struct GuardianReviewEvidenceFragment {
 }
 
 impl ContextualUserFragment for GuardianReviewEvidenceFragment {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("guardian.review_evidence".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "developer"
     }

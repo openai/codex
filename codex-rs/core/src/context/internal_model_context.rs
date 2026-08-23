@@ -1,6 +1,7 @@
 //! Hidden user-context fragment for extension-owned model steering.
 
 use super::ContextualUserFragment;
+use codex_protocol::models::ContentItemKind;
 use std::error::Error;
 use std::fmt;
 
@@ -76,6 +77,10 @@ impl InternalModelContextFragment {
 }
 
 impl ContextualUserFragment for InternalModelContextFragment {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("generic.internal_model_context".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "user"
     }

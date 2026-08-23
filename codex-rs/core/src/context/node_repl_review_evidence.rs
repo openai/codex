@@ -6,6 +6,7 @@ use std::sync::PoisonError;
 
 use codex_features::Feature;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ContentItemKind;
 use codex_protocol::user_input::UserInput;
 use codex_protocol::user_input::UserInput::Image;
 use codex_protocol::user_input::UserInput::Text;
@@ -358,6 +359,10 @@ impl NodeReplReviewEvidenceFragment {
 }
 
 impl ContextualUserFragment for NodeReplReviewEvidenceFragment {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("guardian.node_repl_review_evidence".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "user"
     }

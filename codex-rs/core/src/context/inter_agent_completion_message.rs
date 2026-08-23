@@ -1,6 +1,7 @@
 use codex_protocol::AgentPath;
 
 use super::ContextualUserFragment;
+use codex_protocol::models::ContentItemKind;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct InterAgentCompletionMessage {
@@ -20,6 +21,10 @@ impl InterAgentCompletionMessage {
 }
 
 impl ContextualUserFragment for InterAgentCompletionMessage {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("multi_agent.inter_agent_completion_message".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "assistant"
     }

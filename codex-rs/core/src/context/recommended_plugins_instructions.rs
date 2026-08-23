@@ -1,4 +1,5 @@
 use super::ContextualUserFragment;
+use codex_protocol::models::ContentItemKind;
 use codex_tools::DiscoverableTool;
 
 const RECOMMENDED_PLUGINS_INTRO: &str =
@@ -26,6 +27,10 @@ impl RecommendedPluginsInstructions {
 }
 
 impl ContextualUserFragment for RecommendedPluginsInstructions {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("plugins.recommendations".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "user"
     }

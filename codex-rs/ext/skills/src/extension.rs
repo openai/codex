@@ -9,7 +9,6 @@ use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_exec_server::ResolvedSelectedCapabilityRoot;
 use codex_extension_api::ConfigContributor;
-use codex_extension_api::ContentItemKind;
 use codex_extension_api::ContextContributor;
 use codex_extension_api::ContextualUserFragment;
 use codex_extension_api::ExtensionData;
@@ -238,10 +237,7 @@ where
             rendered
                 .fragment
                 .map(|fragment| {
-                    PromptFragment::developer_capability(
-                        fragment.render(),
-                        ContentItemKind("skills.catalog".to_string()),
-                    )
+                    PromptFragment::developer_capability(fragment.render(), fragment.content_kind())
                 })
                 .into_iter()
                 .collect()

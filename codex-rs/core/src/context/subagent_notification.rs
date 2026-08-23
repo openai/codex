@@ -1,3 +1,4 @@
+use codex_protocol::models::ContentItemKind;
 use codex_protocol::protocol::AgentStatus;
 
 use super::ContextualUserFragment;
@@ -18,6 +19,10 @@ impl SubagentNotification {
 }
 
 impl ContextualUserFragment for SubagentNotification {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("multi_agent.subagent_notification".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "user"
     }

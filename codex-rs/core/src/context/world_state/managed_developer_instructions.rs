@@ -3,6 +3,7 @@ use super::WorldStateHash;
 use super::WorldStateSection;
 use crate::context::ContextualUserFragment;
 use codex_config::Sourced;
+use codex_protocol::models::ContentItemKind;
 use codex_utils_string::approx_bytes_for_tokens;
 use codex_utils_string::approx_tokens_from_byte_count;
 use serde::Deserialize;
@@ -21,6 +22,10 @@ pub(crate) struct ManagedDeveloperInstructions {
 }
 
 impl ContextualUserFragment for ManagedDeveloperInstructions {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("managed_config.developer_instructions".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "developer"
     }

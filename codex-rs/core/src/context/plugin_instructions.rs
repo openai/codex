@@ -1,4 +1,5 @@
 use super::ContextualUserFragment;
+use codex_protocol::models::ContentItemKind;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PluginInstructions {
@@ -12,6 +13,10 @@ impl PluginInstructions {
 }
 
 impl ContextualUserFragment for PluginInstructions {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("plugins.instructions".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "developer"
     }

@@ -1,5 +1,6 @@
 use super::ContextualUserFragment;
 use codex_prompts::END_INSTRUCTIONS;
+use codex_protocol::models::ContentItemKind;
 use codex_protocol::protocol::REALTIME_CONVERSATION_CLOSE_TAG;
 use codex_protocol::protocol::REALTIME_CONVERSATION_OPEN_TAG;
 
@@ -21,6 +22,10 @@ impl RealtimeEndInstructions {
 }
 
 impl ContextualUserFragment for RealtimeEndInstructions {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("realtime_conversation.end_instructions".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "developer"
     }

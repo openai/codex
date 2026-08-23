@@ -1,4 +1,5 @@
 use super::ContextualUserFragment;
+use codex_protocol::models::ContentItemKind;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct TurnAborted {
@@ -17,6 +18,10 @@ impl TurnAborted {
 }
 
 impl ContextualUserFragment for TurnAborted {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("generic.turn_aborted".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "user"
     }

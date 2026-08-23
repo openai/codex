@@ -3,11 +3,16 @@ use codex_protocol::protocol::APPS_INSTRUCTIONS_CLOSE_TAG;
 use codex_protocol::protocol::APPS_INSTRUCTIONS_OPEN_TAG;
 
 use super::ContextualUserFragment;
+use codex_protocol::models::ContentItemKind;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct AppsInstructions;
 
 impl ContextualUserFragment for AppsInstructions {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("apps.instructions".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "developer"
     }

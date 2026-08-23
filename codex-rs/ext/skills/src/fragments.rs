@@ -1,4 +1,5 @@
 use codex_extension_api::ContextualUserFragment;
+use codex_protocol::models::ContentItemKind;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_CLOSE_TAG;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
 
@@ -40,6 +41,10 @@ impl ContextualUserFragment for AvailableSkillsInstructions {
         "developer"
     }
 
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("skills.catalog".to_string())
+    }
+
     fn markers(&self) -> (&'static str, &'static str) {
         Self::type_markers()
     }
@@ -71,6 +76,10 @@ pub(crate) struct SkillResourceAccess {
 impl ContextualUserFragment for SkillInstructions {
     fn role(&self) -> &'static str {
         "user"
+    }
+
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("skills.selected_skill_instructions".to_string())
     }
 
     fn markers(&self) -> (&'static str, &'static str) {

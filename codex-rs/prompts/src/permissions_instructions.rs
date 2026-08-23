@@ -2,6 +2,7 @@ use codex_context_fragments::ContextualUserFragment;
 use codex_execpolicy::Policy;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::format_allow_prefixes;
 use codex_protocol::openai_models::ApprovalMessages;
@@ -175,6 +176,10 @@ impl PermissionsInstructions {
 impl ContextualUserFragment for PermissionsInstructions {
     fn role(&self) -> &'static str {
         "developer"
+    }
+
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("generic.permissions_instructions".to_string())
     }
 
     fn markers(&self) -> (&'static str, &'static str) {

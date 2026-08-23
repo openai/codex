@@ -1,4 +1,5 @@
 use super::ContextualUserFragment;
+use codex_protocol::models::ContentItemKind;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RolloutBudgetContext {
@@ -6,6 +7,10 @@ pub(crate) struct RolloutBudgetContext {
 }
 
 impl ContextualUserFragment for RolloutBudgetContext {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("rollout_budget.remaining_tokens".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "developer"
     }

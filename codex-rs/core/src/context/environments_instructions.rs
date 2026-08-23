@@ -2,10 +2,15 @@ use codex_protocol::protocol::ENVIRONMENTS_INSTRUCTIONS_CLOSE_TAG;
 use codex_protocol::protocol::ENVIRONMENTS_INSTRUCTIONS_OPEN_TAG;
 
 use super::ContextualUserFragment;
+use codex_protocol::models::ContentItemKind;
 
 pub(crate) struct EnvironmentsInstructions;
 
 impl ContextualUserFragment for EnvironmentsInstructions {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("environments.instructions".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "developer"
     }

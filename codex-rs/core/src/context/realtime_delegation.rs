@@ -1,4 +1,5 @@
 use super::ContextualUserFragment;
+use codex_protocol::models::ContentItemKind;
 
 const MAX_REALTIME_DELEGATION_FIELD_BYTES: usize = 4 * 1024;
 const TRUNCATION_MARKER: &str = "…";
@@ -31,6 +32,10 @@ impl<'a> RealtimeDelegation<'a> {
 }
 
 impl ContextualUserFragment for RealtimeDelegation<'_> {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("realtime_conversation.delegation".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "user"
     }

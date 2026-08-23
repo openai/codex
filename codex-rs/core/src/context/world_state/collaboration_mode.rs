@@ -4,6 +4,7 @@ use super::WorldStateSection;
 use crate::context::ContextualUserFragment;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::models::ContentItemKind;
 use codex_protocol::openai_models::CollaborationModeMessages;
 use codex_protocol::protocol::COLLABORATION_MODE_CLOSE_TAG;
 use codex_protocol::protocol::COLLABORATION_MODE_OPEN_TAG;
@@ -125,6 +126,10 @@ struct CollaborationModeInstructions {
 }
 
 impl ContextualUserFragment for CollaborationModeInstructions {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("collaboration_mode.instructions".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "developer"
     }

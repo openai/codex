@@ -1,4 +1,5 @@
 use super::ContextualUserFragment;
+use codex_protocol::models::ContentItemKind;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PersonalitySpecInstructions {
@@ -12,6 +13,10 @@ impl PersonalitySpecInstructions {
 }
 
 impl ContextualUserFragment for PersonalitySpecInstructions {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("personality.spec_instructions".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "developer"
     }

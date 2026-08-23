@@ -4,6 +4,7 @@ use super::WorldStateSection;
 use crate::context::ContextualUserFragment;
 use crate::context::environment_context::push_xml_escaped_text;
 use codex_extension_api::RenderedWorldStateFragment;
+use codex_protocol::models::ContentItemKind;
 use codex_protocol::protocol::TOOLS_CLOSE_TAG;
 use codex_protocol::protocol::TOOLS_OPEN_TAG;
 use std::collections::BTreeMap;
@@ -97,9 +98,14 @@ impl WorldStateSection for ToolsState {
                 )
             }
         };
-        Some(Box::new(WorldStateContextFragment(
-            RenderedWorldStateFragment::new("developer", (TOOLS_OPEN_TAG, TOOLS_CLOSE_TAG), body),
-        )))
+        Some(Box::new(WorldStateContextFragment {
+            fragment: RenderedWorldStateFragment::new(
+                "developer",
+                (TOOLS_OPEN_TAG, TOOLS_CLOSE_TAG),
+                body,
+            ),
+            content_kind: ContentItemKind("tools.deferred_namespaces".to_string()),
+        }))
     }
 }
 

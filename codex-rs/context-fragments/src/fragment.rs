@@ -1,6 +1,32 @@
+use crate::AnnotatedContent;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+
+/// A rendered contextual fragment and the role that owns its annotated content.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RenderedFragment {
+    role: &'static str,
+    content: AnnotatedContent,
+}
+
+impl RenderedFragment {
+    /// Returns the response role associated with this fragment.
+    pub fn role(&self) -> &'static str {
+        self.role
+    }
+
+    /// Returns this fragment's model-visible content and classification.
+    pub fn annotated_content(&self) -> &AnnotatedContent {
+        &self.content
+    }
+
+    /// Separates the role and annotated content at an API boundary.
+    pub fn into_parts(self) -> (&'static str, AnnotatedContent) {
+        (self.role, self.content)
+    }
+}
 
 /// Context payload that is injected as a message fragment.
 ///
@@ -13,6 +39,9 @@ use codex_protocol::models::ResponseItem;
 /// arbitrary text.
 pub trait ContextualUserFragment {
     fn role(&self) -> &'static str;
+
+    /// Returns a stable `<feature>.<name>` classification, using `generic` for shared fragments.
+    fn content_kind(&self) -> ContentItemKind;
 
     /// Whether this fragment must be recorded as its own response item.
     fn requires_separate_message(&self) -> bool {
@@ -43,6 +72,14 @@ pub trait ContextualUserFragment {
         }
 
         format!("{start_marker}{body}{end_marker}")
+    }
+
+    /// Renders the role, model-visible content, and classification together.
+    fn render_fragment(&self) -> RenderedFragment {
+        RenderedFragment {
+            role: self.role(),
+            content: AnnotatedContent::input_text(self.render(), self.content_kind()),
+        }
     }
 
     fn into(self) -> ResponseItem

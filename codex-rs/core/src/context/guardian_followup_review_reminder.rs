@@ -1,9 +1,14 @@
 use super::ContextualUserFragment;
+use codex_protocol::models::ContentItemKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct GuardianFollowupReviewReminder;
 
 impl ContextualUserFragment for GuardianFollowupReviewReminder {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("guardian.followup_review_reminder".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "developer"
     }

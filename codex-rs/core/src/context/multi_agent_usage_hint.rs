@@ -1,4 +1,5 @@
 use super::ContextualUserFragment;
+use codex_protocol::models::ContentItemKind;
 
 /// Configured multi-agent instructions emitted as a standalone developer message.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -15,6 +16,10 @@ impl MultiAgentUsageHint {
 }
 
 impl ContextualUserFragment for MultiAgentUsageHint {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("multi_agent.usage_hint".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "developer"
     }

@@ -1,3 +1,4 @@
+use codex_protocol::models::ContentItemKind;
 use codex_utils_string::truncate_middle_with_token_budget;
 
 use crate::ContextualUserFragment;
@@ -21,6 +22,10 @@ impl AdditionalContextUserFragment {
 impl ContextualUserFragment for AdditionalContextUserFragment {
     fn role(&self) -> &'static str {
         "user"
+    }
+
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("generic.user_additional_context".to_string())
     }
 
     fn markers(&self) -> (&'static str, &'static str) {
@@ -67,6 +72,10 @@ impl AdditionalContextDeveloperFragment {
 impl ContextualUserFragment for AdditionalContextDeveloperFragment {
     fn role(&self) -> &'static str {
         "developer"
+    }
+
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("generic.developer_additional_context".to_string())
     }
 
     fn markers(&self) -> (&'static str, &'static str) {

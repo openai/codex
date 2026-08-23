@@ -1,4 +1,5 @@
 use super::ContextualUserFragment;
+use codex_protocol::models::ContentItemKind;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct HookAdditionalContext {
@@ -12,6 +13,10 @@ impl HookAdditionalContext {
 }
 
 impl ContextualUserFragment for HookAdditionalContext {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("hooks.additional_context".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "developer"
     }
