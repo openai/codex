@@ -33,6 +33,8 @@ use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
 use codex_analytics::CompactionTrigger;
+use codex_context_fragments::set_annotated_content;
+use codex_context_fragments::to_annotated_content;
 use codex_features::Feature;
 use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
@@ -648,28 +650,15 @@ fn message_text_token_count(item: &ResponseItem) -> usize {
 }
 
 fn truncate_message_text_to_token_budget(
-    envelope: ResponseItemEnvelope,
+    mut envelope: ResponseItemEnvelope,
     max_tokens: usize,
 ) -> Option<ResponseItemEnvelope> {
-    let ResponseItemEnvelope {
-        item,
-        metadata: harness_metadata,
-    } = envelope;
-    let ResponseItem::Message {
-        id,
-        role,
-        content,
-        phase,
-        internal_chat_message_metadata_passthrough: passthrough_metadata,
-    } = item
-    else {
-        return None;
-    };
+    let content = to_annotated_content(&mut envelope.item)?;
 
     let mut remaining = max_tokens;
     let mut truncated_content = Vec::with_capacity(content.len());
     for mut content_item in content {
-        match &mut content_item {
+        match content_item.content_mut() {
             ContentItem::InputText { text } | ContentItem::OutputText { text } => {
                 if remaining == 0 {
                     continue;
@@ -696,22 +685,16 @@ fn truncate_message_text_to_token_budget(
         return None;
     }
 
-    Some(ResponseItemEnvelope {
-        item: ResponseItem::Message {
-            id,
-            role,
-            content: truncated_content,
-            phase,
-            internal_chat_message_metadata_passthrough: passthrough_metadata,
-        },
-        metadata: harness_metadata,
-    })
+    set_annotated_content(&mut envelope.item, truncated_content)?;
+    Some(envelope)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ContentItemKind;
+    use codex_protocol::models::InternalChatMessageMetadataPassthrough;
     use codex_protocol::models::MessagePhase;
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc;
@@ -957,7 +940,20 @@ mod tests {
         assert_eq!(
             truncated,
             vec![
-                message("user", "midd…1 tokens truncated…1234", /*phase*/ None),
+                ResponseItem::Message {
+                    id: None,
+                    role: "user".to_string(),
+                    content: vec![ContentItem::InputText {
+                        text: "midd…1 tokens truncated…1234".to_string(),
+                    }],
+                    phase: None,
+                    internal_chat_message_metadata_passthrough: Some(
+                        InternalChatMessageMetadataPassthrough {
+                            content_item_kinds: Some(vec![ContentItemKind("unknown".to_string())]),
+                            ..Default::default()
+                        },
+                    ),
+                },
                 new,
             ]
         );
@@ -979,9 +975,28 @@ mod tests {
                 ContentItem::OutputText {
                     text: "uvwxyz".to_string(),
                 },
+                ContentItem::InputText {
+                    text: "discarded after the text budget is exhausted".to_string(),
+                },
+                ContentItem::InputImage {
+                    image_url: "data:image/png;base64,def".to_string(),
+                    detail: None,
+                },
             ],
             phase: None,
-            internal_chat_message_metadata_passthrough: None,
+            internal_chat_message_metadata_passthrough: Some(
+                InternalChatMessageMetadataPassthrough {
+                    turn_id: Some("turn-1".to_string()),
+                    content_item_kinds: Some(vec![
+                        ContentItemKind("user.text".to_string()),
+                        ContentItemKind("user.image".to_string()),
+                        ContentItemKind("user.text".to_string()),
+                        ContentItemKind("user.text".to_string()),
+                        ContentItemKind("user.image".to_string()),
+                    ]),
+                    ..Default::default()
+                },
+            ),
         };
 
         let truncated = truncate_without_metadata(vec![item], /*max_tokens*/ 3);
@@ -1002,9 +1017,24 @@ mod tests {
                     ContentItem::OutputText {
                         text: "uv…1 tokens truncated…yz".to_string(),
                     },
+                    ContentItem::InputImage {
+                        image_url: "data:image/png;base64,def".to_string(),
+                        detail: None,
+                    },
                 ],
                 phase: None,
-                internal_chat_message_metadata_passthrough: None,
+                internal_chat_message_metadata_passthrough: Some(
+                    InternalChatMessageMetadataPassthrough {
+                        turn_id: Some("turn-1".to_string()),
+                        content_item_kinds: Some(vec![
+                            ContentItemKind("user.text".to_string()),
+                            ContentItemKind("user.image".to_string()),
+                            ContentItemKind("user.text".to_string()),
+                            ContentItemKind("user.image".to_string()),
+                        ]),
+                        ..Default::default()
+                    },
+                ),
             }]
         );
     }
