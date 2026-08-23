@@ -429,8 +429,8 @@ where
             None => self.hide_cursor()?,
             Some(position) => {
                 self.set_cursor_style(cursor_style)?;
-                self.show_cursor()?;
                 self.set_cursor_position(position)?;
+                self.show_cursor()?;
             }
         }
 
@@ -896,11 +896,11 @@ mod tests {
         }
 
         fn hide_cursor(&mut self) -> io::Result<()> {
-            Ok(())
+            queue!(self, crossterm::cursor::Hide)
         }
 
         fn show_cursor(&mut self) -> io::Result<()> {
-            Ok(())
+            queue!(self, crossterm::cursor::Show)
         }
 
         fn get_cursor_position(&mut self) -> io::Result<Position> {
@@ -909,6 +909,8 @@ mod tests {
 
         fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> io::Result<()> {
             self.cursor = position.into();
+            let Position { x, y } = self.cursor;
+            queue!(self, MoveTo(x, y))?;
             Ok(())
         }
 
@@ -1252,6 +1254,43 @@ mod tests {
         assert!(
             actual.contains(&expected),
             "expected terminal output to contain cursor style {expected:?}, got {actual:?}"
+        );
+    }
+
+    #[test]
+    fn terminal_draw_moves_cursor_before_showing_it() {
+        let cursor_position = Position { x: 1, y: 0 };
+        let mut terminal =
+            Terminal::with_options(CaptureBackend::new(/*width*/ 2, /*height*/ 1))
+                .expect("terminal");
+        terminal.set_viewport_area(Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 2, /*height*/ 1,
+        ));
+
+        terminal
+            .try_draw(|frame| {
+                frame.set_cursor_position(cursor_position);
+                io::Result::Ok(())
+            })
+            .expect("draw");
+
+        let mut expected_move = Vec::new();
+        queue!(expected_move, MoveTo(cursor_position.x, cursor_position.y)).expect("queue move");
+        let expected_move = String::from_utf8(expected_move).expect("move utf8");
+        let mut expected_show = Vec::new();
+        queue!(expected_show, crossterm::cursor::Show).expect("queue show");
+        let expected_show = String::from_utf8(expected_show).expect("show utf8");
+        let actual = terminal.backend().output();
+        let move_index = actual.find(&expected_move).expect("cursor move");
+        let show_index = actual.find(&expected_show).expect("cursor show");
+
+        assert!(
+            move_index < show_index,
+            "expected cursor move before show, got {actual:?}"
+        );
+        assert_snapshot!(
+            actual[move_index..].escape_debug().to_string(),
+            @r"\u{1b}[1;2H\u{1b}[?25h"
         );
     }
 
