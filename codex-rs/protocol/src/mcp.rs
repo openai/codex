@@ -30,6 +30,24 @@ pub const OPENAI_STANDARD_FORM_INPUT_EXTENSION_ID: &str = "openai/standard-form-
 /// Extension ID for MCP App UI rendering.
 pub const MCP_APP_UI_EXTENSION_ID: &str = "io.modelcontextprotocol/ui";
 
+/// Returns whether a raw MCP server name identifies a Node REPL-backed server.
+pub fn is_node_repl_backed_server(server: &str) -> bool {
+    matches!(server, "node_repl" | "cua_repl")
+}
+
+/// Recognizes Node REPL-backed tools in model-visible MCP namespaces or legacy
+/// flat tool names. An explicit namespace takes precedence over the tool name.
+pub fn is_node_repl_backed_tool(name: &str, namespace: Option<&str>) -> bool {
+    if let Some(namespace) = namespace {
+        let namespace = namespace.strip_prefix("mcp__").unwrap_or(namespace);
+        return is_node_repl_backed_server(namespace.strip_suffix("__").unwrap_or(namespace));
+    }
+
+    let name = name.strip_prefix("mcp__").unwrap_or(name);
+    name.split_once("__")
+        .is_some_and(|(server, _)| is_node_repl_backed_server(server))
+}
+
 /// Bounded app-resource provenance retained across a compaction checkpoint.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct McpResourceOriginCheckpoint {
@@ -430,6 +448,38 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
+
+    #[test]
+    fn node_repl_backed_tool_recognizes_namespaces_and_legacy_names() {
+        for (name, namespace, expected) in [
+            ("read_file", Some("mcp__node_repl"), true),
+            ("read_file", Some("mcp__node_repl__"), true),
+            ("read_file", Some("node_repl"), true),
+            ("read_file", Some("node_repl__"), true),
+            ("read_file", Some("mcp__cua_repl"), true),
+            ("read_file", Some("mcp__cua_repl__"), true),
+            ("read_file", Some("cua_repl"), true),
+            ("read_file", Some("cua_repl__"), true),
+            ("read_file", Some("node_repl_"), false),
+            ("read_file", Some("cua_repl_"), false),
+            ("read_file", Some("mcp__node_repl____"), false),
+            ("read_file", Some("mcp__cua_repl____"), false),
+            ("mcp__node_repl__js", None, true),
+            ("node_repl__js", None, true),
+            ("mcp__cua_repl__js", None, true),
+            ("cua_repl__js", None, true),
+            ("mcp__node_repl__js", Some("other"), false),
+            ("mcp__cua_repl__js", Some("other"), false),
+            ("mcp__node_repl_other__js", None, false),
+            ("mcp__cua_repl_other__js", None, false),
+        ] {
+            assert_eq!(
+                is_node_repl_backed_tool(name, namespace),
+                expected,
+                "tool {name} in namespace {namespace:?}"
+            );
+        }
+    }
 
     #[test]
     fn client_mcp_extensions_for_mcp_servers_excludes_client_only_extensions() {

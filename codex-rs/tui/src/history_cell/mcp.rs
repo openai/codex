@@ -2,6 +2,8 @@
 
 use super::*;
 
+use codex_protocol::mcp::is_node_repl_backed_server;
+
 #[path = "mcp_result.rs"]
 mod result;
 
@@ -119,7 +121,7 @@ impl McpToolCallCell {
     }
 
     fn result_kind(&self) -> McpResultKind {
-        if self.invocation.server == "node_repl" && self.invocation.tool == "js" {
+        if is_node_repl_backed_server(&self.invocation.server) && self.invocation.tool == "js" {
             McpResultKind::NodeRepl
         } else {
             McpResultKind::Standard
@@ -157,7 +159,7 @@ impl McpToolCallCell {
                 .map(|title| title.split_whitespace().collect::<Vec<_>>().join(" "))
                 .filter(|title| !title.is_empty())
                 .map(|title| title.graphemes(true).take(80).collect::<String>())
-                .unwrap_or_else(|| "node_repl.js".to_string());
+                .unwrap_or_else(|| format!("{}.{}", self.invocation.server, self.invocation.tool));
             Line::from(title.cyan())
         } else {
             line_to_static(&format_mcp_invocation(&self.invocation))

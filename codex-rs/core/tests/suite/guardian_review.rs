@@ -475,10 +475,16 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case("first_node"; "injects_policy_for_first_node_action")]
-#[test_case("shell_then_nodes"; "reuses_shell_reviewer_and_injects_policy_once")]
-#[test_case("ineligible_node"; "omits_policy_for_ineligible_parent_model")]
-async fn guardian_node_repl_policy_follows_production_approval_path(scenario: &str) -> Result<()> {
+#[test_case("first_node", "node_repl"; "injects_policy_for_first_node_action")]
+#[test_case("shell_then_nodes", "node_repl"; "reuses_shell_reviewer_and_injects_policy_once")]
+#[test_case("ineligible_node", "node_repl"; "omits_policy_for_ineligible_parent_model")]
+#[test_case("first_node", "cua_repl"; "injects_policy_for_first_cua_action")]
+#[test_case("shell_then_nodes", "cua_repl"; "reuses_shell_reviewer_and_injects_cua_policy_once")]
+#[test_case("ineligible_node", "cua_repl"; "omits_cua_policy_for_ineligible_parent_model")]
+async fn guardian_node_repl_policy_follows_production_approval_path(
+    scenario: &str,
+    repl_server: &'static str,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
     skip_if_wine_exec!(
@@ -496,24 +502,20 @@ async fn guardian_node_repl_policy_follows_production_approval_path(scenario: &s
         .with_config(move |config| {
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
             config.approvals_reviewer = ApprovalsReviewer::AutoReview;
-            let node_repl: McpServerConfig = serde_json::from_value(json!({
+            let repl: McpServerConfig = serde_json::from_value(json!({
                 "command": mcp_server_bin,
                 "environment_id": remote_aware_environment_id(),
                 "default_tools_approval_mode": "prompt",
                 "env": { "MCP_TEST_ENABLE_NODE_REPL_JS": "1" }
             }))
-            .expect("valid Node REPL MCP test server");
+            .expect("valid REPL MCP test server");
             config
                 .mcp_servers
-                .set(
-                    [(String::from("node_repl"), node_repl)]
-                        .into_iter()
-                        .collect(),
-                )
-                .expect("configure Node REPL MCP test server");
+                .set([(String::from(repl_server), repl)].into_iter().collect())
+                .expect("configure REPL MCP test server");
         });
     let test = builder.build_with_auto_env(&server).await?;
-    wait_for_mcp_server(&test.codex, "node_repl").await?;
+    wait_for_mcp_server(&test.codex, repl_server).await?;
 
     let actions: &[&str] = if scenario == "shell_then_nodes" {
         &["shell", "node-first", "node-second"]
@@ -537,7 +539,7 @@ async fn guardian_node_repl_policy_follows_production_approval_path(scenario: &s
         } else {
             ev_function_call_with_namespace(
                 &call_id,
-                "mcp__node_repl",
+                &format!("mcp__{repl_server}"),
                 "js",
                 r#"{"code":"nodeRepl.empty()"}"#,
             )
@@ -559,7 +561,7 @@ async fn guardian_node_repl_policy_follows_production_approval_path(scenario: &s
     responses.push(sse(vec![ev_completed("parent-complete")]));
     let response_mock = mount_sse_sequence(&server, responses).await;
 
-    test.submit_text_turn("Inspect the browser with Node REPL.")
+    test.submit_text_turn(&format!("Inspect the browser with {repl_server}."))
         .await?;
 
     let requests = response_mock.requests();

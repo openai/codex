@@ -273,9 +273,9 @@ pub enum Feature {
     GuardianApproval,
     /// Reuse encrypted parent compaction when restarting Guardian review sessions.
     GuardianReuseParentCompaction,
-    /// Include completed node_repl Code Mode responses in Guardian reviews.
+    /// Include completed node_repl or cua_repl Code Mode responses in Guardian reviews.
     GuardianEnhancedNodeReplTranscripts,
-    /// Include completed node_repl Code Mode response images in Guardian reviews.
+    /// Include completed node_repl or cua_repl Code Mode response images in Guardian reviews.
     GuardianNodeReplTranscriptImages,
     /// Enable Guardian V2 automatic approval reviews.
     GuardianV2,

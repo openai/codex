@@ -906,7 +906,7 @@ pub(super) async fn guardian_review_session_config(
             .enable(Feature::RetainClientDeveloperMessages)
             .map_err(|error| {
                 anyhow::anyhow!(
-                    "guardian review session could not preserve Node REPL developer policy: {error}"
+                    "guardian review session could not preserve REPL developer policy: {error}"
                 )
             })?;
     }

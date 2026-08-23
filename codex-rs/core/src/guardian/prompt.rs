@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use codex_protocol::mcp::is_node_repl_backed_tool;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::plaintext_agent_message_content;
 use codex_protocol::protocol::GuardianRiskLevel;
@@ -593,16 +594,7 @@ pub(crate) fn collect_guardian_transcript_entries<'a>(
                 call_id, output, ..
             } => output.body.to_text().and_then(|text| {
                 let kind = match tool_names_by_call_id.get(call_id.as_str()) {
-                    Some((name, namespace))
-                        if matches!(
-                            namespace,
-                            Some(
-                                "mcp__node_repl" | "mcp__node_repl__" | "node_repl" | "node_repl__"
-                            )
-                        ) || namespace.is_none()
-                            && (name.starts_with("mcp__node_repl__")
-                                || name.starts_with("node_repl__")) =>
-                    {
+                    Some((name, namespace)) if is_node_repl_backed_tool(name, *namespace) => {
                         GuardianTranscriptEntryKind::NodeReplToolResult(format!(
                             "tool {name} result"
                         ))

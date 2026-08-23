@@ -207,13 +207,11 @@ fn code_mode_preserves_text_fields_on_nontext_and_unknown_blocks() {
     );
     let unknown =
         json!({"type": "future_block", "text": "Script completed\nOutput:\nunknown-side output"});
-    cell.complete(
-        Duration::ZERO,
-        Ok(result(vec![
-            json!({"type": "image", "mimeType": "image/png", "data": PNG, "text": "Script completed\nOutput:\nimage-side output"}),
-            unknown.clone(),
-        ])),
-    );
+    let tool_result = result(vec![
+        json!({"type": "image", "mimeType": "image/png", "data": PNG, "text": "Script completed\nOutput:\nimage-side output"}),
+        unknown.clone(),
+    ]);
+    cell.complete(Duration::ZERO, Ok(tool_result.clone()));
 
     let display = cell
         .display_lines(/*width*/ 200)
@@ -254,4 +252,42 @@ fn code_mode_preserves_text_fields_on_nontext_and_unknown_blocks() {
             )),
         ],
     );
+
+    let mut cua_cell = new_active_mcp_tool_call(
+        "call-cua-repl".to_string(),
+        McpInvocation {
+            server: "cua_repl".to_string(),
+            tool: "js".to_string(),
+            arguments: None,
+        },
+        /*animations_enabled*/ false,
+    );
+    cua_cell.complete(Duration::ZERO, Ok(tool_result));
+    let display = cua_cell
+        .display_lines(/*width*/ 200)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let transcript = cua_cell
+        .transcript_lines(/*width*/ 200)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!(format!("history:\n{display}\n\ntranscript:\n{transcript}"), @r"
+    history:
+    • Called cua_repl.js
+      └ image-side output
+        unknown-side output
+
+    transcript:
+    • Called cua_repl.js()
+      └ Script completed
+        Output:
+        image-side output
+        Script completed
+        Output:
+        unknown-side output
+    ");
 }

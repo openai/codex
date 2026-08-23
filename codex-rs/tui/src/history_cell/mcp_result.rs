@@ -109,10 +109,12 @@ impl McpToolResult {
 }
 
 impl McpContentBlock {
-    /// Returns the untruncated top-level text used by node_repl's compact and transcript views.
+    /// Returns the untruncated top-level text used by node_repl and cua_repl's compact and
+    /// transcript views.
     ///
-    /// Valid text blocks reuse their display storage. Only node_repl retains this extra field on
-    /// malformed or non-text blocks, where it takes precedence over the usual display content.
+    /// Valid text blocks reuse their display storage. Only node_repl and cua_repl retain this extra
+    /// field on malformed or non-text blocks, where it takes precedence over the usual display
+    /// content.
     pub(super) fn text(&self) -> Option<&str> {
         match &self.display {
             McpContentDisplay::Text(text) => Some(text),

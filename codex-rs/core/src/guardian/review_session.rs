@@ -17,6 +17,7 @@ use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::items::TurnItem;
+use codex_protocol::mcp::is_node_repl_backed_server;
 use codex_protocol::models::BaseInstructionsProvenance;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ImageDetail;
@@ -955,7 +956,7 @@ async fn run_review_on_session(
                 && matches!(
                     &params.request,
                     GuardianApprovalRequest::McpToolCall { server, tool_name, .. }
-                        if server == "node_repl" && tool_name == "js"
+                        if is_node_repl_backed_server(server) && tool_name == "js"
                 )
             {
                 let policy = GuardianNodeReplPolicy;
