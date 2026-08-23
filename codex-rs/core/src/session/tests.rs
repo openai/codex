@@ -11312,7 +11312,7 @@ async fn sample_rollout(
 
     (
         rollout_items,
-        live_history.for_prompt(&reconstruction_turn.model_info.input_modalities),
+        strip_metadata_from_items(&raw_history_items(&live_history)),
     )
 }
 

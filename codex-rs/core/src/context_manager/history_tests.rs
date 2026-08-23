@@ -46,6 +46,13 @@ const EXEC_FORMAT_MAX_BYTES: usize = 10_000;
 const EXEC_FORMAT_MAX_TOKENS: usize = 2_500;
 const TEST_WAV_SAMPLE_RATE: u32 = 8_000;
 
+fn unknown_content_metadata() -> InternalChatMessageMetadataPassthrough {
+    InternalChatMessageMetadataPassthrough {
+        content_item_kinds: Some(vec![ContentItemKind("unknown".to_string())]),
+        ..Default::default()
+    }
+}
+
 fn pcm_wav_data_url(sample_count: u32) -> (String, usize) {
     let padding = sample_count % 2;
     let mut bytes = Vec::new();
@@ -78,7 +85,7 @@ fn assistant_msg(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
-        internal_chat_message_metadata_passthrough: None,
+        internal_chat_message_metadata_passthrough: Some(unknown_content_metadata()),
     }
 }
 
@@ -97,7 +104,7 @@ fn inter_agent_assistant_msg(text: &str) -> ResponseItem {
             text: serde_json::to_string(&communication).unwrap(),
         }],
         phase: None,
-        internal_chat_message_metadata_passthrough: None,
+        internal_chat_message_metadata_passthrough: Some(unknown_content_metadata()),
     }
 }
 
@@ -257,7 +264,7 @@ fn user_msg(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
-        internal_chat_message_metadata_passthrough: None,
+        internal_chat_message_metadata_passthrough: Some(unknown_content_metadata()),
     }
 }
 
@@ -269,7 +276,7 @@ fn user_input_text_msg(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
-        internal_chat_message_metadata_passthrough: None,
+        internal_chat_message_metadata_passthrough: Some(unknown_content_metadata()),
     }
 }
 
@@ -281,7 +288,7 @@ fn developer_msg(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
-        internal_chat_message_metadata_passthrough: None,
+        internal_chat_message_metadata_passthrough: Some(unknown_content_metadata()),
     }
 }
 
@@ -296,7 +303,10 @@ fn developer_msg_with_fragments(texts: &[&str]) -> ResponseItem {
             })
             .collect(),
         phase: None,
-        internal_chat_message_metadata_passthrough: None,
+        internal_chat_message_metadata_passthrough: Some(InternalChatMessageMetadataPassthrough {
+            content_item_kinds: Some(vec![ContentItemKind("unknown".to_string()); texts.len()]),
+            ..Default::default()
+        }),
     }
 }
 
@@ -397,41 +407,7 @@ fn filters_non_api_messages() {
     let a = assistant_msg("hello");
     h.record_items([&u, &a], policy);
 
-    let items = raw_items(&h);
-    assert_eq!(
-        items,
-        vec![
-            ResponseItem::Reasoning {
-                id: None,
-                summary: vec![ReasoningItemReasoningSummary::SummaryText {
-                    text: "summary".to_string(),
-                }],
-                content: Some(vec![ReasoningItemContent::ReasoningText {
-                    text: "thinking...".to_string(),
-                }]),
-                encrypted_content: None,
-                internal_chat_message_metadata_passthrough: None,
-            },
-            ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::OutputText {
-                    text: "hi".to_string()
-                }],
-                phase: None,
-                internal_chat_message_metadata_passthrough: None,
-            },
-            ResponseItem::Message {
-                id: None,
-                role: "assistant".to_string(),
-                content: vec![ContentItem::OutputText {
-                    text: "hello".to_string()
-                }],
-                phase: None,
-                internal_chat_message_metadata_passthrough: None,
-            }
-        ]
-    );
+    assert_eq!(raw_items(&h), vec![reasoning, u, a]);
 }
 
 #[test]
@@ -680,7 +656,17 @@ fn for_prompt_strips_media_when_model_does_not_support_it() {
                 },
             ],
             phase: None,
-            internal_chat_message_metadata_passthrough: None,
+            internal_chat_message_metadata_passthrough: Some(
+                InternalChatMessageMetadataPassthrough {
+                    content_item_kinds: Some(vec![
+                        ContentItemKind("user.text".to_string()),
+                        ContentItemKind("user.image".to_string()),
+                        ContentItemKind("user.audio".to_string()),
+                        ContentItemKind("user.text".to_string()),
+                    ]),
+                    ..Default::default()
+                },
+            ),
         },
         ResponseItem::FunctionCall {
             id: None,
@@ -764,7 +750,17 @@ fn for_prompt_strips_media_when_model_does_not_support_it() {
                 },
             ],
             phase: None,
-            internal_chat_message_metadata_passthrough: None,
+            internal_chat_message_metadata_passthrough: Some(
+                InternalChatMessageMetadataPassthrough {
+                    content_item_kinds: Some(vec![
+                        ContentItemKind("user.text".to_string()),
+                        ContentItemKind("images.unsupported".to_string()),
+                        ContentItemKind("audio.unsupported".to_string()),
+                        ContentItemKind("user.text".to_string()),
+                    ]),
+                    ..Default::default()
+                },
+            ),
         },
         ResponseItem::FunctionCall {
             id: None,
@@ -867,7 +863,7 @@ fn for_prompt_strips_media_when_model_does_not_support_it() {
             audio_url: "data:audio/wav;base64,YXVkaW8=".to_string(),
         }],
         phase: None,
-        internal_chat_message_metadata_passthrough: None,
+        internal_chat_message_metadata_passthrough: Some(unknown_content_metadata()),
     };
     let with_audio = create_history_with_items(vec![audio_message.clone()]);
     assert_eq!(
@@ -914,7 +910,7 @@ fn for_prompt_preserves_image_generation_calls_when_images_are_supported() {
                     text: "hi".to_string(),
                 }],
                 phase: None,
-                internal_chat_message_metadata_passthrough: None,
+                internal_chat_message_metadata_passthrough: Some(unknown_content_metadata()),
             }
         ]
     );
@@ -951,7 +947,7 @@ fn for_prompt_clears_image_generation_result_when_images_are_unsupported() {
                     text: "generate a lobster".to_string(),
                 }],
                 phase: None,
-                internal_chat_message_metadata_passthrough: None,
+                internal_chat_message_metadata_passthrough: Some(unknown_content_metadata()),
             },
             ResponseItem::ImageGenerationCall {
                 id: Some(ResponseItemId::with_suffix("ig", "123")),
