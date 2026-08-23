@@ -1328,6 +1328,20 @@ async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_co
 
     let child_request = wait_for_request_with_model(&child_request_log, expected_model).await?;
     assert!(child_request.body_contains_text(TURN_0_FORK_PROMPT));
+    let misaligned_child_messages = child_request
+        .inputs_of_type("message")
+        .into_iter()
+        .filter(|message| {
+            message["internal_chat_message_metadata_passthrough"]["content_item_kinds"]
+                .as_array()
+                .is_some_and(|kinds| {
+                    message["content"]
+                        .as_array()
+                        .is_none_or(|content| content.len() != kinds.len())
+                })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(misaligned_child_messages, Vec::<Value>::new());
     let child_developer_messages = child_request.message_input_texts("developer");
     if !matches!(
         selection,

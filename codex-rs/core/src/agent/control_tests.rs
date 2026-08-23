@@ -35,7 +35,9 @@ use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
@@ -1404,7 +1406,17 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
                         },
                     ],
                     phase: None,
-                    internal_chat_message_metadata_passthrough: None,
+                    internal_chat_message_metadata_passthrough: Some(
+                        InternalChatMessageMetadataPassthrough {
+                            content_item_kinds: Some(vec![
+                                ContentItemKind("generic.developer_instructions".to_string()),
+                                ContentItemKind("multi_agent.mode_instructions".to_string()),
+                                ContentItemKind("generic.developer_policy".to_string()),
+                                ContentItemKind("managed_config.developer_instructions".to_string()),
+                            ]),
+                            ..Default::default()
+                        },
+                    ),
                 },
                 assistant_message("parent commentary", Some(MessagePhase::Commentary)),
                 assistant_message("parent final answer", Some(MessagePhase::FinalAnswer)),
@@ -1499,7 +1511,16 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
             },
         ],
         phase: None,
-        internal_chat_message_metadata_passthrough: None,
+        internal_chat_message_metadata_passthrough: Some(
+            InternalChatMessageMetadataPassthrough {
+                content_item_kinds: Some(vec![
+                    ContentItemKind("generic.developer_instructions".to_string()),
+                    ContentItemKind("generic.developer_policy".to_string()),
+                    ContentItemKind("managed_config.developer_instructions".to_string()),
+                ]),
+                ..Default::default()
+            },
+        ),
     };
     expected_developer_message.set_turn_id_if_missing(&turn_context.sub_id);
     expected_developer_message.set_create_time_if_missing(
