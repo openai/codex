@@ -11,6 +11,7 @@ use codex_protocol::AgentPath;
 use codex_protocol::ResponseItemId;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -1252,6 +1253,67 @@ fn drop_last_n_user_turns_trims_context_updates_above_rolled_back_turn() {
             .expect("serialize retained reference context item"),
         serde_json::to_value(Some(reference_context_item))
             .expect("serialize expected reference context item")
+    );
+}
+
+#[test]
+fn drop_last_n_user_turns_preserves_annotations_for_surviving_developer_fragments() {
+    let turn_id = "rolled-back-turn";
+    let model_switch = ModelSwitchInstructions::new("switched model instructions").render();
+    let developer_message = ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
+        content: vec![
+            ContentItem::InputText {
+                text: "persistent developer instructions".to_string(),
+            },
+            ContentItem::InputText { text: model_switch },
+            ContentItem::InputText {
+                text: "persistent environment instructions".to_string(),
+            },
+        ],
+        phase: None,
+        internal_chat_message_metadata_passthrough: Some(InternalChatMessageMetadataPassthrough {
+            turn_id: Some(turn_id.to_string()),
+            content_item_kinds: Some(vec![
+                ContentItemKind("generic.developer_instructions".to_string()),
+                ContentItemKind("model_switch.instructions".to_string()),
+                ContentItemKind("environments.instructions".to_string()),
+            ]),
+            ..Default::default()
+        }),
+    };
+    let mut user_message = user_input_text_msg("turn to roll back");
+    user_message.set_turn_id_if_missing(turn_id);
+    let mut history = create_history_with_items(vec![developer_message, user_message]);
+
+    history.drop_last_n_user_turns(/*num_turns*/ 1);
+
+    assert_eq!(
+        raw_items(&history),
+        vec![ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![
+                ContentItem::InputText {
+                    text: "persistent developer instructions".to_string(),
+                },
+                ContentItem::InputText {
+                    text: "persistent environment instructions".to_string(),
+                },
+            ],
+            phase: None,
+            internal_chat_message_metadata_passthrough: Some(
+                InternalChatMessageMetadataPassthrough {
+                    turn_id: Some(turn_id.to_string()),
+                    content_item_kinds: Some(vec![
+                        ContentItemKind("generic.developer_instructions".to_string()),
+                        ContentItemKind("environments.instructions".to_string()),
+                    ]),
+                    ..Default::default()
+                },
+            ),
+        }],
     );
 }
 

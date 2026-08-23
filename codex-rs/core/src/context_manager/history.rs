@@ -9,6 +9,8 @@ use crate::event_mapping::is_contextual_user_message_content;
 use crate::session::turn_context::TurnContext;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_context_fragments::set_annotated_content;
+use codex_context_fragments::to_annotated_content;
 use codex_extension_api::ConversationHistorySnapshot;
 use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
@@ -345,17 +347,19 @@ impl ContextManager {
         {
             retained_items.retain_mut(|item| {
                 if item.turn_id() == Some(first_turn_id)
-                    && let ResponseItem::Message { role, content, .. } = &mut item.item
-                    && role == "developer"
+                    && matches!(&item.item, ResponseItem::Message { role, .. } if role == "developer")
                 {
+                    let Some(mut content) = to_annotated_content(&mut item.item) else {
+                        return false;
+                    };
                     content.retain(|content| {
                         !matches!(
-                            content,
+                            content.content(),
                             ContentItem::InputText { text }
                                 if ModelSwitchInstructions::matches_text(text)
                         )
                     });
-                    !content.is_empty()
+                    !content.is_empty() && set_annotated_content(&mut item.item, content).is_some()
                 } else {
                     true
                 }

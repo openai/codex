@@ -345,6 +345,20 @@ async fn rollback_first_turn_model_change_removes_its_instructions(
 
     let request = &response_mock.requests()[1];
     assert_eq!(request.body_json()["model"], followup_model);
+    let misaligned_messages = request
+        .inputs_of_type("message")
+        .into_iter()
+        .filter(|message| {
+            message["internal_chat_message_metadata_passthrough"]["content_item_kinds"]
+                .as_array()
+                .is_some_and(|kinds| {
+                    message["content"]
+                        .as_array()
+                        .is_none_or(|content| content.len() != kinds.len())
+                })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(misaligned_messages, Vec::<serde_json::Value>::new());
     let model_switch_count = request
         .message_input_texts("developer")
         .iter()
