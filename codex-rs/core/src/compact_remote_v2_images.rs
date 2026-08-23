@@ -1,9 +1,7 @@
 use crate::context_manager::estimate_image_bytes;
-use codex_context_fragments::AnnotatedContent;
-use codex_context_fragments::set_annotated_content;
-use codex_context_fragments::to_annotated_content;
 use codex_history::ResponseItemEnvelope;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::models::is_image_close_tag_text;
 use codex_protocol::models::is_image_open_tag_text;
 use codex_protocol::models::is_local_image_open_tag_text;
@@ -32,17 +30,20 @@ pub(super) fn truncate_message_to_token_budget(
     mut envelope: ResponseItemEnvelope,
     max_tokens: usize,
 ) -> Option<ResponseItemEnvelope> {
-    let mut content = to_annotated_content(&mut envelope.item)?;
+    let ResponseItem::Message { content, .. } = &mut envelope.item else {
+        return None;
+    };
+    let mut content = std::mem::take(content);
     let mut remaining = max_tokens;
     let mut retained = Vec::with_capacity(content.len());
     while !content.is_empty() {
         let last = content.len() - 1;
-        let image_index = match content[last].content() {
+        let image_index = match &content[last] {
             ContentItem::InputImage { .. } => Some(last),
             ContentItem::InputText { text }
                 if is_image_close_tag_text(text)
                     && last > 0
-                    && matches!(content[last - 1].content(), ContentItem::InputImage { .. }) =>
+                    && matches!(&content[last - 1], ContentItem::InputImage { .. }) =>
             {
                 Some(last - 1)
             }
@@ -51,14 +52,13 @@ pub(super) fn truncate_message_to_token_budget(
         if let Some(image_index) = image_index {
             let has_open_tag = image_index > 0
                 && matches!(
-                    content[image_index - 1].content(),
+                    &content[image_index - 1],
                     ContentItem::InputText { text }
                         if is_local_image_open_tag_text(text) || is_image_open_tag_text(text)
                 );
             let start = image_index - usize::from(has_open_tag);
             let token_count = content[start..]
                 .iter()
-                .map(AnnotatedContent::content)
                 .map(content_item_token_count)
                 .sum::<usize>();
             let fits = token_count <= remaining;
@@ -71,7 +71,7 @@ pub(super) fn truncate_message_to_token_budget(
             continue;
         }
         let mut item = content.pop()?;
-        match item.content_mut() {
+        match &mut item {
             ContentItem::InputText { text } | ContentItem::OutputText { text } => {
                 if remaining == 0 {
                     continue;
@@ -95,6 +95,9 @@ pub(super) fn truncate_message_to_token_budget(
         return None;
     }
     retained.reverse();
-    set_annotated_content(&mut envelope.item, retained)?;
+    let ResponseItem::Message { content, .. } = &mut envelope.item else {
+        unreachable!("message content was already extracted above");
+    };
+    *content = retained;
     Some(envelope)
 }
