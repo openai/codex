@@ -1,7 +1,5 @@
 use crate::context::ContextualUserFragment;
-use codex_context_fragments::AnnotatedContent;
 use codex_context_fragments::RenderedFragment;
-use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::ResponseItem;
 
@@ -9,20 +7,6 @@ use codex_protocol::models::ResponseItem;
 enum MessageGroup {
     Standalone,
     Mergeable,
-}
-
-pub(crate) fn build_developer_update_item(text_sections: Vec<String>) -> Option<ResponseItem> {
-    build_rendered_message(
-        text_sections
-            .into_iter()
-            .map(|text| {
-                RenderedFragment::new(
-                    "developer",
-                    AnnotatedContent::input_text(text, ContentItemKind("unknown".to_string())),
-                )
-            })
-            .collect(),
-    )
 }
 
 pub(crate) fn build_rendered_message(fragments: Vec<RenderedFragment>) -> Option<ResponseItem> {
