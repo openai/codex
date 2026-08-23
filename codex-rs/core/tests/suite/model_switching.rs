@@ -411,6 +411,7 @@ async fn model_change_appends_model_instructions_developer_message() -> Result<(
     assert_eq!(requests.len(), 2, "expected two model requests");
 
     let second_request = requests.last().expect("expected second request");
+    assert!(second_request.has_content_kinds(&["model_switch.instructions"]));
     let developer_texts = second_request.message_input_texts("developer");
     let model_switch_text = developer_texts
         .iter()

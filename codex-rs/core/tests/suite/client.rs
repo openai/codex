@@ -384,8 +384,9 @@ async fn sends_audio_urls_to_responses() {
         .unwrap();
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
-    let user_message = response_mock
-        .single_request()
+    let request = response_mock.single_request();
+    assert!(request.has_content_kinds(&["user.audio"]));
+    let user_message = request
         .input()
         .into_iter()
         .rev()
@@ -428,8 +429,9 @@ async fn sends_local_audio_to_responses() -> anyhow::Result<()> {
         .await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
-    let user_message = response_mock
-        .single_request()
+    let request = response_mock.single_request();
+    assert!(request.has_content_kinds(&["user.text", "user.audio", "user.text"]));
+    let user_message = request
         .input()
         .into_iter()
         .rev()

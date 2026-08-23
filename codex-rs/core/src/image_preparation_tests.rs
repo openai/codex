@@ -2,8 +2,10 @@ use std::io::Cursor;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_utils_image::data_url_from_bytes;
 use image::DynamicImage;
 use image::GenericImageView;
@@ -267,7 +269,14 @@ fn resize_notices_preserve_original_image_positions_and_skip_failed_images() {
                 text: expected_user_notice.to_string(),
             }],
             phase: None,
-            internal_chat_message_metadata_passthrough: None,
+            internal_chat_message_metadata_passthrough: Some(
+                InternalChatMessageMetadataPassthrough {
+                    content_item_kinds: Some(vec![ContentItemKind(
+                        "images.resize_notice".to_string()
+                    )]),
+                    ..Default::default()
+                },
+            ),
         }
     );
 
@@ -305,7 +314,14 @@ fn resize_notices_preserve_original_image_positions_and_skip_failed_images() {
                 .to_string(),
             }],
             phase: None,
-            internal_chat_message_metadata_passthrough: None,
+            internal_chat_message_metadata_passthrough: Some(
+                InternalChatMessageMetadataPassthrough {
+                    content_item_kinds: Some(vec![ContentItemKind(
+                        "images.resize_notice".to_string()
+                    )]),
+                    ..Default::default()
+                },
+            ),
         }
     );
 }

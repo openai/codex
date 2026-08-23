@@ -35,6 +35,7 @@ use crate::state::RunningTask;
 use crate::state::TaskKind;
 use codex_analytics::TurnProfileFact;
 use codex_analytics::TurnTokenUsageFact;
+use codex_context_fragments::RenderedFragment;
 use codex_otel::SessionTelemetry;
 use codex_otel::TURN_E2E_DURATION_METRIC;
 use codex_otel::TURN_MEMORY_METRIC;
@@ -55,7 +56,6 @@ use codex_thread_store::PersistContext;
 use codex_features::Feature;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
-use codex_protocol::models::ContentItem;
 pub(crate) use compact::CompactTask;
 pub(crate) use regular::RegularTask;
 pub(crate) use review::ReviewTask;
@@ -111,15 +111,8 @@ pub(crate) fn interrupted_turn_history_marker(
             let marker = crate::context::TurnAborted::new(
                 crate::context::TurnAborted::INTERRUPTED_DEVELOPER_GUIDANCE,
             );
-            Some(ResponseItem::Message {
-                id: None,
-                role: "developer".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: marker.render(),
-                }],
-                phase: None,
-                internal_chat_message_metadata_passthrough: None,
-            })
+            let (_, content) = marker.render_fragment().into_parts();
+            Some(RenderedFragment::new("developer", content).into())
         }
     }
 }

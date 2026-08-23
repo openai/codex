@@ -25,7 +25,7 @@ impl ContextualUserFragment for AdditionalContextUserFragment {
     }
 
     fn content_kind(&self) -> ContentItemKind {
-        ContentItemKind("generic.user_additional_context".to_string())
+        ContentItemKind(format!("additional_content.{}", self.key))
     }
 
     fn markers(&self) -> (&'static str, &'static str) {
@@ -75,7 +75,7 @@ impl ContextualUserFragment for AdditionalContextDeveloperFragment {
     }
 
     fn content_kind(&self) -> ContentItemKind {
-        ContentItemKind("generic.developer_additional_context".to_string())
+        ContentItemKind(format!("additional_content.{}", self.key))
     }
 
     fn markers(&self) -> (&'static str, &'static str) {

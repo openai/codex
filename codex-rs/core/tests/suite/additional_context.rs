@@ -81,6 +81,9 @@ async fn additional_context_is_model_visible_but_not_a_user_message_item() -> Re
     .await;
 
     let request = request.single_request();
+    assert!(request.has_content_kinds(&["additional_content.automation_info"]));
+    assert!(request.has_content_kinds(&["additional_content.browser_info"]));
+    assert!(request.has_content_kinds(&["user.text"]));
     insta::assert_snapshot!(
         "additional_context_simple_input",
         context_snapshot::format_labeled_requests_snapshot(

@@ -264,7 +264,13 @@ async fn token_budget_guidance_precedes_standalone_context_window() -> Result<()
 
     test.submit_turn("inspect context guidance").await?;
 
-    let developer_texts = response.single_request().message_input_texts("developer");
+    let request = response.single_request();
+    assert!(request.has_content_kinds(&[
+        "token_budget.context_window_guidance",
+        "generic.permissions_instructions",
+    ]));
+    assert!(request.has_content_kinds(&["token_budget.context_window"]));
+    let developer_texts = request.message_input_texts("developer");
     let context_window_index = developer_texts
         .iter()
         .position(|text| text.starts_with(CONTEXT_WINDOW_OPEN_TAG))

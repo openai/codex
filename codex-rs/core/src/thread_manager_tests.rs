@@ -22,6 +22,8 @@ use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::mcp::MCP_APP_UI_EXTENSION_ID;
 use codex_protocol::mcp::OPENAI_FORM_EXTENSION_ID;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ContentItemKind;
+use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
@@ -2155,19 +2157,27 @@ fn interrupted_snapshot_is_not_mid_turn() {
 
 #[test]
 fn multi_agent_v2_interrupted_marker_uses_developer_input_message() {
-    let marker = developer_interrupted_marker();
-
-    let ResponseItem::Message { role, content, .. } = marker else {
-        panic!("expected interrupted marker to be a message");
-    };
-    assert_eq!(role, "developer");
-    assert!(
-        matches!(
-            content.as_slice(),
-            [ContentItem::InputText { text }]
-                if text.contains(crate::context::TurnAborted::INTERRUPTED_DEVELOPER_GUIDANCE)
-        ),
-        "expected interrupted marker to use developer InputText content"
+    assert_eq!(
+        developer_interrupted_marker(),
+        ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: format!(
+                    "<turn_aborted>\n{}\n</turn_aborted>",
+                    crate::context::TurnAborted::INTERRUPTED_DEVELOPER_GUIDANCE
+                ),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: Some(
+                InternalChatMessageMetadataPassthrough {
+                    content_item_kinds: Some(vec![ContentItemKind(
+                        "generic.turn_aborted".to_string()
+                    )]),
+                    ..Default::default()
+                }
+            ),
+        }
     );
 }
 

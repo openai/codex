@@ -1513,15 +1513,9 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         expected_developer_message,
         expected_final_answer,
         expected_standalone_output,
-        ResponseItem::Message {
-            id: None,
-            role: "developer".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "Child subagent guidance.".to_string(),
-            }],
-            phase: None,
-            internal_chat_message_metadata_passthrough: None,
-        },
+        ContextualUserFragment::into(MultiAgentRoleInstructions::unmarked(
+            "Child subagent guidance.",
+        )),
     ];
     assert_eq!(
         strip_response_item_ids(&history_items),

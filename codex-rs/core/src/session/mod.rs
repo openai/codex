@@ -106,7 +106,9 @@ use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::BaseInstructionsProvenance;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
+use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::openai_models::ModelInfo;
@@ -3034,10 +3036,38 @@ impl Session {
     }
 
     pub(crate) fn response_item_from_user_input(&self, input: Vec<UserInput>) -> ResponseItem {
-        ResponseItem::from(ResponseInputItem::from_user_input(
+        let mut item = ResponseItem::from(ResponseInputItem::from_user_input(
             input,
             LocalImagePreparation::Defer,
-        ))
+        ));
+        if let ResponseItem::Message {
+            content,
+            internal_chat_message_metadata_passthrough,
+            ..
+        } = &mut item
+        {
+            let content_item_kinds = content
+                .iter()
+                .map(|content| {
+                    ContentItemKind(
+                        match content {
+                            ContentItem::InputText { .. } | ContentItem::OutputText { .. } => {
+                                "user.text"
+                            }
+                            ContentItem::InputImage { .. } => "user.image",
+                            ContentItem::InputAudio { .. } => "user.audio",
+                        }
+                        .to_string(),
+                    )
+                })
+                .collect();
+            *internal_chat_message_metadata_passthrough =
+                Some(InternalChatMessageMetadataPassthrough {
+                    content_item_kinds: Some(content_item_kinds),
+                    ..Default::default()
+                });
+        }
+        item
     }
 
     #[tracing::instrument(level = "trace", skip_all, fields(item_count = items.len()))]

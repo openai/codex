@@ -296,6 +296,21 @@ impl ResponsesRequest {
             .clone()
     }
 
+    /// Returns whether an input item's content annotations exactly match the given sequence.
+    pub fn has_content_kinds(&self, kinds: &[&str]) -> bool {
+        self.input().into_iter().any(|item| {
+            item["internal_chat_message_metadata_passthrough"]["content_item_kinds"]
+                .as_array()
+                .is_some_and(|actual| {
+                    actual.len() == kinds.len()
+                        && actual
+                            .iter()
+                            .zip(kinds)
+                            .all(|(actual, expected)| actual.as_str() == Some(*expected))
+                })
+        })
+    }
+
     pub fn inputs_of_type(&self, ty: &str) -> Vec<Value> {
         self.input()
             .iter()
