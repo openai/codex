@@ -109,6 +109,7 @@ async fn responses_lite_uses_input_items_for_instructions_and_tools() -> Result<
         })
         .with_config(|config| {
             config.base_instructions = Some("test instructions".to_string());
+            config.code_mode.disable_in_process_fallback = true;
         });
     let test = builder.build(&server).await?;
 
@@ -132,6 +133,9 @@ async fn responses_lite_uses_input_items_for_instructions_and_tools() -> Result<
                 "type": "input_text",
                 "text": "test instructions",
             }],
+            "internal_chat_message_metadata_passthrough": {
+                "content_item_kinds": ["model.base_instructions"],
+            },
         })
     );
 
@@ -185,6 +189,7 @@ async fn responses_lite_includes_tool_namespaces_info_when_enabled() -> Result<(
             model_info.supports_search_tool = false;
         })
         .with_config(|config| {
+            config.code_mode.disable_in_process_fallback = true;
             config.tool_registry.turn_metadata_includes_tool_info = true;
         });
     let test = builder.build_with_auto_env(&server).await?;
@@ -456,6 +461,7 @@ async fn responses_lite_does_not_expose_standalone_web_search_for_bedrock_provid
     );
     let body = request.body_json();
     assert!(body.get("tools").is_none());
+    assert!(!request.has_content_kinds(&["model.base_instructions"]));
     let tools = additional_tools(&body)?;
     assert!(!has_namespaced_tool(tools, "web", "run"));
     assert!(!has_hosted_tool(tools, "web_search"));
