@@ -507,7 +507,18 @@ async fn memories_startup_phase1_uses_live_thread_service_tier_and_detached_meta
         .expect("detached memory request should include workspace metadata");
     let metadata: serde_json::Value =
         serde_json::from_str(&metadata_header).expect("turn metadata json");
+    let client_metadata: serde_json::Value = serde_json::from_str(
+        request.body_json()["client_metadata"]["x-codex-turn-metadata"]
+            .as_str()
+            .expect("detached memory request should include client metadata"),
+    )
+    .expect("client metadata json");
+    assert_eq!(client_metadata, metadata);
     assert_eq!(metadata["request_kind"].as_str(), Some("memory"));
+    assert_eq!(
+        metadata["thread_source"].as_str(),
+        Some("memory_consolidation")
+    );
     assert_eq!(metadata["sandbox_mode"].as_str(), Some("workspace-write"));
     assert!(metadata.get("session_id").is_none());
     assert!(metadata.get("thread_id").is_none());

@@ -87,6 +87,7 @@ pub async fn detached_memory_responses_metadata(
 ) -> CodexResponsesMetadata {
     CodexResponsesMetadata {
         request_kind: Some(CodexResponsesRequestKind::Memory),
+        thread_source: Some(ThreadSource::MemoryConsolidation),
         subagent_header: subagent_header_value(session_source),
         sandbox: sandbox.map(ToString::to_string),
         sandbox_mode: Some(

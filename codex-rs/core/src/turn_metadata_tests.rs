@@ -153,6 +153,10 @@ async fn detached_memory_responses_metadata_omits_turn_identity() {
     assert!(!header.contains("東京"));
     let parsed: Value = serde_json::from_str(&header).expect("valid json");
     assert_eq!(parsed["request_kind"].as_str(), Some("memory"));
+    assert_eq!(
+        parsed["thread_source"].as_str(),
+        Some("memory_consolidation")
+    );
     assert_eq!(parsed[SANDBOX_MODE_KEY].as_str(), Some("read-only"));
     assert!(parsed.get("session_id").is_none());
     assert!(parsed.get("thread_id").is_none());
@@ -205,6 +209,7 @@ async fn detached_memory_responses_metadata_omits_empty_workspace_metadata() {
         serde_json::json!({
             "request_kind": "memory",
             "sandbox_mode": "read-only",
+            "thread_source": "memory_consolidation",
         })
     );
 }
