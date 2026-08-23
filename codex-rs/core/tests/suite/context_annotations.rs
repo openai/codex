@@ -201,7 +201,7 @@ async fn first_request_item_types_roles_and_content_annotations() -> Result<()> 
         .join("\n");
     insta::assert_snapshot!(items, @r#"
     message developer ["guardian.approved_action"]
-    message developer ["generic.developer_instructions","token_budget.context_window_guidance","generic.permissions_instructions","environments.instructions"]
+    message developer ["generic.developer_instructions","token_budget.context_window_guidance","permissions.instructions","environments.instructions"]
     message developer ["token_budget.context_window"]
     message developer ["multi_agent.usage_hint"]
     message developer ["multi_agent.mode_instructions"]

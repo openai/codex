@@ -267,7 +267,7 @@ async fn token_budget_guidance_precedes_standalone_context_window() -> Result<()
     let request = response.single_request();
     assert!(request.has_content_kinds(&[
         "token_budget.context_window_guidance",
-        "generic.permissions_instructions",
+        "permissions.instructions",
     ]));
     assert!(request.has_content_kinds(&["token_budget.context_window"]));
     let developer_texts = request.message_input_texts("developer");

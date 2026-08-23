@@ -179,7 +179,7 @@ impl ContextualUserFragment for PermissionsInstructions {
     }
 
     fn content_kind(&self) -> ContentItemKind {
-        ContentItemKind("generic.permissions_instructions".to_string())
+        ContentItemKind("permissions.instructions".to_string())
     }
 
     fn markers(&self) -> (&'static str, &'static str) {
