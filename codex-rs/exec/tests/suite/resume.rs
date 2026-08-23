@@ -199,6 +199,7 @@ async fn exec_resume_last_appends_to_existing_file() -> anyhow::Result<()> {
             .expect("rollout should contain session metadata"),
     )?;
     assert_eq!(meta["payload"]["history_mode"], "paginated");
+    assert_eq!(meta["payload"]["thread_source"], "user");
 
     // 2) Second run: resume the most recent file with a new marker.
     let marker2 = format!("resume-last-2-{}", Uuid::new_v4());
@@ -883,6 +884,8 @@ async fn exec_fork_creates_distinct_threads_with_and_without_a_prompt() -> anyho
 
     test.cmd_with_server(&server)
         .arg("--skip-git-repo-check")
+        .arg("--thread-source")
+        .arg("source_feature")
         .arg(format!("echo {source_marker}"))
         .assert()
         .success();
@@ -892,6 +895,13 @@ async fn exec_fork_creates_distinct_threads_with_and_without_a_prompt() -> anyho
         .expect("source thread should have a rollout");
     let source_id = extract_conversation_id(&source_path);
     let original_source = std::fs::read_to_string(&source_path)?;
+    let source_meta: Value = serde_json::from_str(
+        original_source
+            .lines()
+            .next()
+            .expect("source rollout should contain session metadata"),
+    )?;
+    assert_eq!(source_meta["payload"]["thread_source"], "source_feature");
 
     for (args, expected_error) in [
         (
@@ -986,6 +996,8 @@ async fn exec_fork_creates_distinct_threads_with_and_without_a_prompt() -> anyho
         .arg(test.home_path())
         .arg("fork")
         .arg(&source_name)
+        .arg("--thread-source")
+        .arg("fork_feature")
         .arg("--json")
         .arg("-")
         .write_stdin(format!("echo {fork_marker}"))
@@ -1018,6 +1030,7 @@ async fn exec_fork_creates_distinct_threads_with_and_without_a_prompt() -> anyho
             .expect("fork rollout should contain session metadata"),
     )?;
     assert_eq!(fork_meta["payload"]["forked_from_id"], source_id);
+    assert_eq!(fork_meta["payload"]["thread_source"], "fork_feature");
     assert_eq!(fork_meta["payload"]["history_base"]["thread_id"], source_id);
     assert!(!fork_contents.contains(&source_marker));
     assert!(fork_contents.contains(&fork_marker));

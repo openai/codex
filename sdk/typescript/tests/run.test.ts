@@ -202,6 +202,7 @@ describe("Codex", () => {
     try {
       const thread = client.startThread({
         model: "gpt-test-1",
+        threadSource: "automated_review",
         sandboxMode: "workspace-write",
       });
       await thread.run("apply options");
@@ -216,6 +217,11 @@ describe("Codex", () => {
 
       expectPair(commandArgs, ["--sandbox", "workspace-write"]);
       expectPair(commandArgs, ["--model", "gpt-test-1"]);
+      expectPair(commandArgs, ["--thread-source", "automated_review"]);
+      const metadata = JSON.parse(payload!.headers["x-codex-turn-metadata"] as string) as {
+        thread_source?: string;
+      };
+      expect(metadata.thread_source).toBe("automated_review");
     } finally {
       cleanup();
       restore();
