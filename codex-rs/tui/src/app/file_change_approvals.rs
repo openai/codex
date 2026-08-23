@@ -1,4 +1,8 @@
 //! Recover file-change details for live and replayed approval requests.
+//!
+//! The approval RPC identifies an item but does not repeat its diff. Recover the
+//! matching item before constructing the approval so its full-screen pager owns
+//! the same changes that were already displayed in the transcript.
 
 use super::*;
 

@@ -1,0 +1,39 @@
+---
+source: tui/src/app/tests/patch_approval_tests.rs
+expression: "format!(\"{last:?}\")"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 48, height: 11 },
+    content: [
+        "/ P A T C H / / / / / / / / / / / / / / / / / / ",
+        "  1 -old                                        ",
+        "  1 +new                                        ",
+        "                                                ",
+        "z-deleted.txt (+0 -1)                           ",
+        "                                                ",
+        "  1 -removed                                    ",
+        "───────────────────────────────────────── 100% ─",
+        " ↑/↓ to scroll   pgup/pgdn to page   home/end to",
+        " q to quit                                      ",
+        "                                                ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 0, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 4, y: 1, fg: Red, bg: Reset, underline: Reset, modifier: NONE,
+        x: 8, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 4, y: 2, fg: Green, bg: Reset, underline: Reset, modifier: NONE,
+        x: 8, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 15, y: 4, fg: Green, bg: Reset, underline: Reset, modifier: NONE,
+        x: 17, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 18, y: 4, fg: Red, bg: Reset, underline: Reset, modifier: NONE,
+        x: 20, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 6, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 4, y: 6, fg: Red, bg: Reset, underline: Reset, modifier: NONE,
+        x: 12, y: 6, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 7, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 10, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}
