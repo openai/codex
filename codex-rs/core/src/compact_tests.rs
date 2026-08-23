@@ -2,6 +2,7 @@ use super::*;
 use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
 use codex_protocol::ResponseItemId;
+use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use pretty_assertions::assert_eq;
@@ -295,6 +296,11 @@ fn build_compacted_history_preserves_user_message_passthrough_metadata() {
             internal_chat_message_metadata_passthrough: Some(
                 InternalChatMessageMetadataPassthrough {
                     turn_id: Some("turn-1".to_string()),
+                    content_item_kinds: Some(vec![
+                        ContentItemKind("user.image".to_string()),
+                        ContentItemKind("user.text".to_string()),
+                        ContentItemKind("user.audio".to_string()),
+                    ]),
                     ..Default::default()
                 },
             ),
@@ -303,10 +309,32 @@ fn build_compacted_history_preserves_user_message_passthrough_metadata() {
         "summary text",
     );
 
-    assert_eq!(history[0].turn_id(), Some("turn-1"));
-    assert_eq!(history[1].turn_id(), None);
-    assert_eq!(history[0].metadata, Some(CodexHarnessMetadata::default()));
-    assert_eq!(history[1].metadata, None);
+    assert_eq!(
+        history,
+        vec![
+            ResponseItemEnvelope {
+                item: ResponseItem::Message {
+                    id: None,
+                    role: "user".to_string(),
+                    content: vec![ContentItem::InputText {
+                        text: "first user message".to_string(),
+                    }],
+                    phase: None,
+                    internal_chat_message_metadata_passthrough: Some(
+                        InternalChatMessageMetadataPassthrough {
+                            turn_id: Some("turn-1".to_string()),
+                            content_item_kinds: Some(vec![ContentItemKind(
+                                "user.text".to_string()
+                            )]),
+                            ..Default::default()
+                        },
+                    ),
+                },
+                metadata: Some(CodexHarnessMetadata::default()),
+            },
+            ResponseItemEnvelope::new(user_message("summary text")),
+        ]
+    );
 }
 
 #[tokio::test]

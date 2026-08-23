@@ -28,6 +28,8 @@ use codex_analytics::CompactionStatus;
 use codex_analytics::CompactionStrategy;
 use codex_analytics::CompactionTrigger;
 use codex_analytics::now_unix_seconds;
+use codex_context_fragments::AnnotatedContent;
+use codex_context_fragments::set_annotated_content;
 use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
 use codex_protocol::error::CodexErr;
@@ -37,6 +39,7 @@ use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
@@ -683,18 +686,33 @@ fn build_compacted_history_with_limit(
     }
 
     for message in &selected_messages {
+        let mut item = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: message.message.clone(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: message
+                .internal_chat_message_metadata_passthrough
+                .clone(),
+        };
+        if message
+            .internal_chat_message_metadata_passthrough
+            .as_ref()
+            .and_then(|metadata| metadata.content_item_kinds.as_ref())
+            .is_some()
+        {
+            let _ = set_annotated_content(
+                &mut item,
+                vec![AnnotatedContent::input_text(
+                    &message.message,
+                    ContentItemKind("user.text".to_string()),
+                )],
+            );
+        }
         history.push(ResponseItemEnvelope {
-            item: ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: message.message.clone(),
-                }],
-                phase: None,
-                internal_chat_message_metadata_passthrough: message
-                    .internal_chat_message_metadata_passthrough
-                    .clone(),
-            },
+            item,
             metadata: message.harness_metadata.clone(),
         });
     }
