@@ -10,6 +10,7 @@ use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
 use serde::ser::Serializer;
+use serde_with::serde_as;
 use ts_rs::TS;
 
 use crate::local_media::audio_mime_for_path;
@@ -32,6 +33,7 @@ use crate::mcp::CallToolResult;
 use codex_utils_path_uri::PathUri;
 
 mod executed_tool_calls;
+mod item_metadata;
 
 pub use crate::local_media::MAX_PROMPT_AUDIO_INPUT_BYTES;
 pub use crate::local_media::snapshot_local_user_input;
@@ -42,6 +44,7 @@ pub use executed_tool_calls::ExecutedToolCallTruncation;
 pub use executed_tool_calls::bound_executed_tool_calls_for_prompt;
 pub use executed_tool_calls::bound_executed_tool_calls_for_prompt_prioritizing_recent;
 pub use executed_tool_calls::executed_tool_call_metadata_bytes;
+pub use item_metadata::ContentItemKind;
 
 /// Controls the per-command sandbox override requested by a shell-like tool call.
 #[derive(
@@ -904,6 +907,7 @@ pub enum MessagePhase {
 ///
 /// Responses API strongly types this payload. Do not modify it without first getting API
 /// approval and making the corresponding Responses API change.
+#[serde_as]
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct InternalChatMessageMetadataPassthrough {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -914,6 +918,12 @@ pub struct InternalChatMessageMetadataPassthrough {
     #[schemars(skip)]
     #[ts(skip)]
     pub create_time: Option<serde_json::Number>,
+    /// Harness-owned classifications aligned with the item's content entries.
+    #[serde_as(deserialize_as = "serde_with::DefaultOnError")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    #[ts(skip)]
+    pub content_item_kinds: Option<Vec<ContentItemKind>>,
     /// Warehouse-only Responses metadata, not part of the public app-server protocol.
     #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
