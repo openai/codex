@@ -1644,8 +1644,10 @@ impl ThreadRequestProcessor {
         }
 
         archive_thread_ids[1..].reverse();
-        for &thread_id_to_archive in &archive_thread_ids {
-            self.prepare_thread_for_archive(thread_id_to_archive).await;
+        // Collaboration may resume an archived descendant without unarchiving it.
+        self.prepare_thread_for_archive(thread_id).await;
+        for &descendant_thread_id in subtree_thread_ids.iter().skip(1).rev() {
+            self.prepare_thread_for_archive(descendant_thread_id).await;
         }
 
         let archived_thread_ids = self
