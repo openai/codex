@@ -1,0 +1,12 @@
+[project]
+name = "codex-package-smoke-tests"
+version = "0.0.0"
+requires-python = ">=3.12"
+dependencies = [
+  "pydantic>=2.12,<3",
+  "pytest>=8.0",
+  "zstandard>=0.23",
+]
+
+[tool.uv]
+package = false

@@ -64,11 +64,15 @@ jobs:
 
       - uses: ./.github/actions/setup-ci
 
-      - name: Set up Python 3.12 (Linux ARM64)
-        if: ${{ matrix.target == 'aarch64-unknown-linux-musl' }}
+      - name: Set up Python 3.12
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.3"
 
       - name: Install Linux build dependencies
         if: ${{ runner.os == 'Linux' }}
@@ -251,6 +255,41 @@ jobs:
             --package-dir "${RUNNER_TEMP}/codex-app-server-package-${target}" \
             --archive-output "${archive_dir}/codex-app-server-package-${target}.tar.gz" \
             --archive-output "${archive_dir}/codex-app-server-package-${target}.tar.zst"
+
+      - name: Smoke-test assembled packages
+        shell: bash
+        working-directory: public/scripts/codex_package/smoke_tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}/sdk/python/src${{ runner.os == 'Windows' && ';' || ':' }}${{ github.workspace }}/sdk/python/tests
+        run: |
+          set -euo pipefail
+          target="${{ matrix.target }}"
+          archive_dir="${GITHUB_WORKSPACE}/dist/${target}"
+          mkdir -p "${GITHUB_WORKSPACE}/codex-rs/target"
+          pytest_args=(
+            -v
+            --basetemp "${GITHUB_WORKSPACE}/codex-rs/target/package-smoke-tmp"
+            --package-target "$target"
+            --symbols-archive "${GITHUB_WORKSPACE}/symbols-dist/${target}/codex-symbols-${target}.tar.gz"
+          )
+
+          # CI must exercise packaged tools; local smoke runs may use host tools.
+          if command -v rg || { [[ "$RUNNER_OS" == "Linux" ]] && command -v bwrap; }; then
+            echo "Host rg (or bwrap on Linux) is on PATH; CI must use packaged tools." >&2
+            exit 1
+          fi
+
+          uv run --frozen pytest "${pytest_args[@]}" \
+            --compression gzip \
+            --cli-archive "${archive_dir}/codex-package-${target}.tar.gz" \
+            --app-server-archive "${archive_dir}/codex-app-server-package-${target}.tar.gz" \
+            test_codex_package.py
+
+          uv run --frozen pytest "${pytest_args[@]}" \
+            --compression zstd \
+            --cli-archive "${archive_dir}/codex-package-${target}.tar.zst" \
+            --app-server-archive "${archive_dir}/codex-app-server-package-${target}.tar.zst" \
+            test_codex_package.py
 
       - name: Upload Codex symbols archive
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
