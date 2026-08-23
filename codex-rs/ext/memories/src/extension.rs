@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use codex_core::config::Config;
 use codex_extension_api::ConfigContributor;
+use codex_extension_api::ContentItemKind;
 use codex_extension_api::ContextContributor;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionFuture;
@@ -63,7 +64,12 @@ impl ContextContributor for MemoriesExtension {
 
             build_memory_tool_developer_instructions(&config.codex_home)
                 .await
-                .map(PromptFragment::developer_policy)
+                .map(|instructions| {
+                    PromptFragment::developer_policy(
+                        instructions,
+                        ContentItemKind("memories.instructions".to_string()),
+                    )
+                })
                 .into_iter()
                 .collect()
         })

@@ -5,6 +5,7 @@ use std::sync::Mutex;
 
 use codex_extension_api::ApprovalReviewContributor;
 use codex_extension_api::ConfigContributor;
+use codex_extension_api::ContentItemKind;
 use codex_extension_api::ContextContributor;
 use codex_extension_api::ContextualUserFragment;
 use codex_extension_api::ExtensionData;
@@ -16,7 +17,6 @@ use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ExtensionWarning;
 use codex_extension_api::McpServerContributionContext;
 use codex_extension_api::PromptFragment;
-use codex_extension_api::PromptSlot;
 use codex_extension_api::SkillInvocationContributor;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::TokenUsageContributor;
@@ -194,6 +194,7 @@ impl ContextContributor for NamedContextContributor {
     ) -> ExtensionFuture<'a, Vec<PromptFragment>> {
         Box::pin(std::future::ready(vec![PromptFragment::developer_policy(
             self.0,
+            ContentItemKind("test.thread_context".to_string()),
         )]))
     }
 }
@@ -205,10 +206,12 @@ impl ContextContributor for NamedTurnContextContributor {
         &'a self,
         _input: TurnContextContributionInput<'a>,
     ) -> ExtensionFuture<'a, Vec<PromptFragment>> {
-        Box::pin(std::future::ready(vec![PromptFragment::new(
-            PromptSlot::ContextualUser,
-            self.0,
-        )]))
+        Box::pin(std::future::ready(vec![
+            PromptFragment::developer_capability(
+                self.0,
+                ContentItemKind("test.turn_context".to_string()),
+            ),
+        ]))
     }
 }
 
@@ -289,10 +292,22 @@ async fn contributors_preserve_registration_order() {
     assert_eq!(
         fragments,
         vec![
-            PromptFragment::developer_policy("first"),
-            PromptFragment::developer_policy("second"),
-            PromptFragment::new(PromptSlot::ContextualUser, "turn-first"),
-            PromptFragment::new(PromptSlot::ContextualUser, "turn-second"),
+            PromptFragment::developer_policy(
+                "first",
+                ContentItemKind("test.thread_context".to_string()),
+            ),
+            PromptFragment::developer_policy(
+                "second",
+                ContentItemKind("test.thread_context".to_string()),
+            ),
+            PromptFragment::developer_capability(
+                "turn-first",
+                ContentItemKind("test.turn_context".to_string()),
+            ),
+            PromptFragment::developer_capability(
+                "turn-second",
+                ContentItemKind("test.turn_context".to_string()),
+            ),
         ]
     );
     assert_eq!(

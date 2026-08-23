@@ -62,8 +62,6 @@ use codex_execpolicy::prefix_rule_migration;
 use codex_extension_api::ConversationHistorySnapshot;
 use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::LoadedUserInstructions;
-use codex_extension_api::PromptFragment;
-use codex_extension_api::PromptSlot;
 use codex_extension_api::TurnContextContributionInput;
 use codex_features::FEATURES;
 use codex_features::Feature;
@@ -997,25 +995,6 @@ async fn thread_title_from_thread_store(
 
     let title = thread.name.as_deref()?.trim();
     (!title.is_empty() && thread.preview.trim() != title).then(|| title.to_string())
-}
-
-fn push_prompt_fragment(
-    fragment: PromptFragment,
-    developer_sections: &mut Vec<String>,
-    contextual_user_sections: &mut Vec<String>,
-    separate_developer_sections: &mut Vec<String>,
-) {
-    match fragment.slot() {
-        PromptSlot::DeveloperPolicy | PromptSlot::DeveloperCapabilities => {
-            developer_sections.push(fragment.text().to_string());
-        }
-        PromptSlot::ContextualUser => {
-            contextual_user_sections.push(fragment.text().to_string());
-        }
-        PromptSlot::SeparateDeveloper => {
-            separate_developer_sections.push(fragment.text().to_string());
-        }
-    }
 }
 
 impl Session {
@@ -3486,8 +3465,6 @@ impl Session {
     ) -> Vec<ResponseItem> {
         let turn_context = step_context.turn.as_ref();
         let mut developer_sections = Vec::new();
-        let mut contextual_user_sections = Vec::new();
-        let mut separate_developer_sections = Vec::new();
         let context_contributors = self.services.extensions.context_contributors().to_vec();
 
         for contributor in &context_contributors {
@@ -3502,34 +3479,13 @@ impl Session {
                 })
                 .await
             {
-                push_prompt_fragment(
-                    fragment,
-                    &mut developer_sections,
-                    &mut contextual_user_sections,
-                    &mut separate_developer_sections,
-                );
+                developer_sections.push(fragment.text().to_string());
             }
         }
 
-        let mut items = Vec::with_capacity(3);
-        if let Some(developer_message) =
-            crate::context_manager::updates::build_developer_update_item(developer_sections)
-        {
-            items.push(developer_message);
-        }
-        for section in separate_developer_sections {
-            if let Some(developer_message) =
-                crate::context_manager::updates::build_developer_update_item(vec![section])
-            {
-                items.push(developer_message);
-            }
-        }
-        if let Some(contextual_user_message) =
-            crate::context_manager::updates::build_contextual_user_message(contextual_user_sections)
-        {
-            items.push(contextual_user_message);
-        }
-        items
+        crate::context_manager::updates::build_developer_update_item(developer_sections)
+            .into_iter()
+            .collect()
     }
 
     pub(crate) async fn build_initial_context_with_world_state(
@@ -3598,12 +3554,7 @@ impl Session {
                 )
                 .await
             {
-                push_prompt_fragment(
-                    fragment,
-                    &mut developer_sections,
-                    &mut contextual_user_sections,
-                    &mut separate_developer_sections,
-                );
+                developer_sections.push(fragment.text().to_string());
             }
         }
         for contributor in &context_contributors {
@@ -3618,12 +3569,7 @@ impl Session {
                 })
                 .await
             {
-                push_prompt_fragment(
-                    fragment,
-                    &mut developer_sections,
-                    &mut contextual_user_sections,
-                    &mut separate_developer_sections,
-                );
+                developer_sections.push(fragment.text().to_string());
             }
         }
         // This is full-context metadata. Steady-state context diffs should not re-emit it.

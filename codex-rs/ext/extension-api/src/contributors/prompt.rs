@@ -1,41 +1,38 @@
 // All this file should be replaced by the existing fragment implementation ofc
 
+use codex_protocol::models::ContentItemKind;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PromptSlot {
     DeveloperPolicy,
     DeveloperCapabilities,
-    ContextualUser,
-    SeparateDeveloper,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PromptFragment {
     slot: PromptSlot,
     text: String,
+    content_kind: ContentItemKind,
 }
 
 impl PromptFragment {
     /// Creates a prompt fragment for the given slot.
-    pub fn new(slot: PromptSlot, text: impl Into<String>) -> Self {
+    pub fn new(slot: PromptSlot, text: impl Into<String>, content_kind: ContentItemKind) -> Self {
         Self {
             slot,
             text: text.into(),
+            content_kind,
         }
     }
 
     /// Creates a developer-policy prompt fragment.
-    pub fn developer_policy(text: impl Into<String>) -> Self {
-        Self::new(PromptSlot::DeveloperPolicy, text)
+    pub fn developer_policy(text: impl Into<String>, content_kind: ContentItemKind) -> Self {
+        Self::new(PromptSlot::DeveloperPolicy, text, content_kind)
     }
 
     /// Creates a developer-capabilities prompt fragment.
-    pub fn developer_capability(text: impl Into<String>) -> Self {
-        Self::new(PromptSlot::DeveloperCapabilities, text)
-    }
-
-    /// Creates a separate top-level developer prompt fragment.
-    pub fn separate_developer(text: impl Into<String>) -> Self {
-        Self::new(PromptSlot::SeparateDeveloper, text)
+    pub fn developer_capability(text: impl Into<String>, content_kind: ContentItemKind) -> Self {
+        Self::new(PromptSlot::DeveloperCapabilities, text, content_kind)
     }
 
     /// Returns the target prompt slot.
@@ -46,5 +43,10 @@ impl PromptFragment {
     /// Returns the model-visible text.
     pub fn text(&self) -> &str {
         &self.text
+    }
+
+    /// Returns the producer-owned classification of the model-visible text.
+    pub fn content_kind(&self) -> &ContentItemKind {
+        &self.content_kind
     }
 }
