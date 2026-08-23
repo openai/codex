@@ -36,7 +36,6 @@ impl ChatWidget {
                 || self.review.is_review_mode
                 || self.mcp_startup_status.is_some(),
         );
-        self.refresh_plan_mode_nudge();
         self.refresh_status_surfaces();
     }
 

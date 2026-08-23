@@ -60,25 +60,6 @@ fn effort_transition_does_not_queue_a_missing_outgoing_status_line() {
 }
 
 #[test]
-fn effort_transition_does_not_queue_while_plan_mode_nudge_is_visible() {
-    let (mut composer, _rx) = new_test_composer();
-    composer.set_status_line_enabled(/*enabled*/ true);
-    composer.set_status_line(Some(Line::from("gpt-5.4 high · main")));
-    composer.set_plan_mode_nudge_visible(/*visible*/ true);
-    composer.set_active_reasoning_effort(
-        Some(&ReasoningEffort::High),
-        /*animations_enabled*/ true,
-    );
-
-    assert!(composer.set_active_reasoning_effort(
-        Some(&ReasoningEffort::Ultra),
-        /*animations_enabled*/ true,
-    ));
-    assert!(composer.effort_ignition.is_some());
-    assert!(composer.effort_status_line_transition.is_none());
-}
-
-#[test]
 fn effort_composer_restored_baseline_and_reduced_motion_do_not_start() {
     let (mut composer, _rx) = new_test_composer();
     composer.set_status_line_enabled(/*enabled*/ true);

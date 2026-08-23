@@ -78,7 +78,6 @@ impl ChatWidget {
         if had_modal_or_popup && self.bottom_pane.no_modal_or_popup_active() {
             self.maybe_send_next_queued_input();
         }
-        self.refresh_plan_mode_nudge();
     }
 
     pub(super) fn defer_input_until_settings_applied(&mut self) {
