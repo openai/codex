@@ -78,7 +78,7 @@ impl InternalModelContextFragment {
 
 impl ContextualUserFragment for InternalModelContextFragment {
     fn content_kind(&self) -> ContentItemKind {
-        ContentItemKind("generic.internal_model_context".to_string())
+        ContentItemKind(format!("{}.internal_context", self.source.as_str()))
     }
 
     fn role(&self) -> &'static str {
