@@ -4954,6 +4954,7 @@ async fn emit_subagent_session_started_includes_fork_lineage_and_originator() {
     let child_thread_id = ThreadId::new();
     let mut session_configuration = make_session_configuration_for_tests().await;
     session_configuration.forked_from_thread_id = Some(forked_from_thread_id);
+    session_configuration.thread_source = Some(ThreadSource::GuardianReview);
 
     emit_subagent_session_started(
         &analytics_events_client,
@@ -4965,13 +4966,7 @@ async fn emit_subagent_session_started_includes_fork_lineage_and_originator() {
         child_thread_id,
         Some(parent_thread_id),
         session_configuration.thread_config_snapshot(Vec::new()),
-        SubAgentSource::ThreadSpawn {
-            parent_thread_id,
-            depth: 1,
-            agent_path: None,
-            agent_nickname: None,
-            agent_role: None,
-        },
+        SubAgentSource::Other(crate::guardian::GUARDIAN_REVIEWER_NAME.to_string()),
     );
 
     let event = timeout(Duration::from_secs(1), async {
@@ -4995,6 +4990,7 @@ async fn emit_subagent_session_started_includes_fork_lineage_and_originator() {
     .await
     .expect("subagent initialization analytics should be emitted");
 
+    assert_eq!(event["event_params"]["thread_source"], "guardian_review");
     assert_eq!(
         event["event_params"]["parent_thread_id"],
         parent_thread_id.to_string()

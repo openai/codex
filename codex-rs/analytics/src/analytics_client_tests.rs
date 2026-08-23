@@ -3232,6 +3232,7 @@ fn subagent_thread_started_review_serializes_expected_shape() {
             client_version: "1.0.0".to_string(),
             model: "gpt-5".to_string(),
             ephemeral: false,
+            thread_source: Some(ThreadSource::Subagent),
             subagent_source: SubAgentSource::Review,
             created_at: 123,
         },
@@ -3284,6 +3285,7 @@ fn subagent_thread_started_thread_spawn_serializes_thread_lineage() {
             client_version: "1.0.0".to_string(),
             model: "gpt-5".to_string(),
             ephemeral: true,
+            thread_source: Some(ThreadSource::Subagent),
             subagent_source: SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth: 1,
@@ -3323,6 +3325,7 @@ fn subagent_thread_started_memory_consolidation_serializes_expected_shape() {
             client_version: "1.0.0".to_string(),
             model: "gpt-5".to_string(),
             ephemeral: false,
+            thread_source: Some(ThreadSource::Subagent),
             subagent_source: SubAgentSource::MemoryConsolidation,
             created_at: 125,
         },
@@ -3350,12 +3353,14 @@ fn subagent_thread_started_other_serializes_expected_shape() {
             client_version: "1.0.0".to_string(),
             model: "gpt-5".to_string(),
             ephemeral: false,
+            thread_source: Some(ThreadSource::GuardianReview),
             subagent_source: SubAgentSource::Other("guardian".to_string()),
             created_at: 126,
         },
     ));
 
     let payload = serde_json::to_value(&event).expect("serialize other subagent event");
+    assert_eq!(payload["event_params"]["thread_source"], "guardian_review");
     assert_eq!(payload["event_params"]["subagent_source"], "guardian");
     assert_eq!(payload["event_params"]["parent_thread_id"], json!(null));
 }
@@ -3376,6 +3381,7 @@ fn subagent_thread_started_other_serializes_explicit_parent_thread_id() {
             client_version: "1.0.0".to_string(),
             model: "gpt-5".to_string(),
             ephemeral: false,
+            thread_source: Some(ThreadSource::GuardianReview),
             subagent_source: SubAgentSource::Other("guardian".to_string()),
             created_at: 126,
         },
@@ -3407,6 +3413,7 @@ async fn subagent_thread_started_publishes_without_initialize() {
                     client_version: "1.0.0".to_string(),
                     model: "gpt-5".to_string(),
                     ephemeral: false,
+                    thread_source: Some(ThreadSource::Subagent),
                     subagent_source: SubAgentSource::Review,
                     created_at: 127,
                 },
@@ -3427,7 +3434,7 @@ async fn subagent_thread_started_publishes_without_initialize() {
 }
 
 #[tokio::test]
-async fn subagent_events_keep_thread_originator_with_explicit_turn_connection() {
+async fn guardian_events_keep_thread_source_and_originator_with_explicit_turn_connection() {
     let mut reducer = AnalyticsReducer::default();
     let mut events = Vec::new();
     let parent_thread_id =
@@ -3483,13 +3490,8 @@ async fn subagent_events_keep_thread_originator_with_explicit_turn_connection() 
                     client_version: "1.0.0".to_string(),
                     model: "gpt-5".to_string(),
                     ephemeral: false,
-                    subagent_source: SubAgentSource::ThreadSpawn {
-                        parent_thread_id,
-                        depth: 1,
-                        agent_path: None,
-                        agent_nickname: None,
-                        agent_role: None,
-                    },
+                    thread_source: Some(ThreadSource::GuardianReview),
+                    subagent_source: SubAgentSource::Other("guardian".to_string()),
                     created_at: 130,
                 },
             )),
@@ -3546,8 +3548,8 @@ async fn subagent_events_keep_thread_originator_with_explicit_turn_connection() 
     };
     let params = &event.event_params;
     assert_eq!(params.session_id, "session-root");
-    assert_eq!(params.thread_source, Some(ThreadSource::Subagent));
-    assert_eq!(params.subagent_source.as_deref(), Some("thread_spawn"));
+    assert_eq!(params.thread_source, Some(ThreadSource::GuardianReview));
+    assert_eq!(params.subagent_source.as_deref(), Some("guardian"));
     assert_eq!(
         params.parent_thread_id.as_deref(),
         Some("44444444-4444-4444-4444-444444444444")
@@ -3625,6 +3627,7 @@ async fn subagent_tool_items_inherit_parent_connection_metadata() {
                     client_version: "1.0.0".to_string(),
                     model: "gpt-5".to_string(),
                     ephemeral: false,
+                    thread_source: Some(ThreadSource::Subagent),
                     subagent_source: SubAgentSource::Review,
                     created_at: 128,
                 },

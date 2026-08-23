@@ -28,6 +28,7 @@ use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use serde::Serialize;
@@ -440,6 +441,7 @@ pub struct SubAgentThreadStartedInput {
     pub client_version: String,
     pub model: String,
     pub ephemeral: bool,
+    pub thread_source: Option<ThreadSource>,
     pub subagent_source: SubAgentSource,
     pub created_at: u64,
 }

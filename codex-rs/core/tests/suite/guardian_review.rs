@@ -42,6 +42,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::ThreadSettingsOverrides;
+use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::user_input::UserInput;
 use core_test_support::fs_wait;
@@ -398,6 +399,14 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review(
         Some("guardian")
     );
     assert_eq!(guardian_review["model"].as_str(), Some(expected_model));
+    for request in [guardian_prewarm, &guardian_review] {
+        let metadata: serde_json::Value = serde_json::from_str(
+            request["client_metadata"]["x-codex-turn-metadata"]
+                .as_str()
+                .expect("guardian turn metadata"),
+        )?;
+        assert_eq!(metadata["thread_source"], "guardian_review");
+    }
     assert_eq!(
         guardian_review["client_metadata"]["thread_id"].as_str(),
         Some(guardian_thread_id)
@@ -442,10 +451,18 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review(
         .await
         .expect("guardian trunk rollout path");
     test.codex.shutdown_and_wait().await?;
-    let guardian_context_windows = fs::read_to_string(guardian_rollout_path)?
+    let guardian_rollout = fs::read_to_string(guardian_rollout_path)?
         .lines()
         .map(serde_json::from_str::<RolloutLine>)
-        .collect::<serde_json::Result<Vec<_>>>()?
+        .collect::<serde_json::Result<Vec<_>>>()?;
+    assert_eq!(
+        guardian_rollout.iter().find_map(|line| match &line.item {
+            RolloutItem::SessionMeta(meta) => meta.meta.thread_source.as_ref(),
+            _ => None,
+        }),
+        Some(&ThreadSource::GuardianReview)
+    );
+    let guardian_context_windows = guardian_rollout
         .into_iter()
         .filter_map(|line| match line.item {
             RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => Some(event.model_context_window),

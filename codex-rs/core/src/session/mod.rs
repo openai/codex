@@ -1323,7 +1323,7 @@ impl Session {
                     ThreadHistoryMode::Paginated
                 ) && matches!(
                     session_configuration.thread_source.as_ref(),
-                    Some(ThreadSource::Subagent)
+                    Some(ThreadSource::Subagent | ThreadSource::GuardianReview)
                 ),
             )
         };
@@ -4230,6 +4230,7 @@ pub(crate) fn emit_subagent_session_started(
         client_version,
         model: thread_config.model,
         ephemeral: thread_config.ephemeral,
+        thread_source: thread_config.thread_source,
         subagent_source,
         created_at,
     });

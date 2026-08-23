@@ -1131,7 +1131,7 @@ impl AnalyticsReducer {
             .metadata
             .get_or_insert_with(|| ThreadMetadataState {
                 session_id: input.session_id.clone(),
-                thread_source: Some(ThreadSource::Subagent),
+                thread_source: input.thread_source.clone(),
                 initialization_mode: ThreadInitializationMode::New,
                 subagent_source: Some(subagent_source_name(&input.subagent_source)),
                 parent_thread_id,
