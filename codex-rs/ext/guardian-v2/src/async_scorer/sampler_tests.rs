@@ -35,6 +35,7 @@ use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 
 use super::CLASSIFICATION_TOKEN_USAGE_METRIC;
+use super::INITIAL_WEBSOCKET_CONNECTIONS;
 use super::LunaSampler;
 use super::LunaSamplerConfig;
 use super::LunaSamplingRequest;
@@ -88,7 +89,20 @@ fn assert_connection_metadata(server: &responses::WebSocketTestServer) -> Result
     Ok(thread_id)
 }
 
+#[derive(Clone, Copy)]
+enum ProxyPrewarmLimit {
+    AllConnections,
+    StopAfter { ready_connections: usize },
+}
+
 async fn proxy_websocket_servers(servers: &[&responses::WebSocketTestServer]) -> Result<String> {
+    proxy_websocket_servers_with_prewarm_limit(servers, ProxyPrewarmLimit::AllConnections).await
+}
+
+async fn proxy_websocket_servers_with_prewarm_limit(
+    servers: &[&responses::WebSocketTestServer],
+    prewarm_limit: ProxyPrewarmLimit,
+) -> Result<String> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let address = listener.local_addr()?;
     let targets = servers
@@ -96,7 +110,15 @@ async fn proxy_websocket_servers(servers: &[&responses::WebSocketTestServer]) ->
         .map(|server| server.uri().trim_start_matches("ws://").to_owned())
         .collect::<Vec<_>>();
     tokio::spawn(async move {
-        for target in targets {
+        for (index, target) in targets.into_iter().enumerate() {
+            if let ProxyPrewarmLimit::StopAfter { ready_connections } = prewarm_limit
+                && index == ready_connections
+            {
+                let Ok((connection, _)) = listener.accept().await else {
+                    return;
+                };
+                drop(connection);
+            }
             let Ok((mut incoming, _)) = listener.accept().await else {
                 return;
             };
@@ -171,7 +193,9 @@ async fn sampler_records_token_usage_after_returning_an_early_classification() -
         ev_output_text_delta("low"),
         ev_completed_with_tokens("response-1", /*total_tokens*/ 37),
     ];
-    let server = responses::start_websocket_server(vec![Vec::new(), vec![events]]).await;
+    let mut connections = vec![Vec::new(); INITIAL_WEBSOCKET_CONNECTIONS - 1];
+    connections.push(vec![events]);
+    let server = responses::start_websocket_server(connections).await;
     let metrics = Arc::new(RecordingMetrics::default());
     let mut config = sampler_config(format!(
         "http://{}/v1",
@@ -240,7 +264,13 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_classifications
     let refreshed =
         responses::start_websocket_server(vec![vec![scripted_requests[1].clone()]]).await;
     let server = responses::start_websocket_server(vec![scripted_requests]).await;
-    let base_url = proxy_websocket_servers(&[&idle_server, &server, &refreshed]).await?;
+    let base_url = proxy_websocket_servers_with_prewarm_limit(
+        &[&idle_server, &server, &refreshed],
+        ProxyPrewarmLimit::StopAfter {
+            ready_connections: 2,
+        },
+    )
+    .await?;
     let manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test-api-key"));
     manager
         .set_external_auth(Arc::new(RefreshableAuth(std::sync::Mutex::new(
@@ -391,8 +421,9 @@ async fn sampler_reuses_parent_compaction_only_for_matching_model_hashes() -> Re
             ev_assistant_message("sample", "low"),
             ev_completed("response-1"),
         ];
-        let server =
-            responses::start_websocket_server(vec![Vec::new(), vec![events.clone(), events]]).await;
+        let mut connections = vec![Vec::new(); INITIAL_WEBSOCKET_CONNECTIONS - 1];
+        connections.push(vec![events.clone(), events]);
+        let server = responses::start_websocket_server(connections).await;
         let mut config = sampler_config(format!(
             "http://{}/v1",
             server.uri().trim_start_matches("ws://")
@@ -412,7 +443,10 @@ async fn sampler_reuses_parent_compaction_only_for_matching_model_hashes() -> Re
         assert_eq!(sampler.sample(request).await?, "low");
 
         let request = server
-            .wait_for_request(/*connection_index*/ 1, /*request_index*/ 0)
+            .wait_for_request(
+                /*connection_index*/ INITIAL_WEBSOCKET_CONNECTIONS - 1,
+                /*request_index*/ 0,
+            )
             .await
             .body_json();
         let input = request["input"].as_array().expect("input items");
@@ -430,7 +464,10 @@ async fn sampler_reuses_parent_compaction_only_for_matching_model_hashes() -> Re
             switched_request.parent_compaction_hash = Some("incompatible".to_owned());
             assert_eq!(sampler.sample(switched_request).await?, "low");
             let switched_request = server
-                .wait_for_request(/*connection_index*/ 1, /*request_index*/ 1)
+                .wait_for_request(
+                    /*connection_index*/ INITIAL_WEBSOCKET_CONNECTIONS - 1,
+                    /*request_index*/ 1,
+                )
                 .await
                 .body_json();
             assert_eq!(switched_request["input"][2]["role"], "user");
@@ -509,7 +546,9 @@ async fn sampler_keeps_first_classification_token_when_later_output_disagrees() 
         ev_assistant_message("sample", "lowhigh"),
         ev_completed("response-1"),
     ];
-    let server = responses::start_websocket_server(vec![Vec::new(), vec![events]]).await;
+    let mut connections = vec![Vec::new(); INITIAL_WEBSOCKET_CONNECTIONS - 1];
+    connections.push(vec![events]);
+    let server = responses::start_websocket_server(connections).await;
     let sampler = LunaSampler::connect(sampler_config(format!(
         "http://{}/v1",
         server.uri().trim_start_matches("ws://")
@@ -589,7 +628,13 @@ async fn sampler_grows_its_pool_for_overlapping_requests() -> Result<()> {
     let second = responses::start_websocket_server(vec![response("response-2")]).await;
     let third = responses::start_websocket_server(vec![response("response-3")]).await;
     let sampler = LunaSampler::connect(sampler_config(
-        proxy_websocket_servers(&[&first, &second, &third]).await?,
+        proxy_websocket_servers_with_prewarm_limit(
+            &[&first, &second, &third],
+            ProxyPrewarmLimit::StopAfter {
+                ready_connections: 2,
+            },
+        )
+        .await?,
     ))
     .await?;
 
@@ -661,7 +706,11 @@ async fn sampler_replaces_scored_drains_before_unfinished_classifications() -> R
         ]]])
         .await,
     );
-    let server_refs = servers.iter().collect::<Vec<_>>();
+    let server_refs = servers[2..INITIAL_WEBSOCKET_CONNECTIONS]
+        .iter()
+        .chain(servers[..2].iter())
+        .chain(servers[INITIAL_WEBSOCKET_CONNECTIONS..].iter())
+        .collect::<Vec<_>>();
     let sampler = Arc::new(
         LunaSampler::connect(sampler_config(proxy_websocket_servers(&server_refs).await?)).await?,
     );
@@ -785,7 +834,13 @@ async fn sampler_assigns_a_fresh_identity_when_replacing_aged_connections() -> R
     let second = responses::start_websocket_server(vec![response.clone()]).await;
     let replacement = responses::start_websocket_server(vec![response]).await;
     let sampler = LunaSampler::connect(sampler_config(
-        proxy_websocket_servers(&[&first, &second, &replacement]).await?,
+        proxy_websocket_servers_with_prewarm_limit(
+            &[&first, &second, &replacement],
+            ProxyPrewarmLimit::StopAfter {
+                ready_connections: 2,
+            },
+        )
+        .await?,
     ))
     .await?;
 
@@ -830,7 +885,13 @@ async fn sampler_reconnects_after_transient_service_failures() -> Result<()> {
     ]]])
     .await;
     let sampler = LunaSampler::connect(sampler_config(
-        proxy_websocket_servers(&[&first, &second, &recovered]).await?,
+        proxy_websocket_servers_with_prewarm_limit(
+            &[&first, &second, &recovered],
+            ProxyPrewarmLimit::StopAfter {
+                ready_connections: 2,
+            },
+        )
+        .await?,
     ))
     .await?;
 
@@ -865,7 +926,13 @@ async fn sampler_limits_transient_recovery_attempts() -> Result<()> {
     let third = responses::start_websocket_server(unavailable()).await;
     let unused = responses::start_websocket_server(unavailable()).await;
     let sampler = LunaSampler::connect(sampler_config(
-        proxy_websocket_servers(&[&first, &second, &third, &unused]).await?,
+        proxy_websocket_servers_with_prewarm_limit(
+            &[&first, &second, &third, &unused],
+            ProxyPrewarmLimit::StopAfter {
+                ready_connections: 2,
+            },
+        )
+        .await?,
     ))
     .await?;
 

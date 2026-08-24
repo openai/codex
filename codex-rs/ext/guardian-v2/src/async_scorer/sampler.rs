@@ -46,7 +46,7 @@ pub(crate) const MODEL: &str = "gpt-5.6-luna";
 pub(crate) const CLASSIFICATION_TOKEN_USAGE_METRIC: &str =
     "codex.guardian_v2.classification.token_usage";
 const MAX_OUTPUT_BYTES: usize = 8 * 1024;
-const INITIAL_WEBSOCKET_CONNECTIONS: usize = 2;
+pub(super) const INITIAL_WEBSOCKET_CONNECTIONS: usize = 8;
 const MAX_WEBSOCKET_CONNECTIONS: usize = 16;
 const MAX_SAMPLING_RETRIES: usize = 2;
 const MAX_WEBSOCKET_AGE: Duration = Duration::from_secs(55 * 60);
