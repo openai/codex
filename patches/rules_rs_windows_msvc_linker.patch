@@ -1,0 +1,14 @@
+# What: use Rust's bundled direct linker for Windows x86_64 MSVC toolchains.
+# Scope: standard and bootstrap rules_rs Rust toolchains targeting x86_64 MSVC.
+
+diff --git a/rs/toolchains/declare_rustc_toolchains.bzl b/rs/toolchains/declare_rustc_toolchains.bzl
+--- a/rs/toolchains/declare_rustc_toolchains.bzl
++++ b/rs/toolchains/declare_rustc_toolchains.bzl
+@@ -88,6 +88,7 @@ def declare_rustc_toolchains(
+             llvm_cov = "@llvm//tools:llvm-cov",
+             llvm_profdata = "@llvm//tools:llvm-profdata",
+             linker = select({
++                "@rules_rs//rs/platforms/config:x86_64-pc-windows-msvc": "{}rust-lld".format(rustc_repo_label),
+                 "@platforms//cpu:wasm32": "{}rust-lld".format(rustc_repo_label),
+                 "@platforms//cpu:wasm64": "{}rust-lld".format(rustc_repo_label),
+                 "//conditions:default": None,

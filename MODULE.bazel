@@ -151,6 +151,7 @@ single_version_override(
     patch_strip = 1,
     patches = [
         "//patches:rules_rs_build_script_deps_annotation.patch",
+        "//patches:rules_rs_windows_msvc_linker.patch",
     ],
     version = "0.0.96",
 )
@@ -161,8 +162,8 @@ rules_rust.patch(
         # Carry the OpenAI setup fix that makes build-script tools available
         # through their runfiles after the rules_rs upgrade.
         "//patches:rules_rust_build_script_tools_transition.patch",
-        # Keep direct Windows/MSVC links compatible with hermetic LLVM's
-        # non-.lib runtime artifacts.
+        # Prefer Rust's direct linker for Windows/MSVC and keep hermetic
+        # LLVM's non-.lib runtime artifacts compatible with it.
         "//patches:rules_rust_windows_msvc_direct_link_args.patch",
         # Skip transient native-Windows linker outputs while consolidating
         # dependency search paths.

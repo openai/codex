@@ -1,5 +1,18 @@
 --- a/rust/private/rustc.bzl
 +++ b/rust/private/rustc.bzl
+@@ -438,4 +438,11 @@
+     use_bpf_linker = toolchain.target_arch in ("bpfeb", "bpfel") and toolchain.linker
+-    if not ld or toolchain.linker_preference == "rust" or use_bpf_linker:
++    use_windows_msvc_linker = (
++        toolchain.target_arch == "x86_64" and
++        toolchain.target_os == "windows" and
++        toolchain.target_abi == "msvc" and
++        toolchain.linker != None and
++        toolchain.linker_preference != "cc"
++    )
++    if not ld or toolchain.linker_preference == "rust" or use_bpf_linker or use_windows_msvc_linker:
+         ld = toolchain.linker.path
+         ld_is_direct_driver = toolchain.linker_type == "direct"
 @@ -468,11 +468,25 @@
                      filtered_args.append(version)
                      # Keep library search path flags
