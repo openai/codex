@@ -1,5 +1,5 @@
 use crate::ConfigLayerMetadata;
-use crate::merge::is_multi_agent_v2_feature_path;
+use crate::merge::is_structured_feature_path;
 use serde_json::Value as JsonValue;
 use sha2::Digest;
 use sha2::Sha256;
@@ -29,7 +29,13 @@ pub(super) fn record_origins(
         }
         _ => {
             if !path.is_empty() {
-                if matches!(value, TomlValue::Boolean(_)) && is_multi_agent_v2_feature_path(path) {
+                if matches!(value, TomlValue::Boolean(_)) && is_structured_feature_path(path) {
+                    if path
+                        .last()
+                        .is_some_and(|feature| feature == "network_proxy")
+                    {
+                        origins.insert(path.join("."), meta.clone());
+                    }
                     path.push("enabled".to_string());
                     origins.insert(path.join("."), meta.clone());
                     path.pop();

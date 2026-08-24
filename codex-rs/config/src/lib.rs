@@ -154,6 +154,7 @@ pub use mcp_types::McpServerToolConfig;
 pub use mcp_types::McpServerTransportConfig;
 pub use mcp_types::RawMcpServerConfig;
 pub use merge::ShellEnvironmentPolicyFilterRepresentation;
+pub use merge::is_structured_feature_path;
 pub use merge::merge_toml_values;
 pub use merge::shell_environment_filter_entry;
 pub use overrides::build_cli_overrides_layer;

@@ -1,3 +1,4 @@
+use super::credential_broker_trusted_config;
 use super::discover_project_layers;
 use super::layer_io;
 use super::load_config_toml_for_required_layer_raw;
@@ -134,6 +135,7 @@ pub(super) async fn load_local_config_layers_with_overrides(
     let trust_context = project_trust_context(
         fs,
         &discovery_config,
+        &credential_broker_trusted_config(&discovery_config, &[], &loaded_managed),
         cwd,
         &project_root_markers,
         codex_home.as_path(),

@@ -15,7 +15,7 @@ type TranslateRequestHeader = fn(&HeaderMap, &str, &str) -> Option<HeaderValue>;
 /// Providers must be declared as `static` values because the broker uses their addresses as stable
 /// identities when deduplicating credential records.
 pub(super) struct CredentialProvider {
-    context_env_vars: &'static [&'static str],
+    pub(super) context_env_vars: &'static [&'static str],
     sources: &'static [CredentialSource],
     pub(super) reset_on_configuration_change: bool,
     dummy_value: fn(&str) -> String,

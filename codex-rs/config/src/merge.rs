@@ -1,5 +1,6 @@
 use crate::key_aliases::normalize_key_aliases;
 use crate::key_aliases::normalized_with_key_aliases;
+use codex_network_proxy::credential_broker_provider_context_env_keys;
 use codex_network_proxy::normalize_host;
 use toml::Value as TomlValue;
 
@@ -58,24 +59,21 @@ pub fn merge_toml_values(base: &mut TomlValue, overlay: &TomlValue) {
     merge_toml_values_at_path(base, overlay, &mut Vec::new());
 }
 
-pub(crate) fn is_multi_agent_v2_feature_path<S: AsRef<str>>(path: &[S]) -> bool {
-    match path {
-        [features, feature] => {
-            features.as_ref() == "features" && feature.as_ref() == "multi_agent_v2"
-        }
-        [profiles, _, features, feature] => {
-            profiles.as_ref() == "profiles"
-                && features.as_ref() == "features"
-                && feature.as_ref() == "multi_agent_v2"
-        }
-        _ => false,
-    }
+pub fn is_structured_feature_path<S: AsRef<str>>(path: &[S]) -> bool {
+    let (features, feature) = match path {
+        [profiles, _, features, feature] if profiles.as_ref() == "profiles" => (features, feature),
+        [features, feature] => (features, feature),
+        _ => return false,
+    };
+
+    features.as_ref() == "features"
+        && matches!(feature.as_ref(), "multi_agent_v2" | "network_proxy")
 }
 
 fn merge_toml_values_at_path(base: &mut TomlValue, overlay: &TomlValue, path: &mut Vec<String>) {
     replace_shell_environment_policy_filter_representation(base, overlay, path);
 
-    if is_multi_agent_v2_feature_path(path) {
+    if is_structured_feature_path(path) {
         if let TomlValue::Boolean(enabled) = base
             && overlay.is_table()
         {
@@ -104,6 +102,18 @@ fn merge_toml_values_at_path(base: &mut TomlValue, overlay: &TomlValue, path: &m
         if is_shell_environment_filters_path(path) {
             normalize_case_insensitive_keys(base_table);
             normalize_case_insensitive_keys(&mut overlay_table);
+        }
+        if cfg!(windows)
+            && matches!(path.as_slice(), [policy, field] if policy == "shell_environment_policy" && field == "set")
+        {
+            for key in overlay_table.keys().filter(|key| {
+                credential_broker_provider_context_env_keys()
+                    .any(|binding_key| key.eq_ignore_ascii_case(binding_key))
+            }) {
+                base_table.retain(|candidate, _| {
+                    candidate == key || !candidate.eq_ignore_ascii_case(key)
+                });
+            }
         }
 
         for (key, value) in overlay_table {

@@ -136,6 +136,37 @@ fn multi_agent_v2_feature_toggle_preserves_nested_configuration() {
     );
 }
 
+#[test]
+fn network_proxy_feature_toggle_preserves_credential_broker_configuration() {
+    let tmp = tempdir().expect("tmpdir");
+    let codex_home = tmp.path();
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    for (initial, disabled, enabled_again) in [
+        (
+            "[features]\nnetwork_proxy = true\n",
+            "[features]\n",
+            "[features]\nnetwork_proxy = true\n",
+        ),
+        (
+            "[features.network_proxy]\nenabled = true\ncredential_broker = true\ndomains = { \"github.com\" = \"allow\" }\n",
+            "[features.network_proxy]\nenabled = false\ncredential_broker = true\ndomains = { \"github.com\" = \"allow\" }\n",
+            "[features.network_proxy]\nenabled = true\ncredential_broker = true\ndomains = { \"github.com\" = \"allow\" }\n",
+        ),
+    ] {
+        std::fs::write(&config_path, initial).expect("write config");
+        for (enabled, expected) in [(false, disabled), (true, enabled_again)] {
+            ConfigEditsBuilder::new(codex_home)
+                .set_feature_enabled("network_proxy", enabled)
+                .apply_blocking()
+                .expect("toggle feature");
+            let updated: TomlValue =
+                toml::from_str(&std::fs::read_to_string(&config_path).expect("read config"))
+                    .expect("parse config");
+            assert_eq!(updated, toml::from_str::<TomlValue>(expected).unwrap());
+        }
+    }
+}
+
 /// Adding nested multi-agent settings must retain an existing legacy boolean toggle.
 #[test]
 fn multi_agent_v2_nested_edit_preserves_legacy_boolean_toggle() {

@@ -423,6 +423,8 @@ pub struct NetworkProxyConfigToml {
     pub unix_sockets: Option<BTreeMap<String, NetworkProxyUnixSocketPermissionToml>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allow_local_binding: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credential_broker: Option<bool>,
 }
 
 impl FeatureConfig for NetworkProxyConfigToml {

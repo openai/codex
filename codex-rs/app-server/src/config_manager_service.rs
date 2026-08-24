@@ -19,6 +19,7 @@ use codex_config::ConfigLayerStack;
 use codex_config::ConfigRequirementsToml;
 use codex_config::ShellEnvironmentPolicyFilterRepresentation;
 use codex_config::config_toml::ConfigToml;
+use codex_config::is_structured_feature_path;
 use codex_config::merge_toml_values;
 use codex_config::shell_environment_filter_entry;
 use codex_config::validate_shell_environment_policy_filter_config;
@@ -312,6 +313,22 @@ impl ConfigManager {
             {
                 segments[2] = pattern;
             }
+            if cfg!(windows)
+                && let [policy, field, key] = segments.as_slice()
+                && policy == "shell_environment_policy"
+                && field == "set"
+                && let Some(existing) = user_config
+                    .get(policy)
+                    .and_then(|policy| policy.get(field))
+                    .and_then(TomlValue::as_table)
+                    .and_then(|overrides| {
+                        overrides
+                            .keys()
+                            .find(|candidate| candidate.eq_ignore_ascii_case(key))
+                    })
+            {
+                segments[2].clone_from(existing);
+            }
             if !value.is_null() {
                 match segments.as_slice() {
                     [segment] if segment == "profile" => {
@@ -329,9 +346,28 @@ impl ConfigManager {
                     _ => {}
                 }
             }
-            let parsed_value = parse_value(value).map_err(|message| {
-                ConfigManagerError::write(ConfigWriteErrorCode::ConfigValidationError, message)
-            })?;
+            let preserves_network_proxy_settings = value.is_null()
+                && is_structured_feature_path(&segments)
+                && segments
+                    .last()
+                    .is_some_and(|feature| feature == "network_proxy")
+                && {
+                    let has_broker_settings = |config: &TomlValue| {
+                        value_at_path(config, &segments)
+                            .and_then(TomlValue::as_table)
+                            .is_some_and(|feature| feature.contains_key("credential_broker"))
+                    };
+                    has_broker_settings(&user_config)
+                        || !has_broker_settings(&user_layer.config)
+                            && has_broker_settings(&layers.effective_config())
+                };
+            let parsed_value = if preserves_network_proxy_settings {
+                Some(TomlValue::Boolean(false))
+            } else {
+                parse_value(value).map_err(|message| {
+                    ConfigManagerError::write(ConfigWriteErrorCode::ConfigValidationError, message)
+                })?
+            };
             if matches!(strategy, MergeStrategy::Upsert)
                 && let Some(value) = parsed_value.as_ref()
                 && matches!(segments.as_slice(), [policy, ..] if policy == "shell_environment_policy")
@@ -354,6 +390,15 @@ impl ConfigManager {
                 segments.clone()
             };
             let original_value = value_at_path(&user_config, &persist_segments).cloned();
+            let structured_feature_toggle = preserves_network_proxy_settings
+                || is_structured_feature_path(&segments)
+                    && parsed_value.as_ref().is_some_and(|value| {
+                        value.is_bool()
+                            || matches!(strategy, MergeStrategy::Upsert)
+                                && value.as_table().is_some_and(|table| {
+                                    table.len() == 1 && table.contains_key("enabled")
+                                })
+                    });
 
             apply_merge(&mut user_config, &segments, parsed_value.as_ref(), strategy).map_err(
                 |err| match err {
@@ -379,6 +424,9 @@ impl ConfigManager {
                 });
             }
 
+            if structured_feature_toggle {
+                segments.push("enabled".to_string());
+            }
             parsed_segments.push(segments);
         }
 
@@ -569,6 +617,16 @@ enum MergeError {
     Validation(String),
 }
 
+fn structured_feature_depth(segments: &[String]) -> Option<usize> {
+    let depth = match segments {
+        [profiles, _, _, _, ..] if profiles == "profiles" => 4,
+        [_, _, ..] => 2,
+        _ => return None,
+    };
+
+    is_structured_feature_path(&segments[..depth]).then_some(depth)
+}
+
 fn apply_merge(
     root: &mut TomlValue,
     segments: &[String],
@@ -585,17 +643,8 @@ fn apply_merge(
         ));
     };
 
-    let multi_agent_v2_feature_depth = match segments {
-        [features, feature, ..] if features == "features" && feature == "multi_agent_v2" => Some(2),
-        [profiles, _, features, feature, ..]
-            if profiles == "profiles" && features == "features" && feature == "multi_agent_v2" =>
-        {
-            Some(4)
-        }
-        _ => None,
-    };
-    let preserves_multi_agent_v2_feature_config =
-        multi_agent_v2_feature_depth.is_some_and(|feature_depth| {
+    let preserves_structured_feature_config =
+        structured_feature_depth(segments).is_some_and(|feature_depth| {
             match value_at_path(root, &segments[..feature_depth]) {
                 Some(TomlValue::Boolean(_)) => {
                     segments.len() > feature_depth || matches!(value, TomlValue::Table(_))
@@ -607,7 +656,7 @@ fn apply_merge(
             }
         });
 
-    if preserves_multi_agent_v2_feature_config
+    if preserves_structured_feature_config
         || matches!(strategy, MergeStrategy::Upsert)
             && (shell_environment_policy_representation_switch(root, segments, value)
                 || (matches!(value_at_path(root, segments), Some(TomlValue::Table(_)))
@@ -770,20 +819,26 @@ fn value_at_path<'a>(root: &'a TomlValue, segments: &[String]) -> Option<&'a Tom
 fn value_at_semantic_path<'a>(root: &'a TomlValue, segments: &[String]) -> Option<&'a TomlValue> {
     shell_environment_filter_entry(root, segments)
         .map(|(_, value)| value)
+        .or_else(|| match segments {
+            [policy, field, key]
+                if cfg!(windows) && policy == "shell_environment_policy" && field == "set" =>
+            {
+                root.get(policy)?
+                    .get(field)?
+                    .as_table()?
+                    .iter()
+                    .find(|(candidate, _)| candidate.eq_ignore_ascii_case(key))
+                    .map(|(_, value)| value)
+            }
+            _ => None,
+        })
         .or_else(|| value_at_path(root, segments))
         .or_else(|| {
             let (field, parents) = segments.split_last()?;
             if field != "enabled" {
                 return None;
             }
-            let is_multi_agent_v2_feature = match parents {
-                [features, feature] => features == "features" && feature == "multi_agent_v2",
-                [profiles, _, features, feature] => {
-                    profiles == "profiles" && features == "features" && feature == "multi_agent_v2"
-                }
-                _ => false,
-            };
-            if !is_multi_agent_v2_feature {
+            if structured_feature_depth(parents) != Some(parents.len()) {
                 return None;
             }
             let feature = value_at_path(root, parents)?;

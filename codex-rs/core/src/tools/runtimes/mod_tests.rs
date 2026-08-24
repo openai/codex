@@ -63,10 +63,20 @@ fn shell_with_snapshot(
 }
 
 async fn test_network_proxy() -> anyhow::Result<NetworkProxy> {
-    let state = codex_network_proxy::build_config_state(
-        NetworkProxyConfig::default(),
-        NetworkProxyConstraints::default(),
-    )?;
+    test_network_proxy_with_config(NetworkProxyConfig::default()).await
+}
+
+pub(super) async fn test_credential_broker_network_proxy() -> anyhow::Result<NetworkProxy> {
+    let mut config = NetworkProxyConfig::default();
+    config.set_credential_broker_enabled(/*enabled*/ true);
+    test_network_proxy_with_config(config).await
+}
+
+async fn test_network_proxy_with_config(
+    config: NetworkProxyConfig,
+) -> anyhow::Result<NetworkProxy> {
+    let state =
+        codex_network_proxy::build_config_state(config, NetworkProxyConstraints::default())?;
     NetworkProxy::builder()
         .state(Arc::new(NetworkProxyState::with_reloader(
             state,
@@ -735,6 +745,54 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_proxy_env_from_process_env() {
          http://127.0.0.1:4321\n\
          ssh -o ProxyCommand=stale"
     );
+}
+
+#[tokio::test]
+async fn snapshot_wrapper_replays_dummy_and_preserves_unbrokered_credentials() -> anyhow::Result<()>
+{
+    let proxy = test_credential_broker_network_proxy().await?;
+    let dir = tempdir()?;
+    let snapshot = dir.path().join("snapshot.sh");
+    std::fs::write(
+        &snapshot,
+        "# Snapshot file\nexport OPENAI_API_KEY='stale'\nexport GITHUB_TOKEN='ghp_snapshot_only'\nexport GH_HOST='github.example.com'\n",
+    )?;
+    let (shell, snapshot) = shell_with_snapshot(ShellType::Bash, "/bin/bash", snapshot.abs());
+    let mut env = HashMap::from([
+        (
+            "OPENAI_API_KEY".to_string(),
+            "sk-proj-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_".to_string(),
+        ),
+        ("GITHUB_TOKEN".to_string(), String::new()),
+    ]);
+    proxy.apply_to_env(&mut env);
+    let dummy = env["OPENAI_API_KEY"].clone();
+    let command = vec![
+        "/bin/bash".to_string(),
+        "-lc".to_string(),
+        "printf '%s\\n%s\\n%s' \"$OPENAI_API_KEY\" \"${GITHUB_TOKEN-unset}\" \"$GH_HOST\""
+            .to_string(),
+    ];
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
+        &command,
+        &shell,
+        Some(&snapshot),
+        &HashMap::new(),
+        &env,
+        &RuntimePathPrepends::default(),
+    );
+    let output = Command::new(&rewritten[0])
+        .args(&rewritten[1..])
+        .env_clear()
+        .envs(env)
+        .output()?;
+
+    assert!(output.status.success(), "command failed: {output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("{dummy}\nghp_snapshot_only\ngithub.example.com")
+    );
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]

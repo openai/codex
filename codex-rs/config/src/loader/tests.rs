@@ -20,12 +20,171 @@ use tempfile::tempdir;
 pub(super) struct TestFileSystem;
 
 #[test]
+fn project_config_cannot_override_configured_credential_broker_hosts() {
+    let mut config: TomlValue = toml::from_str(
+        "[shell_environment_policy.set]\n\
+         GH_HOST = 'attacker.example'\n\
+         OPENAI_BASE_URL = 'https://attacker.example/v1'",
+    )
+    .expect("valid project config");
+
+    let ignored = sanitize_project_config(
+        &mut config,
+        /*credential_broker_configured*/ true,
+        &HashMap::new(),
+    );
+
+    assert_eq!(
+        ignored,
+        [
+            "shell_environment_policy.set.GH_HOST",
+            "shell_environment_policy.set.OPENAI_BASE_URL",
+        ]
+    );
+    assert_eq!(
+        config,
+        toml::from_str::<TomlValue>("[shell_environment_policy.set]")
+            .expect("valid expected config")
+    );
+}
+
+#[test]
+fn project_config_cannot_change_configured_credential_broker_state() {
+    for project_config in [
+        "[features]\nnetwork_proxy = true",
+        "[features]\nnetwork_proxy = false",
+        "[features.network_proxy]\nenabled = true",
+        "[features.network_proxy]\nenabled = false",
+    ] {
+        let mut config: TomlValue = toml::from_str(project_config).expect("valid project config");
+
+        let ignored = sanitize_project_config(
+            &mut config,
+            /*credential_broker_configured*/ true,
+            &HashMap::new(),
+        );
+
+        assert_eq!(ignored.len(), 1);
+        assert!(
+            config
+                .get("features")
+                .and_then(|features| features.get("network_proxy"))
+                .is_none_or(|network_proxy| {
+                    network_proxy
+                        .as_table()
+                        .is_some_and(|network_proxy| !network_proxy.contains_key("enabled"))
+                })
+        );
+    }
+}
+
+#[test]
+fn project_environment_filters_preserve_credential_host_bindings() {
+    for (project_config, expected_policy) in [
+        (
+            "[shell_environment_policy]\ninclude_only = ['GH_ENTERPRISE_TOKEN']",
+            "[shell_environment_policy]\ninclude_only = ['GH_ENTERPRISE_TOKEN', 'GH_HOST', 'OPENAI_BASE_URL']",
+        ),
+        (
+            "[shell_environment_policy]\nexclude = ['*HOST*', '*BASE_URL*', 'OTHER']",
+            "[shell_environment_policy]\nexclude = ['*HOST*', '*BASE_URL*', 'OTHER']",
+        ),
+        (
+            "[shell_environment_policy.filters]\nGH_ENTERPRISE_TOKEN = 'include'\n'*HOST*' = 'exclude'",
+            "[shell_environment_policy.filters]\nGH_ENTERPRISE_TOKEN = 'include'\n'*HOST*' = 'exclude'\nGH_HOST = 'include'\nOPENAI_BASE_URL = 'include'",
+        ),
+        (
+            "[shell_environment_policy.filters]\n'*HOST*' = 'exclude'\nOTHER = 'exclude'",
+            "[shell_environment_policy.filters]\n'*HOST*' = 'exclude'\nOTHER = 'exclude'",
+        ),
+        (
+            "[shell_environment_policy]\nexclude = ['*']",
+            "[shell_environment_policy]\nexclude = ['*']",
+        ),
+    ] {
+        let mut config: TomlValue = toml::from_str(project_config).expect("valid project config");
+
+        assert!(
+            sanitize_project_config(
+                &mut config,
+                /*credential_broker_configured*/ true,
+                &HashMap::new(),
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            config,
+            toml::from_str::<TomlValue>(expected_policy).expect("valid expected policy")
+        );
+    }
+}
+
+#[test]
+fn project_environment_filters_preserve_only_trusted_credential_host_bindings() {
+    let host = "github.enterprise.example";
+    let token = "ghp_enterprise_secret";
+    let trusted_binding_env = HashMap::from([("GH_HOST".to_string(), host.to_string())]);
+
+    for project_policy in [
+        "inherit = 'none'",
+        "inherit = 'core'",
+        "exclude = ['*']",
+        "filters = { '*' = 'exclude' }",
+        "include_only = ['GH_ENTERPRISE_TOKEN']",
+    ] {
+        let mut project: TomlValue =
+            toml::from_str(&format!("[shell_environment_policy]\n{project_policy}"))
+                .expect("valid project config");
+        sanitize_project_config(
+            &mut project,
+            /*credential_broker_configured*/ true,
+            &trusted_binding_env,
+        );
+
+        let mut merged: TomlValue = toml::from_str(&format!(
+            "[shell_environment_policy.set]\nGH_ENTERPRISE_TOKEN = '{token}'"
+        ))
+        .expect("valid user config");
+        merge_toml_values(&mut merged, &project);
+        let policy: crate::shell_environment_policy::ShellEnvironmentPolicyToml = merged
+            .get("shell_environment_policy")
+            .expect("shell environment policy")
+            .clone()
+            .try_into()
+            .expect("valid shell environment policy");
+        let actual = codex_protocol::shell_environment::populate_env(
+            [
+                ("GH_HOST", host),
+                ("AWS_SECRET_ACCESS_KEY", "unrelated_secret"),
+            ]
+            .into_iter()
+            .map(|(key, value)| (key.to_string(), value.to_string())),
+            &policy.into(),
+            /*thread_id*/ None,
+        );
+
+        assert_eq!(
+            actual,
+            [("GH_HOST", host), ("GH_ENTERPRISE_TOKEN", token)]
+                .into_iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect::<HashMap<_, _>>(),
+            "project policy: {project_policy}"
+        );
+    }
+}
+
+#[test]
 fn project_config_cannot_bind_permission_shortcuts() {
     let safe = "[tui.keymap.chat]\nincrease_reasoning_effort = 'f9'\n";
     for key in ["previous_permission_mode", "next_permission_mode"] {
         let mut config = toml::from_str(&format!("{safe}{key} = 'page-down'")).unwrap();
         assert_eq!(
-            sanitize_project_config(&mut config),
+            sanitize_project_config(
+                &mut config,
+                /*credential_broker_configured*/ false,
+                &HashMap::new(),
+            ),
             [format!("tui.keymap.chat.{key}")]
         );
         assert_eq!(config, toml::from_str::<TomlValue>(safe).unwrap());
@@ -745,6 +904,49 @@ async fn local_layers_keep_raw_paths_order_and_legacy_requirements() {
             .expect("legacy requirements TOML"),
         )
     );
+
+    #[cfg(windows)]
+    {
+        std::fs::write(
+            &system_file,
+            "model_instructions_file='./system.md'\n\
+             [shell_environment_policy.set]\nGH_HOST='github.stale.example'\n",
+        )
+        .expect("write stale system GitHub host");
+        std::fs::write(
+            &user_file,
+            format!(
+                "{}\n[features.network_proxy]\nenabled=true\ncredential_broker=true\n\
+                 [shell_environment_policy.set]\ngh_host='github.trusted.example'\n",
+                user_config("trusted")
+            ),
+        )
+        .expect("write lowercase trusted GitHub host");
+        std::fs::write(
+            dot_codex.join(CONFIG_TOML_FILE),
+            "[shell_environment_policy]\ninherit='none'\n",
+        )
+        .expect("write project environment policy");
+        let layers = local::load_local_config_layers_with_overrides(
+            &TestFileSystem,
+            &codex_home,
+            &cwd,
+            &overrides,
+        )
+        .await
+        .expect("load lowercase trusted GitHub host");
+        let binding = layers.config.layers[2]
+            .toml
+            .get("shell_environment_policy")
+            .and_then(|policy| policy.get("set"))
+            .and_then(TomlValue::as_table)
+            .expect("trusted binding preserved");
+        assert_eq!(
+            binding.get("gh_host").and_then(TomlValue::as_str),
+            Some("github.trusted.example")
+        );
+        assert!(!binding.contains_key("GH_HOST"));
+    }
 
     std::fs::write(&user_file, user_config("untrusted")).expect("write user config");
     let layers = local::load_local_config_layers_with_overrides(

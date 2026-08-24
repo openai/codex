@@ -43,6 +43,7 @@ use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
+use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
@@ -2793,6 +2794,88 @@ async fn spawned_subagent_execpolicy_amendment_propagates_to_parent_session() ->
     )
     .await?;
     wait_for_completion_without_approval(&test).await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(unix)]
+async fn zsh_fork_receives_brokered_github_credential_and_provider_context() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    const GH_HOST: &str = "github.example.com";
+    const REAL_GITHUB_TOKEN: &str =
+        "ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+
+    let Some(runtime) = zsh_fork_runtime("zsh-fork credential broker environment test")? else {
+        return Ok(());
+    };
+
+    let home = Arc::new(TempDir::new()?);
+    fs::write(
+        home.path().join("config.toml"),
+        r#"default_permissions = "brokered"
+features = { network_proxy = { enabled = true, credential_broker = true } }
+permissions = { brokered = { extends = ":workspace", network = { enabled = true, allow_local_binding = true } } }
+"#,
+    )?;
+    let mut builder = zsh_fork_test_builder(runtime, AskForApproval::Never)
+        .with_home(home)
+        .with_cloud_config_bundle(managed_network_requirements_loader())
+        .with_config(|config| {
+            config.permissions.shell_environment_policy.r#set.extend([
+                ("GH_HOST".to_string(), GH_HOST.to_string()),
+                (
+                    "GH_ENTERPRISE_TOKEN".to_string(),
+                    REAL_GITHUB_TOKEN.to_string(),
+                ),
+            ]);
+        });
+    let server = start_mock_server().await;
+    let test = builder.build(&server).await?;
+
+    let call_id = "zsh-fork-brokered-github-credential";
+    let command = r#"printf '%s\n%s\n%s\n' "$GH_HOST" "$GH_ENTERPRISE_TOKEN" "$CODEX_NETWORK_PROXY_CREDENTIAL_BROKER_ACTIVE""#;
+    let event = shell_event(
+        call_id,
+        command,
+        /*timeout_ms*/ 10_000,
+        SandboxPermissions::UseDefault,
+    )?;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-zsh-fork-broker-1"),
+                event,
+                ev_completed("resp-zsh-fork-broker-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-zsh-fork-broker", "done"),
+                ev_completed("resp-zsh-fork-broker-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    submit_turn_preserving_active_permission_profile(
+        &test,
+        "show the brokered GitHub environment",
+        AskForApproval::Never,
+    )
+    .await?;
+    wait_for_completion_without_approval(&test).await;
+
+    let result = parse_result(&responses.requests()[1].function_call_output(call_id));
+    assert_eq!(result.exit_code, Some(0), "command failed: {result:?}");
+    assert!(!result.stdout.contains(REAL_GITHUB_TOKEN));
+    let values = result.stdout.lines().collect::<Vec<_>>();
+    assert_eq!(values.len(), 3, "unexpected command output: {result:?}");
+    assert_eq!(values[0], GH_HOST);
+    assert_ne!(values[1], REAL_GITHUB_TOKEN);
+    assert!(values[1].starts_with("ghp_"));
+    assert_eq!(values[1].len(), REAL_GITHUB_TOKEN.len());
+    assert_eq!(values[2], "1");
 
     Ok(())
 }

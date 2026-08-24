@@ -1198,12 +1198,16 @@ async fn multi_agent_v2_boolean_layer_owns_enabled_origin_and_overrides() {
     let user_path = tmp.path().join(CONFIG_TOML_FILE);
     std::fs::write(
         &user_path,
-        "[features.multi_agent_v2]\nenabled = true\nsubagent_usage_hint_text = \"keep\"\n",
+        "[features.multi_agent_v2]\nenabled = true\nsubagent_usage_hint_text = \"keep\"\n\n[features.network_proxy]\nenabled = true\ncredential_broker = true\n",
     )
     .expect("user config");
 
     let managed_path = tmp.path().join("managed_config.toml");
-    std::fs::write(&managed_path, "[features]\nmulti_agent_v2 = false\n").expect("managed config");
+    std::fs::write(
+        &managed_path,
+        "[features]\nmulti_agent_v2 = false\nnetwork_proxy = false\n",
+    )
+    .expect("managed config");
     let managed_file = AbsolutePathBuf::try_from(managed_path.clone()).expect("managed file");
     let service = ConfigManager::new_for_tests(
         tmp.path().to_path_buf(),
@@ -1219,15 +1223,18 @@ async fn multi_agent_v2_boolean_layer_owns_enabled_origin_and_overrides() {
         })
         .await
         .expect("read config");
-    assert_eq!(
-        read.origins
-            .get("features.multi_agent_v2.enabled")
-            .expect("enabled origin")
-            .name,
-        ApiConfigLayerSource::LegacyManagedConfigTomlFromFile {
-            file: managed_file.clone(),
-        },
-    );
+    for path in [
+        "features.multi_agent_v2.enabled",
+        "features.network_proxy",
+        "features.network_proxy.enabled",
+    ] {
+        assert_eq!(
+            read.origins.get(path).expect("managed feature origin").name,
+            ApiConfigLayerSource::LegacyManagedConfigTomlFromFile {
+                file: managed_file.clone(),
+            },
+        );
+    }
 
     let result = service
         .write_value(ConfigValueWriteParams {
@@ -1246,6 +1253,109 @@ async fn multi_agent_v2_boolean_layer_owns_enabled_origin_and_overrides() {
         ApiConfigLayerSource::LegacyManagedConfigTomlFromFile { file: managed_file }
     );
     assert_eq!(overridden.effective_value, serde_json::json!(false));
+}
+
+#[tokio::test]
+async fn structured_feature_toggle_ignores_unrelated_managed_settings() -> Result<()> {
+    let tmp = tempdir()?;
+    let user_path = tmp.path().join(CONFIG_TOML_FILE);
+    std::fs::write(
+        &user_path,
+        "[features.network_proxy]\nenabled = false\ncredential_broker = true\n",
+    )?;
+
+    let managed_path = tmp.path().join("managed_config.toml");
+    std::fs::write(
+        &managed_path,
+        "[features.network_proxy]\nproxy_url = 'http://127.0.0.1:4321'\n",
+    )?;
+    let service = ConfigManager::new_for_tests(
+        tmp.path().to_path_buf(),
+        vec![],
+        LoaderOverrides::with_managed_config_path_for_tests(managed_path.clone()),
+        CloudConfigBundleLoader::default(),
+    );
+
+    service
+        .write_value(ConfigValueWriteParams {
+            file_path: Some(user_path.display().to_string()),
+            key_path: "features.network_proxy".to_string(),
+            value: serde_json::Value::Null,
+            merge_strategy: MergeStrategy::Replace,
+            expected_version: None,
+        })
+        .await?;
+    assert_eq!(
+        toml::from_str::<TomlValue>(&std::fs::read_to_string(&user_path)?)?,
+        toml::from_str::<TomlValue>(
+            "[features.network_proxy]\nenabled = false\ncredential_broker = true\n"
+        )?
+    );
+
+    let result = service
+        .write_value(ConfigValueWriteParams {
+            file_path: Some(user_path.display().to_string()),
+            key_path: "features.network_proxy".to_string(),
+            value: serde_json::json!(true),
+            merge_strategy: MergeStrategy::Replace,
+            expected_version: None,
+        })
+        .await?;
+
+    assert_eq!(result.status, WriteStatus::Ok);
+    assert_eq!(result.overridden_metadata, None);
+
+    let selected_path = tmp.path().join("work.config.toml");
+    std::fs::write(&selected_path, "")?;
+    let mut loader_overrides = LoaderOverrides::with_managed_config_path_for_tests(managed_path);
+    loader_overrides.user_config_path = Some(AbsolutePathBuf::from_absolute_path(&selected_path)?);
+    loader_overrides.user_config_profile = Some("work".parse()?);
+    let profile_service = ConfigManager::new_for_tests(
+        tmp.path().to_path_buf(),
+        vec![],
+        loader_overrides,
+        CloudConfigBundleLoader::default(),
+    );
+    profile_service
+        .write_value(ConfigValueWriteParams {
+            file_path: Some(selected_path.display().to_string()),
+            key_path: "features.network_proxy".to_string(),
+            value: serde_json::Value::Null,
+            merge_strategy: MergeStrategy::Replace,
+            expected_version: None,
+        })
+        .await?;
+    assert_eq!(
+        toml::from_str::<TomlValue>(&std::fs::read_to_string(&selected_path)?)?,
+        toml::from_str::<TomlValue>("[features]\nnetwork_proxy = false\n")?
+    );
+
+    service
+        .batch_write(ConfigBatchWriteParams {
+            edits: vec![
+                codex_app_server_protocol::ConfigEdit {
+                    key_path: "features.network_proxy.credential_broker".to_string(),
+                    value: serde_json::Value::Null,
+                    merge_strategy: MergeStrategy::Replace,
+                },
+                codex_app_server_protocol::ConfigEdit {
+                    key_path: "features.network_proxy".to_string(),
+                    value: serde_json::Value::Null,
+                    merge_strategy: MergeStrategy::Replace,
+                },
+            ],
+            file_path: Some(user_path.display().to_string()),
+            expected_version: None,
+            reload_user_config: false,
+        })
+        .await?;
+    assert!(
+        toml::from_str::<TomlValue>(&std::fs::read_to_string(&user_path)?)?
+            .get("features")
+            .and_then(|features| features.get("network_proxy"))
+            .is_none()
+    );
+    Ok(())
 }
 
 #[tokio::test]
@@ -1486,6 +1596,29 @@ subagent_usage_hint_text = "Delegate carefully."
             "",
         ),
         (
+            r#"[features]
+network_proxy = true
+"#,
+            "features.network_proxy.credential_broker",
+            serde_json::json!(true),
+            r#"[features.network_proxy]
+enabled = true
+credential_broker = true
+"#,
+        ),
+        (
+            r#"[features.network_proxy]
+enabled = true
+credential_broker = true
+"#,
+            "features.network_proxy",
+            serde_json::json!(false),
+            r#"[features.network_proxy]
+enabled = false
+credential_broker = true
+"#,
+        ),
+        (
             r#"[desktop.features.multi_agent_v2]
 custom = true
 "#,
@@ -1590,7 +1723,7 @@ inherit = "all"
 exclude = [
     "AWS_*", # keep this comment
 ]
-set = { KEEP = "1", OTHER = "2" } # keep this inline table
+set = { KEEP = "1", OTHER = "2", GH_HOST = "github.stale.example" } # keep this inline table
 "#,
     )?;
 
@@ -1612,9 +1745,32 @@ inherit = "core"
 exclude = [
     "AWS_*", # keep this comment
 ]
-set = { KEEP = "1", OTHER = "2" } # keep this inline table
+set = { KEEP = "1", OTHER = "2", GH_HOST = "github.stale.example" } # keep this inline table
 "#
     );
+    #[cfg(windows)]
+    {
+        service
+            .write_value(ConfigValueWriteParams {
+                file_path: Some(path.display().to_string()),
+                key_path: "shell_environment_policy.set.gh_host".to_string(),
+                value: serde_json::json!("github.trusted.example"),
+                merge_strategy: MergeStrategy::Upsert,
+                expected_version: None,
+            })
+            .await?;
+        let config: TomlValue = toml::from_str(&std::fs::read_to_string(&path)?)?;
+        let overrides = config
+            .get("shell_environment_policy")
+            .and_then(|policy| policy.get("set"))
+            .and_then(TomlValue::as_table)
+            .expect("environment overrides");
+        assert_eq!(
+            overrides.get("GH_HOST").and_then(TomlValue::as_str),
+            Some("github.trusted.example")
+        );
+        assert!(!overrides.contains_key("gh_host"));
+    }
     service
         .read(ConfigReadParams {
             include_layers: false,
@@ -1723,6 +1879,7 @@ exclude = ["AWS_*"]
 "#,
             "shell_environment_policy.filters.AWS_*",
             serde_json::json!("include"),
+            serde_json::Value::Null,
         ),
         (
             r#"[shell_environment_policy.filters]
@@ -1730,10 +1887,18 @@ exclude = ["AWS_*"]
 "#,
             "shell_environment_policy.exclude",
             serde_json::json!(["AWS_*"]),
+            serde_json::Value::Null,
+        ),
+        #[cfg(windows)]
+        (
+            "[shell_environment_policy.set]\nGH_HOST = 'github.managed.example'\n",
+            "shell_environment_policy.set.gh_host",
+            serde_json::json!("github.user.example"),
+            serde_json::json!("github.managed.example"),
         ),
     ];
 
-    for (managed, key_path, value) in cases {
+    for (managed, key_path, value, expected_effective_value) in cases {
         let tmp = tempdir()?;
         let path = tmp.path().join(CONFIG_TOML_FILE);
         std::fs::write(&path, "")?;
@@ -1765,7 +1930,7 @@ exclude = ["AWS_*"]
             overridden.overriding_layer.name,
             ApiConfigLayerSource::LegacyManagedConfigTomlFromFile { file: managed_file }
         );
-        assert_eq!(overridden.effective_value, serde_json::Value::Null);
+        assert_eq!(overridden.effective_value, expected_effective_value);
         service
             .read(ConfigReadParams {
                 include_layers: false,

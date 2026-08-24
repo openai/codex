@@ -3602,6 +3602,8 @@ impl Config {
                     network_proxy,
                 );
             }
+            configured_network_proxy_config
+                .set_credential_broker_openai_base_url(cfg.openai_base_url.as_deref());
             configured_network_proxy_config.enabled = true;
         }
         if cfg.approval_policy == Some(AskForApproval::UnlessTrusted) {
@@ -4475,6 +4477,8 @@ impl Config {
                         network_proxy,
                     );
                 }
+                configured_network_proxy_config
+                    .set_credential_broker_openai_base_url(cfg.openai_base_url.as_deref());
                 configured_network_proxy_config.enabled = true;
             }
             configured_network_proxy_config

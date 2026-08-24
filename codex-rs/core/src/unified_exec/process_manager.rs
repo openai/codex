@@ -1084,6 +1084,9 @@ impl UnifiedExecProcessManager {
             .as_ref()
             .filter(|launch| launch.policy_decision_timeout_ms.is_some())
             .and_then(|_| network.and_then(NetworkProxy::remote_policy_decider));
+        if environment.is_remote() && network.is_some() && network_proxy_launch.is_none() {
+            request.exec_server_enforce_managed_network = false;
+        }
         request.exec_server_network_proxy = network_proxy_launch;
         request.exec_server_env_config = exec_server_env_config;
         request.exec_server_shell_snapshot = shell_snapshot;

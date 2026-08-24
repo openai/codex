@@ -255,6 +255,31 @@ fn multi_agent_v2_cli_overrides_preserve_boolean_and_nested_configuration() {
     }
 }
 
+#[test]
+fn network_proxy_feature_overrides_preserve_credential_broker_configuration() {
+    let enabled = (
+        "features.network_proxy".to_string(),
+        TomlValue::Boolean(true),
+    );
+    let broker = (
+        "features.network_proxy.credential_broker".to_string(),
+        TomlValue::Boolean(true),
+    );
+    let expected =
+        parse_toml("[features.network_proxy]\nenabled = true\ncredential_broker = true\n");
+
+    for overrides in [vec![enabled.clone(), broker.clone()], vec![broker, enabled]] {
+        assert_eq!(crate::build_cli_overrides_layer(&overrides), expected);
+    }
+
+    let mut base = parse_toml("[features]\nnetwork_proxy = true\n");
+    merge_toml_values(
+        &mut base,
+        &parse_toml("[features.network_proxy]\ncredential_broker = true\n"),
+    );
+    assert_eq!(base, expected);
+}
+
 /// Repeated opaque desktop overrides continue to replace their previous value.
 #[test]
 fn multi_agent_v2_cli_compatibility_excludes_opaque_desktop_paths() {

@@ -321,6 +321,11 @@ pub fn brokered_credential_dummy_env_keys(env: &HashMap<String, String>) -> Vec<
     keys
 }
 
+/// Returns environment keys used to bind registered credential providers to their destinations.
+pub fn credential_broker_provider_context_env_keys() -> impl Iterator<Item = &'static str> {
+    providers::credential_providers().flat_map(|provider| provider.context_env_vars.iter().copied())
+}
+
 /// Returns credential keys plus provider context keys already present in an environment with an
 /// active broker.
 pub fn brokered_credential_env_keys(
