@@ -24,6 +24,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
+use crate::linux_run_main::synthetic_mount_registry_root;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
 use codex_protocol::permissions::is_protected_metadata_name;
@@ -607,6 +608,23 @@ fn create_filesystem_args(
         read_only_subpaths.sort_by_key(|path| path_depth(path));
         for subpath in read_only_subpaths {
             append_read_only_subpath_args(&mut bwrap_args, &subpath, &allowed_write_paths)?;
+        }
+        // Protect the registry only where a writable bind exposes it. Apply
+        // this before deny masks so a denied parent stays hidden, rather than
+        // trying to recreate the registry beneath an already read-only tmpfs.
+        let registry_root = synthetic_mount_registry_root();
+        let registry_mount = if registry_root.starts_with(mount_root) {
+            Some(registry_root.as_path())
+        } else if mount_root.starts_with(&registry_root) {
+            Some(mount_root)
+        } else {
+            None
+        };
+        if let Some(registry_mount) = registry_mount {
+            fs::create_dir_all(&registry_root)?;
+            bwrap_args.args.push("--ro-bind".to_string());
+            bwrap_args.args.push(path_to_string(registry_mount));
+            bwrap_args.args.push(path_to_string(registry_mount));
         }
         let mut nested_unreadable_roots: Vec<PathBuf> = unreadable_roots
             .iter()
@@ -1688,6 +1706,46 @@ mod tests {
     }
 
     #[test]
+    fn registry_protection_precedes_denied_parent_mask() {
+        let registry_root = synthetic_mount_registry_root();
+        let temp_root = registry_root.parent().expect("registry parent");
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Write,
+                missing_path_behavior: None,
+            },
+            FileSystemSandboxEntry {
+                path: AbsolutePathBuf::try_from(temp_root)
+                    .expect("absolute temp root")
+                    .into(),
+                access: FileSystemAccessMode::Deny,
+                missing_path_behavior: None,
+            },
+        ]);
+
+        let args =
+            create_filesystem_args(&policy, Path::new("/"), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
+                .expect("filesystem args");
+        let registry_path = path_to_string(&registry_root);
+        let temp_path = path_to_string(temp_root);
+        let registry_bind = args
+            .args
+            .windows(3)
+            .position(|args| args == ["--ro-bind", registry_path.as_str(), registry_path.as_str()]);
+        let temp_mask = args
+            .args
+            .windows(2)
+            .position(|args| args == ["--tmpfs", temp_path.as_str()]);
+        assert!(
+            registry_bind.expect("registry read-only bind") < temp_mask.expect("temp deny mask"),
+            "registry protection must not reopen denied temp paths"
+        );
+    }
+
+    #[test]
     fn missing_read_only_subpath_uses_empty_file_bind_data() {
         let temp_dir = TempDir::new().expect("temp dir");
         let workspace = temp_dir.path().join("workspace");
@@ -2053,6 +2111,9 @@ mod tests {
                 "/.codex".to_string(),
                 "--remount-ro".to_string(),
                 "/.codex".to_string(),
+                "--ro-bind".to_string(),
+                path_to_string(&synthetic_mount_registry_root()),
+                path_to_string(&synthetic_mount_registry_root()),
                 // Rebind /dev after the root bind so device nodes remain
                 // writable/usable inside the writable root.
                 "--bind".to_string(),

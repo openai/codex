@@ -567,7 +567,7 @@ fn run_or_exec_bwrap(bwrap_args: crate::bwrap::BwrapArgs) -> ! {
 
 fn run_bwrap_in_child_with_synthetic_mount_cleanup(bwrap_args: crate::bwrap::BwrapArgs) -> ! {
     let crate::bwrap::BwrapArgs {
-        mut args,
+        args,
         preserved_files,
         synthetic_mount_targets,
         protected_create_targets,
@@ -576,20 +576,6 @@ fn run_bwrap_in_child_with_synthetic_mount_cleanup(bwrap_args: crate::bwrap::Bwr
     let synthetic_mount_registrations = register_synthetic_mount_targets(&synthetic_mount_targets);
     let protected_create_registrations =
         register_protected_create_targets(&protected_create_targets);
-    let registry_root = synthetic_mount_registry_root()
-        .to_string_lossy()
-        .into_owned();
-    let Some(command_separator) = args.iter().position(|arg| arg == "--") else {
-        panic!("bubblewrap argv is missing command separator '--'");
-    };
-    args.splice(
-        command_separator..command_separator,
-        [
-            "--ro-bind".to_string(),
-            registry_root.clone(),
-            registry_root,
-        ],
-    );
     let exec_start_pipe = create_exec_start_pipe(!protected_create_targets.is_empty());
     let parent_pid = unsafe { libc::getpid() };
     let pid = unsafe { libc::fork() };
@@ -1347,7 +1333,7 @@ fn synthetic_mount_marker_dir(path: &Path) -> PathBuf {
     synthetic_mount_registry_root().join(format!("{:016x}", hash_path(path)))
 }
 
-fn synthetic_mount_registry_root() -> PathBuf {
+pub(crate) fn synthetic_mount_registry_root() -> PathBuf {
     static REGISTRY_ROOT: OnceLock<PathBuf> = OnceLock::new();
 
     REGISTRY_ROOT
@@ -1360,9 +1346,17 @@ fn synthetic_mount_registry_root() -> PathBuf {
                     temp_dir.display()
                 )
             });
-            temp_dir.join(format!(
+            let registry_root = temp_dir.join(format!(
                 "codex-bwrap-synthetic-mount-targets-{effective_uid}"
-            ))
+            ));
+            // A registry symlink can redirect bookkeeping into a writable root
+            // that does not overlap TMPDIR, bypassing its read-only mount.
+            assert!(
+                !registry_root.is_symlink(),
+                "synthetic mount registry must not be a symlink: {}",
+                registry_root.display()
+            );
+            registry_root
         })
         .clone()
 }

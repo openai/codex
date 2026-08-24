@@ -731,6 +731,61 @@ async fn sandbox_reports_codex_symlink_build_failure_without_panicking() {
 }
 
 #[tokio::test]
+async fn sandbox_rejects_symlinked_synthetic_mount_registry() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
+        return;
+    }
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = temp.path().join("workspace");
+    let registry_target = workspace.join("registry");
+    std::fs::create_dir_all(&registry_target).expect("create registry target");
+    let effective_uid = unsafe { libc::geteuid() };
+    let registry = temp.path().join(format!(
+        "codex-bwrap-synthetic-mount-targets-{effective_uid}"
+    ));
+    std::os::unix::fs::symlink(&registry_target, &registry).expect("symlink registry");
+
+    let cwd = AbsolutePathBuf::try_from(workspace).expect("absolute workspace");
+    let permission_profile = PermissionProfile::workspace_write_with(
+        std::slice::from_ref(&cwd),
+        NetworkSandboxPolicy::Enabled,
+        /*exclude_tmpdir_env_var*/ true,
+        /*exclude_slash_tmp*/ true,
+    );
+    let mut env = create_env_from_core_vars();
+    env.insert("TMPDIR".to_string(), temp.path().display().to_string());
+    let output = expect_denied(
+        run_cmd_result_with_permission_profile_for_cwd(
+            &["sh", "-c", "touch registry/forged-marker"],
+            cwd,
+            permission_profile,
+            env,
+            LONG_TIMEOUT_MS,
+            /*use_legacy_landlock*/ false,
+        )
+        .await,
+        "a symlinked registry must not expose writable bookkeeping",
+    );
+    assert!(
+        output
+            .stderr
+            .text
+            .contains("synthetic mount registry must not be a symlink"),
+        "stderr: {}",
+        output.stderr.text
+    );
+    assert_eq!(
+        std::fs::read_dir(registry_target)
+            .expect("read registry target")
+            .count(),
+        0,
+        "the registry symlink must be rejected before registration or command execution"
+    );
+}
+
+#[tokio::test]
 async fn sandbox_keeps_parent_repo_discovery_while_blocking_child_metadata() {
     if should_skip_bwrap_tests().await {
         eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
@@ -956,6 +1011,82 @@ async fn sandbox_blocks_explicit_split_policy_carveouts_under_bwrap() {
     );
 
     assert_ne!(output.exit_code, 0);
+}
+
+#[tokio::test]
+async fn sandbox_starts_with_denied_tmp_without_exposing_registry() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
+        return;
+    }
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(temp.path().join("AGENTS.md"), "project instructions\n")
+        .expect("write instructions");
+    let cwd = AbsolutePathBuf::try_from(temp.path()).expect("absolute workspace");
+    let sandbox_helper = codex_linux_sandbox_exe();
+    let helper_dir = AbsolutePathBuf::try_from(sandbox_helper.parent().expect("helper parent"))
+        .expect("absolute helper directory");
+
+    for tmp_root in [PathBuf::from("/tmp"), temp.path().join("denied-tmp")] {
+        std::fs::create_dir_all(&tmp_root).expect("create temp root");
+        let secret = NamedTempFile::new_in(&tmp_root).expect("denied file");
+        std::fs::write(secret.path(), "private").expect("write denied file");
+        for read_root in [FileSystemSpecialPath::Root, FileSystemSpecialPath::Minimal] {
+            let denied_path = if tmp_root == std::path::Path::new("/tmp") {
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::SlashTmp,
+                }
+            } else {
+                AbsolutePathBuf::try_from(tmp_root.as_path())
+                    .expect("absolute temp root")
+                    .into()
+            };
+            let policy = FileSystemSandboxPolicy::restricted(vec![
+                FileSystemSandboxEntry::new(
+                    FileSystemPath::Special { value: read_root },
+                    FileSystemAccessMode::Read,
+                ),
+                FileSystemSandboxEntry::new(helper_dir.clone().into(), FileSystemAccessMode::Read),
+                FileSystemSandboxEntry::new(cwd.clone().into(), FileSystemAccessMode::Write),
+                FileSystemSandboxEntry::new(denied_path, FileSystemAccessMode::Deny),
+            ]);
+            let mut env = create_env_from_core_vars();
+            env.insert("TMPDIR".to_string(), tmp_root.display().to_string());
+            env.insert(
+                "DENIED_SECRET".to_string(),
+                secret.path().display().to_string(),
+            );
+            let output = run_cmd_result_with_permission_profile_for_cwd(
+                &[
+                    "sh",
+                    "-c",
+                    r#"set -e
+cat AGENTS.md
+test ! -r "$DENIED_SECRET"
+if printf modified > "$DENIED_SECRET" 2>/dev/null; then exit 1; fi
+registry="$TMPDIR/codex-bwrap-synthetic-mount-targets-$(id -u)"
+test ! -e "$registry"
+"#,
+                ],
+                cwd.clone(),
+                PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Enabled),
+                env,
+                LONG_TIMEOUT_MS,
+                /*use_legacy_landlock*/ false,
+            )
+            .await
+            .expect("sandbox should start with denied temp directory");
+            assert_eq!(
+                (output.exit_code, output.stdout.text.as_str()),
+                (0, "project instructions\n"),
+                "stderr: {}",
+                output.stderr.text
+            );
+            assert_eq!(std::fs::read_to_string(secret.path()).unwrap(), "private");
+            assert!(!temp.path().join(".git").exists());
+        }
+    }
 }
 
 #[tokio::test]
