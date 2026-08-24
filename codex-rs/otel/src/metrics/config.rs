@@ -7,6 +7,7 @@ use crate::metrics::names::RESPONSES_API_ENGINE_SERVICE_TBT_DURATION_METRIC;
 use crate::metrics::names::RESPONSES_API_ENGINE_SERVICE_TTFT_DURATION_METRIC;
 use crate::metrics::names::TOOL_CALL_COUNT_METRIC;
 use crate::metrics::names::TOOL_CALL_DURATION_METRIC;
+use crate::metrics::names::TURN_COST_MICROUSD_METRIC;
 use crate::metrics::names::TURN_TOKEN_USAGE_METRIC;
 use crate::metrics::validation::validate_tag_key;
 use crate::metrics::validation::validate_tag_value;
@@ -27,6 +28,7 @@ const STATSIG_DISABLED_METRICS: &[&str] = &[
     RESPONSES_API_ENGINE_SERVICE_TTFT_DURATION_METRIC,
     TOOL_CALL_COUNT_METRIC,
     TOOL_CALL_DURATION_METRIC,
+    TURN_COST_MICROUSD_METRIC,
     TURN_TOKEN_USAGE_METRIC,
 ];
 

@@ -95,10 +95,16 @@ enum BackendAvailability {
 
 impl TurnCostWorker {
     pub(crate) fn spawn(config: Arc<Config>, auth_manager: Arc<AuthManager>) -> Option<Self> {
-        if !matches!(
+        let has_otel_log_exporter = matches!(
             config.otel.exporter,
             OtelExporterKind::OtlpHttp { .. } | OtelExporterKind::OtlpGrpc { .. }
-        ) || config.model_provider.is_amazon_bedrock()
+        );
+        let has_otel_metrics_exporter = matches!(
+            config.otel.metrics_exporter,
+            OtelExporterKind::OtlpHttp { .. } | OtelExporterKind::OtlpGrpc { .. }
+        );
+        if !(has_otel_log_exporter || has_otel_metrics_exporter)
+            || config.model_provider.is_amazon_bedrock()
         {
             return None;
         }

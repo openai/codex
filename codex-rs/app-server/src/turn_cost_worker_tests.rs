@@ -22,6 +22,39 @@ use wiremock::matchers::path;
 const TURN_COST_PATH: &str = "/v1/analytics/codex/turn-costs";
 
 #[tokio::test]
+async fn worker_starts_with_otlp_metrics_exporter_without_log_exporter() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path(TURN_COST_PATH))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "turns": []
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let codex_home = TempDir::new().expect("temporary Codex home");
+    let mut config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("test config");
+    config.chatgpt_base_url = server.uri();
+    config.otel.exporter = OtelExporterKind::None;
+    config.otel.metrics_exporter = OtelExporterKind::OtlpGrpc {
+        endpoint: server.uri(),
+        headers: HashMap::new(),
+        tls: None,
+    };
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("sk-test"));
+
+    let worker = TurnCostWorker::spawn(Arc::new(config), auth_manager)
+        .expect("OTLP metrics exporter should enable turn-cost collection");
+    wait_for_request_count(&server, /*expected*/ 1).await;
+    worker.shutdown();
+    server.verify().await;
+}
+
+#[tokio::test]
 async fn handle_observes_only_matching_model_provider() {
     let codex_home = TempDir::new().expect("temporary Codex home");
     let mut config = ConfigBuilder::default()
