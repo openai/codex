@@ -141,7 +141,8 @@ async fn executor_stop_hook_rejects_mismatched_environment() -> Result<()> {
             (executor_url.to_string(), None)
         } else {
             let listener = TcpListener::bind("127.0.0.1:0").await?;
-            let executor_url = format!("ws://{}", listener.local_addr()?);
+            let executor_address = listener.local_addr()?;
+            let executor_url = format!("ws://{executor_address}");
             drop(listener);
             let runtime_paths = ExecServerRuntimePaths::new(
                 std::env::current_exe()?,
@@ -157,7 +158,19 @@ async fn executor_stop_hook_rejects_mismatched_environment() -> Result<()> {
                 )
                 .await
             });
-            tokio::task::yield_now().await;
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if tokio::net::TcpStream::connect(executor_address)
+                        .await
+                        .is_ok()
+                    {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .context("timed out waiting for the mismatched executor to start")?;
             (executor_url, Some(executor))
         };
 
