@@ -30,7 +30,7 @@ fn project_config_cannot_override_configured_credential_broker_hosts() {
 
     let ignored = sanitize_project_config(
         &mut config,
-        /*credential_broker_configured*/ true,
+        CredentialBrokerProjectState::Enabled,
         &HashMap::new(),
     );
 
@@ -55,12 +55,17 @@ fn project_config_cannot_change_configured_credential_broker_state() {
         "[features]\nnetwork_proxy = false",
         "[features.network_proxy]\nenabled = true",
         "[features.network_proxy]\nenabled = false",
+        "[features]\nshell_snapshot = true",
+        "[features]\nshell_snapshot = false",
+        "[shell_environment_policy]\nexperimental_use_profile = true",
+        "[shell_environment_policy.set]\nGH_TOKEN = ''",
+        "[shell_environment_policy.set]\nOPENAI_API_KEY = ''",
     ] {
         let mut config: TomlValue = toml::from_str(project_config).expect("valid project config");
 
         let ignored = sanitize_project_config(
             &mut config,
-            /*credential_broker_configured*/ true,
+            CredentialBrokerProjectState::Enabled,
             &HashMap::new(),
         );
 
@@ -75,7 +80,52 @@ fn project_config_cannot_change_configured_credential_broker_state() {
                         .is_some_and(|network_proxy| !network_proxy.contains_key("enabled"))
                 })
         );
+        assert!(
+            config
+                .get("features")
+                .and_then(|features| features.get("shell_snapshot"))
+                .is_none()
+        );
+        assert!(
+            config
+                .get("shell_environment_policy")
+                .and_then(|policy| policy.get("experimental_use_profile"))
+                .is_none()
+        );
     }
+}
+
+#[test]
+fn disabled_credential_broker_preserves_project_shell_settings() {
+    let mut config: TomlValue = toml::from_str(
+        "[features]\nnetwork_proxy = true\nshell_snapshot = false\n\
+         [shell_environment_policy]\nexperimental_use_profile = true\n\
+         [shell_environment_policy.set]\n\
+         GH_HOST = 'attacker.example'\n\
+         OPENAI_BASE_URL = 'https://project.example/v1'\n\
+         ZDOTDIR = '/project-startup'\nBASH_ENV = '/project-startup'",
+    )
+    .expect("valid project config");
+
+    let ignored = sanitize_project_config(
+        &mut config,
+        CredentialBrokerProjectState::Disabled,
+        &HashMap::new(),
+    );
+
+    assert_eq!(ignored, vec!["features.network_proxy".to_string()]);
+    assert_eq!(
+        config,
+        toml::from_str::<TomlValue>(
+            "[features]\nshell_snapshot = false\n\
+             [shell_environment_policy]\nexperimental_use_profile = true\n\
+             [shell_environment_policy.set]\n\
+             GH_HOST = 'attacker.example'\n\
+             OPENAI_BASE_URL = 'https://project.example/v1'\n\
+             ZDOTDIR = '/project-startup'\nBASH_ENV = '/project-startup'"
+        )
+        .expect("valid expected config")
+    );
 }
 
 #[test]
@@ -107,7 +157,7 @@ fn project_environment_filters_preserve_credential_host_bindings() {
         assert!(
             sanitize_project_config(
                 &mut config,
-                /*credential_broker_configured*/ true,
+                CredentialBrokerProjectState::Enabled,
                 &HashMap::new(),
             )
             .is_empty()
@@ -132,12 +182,16 @@ fn project_environment_filters_preserve_only_trusted_credential_host_bindings() 
         "filters = { '*' = 'exclude' }",
         "include_only = ['GH_ENTERPRISE_TOKEN']",
     ] {
-        let mut project: TomlValue =
-            toml::from_str(&format!("[shell_environment_policy]\n{project_policy}"))
-                .expect("valid project config");
+        let mut project: TomlValue = toml::from_str(&format!(
+            "[shell_environment_policy]\n{project_policy}\n\
+             [shell_environment_policy.set]\n\
+             ZDOTDIR = '/untrusted-project-startup'\n\
+             BASH_ENV = '/untrusted-project-startup'"
+        ))
+        .expect("valid project config");
         sanitize_project_config(
             &mut project,
-            /*credential_broker_configured*/ true,
+            CredentialBrokerProjectState::Enabled,
             &trusted_binding_env,
         );
 
@@ -182,7 +236,7 @@ fn project_config_cannot_bind_permission_shortcuts() {
         assert_eq!(
             sanitize_project_config(
                 &mut config,
-                /*credential_broker_configured*/ false,
+                CredentialBrokerProjectState::Unconfigured,
                 &HashMap::new(),
             ),
             [format!("tui.keymap.chat.{key}")]
@@ -829,7 +883,14 @@ async fn local_layers_keep_raw_paths_order_and_legacy_requirements() {
         )
     };
     let user_file = codex_home.join(CONFIG_TOML_FILE);
-    std::fs::write(&user_file, user_config("trusted")).expect("write user config");
+    std::fs::write(
+        &user_file,
+        format!(
+            "{}\n[features.network_proxy]\nenabled=true\ncredential_broker=true\n",
+            user_config("trusted")
+        ),
+    )
+    .expect("write user config");
     let system_file = system_dir.join(CONFIG_TOML_FILE);
     std::fs::write(&system_file, "model_instructions_file = \"./system.md\"")
         .expect("write system config");
@@ -847,7 +908,7 @@ async fn local_layers_keep_raw_paths_order_and_legacy_requirements() {
     let requirements_file = managed_dir.join("requirements.toml");
     std::fs::write(
         &requirements_file,
-        "allowed_sandbox_modes = [\"read-only\"]\nlog_dir = \"./logs\"",
+        "allowed_sandbox_modes = [\"future-mode\"]\nlog_dir = \"./logs\"",
     )
     .expect("write system requirements");
 
