@@ -23,6 +23,7 @@ use codex_model_provider::create_model_provider;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::AdditionalPermissionProfile as PermissionProfile;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
@@ -640,7 +641,13 @@ async fn process_compacted_history_preserves_separate_guardian_developer_message
         .iter()
         .filter_map(|item| match item {
             ResponseItem::Message { role, content, .. } if role == "developer" => {
-                crate::content_items_to_text(content)
+                crate::content_items_to_text(content).map(|text| {
+                    (
+                        text,
+                        item.executed_tool_call_metadata()
+                            .and_then(|metadata| metadata.content_item_kinds.clone()),
+                    )
+                })
             }
             _ => None,
         })
@@ -649,10 +656,16 @@ async fn process_compacted_history_preserves_separate_guardian_developer_message
     assert!(
         !developer_messages
             .iter()
-            .any(|message| message.contains("stale developer message"))
+            .any(|(message, _)| message.contains("stale developer message"))
     );
     assert!(developer_messages.len() >= 2);
-    assert_eq!(developer_messages.last(), Some(&guardian_policy));
+    assert_eq!(
+        developer_messages.last(),
+        Some(&(
+            guardian_policy,
+            Some(vec![ContentItemKind("guardian.policy".to_string())]),
+        ))
+    );
 }
 
 #[tokio::test]

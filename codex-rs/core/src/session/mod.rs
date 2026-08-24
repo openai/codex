@@ -22,6 +22,7 @@ use crate::config::ManagedFeatures;
 use crate::config::resolve_tool_suggest_config_from_layer_stack;
 use crate::context::ContextualUserFragment;
 use crate::context::DeveloperInstructions;
+use crate::context::GuardianPolicy;
 use crate::context::ManagedDeveloperInstructions;
 use crate::context::ModelSwitchInstructions;
 use crate::context::MultiAgentRoleInstructions;
@@ -57,7 +58,6 @@ use codex_analytics::SubAgentThreadStartedInput;
 use codex_analytics::TurnCodexErrorFact;
 use codex_async_utils::OrCancelExt;
 use codex_connectors::connector_runtime_context_key;
-use codex_context_fragments::AnnotatedContent;
 use codex_context_fragments::RenderedFragment;
 use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
@@ -3719,13 +3719,7 @@ impl Session {
             && !developer_instructions.is_empty()
             && let Some(guardian_developer_message) =
                 crate::context_manager::updates::build_rendered_message(vec![
-                    RenderedFragment::new(
-                        "developer",
-                        AnnotatedContent::input_text(
-                            developer_instructions,
-                            ContentItemKind("guardian.policy".to_string()),
-                        ),
-                    ),
+                    GuardianPolicy::new(developer_instructions).render_fragment(),
                 ])
         {
             items.push(guardian_developer_message);
