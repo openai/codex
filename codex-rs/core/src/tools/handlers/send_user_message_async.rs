@@ -98,4 +98,8 @@ impl ToolExecutor<ToolInvocation> for SendUserMessageAsyncHandler {
     }
 }
 
-impl CoreToolRuntime for SendUserMessageAsyncHandler {}
+impl CoreToolRuntime for SendUserMessageAsyncHandler {
+    fn is_builtin_control_tool(&self) -> bool {
+        true
+    }
+}

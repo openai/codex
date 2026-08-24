@@ -64,11 +64,26 @@ impl ToolExecutor<ToolInvocation> for ExtensionToolAdapter {
 impl CoreToolRuntime for ExtensionToolAdapter {
     fn is_builtin_control_tool(&self) -> bool {
         let tool_name = self.0.tool_name();
-        tool_name.is_default_namespace()
-            && matches!(
+        if tool_name.is_default_namespace() {
+            return matches!(
                 tool_name.name.as_str(),
                 "get_goal" | "create_goal" | "update_goal"
+            );
+        }
+        matches!(
+            (tool_name.namespace.as_deref(), tool_name.name.as_str()),
+            (
+                Some("notes"),
+                "list_files_by_prefix"
+                    | "read_file"
+                    | "search_contents"
+                    | "append_to_file"
+                    | "write_file"
+            ) | (
+                Some("history"),
+                "list_windows" | "list_items" | "read_item" | "search_contents"
             )
+        )
     }
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
