@@ -3095,7 +3095,7 @@ async fn escalated_retry_bypasses_extension_approval_and_runs_guardian() -> anyh
     struct AutoApprovingReviewContributor;
 
     impl codex_extension_api::ApprovalReviewContributor for AutoApprovingReviewContributor {
-        fn contribute<'a>(
+        fn fast_decision<'a>(
             &'a self,
             _session_store: &'a codex_extension_api::ExtensionData,
             _thread_store: &'a codex_extension_api::ExtensionData,

@@ -363,7 +363,7 @@ impl ThreadLifecycleContributor<Config> for GuardianV2Extension {
 }
 
 impl ApprovalReviewContributor for GuardianV2Extension {
-    fn contribute<'a>(
+    fn fast_decision<'a>(
         &'a self,
         _session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,

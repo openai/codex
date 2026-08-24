@@ -1161,7 +1161,7 @@ async fn guardian_timeout_rejects_tool_call_with_acting_model_instructions(
     struct TimedOutReviewContributor;
 
     impl codex_extension_api::ApprovalReviewContributor for TimedOutReviewContributor {
-        fn contribute<'a>(
+        fn fast_decision<'a>(
             &'a self,
             _session_store: &'a codex_extension_api::ExtensionData,
             _thread_store: &'a codex_extension_api::ExtensionData,

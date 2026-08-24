@@ -65,7 +65,7 @@ use wiremock::matchers::path;
 struct ApprovedReviewContributor;
 
 impl ApprovalReviewContributor for ApprovedReviewContributor {
-    fn contribute<'a>(
+    fn fast_decision<'a>(
         &'a self,
         _session_store: &'a ExtensionData,
         _thread_store: &'a ExtensionData,
@@ -83,7 +83,7 @@ impl ApprovalReviewContributor for ApprovedReviewContributor {
 struct EscalationApprovingReviewContributor;
 
 impl ApprovalReviewContributor for EscalationApprovingReviewContributor {
-    fn contribute<'a>(
+    fn fast_decision<'a>(
         &'a self,
         _session_store: &'a ExtensionData,
         _thread_store: &'a ExtensionData,

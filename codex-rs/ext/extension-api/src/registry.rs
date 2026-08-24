@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use codex_protocol::protocol::ReviewDecision;
 
+use crate::ApprovalAssessment;
 use crate::ApprovalReviewContributor;
+use crate::ApprovalReviewError;
+use crate::ApprovalReviewInput;
 use crate::ConfigContributor;
 use crate::ContextContributor;
 use crate::ExtensionData;
@@ -188,9 +191,22 @@ impl<C: Sync> ExtensionRegistry<C> {
         &self.skill_invocation_contributors
     }
 
-    /// Claims the first rendered approval-review prompt accepted by an
-    /// installed contributor.
-    pub async fn approval_review(
+    /// Returns the first full approval assessment claimed by a contributor.
+    pub async fn full_approval_review(
+        &self,
+        input: ApprovalReviewInput<'_>,
+    ) -> Option<Result<ApprovalAssessment, ApprovalReviewError>> {
+        for contributor in &self.approval_review_contributors {
+            if let Some(assessment) = contributor.full_review(&input).await {
+                return Some(assessment);
+            }
+        }
+
+        None
+    }
+
+    /// Returns the first fast approval decision claimed by a contributor.
+    pub async fn fast_approval_decision(
         &self,
         session_store: &ExtensionData,
         thread_store: &ExtensionData,
@@ -199,7 +215,7 @@ impl<C: Sync> ExtensionRegistry<C> {
     ) -> Option<ReviewDecision> {
         for contributor in &self.approval_review_contributors {
             if let Some(decision) = contributor
-                .contribute(
+                .fast_decision(
                     session_store,
                     thread_store,
                     prompt,

@@ -170,7 +170,7 @@ async fn installed_extension_reconnects_after_auth_refresh() -> Result<()> {
         .await?;
         assert_eq!(
             registry
-                .approval_review(
+                .fast_approval_decision(
                     &session_store,
                     thread_store,
                     "review action",
@@ -622,7 +622,7 @@ async fn sample_configured_conversation_history(
     }
     assert_eq!(
         registry
-            .approval_review(
+            .fast_approval_decision(
                 &session_store,
                 thread_store,
                 "review action",
@@ -751,7 +751,7 @@ impl GuardianFailureFixture {
         .await?;
         assert_eq!(
             self.registry
-                .approval_review(
+                .fast_approval_decision(
                     &self.session_store,
                     thread_store,
                     "review action",
@@ -1071,7 +1071,7 @@ max_recent_non_user_entries = 8
     });
     assert_eq!(
         registry
-            .approval_review(
+            .fast_approval_decision(
                 &session_store,
                 thread_store,
                 "review action",
@@ -1092,7 +1092,7 @@ max_recent_non_user_entries = 8
     });
     assert_eq!(
         registry
-            .approval_review(
+            .fast_approval_decision(
                 &session_store,
                 thread_store,
                 "review action",
@@ -1115,7 +1115,7 @@ max_recent_non_user_entries = 8
         .store(/*val*/ 3, Ordering::Release);
     assert_eq!(
         registry
-            .approval_review(
+            .fast_approval_decision(
                 &session_store,
                 thread_store,
                 "review action",
@@ -1134,7 +1134,7 @@ max_recent_non_user_entries = 8
         .store(/*val*/ 4, Ordering::Release);
     assert_eq!(
         registry
-            .approval_review(
+            .fast_approval_decision(
                 &session_store,
                 thread_store,
                 "review action",
@@ -1155,7 +1155,7 @@ max_recent_non_user_entries = 8
         .store(/*val*/ 2, Ordering::Release);
     assert_eq!(
         registry
-            .approval_review(
+            .fast_approval_decision(
                 &session_store,
                 thread_store,
                 "review action",
@@ -1447,7 +1447,7 @@ async fn contributor_uses_model_defaults_and_preserves_local_overrides() -> Resu
     });
     assert_eq!(
         registry
-            .approval_review(
+            .fast_approval_decision(
                 &session_store,
                 thread_store,
                 "review action",
@@ -1603,7 +1603,7 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
     assert!(score.sampled_at.is_some());
     assert_eq!(
         registry
-            .approval_review(
+            .fast_approval_decision(
                 &session_store,
                 thread_store,
                 "review action",
@@ -1618,7 +1618,7 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
     });
     assert_eq!(
         registry
-            .approval_review(
+            .fast_approval_decision(
                 &session_store,
                 thread_store,
                 "review action",
@@ -1634,7 +1634,7 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
     });
     assert_eq!(
         registry
-            .approval_review(
+            .fast_approval_decision(
                 &session_store,
                 thread_store,
                 "review action",
@@ -1651,7 +1651,7 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
     });
     assert_eq!(
         registry
-            .approval_review(
+            .fast_approval_decision(
                 &session_store,
                 &disabled_thread_store,
                 "review action",
@@ -1738,7 +1738,7 @@ async fn contributor_skips_models_requiring_managed_guardian_review() -> Result<
     });
     assert_eq!(
         registry
-            .approval_review(
+            .fast_approval_decision(
                 &session_store,
                 thread_store,
                 "review action",
@@ -1818,7 +1818,7 @@ async fn contributor_counts_failed_thread_lookups_toward_score_lag() -> Result<(
     });
     assert_eq!(
         registry
-            .approval_review(
+            .fast_approval_decision(
                 &session_store,
                 thread_store,
                 "review action",
@@ -1854,7 +1854,7 @@ async fn contributor_counts_failed_thread_lookups_toward_score_lag() -> Result<(
     assert_eq!(score_progress.latest_tool_call.load(Ordering::Acquire), 2);
     assert_eq!(
         registry
-            .approval_review(
+            .fast_approval_decision(
                 &session_store,
                 thread_store,
                 "review action",
@@ -2197,7 +2197,7 @@ async fn contributor_reuses_the_latest_compatible_parent_compaction() -> Result<
     assert_eq!(previous_score.scores.get("action_risk"), Some(&0.0));
     assert_eq!(
         registry
-            .approval_review(
+            .fast_approval_decision(
                 &session_store,
                 thread_store,
                 "review action",
@@ -2241,7 +2241,7 @@ async fn contributor_reuses_the_latest_compatible_parent_compaction() -> Result<
     );
     assert_eq!(
         registry
-            .approval_review(
+            .fast_approval_decision(
                 &session_store,
                 thread_store,
                 "review action",
