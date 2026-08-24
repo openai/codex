@@ -4,6 +4,7 @@
 # Require approval from a Codex engineer for all internal changes.
 * @openai/codex-eng @openai/codex-core-agent-team
 /codex-cli/ @openai/coding-team @openai/codex-core-agent-team
+/scripts/release/ @openai/codex-core-agent-team
 
 # Core crate ownership.
 /codex-rs/ansi-escape/ @openai/coding-team @openai/codex-core-agent-team
