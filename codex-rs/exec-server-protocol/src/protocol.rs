@@ -194,7 +194,7 @@ impl EnvironmentInfo {
                 environment_config_read: true,
                 http_header_env_vars: true,
                 sandboxed_file_streaming: true,
-                shell_snapshot_v2: false,
+                shell_snapshot_v2: cfg!(unix),
             },
         }
     }
