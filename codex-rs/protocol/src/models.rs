@@ -1316,6 +1316,21 @@ impl ResponseItem {
         }
     }
 
+    /// Removes content item classifications while preserving other passthrough metadata.
+    pub fn clear_content_item_kinds(&mut self) {
+        let Some(metadata) = self.internal_chat_message_metadata_passthrough_mut() else {
+            return;
+        };
+        let Some(metadata_value) = metadata else {
+            return;
+        };
+
+        metadata_value.content_item_kinds = None;
+        if metadata_value == &InternalChatMessageMetadataPassthrough::default() {
+            *metadata = None;
+        }
+    }
+
     fn internal_chat_message_metadata_passthrough(
         &self,
     ) -> Option<&InternalChatMessageMetadataPassthrough> {

@@ -257,6 +257,7 @@ impl MemoryStartupContext {
             session_source.clone(),
             config_snapshot.originator,
             config.model_verbosity,
+            config.features.enabled(Feature::ContentItemKinds),
             config.features.enabled(Feature::EnableRequestCompression),
             config.features.enabled(Feature::RuntimeMetrics),
             /*beta_features_header*/ None,

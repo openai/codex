@@ -1375,6 +1375,10 @@ async fn fork_injects_changed_agents_md_once() -> Result<()> {
     fork_config.model_provider = parent.config.model_provider.clone();
     fork_config.model_catalog = parent.config.model_catalog.clone();
     fork_config.codex_self_exe = parent.config.codex_self_exe.clone();
+    fork_config
+        .features
+        .enable(Feature::ContentItemKinds)
+        .expect("test config should allow ContentItemKinds override");
     let forked = parent
         .thread_manager
         .fork_thread(

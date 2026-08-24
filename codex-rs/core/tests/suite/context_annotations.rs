@@ -215,3 +215,39 @@ async fn first_request_item_types_roles_and_content_annotations() -> Result<()> 
 
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn content_item_kinds_are_omitted_when_feature_disabled() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let response = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.developer_instructions = Some("Keep other metadata intact.".into());
+            config
+                .features
+                .disable(Feature::ContentItemKinds)
+                .expect("test config should allow ContentItemKinds override");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    test.submit_text_turn("inspect request metadata").await?;
+
+    let input = response.single_request().input();
+    assert!(input.iter().all(|item| {
+        item.pointer("/internal_chat_message_metadata_passthrough/content_item_kinds")
+            .is_none()
+    }));
+    assert!(input.iter().any(|item| {
+        item.pointer("/internal_chat_message_metadata_passthrough/turn_id")
+            .is_some()
+    }));
+
+    Ok(())
+}
