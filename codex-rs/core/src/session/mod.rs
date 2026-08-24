@@ -1128,6 +1128,12 @@ impl Session {
                 spec
             }
         };
+        // Disabled specs still carry managed requirements and constraints, but they do not have
+        // listeners and must not be exposed as active managed proxy runtimes.
+        if !spec.enabled() {
+            self.services.network_proxy.store(None);
+            return;
+        }
         if let Some(started_proxy) = self.services.network_proxy.load_full() {
             if let Err(err) = spec.apply_to_started_proxy(started_proxy.as_ref()).await {
                 warn!("failed to refresh managed network proxy for sandbox change: {err}");

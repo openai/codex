@@ -1158,6 +1158,7 @@ async fn new_turn_refreshes_managed_network_proxy_for_sandbox_change() -> anyhow
     let mut network_config = NetworkProxyConfig::default();
     network_config.set_allowed_domains(vec!["evil.com".to_string()]);
     let requirements = NetworkConstraints {
+        enabled: Some(true),
         domains: Some(NetworkDomainPermissionsToml {
             entries: std::collections::BTreeMap::from([(
                 "*.example.com".to_string(),
@@ -1225,6 +1226,51 @@ async fn new_turn_refreshes_managed_network_proxy_for_sandbox_change() -> anyhow
         Some(vec!["*.example.com".to_string()])
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn refresh_clears_disabled_managed_network_proxy() -> anyhow::Result<()> {
+    let permission_profile = PermissionProfile::workspace_write();
+    let enabled_spec = crate::config::NetworkProxySpec::from_config_and_constraints(
+        NetworkProxyConfig::default(),
+        Some(NetworkConstraints {
+            enabled: Some(true),
+            ..Default::default()
+        }),
+        &permission_profile,
+    )?;
+    let disabled_spec = crate::config::NetworkProxySpec::from_config_and_constraints(
+        NetworkProxyConfig::default(),
+        Some(NetworkConstraints {
+            enabled: Some(false),
+            ..Default::default()
+        }),
+        &permission_profile,
+    )?;
+    let session = make_session_with_config(move |config| {
+        config
+            .permissions
+            .set_permission_profile(permission_profile)
+            .expect("test setup should allow permission profile");
+        config.permissions.network = Some(enabled_spec);
+    })
+    .await?;
+    assert!(session.services.network_proxy.load_full().is_some());
+
+    {
+        let mut state = session.state.lock().await;
+        let mut config = (*state.session_configuration.original_config_do_not_use).clone();
+        config.permissions.network = Some(disabled_spec);
+        state.session_configuration.original_config_do_not_use = Arc::new(config);
+    }
+
+    session
+        .refresh_managed_network_proxy_for_current_permission_profile()
+        .await;
+
+    assert!(session.services.network_proxy.load_full().is_none());
+    assert!(session.new_default_turn().await.network.is_none());
     Ok(())
 }
 
@@ -1397,6 +1443,41 @@ async fn workspace_write_turns_continue_to_expose_managed_network_proxy() -> any
 
     let turn_context = session.new_default_turn().await;
     assert!(turn_context.network.is_some());
+    Ok(())
+}
+
+#[tokio::test]
+async fn disabled_managed_network_does_not_start_or_expose_proxy() -> anyhow::Result<()> {
+    let permission_profile = PermissionProfile::workspace_write();
+    let network_spec = crate::config::NetworkProxySpec::from_config_and_constraints(
+        NetworkProxyConfig::default(),
+        Some(NetworkConstraints {
+            enabled: Some(false),
+            ..Default::default()
+        }),
+        &permission_profile,
+    )?;
+
+    let (session, rx) = make_session_with_config_and_rx(move |config| {
+        config
+            .permissions
+            .set_permission_profile(permission_profile)
+            .expect("test setup should allow permission profile");
+        config.permissions.network = Some(network_spec);
+    })
+    .await?;
+
+    assert!(session.services.network_proxy.load_full().is_none());
+    assert!(session.new_default_turn().await.network.is_none());
+
+    loop {
+        let event = rx.recv().await.expect("channel open");
+        if let EventMsg::SessionConfigured(event) = event.msg {
+            assert!(event.network_proxy.is_none());
+            break;
+        }
+    }
+
     Ok(())
 }
 
