@@ -285,14 +285,16 @@ impl Session {
             world_state.add_section(usage_hint);
         }
         world_state.add_section(multi_agent_mode);
-        world_state.add_section(ManagedDeveloperInstructionsState::new(
-            turn_context
-                .config
-                .config_layer_stack
-                .requirements()
-                .additional_developer_instructions
-                .as_ref(),
-        ));
+        if !crate::guardian::is_basic_session_source(&turn_context.session_source) {
+            world_state.add_section(ManagedDeveloperInstructionsState::new(
+                turn_context
+                    .config
+                    .config_layer_stack
+                    .requirements()
+                    .additional_developer_instructions
+                    .as_ref(),
+            ));
+        }
         Ok(world_state)
     }
 }

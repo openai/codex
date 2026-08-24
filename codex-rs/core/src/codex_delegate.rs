@@ -80,7 +80,7 @@ pub(crate) async fn run_codex_thread_interactive(
         warnings: Vec::new(),
     };
     let session_source = SessionSource::SubAgent(subagent_source.clone());
-    let is_guardian_reviewer = crate::guardian::is_guardian_reviewer_source(&session_source);
+    let is_guardian_reviewer = crate::guardian::is_basic_session_source(&session_source);
     let extensions = if is_guardian_reviewer {
         codex_extension_api::empty_extension_registry()
     } else {

@@ -547,11 +547,16 @@ impl Session {
         config
             .startup_warnings
             .extend(user_instruction_provider_warnings);
-        let exec_policy = if crate::guardian::is_guardian_reviewer_source(&session_source) {
-            // Guardian review should rely on the built-in shell safety checks,
-            // not on caller-provided exec-policy rules that could shape the
-            // reviewer or silently auto-approve commands.
-            Arc::new(ExecPolicyManager::default())
+        let exec_policy = if crate::guardian::is_basic_session_source(&session_source) {
+            let managed_policy = config
+                .config_layer_stack
+                .requirements()
+                .exec_policy
+                .as_deref()
+                .map_or_else(codex_execpolicy::Policy::empty, |policy| {
+                    policy.as_ref().clone()
+                });
+            Arc::new(ExecPolicyManager::new(Arc::new(managed_policy)))
         } else if let Some(exec_policy) = &inherited_exec_policy {
             Arc::clone(exec_policy)
         } else {
@@ -602,9 +607,8 @@ impl Session {
                 config.http_client_factory(),
             )
             .await;
-        let trusted_guardian_reviewer =
-            crate::guardian::is_guardian_reviewer_source(&session_source)
-                && !matches!(conversation_history, InitialHistory::Resumed(_));
+        let trusted_guardian_reviewer = crate::guardian::is_basic_session_source(&session_source)
+            && !matches!(conversation_history, InitialHistory::Resumed(_));
         if config
             .config_layer_stack
             .requirements()
@@ -3592,7 +3596,7 @@ impl Session {
             )
         };
         let separate_guardian_developer_message =
-            crate::guardian::is_guardian_reviewer_source(&session_source);
+            crate::guardian::is_basic_session_source(&session_source);
         // Keep the guardian policy prompt out of the aggregated developer bundle so it
         // stays isolated as its own top-level developer message for guardian subagents.
         if !separate_guardian_developer_message

@@ -1884,21 +1884,44 @@ impl ThreadManagerState {
                 threads.remove(&resumed.conversation_id);
             }
         }
-        let user_instructions = self
-            .user_instructions_for_spawn(&session_source, parent_thread_id, forked_from_thread_id)
-            .await;
+        let (
+            user_instructions,
+            inherited_exec_policy,
+            extensions,
+            mcp_manager,
+            multi_agent_version,
+        ) = if crate::guardian::is_basic_session_source(&session_source) {
+            (
+                LoadedUserInstructions::default(),
+                None,
+                empty_extension_registry(),
+                Arc::new(McpManager::new(Arc::clone(&self.plugins_manager))),
+                Some(MultiAgentVersion::Disabled),
+            )
+        } else {
+            (
+                self.user_instructions_for_spawn(
+                    &session_source,
+                    parent_thread_id,
+                    forked_from_thread_id,
+                )
+                .await,
+                inherited_exec_policy,
+                Arc::clone(&self.extensions),
+                Arc::clone(&self.mcp_manager),
+                self.initial_multi_agent_version_for_spawn(
+                    &initial_history,
+                    Some(&session_source),
+                    parent_thread_id,
+                    forked_from_thread_id,
+                )
+                .await,
+            )
+        };
         let parent_rollout_thread_trace = self
             .parent_rollout_thread_trace_for_source(&session_source, &initial_history)
             .await;
         let tracked_session_source = session_source.clone();
-        let multi_agent_version = self
-            .initial_multi_agent_version_for_spawn(
-                &initial_history,
-                Some(&session_source),
-                parent_thread_id,
-                forked_from_thread_id,
-            )
-            .await;
         let originator = self
             .effective_originator(
                 &initial_history,
@@ -1927,9 +1950,9 @@ impl ThreadManagerState {
             environment_manager: Arc::clone(&self.environment_manager),
             skills_service: Arc::clone(&self.skills_service),
             plugins_manager: Arc::clone(&self.plugins_manager),
-            mcp_manager: Arc::clone(&self.mcp_manager),
+            mcp_manager,
             code_mode_session_provider: Arc::clone(&self.code_mode_session_provider),
-            extensions: Arc::clone(&self.extensions),
+            extensions,
             conversation_history: initial_history,
             requested_history_mode: history_mode,
             fork_persistence,

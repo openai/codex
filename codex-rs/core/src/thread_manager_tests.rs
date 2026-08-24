@@ -880,18 +880,106 @@ async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
 
 #[tokio::test]
 async fn spawn_internal_session_preserves_parent_lineage_without_forking_history() {
+    struct ParentLifecycleContributor {
+        observed_mcp_sources: Arc<std::sync::Mutex<Vec<SessionSource>>>,
+    }
+
+    impl codex_extension_api::ThreadLifecycleContributor<Config> for ParentLifecycleContributor {}
+
+    impl codex_extension_api::McpServerContributor<Config> for ParentLifecycleContributor {
+        fn id(&self) -> &'static str {
+            "parent_mcp_contributor"
+        }
+
+        fn contribute<'a>(
+            &'a self,
+            context: codex_extension_api::McpServerContributionContext<'a, Config>,
+        ) -> codex_extension_api::ExtensionFuture<'a, Vec<codex_extension_api::McpServerContribution>>
+        {
+            Box::pin(async move {
+                if let Some(session_source) = context.session_source() {
+                    self.observed_mcp_sources
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .push(session_source.clone());
+                }
+                Vec::new()
+            })
+        }
+    }
+
+    struct ParentInstructionsProvider(codex_extension_api::UserInstructions);
+
+    impl codex_extension_api::UserInstructionsProvider for ParentInstructionsProvider {
+        fn load_user_instructions(&self) -> codex_extension_api::LoadUserInstructionsFuture<'_> {
+            Box::pin(async move {
+                codex_extension_api::LoadedUserInstructions {
+                    instructions: Some(self.0.clone()),
+                    warnings: Vec::new(),
+                }
+            })
+        }
+    }
+
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config().await;
     config.codex_home = temp_dir.path().join("codex-home").abs();
     config.cwd = config.codex_home.abs();
     std::fs::create_dir_all(&config.codex_home).expect("create codex home");
 
-    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+    let mut managed_exec_policy = codex_execpolicy::Policy::empty();
+    managed_exec_policy
+        .add_prefix_rule(&["rm".to_string()], codex_execpolicy::Decision::Forbidden)
+        .expect("add managed execution restriction");
+    let mut requirements = config.config_layer_stack.requirements().clone();
+    requirements.exec_policy = Some(codex_config::Sourced::new(
+        codex_execpolicy::RequirementsExecPolicy::new(managed_exec_policy),
+        codex_config::RequirementSource::Unknown,
+    ));
+    requirements.additional_developer_instructions = Some(codex_config::Sourced::new(
+        "managed instructions must not shape the reviewer".to_string(),
+        codex_config::RequirementSource::Unknown,
+    ));
+    let mut requirements_toml = config.config_layer_stack.requirements_toml().clone();
+    requirements_toml.additional_developer_instructions =
+        Some("managed instructions must not shape the reviewer".to_string());
+    config.config_layer_stack = codex_config::ConfigLayerStack::new(
+        config
+            .config_layer_stack
+            .all_layers_low_to_high()
+            .cloned()
+            .collect(),
+        requirements,
+        requirements_toml,
+    )
+    .expect("managed requirements stack");
+
+    let parent_instructions = codex_extension_api::UserInstructions {
+        text: "parent user instructions must not be inherited".to_string(),
+        source: config.codex_home.join("AGENTS.md"),
+    };
+    let mut manager = ThreadManager::with_models_provider_and_home_for_tests(
         CodexAuth::from_api_key("dummy"),
         config.model_provider.clone(),
         config.codex_home.to_path_buf(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
     );
+    let observed_mcp_sources = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let parent_contributor = Arc::new(ParentLifecycleContributor {
+        observed_mcp_sources: Arc::clone(&observed_mcp_sources),
+    });
+    let mut extensions = codex_extension_api::ExtensionRegistryBuilder::new();
+    extensions.thread_lifecycle_contributor(parent_contributor.clone());
+    extensions.mcp_server_contributor(parent_contributor);
+    let manager_state = Arc::get_mut(&mut manager.state).expect("unshared thread manager state");
+    manager_state.extensions = Arc::new(extensions.build());
+    manager_state.mcp_manager = Arc::new(McpManager::new_with_extensions(
+        Arc::clone(&manager_state.plugins_manager),
+        Arc::clone(&manager_state.extensions),
+        manager_state.mcp_manager.codex_apps_tools_cache(),
+    ));
+    manager_state.user_instructions_provider =
+        Arc::new(ParentInstructionsProvider(parent_instructions.clone()));
     let parent = manager
         .start_thread(StartThreadOptions {
             metrics_service_name: Some("codex_work_desktop".to_string()),
@@ -899,6 +987,45 @@ async fn spawn_internal_session_preserves_parent_lineage_without_forking_history
         })
         .await
         .expect("start parent thread");
+    parent
+        .thread
+        .session
+        .set_multi_agent_version_if_unset(MultiAgentVersion::V2);
+    assert_eq!(
+        parent.thread.session.user_instructions().await,
+        Some(parent_instructions)
+    );
+    assert_eq!(
+        parent
+            .thread
+            .session
+            .services
+            .extensions
+            .thread_lifecycle_contributors()
+            .len(),
+        1
+    );
+    let mut reviewer_environments = parent
+        .thread
+        .session
+        .services
+        .turn_environments
+        .selections();
+    let reviewer_environment = reviewer_environments
+        .first_mut()
+        .expect("parent should have an environment");
+    reviewer_environment.config =
+        EnvironmentConfigState::Ready(codex_protocol::protocol::EnvironmentConfig {
+            allow_login_shell: true,
+            permission_profile: config.permissions.permission_profile_state().snapshot(),
+            shell_environment_policy: Default::default(),
+            exec_policy: Some(codex_execpolicy::RequirementsExecPolicy::new(
+                codex_execpolicy::Policy::empty(),
+            )),
+            mcp_policy: None,
+            network_policy: None,
+            selected_capability_roots: Vec::new(),
+        });
     let reviewer = manager
         .spawn_internal_session(
             parent.thread_id,
@@ -907,7 +1034,7 @@ async fn spawn_internal_session_preserves_parent_lineage_without_forking_history
                 initial_history: InitialHistory::Forked(vec![RolloutItem::ResponseItem(
                     user_msg("parent history must not be inherited").into(),
                 )]),
-                environments: Some(Vec::new()),
+                environments: Some(reviewer_environments),
                 ..StartThreadOptions::new(config)
             },
         )
@@ -937,10 +1064,69 @@ async fn spawn_internal_session_preserves_parent_lineage_without_forking_history
     assert_eq!(reviewer_config.forked_from_thread_id, None);
     assert_eq!(reviewer_config.originator, "codex_work_desktop");
     assert_eq!(
+        reviewer.thread.multi_agent_version(),
+        Some(MultiAgentVersion::Disabled)
+    );
+    assert_eq!(
         reviewer.session_configured.parent_thread_id,
         Some(parent.thread_id)
     );
     assert_eq!(reviewer.session_configured.forked_from_id, None);
+    assert!(reviewer.thread.session.user_instructions().await.is_none());
+    assert!(
+        reviewer
+            .thread
+            .session
+            .services
+            .exec_policy
+            .current()
+            .rules()
+            .contains_key("rm")
+    );
+    let reviewer_turn = reviewer.thread.session.new_default_turn().await;
+    let reviewer_world_state =
+        build_world_state_from_turn_context(&reviewer.thread.session, &reviewer_turn).await;
+    let reviewer_context = reviewer
+        .thread
+        .session
+        .build_initial_context_with_world_state(&reviewer_turn, &reviewer_world_state)
+        .await;
+    assert!(
+        !serde_json::to_string(&reviewer_context)
+            .expect("reviewer context should serialize")
+            .contains("managed instructions must not shape the reviewer")
+    );
+    let reviewer_environment = reviewer
+        .thread
+        .environment_selections()
+        .await
+        .into_iter()
+        .next()
+        .expect("reviewer should retain its selected environment");
+    assert!(matches!(
+        reviewer_environment.config,
+        EnvironmentConfigState::Ready(config) if config.exec_policy.is_some()
+    ));
+    assert!(
+        reviewer
+            .thread
+            .session
+            .services
+            .extensions
+            .thread_lifecycle_contributors()
+            .is_empty()
+    );
+    {
+        let observed_mcp_sources = observed_mcp_sources
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert!(!observed_mcp_sources.is_empty());
+        assert!(
+            observed_mcp_sources
+                .iter()
+                .all(|source| !source.is_internal())
+        );
+    }
     assert_eq!(manager.list_thread_ids().await, vec![parent.thread_id]);
     assert!(manager.get_thread(reviewer.thread_id).await.is_err());
     assert!(

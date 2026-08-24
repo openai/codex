@@ -22,6 +22,7 @@ use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::protocol::EnvironmentConfigState;
+use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -473,6 +474,191 @@ fn apply_patch_accepts_environment_id(spec: &ToolSpec) -> bool {
             tool.format.definition.contains("Environment ID")
         }
         _ => false,
+    }
+}
+
+#[tokio::test]
+async fn internal_guardian_sessions_exclude_optional_core_tools() {
+    let (session, mut turn) = make_session_and_context().await;
+    turn.session_source = SessionSource::Internal(InternalSessionSource::Guardian);
+    set_feature(&mut turn, Feature::ViewImage, /*enabled*/ true);
+    Arc::make_mut(&mut turn.config).update_plan_enabled = true;
+    turn.multi_agent_version = MultiAgentVersion::V2;
+    let turn = Arc::new(turn);
+    let step_context = StepContext::for_test(Arc::clone(&turn));
+
+    let router = super::build_tool_router(
+        &session,
+        step_context.turn.as_ref(),
+        &step_context.environments,
+        &step_context.mcp,
+        /*apps_enabled*/ false,
+        &turn.extension_data,
+        /*tool_suggest_candidates*/ None,
+    )
+    .expect("build internal Guardian tool router");
+
+    assert_eq!(
+        router
+            .model_visible_specs()
+            .iter()
+            .map(codex_tools::ToolSpec::name)
+            .collect::<Vec<_>>(),
+        vec!["exec_command", "write_stdin", "view_image"]
+    );
+}
+
+#[tokio::test]
+async fn internal_guardian_sessions_respect_managed_shell_restrictions() {
+    for (disabled_feature, shell_type) in [
+        (Some(Feature::ShellTool), ConfigShellToolType::UnifiedExec),
+        (Some(Feature::UnifiedExec), ConfigShellToolType::UnifiedExec),
+        (None, ConfigShellToolType::Disabled),
+    ] {
+        let (session, mut turn) = make_session_and_context().await;
+        turn.session_source = SessionSource::Internal(InternalSessionSource::Guardian);
+        set_feature(&mut turn, Feature::ViewImage, /*enabled*/ true);
+        set_feature(&mut turn, Feature::CodeMode, /*enabled*/ true);
+        if let Some(feature) = disabled_feature {
+            let config = Arc::make_mut(&mut turn.config);
+            config.features = crate::config::ManagedFeatures::from_configured(
+                config.features.get().clone(),
+                Some(codex_config::Sourced::new(
+                    codex_config::FeatureRequirementsToml {
+                        entries: BTreeMap::from([(feature.key().to_string(), false)]),
+                    },
+                    codex_config::RequirementSource::Unknown,
+                )),
+            )
+            .expect("managed shell restriction should be valid");
+        }
+        Arc::make_mut(&mut turn.model_info).shell_type = shell_type;
+        let turn = Arc::new(turn);
+        let step_context = StepContext::for_test(Arc::clone(&turn));
+
+        let router = super::build_tool_router(
+            &session,
+            step_context.turn.as_ref(),
+            &step_context.environments,
+            &step_context.mcp,
+            /*apps_enabled*/ false,
+            &turn.extension_data,
+            /*tool_suggest_candidates*/ None,
+        )
+        .expect("build internal Guardian tool router");
+
+        assert_eq!(
+            router
+                .model_visible_specs()
+                .iter()
+                .map(codex_tools::ToolSpec::name)
+                .collect::<Vec<_>>(),
+            vec![
+                codex_code_mode::PUBLIC_TOOL_NAME,
+                codex_code_mode::WAIT_TOOL_NAME,
+                "view_image",
+            ],
+            "disabled feature: {disabled_feature:?}, shell type: {shell_type:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn internal_guardian_sessions_preserve_code_mode() {
+    let (session, mut turn) = make_session_and_context().await;
+    turn.session_source = SessionSource::Internal(InternalSessionSource::Guardian);
+    set_feature(&mut turn, Feature::CodeMode, /*enabled*/ true);
+    let turn = Arc::new(turn);
+    let step_context = StepContext::for_test(Arc::clone(&turn));
+
+    let router = super::build_tool_router(
+        &session,
+        step_context.turn.as_ref(),
+        &step_context.environments,
+        &step_context.mcp,
+        /*apps_enabled*/ false,
+        &turn.extension_data,
+        /*tool_suggest_candidates*/ None,
+    )
+    .expect("build internal Guardian tool router");
+
+    assert!(
+        router
+            .model_visible_specs()
+            .iter()
+            .any(|tool| tool.name() == codex_code_mode::PUBLIC_TOOL_NAME)
+    );
+    assert!(
+        router
+            .model_visible_specs()
+            .iter()
+            .any(|tool| tool.name() == codex_code_mode::WAIT_TOOL_NAME)
+    );
+}
+
+#[tokio::test]
+async fn internal_guardian_sessions_require_managed_secondary_environments() {
+    for (secondary_profile, expected_tools) in [
+        (
+            codex_protocol::models::PermissionProfile::workspace_write(),
+            vec!["exec_command", "write_stdin", "view_image"],
+        ),
+        (
+            codex_protocol::models::PermissionProfile::Disabled,
+            Vec::new(),
+        ),
+    ] {
+        let (session, mut turn) = make_session_and_context().await;
+        turn.session_source = SessionSource::Internal(InternalSessionSource::Guardian);
+        set_feature(&mut turn, Feature::ViewImage, /*enabled*/ true);
+        let TurnEnvironmentState::Ready(primary) = turn
+            .environments
+            .environments
+            .first_mut()
+            .expect("primary environment")
+        else {
+            panic!("primary environment should be ready");
+        };
+        primary.config_mut().permission_profile =
+            codex_protocol::models::PermissionProfileSnapshot::legacy(
+                codex_protocol::models::PermissionProfile::workspace_write(),
+            );
+        duplicate_primary_environment(&mut turn);
+        let secondary_workspace_root =
+            codex_utils_path_uri::PathUri::from_abs_path(&turn.config.cwd.join("secondary"));
+        let TurnEnvironmentState::Ready(secondary) = turn
+            .environments
+            .environments
+            .get_mut(1)
+            .expect("secondary environment")
+        else {
+            panic!("secondary environment should be ready");
+        };
+        secondary.selection.workspace_roots = vec![secondary_workspace_root];
+        secondary.config_mut().permission_profile =
+            codex_protocol::models::PermissionProfileSnapshot::legacy(secondary_profile);
+        let turn = Arc::new(turn);
+        let step_context = StepContext::for_test(Arc::clone(&turn));
+
+        let router = super::build_tool_router(
+            &session,
+            step_context.turn.as_ref(),
+            &step_context.environments,
+            &step_context.mcp,
+            /*apps_enabled*/ false,
+            &turn.extension_data,
+            /*tool_suggest_candidates*/ None,
+        )
+        .expect("build internal Guardian tool router");
+
+        assert_eq!(
+            router
+                .model_visible_specs()
+                .iter()
+                .map(codex_tools::ToolSpec::name)
+                .collect::<Vec<_>>(),
+            expected_tools
+        );
     }
 }
 

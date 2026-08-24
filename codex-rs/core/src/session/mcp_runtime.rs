@@ -150,7 +150,7 @@ impl Session {
         mut projection: McpRuntimeProjection,
     ) -> BoxFuture<'a, McpRuntimeProjection> {
         Box::pin(async move {
-            if crate::guardian::is_guardian_reviewer_source(session_source) {
+            if crate::guardian::is_basic_session_source(session_source) {
                 return projection;
             }
 
