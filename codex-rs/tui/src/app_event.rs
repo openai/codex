@@ -195,11 +195,13 @@ pub(crate) enum TranscriptExportDestination {
     File(PathBuf),
 }
 
-/// Deliver a generated title to its originating automatic rename.
+/// Deliver a generated title to its originating automatic rename or editable prompt.
 #[derive(Debug)]
 pub(crate) enum ThreadTitleDestination {
     /// Replace the provisional name only if the user has not renamed the thread.
     Automatic { expected_title: String },
+    /// Prefill only the still-active rename prompt with the matching request ID.
+    RenameSuggestion { request_id: Uuid },
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -225,6 +227,11 @@ pub(crate) enum AppEvent {
     RenameAgentsOverviewThread {
         thread_id: ThreadId,
         name: String,
+    },
+    /// Generate an editable title suggestion for the active rename prompt.
+    SuggestThreadName {
+        thread_id: ThreadId,
+        request_id: Uuid,
     },
     /// Register a hidden title-generation thread started in the background.
     ThreadTitleStarted {

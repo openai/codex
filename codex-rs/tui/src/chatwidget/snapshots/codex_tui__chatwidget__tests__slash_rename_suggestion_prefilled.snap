@@ -1,0 +1,10 @@
+---
+source: tui/src/chatwidget/tests/slash_commands.rs
+expression: popup
+---
+▌ Rename thread
+▌ Suggested from this conversation
+▌
+▌ Fix login timeout
+
+Press enter to confirm or esc to go back

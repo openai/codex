@@ -2472,6 +2472,13 @@ impl App {
                     }
                 }
             }
+            AppEvent::SuggestThreadName {
+                thread_id,
+                request_id,
+            } => {
+                self.suggest_thread_name(app_server, thread_id, request_id)
+                    .await;
+            }
             AppEvent::ThreadTitleStarted {
                 thread_id,
                 destination,
@@ -2512,6 +2519,17 @@ impl App {
                                 }
                             }
                         }
+                    }
+                    ThreadTitleDestination::RenameSuggestion { request_id } => {
+                        let suggestion = result
+                            .ok()
+                            .and_then(|response| super::thread_title::parse_thread_title(&response));
+
+                        self.chat_widget.apply_thread_name_suggestion(
+                            thread_id,
+                            request_id,
+                            suggestion.as_deref(),
+                        );
                     }
                 }
             }

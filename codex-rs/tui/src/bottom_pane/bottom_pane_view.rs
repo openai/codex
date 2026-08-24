@@ -56,6 +56,15 @@ pub(crate) trait BottomPaneView: Renderable {
         None
     }
 
+    /// Apply a matching background suggestion when this view supports text prefills.
+    fn apply_text_suggestion(
+        &mut self,
+        _request_id: uuid::Uuid,
+        _suggestion: Option<&str>,
+    ) -> bool {
+        false
+    }
+
     /// Active tab id for tabbed list-based views.
     #[allow(dead_code)]
     fn active_tab_id(&self) -> Option<&str> {

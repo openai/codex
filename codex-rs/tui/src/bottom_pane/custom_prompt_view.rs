@@ -12,6 +12,7 @@ use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::Widget;
 use std::cell::RefCell;
 use std::time::Instant;
+use uuid::Uuid;
 
 use crate::key_hint;
 use crate::key_hint::has_ctrl_or_alt;
@@ -35,6 +36,12 @@ use super::textarea::TextAreaState;
 /// Callback invoked when the user submits a custom prompt.
 pub(crate) type PromptSubmitted = Box<dyn Fn(String) + Send + Sync>;
 
+/// Correlates a pending generated prefill with its eventual display label.
+struct PendingTextSuggestion {
+    request_id: Uuid,
+    applied_label: String,
+}
+
 /// Minimal multi-line text input view to collect custom review instructions.
 pub(crate) struct CustomPromptView {
     title: String,
@@ -47,6 +54,8 @@ pub(crate) struct CustomPromptView {
     textarea_state: RefCell<TextAreaState>,
     paste_burst: PasteBurst,
     completion: Option<ViewCompletion>,
+    pending_suggestion: Option<PendingTextSuggestion>,
+    user_edited: bool,
 }
 
 impl CustomPromptView {
@@ -72,6 +81,8 @@ impl CustomPromptView {
             textarea_state: RefCell::new(TextAreaState::default()),
             paste_burst: PasteBurst::default(),
             completion: None,
+            pending_suggestion: None,
+            user_edited: false,
         }
     }
 
@@ -86,9 +97,31 @@ impl CustomPromptView {
         self.textarea.enter_vim_insert_mode();
     }
 
+    /// Opt this prompt into one correlated background text suggestion.
+    pub(crate) fn with_text_suggestion(
+        mut self,
+        request_id: Uuid,
+        loading_label: String,
+        applied_label: String,
+    ) -> Self {
+        self.context_label = Some(loading_label);
+        self.pending_suggestion = Some(PendingTextSuggestion {
+            request_id,
+            applied_label,
+        });
+        self
+    }
+
     fn handle_key_event_at(&mut self, key_event: KeyEvent, now: Instant) {
+        let previous_text = self
+            .pending_suggestion
+            .as_ref()
+            .filter(|_| !self.user_edited)
+            .map(|_| self.textarea.text().to_string());
+
         if self.textarea.is_vim_operator_pending() {
             self.textarea.input(key_event);
+            self.user_edited |= previous_text.is_some_and(|text| self.textarea.text() != text);
             return;
         }
 
@@ -113,6 +146,7 @@ impl CustomPromptView {
                 {
                     self.paste_burst.extend_window(now);
                     self.textarea.insert_str("\n");
+                    self.user_edited = true;
                     return;
                 }
                 if modifiers == KeyModifiers::NONE {
@@ -152,6 +186,8 @@ impl CustomPromptView {
                 self.paste_burst.clear_after_explicit_paste();
             }
         }
+
+        self.user_edited |= previous_text.is_some_and(|text| self.textarea.text() != text);
     }
 }
 
@@ -186,7 +222,33 @@ impl BottomPaneView for CustomPromptView {
             return false;
         }
         self.textarea.insert_str(&pasted);
+        self.user_edited = true;
         self.paste_burst.clear_after_explicit_paste();
+        true
+    }
+
+    fn apply_text_suggestion(&mut self, request_id: Uuid, suggestion: Option<&str>) -> bool {
+        if self.completion.is_some() {
+            return false;
+        }
+
+        let Some(pending) = self
+            .pending_suggestion
+            .take_if(|pending| pending.request_id == request_id)
+        else {
+            return false;
+        };
+
+        self.context_label = None;
+
+        if !self.user_edited
+            && let Some(suggestion) = suggestion
+        {
+            self.textarea.set_text_clearing_elements(suggestion);
+            self.textarea.set_cursor(suggestion.len());
+            self.context_label = Some(pending.applied_label);
+        }
+
         true
     }
 }

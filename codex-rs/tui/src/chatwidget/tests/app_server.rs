@@ -1622,6 +1622,37 @@ async fn live_app_server_manual_thread_name_is_visible_before_notification() {
 }
 
 #[tokio::test]
+async fn thread_name_suggestion_requires_matching_thread_and_request() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    let request_id = uuid::Uuid::new_v4();
+    chat.thread_id = Some(thread_id);
+
+    let view = CustomPromptView::new(
+        "Rename thread".to_string(),
+        "Type a name and press Enter".to_string(),
+        /*initial_text*/ String::new(),
+        /*context_label*/ None,
+        Box::new(|_| {}),
+    )
+    .with_text_suggestion(request_id, "Loading".into(), "Ready".into());
+    chat.bottom_pane.show_text_prompt(view);
+
+    chat.apply_thread_name_suggestion(ThreadId::new(), request_id, Some("Wrong thread"));
+    chat.apply_thread_name_suggestion(thread_id, uuid::Uuid::new_v4(), Some("Wrong request"));
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(popup.contains("Loading"));
+    assert!(!popup.contains("Wrong"));
+
+    chat.apply_thread_name_suggestion(thread_id, request_id, Some("Suggested title"));
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(popup.contains("Ready"));
+    assert!(popup.contains("Suggested title"));
+}
+
+#[tokio::test]
 async fn live_app_server_thread_closed_requests_immediate_exit() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
