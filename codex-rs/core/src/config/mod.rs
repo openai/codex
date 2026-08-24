@@ -8,6 +8,7 @@ use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use crate::windows_sandbox::resolve_windows_sandbox_mode;
 use crate::windows_sandbox::resolve_windows_sandbox_private_desktop;
+use codex_agent_roles::load_agent_roles;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
@@ -155,7 +156,6 @@ use codex_network_proxy::NetworkProxyConfig;
 use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
 
-pub(crate) mod agent_roles;
 mod auth_keyring;
 pub mod edit;
 mod managed_features;
@@ -170,6 +170,7 @@ mod resolved_permission_profile;
 mod schema;
 pub use auth_keyring::bootstrap_auth_config;
 pub use auth_keyring::resolve_bootstrap_auth_keyring_backend_kind;
+pub use codex_agent_roles::AgentRoleConfig;
 pub use codex_config::ConfigLoadOptions;
 pub use codex_config::Constrained;
 pub use codex_config::ConstraintError;
@@ -2308,17 +2309,6 @@ pub fn set_default_oss_provider(codex_home: &Path, provider: &str) -> std::io::R
         .map_err(|err| std::io::Error::other(format!("failed to persist config.toml: {err}")))
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct AgentRoleConfig {
-    /// Human-facing role documentation used in spawn tool guidance.
-    /// Required for loaded user-defined roles after deprecated/new metadata precedence resolves.
-    pub description: Option<String>,
-    /// Path to a role-specific config layer.
-    pub config_file: Option<PathBuf>,
-    /// Candidate nicknames for agents spawned with this role.
-    pub nickname_candidates: Option<Vec<String>>,
-}
-
 fn resolve_tool_suggest_config(
     config_toml: &ConfigToml,
     config_layer_stack: &ConfigLayerStack,
@@ -3676,8 +3666,7 @@ impl Config {
         let terminal_resize_reflow = resolve_terminal_resize_reflow_config(&cfg);
 
         let agent_roles =
-            agent_roles::load_agent_roles(fs, &cfg, &config_layer_stack, &mut startup_warnings)
-                .await?;
+            load_agent_roles(fs, &cfg, &config_layer_stack, &mut startup_warnings).await?;
 
         let openai_base_url = cfg
             .openai_base_url

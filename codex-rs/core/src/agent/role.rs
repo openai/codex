@@ -5,9 +5,9 @@
 
 use crate::config::AgentRoleConfig;
 use crate::config::Config;
-use crate::config::agent_roles::parse_agent_role_file_contents;
 use crate::config::deserialize_config_toml_with_base;
 use anyhow::anyhow;
+use codex_agent_roles::parse_agent_role_file_contents;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;

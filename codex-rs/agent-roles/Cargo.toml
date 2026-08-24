@@ -1,0 +1,23 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-agent-roles"
+version.workspace = true
+
+[lib]
+doctest = false
+name = "codex_agent_roles"
+path = "src/lib.rs"
+test = false
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-config = { workspace = true }
+codex-file-system = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
+codex-utils-path-uri = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+toml = { workspace = true, features = ["preserve_order"] }
+tracing = { workspace = true }
