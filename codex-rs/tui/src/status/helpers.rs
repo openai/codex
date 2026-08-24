@@ -99,6 +99,8 @@ pub(crate) fn compose_account_display(
 pub(crate) fn plan_type_display_name(plan_type: PlanType) -> String {
     if plan_type == PlanType::EnterpriseCbpAutomation {
         "Enterprise (Automation)".to_string()
+    } else if plan_type == PlanType::SelfServeBusinessProLite {
+        "Business Premium".to_string()
     } else if plan_type.is_team_like() {
         "Business".to_string()
     } else if plan_type.is_business_like() {
@@ -225,7 +227,6 @@ mod tests {
             (PlanType::Pro, "Pro"),
             (PlanType::ProLite, "Pro Lite"),
             (PlanType::Team, "Business"),
-            (PlanType::SelfServeBusinessProLite, "Business"),
             (PlanType::SelfServeBusinessUsageBased, "Business"),
             (PlanType::Business, "Enterprise"),
             (PlanType::EnterpriseCbpAutomation, "Enterprise (Automation)"),
@@ -238,6 +239,10 @@ mod tests {
         for (plan_type, expected) in cases {
             assert_eq!(plan_type_display_name(plan_type), expected);
         }
+        insta::assert_snapshot!(
+            plan_type_display_name(PlanType::SelfServeBusinessProLite),
+            @"Business Premium"
+        );
         insta::assert_snapshot!(
             "education_plan_display_names",
             [PlanType::Edu, PlanType::EduPlus, PlanType::EduPro]

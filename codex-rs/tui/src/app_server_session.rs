@@ -3712,7 +3712,7 @@ mod tests {
             Some(StatusAccountDisplay::ChatGpt {
                 email: None,
                 plan: Some(ref plan),
-            }) if plan == "Business"
+            }) if plan == "Business Premium"
         ));
     }
 }
