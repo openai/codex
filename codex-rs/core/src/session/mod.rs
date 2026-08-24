@@ -2018,26 +2018,6 @@ impl Session {
         child_agent_path: &codex_protocol::AgentPath,
         status: AgentStatus,
     ) {
-        if matches!(status, AgentStatus::Completed(_))
-            && let Some(parent_turn_id) = turn_context.turn_metadata_state.parent_turn_id()
-            && let Err(err) = self
-                .services
-                .agent_control
-                .emit_sub_agent_activity(
-                    parent_thread_id,
-                    parent_turn_id,
-                    SubAgentActivityItem {
-                        id: format!("subagent-completed-{}", turn_context.sub_id),
-                        kind: SubAgentActivityKind::Completed,
-                        agent_thread_id: self.thread_id,
-                        agent_path: child_agent_path.clone(),
-                    },
-                )
-                .await
-        {
-            debug!("failed to emit completed activity to parent thread {parent_thread_id}: {err}");
-        }
-
         let Some(parent_agent_path) = child_agent_path
             .as_str()
             .rsplit_once('/')
@@ -2045,6 +2025,52 @@ impl Session {
         else {
             return;
         };
+
+        if matches!(status, AgentStatus::Completed(_))
+            && let Some(parent_turn_id) = turn_context.turn_metadata_state.parent_turn_id()
+        {
+            let initiating_thread_id = match turn_context
+                .turn_metadata_state
+                .initiating_agent_path()
+            {
+                Some(initiating_agent_path) if initiating_agent_path != &parent_agent_path => self
+                    .services
+                    .agent_control
+                    .resolve_agent_reference(
+                        self.thread_id,
+                        &turn_context.session_source,
+                        initiating_agent_path.as_str(),
+                    )
+                    .await
+                    .inspect_err(|err| {
+                        debug!(
+                            "failed to resolve completed activity initiator {initiating_agent_path}: {err}"
+                        );
+                    })
+                    .ok(),
+                _ => Some(parent_thread_id),
+            };
+            if let Some(initiating_thread_id) = initiating_thread_id
+                && let Err(err) = self
+                    .services
+                    .agent_control
+                    .emit_sub_agent_activity(
+                        initiating_thread_id,
+                        parent_turn_id,
+                        SubAgentActivityItem {
+                            id: format!("subagent-completed-{}", turn_context.sub_id),
+                            kind: SubAgentActivityKind::Completed,
+                            agent_thread_id: self.thread_id,
+                            agent_path: child_agent_path.clone(),
+                        },
+                    )
+                    .await
+            {
+                debug!(
+                    "failed to emit completed activity to initiating thread {initiating_thread_id}: {err}"
+                );
+            }
+        }
 
         let Some(message) = format_inter_agent_completion_message(
             parent_agent_path.clone(),

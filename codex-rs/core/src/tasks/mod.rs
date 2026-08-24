@@ -314,6 +314,18 @@ impl Session {
             self.input_queue.get_pending_input(&self.active_turn).await;
         if let MailboxParentProvenance::Attribute = mailbox_parent_provenance {
             if let Some(id) = parent_turn_id {
+                if let Some(initiating_agent_path) = pending_items.iter().find_map(|item| {
+                    let TurnInput::InterAgentCommunication(communication) = item else {
+                        return None;
+                    };
+                    communication
+                        .trigger_turn
+                        .then(|| communication.author.clone())
+                }) {
+                    turn_context
+                        .turn_metadata_state
+                        .set_initiating_agent_path(initiating_agent_path);
+                }
                 turn_context.turn_metadata_state.set_parent_turn_id(id);
             }
             if let Some(id) = root_turn_id {

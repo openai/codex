@@ -2331,6 +2331,296 @@ async fn plaintext_multi_agent_v2_completion_sends_agent_message(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn() -> Result<()> {
+    const SPAWN_WORKER_PROMPT: &str = "spawn the completion-routing worker";
+    const SPAWN_REQUESTER_PROMPT: &str = "spawn the completion-routing requester";
+    const READ_RESULT_PROMPT: &str = "read the completion-routing worker result";
+    const WORKER_INITIAL_TASK: &str = "finish the worker initial task";
+    const REQUESTER_TASK: &str = "ask the sibling worker to do more";
+    const WORKER_FOLLOWUP_TASK: &str = "finish the peer-requested worker task";
+    const WORKER_CALL_ID: &str = "spawn-routing-worker";
+    const REQUESTER_CALL_ID: &str = "spawn-routing-requester";
+    const FOLLOWUP_CALL_ID: &str = "request-peer-followup";
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex()
+        .with_model("gpt-5.6-sol")
+        .with_config(|config| {
+            for feature in [Feature::Collab, Feature::MultiAgentV2] {
+                config
+                    .features
+                    .enable(feature)
+                    .expect("test config should allow feature update");
+            }
+            config.model_provider.request_max_retries = Some(0);
+            config.model_provider.stream_max_retries = Some(0);
+            config.model_provider.supports_websockets = false;
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    let root_thread_id = test.session_configured.thread_id;
+    let mut created_threads = test.thread_manager.subscribe_thread_created();
+
+    let worker_spawn_args = serde_json::to_string(&json!({
+        "message": WORKER_INITIAL_TASK,
+        "task_name": "worker",
+        "fork_turns": "none",
+    }))?;
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, SPAWN_WORKER_PROMPT) && !body_contains(request, WORKER_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("resp-spawn-routing-worker"),
+            ev_function_call_with_namespace(
+                WORKER_CALL_ID,
+                MULTI_AGENT_V2_NAMESPACE,
+                "spawn_agent",
+                &worker_spawn_args,
+            ),
+            ev_completed("resp-spawn-routing-worker"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, WORKER_INITIAL_TASK)
+                && request_has_input_type(request, "agent_message")
+                && !body_contains(request, WORKER_FOLLOWUP_TASK)
+        },
+        sse(vec![
+            ev_response_created("resp-routing-worker-initial"),
+            ev_assistant_message("msg-routing-worker-initial", "initial worker finished"),
+            ev_completed("resp-routing-worker-initial"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, WORKER_CALL_ID)
+                && body_contains(request, SPAWN_WORKER_PROMPT)
+                && !body_contains(request, SPAWN_REQUESTER_PROMPT)
+        },
+        sse(vec![
+            ev_response_created("resp-routing-worker-spawned"),
+            ev_assistant_message("msg-routing-worker-spawned", "worker spawned"),
+            ev_completed("resp-routing-worker-spawned"),
+        ]),
+    )
+    .await;
+
+    test.submit_turn(SPAWN_WORKER_PROMPT).await?;
+    let worker_thread_id = created_threads.recv().await?;
+    let worker_thread = test.thread_manager.get_thread(worker_thread_id).await?;
+    wait_for_event(worker_thread.as_ref(), |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requester_spawn_args = serde_json::to_string(&json!({
+        "message": REQUESTER_TASK,
+        "task_name": "requester",
+        "fork_turns": "none",
+    }))?;
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, SPAWN_REQUESTER_PROMPT)
+                && !body_contains(request, REQUESTER_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("resp-spawn-routing-requester"),
+            ev_function_call_with_namespace(
+                REQUESTER_CALL_ID,
+                MULTI_AGENT_V2_NAMESPACE,
+                "spawn_agent",
+                &requester_spawn_args,
+            ),
+            ev_completed("resp-spawn-routing-requester"),
+        ]),
+    )
+    .await;
+    let followup_args = serde_json::to_string(&json!({
+        "target": "/root/worker",
+        "message": WORKER_FOLLOWUP_TASK,
+    }))?;
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, REQUESTER_TASK)
+                && request_has_input_type(request, "agent_message")
+                && !body_contains(request, SPAWN_REQUESTER_PROMPT)
+                && !body_contains(request, FOLLOWUP_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("resp-routing-requester"),
+            ev_function_call_with_namespace(
+                FOLLOWUP_CALL_ID,
+                MULTI_AGENT_V2_NAMESPACE,
+                "followup_task",
+                &followup_args,
+            ),
+            ev_completed("resp-routing-requester"),
+        ]),
+    )
+    .await;
+    let worker_followup_request = mount_response_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, WORKER_FOLLOWUP_TASK)
+                && request_has_input_type(request, "agent_message")
+                && !body_contains(request, FOLLOWUP_CALL_ID)
+        },
+        sse_response(sse(vec![
+            ev_response_created("resp-routing-worker-followup"),
+            ev_assistant_message("msg-routing-worker-followup", "peer follow-up finished"),
+            ev_completed("resp-routing-worker-followup"),
+        ]))
+        .set_delay(Duration::from_millis(250)),
+    )
+    .await;
+    let mut collaboration_responses = Vec::new();
+    for (call_id, prompt, response_id) in [
+        (
+            REQUESTER_CALL_ID,
+            SPAWN_REQUESTER_PROMPT,
+            "resp-routing-requester-spawned",
+        ),
+        (
+            FOLLOWUP_CALL_ID,
+            REQUESTER_TASK,
+            "resp-routing-followup-requested",
+        ),
+    ] {
+        collaboration_responses.push(
+            mount_sse_once_match(
+                &server,
+                move |request: &wiremock::Request| {
+                    body_contains(request, call_id) && body_contains(request, prompt)
+                },
+                sse(vec![
+                    ev_response_created(response_id),
+                    ev_assistant_message(response_id, "request accepted"),
+                    ev_completed(response_id),
+                ]),
+            )
+            .await,
+        );
+    }
+
+    test.submit_turn(SPAWN_REQUESTER_PROMPT).await?;
+    let requester_thread_id = created_threads.recv().await?;
+    let requester_thread = test.thread_manager.get_thread(requester_thread_id).await?;
+    let requester_turn_id = wait_for_event_match(requester_thread.as_ref(), |event| match event {
+        EventMsg::TurnStarted(started) => Some(started.turn_id.clone()),
+        _ => None,
+    })
+    .await;
+    wait_for_event(requester_thread.as_ref(), |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let followup_output = collaboration_responses[1]
+        .function_call_output_text(FOLLOWUP_CALL_ID)
+        .expect("requester follow-up tool output");
+    assert_eq!(followup_output, "");
+    wait_for_event(worker_thread.as_ref(), |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let worker_followup_turn_id = worker_followup_request
+        .requests()
+        .into_iter()
+        .find_map(|request| {
+            let body = request.body_json();
+            (body["client_metadata"]["thread_id"] == json!(worker_thread_id)
+                && request.body_contains_text(WORKER_FOLLOWUP_TASK))
+            .then(|| {
+                body["client_metadata"]["turn_id"]
+                    .as_str()
+                    .expect("worker follow-up turn ID")
+                    .to_string()
+            })
+        })
+        .expect("worker follow-up model request");
+    let completed = timeout(
+        Duration::from_secs(5),
+        wait_for_event_match(requester_thread.as_ref(), |event| match event {
+            EventMsg::ItemCompleted(completed)
+                if matches!(
+                    &completed.item,
+                    TurnItem::SubAgentActivity(activity)
+                        if activity.kind == SubAgentActivityKind::Completed
+                            && activity.agent_thread_id == worker_thread_id
+                ) =>
+            {
+                Some(completed.clone())
+            }
+            _ => None,
+        }),
+    )
+    .await?;
+    let TurnItem::SubAgentActivity(completed_item) = completed.item else {
+        unreachable!("completion event should contain sub-agent activity");
+    };
+    assert_eq!(
+        (completed.thread_id, completed.turn_id, completed_item),
+        (
+            requester_thread_id,
+            requester_turn_id,
+            SubAgentActivityItem {
+                id: format!("subagent-completed-{worker_followup_turn_id}"),
+                kind: SubAgentActivityKind::Completed,
+                agent_thread_id: worker_thread_id,
+                agent_path: codex_protocol::AgentPath::root()
+                    .join("worker")
+                    .expect("worker path"),
+            },
+        )
+    );
+
+    let root_result_request = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, READ_RESULT_PROMPT)
+                && body_contains(request, "Sender: /root/worker")
+                && body_contains(request, "peer follow-up finished")
+        },
+        sse(vec![
+            ev_response_created("resp-routing-root-result"),
+            ev_assistant_message("msg-routing-root-result", "result received"),
+            ev_completed("resp-routing-root-result"),
+        ]),
+    )
+    .await;
+    test.submit_turn(READ_RESULT_PROMPT).await?;
+    let root_request = root_result_request
+        .requests()
+        .into_iter()
+        .find(|request| {
+            request.body_json()["client_metadata"]["thread_id"] == json!(root_thread_id)
+                && request.body_contains_text(READ_RESULT_PROMPT)
+                && request.body_contains_text("peer follow-up finished")
+        })
+        .expect("root result request");
+    assert!(
+        root_request
+            .inputs_of_type("agent_message")
+            .iter()
+            .any(|item| {
+                item["author"] == "/root/worker"
+                    && item["recipient"] == "/root"
+                    && item.to_string().contains("peer follow-up finished")
+            })
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn skills_toggle_skips_instructions_for_parent_and_spawned_child() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
