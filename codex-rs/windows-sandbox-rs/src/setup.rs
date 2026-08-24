@@ -575,6 +575,12 @@ fn gather_full_read_roots_for_permissions(
             .into_iter()
             .map(|root| root.root),
     );
+    roots.extend(
+        permissions
+            .readable_roots_for_cwd(command_cwd)
+            .into_iter()
+            .filter(|root| root.parent().is_some() || !command_cwd.starts_with(root)),
+    );
     canonical_existing(&roots)
 }
 
@@ -584,7 +590,7 @@ pub(crate) fn gather_read_roots(
     env_map: &HashMap<String, String>,
     codex_home: &Path,
 ) -> Vec<PathBuf> {
-    if permissions.has_full_disk_read_access() {
+    if permissions.has_symbolic_root_read_access(command_cwd) {
         return gather_full_read_roots_for_permissions(
             command_cwd,
             permissions,
@@ -1174,7 +1180,25 @@ fn build_payload_roots(
     read_roots = filter_user_profile_root_exclusions(read_roots);
     read_roots = filter_ssh_config_dependency_roots(read_roots);
     let write_root_set: HashSet<PathBuf> = write_roots.iter().cloned().collect();
-    read_roots.retain(|root| !write_root_set.contains(root));
+    let deny_read_keys: Vec<String> = overrides
+        .deny_read_paths
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .map(|path| canonical_path_key(path))
+        .collect();
+    read_roots.retain(|root| {
+        if write_root_set.contains(root) {
+            return false;
+        }
+        if deny_read_keys.is_empty() {
+            return true;
+        }
+        let root_key = canonical_path_key(root);
+        !deny_read_keys
+            .iter()
+            .any(|denied| Path::new(&root_key).starts_with(denied))
+    });
     (read_roots, write_roots)
 }
 

@@ -273,12 +273,18 @@ async fn windows_elevated_enforces_deny_read_and_protects_setup_marker() -> anyh
     let workspace = TempDir::new()?;
     let cwd = dunce::canonicalize(workspace.path())?.abs();
     let glob_secret = cwd.join("secret.env");
-    let exact_secret = cwd.join("exact-secret.txt");
     let public = cwd.join("public.txt");
+    let user_profile = TempDir::new_in(dirs::home_dir().context("resolve user profile")?)?;
+    let _user_profile_guard = EnvVarGuard::set("USERPROFILE", user_profile.path().as_os_str());
+    let exact_secret = user_profile.path().join("exact-secret.txt");
+    std::fs::write(&exact_secret, "exact secret\n")?;
+    let bundled_skill_dir = user_profile.path().join(".codex/plugins/cache");
+    std::fs::create_dir_all(&bundled_skill_dir)?;
+    let bundled_skill = bundled_skill_dir.join("SKILL.md");
     let setup_marker = codex_home.path().join(".sandbox").join("setup_marker.json");
     std::fs::write(&glob_secret, "glob secret\n")?;
-    std::fs::write(&exact_secret, "exact secret\n")?;
     std::fs::write(&public, "public ok\n")?;
+    std::fs::write(&bundled_skill, "bundled skill ok\n")?;
 
     let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry {
@@ -303,7 +309,7 @@ async fn windows_elevated_enforces_deny_read_and_protects_setup_marker() -> anyh
             missing_path_behavior: None,
         },
         FileSystemSandboxEntry {
-            path: exact_secret.into(),
+            path: exact_secret.clone().abs().into(),
             access: FileSystemAccessMode::Deny,
             missing_path_behavior: None,
         },
@@ -323,16 +329,19 @@ async fn windows_elevated_enforces_deny_read_and_protects_setup_marker() -> anyh
                 "cmd.exe".to_string(),
                 "/D".to_string(),
                 "/C".to_string(),
-                format!(
-                    "(type secret.env 1>NUL 2>NUL && echo GLOB-READ || echo GLOB-DENIED) & (type exact-secret.txt 1>NUL 2>NUL && echo EXACT-READ || echo EXACT-DENIED) & (type \"{}\" 1>NUL 2>NUL && echo MARKER-READ-ALLOWED || echo MARKER-READ-DENIED) & (echo tampered > \"{}\" 2>NUL && echo MARKER-WRITE-ALLOWED || echo MARKER-WRITE-DENIED) & type public.txt",
-                    setup_marker.display(),
-                    setup_marker.display()
-                ),
+                "(type secret.env 1>NUL 2>NUL && echo GLOB-READ || echo GLOB-DENIED) & (type %SETUP_MARKER% 1>NUL 2>NUL && echo MARKER-READ-ALLOWED || echo MARKER-READ-DENIED) & (echo tampered > %SETUP_MARKER% 2>NUL && echo MARKER-WRITE-ALLOWED || echo MARKER-WRITE-DENIED) & type public.txt & type %BUNDLED_SKILL% & (type %EXACT_SECRET% 1>NUL 2>NUL && echo EXACT-READ || echo EXACT-DENIED)".to_string(),
             ],
             cwd: cwd.clone(),
             expiration: 10_000.into(),
             capture_policy: ExecCapturePolicy::ShellTool,
-            env: HashMap::new(),
+            env: [
+                ("BUNDLED_SKILL", &bundled_skill),
+                ("EXACT_SECRET", &exact_secret),
+                ("SETUP_MARKER", &setup_marker),
+            ]
+            .into_iter()
+            .map(|(name, path)| (name.to_string(), format!("\"{}\"", path.display())))
+            .collect(),
             network: None,
             network_environment_id: None,
             sandbox_permissions: SandboxPermissions::UseDefault,
@@ -371,6 +380,7 @@ async fn windows_elevated_enforces_deny_read_and_protects_setup_marker() -> anyh
         stdout.text.contains("public ok"),
         "allowed reads should still work: {stdout:?}"
     );
+    assert!(stdout.text.contains("bundled skill ok"));
     assert!(
         stdout.text.contains("MARKER-READ-DENIED"),
         "sandboxed command should not read setup readiness: {stdout:?}"

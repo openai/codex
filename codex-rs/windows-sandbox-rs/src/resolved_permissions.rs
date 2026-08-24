@@ -4,6 +4,7 @@ use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::FileSystemSpecialPath::Root;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
@@ -104,6 +105,16 @@ impl ResolvedWindowsSandboxPermissions {
 
     pub(crate) fn has_full_disk_read_access(&self) -> bool {
         self.file_system.has_full_disk_read_access()
+    }
+
+    pub(crate) fn has_symbolic_root_read_access(&self, cwd: &Path) -> bool {
+        self.file_system.entries.iter().any(|entry| {
+            matches!(&entry.path, FileSystemPath::Special { value: Root })
+                && entry.access.can_read()
+        }) && cwd
+            .ancestors()
+            .last()
+            .is_some_and(|root| self.file_system.can_read_path_with_cwd(root, cwd))
     }
 
     pub(crate) fn include_platform_defaults(&self) -> bool {
