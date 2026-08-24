@@ -199,6 +199,7 @@ impl ChatWidget {
             pet_image_support_override: None,
             thread_id: None,
             thread_name: None,
+            pending_automatic_thread_names: HashSet::new(),
             thread_rename_block_message: None,
             active_side_conversation: false,
             blocks_direct_input: false,

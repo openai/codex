@@ -6,6 +6,7 @@
 use super::resize_reflow::trailing_run_start;
 use super::session_lifecycle::ThreadAttachPresentation;
 use super::*;
+use crate::app_event::ThreadTitleDestination;
 use crate::app_server_session::ForkGoalContinuation;
 use crate::app_server_session::UnsupportedLegacyPermissionProfile;
 use crate::app_server_session::turn_permissions_overrides;
@@ -2459,13 +2460,59 @@ impl App {
                     .await;
             }
             AppEvent::RenameAgentsOverviewThread { thread_id, name } => {
-                if let Err(error) = app_server.thread_set_name(thread_id, name.clone()).await {
-                    if let Ok(mut state) = self.agents_overview.view_state.lock() {
-                        state.input = name;
-                        state.renaming = true;
+                match app_server.thread_set_name(thread_id, name.clone()).await {
+                    Ok(()) => self.chat_widget.expect_manual_thread_name(thread_id, name),
+                    Err(error) => {
+                        if let Ok(mut state) = self.agents_overview.view_state.lock() {
+                            state.input = name;
+                            state.renaming = true;
+                        }
+                        self.chat_widget
+                            .add_error_message(format!("Failed to rename task: {error}"));
                     }
-                    self.chat_widget
-                        .add_error_message(format!("Failed to rename task: {error}"));
+                }
+            }
+            AppEvent::ThreadTitleStarted {
+                thread_id,
+                destination,
+                prompt,
+                effort,
+                result,
+            } => {
+                self.on_thread_title_started(
+                    app_server,
+                    thread_id,
+                    destination,
+                    prompt,
+                    effort,
+                    result,
+                );
+            }
+            AppEvent::GeneratedThreadTitle {
+                thread_id,
+                temporary_thread_id,
+                destination,
+                result,
+            } => {
+                self.temporary_structured_requests
+                    .remove(&temporary_thread_id);
+
+                match destination {
+                    ThreadTitleDestination::Automatic { expected_title } => {
+                        if let Ok(response) = result
+                            && let Some(title) = super::thread_title::parse_thread_title(&response)
+                            && self.chat_widget.thread_id() == Some(thread_id)
+                            && self.chat_widget.thread_name().as_deref()
+                                == Some(expected_title.as_str())
+                        {
+                            match app_server.thread_set_name(thread_id, title.clone()).await {
+                                Ok(()) => self.chat_widget.expect_automatic_thread_name(title),
+                                Err(error) => {
+                                    tracing::debug!(%error, "failed to apply generated thread title");
+                                }
+                            }
+                        }
+                    }
                 }
             }
             AppEvent::StopAgentsOverviewThread { thread_id } => {

@@ -1559,6 +1559,69 @@ async fn live_app_server_thread_name_update_shows_resume_hint() {
 }
 
 #[tokio::test]
+async fn live_app_server_automatic_thread_name_update_is_silent() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    for title in ["Provisional title", "Generated title"] {
+        chat.expect_automatic_thread_name(title.to_string());
+        assert_eq!(chat.thread_name(), Some(title.to_string()));
+
+        chat.handle_server_notification(
+            ServerNotification::ThreadNameUpdated(
+                codex_app_server_protocol::ThreadNameUpdatedNotification {
+                    thread_id: thread_id.to_string(),
+                    thread_name: Some(title.to_string()),
+                },
+            ),
+            /*replay_kind*/ None,
+        );
+
+        assert_eq!(chat.thread_name, Some(title.to_string()));
+        assert!(drain_insert_history(&mut rx).is_empty());
+    }
+
+    chat.handle_server_notification(
+        ServerNotification::ThreadNameUpdated(
+            codex_app_server_protocol::ThreadNameUpdatedNotification {
+                thread_id: thread_id.to_string(),
+                thread_name: Some("Manual title".to_string()),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+
+    assert_eq!(chat.thread_name, Some("Manual title".to_string()));
+    assert_eq!(drain_insert_history(&mut rx).len(), 1);
+}
+
+#[tokio::test]
+async fn live_app_server_manual_thread_name_is_visible_before_notification() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.expect_automatic_thread_name("Provisional title".to_string());
+
+    chat.expect_manual_thread_name(thread_id, "Manual title".to_string());
+
+    assert_eq!(chat.thread_name(), Some("Manual title".to_string()));
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    chat.handle_server_notification(
+        ServerNotification::ThreadNameUpdated(
+            codex_app_server_protocol::ThreadNameUpdatedNotification {
+                thread_id: thread_id.to_string(),
+                thread_name: Some("Manual title".to_string()),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+
+    assert_eq!(chat.thread_name(), Some("Manual title".to_string()));
+    assert_eq!(drain_insert_history(&mut rx).len(), 1);
+}
+
+#[tokio::test]
 async fn live_app_server_thread_closed_requests_immediate_exit() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

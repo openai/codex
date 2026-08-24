@@ -92,6 +92,22 @@ impl App {
             let _ = self.dynamic_tool_status_updates.send(status.clone());
         }
 
+        // Hidden helper threads must not enter visible thread routing or overview refreshes.
+        if let ServerNotificationThreadTarget::Thread(thread_id) =
+            server_notification_thread_target(&notification)
+            && let Some(sender) = self.temporary_structured_requests.get(&thread_id)
+        {
+            if matches!(
+                &notification,
+                ServerNotification::ItemCompleted(_) | ServerNotification::TurnCompleted(_)
+            ) && sender.send(notification).is_err()
+            {
+                self.temporary_structured_requests.remove(&thread_id);
+            }
+
+            return;
+        }
+
         if let ServerNotification::ThreadStarted(started) = &notification
             && let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id, ..
