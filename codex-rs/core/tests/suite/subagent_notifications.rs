@@ -9,6 +9,8 @@ use codex_history::RolloutItem;
 use codex_models_manager::bundled_models_response;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::items::SubAgentActivityItem;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::MultiAgentMessages;
 use codex_protocol::openai_models::MultiAgentRoleMessages;
@@ -20,6 +22,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::MULTI_AGENT_MODE_OPEN_TAG;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentActivityKind;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSettingsOverrides;
@@ -59,6 +62,7 @@ use std::time::Duration;
 use test_case::test_case;
 use tokio::time::Instant;
 use tokio::time::sleep;
+use tokio::time::timeout;
 use tracing::Level;
 use tracing_test::internal::MockWriter;
 use wiremock::MockServer;
@@ -1982,11 +1986,25 @@ enum CompletionScenario {
     TerminalError,
 }
 
-#[test_case(CompletionScenario::Completed ; "completed")]
-#[test_case(CompletionScenario::TerminalError ; "terminal_error")]
+#[test_case(
+    CompletionScenario::Completed,
+    ThreadHistoryMode::Paginated;
+    "completed_paginated"
+)]
+#[test_case(
+    CompletionScenario::Completed,
+    ThreadHistoryMode::Legacy;
+    "completed_legacy"
+)]
+#[test_case(
+    CompletionScenario::TerminalError,
+    ThreadHistoryMode::Paginated;
+    "terminal_error"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn plaintext_multi_agent_v2_completion_sends_agent_message(
     scenario: CompletionScenario,
+    history_mode: ThreadHistoryMode,
 ) -> Result<()> {
     let server = start_mock_server().await;
     let spawn_args = serde_json::to_string(&json!({
@@ -2018,14 +2036,28 @@ async fn plaintext_multi_agent_v2_completion_sends_agent_message(
     };
     let child_request = mount_response_once_match(
         &server,
-        |req: &wiremock::Request| request_has_input_type(req, "agent_message"),
+        |req: &wiremock::Request| {
+            request_has_input_type(req, "agent_message")
+                && decoded_body(req)
+                    .and_then(|body| serde_json::from_slice::<Value>(&body).ok())
+                    .and_then(|body| {
+                        body["client_metadata"]["x-codex-turn-metadata"]
+                            .as_str()
+                            .and_then(|metadata| serde_json::from_str::<Value>(metadata).ok())
+                    })
+                    .is_some_and(|metadata| {
+                        metadata.get("parent_turn_id").is_some_and(Value::is_string)
+                    })
+        },
         sse_response(sse(child_events)).set_delay(Duration::from_secs(1)),
     )
     .await;
     mount_sse_once_match(
         &server,
         |req: &wiremock::Request| {
-            body_contains(req, SPAWN_CALL_ID) && !body_contains(req, "Message Type: FINAL_ANSWER")
+            body_contains(req, SPAWN_CALL_ID)
+                && !request_has_input_type(req, "agent_message")
+                && !body_contains(req, "Message Type: FINAL_ANSWER")
         },
         sse(vec![
             ev_response_created("resp-parent-2"),
@@ -2096,12 +2128,106 @@ async fn plaintext_multi_agent_v2_completion_sends_agent_message(
             config.model_provider.stream_max_retries = Some(0);
             config.model_provider.supports_websockets = false;
         })
+        .with_history_mode(history_mode)
         .build(&server)
         .await?;
 
     test.submit_turn(TURN_1_PROMPT).await?;
-    let _ = wait_for_requests(&child_request).await?;
-    test.submit_turn(TURN_2_NO_WAIT_PROMPT).await?;
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let (child_request, child_turn_metadata) = loop {
+        let child_request = child_request.requests().into_iter().find_map(|request| {
+            let body = request.body_json();
+            let turn_metadata: Value =
+                serde_json::from_str(body["client_metadata"]["x-codex-turn-metadata"].as_str()?)
+                    .ok()?;
+            turn_metadata
+                .get("parent_turn_id")
+                .and_then(Value::as_str)?;
+            Some((request, turn_metadata))
+        });
+        if let Some(child_request) = child_request {
+            break child_request;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for child request"
+        );
+        sleep(Duration::from_millis(10)).await;
+    };
+    let expected_completed_activity = if matches!(scenario, CompletionScenario::Completed) {
+        let child_body = child_request.body_json();
+        let parent_turn_id = child_turn_metadata["parent_turn_id"]
+            .as_str()
+            .expect("child parent turn ID")
+            .to_string();
+        let child_turn_id = child_body["client_metadata"]["turn_id"]
+            .as_str()
+            .expect("child turn ID")
+            .to_string();
+        let child_thread_id = ThreadId::from_string(
+            child_body["client_metadata"]["thread_id"]
+                .as_str()
+                .expect("child thread ID"),
+        )?;
+        Some((parent_turn_id, child_turn_id, child_thread_id))
+    } else {
+        None
+    };
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: TURN_2_NO_WAIT_PROMPT.to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let (completed_activity_started, completed_activity_completed) =
+        timeout(Duration::from_secs(5), async {
+            let mut active_turn_id = None;
+            let mut completed_activity_started = None;
+            let mut completed_activity_completed = None;
+            loop {
+                let event = test
+                    .codex
+                    .next_event()
+                    .await
+                    .expect("event stream should remain open");
+                match event.msg {
+                    EventMsg::TurnStarted(event) => {
+                        active_turn_id = Some(event.turn_id);
+                    }
+                    EventMsg::ItemStarted(event)
+                        if matches!(
+                            &event.item,
+                            TurnItem::SubAgentActivity(SubAgentActivityItem {
+                                kind: SubAgentActivityKind::Completed,
+                                ..
+                            })
+                        ) =>
+                    {
+                        completed_activity_started = Some(event);
+                    }
+                    EventMsg::ItemCompleted(event)
+                        if matches!(
+                            &event.item,
+                            TurnItem::SubAgentActivity(SubAgentActivityItem {
+                                kind: SubAgentActivityKind::Completed,
+                                ..
+                            })
+                        ) =>
+                    {
+                        completed_activity_completed = Some(event);
+                    }
+                    EventMsg::TurnComplete(event)
+                        if active_turn_id.as_deref() == Some(event.turn_id.as_str()) =>
+                    {
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            (completed_activity_started, completed_activity_completed)
+        })
+        .await
+        .expect("timed out waiting for parent turn completion");
 
     let request = wait_for_requests(&agent_request)
         .await?
@@ -2121,6 +2247,85 @@ async fn plaintext_multi_agent_v2_completion_sends_agent_message(
             }],
         })])
     );
+
+    if let Some((parent_turn_id, child_turn_id, child_thread_id)) = expected_completed_activity {
+        let started = completed_activity_started.expect("completed activity start event");
+        let completed_event =
+            completed_activity_completed.expect("completed activity completion event");
+        let TurnItem::SubAgentActivity(started_item) = &started.item else {
+            panic!("expected started sub-agent activity");
+        };
+        let TurnItem::SubAgentActivity(completed_event_item) = &completed_event.item else {
+            panic!("expected completed sub-agent activity");
+        };
+        assert_eq!(
+            (
+                started.thread_id,
+                &started.turn_id,
+                started_item,
+                Some(started.started_at_ms),
+            ),
+            (
+                completed_event.thread_id,
+                &completed_event.turn_id,
+                completed_event_item,
+                completed_event.started_at_ms,
+            )
+        );
+        assert_eq!(started.turn_id, parent_turn_id);
+
+        test.codex.ensure_rollout_materialized().await;
+        test.codex.flush_rollout().await?;
+        let rollout = codex_rollout::RolloutRecorder::get_rollout_history(
+            &test.codex.rollout_path().expect("parent rollout path"),
+        )
+        .await?;
+        assert!(
+            !rollout.get_rollout_items().iter().any(|item| matches!(
+                item,
+                RolloutItem::EventMsg(EventMsg::SubAgentActivity(activity))
+                    if activity.kind == SubAgentActivityKind::Completed
+            )),
+            "legacy completed activity should not be persisted without its parent turn ID"
+        );
+        let completed = rollout
+            .get_rollout_items()
+            .iter()
+            .find_map(|item| match item {
+                RolloutItem::EventMsg(EventMsg::ItemCompleted(completed))
+                    if matches!(
+                        &completed.item,
+                        TurnItem::SubAgentActivity(SubAgentActivityItem {
+                            kind: SubAgentActivityKind::Completed,
+                            ..
+                        })
+                    ) =>
+                {
+                    Some(completed)
+                }
+                _ => None,
+            })
+            .expect("persisted completed sub-agent activity");
+
+        assert_eq!(completed.turn_id, parent_turn_id);
+        let TurnItem::SubAgentActivity(completed_item) = &completed.item else {
+            panic!("expected completed sub-agent activity");
+        };
+        assert_eq!(
+            completed_item,
+            &SubAgentActivityItem {
+                id: format!("subagent-completed-{child_turn_id}"),
+                kind: SubAgentActivityKind::Completed,
+                agent_thread_id: child_thread_id,
+                agent_path: codex_protocol::AgentPath::root()
+                    .join("worker")
+                    .expect("worker path"),
+            }
+        );
+    } else {
+        assert!(completed_activity_started.is_none());
+        assert!(completed_activity_completed.is_none());
+    }
 
     Ok(())
 }

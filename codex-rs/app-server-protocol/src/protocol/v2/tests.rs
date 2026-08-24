@@ -3187,7 +3187,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
 
     let sub_agent_activity_item = TurnItem::SubAgentActivity(SubAgentActivityItem {
         id: "activity-1".to_string(),
-        kind: CoreSubAgentActivityKind::Interrupted,
+        kind: CoreSubAgentActivityKind::Completed,
         agent_thread_id: receiver_thread_id,
         agent_path: codex_protocol::AgentPath::root()
             .join("worker")
@@ -3198,7 +3198,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
         ThreadItem::from(sub_agent_activity_item),
         ThreadItem::SubAgentActivity {
             id: "activity-1".to_string(),
-            kind: SubAgentActivityKind::Interrupted,
+            kind: SubAgentActivityKind::Completed,
             agent_thread_id: receiver_thread_id.to_string(),
             agent_path: "/root/worker".to_string(),
         }

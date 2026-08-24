@@ -235,6 +235,7 @@ impl TraceReducer {
                     target_thread_id,
                     Some(wall_time_unix_ms),
                 ),
+            (_, SubAgentActivityKind::Completed) => Ok(()),
             _ => bail!(
                 "sub-agent activity {:?} does not match tool call kind {tool_kind:?}",
                 payload.kind

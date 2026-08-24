@@ -24,6 +24,7 @@ use crate::thread_manager::ThreadIdGenerator;
 use crate::thread_manager::ThreadManagerState;
 use crate::thread_manager::default_thread_id_generator;
 use crate::thread_rollout_truncation::truncate_rollout_to_last_n_fork_turns;
+use crate::turn_timing::now_unix_timestamp_ms;
 use codex_history::InitialHistory;
 use codex_history::ResumedHistory;
 use codex_history::RolloutItem;
@@ -33,11 +34,17 @@ use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
+use codex_protocol::items::SubAgentActivityItem;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::HasLegacyEvent;
 use codex_protocol::protocol::InterAgentCommunication;
+use codex_protocol::protocol::ItemCompletedEvent;
+use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
@@ -231,6 +238,55 @@ impl AgentControl {
             root_turn_id,
         )
         .await
+    }
+
+    pub(crate) async fn emit_sub_agent_activity(
+        &self,
+        thread_id: ThreadId,
+        turn_id: String,
+        item: SubAgentActivityItem,
+    ) -> CodexResult<()> {
+        let state = self.upgrade()?;
+        let thread = state.get_thread(thread_id).await?;
+        let started_at_ms = now_unix_timestamp_ms();
+        let item = TurnItem::SubAgentActivity(item);
+        thread
+            .session
+            .send_event_raw(Event {
+                id: turn_id.clone(),
+                msg: EventMsg::ItemStarted(ItemStartedEvent {
+                    thread_id,
+                    turn_id: turn_id.clone(),
+                    item: item.clone(),
+                    started_at_ms,
+                }),
+            })
+            .await;
+        let completed_at_ms = now_unix_timestamp_ms();
+        let completed = ItemCompletedEvent {
+            thread_id,
+            turn_id: turn_id.clone(),
+            item,
+            started_at_ms: Some(started_at_ms),
+            completed_at_ms,
+        };
+        thread
+            .session
+            .send_event_raw(Event {
+                id: turn_id.clone(),
+                msg: EventMsg::ItemCompleted(completed.clone()),
+            })
+            .await;
+        for legacy in completed.as_legacy_events(/*show_raw_agent_reasoning*/ false) {
+            thread
+                .session
+                .send_event_raw(Event {
+                    id: turn_id.clone(),
+                    msg: legacy,
+                })
+                .await;
+        }
+        Ok(())
     }
 
     async fn send_inter_agent_communication_after_capacity_check(

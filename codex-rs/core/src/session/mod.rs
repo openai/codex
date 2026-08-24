@@ -101,6 +101,7 @@ use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::items::EnteredReviewModeItem;
+use codex_protocol::items::SubAgentActivityItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::ActivePermissionProfile;
@@ -126,6 +127,7 @@ use codex_protocol::protocol::MULTI_AGENT_MODE_OPEN_TAG;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentActivityKind;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSettingsOverrides;
@@ -2016,6 +2018,26 @@ impl Session {
         child_agent_path: &codex_protocol::AgentPath,
         status: AgentStatus,
     ) {
+        if matches!(status, AgentStatus::Completed(_))
+            && let Some(parent_turn_id) = turn_context.turn_metadata_state.parent_turn_id()
+            && let Err(err) = self
+                .services
+                .agent_control
+                .emit_sub_agent_activity(
+                    parent_thread_id,
+                    parent_turn_id,
+                    SubAgentActivityItem {
+                        id: format!("subagent-completed-{}", turn_context.sub_id),
+                        kind: SubAgentActivityKind::Completed,
+                        agent_thread_id: self.thread_id,
+                        agent_path: child_agent_path.clone(),
+                    },
+                )
+                .await
+        {
+            debug!("failed to emit completed activity to parent thread {parent_thread_id}: {err}");
+        }
+
         let Some(parent_agent_path) = child_agent_path
             .as_str()
             .rsplit_once('/')

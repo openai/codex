@@ -291,7 +291,7 @@ pub(crate) fn sub_agent_activity_display(item: &ThreadItem) -> Option<SubAgentAc
     let is_running_hint = match kind {
         SubAgentActivityKind::Started => true,
         SubAgentActivityKind::Interacted => return None,
-        SubAgentActivityKind::Interrupted => false,
+        SubAgentActivityKind::Interrupted | SubAgentActivityKind::Completed => false,
     };
     Some(SubAgentActivityDisplay {
         thread_id: parse_thread_id(agent_thread_id)?,
@@ -318,6 +318,7 @@ pub(crate) fn sub_agent_activity_summary(kind: SubAgentActivityKind, agent_path:
         SubAgentActivityKind::Started => format!("Started `{agent_path}`"),
         SubAgentActivityKind::Interacted => format!("Interacted with `{agent_path}`"),
         SubAgentActivityKind::Interrupted => format!("Interrupted `{agent_path}`"),
+        SubAgentActivityKind::Completed => format!("Completed `{agent_path}`"),
     }
 }
 
@@ -326,6 +327,7 @@ fn sub_agent_activity_title(kind: SubAgentActivityKind, agent_path: &str) -> Lin
         SubAgentActivityKind::Started => ("Started ", agent_path),
         SubAgentActivityKind::Interacted => ("Interacted with ", agent_path),
         SubAgentActivityKind::Interrupted => ("Interrupted ", agent_path),
+        SubAgentActivityKind::Completed => ("Completed ", agent_path),
     };
     title_spans_line(vec![
         Span::from(prefix).bold(),
@@ -689,6 +691,26 @@ mod tests {
         };
 
         assert_eq!(sub_agent_activity_display(&item), None);
+    }
+
+    #[test]
+    fn completed_sub_agent_activity_stops_running_liveness() {
+        let thread_id = ThreadId::new();
+        let item = ThreadItem::SubAgentActivity {
+            id: "activity-1".to_string(),
+            kind: SubAgentActivityKind::Completed,
+            agent_thread_id: thread_id.to_string(),
+            agent_path: "/root/child".to_string(),
+        };
+
+        assert_eq!(
+            sub_agent_activity_display(&item),
+            Some(SubAgentActivityDisplay {
+                thread_id,
+                agent_path: "/root/child".to_string(),
+                is_running_hint: false,
+            })
+        );
     }
 
     #[test]

@@ -268,6 +268,10 @@ impl TurnMetadataState {
         let _ = self.parent_turn_id.set(parent_turn_id);
     }
 
+    pub(crate) fn parent_turn_id(&self) -> Option<String> {
+        self.parent_turn_id.get().cloned()
+    }
+
     pub(crate) fn set_root_turn_id(&self, root_turn_id: String) {
         if root_turn_id.trim().is_empty() {
             return;

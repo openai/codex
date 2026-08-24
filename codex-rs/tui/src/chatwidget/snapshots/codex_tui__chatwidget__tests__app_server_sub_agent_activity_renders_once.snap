@@ -1,5 +1,5 @@
 ---
-source: tui/src/chatwidget/tests.rs
+source: tui/src/chatwidget/tests/app_server.rs
 expression: rendered
 ---
-• Interacted with `/root/researcher`
+• Completed `/root/researcher`

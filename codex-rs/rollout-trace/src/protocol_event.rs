@@ -22,6 +22,7 @@ use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::PatchApplyEndEvent;
 use codex_protocol::protocol::PatchApplyStatus;
 use codex_protocol::protocol::SubAgentActivityEvent;
+use codex_protocol::protocol::SubAgentActivityKind;
 use codex_protocol::protocol::TurnAbortReason;
 use serde::Serialize;
 use std::time::Duration;
@@ -352,11 +353,14 @@ pub(crate) fn tool_runtime_trace_event(event: &EventMsg) -> Option<ToolRuntimeTr
             status: ExecutionStatus::Completed,
             payload: ToolRuntimePayload::CollabCloseEnd(event),
         }),
-        EventMsg::SubAgentActivity(event) => Some(ToolRuntimeTraceEvent::Ended {
-            tool_call_id: &event.event_id,
-            status: ExecutionStatus::Completed,
-            payload: ToolRuntimePayload::SubAgentActivity(event),
-        }),
+        EventMsg::SubAgentActivity(event) if event.kind != SubAgentActivityKind::Completed => {
+            Some(ToolRuntimeTraceEvent::Ended {
+                tool_call_id: &event.event_id,
+                status: ExecutionStatus::Completed,
+                payload: ToolRuntimePayload::SubAgentActivity(event),
+            })
+        }
+        EventMsg::SubAgentActivity(_) => None,
         EventMsg::Error(_)
         | EventMsg::Warning(_)
         | EventMsg::GuardianWarning(_)

@@ -19366,7 +19366,8 @@
         "enum": [
           "started",
           "interacted",
-          "interrupted"
+          "interrupted",
+          "completed"
         ],
         "type": "string"
       },
