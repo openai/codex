@@ -11,7 +11,6 @@ use codex_core::GuardianAuthorizationVersion;
 use codex_core::GuardianRootMessage;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
-use codex_core::context::ContextualUserFragment;
 use codex_core::context::GuardianReviewEvidence;
 use codex_core::context::NodeReplReviewEvidence;
 use codex_extension_api::ApprovalReviewContributor;
@@ -42,6 +41,7 @@ use codex_protocol::security_risk::SecurityRiskScore;
 use serde_json::json;
 
 use super::config::GuardianV2Config;
+use super::review_evidence::render_review_evidence;
 use super::sampler::LunaSampler;
 use super::sampler::LunaSamplerConfig;
 use super::sampler::LunaSamplerError;
@@ -650,7 +650,7 @@ impl GuardianV2Extension {
                     review.authorization_version == authorization_version
                         && review.root_authorization_version == root_authorization_version
                 })
-                .map(ContextualUserFragment::render)
+                .map(|review| render_review_evidence(review))
                 .collect();
             classification_input.extend([
                 "The Codex agent has requested the following action:\n".to_owned(),

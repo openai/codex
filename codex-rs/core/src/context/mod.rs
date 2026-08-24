@@ -66,6 +66,7 @@ pub(crate) use guardian_node_repl_policy::GuardianNodeReplPolicy;
 pub(crate) use guardian_policy::GuardianPolicy;
 pub use guardian_review_evidence::GuardianReviewEvidence;
 pub use guardian_review_evidence::GuardianReviewEvidenceFragment;
+pub use guardian_review_evidence::GuardianReviewEvidenceRecord;
 pub(crate) use hook_additional_context::HookAdditionalContext;
 pub(crate) use image_resize_notice::ImageResizeNotice;
 pub(crate) use image_resize_notice::ImageResizeNoticeSource;
