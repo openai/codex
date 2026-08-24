@@ -694,25 +694,6 @@ impl GuardianV2Extension {
                         images,
                         parent_compaction,
                         parent_compaction_hash,
-                        output_schema: json!({
-                            "type": "object",
-                            "properties": {
-                                "scores": {
-                                    "type": "object",
-                                    "properties": {
-                                        "action_risk": {
-                                            "type": "number",
-                                            "minimum": 0.0,
-                                            "maximum": 1.0
-                                        }
-                                    },
-                                    "required": ["action_risk"],
-                                    "additionalProperties": false
-                                }
-                            },
-                            "required": ["scores"],
-                            "additionalProperties": false
-                        }),
                         reasoning_effort: guardian_config.reasoning_effort.clone(),
                         turn_id: turn_id.clone(),
                     })
@@ -722,24 +703,13 @@ impl GuardianV2Extension {
                     Err(LunaSamplerError::Superseded) => return Ok("superseded"),
                     Err(error) => return Err(error.to_string()),
                 };
-                let output: serde_json::Value =
-                    serde_json::from_str(&output).map_err(|error| error.to_string())?;
-                let scores = output
-                    .get("scores")
-                    .and_then(serde_json::Value::as_object)
-                    .ok_or_else(|| "Luna returned no security risk scores".to_string())?;
-                let scores = scores
-                    .iter()
-                    .map(|(category, value)| {
-                        value
-                            .as_f64()
-                            .filter(|score| (0.0..=1.0).contains(score))
-                            .map(|score| (category.clone(), score))
-                            .ok_or_else(|| format!("invalid security risk score for {category}"))
-                    })
-                    .collect::<Result<_, _>>()?;
+                let action_risk = match output.as_str() {
+                    "high" => 1.0,
+                    "low" => 0.0,
+                    _ => return Err("invalid Guardian V2 classification".to_owned()),
+                };
                 let score = SecurityRiskScore {
-                    scores,
+                    scores: BTreeMap::from([("action_risk".to_owned(), action_risk)]),
                     sampled_at: Some(sampled_at.into()),
                 };
                 let accepted =

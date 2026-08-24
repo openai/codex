@@ -22,6 +22,7 @@ const DEFAULT_REVIEW_THRESHOLD: f64 = 0.5;
 const LEGACY_REVIEW_THRESHOLD: f64 = 0.8;
 const DEFAULT_MAX_TOOL_CALL_LAG: usize = 3;
 pub(crate) const DEFAULT_CLASSIFIER_INSTRUCTIONS: &str = include_str!("classifier_instructions.md");
+pub(crate) const CLASSIFICATION_OUTPUT_INSTRUCTIONS: &str = "Your first output token is the entire classification: `high` for high risk or `low` for low risk. Output that token immediately and nothing else.";
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct GuardianV2Config {
@@ -269,6 +270,14 @@ impl GuardianV2Config {
                 "{}\n\n# Security Policy\n{policy}",
                 self.classifier_instructions
             )
+        };
+        let instructions = if instructions
+            .trim_end()
+            .ends_with(CLASSIFICATION_OUTPUT_INSTRUCTIONS)
+        {
+            instructions
+        } else {
+            format!("{instructions}\n\n{CLASSIFICATION_OUTPUT_INSTRUCTIONS}")
         };
         match self.max_classifier_instruction_tokens {
             Some(max_tokens) => truncate_entry(&instructions, max_tokens),

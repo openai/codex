@@ -6,6 +6,7 @@ use codex_protocol::openai_models::GuardianV2TranscriptModelConfig;
 use codex_protocol::openai_models::ReasoningEffort;
 use pretty_assertions::assert_eq;
 
+use super::CLASSIFICATION_OUTPUT_INSTRUCTIONS;
 use super::DEFAULT_CLASSIFIER_INSTRUCTIONS;
 use super::GuardianV2Config;
 use crate::async_scorer::transcript::truncate_entry;
@@ -124,6 +125,41 @@ fn model_prompt_and_explicit_threshold_precedence_are_preserved() {
 }
 
 #[test]
+fn legacy_classifier_prompts_keep_the_output_contract_after_truncation() {
+    let prompt = "Return a JSON action_risk score. ".repeat(200);
+    let policy = "Require approval for unsafe actions.";
+    let model_defaults = GuardianV2ModelConfig {
+        classifier_instructions: Some(prompt.clone()),
+        max_classifier_instruction_tokens: Some(100),
+        ..Default::default()
+    };
+    let local_override = GuardianV2Config::from_overrides(GuardianV2ConfigToml {
+        classifier_instructions: Some(prompt.clone()),
+        max_classifier_instruction_tokens: Some(100),
+        ..Default::default()
+    })
+    .unwrap();
+    let model_override = GuardianV2Config::from_overrides(GuardianV2ConfigToml::default())
+        .unwrap()
+        .with_model_defaults(Some(&model_defaults))
+        .unwrap();
+
+    for config in [local_override, model_override] {
+        let rendered = config.render_classifier_instructions(policy);
+        assert_eq!(
+            rendered,
+            truncate_entry(
+                &format!(
+                    "{prompt}\n\n# Security Policy\n{policy}\n\n{CLASSIFICATION_OUTPUT_INSTRUCTIONS}"
+                ),
+                /*max_tokens*/ 100,
+            )
+        );
+        assert!(rendered.ends_with(CLASSIFICATION_OUTPUT_INSTRUCTIONS));
+    }
+}
+
+#[test]
 fn model_runtime_settings_preserve_local_overrides() {
     let prompt = "legacy instructions ".repeat(3_000);
     let defaults = GuardianV2ModelConfig {
@@ -183,6 +219,8 @@ fn model_runtime_settings_preserve_local_overrides() {
         .unwrap();
     assert_eq!(
         uncapped.render_classifier_instructions("Tenant policy."),
-        format!("{prompt}\n\n# Security Policy\nTenant policy.")
+        format!(
+            "{prompt}\n\n# Security Policy\nTenant policy.\n\n{CLASSIFICATION_OUTPUT_INSTRUCTIONS}"
+        )
     );
 }

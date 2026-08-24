@@ -286,10 +286,15 @@ async fn luna_websocket(
                     .push(request);
                 state.allow_luna.notified().await;
             }
-            let score = json!({ "scores": { "action_risk": state.luna_score } }).to_string();
+            let classification = if state.luna_score < 0.5 {
+                "low"
+            } else {
+                "high"
+            };
             for event in [
                 responses::ev_response_created("luna-score"),
-                responses::ev_assistant_message("luna-score-message", &score),
+                responses::ev_output_text_delta(classification),
+                responses::ev_assistant_message("luna-score-message", classification),
                 responses::ev_completed("luna-score"),
             ] {
                 if socket
@@ -651,7 +656,7 @@ async fn guardian_v2_routes_tool_approvals(
             "Guardian V2 classification result".to_owned(),
             "call_id=guardian-action-0".into(),
             format!("thread_id={reviewed_thread_id}"),
-            format!("action_risk={luna_score}"),
+            format!("action_risk={}", if luna_score < 0.5 { 0 } else { 1 }),
             "review_threshold=0.5".into(),
             "accepted=true".into(),
         ];

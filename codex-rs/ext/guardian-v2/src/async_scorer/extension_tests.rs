@@ -61,6 +61,7 @@ use super::StrictReviewReason;
 use super::TOOL_CALL_LAG_METRIC;
 use super::encrypted_parent_compaction;
 use super::should_classify_tool;
+use crate::async_scorer::config::CLASSIFICATION_OUTPUT_INSTRUCTIONS;
 use crate::async_scorer::config::DEFAULT_MODEL_CONTEXT_ITEM_TOKENS;
 use crate::async_scorer::config::DEFAULT_PARENT_COMPACTION_TOKENS;
 use crate::async_scorer::sampler::CLASSIFICATION_TOKEN_USAGE_METRIC;
@@ -92,7 +93,7 @@ async fn installed_extension_reconnects_after_auth_refresh() -> Result<()> {
     let thread_server = responses::start_mock_server().await;
     let test = test_codex().build_with_auto_env(&thread_server).await?;
     let events = vec![
-        ev_assistant_message("sample", r#"{"scores":{"action_risk":0.25}}"#),
+        ev_assistant_message("sample", "low"),
         ev_completed("response-1"),
     ];
     // Keep the sampled connection open for another request so only auth
@@ -166,6 +167,17 @@ async fn installed_extension_reconnects_after_auth_refresh() -> Result<()> {
             }
         })
         .await?;
+        assert_eq!(
+            registry
+                .approval_review(
+                    &session_store,
+                    thread_store,
+                    "review action",
+                    /*extension_metrics*/ None,
+                )
+                .await,
+            Some(ReviewDecision::Approved)
+        );
     }
 
     assert_eq!(
@@ -574,10 +586,7 @@ async fn sample_configured_conversation_history(
         "output_tokens_details": {"reasoning_tokens": 10},
         "total_tokens": 150,
     });
-    let events = vec![
-        ev_assistant_message("sample", r#"{"scores":{"action_risk":0.8}}"#),
-        completed,
-    ];
+    let events = vec![ev_assistant_message("sample", "high"), completed];
     let server = responses::start_websocket_server(vec![Vec::new(), vec![events]]).await;
     let provider_info = ModelProviderInfo::create_openai_provider(Some(format!(
         "http://{}/v1",
@@ -811,7 +820,7 @@ async fn contributor_fails_closed_when_luna_classification_fails() -> Result<()>
 
     let fixture = GuardianFailureFixture::new().await?;
     let invalid_score = vec![
-        ev_assistant_message("sample", r#"{"scores":{"action_risk":"invalid"}}"#),
+        ev_assistant_message("sample", "invalid"),
         ev_completed("response-invalid"),
     ];
     let server = responses::start_websocket_server(vec![Vec::new(), vec![invalid_score]]).await;
@@ -864,7 +873,7 @@ classifier_instructions = "Predict future violations.\n# Security Policy\n{{ ten
             "content": [{
                 "type": "input_text",
                 "text": format!(
-                    "Predict future violations.\n# Security Policy\n{TEST_GUARDIAN_POLICY}\nReturn action_risk."
+                    "Predict future violations.\n# Security Policy\n{TEST_GUARDIAN_POLICY}\nReturn action_risk.\n\n{CLASSIFICATION_OUTPUT_INSTRUCTIONS}"
                 ),
             }],
         })
@@ -902,7 +911,9 @@ max_classifier_instruction_tokens = 256
             "content": [{
                 "type": "input_text",
                 "text": truncate_entry(
-                    &format!("{template}\n\n# Security Policy\n{TEST_GUARDIAN_POLICY}"),
+                    &format!(
+                        "{template}\n\n# Security Policy\n{TEST_GUARDIAN_POLICY}\n\n{CLASSIFICATION_OUTPUT_INSTRUCTIONS}"
+                    ),
                     /*max_tokens*/ 256,
                 ),
             }],
@@ -989,7 +1000,7 @@ max_recent_non_user_entries = 8
             "content": [{
                 "type": "input_text",
                 "text": format!(
-                    "Use the experimental security classification prompt.\n\n# Security Policy\n{TEST_GUARDIAN_POLICY}"
+                    "Use the experimental security classification prompt.\n\n# Security Policy\n{TEST_GUARDIAN_POLICY}\n\n{CLASSIFICATION_OUTPUT_INSTRUCTIONS}"
                 )
             }]
         })
@@ -1342,7 +1353,7 @@ async fn contributor_uses_model_defaults_and_preserves_local_overrides() -> Resu
             "content": [{
                 "type": "input_text",
                 "text": format!(
-                    "Use the experimental model-owned prompt.\n\n# Security Policy\n{TEST_GUARDIAN_POLICY}"
+                    "Use the experimental model-owned prompt.\n\n# Security Policy\n{TEST_GUARDIAN_POLICY}\n\n{CLASSIFICATION_OUTPUT_INSTRUCTIONS}"
                 )
             }]
         })
@@ -1489,11 +1500,7 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
     assert_eq!(request["client_metadata"]["turn_id"], "turn-1");
     assert_eq!(request["reasoning"]["effort"], "low");
     assert_eq!(request["reasoning"]["context"], "all_turns");
-    assert_eq!(request["text"]["format"]["strict"], true);
-    assert_eq!(
-        request["text"]["format"]["schema"]["properties"]["scores"]["properties"]["action_risk"],
-        json!({"type": "number", "minimum": 0.0, "maximum": 1.0})
-    );
+    assert!(request.get("text").is_none());
     assert_eq!(
         request["input"][1],
         json!({
@@ -1542,7 +1549,7 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
     assert_eq!(
         score.as_ref(),
         &SecurityRiskScore {
-            scores: BTreeMap::from([("action_risk".to_string(), 0.8)]),
+            scores: BTreeMap::from([("action_risk".to_string(), 1.0)]),
             sampled_at: score.sampled_at,
         }
     );
@@ -2018,7 +2025,7 @@ async fn contributor_reuses_the_latest_compatible_parent_compaction() -> Result<
         .build_with_auto_env(&thread_server)
         .await?;
     let events = vec![
-        ev_assistant_message("sample", r#"{"scores":{"action_risk":0.25}}"#),
+        ev_assistant_message("sample", "low"),
         ev_completed("response-1"),
     ];
     let server = responses::start_websocket_server(vec![Vec::new(), vec![events]]).await;
@@ -2134,7 +2141,7 @@ async fn contributor_reuses_the_latest_compatible_parent_compaction() -> Result<
         }
     })
     .await?;
-    assert_eq!(previous_score.scores.get("action_risk"), Some(&0.25));
+    assert_eq!(previous_score.scores.get("action_risk"), Some(&0.0));
     assert_eq!(
         registry
             .approval_review(
@@ -2259,7 +2266,7 @@ async fn contributor_can_disable_parent_compaction_reuse() -> Result<()> {
         }
     })
     .await?;
-    assert_eq!(score.scores.get("action_risk"), Some(&0.8));
+    assert_eq!(score.scores.get("action_risk"), Some(&1.0));
 
     Ok(())
 }
