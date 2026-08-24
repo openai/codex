@@ -1,0 +1,5 @@
+---
+source: tui/src/markdown_render_tests.rs
+expression: text
+---
+Text::from(Line::from_iter([Span::from("plain "), Span::from("plain").cyan().underlined(), Span::from(" ("), Span::from("https://example.com").cyan().underlined(), Span::from(")"), Span::from(" "), Span::from("code").cyan(), Span::from(" "), Span::from("code").cyan().underlined(), Span::from(" ("), Span::from("https://example.com").cyan().underlined(), Span::from(")")]))

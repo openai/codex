@@ -94,8 +94,10 @@ pub(crate) fn render_markdown_agent_with_links_cwd_and_visualizations(
 ) -> Vec<HyperlinkLine> {
     let rewritten = rewrite_inline_visualizations(markdown_source, inline_visualization_context);
     let normalized = unwrap_markdown_fences(&rewritten.markdown);
-    let is_hidden_link_destination =
-        |destination: &str| rewritten.trusted_file_links.contains_key(destination);
+    let is_hidden_link_destination = |destination: &str| {
+        rewritten.trusted_file_links.contains_key(destination)
+            || crate::markdown_render::hide_web_link_destination(destination)
+    };
     let mut lines =
         crate::markdown_render::render_markdown_lines_with_width_cwd_and_hidden_link_destinations(
             &normalized,
@@ -126,6 +128,7 @@ pub(crate) fn render_streaming_markdown_agent_with_links_and_cwd(
         &normalized,
         width,
         cwd,
+        &crate::markdown_render::hide_web_link_destination,
     );
     if normalized != markdown_source {
         // Fence unwrapping removes opening/closing lines. A normalized tail that is still a raw

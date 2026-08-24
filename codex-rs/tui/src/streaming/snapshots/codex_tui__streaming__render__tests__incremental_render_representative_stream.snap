@@ -17,7 +17,7 @@ expression: render.lines
     HyperlinkLine {
         line: Line::from_iter([
             Span::from("First paragraph with a "),
-            Span::from("link"),
+            Span::from("link").cyan().underlined(),
         ]),
         hyperlinks: [
             TerminalHyperlink {

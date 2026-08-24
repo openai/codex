@@ -75,6 +75,73 @@ fn contains_text(buffer: &Buffer, text: &str) -> bool {
         })
 }
 
+#[test]
+fn active_transcript_preserves_clipped_markdown_hyperlinks() {
+    let cell = history_cell::AgentMarkdownCell::new(
+        "Earlier content\n\n[OSC8 label](https://example.com/)".to_string(),
+        std::path::Path::new("/tmp"),
+    );
+    let renderable = TranscriptAreaRenderable {
+        child: &cell,
+        top: 1,
+        right: 2,
+        persistent_layout: None,
+    };
+    let area = Rect::new(
+        /*x*/ 2, /*y*/ 1, /*width*/ 40, /*height*/ 3,
+    );
+    let mut buffer = Buffer::empty(area);
+    renderable.render(area, &mut buffer);
+
+    let linked_text = buffer
+        .content
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .filter(|symbol| symbol.starts_with("\x1b]8;;https://example.com/\x07"))
+        .map(crate::terminal_hyperlinks::strip_osc8)
+        .collect::<String>();
+    assert_eq!(linked_text, "OSC8 labelhttps://example.com/");
+
+    let visible_rows = buffer
+        .content
+        .chunks(usize::from(area.width))
+        .map(|row| {
+            row.iter()
+                .map(|cell| crate::terminal_hyperlinks::strip_osc8(cell.symbol()))
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    insta::assert_debug_snapshot!(visible_rows, @r#"
+    [
+        "",
+        "",
+        "  OSC8 label (https://example.com/)",
+    ]
+    "#);
+
+    let size = ratatui::layout::Size::new(/*width*/ 44, /*height*/ 5);
+    let mut terminal =
+        crate::custom_terminal::Terminal::with_screen_size_and_cursor_position_for_test(
+            ratatui::backend::CrosstermBackend::new(Vec::new()),
+            size,
+            area.as_position(),
+        );
+    terminal.set_viewport_area(Rect::new(
+        /*x*/ 0,
+        /*y*/ 0,
+        size.width,
+        size.height,
+    ));
+    terminal
+        .draw_with_size(size, |frame| renderable.render(area, frame.buffer_mut()))
+        .expect("render terminal frame");
+    let output = String::from_utf8(terminal.backend().writer().clone()).expect("UTF-8 output");
+    assert!(output.contains("\x1b]8;;https://example.com/\x07OSC8 label\x1b]8;;\x07"));
+    assert!(output.contains("\x1b]8;;https://example.com/\x07https://example.com/\x1b]8;;\x07"));
+}
+
 #[tokio::test]
 async fn initial_session_header_starts_at_the_top_of_the_viewport() {
     let (mut widget, _sender, _events, _operations) = make_chatwidget_manual_with_sender().await;

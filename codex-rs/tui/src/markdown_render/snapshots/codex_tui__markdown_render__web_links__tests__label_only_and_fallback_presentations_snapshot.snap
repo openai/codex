@@ -1,0 +1,56 @@
+---
+source: tui/src/markdown_render/web_links_tests.rs
+expression: presentations
+---
+[
+    Text::from_iter([
+        Line::from_iter([
+            Span::from("plain "),
+            Span::from("plain").cyan().underlined(),
+            Span::from(" "),
+            Span::from("code").cyan(),
+            Span::from(" "),
+            Span::from("code").cyan().underlined(),
+        ]),
+        Line::default(),
+        Line::from_iter([
+            Span::from(" "),
+            Span::from("Resource"),
+        ]).fg(Color::Rgb(249, 226, 175)).bold(),
+        Line::from(Span::from("━━━━━━━━━━").dim()),
+        Line::from_iter([
+            Span::from(" "),
+            Span::from("docs").cyan().underlined(),
+        ]),
+    ]),
+    Text::from_iter([
+        Line::from_iter([
+            Span::from("plain "),
+            Span::from("plain").cyan().underlined(),
+            Span::from(" ("),
+            Span::from("https://example.com").cyan().underlined(),
+            Span::from(")"),
+            Span::from(" "),
+            Span::from("code").cyan(),
+        ]),
+        Line::from_iter([
+            Span::from("code").cyan().underlined(),
+            Span::from(" ("),
+            Span::from("https://example.com").cyan().underlined(),
+            Span::from(")"),
+        ]),
+        Line::default(),
+        Line::from_iter([
+            Span::from(" "),
+            Span::from("Resource"),
+        ]).fg(Color::Rgb(249, 226, 175)).bold(),
+        Line::from(Span::from("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━").dim()),
+        Line::from_iter([
+            Span::from(" "),
+            Span::from("docs").cyan().underlined(),
+            Span::from(" ("),
+            Span::from("https://example.com/docs").cyan().underlined(),
+            Span::from(")"),
+        ]),
+    ]),
+]

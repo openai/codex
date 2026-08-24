@@ -757,12 +757,71 @@ fn strong_emphasis() {
 fn link() {
     let text = render_markdown_text("[Link](https://example.com)");
     let expected = Text::from(Line::from_iter([
-        "Link".into(),
+        "Link".cyan().underlined(),
         " (".into(),
         "https://example.com".cyan().underlined(),
         ")".into(),
     ]));
     assert_eq!(text, expected);
+}
+
+#[test]
+fn web_link_labels_use_link_style_and_preserve_inline_formatting() {
+    for (label, expected_label) in [
+        ("plain", "plain".cyan().underlined()),
+        ("`code`", "code".cyan().underlined()),
+        ("**bold**", "bold".cyan().bold().underlined()),
+        ("*italic*", "italic".cyan().italic().underlined()),
+    ] {
+        let text = render_markdown_text(&format!(
+            "before [{label}](https://example.com) after `code`"
+        ));
+        let expected = Text::from(Line::from_iter([
+            "before ".into(),
+            expected_label,
+            " (".into(),
+            "https://example.com".cyan().underlined(),
+            ")".into(),
+            " after ".into(),
+            "code".cyan(),
+        ]));
+        assert_eq!(text, expected, "label: {label}");
+    }
+}
+
+#[test]
+fn web_link_labels_keep_link_style_in_wrapped_prose_and_tables() {
+    let links =
+        "[plain](https://example.com) [`code`](https://example.com) [<b>](https://example.com)";
+    for markdown in [links.to_string(), format!("| Links |\n| --- |\n| {links} |")]
+    {
+        for width in [32, 80] {
+            let text = render_markdown_text_with_width(&markdown, Some(width));
+            let labels = text
+                .lines
+                .iter()
+                .flat_map(|line| &line.spans)
+                .filter(|span| matches!(span.content.as_ref(), "plain" | "code" | "<b>"))
+                .cloned()
+                .collect::<Vec<_>>();
+            assert_eq!(
+                labels,
+                vec![
+                    "plain".cyan().underlined(),
+                    "code".cyan().underlined(),
+                    "<b>".cyan().underlined()
+                ]
+            );
+        }
+    }
+}
+
+#[test]
+fn web_link_labels_have_a_visible_underline_snapshot() {
+    let text = render_markdown_text(
+        "plain [plain](https://example.com) `code` [`code`](https://example.com)",
+    );
+    assert_debug_snapshot!(text);
 }
 
 #[test]
@@ -912,7 +971,7 @@ fn file_link_uses_target_path_for_hash_range() {
 fn url_link_shows_destination() {
     let text = render_markdown_text("[docs](https://example.com/docs)");
     let expected = Text::from(Line::from_iter([
-        "docs".into(),
+        "docs".cyan().underlined(),
         " (".into(),
         "https://example.com/docs".cyan().underlined(),
         ")".into(),

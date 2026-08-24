@@ -33,11 +33,10 @@ use crate::session_state::ThreadSessionState;
 use crate::style::proposed_plan_style;
 use crate::style::user_message_style;
 use crate::terminal_hyperlinks::HyperlinkLine;
-use crate::terminal_hyperlinks::mark_buffer_hyperlinks;
+use crate::terminal_hyperlinks::HyperlinkParagraph;
 use crate::terminal_hyperlinks::plain_hyperlink_lines;
 use crate::terminal_hyperlinks::prefix_hyperlink_lines;
 use crate::terminal_hyperlinks::visible_lines;
-use crate::terminal_hyperlinks::visible_lines_ref;
 #[cfg(test)]
 use crate::test_support::PathBufExt;
 #[cfg(test)]
@@ -291,8 +290,7 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
 impl Renderable for Box<dyn HistoryCell> {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         let hyperlink_lines = self.display_hyperlink_lines(area.width);
-        let lines = visible_lines_ref(&hyperlink_lines);
-        let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
+        let paragraph = HyperlinkParagraph::new(&hyperlink_lines, Style::default());
         let y = if area.height == 0 {
             0
         } else {
@@ -304,8 +302,7 @@ impl Renderable for Box<dyn HistoryCell> {
         // Active-cell content can reflow dramatically during resize/stream updates. Clear the
         // entire draw area first so stale glyphs from previous frames never linger.
         Clear.render(area, buf);
-        paragraph.scroll((y, 0)).render(area, buf);
-        mark_buffer_hyperlinks(buf, area, &hyperlink_lines, usize::from(y));
+        paragraph.scroll(y).render(area, buf);
     }
     fn desired_height(&self, width: u16) -> u16 {
         HistoryCell::desired_height(self.as_ref(), width)

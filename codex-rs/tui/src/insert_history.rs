@@ -540,6 +540,55 @@ mod tests {
     }
 
     #[test]
+    fn markdown_link_label_survives_history_wrapping() {
+        use pretty_assertions::assert_eq;
+
+        let destination = "https://developers.openai.com/";
+        let markdown = "Instead of a Markdown-labeled link. That is the most reliably clickable form. Official OpenAI documentation does not appear to document this exact terminal-link behavior; this is an inference from how terminal hyperlink rendering works. [OpenAI Developers](https://developers.openai.com/)";
+        for label in ["OpenAI Developers", "`OpenAI Developers`"] {
+            for markdown in [
+                markdown.replace("[OpenAI Developers]", &format!("[{label}]")),
+                format!("| Link |\n| --- |\n| [{label}]({destination}) |"),
+            ] {
+                for width in [32, 80, 200] {
+                    let lines = crate::markdown::render_markdown_agent_with_links_and_cwd(
+                        &markdown,
+                        Some(width),
+                        /*cwd*/ None,
+                    );
+                    let lines = crate::terminal_hyperlinks::prefix_hyperlink_lines(
+                        lines,
+                        "  ".into(),
+                        "  ".into(),
+                    );
+                    let (wrapped, _) = wrap_history_hyperlink_lines(
+                        &lines,
+                        width + 2,
+                        HistoryLineWrapPolicy::PreWrap,
+                    );
+                    let mut actual = Vec::new();
+                    for line in &wrapped {
+                        write_history_line(&mut actual, line, width + 2)
+                            .expect("write history line");
+                    }
+                    let output = String::from_utf8(actual).expect("UTF-8 terminal output");
+                    let open = format!("\x1b]8;;{destination}\x07");
+                    let linked_text = output
+                        .split(&open)
+                        .skip(1)
+                        .map(|part| part.split("\x1b]8;;\x07").next().unwrap())
+                        .collect::<String>();
+                    assert_eq!(
+                        linked_text.replace(' ', ""),
+                        format!("OpenAIDevelopers{destination}"),
+                        "label {label}, width {width}: {wrapped:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn vt100_blockquote_line_emits_green_fg() {
         // Set up a small off-screen terminal
         let width: u16 = 40;

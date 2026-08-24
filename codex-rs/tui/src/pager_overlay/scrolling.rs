@@ -7,15 +7,11 @@ use crate::history_cell::UserHistoryCell;
 use crate::render::renderable::Renderable;
 use crate::style::user_message_style;
 use crate::terminal_hyperlinks::HyperlinkLine;
-use crate::terminal_hyperlinks::mark_buffer_hyperlinks;
-use crate::terminal_hyperlinks::visible_lines_ref;
+use crate::terminal_hyperlinks::HyperlinkParagraph;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
-use ratatui::text::Text;
-use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
-use ratatui::widgets::Wrap;
 
 /// Renders a committed history cell directly into the visible transcript viewport.
 pub(super) struct CellRenderable {
@@ -40,12 +36,9 @@ impl Renderable for CellRenderable {
         } else {
             Style::default()
         };
-        let p = Paragraph::new(Text::from(visible_lines_ref(&hyperlink_lines)))
-            .style(style)
-            .wrap(Wrap { trim: false })
-            .scroll((scroll_offset, 0));
-        p.render(area, buf);
-        mark_buffer_hyperlinks(buf, area, &hyperlink_lines, usize::from(scroll_offset));
+        HyperlinkParagraph::new(&hyperlink_lines, style)
+            .scroll(scroll_offset)
+            .render(area, buf);
         true
     }
 
@@ -66,17 +59,14 @@ impl Renderable for HyperlinkLinesRenderable {
 
     /// Keep live-tail hyperlinks aligned with the same visible rows as their text.
     fn render_scrolled(&self, area: Rect, buf: &mut Buffer, scroll_offset: u16) -> bool {
-        Paragraph::new(Text::from(visible_lines_ref(&self.lines)))
-            .wrap(Wrap { trim: false })
-            .scroll((scroll_offset, 0))
+        HyperlinkParagraph::new(&self.lines, Style::default())
+            .scroll(scroll_offset)
             .render(area, buf);
-        mark_buffer_hyperlinks(buf, area, &self.lines, usize::from(scroll_offset));
         true
     }
 
     fn desired_height(&self, width: u16) -> u16 {
-        Paragraph::new(Text::from(visible_lines_ref(&self.lines)))
-            .wrap(Wrap { trim: false })
+        HyperlinkParagraph::new(&self.lines, Style::default())
             .line_count(width)
             .try_into()
             .unwrap_or(/*default*/ 0)

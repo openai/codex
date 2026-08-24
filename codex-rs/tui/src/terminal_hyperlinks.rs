@@ -3,6 +3,10 @@
 //! Layout code measures and wraps ordinary ratatui lines. Hyperlink annotations are applied only
 //! when text reaches a terminal buffer or scrollback writer so OSC 8 bytes never affect geometry.
 
+mod paragraph;
+
+pub(crate) use paragraph::HyperlinkParagraph;
+
 use std::num::NonZeroU16;
 use std::ops::Range;
 
@@ -778,10 +782,7 @@ mod tests {
         );
         let mut buf = Buffer::empty(area);
 
-        Paragraph::new(Text::from(line.line.clone()))
-            .wrap(Wrap { trim: false })
-            .render(area, &mut buf);
-        mark_buffer_hyperlinks(&mut buf, area, &[line], /*scroll_rows*/ 0);
+        HyperlinkParagraph::new(&[line], Style::default()).render(area, &mut buf);
 
         let linked_text = area
             .positions()
@@ -819,11 +820,9 @@ mod tests {
         terminal
             .draw(|frame| {
                 let buf = frame.buffer_mut();
-                Paragraph::new(Text::from(visible_lines_ref(&lines)))
-                    .wrap(Wrap { trim: false })
-                    .scroll((/*vertical*/ 2, /*horizontal*/ 0))
+                HyperlinkParagraph::new(&lines, Style::default())
+                    .scroll(/*rows*/ 2)
                     .render(area, buf);
-                mark_buffer_hyperlinks(buf, area, &lines, /*scroll_rows*/ 2);
 
                 let linked_text = area
                     .positions()
