@@ -199,20 +199,33 @@ async fn checks_rollouts_within_the_cursor_lookback() {
 }
 
 #[tokio::test]
-async fn recovers_pending_migrations_behind_the_checked_thread() {
+async fn recovers_pending_migrations_after_retrying_busy_rollouts() {
     let home = TempDir::new().expect("create Codex home");
-    let thread_id = ThreadId::new();
-    let path = write_rollout(home.path(), thread_id, ThreadHistoryMode::Legacy);
+    let pending_thread_id = ThreadId::new();
+    write_rollout(home.path(), pending_thread_id, ThreadHistoryMode::Legacy);
+    let busy_thread_id = ThreadId::new();
+    let busy_path = move_to_timestamp(
+        home.path(),
+        write_rollout(home.path(), busy_thread_id, ThreadHistoryMode::Legacy),
+        "2025/01/04",
+        "2025-01-04T12-00-00",
+    );
     let store = indexed_store(home.path()).await;
+    let state_db = store.state_db().await.expect("state db");
+    let writer_guard = store
+        .writer_lock_coordinator
+        .acquire(busy_thread_id)
+        .expect("hold cross-process writer lock");
 
     store
         .migrate_rollouts_on_startup()
         .await
-        .expect("migrate and advance startup cursor");
-    thread_history::delete_thread(&store, thread_id)
+        .expect("migrate and record busy rollout");
+    drop(writer_guard);
+    thread_history::delete_thread(&store, pending_thread_id)
         .await
         .expect("simulate missing projection");
-    let journal_path = migration_journal_path(home.path(), thread_id);
+    let journal_path = migration_journal_path(home.path(), pending_thread_id);
     write_migration_journal(&journal_path)
         .await
         .expect("simulate pending migration marker");
@@ -220,22 +233,29 @@ async fn recovers_pending_migrations_behind_the_checked_thread() {
     store
         .migrate_rollouts_on_startup()
         .await
-        .expect("recover pending migration behind cursor");
+        .expect("retry busy rollout before recovery");
 
-    assert!(!journal_path.exists());
-    assert!(
-        thread_history::projection_state(&store, thread_id)
-            .await
-            .expect("read repaired projection")
-            .is_some()
-    );
     assert_eq!(
-        codex_rollout::read_session_meta_line(&path)
+        codex_rollout::read_session_meta_line(&busy_path)
             .await
             .expect("read migrated metadata")
             .meta
             .history_mode,
         ThreadHistoryMode::Paginated
+    );
+    assert!(!journal_path.exists());
+    assert!(
+        thread_history::projection_state(&store, pending_thread_id)
+            .await
+            .expect("read repaired projection")
+            .is_some()
+    );
+    assert!(
+        state_db
+            .list_rollout_migration_skipped_rollouts(super::LEGACY_TO_PAGINATED_MIGRATION_ID)
+            .await
+            .expect("read skipped rollouts")
+            .is_empty()
     );
 }
 
@@ -274,46 +294,180 @@ async fn waits_for_a_live_writer_before_migrating() {
 }
 
 #[tokio::test]
-async fn rechecks_changed_empty_rollouts() {
+async fn waits_for_rollout_maintenance_before_migrating() {
     let home = TempDir::new().expect("create Codex home");
-    write_rollout(home.path(), ThreadId::new(), ThreadHistoryMode::Legacy);
-    let empty_thread_id = ThreadId::new();
-    let empty_path = move_to_timestamp(
+    let thread_id = ThreadId::new();
+    let path = write_rollout(home.path(), thread_id, ThreadHistoryMode::Legacy);
+    let store = indexed_store(home.path()).await;
+    let maintenance_guard = codex_rollout::try_acquire_rollout_maintenance_lock(home.path())
+        .expect("acquire rollout maintenance lock")
+        .expect("claim rollout maintenance lock");
+    let migration_store = store.clone();
+    let mut migration = tokio::spawn(async move {
+        migration_store
+            .migrate_rollouts_on_startup()
+            .await
+            .expect("migrate startup rollouts");
+    });
+
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), &mut migration)
+            .await
+            .is_err(),
+        "migration should wait for rollout maintenance"
+    );
+    drop(maintenance_guard);
+    tokio::time::timeout(Duration::from_secs(2), migration)
+        .await
+        .expect("migration should retry rollout maintenance")
+        .expect("join startup migration");
+
+    assert_eq!(
+        codex_rollout::read_session_meta_line(&path)
+            .await
+            .expect("read migrated metadata")
+            .meta
+            .history_mode,
+        ThreadHistoryMode::Paginated
+    );
+}
+
+#[tokio::test]
+async fn permanently_skips_failed_rollouts_without_blocking_the_cursor() {
+    let home = TempDir::new().expect("create Codex home");
+    let failed_thread_id = ThreadId::new();
+    let failed_path = write_rollout(home.path(), failed_thread_id, ThreadHistoryMode::Legacy);
+    let store = indexed_store(home.path()).await;
+    let state_db = store.state_db().await.expect("state db");
+    let metadata = state_db
+        .get_thread(failed_thread_id)
+        .await
+        .expect("read thread metadata")
+        .expect("thread metadata");
+    state_db
+        .delete_thread(failed_thread_id)
+        .await
+        .expect("remove thread metadata");
+
+    store
+        .migrate_rollouts_on_startup()
+        .await
+        .expect("record failed rollout");
+    assert_eq!(
+        state_db
+            .get_rollout_migration_state(super::LEGACY_TO_PAGINATED_MIGRATION_ID)
+            .await
+            .expect("read migration state")
+            .expect("migration state")
+            .last_checked_thread
+            .expect("checked thread")
+            .thread_id,
+        failed_thread_id.to_string()
+    );
+    assert_eq!(
+        state_db
+            .list_rollout_migration_skipped_rollouts(super::LEGACY_TO_PAGINATED_MIGRATION_ID)
+            .await
+            .expect("read skipped rollouts")
+            .into_iter()
+            .map(|skipped_rollout| skipped_rollout.skip_reason)
+            .collect::<Vec<_>>(),
+        vec![super::FAILED_SKIP_REASON.to_string()]
+    );
+
+    state_db
+        .insert_thread_if_absent(&metadata)
+        .await
+        .expect("restore thread metadata");
+    let archived_directory = home.path().join(codex_rollout::ARCHIVED_SESSIONS_SUBDIR);
+    fs::create_dir_all(&archived_directory).expect("create archived directory");
+    let archived_path = archived_directory.join(failed_path.file_name().expect("rollout filename"));
+    fs::rename(&failed_path, &archived_path).expect("archive failed rollout");
+
+    store
+        .migrate_rollouts_on_startup()
+        .await
+        .expect("skip failed rollout again");
+
+    assert_eq!(
+        codex_rollout::read_session_meta_line(&archived_path)
+            .await
+            .expect("read failed rollout metadata")
+            .meta
+            .history_mode,
+        ThreadHistoryMode::Legacy
+    );
+}
+
+#[tokio::test]
+async fn retries_busy_rollouts_after_archive_and_compression_move() {
+    let home = TempDir::new().expect("create Codex home");
+    let thread_id = ThreadId::new();
+    let path = move_to_timestamp(
         home.path(),
-        write_rollout(home.path(), empty_thread_id, ThreadHistoryMode::Legacy),
+        write_rollout(home.path(), thread_id, ThreadHistoryMode::Legacy),
+        "2025/01/01",
+        "2025-01-01T12-00-00",
+    );
+    let newest_thread_id = ThreadId::new();
+    move_to_timestamp(
+        home.path(),
+        write_rollout(home.path(), newest_thread_id, ThreadHistoryMode::Paginated),
         "2025/01/04",
         "2025-01-04T12-00-00",
     );
-    let restored_contents = fs::read(&empty_path).expect("read rollout before emptying");
-    fs::write(&empty_path, []).expect("empty rollout");
     let store = indexed_store(home.path()).await;
+    let state_db = store.state_db().await.expect("state db");
+    let writer_guard = store
+        .writer_lock_coordinator
+        .acquire(thread_id)
+        .expect("hold cross-process writer lock");
 
     store
         .migrate_rollouts_on_startup()
         .await
-        .expect("record empty rollout");
-    fs::write(&empty_path, restored_contents).expect("restore rollout");
-    let (items, _, _) = RolloutRecorder::load_rollout_items(&empty_path)
-        .await
-        .expect("load restored rollout");
-    let metadata = codex_rollout::builder_from_items(items.as_slice(), &empty_path)
-        .expect("build restored metadata")
-        .build("test-provider");
-    store
-        .state_db()
-        .await
-        .expect("state db")
-        .upsert_thread(&metadata)
-        .await
-        .expect("seed restored metadata");
+        .expect("record busy rollout");
+    assert_eq!(
+        state_db
+            .get_rollout_migration_state(super::LEGACY_TO_PAGINATED_MIGRATION_ID)
+            .await
+            .expect("read migration state")
+            .expect("migration state")
+            .last_checked_thread
+            .expect("checked thread")
+            .thread_id,
+        newest_thread_id.to_string()
+    );
+    assert_eq!(
+        state_db
+            .list_rollout_migration_skipped_rollouts(super::LEGACY_TO_PAGINATED_MIGRATION_ID)
+            .await
+            .expect("read skipped rollouts")
+            .into_iter()
+            .map(|skipped_rollout| skipped_rollout.skip_reason)
+            .collect::<Vec<_>>(),
+        vec![super::BUSY_SKIP_REASON.to_string()]
+    );
 
+    drop(writer_guard);
+    let archived_directory = home.path().join(codex_rollout::ARCHIVED_SESSIONS_SUBDIR);
+    fs::create_dir_all(&archived_directory).expect("create archived directory");
+    let archived_path = archived_directory.join(path.file_name().expect("rollout filename"));
+    fs::rename(&path, &archived_path).expect("archive busy rollout");
+    let compressed_path = archived_path.with_extension("jsonl.zst");
+    let mut input = fs::File::open(&archived_path).expect("open archived rollout");
+    let output = fs::File::create(&compressed_path).expect("create compressed rollout");
+    let mut encoder = zstd::stream::write::Encoder::new(output, 0).expect("create encoder");
+    std::io::copy(&mut input, &mut encoder).expect("compress archived rollout");
+    encoder.finish().expect("finish compressed rollout");
+    fs::remove_file(&archived_path).expect("remove plain archived rollout");
     store
         .migrate_rollouts_on_startup()
         .await
-        .expect("migrate changed rollout");
+        .expect("retry no-longer-busy rollout");
 
     assert_eq!(
-        codex_rollout::read_session_meta_line(&empty_path)
+        codex_rollout::read_session_meta_line(&compressed_path)
             .await
             .expect("read migrated metadata")
             .meta
@@ -321,13 +475,77 @@ async fn rechecks_changed_empty_rollouts() {
         ThreadHistoryMode::Paginated
     );
     assert!(
-        store
-            .state_db()
-            .await
-            .expect("state db")
+        state_db
             .list_rollout_migration_skipped_rollouts(super::LEGACY_TO_PAGINATED_MIGRATION_ID)
             .await
             .expect("read skipped rollouts")
             .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn treats_writer_owned_empty_rollouts_as_busy() {
+    let home = TempDir::new().expect("create Codex home");
+    write_rollout(home.path(), ThreadId::new(), ThreadHistoryMode::Paginated);
+    let store = indexed_store(home.path()).await;
+    store
+        .migrate_rollouts_on_startup()
+        .await
+        .expect("seed startup cursor");
+
+    let thread_id = ThreadId::new();
+    let path = move_to_timestamp(
+        home.path(),
+        write_rollout(home.path(), thread_id, ThreadHistoryMode::Legacy),
+        "2025/01/04",
+        "2025-01-04T12-00-00",
+    );
+    let (items, _, _) = RolloutRecorder::load_rollout_items(&path)
+        .await
+        .expect("load rollout items");
+    let metadata = codex_rollout::builder_from_items(items.as_slice(), &path)
+        .expect("build thread metadata")
+        .build("test-provider");
+    let contents = fs::read(&path).expect("read rollout before emptying");
+    fs::write(&path, []).expect("empty rollout");
+    let state_db = store.state_db().await.expect("state db");
+    state_db
+        .upsert_thread(&metadata)
+        .await
+        .expect("seed thread metadata");
+    let writer_guard = store
+        .writer_lock_coordinator
+        .acquire(thread_id)
+        .expect("hold cross-process writer lock");
+
+    store
+        .migrate_rollouts_on_startup()
+        .await
+        .expect("record empty rollout as busy");
+    assert_eq!(
+        state_db
+            .list_rollout_migration_skipped_rollouts(super::LEGACY_TO_PAGINATED_MIGRATION_ID)
+            .await
+            .expect("read skipped rollouts")
+            .into_iter()
+            .map(|skipped_rollout| skipped_rollout.skip_reason)
+            .collect::<Vec<_>>(),
+        vec![super::BUSY_SKIP_REASON.to_string()]
+    );
+
+    fs::write(&path, contents).expect("restore rollout");
+    drop(writer_guard);
+    store
+        .migrate_rollouts_on_startup()
+        .await
+        .expect("retry no-longer-empty rollout");
+
+    assert_eq!(
+        codex_rollout::read_session_meta_line(&path)
+            .await
+            .expect("read migrated metadata")
+            .meta
+            .history_mode,
+        ThreadHistoryMode::Paginated
     );
 }

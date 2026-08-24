@@ -81,6 +81,11 @@ enum CanonicalizationAttempt {
     NeedsRollbackPlan,
 }
 
+enum RolloutMigrationPaths {
+    Discover,
+    Known(Vec<PathBuf>),
+}
+
 struct CanonicalizationSource<'a> {
     thread_id: ThreadId,
     source_path: &'a Path,
@@ -268,6 +273,7 @@ impl LocalThreadStore {
             options,
             |_| {},
             RolloutMigrationTrigger::Manual,
+            RolloutMigrationPaths::Discover,
         )
         .await
     }
@@ -282,6 +288,7 @@ impl LocalThreadStore {
             options,
             on_progress,
             RolloutMigrationTrigger::Manual,
+            RolloutMigrationPaths::Discover,
         )
         .await
     }
@@ -291,10 +298,11 @@ impl LocalThreadStore {
         options: RolloutMigrationOptions,
         mut on_progress: impl FnMut(RolloutMigrationProgress),
         trigger: RolloutMigrationTrigger,
+        paths: RolloutMigrationPaths,
     ) -> ThreadStoreResult<RolloutMigrationReport> {
         let telemetry = RolloutMigrationTelemetry::new(trigger, &options);
         let result = self
-            .migrate_rollouts_with_progress_inner(options, &mut on_progress)
+            .migrate_rollouts_with_progress_inner(options, &mut on_progress, paths)
             .await;
         telemetry.finish(&result);
         result
@@ -304,6 +312,7 @@ impl LocalThreadStore {
         &self,
         options: RolloutMigrationOptions,
         on_progress: &mut impl FnMut(RolloutMigrationProgress),
+        paths: RolloutMigrationPaths,
     ) -> ThreadStoreResult<RolloutMigrationReport> {
         let mut limiter = RolloutMigrationRateLimiter::new(options.max_mib_per_second)?;
         let _maintenance_guard = match options.mode {
@@ -317,18 +326,12 @@ impl LocalThreadStore {
                     })?,
             ),
         };
-        let mut paths =
-            find_rollout_paths(&self.config.codex_home.join(codex_rollout::SESSIONS_SUBDIR))
-                .await?;
-        paths.extend(
-            find_rollout_paths(
-                &self
-                    .config
-                    .codex_home
-                    .join(codex_rollout::ARCHIVED_SESSIONS_SUBDIR),
-            )
-            .await?,
-        );
+        let mut paths = match paths {
+            RolloutMigrationPaths::Discover => {
+                find_all_rollout_paths(&self.config.codex_home).await?
+            }
+            RolloutMigrationPaths::Known(paths) => paths,
+        };
         if options.mode == RolloutMigrationMode::Apply {
             let pending_thread_ids = pending_migration_thread_ids(&self.config.codex_home).await?;
             paths.sort_by_key(|path| {
@@ -376,36 +379,76 @@ impl LocalThreadStore {
         legacy_names: &HashMap<ThreadId, String>,
         limiter: &mut RolloutMigrationRateLimiter,
     ) -> ThreadStoreResult<Option<RolloutMigrationOutcome>> {
-        let metadata = match codex_rollout::read_session_meta_line(&path).await {
-            Ok(metadata) => metadata,
-            Err(error) => {
-                let thread_id = thread_id_from_rollout_filename(&path);
-                if !matches_selection(&options.thread_ids, thread_id) {
-                    return Ok(None);
+        let mut retried_moved_path = false;
+        let metadata = loop {
+            let error = match codex_rollout::read_session_meta_line(&path).await {
+                Ok(metadata) => break metadata,
+                Err(error) if !retried_moved_path && error.kind() == io::ErrorKind::NotFound => {
+                    // A different Codex process can archive or compress this rollout after path
+                    // discovery but before we take its writer lock. Retry the same rollout under
+                    // its current root/suffix before treating the missing snapshot path as failed.
+                    if let Some(current_path) =
+                        find_current_rollout_path(&self.config.codex_home, &path).await?
+                    {
+                        path = current_path;
+                        retried_moved_path = true;
+                        continue;
+                    }
+                    error
                 }
-                let empty = tokio::fs::metadata(&path)
-                    .await
-                    .is_ok_and(|metadata| metadata.len() == 0);
-                let failure_reason = if empty {
-                    None
-                } else if error.kind() != io::ErrorKind::Other {
-                    Some(RolloutMigrationFailureReason::RolloutReadFailed)
-                } else {
-                    Some(RolloutMigrationFailureReason::InvalidSessionMetadata)
-                };
-                return Ok(Some(RolloutMigrationOutcome {
-                    thread_id,
-                    rollout_path: path,
-                    status: if empty {
-                        RolloutMigrationStatus::SkippedEmpty
-                    } else {
-                        RolloutMigrationStatus::Failed
-                    },
-                    failure_reason,
-                    bytes_processed: 0,
-                    message: (!empty).then(|| error.to_string()),
-                }));
+                Err(error) => error,
+            };
+            let thread_id = thread_id_from_rollout_filename(&path);
+            if !matches_selection(&options.thread_ids, thread_id) {
+                return Ok(None);
             }
+            let initially_empty = tokio::fs::metadata(&path)
+                .await
+                .is_ok_and(|metadata| metadata.len() == 0);
+            // Writers create the rollout path before SessionMeta is durable. Re-read under the
+            // writer lock so a writer that just finished does not become a permanent empty skip.
+            let error = if initially_empty
+                && options.mode == RolloutMigrationMode::Apply
+                && let Some(thread_id) = thread_id
+            {
+                let _writer_guard = match self.writer_lock_coordinator.acquire(thread_id) {
+                    Ok(guard) => guard,
+                    Err(ThreadStoreError::Conflict { message }) => {
+                        return Ok(Some(skipped_busy_outcome(
+                            thread_id, path, message, /*bytes_processed*/ 0,
+                        )));
+                    }
+                    Err(error) => return Err(error),
+                };
+                match codex_rollout::read_session_meta_line(&path).await {
+                    Ok(metadata) => break metadata,
+                    Err(error) => error,
+                }
+            } else {
+                error
+            };
+            let empty = tokio::fs::metadata(&path)
+                .await
+                .is_ok_and(|metadata| metadata.len() == 0);
+            let failure_reason = if empty {
+                None
+            } else if error.kind() != io::ErrorKind::Other {
+                Some(RolloutMigrationFailureReason::RolloutReadFailed)
+            } else {
+                Some(RolloutMigrationFailureReason::InvalidSessionMetadata)
+            };
+            return Ok(Some(RolloutMigrationOutcome {
+                thread_id,
+                rollout_path: path,
+                status: if empty {
+                    RolloutMigrationStatus::SkippedEmpty
+                } else {
+                    RolloutMigrationStatus::Failed
+                },
+                failure_reason,
+                bytes_processed: 0,
+                message: (!empty).then(|| error.to_string()),
+            }));
         };
         let thread_id = metadata.meta.id;
         if !matches_selection(&options.thread_ids, Some(thread_id)) {
@@ -511,6 +554,16 @@ impl LocalThreadStore {
                 )));
             }
         };
+        // SessionMeta gives us the writer-lock id, so archiving can win between that read and
+        // lock acquisition. Once the lock is ours, follow the same rollout to its current path.
+        if !tokio::fs::try_exists(&path)
+            .await
+            .map_err(migration_error)?
+            && let Some(current_path) =
+                find_current_rollout_path(&self.config.codex_home, &path).await?
+        {
+            path = current_path;
+        }
         let bytes_before = limiter.bytes_processed;
         let result = match self
             .migrate_one_rollout(thread_id, &path, &journal_path, kind, legacy_names, limiter)
@@ -1226,6 +1279,30 @@ async fn find_rollout_paths(root: &Path) -> ThreadStoreResult<Vec<PathBuf>> {
 
     paths.sort_by(|left, right| right.cmp(left));
     Ok(paths)
+}
+
+async fn find_all_rollout_paths(codex_home: &Path) -> ThreadStoreResult<Vec<PathBuf>> {
+    let mut paths = find_rollout_paths(&codex_home.join(codex_rollout::SESSIONS_SUBDIR)).await?;
+    paths.extend(
+        find_rollout_paths(&codex_home.join(codex_rollout::ARCHIVED_SESSIONS_SUBDIR)).await?,
+    );
+    Ok(paths)
+}
+
+async fn find_current_rollout_path(
+    codex_home: &Path,
+    stale_path: &Path,
+) -> ThreadStoreResult<Option<PathBuf>> {
+    let plain_path = codex_rollout::plain_rollout_path(stale_path);
+    let Some(file_name) = plain_path.file_name() else {
+        return Ok(None);
+    };
+    Ok(find_all_rollout_paths(codex_home)
+        .await?
+        .into_iter()
+        .find(|candidate| {
+            codex_rollout::plain_rollout_path(candidate).file_name() == Some(file_name)
+        }))
 }
 
 fn matches_selection(selected: &[ThreadId], actual: Option<ThreadId>) -> bool {

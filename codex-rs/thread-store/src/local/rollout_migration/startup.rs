@@ -4,13 +4,15 @@
 //! rollout files on later launches. When it finds legacy history or a pending recovery marker, it
 //! invokes the existing full migration path.
 //!
-//! Empty or malformed rollouts are fingerprinted so they do not block the cursor forever. If one
-//! changes later, startup retries it instead of trusting the old skip.
+//! Rollouts that background migration cannot finish are remembered so they do not hold the cursor
+//! back forever. Ordinary failures stay skipped until a manual migration retries them; busy
+//! rollouts are retried on later startups because the writer may have gone away.
 
 use std::collections::HashSet;
-use std::io::ErrorKind;
+use std::ffi::OsString;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Duration;
 use std::time::SystemTime;
 
 use chrono::NaiveDateTime;
@@ -23,19 +25,26 @@ use codex_state::RolloutMigrationSkippedRollout;
 use super::LocalThreadStore;
 use super::RolloutMigrationMode;
 use super::RolloutMigrationOptions;
+use super::RolloutMigrationReport;
 use super::RolloutMigrationStatus;
-use super::find_rollout_paths;
+use super::find_all_rollout_paths;
 use super::migration_error;
+use super::publish::migration_journal_path;
 use super::publish::pending_migration_thread_ids;
 use super::telemetry::RolloutMigrationTrigger;
+use super::thread_id_from_rollout_filename;
+use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
 
 const LEGACY_TO_PAGINATED_MIGRATION_ID: &str = "legacy_to_paginated_v1";
 const EMPTY_SKIP_REASON: &str = "empty";
+const FAILED_SKIP_REASON: &str = "failed";
 const MALFORMED_SESSION_META_SKIP_REASON: &str = "malformed_session_meta";
+const BUSY_SKIP_REASON: &str = "busy";
 const CURSOR_LOOKBACK_SECONDS: i64 = 48 * 60 * 60;
+const MAINTENANCE_RETRY_DELAY: Duration = Duration::from_secs(1);
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct RolloutFingerprint {
     size_bytes: i64,
     modified_at_ns: i64,
@@ -44,6 +53,7 @@ struct RolloutFingerprint {
 enum StartupInspection {
     Paginated,
     Legacy,
+    NeedsMigration,
     Skipped,
     Unresolved,
 }
@@ -52,8 +62,13 @@ pub(super) async fn migrate_rollouts_on_startup(store: &LocalThreadStore) -> Thr
     let Some(state_db) = store.state_db.as_ref() else {
         return Ok(());
     };
-    let paths = find_all_rollout_paths(store).await?;
-    let skipped_rollouts = state_db
+    let paths = find_all_rollout_paths(&store.config.codex_home).await?;
+    let mut skipped_rollouts = state_db
+        .list_rollout_migration_skipped_rollouts(LEGACY_TO_PAGINATED_MIGRATION_ID)
+        .await
+        .map_err(migration_error)?;
+    retry_busy_rollouts(store, skipped_rollouts.as_slice(), paths.as_slice()).await?;
+    skipped_rollouts = state_db
         .list_rollout_migration_skipped_rollouts(LEGACY_TO_PAGINATED_MIGRATION_ID)
         .await
         .map_err(migration_error)?;
@@ -63,14 +78,13 @@ pub(super) async fn migrate_rollouts_on_startup(store: &LocalThreadStore) -> Thr
     {
         return migrate_all_rollouts(store, paths, skipped_rollouts.as_slice()).await;
     }
-    let (unchanged_skips, invalidated_skip) =
-        revalidate_skipped_rollouts(store, skipped_rollouts.as_slice()).await?;
+    let skipped_file_names = skipped_rollout_file_names(store, skipped_rollouts.as_slice());
     let state = state_db
         .get_rollout_migration_state(LEGACY_TO_PAGINATED_MIGRATION_ID)
         .await
         .map_err(migration_error)?;
 
-    if state.is_none() || invalidated_skip {
+    if state.is_none() {
         return migrate_all_rollouts(store, paths, skipped_rollouts.as_slice()).await;
     }
 
@@ -83,8 +97,8 @@ pub(super) async fn migrate_rollouts_on_startup(store: &LocalThreadStore) -> Thr
     let candidates = paths
         .iter()
         .filter(|path| {
-            let relative_path = relative_rollout_path(store, path);
-            !unchanged_skips.contains(relative_path.as_str())
+            !plain_rollout_file_name(path)
+                .is_some_and(|file_name| skipped_file_names.contains(&file_name))
                 && thread_creation_cursor(path).is_none_or(|cursor| {
                     lookback_created_at.is_none_or(|lookback_created_at| {
                         cursor.thread_created_at >= lookback_created_at
@@ -100,7 +114,7 @@ pub(super) async fn migrate_rollouts_on_startup(store: &LocalThreadStore) -> Thr
     for path in candidates {
         match inspect_rollout_path(store, path).await? {
             StartupInspection::Paginated | StartupInspection::Skipped => {}
-            StartupInspection::Legacy => {
+            StartupInspection::Legacy | StartupInspection::NeedsMigration => {
                 return migrate_all_rollouts(store, paths, skipped_rollouts.as_slice()).await;
             }
             StartupInspection::Unresolved => unresolved = true,
@@ -118,55 +132,132 @@ async fn migrate_all_rollouts(
     paths_before_migration: Vec<PathBuf>,
     existing_skips: &[RolloutMigrationSkippedRollout],
 ) -> ThreadStoreResult<()> {
-    let report = store
-        .migrate_rollouts_with_progress_for_trigger(
-            RolloutMigrationOptions {
-                mode: RolloutMigrationMode::Apply,
-                thread_ids: Vec::new(),
-                max_mib_per_second: None,
-            },
-            |_| {},
-            RolloutMigrationTrigger::Startup,
-        )
-        .await?;
-    let existing_skip_paths = existing_skips
+    let skipped_file_names = skipped_rollout_file_names(store, existing_skips);
+    let pending_thread_ids = pending_migration_thread_ids(&store.config.codex_home).await?;
+    let paths_to_migrate = paths_before_migration
         .iter()
-        .map(|skipped_rollout| skipped_rollout.rollout_path.as_str())
-        .collect::<HashSet<_>>();
-    let mut terminal = true;
-    let mut reported_paths = HashSet::new();
+        .filter(|path| {
+            !plain_rollout_file_name(path)
+                .is_some_and(|file_name| skipped_file_names.contains(&file_name))
+                || thread_id_from_rollout_filename(path)
+                    .is_some_and(|thread_id| pending_thread_ids.contains(&thread_id))
+        })
+        .cloned()
+        .collect();
+    let report = run_startup_migration(store, paths_to_migrate).await?;
     for outcome in &report.outcomes {
-        let relative_path = relative_rollout_path(store, &outcome.rollout_path);
-        reported_paths.insert(relative_path.clone());
-        match outcome.status {
-            RolloutMigrationStatus::Migrated | RolloutMigrationStatus::AlreadyPaginated => {
-                if existing_skip_paths.contains(relative_path.as_str()) {
-                    remove_skip(store, relative_path.as_str()).await?;
-                }
-            }
-            RolloutMigrationStatus::SkippedEmpty | RolloutMigrationStatus::Failed => {
-                if !matches!(
-                    inspect_rollout_path(store, &outcome.rollout_path).await?,
-                    StartupInspection::Skipped
-                ) {
-                    terminal = false;
-                }
-            }
-            RolloutMigrationStatus::Eligible | RolloutMigrationStatus::SkippedBusy => {
-                terminal = false
-            }
-        }
-    }
-    if !terminal {
-        return Ok(());
-    }
-    for skipped_rollout in existing_skips {
-        if !reported_paths.contains(skipped_rollout.rollout_path.as_str()) {
-            remove_skip(store, skipped_rollout.rollout_path.as_str()).await?;
-        }
+        update_skip_after_outcome(store, outcome).await?;
     }
     // Only mark the pre-migration snapshot; newer rollouts wait for the next startup check.
     advance_last_checked_thread(store, paths_before_migration.as_slice()).await
+}
+
+async fn retry_busy_rollouts(
+    store: &LocalThreadStore,
+    skipped_rollouts: &[RolloutMigrationSkippedRollout],
+    discovered_paths: &[PathBuf],
+) -> ThreadStoreResult<()> {
+    let mut paths = Vec::new();
+    let mut moved_skip_paths = Vec::new();
+    for skipped_rollout in skipped_rollouts
+        .iter()
+        .filter(|skipped_rollout| skipped_rollout.skip_reason == BUSY_SKIP_REASON)
+    {
+        let stored_path = store.config.codex_home.join(&skipped_rollout.rollout_path);
+        let path = if tokio::fs::try_exists(&stored_path)
+            .await
+            .map_err(migration_error)?
+        {
+            Some(stored_path.clone())
+        } else {
+            // Archive/unarchive moves one rollout between roots, while compression swaps between
+            // its plain and compressed filenames. Match the plain basename across both.
+            let file_name = plain_rollout_file_name(&stored_path);
+            discovered_paths
+                .iter()
+                .find(|path| plain_rollout_file_name(path) == file_name)
+                .cloned()
+        };
+        let Some(path) = path else {
+            continue;
+        };
+        if path != stored_path {
+            moved_skip_paths.push(skipped_rollout.rollout_path.as_str());
+        }
+        paths.push(path);
+    }
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let report = run_startup_migration(store, paths).await?;
+    for moved_skip_path in moved_skip_paths {
+        remove_skip(store, moved_skip_path).await?;
+    }
+    for outcome in &report.outcomes {
+        update_skip_after_outcome(store, outcome).await?;
+    }
+    Ok(())
+}
+
+async fn run_startup_migration(
+    store: &LocalThreadStore,
+    paths: Vec<PathBuf>,
+) -> ThreadStoreResult<RolloutMigrationReport> {
+    loop {
+        let Some(maintenance_guard) =
+            codex_rollout::try_acquire_rollout_maintenance_lock(&store.config.codex_home)
+                .map_err(migration_error)?
+        else {
+            tokio::time::sleep(MAINTENANCE_RETRY_DELAY).await;
+            continue;
+        };
+        // Avoid counting expected compression contention as a failed migration run. The migration
+        // path takes the real lock below, so retry if another maintainer wins this small gap.
+        drop(maintenance_guard);
+        match store
+            .migrate_rollouts_with_progress_for_trigger(
+                RolloutMigrationOptions {
+                    mode: RolloutMigrationMode::Apply,
+                    thread_ids: Vec::new(),
+                    max_mib_per_second: None,
+                },
+                |_| {},
+                RolloutMigrationTrigger::Startup,
+                super::RolloutMigrationPaths::Known(paths.clone()),
+            )
+            .await
+        {
+            Err(ThreadStoreError::Conflict { .. }) => continue,
+            result => return result,
+        }
+    }
+}
+
+async fn update_skip_after_outcome(
+    store: &LocalThreadStore,
+    outcome: &super::RolloutMigrationOutcome,
+) -> ThreadStoreResult<()> {
+    let relative_path = relative_rollout_path(store, &outcome.rollout_path);
+    match outcome.status {
+        RolloutMigrationStatus::Migrated | RolloutMigrationStatus::AlreadyPaginated => {
+            remove_skip(store, relative_path.as_str()).await
+        }
+        RolloutMigrationStatus::SkippedEmpty => {
+            record_current_skip(store, &outcome.rollout_path, EMPTY_SKIP_REASON).await
+        }
+        RolloutMigrationStatus::SkippedBusy => {
+            record_current_skip(store, &outcome.rollout_path, BUSY_SKIP_REASON).await
+        }
+        RolloutMigrationStatus::Failed => {
+            if outcome.thread_id.is_some_and(|thread_id| {
+                migration_journal_path(&store.config.codex_home, thread_id).exists()
+            }) {
+                return Ok(());
+            }
+            record_current_skip(store, &outcome.rollout_path, FAILED_SKIP_REASON).await
+        }
+        RolloutMigrationStatus::Eligible => Ok(()),
+    }
 }
 
 async fn inspect_rollout_path(
@@ -179,33 +270,45 @@ async fn inspect_rollout_path(
             Ok(StartupInspection::Legacy)
         }
         Ok(_) => Ok(StartupInspection::Paginated),
-        Err(error) => {
+        Err(_) => {
             let after = rollout_fingerprint(path).await?;
-            if before != after || !matches!(error.kind(), ErrorKind::Other | ErrorKind::InvalidData)
-            {
+            if before != after {
                 return Ok(StartupInspection::Unresolved);
             }
-            record_skip(store, path, before).await?;
+            // The migration path re-reads empty files under the writer lock before deciding
+            // whether they are terminally empty or just waiting for SessionMeta.
+            if before.size_bytes == 0 {
+                return Ok(StartupInspection::NeedsMigration);
+            }
+            record_skip(store, path, before, MALFORMED_SESSION_META_SKIP_REASON).await?;
             Ok(StartupInspection::Skipped)
         }
     }
+}
+
+async fn record_current_skip(
+    store: &LocalThreadStore,
+    path: &Path,
+    skip_reason: &str,
+) -> ThreadStoreResult<()> {
+    // These fields remain in the generic schema, but background skips are permanent now. Keep
+    // recording the best available fingerprint for humans inspecting SQLite.
+    let fingerprint = rollout_fingerprint(path).await.unwrap_or_default();
+    record_skip(store, path, fingerprint, skip_reason).await
 }
 
 async fn record_skip(
     store: &LocalThreadStore,
     path: &Path,
     fingerprint: RolloutFingerprint,
+    skip_reason: &str,
 ) -> ThreadStoreResult<()> {
     let state_db = startup_state_db(store)?;
     let skipped_rollout = RolloutMigrationSkippedRollout {
         rollout_path: relative_rollout_path(store, path),
         rollout_size_bytes: fingerprint.size_bytes,
         rollout_modified_at_ns: fingerprint.modified_at_ns,
-        skip_reason: if fingerprint.size_bytes == 0 {
-            EMPTY_SKIP_REASON.to_string()
-        } else {
-            MALFORMED_SESSION_META_SKIP_REASON.to_string()
-        },
+        skip_reason: skip_reason.to_string(),
     };
     state_db
         .record_rollout_migration_skip(LEGACY_TO_PAGINATED_MIGRATION_ID, &skipped_rollout)
@@ -218,32 +321,6 @@ async fn remove_skip(store: &LocalThreadStore, rollout_path: &str) -> ThreadStor
         .remove_rollout_migration_skip(LEGACY_TO_PAGINATED_MIGRATION_ID, rollout_path)
         .await
         .map_err(migration_error)
-}
-
-async fn revalidate_skipped_rollouts(
-    store: &LocalThreadStore,
-    skipped_rollouts: &[RolloutMigrationSkippedRollout],
-) -> ThreadStoreResult<(HashSet<String>, bool)> {
-    let mut unchanged_skips = HashSet::new();
-    let mut invalidated_skip = false;
-    for skipped_rollout in skipped_rollouts {
-        let path = store.config.codex_home.join(&skipped_rollout.rollout_path);
-        let fingerprint = match rollout_fingerprint(&path).await {
-            Ok(fingerprint) => fingerprint,
-            Err(_) => {
-                invalidated_skip = true;
-                continue;
-            }
-        };
-        if fingerprint.size_bytes == skipped_rollout.rollout_size_bytes
-            && fingerprint.modified_at_ns == skipped_rollout.rollout_modified_at_ns
-        {
-            unchanged_skips.insert(skipped_rollout.rollout_path.clone());
-        } else {
-            invalidated_skip = true;
-        }
-    }
-    Ok((unchanged_skips, invalidated_skip))
 }
 
 async fn advance_last_checked_thread(
@@ -270,21 +347,6 @@ fn startup_state_db(store: &LocalThreadStore) -> ThreadStoreResult<&StateDbHandl
         .ok_or_else(|| migration_error("startup migration requires state db"))
 }
 
-async fn find_all_rollout_paths(store: &LocalThreadStore) -> ThreadStoreResult<Vec<PathBuf>> {
-    let mut paths =
-        find_rollout_paths(&store.config.codex_home.join(codex_rollout::SESSIONS_SUBDIR)).await?;
-    paths.extend(
-        find_rollout_paths(
-            &store
-                .config
-                .codex_home
-                .join(codex_rollout::ARCHIVED_SESSIONS_SUBDIR),
-        )
-        .await?,
-    );
-    Ok(paths)
-}
-
 fn thread_creation_cursor(path: &Path) -> Option<RolloutMigrationCursor> {
     let name = path.file_name()?.to_str()?;
     let stem = name
@@ -309,6 +371,24 @@ fn relative_rollout_path(store: &LocalThreadStore, path: &Path) -> String {
         .unwrap_or(path)
         .to_string_lossy()
         .replace('\\', "/")
+}
+
+fn skipped_rollout_file_names(
+    store: &LocalThreadStore,
+    skipped_rollouts: &[RolloutMigrationSkippedRollout],
+) -> HashSet<OsString> {
+    skipped_rollouts
+        .iter()
+        .filter_map(|skipped_rollout| {
+            plain_rollout_file_name(&store.config.codex_home.join(&skipped_rollout.rollout_path))
+        })
+        .collect()
+}
+
+fn plain_rollout_file_name(path: &Path) -> Option<OsString> {
+    codex_rollout::plain_rollout_path(path)
+        .file_name()
+        .map(std::ffi::OsStr::to_os_string)
 }
 
 async fn rollout_fingerprint(path: &Path) -> ThreadStoreResult<RolloutFingerprint> {
