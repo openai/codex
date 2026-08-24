@@ -28,12 +28,14 @@ fn spawn_startup_thread_start(
     let request_handle = app_server.request_handle();
     let thread_params_mode = app_server.thread_params_mode();
     let remote_cwd_override = app_server.remote_cwd_override().map(Path::to_path_buf);
+    let thread_tool_transport = app_server.thread_tool_transport();
     tokio::spawn(async move {
         let result = crate::app_server_session::start_thread_with_request_handle(
             request_handle,
             config,
             thread_params_mode,
             remote_cwd_override,
+            thread_tool_transport,
         )
         .await
         .map_err(|err| format!("{err:#}"));
@@ -176,6 +178,22 @@ impl App {
         }
         if let Some(updated_model) = config.model.clone() {
             model = updated_model;
+        }
+        let dynamic_tool_status_updates = tokio::sync::broadcast::channel(/*capacity*/ 64).0;
+        if matches!(&app_server_target, AppServerTarget::LocalDaemon { .. })
+            && !crate::uses_remote_workspace_or_environment(
+                &app_server_target,
+                environment_manager.as_ref(),
+            )
+            && let Err(error) = app_server
+                .start_dynamic_tool_mcp(
+                    config.clone(),
+                    app_event_tx.clone(),
+                    dynamic_tool_status_updates.clone(),
+                )
+                .await
+        {
+            tracing::warn!(%error, "TUI task delegation is unavailable without its MCP server");
         }
         let model_catalog = Arc::new(ModelCatalog::new(available_models.clone()));
         let feedback_audience = bootstrap.feedback_audience;
@@ -501,6 +519,8 @@ See the Codex keymap documentation for supported actions and examples."
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
+            dynamic_tool_status_updates,
+            dynamic_tool_tasks: HashMap::new(),
             pending_startup_thread_start,
             startup_protected_input_boundary: true,
             startup_pending_protected_request: false,

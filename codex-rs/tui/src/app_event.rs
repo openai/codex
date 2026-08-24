@@ -16,6 +16,7 @@ use crate::inline_visualization::InlineVisualizationContext;
 use codex_app_server_protocol::AddCreditsNudgeCreditType;
 use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
 use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditResponse;
+use codex_app_server_protocol::DynamicToolCallResponse;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::GetAccountTokenUsageResponse;
 use codex_app_server_protocol::MarketplaceAddResponse;
@@ -29,6 +30,7 @@ use codex_app_server_protocol::PluginMarketplaceEntry;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallResponse;
+use codex_app_server_protocol::RequestId as AppServerRequestId;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadGoalStatus;
@@ -334,6 +336,18 @@ pub(crate) enum AppEvent {
     /// Result of the fresh startup thread that is attached after the input UI is live.
     StartupThreadStarted {
         result: Result<AppServerStartedThread, String>,
+    },
+
+    /// Register a dynamically created background thread before its first turn starts.
+    DynamicToolThreadStarted {
+        thread_id: ThreadId,
+        registered: tokio::sync::oneshot::Sender<()>,
+    },
+
+    /// Return a completed client-owned dynamic tool call to app server.
+    DynamicToolCallCompleted {
+        request_id: AppServerRequestId,
+        response: DynamicToolCallResponse,
     },
 
     /// Clear the terminal UI (screen + scrollback), start a fresh session, and keep the

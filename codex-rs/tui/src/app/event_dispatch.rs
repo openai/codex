@@ -100,6 +100,35 @@ impl App {
                 self.handle_startup_thread_started(app_server, result)
                     .await?;
             }
+            AppEvent::DynamicToolThreadStarted {
+                thread_id,
+                registered,
+            } => {
+                self.agents_overview
+                    .dispatched_requests
+                    .entry(thread_id)
+                    .or_default();
+                let _ = registered.send(());
+            }
+            AppEvent::DynamicToolCallCompleted {
+                request_id,
+                response,
+            } => {
+                self.dynamic_tool_tasks.remove(&request_id);
+                match serde_json::to_value(response) {
+                    Ok(result) => {
+                        if let Err(error) = app_server
+                            .resolve_server_request(request_id.clone(), result)
+                            .await
+                        {
+                            tracing::warn!(?request_id, %error, "failed to resolve dynamic tool call");
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(?request_id, %error, "failed to serialize dynamic tool response");
+                    }
+                }
+            }
             AppEvent::RequestOlderScrollbackHistory { thread_id } => {
                 if self.chat_widget.thread_id() == Some(thread_id)
                     && self.overlay.is_none()
@@ -2903,6 +2932,25 @@ impl App {
         app_server: &mut AppServerSession,
         mode: ExitMode,
     ) -> AppRunControl {
+        for (request_id, (_, task)) in self.dynamic_tool_tasks.drain() {
+            task.abort();
+            let response = crate::dynamic_tools::failure_response(
+                "TUI disconnected while handling a dynamic tool call",
+            );
+            match serde_json::to_value(response) {
+                Ok(result) => {
+                    if let Err(error) = app_server
+                        .resolve_server_request(request_id.clone(), result)
+                        .await
+                    {
+                        tracing::warn!(?request_id, %error, "failed to cancel dynamic tool call");
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(?request_id, %error, "failed to serialize dynamic tool response")
+                }
+            }
+        }
         match mode {
             ExitMode::ShutdownFirst => {
                 // Mark the thread we are explicitly shutting down for exit so

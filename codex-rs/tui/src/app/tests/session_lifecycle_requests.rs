@@ -45,6 +45,7 @@ enum HistoryCapabilities {
     Current,
     LegacyOnly,
     LegacyOnlyUnsupportedVariant,
+    LegacyDynamicToolsAndHistory,
     ForkHydrationFails,
 }
 
@@ -157,10 +158,29 @@ async fn start_recording_app_server_with_history(
                             .expect("request recorder lock")
                             .iter()
                             .any(|recorded| recorded.method == "thread/fork");
-                    let response = if matches!(
+                    let reject_dynamic_tools = history_capabilities
+                        == HistoryCapabilities::LegacyDynamicToolsAndHistory
+                        && request.method == "thread/start"
+                        && params
+                            .and_then(|params| params.get("dynamicTools"))
+                            .and_then(serde_json::Value::as_array)
+                            .is_some_and(|tools| {
+                                tools.iter().any(|tool| tool["type"] == "namespace")
+                            });
+                    let response = if reject_dynamic_tools {
+                        JSONRPCMessage::Error(JSONRPCError {
+                            id: request_id,
+                            error: JSONRPCErrorError {
+                                code: -32602,
+                                data: None,
+                                message: "missing field `inputSchema`".to_string(),
+                            },
+                        })
+                    } else if matches!(
                         history_capabilities,
                         HistoryCapabilities::LegacyOnly
                             | HistoryCapabilities::LegacyOnlyUnsupportedVariant
+                            | HistoryCapabilities::LegacyDynamicToolsAndHistory
                     ) && requires_pagination
                     {
                         let (code, message) = if history_capabilities
@@ -325,6 +345,864 @@ async fn make_history_test_app() -> Result<(App, tempfile::TempDir)> {
     app.config.codex_home = codex_home.path().to_path_buf().abs();
     app.config.sqlite = SqliteConfig::new_for_testing(codex_home.path().abs());
     Ok((app, codex_home))
+}
+
+fn spawn_approved_task_tool_call(
+    app: &App,
+    app_server: &AppServerSession,
+    request_id: AppServerRequestId,
+    params: codex_app_server_protocol::DynamicToolCallParams,
+) {
+    let request_handle = app_server.request_handle();
+    let app_event_tx = app.app_event_tx.clone();
+    let status_updates = app.dynamic_tool_status_updates.subscribe();
+    let mut thread_start_params = crate::app_server_session::thread_start_params_from_config(
+        &app.config,
+        app_server.thread_params_mode(),
+        app_server.remote_cwd_override(),
+        /*session_start_source*/ None,
+    );
+    app_server
+        .thread_tool_transport()
+        .configure(&mut thread_start_params);
+    tokio::spawn(async move {
+        let response = crate::dynamic_tools::execute(
+            request_handle,
+            params,
+            thread_start_params,
+            status_updates,
+            Some(&app_event_tx),
+        )
+        .await;
+        app_event_tx.send(AppEvent::DynamicToolCallCompleted {
+            request_id,
+            response,
+        });
+    });
+}
+
+#[tokio::test]
+async fn external_transport_excludes_delegation_dynamic_tools_for_both_start_paths() -> Result<()> {
+    let (app, _codex_home) = make_history_test_app().await?;
+    let (mut app_server, requests, proxy) = start_recording_app_server(
+        &app.config,
+        /*blocked_thread_list*/ None,
+        /*failed_thread_name*/ None,
+    )
+    .await?;
+
+    app_server.start_thread(&app.config).await?;
+    crate::app_server_session::start_thread_with_request_handle(
+        app_server.request_handle(),
+        app.config.clone(),
+        crate::app_server_session::ThreadParamsMode::Embedded,
+        /*remote_cwd_override*/ None,
+        app_server.thread_tool_transport(),
+    )
+    .await?;
+
+    let starts = recorded_params(&requests, "thread/start");
+    assert_eq!(starts.len(), 2);
+    for params in starts {
+        assert_eq!(params["dynamicTools"][0]["type"], "namespace");
+        assert_eq!(params["dynamicTools"][0]["name"], "codex_tui");
+        assert_eq!(
+            params["dynamicTools"][0]["tools"].as_array().map(Vec::len),
+            Some(6)
+        );
+        assert!(
+            params["dynamicTools"][0]["tools"]
+                .as_array()
+                .is_some_and(|tools| tools.iter().all(|tool| {
+                    tool["deferLoading"] == true
+                        && !crate::dynamic_tools::DELEGATION_TOOLS
+                            .contains(&tool["name"].as_str().unwrap_or_default())
+                }))
+        );
+    }
+
+    app_server.shutdown().await?;
+    proxy.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn local_daemon_registers_approval_gated_mcp_tools_for_both_start_paths() -> Result<()> {
+    let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    let codex_home = tempdir()?;
+    app.config.codex_home = codex_home.path().to_path_buf().abs();
+    app.config.sqlite = SqliteConfig::new_for_testing(codex_home.path().abs());
+    app.config
+        .web_search_mode
+        .set(codex_protocol::config_types::WebSearchMode::Live)?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        "web_search = \"disabled\"\n",
+    )?;
+    let (mut app_server, requests, proxy) = start_recording_app_server(
+        &app.config,
+        /*blocked_thread_list*/ None,
+        /*failed_thread_name*/ None,
+    )
+    .await?;
+    app_server
+        .start_dynamic_tool_mcp(
+            app.config.clone(),
+            app.app_event_tx.clone(),
+            app.dynamic_tool_status_updates.clone(),
+        )
+        .await?;
+
+    let thread_id = app_server
+        .start_thread(&app.config)
+        .await?
+        .session
+        .thread_id;
+    crate::app_server_session::start_thread_with_request_handle(
+        app_server.request_handle(),
+        app.config.clone(),
+        crate::app_server_session::ThreadParamsMode::Embedded,
+        /*remote_cwd_override*/ None,
+        app_server.thread_tool_transport(),
+    )
+    .await?;
+
+    let inventory: codex_app_server_protocol::ListMcpServerStatusResponse = app_server
+        .request_handle()
+        .request_typed(ClientRequest::McpServerStatusList {
+            request_id: AppServerRequestId::String("tui-tool-inventory".to_string()),
+            params: codex_app_server_protocol::ListMcpServerStatusParams {
+                cursor: None,
+                limit: None,
+                detail: Some(codex_app_server_protocol::McpServerStatusDetail::ToolsAndAuthOnly),
+                thread_id: Some(thread_id.to_string()),
+            },
+        })
+        .await?;
+    let tools = &inventory
+        .data
+        .iter()
+        .find(|server| server.name == "codex_tui")
+        .expect("local daemon must connect to the TUI MCP server")
+        .tools;
+    assert_eq!(tools.len(), 9);
+    for tool in crate::dynamic_tools::DELEGATION_TOOLS {
+        assert!(tools.contains_key(tool));
+    }
+    assert!(
+        !tools["create_thread"]
+            .input_schema
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|properties| properties.contains_key("permissions"))
+    );
+
+    let starts = recorded_params(&requests, "thread/start");
+    assert_eq!(starts.len(), 2);
+    for params in &starts {
+        assert_eq!(params["dynamicTools"], serde_json::Value::Null);
+        assert_eq!(params["config"]["web_search"], "live");
+        let server = &params["config"]["mcp_servers.codex_tui"];
+        assert!(
+            server["url"]
+                .as_str()
+                .is_some_and(|url| url.starts_with("http://127.0.0.1:"))
+        );
+        assert!(
+            server["http_headers"]["Authorization"]
+                .as_str()
+                .is_some_and(|header| header.starts_with("Bearer "))
+        );
+        assert_eq!(server["default_tools_approval_mode"], "approve");
+        for tool in crate::dynamic_tools::DELEGATION_TOOLS {
+            assert_eq!(server["tools"][tool]["approval_mode"], "prompt");
+        }
+    }
+
+    let mcp_url = starts[0]["config"]["mcp_servers.codex_tui"]["url"]
+        .as_str()
+        .expect("MCP server URL");
+    let unauthorized = codex_http_client::HttpClientBuilder::new()
+        .build_direct()?
+        .post(mcp_url)
+        .send()
+        .await?;
+    assert_eq!(unauthorized.status().as_u16(), 401);
+
+    app.config
+        .web_search_mode
+        .set(codex_protocol::config_types::WebSearchMode::Disabled)?;
+    let delegation_source = create_history_rollout(
+        &app.config,
+        ThreadHistoryMode::Legacy,
+        "Approved task source",
+    )?;
+    app_server
+        .resume_thread(
+            app.config.clone(),
+            delegation_source,
+            crate::app_server_session::ResumeModelSettings::RestoreFromThread,
+        )
+        .await?;
+    let resumed = recorded_params(&requests, "thread/resume")
+        .pop()
+        .expect("resumed task request");
+    assert_eq!(
+        resumed["config"]["mcp_servers.codex_tui"],
+        starts[0]["config"]["mcp_servers.codex_tui"]
+    );
+    app_server
+        .resume_thread(
+            app.config.clone(),
+            delegation_source,
+            crate::app_server_session::ResumeModelSettings::PreserveExistingThread,
+        )
+        .await?;
+    let reattached = recorded_params(&requests, "thread/resume")
+        .pop()
+        .expect("reattached task request");
+    assert_eq!(
+        reattached["config"]["mcp_servers.codex_tui"],
+        starts[0]["config"]["mcp_servers.codex_tui"]
+    );
+    app_server
+        .fork_thread(app.config.clone(), delegation_source)
+        .await?;
+    let forked = recorded_params(&requests, "thread/fork")
+        .pop()
+        .expect("forked task request");
+    assert_eq!(
+        forked["config"]["mcp_servers.codex_tui"],
+        starts[0]["config"]["mcp_servers.codex_tui"]
+    );
+    let authorization =
+        starts[0]["config"]["mcp_servers.codex_tui"]["http_headers"]["Authorization"]
+            .as_str()
+            .expect("MCP bearer token");
+    let client = codex_http_client::HttpClientBuilder::new().build_direct()?;
+    let call_tool = |id: u32, tool: &'static str, arguments: serde_json::Value| {
+        client
+            .post(mcp_url)
+            .header("Authorization", authorization)
+            .header("Accept", "application/json, text/event-stream")
+            .header("MCP-Protocol-Version", "2026-07-28")
+            .header("MCP-Method", "tools/call")
+            .header("MCP-Name", tool)
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/call",
+                "params": {
+                    "name": tool,
+                    "arguments": arguments,
+                    "_meta": {
+                        "threadId": delegation_source,
+                        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                        "io.modelcontextprotocol/clientCapabilities": {}
+                    }
+                }
+            }))
+    };
+    let response = call_tool(1, "list_threads", serde_json::json!({}))
+        .send()
+        .await?;
+    let status = response.status();
+    let response = response.text().await?;
+    assert!(status.is_success(), "{status}: {response}");
+    assert!(response.contains("threads"), "{response}");
+
+    let mut creation = tokio::spawn(
+        call_tool(
+            2,
+            "create_thread",
+            serde_json::json!({"prompt": "Start an approved task"}),
+        )
+        .send(),
+    );
+    let registration = tokio::select! {
+        event = events.recv() => event.expect("approved MCP task must register before starting"),
+        response = &mut creation => {
+            let response = response??;
+            panic!("MCP task creation completed without registration: {}", response.text().await?);
+        }
+        _ = tokio::time::sleep(std::time::Duration::from_secs(/*secs*/ 5)) => {
+            panic!("timed out waiting for MCP task registration");
+        }
+    };
+    let AppEvent::DynamicToolThreadStarted {
+        thread_id: child_thread_id,
+        registered,
+    } = registration
+    else {
+        panic!("expected the MCP-created task to register")
+    };
+    assert!(registered.send(()).is_ok());
+    let created = creation.await??;
+    assert!(created.status().is_success());
+    assert!(created.text().await?.contains(&child_thread_id.to_string()));
+    let child = recorded_params(&requests, "thread/start")
+        .pop()
+        .expect("MCP child thread/start request");
+    assert_eq!(child["dynamicTools"], serde_json::Value::Null);
+    assert!(child["config"]["web_search"].is_null());
+    assert_eq!(
+        child["config"]["mcp_servers.codex_tui"],
+        starts[0]["config"]["mcp_servers.codex_tui"]
+    );
+    let forked = call_tool(3, "fork_thread", serde_json::json!({"threadId": thread_id}))
+        .send()
+        .await?;
+    assert!(forked.status().is_success());
+    let forked = recorded_params(&requests, "thread/fork")
+        .pop()
+        .expect("MCP-created fork request");
+    assert_eq!(
+        forked["config"]["mcp_servers.codex_tui"],
+        starts[0]["config"]["mcp_servers.codex_tui"]
+    );
+
+    app_server.shutdown().await?;
+    proxy.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn local_mcp_respects_configured_servers_and_managed_requirements() -> Result<()> {
+    for scenario in ["conflicting", "blocked", "mismatched", "allowed"] {
+        let (mut app, _codex_home) = make_history_test_app().await?;
+        if scenario == "conflicting" {
+            let raw = serde_json::from_value::<codex_config::RawMcpServerConfig>(
+                serde_json::json!({"url": "http://127.0.0.1:1/mcp", "enabled": false}),
+            )?;
+            let mut servers = app.config.mcp_servers.get().clone();
+            servers.insert(
+                crate::dynamic_tools::NAMESPACE.to_string(),
+                codex_config::McpServerConfig::try_from(raw)
+                    .map_err(color_eyre::eyre::Report::msg)?,
+            );
+            app.config.mcp_servers.set(servers)?;
+        } else {
+            let mut allowed_servers = std::collections::BTreeMap::new();
+            if matches!(scenario, "mismatched" | "allowed") {
+                let requirement = if scenario == "allowed" {
+                    codex_config::McpServerRequirement::Url(
+                        codex_protocol::mcp_policy::McpServerValueMatcher::Prefix {
+                            value: "http://127.0.0.1:".to_string(),
+                        },
+                    )
+                } else {
+                    codex_config::McpServerRequirement::Identity {
+                        identity: codex_config::McpServerIdentity::Url {
+                            url: "http://127.0.0.1:1/mcp".to_string(),
+                        },
+                    }
+                };
+                allowed_servers.insert(crate::dynamic_tools::NAMESPACE.to_string(), requirement);
+            }
+            let requirements = codex_config::ConfigRequirements {
+                mcp_servers: Some(codex_config::Sourced::new(
+                    allowed_servers,
+                    codex_config::RequirementSource::Unknown,
+                )),
+                ..Default::default()
+            };
+            app.config.config_layer_stack = codex_config::ConfigLayerStack::new(
+                Vec::new(),
+                requirements,
+                codex_config::ConfigRequirementsToml::default(),
+            )?;
+        }
+        let (mut app_server, requests, proxy) = start_recording_app_server(
+            &app.config,
+            /*blocked_thread_list*/ None,
+            /*failed_thread_name*/ None,
+        )
+        .await?;
+        let result = app_server
+            .start_dynamic_tool_mcp(
+                app.config.clone(),
+                app.app_event_tx.clone(),
+                app.dynamic_tool_status_updates.clone(),
+            )
+            .await;
+        if scenario == "allowed" {
+            result?;
+        } else {
+            let error = result.expect_err("unavailable internal MCP must fail closed");
+            assert_eq!(
+                error.kind(),
+                if scenario == "conflicting" {
+                    std::io::ErrorKind::AlreadyExists
+                } else {
+                    std::io::ErrorKind::PermissionDenied
+                }
+            );
+        }
+        app_server.start_thread(&app.config).await?;
+        let start = recorded_params(&requests, "thread/start")
+            .pop()
+            .expect("fallback task start");
+        if scenario == "allowed" {
+            assert!(start["dynamicTools"].is_null());
+            assert!(start["config"]["mcp_servers.codex_tui"].is_object());
+        } else {
+            assert_eq!(
+                start["dynamicTools"][0]["tools"].as_array().map(Vec::len),
+                Some(6)
+            );
+            assert!(start["config"]["mcp_servers.codex_tui"].is_null());
+        }
+        app_server.shutdown().await?;
+        proxy.await??;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn older_external_server_starts_without_unsupported_dynamic_tools_or_history() -> Result<()> {
+    let (app, _codex_home) = make_history_test_app().await?;
+    let (mut app_server, requests, proxy) = start_recording_app_server_with_history(
+        &app.config,
+        HistoryCapabilities::LegacyDynamicToolsAndHistory,
+        /*blocked_thread_list*/ None,
+        /*failed_thread_name*/ None,
+    )
+    .await?;
+
+    app_server.start_thread(&app.config).await?;
+    crate::app_server_session::start_thread_with_request_handle(
+        app_server.request_handle(),
+        app.config.clone(),
+        crate::app_server_session::ThreadParamsMode::Embedded,
+        /*remote_cwd_override*/ None,
+        app_server.thread_tool_transport(),
+    )
+    .await?;
+
+    let starts = recorded_params(&requests, "thread/start");
+    assert_eq!(starts.len(), 6);
+    for attempts in starts.chunks_exact(3) {
+        assert_eq!(attempts[0]["dynamicTools"][0]["type"], "namespace");
+        assert_eq!(attempts[0]["historyMode"], "paginated");
+        assert_eq!(attempts[1]["dynamicTools"], serde_json::Value::Null);
+        assert_eq!(attempts[1]["historyMode"], "paginated");
+        assert_eq!(attempts[2]["dynamicTools"], serde_json::Value::Null);
+        assert_eq!(attempts[2]["historyMode"], serde_json::Value::Null);
+    }
+
+    app_server.shutdown().await?;
+    proxy.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn embedded_server_rejects_unowned_dynamic_tool_calls() -> Result<()> {
+    let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    let codex_home = tempdir()?;
+    app.config.codex_home = codex_home.path().to_path_buf().abs();
+    app.config.sqlite = SqliteConfig::new_for_testing(codex_home.path().abs());
+    let app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    app.handle_app_server_event(
+        &app_server,
+        codex_app_server_client::AppServerEvent::ServerRequest(Box::new(
+            ServerRequest::DynamicToolCall {
+                request_id: AppServerRequestId::Integer(100),
+                params: codex_app_server_protocol::DynamicToolCallParams {
+                    thread_id: "thread-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    call_id: "call-1".to_string(),
+                    namespace: Some("codex_app".to_string()),
+                    tool: "list_threads".to_string(),
+                    arguments: serde_json::json!({}),
+                },
+            },
+        )),
+    )
+    .await;
+    let AppEvent::DynamicToolCallCompleted { response, .. } = events
+        .try_recv()
+        .expect("embedded dynamic calls must receive a response")
+    else {
+        panic!("expected a dynamic tool failure response")
+    };
+    assert!(!response.success);
+    app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn dynamic_tool_requests_ignore_other_namespaces_and_dispatch_tui_namespace() -> Result<()> {
+    let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    let codex_home = tempdir()?;
+    app.config.codex_home = codex_home.path().to_path_buf().abs();
+    app.config.sqlite = SqliteConfig::new_for_testing(codex_home.path().abs());
+    app.config
+        .permissions
+        .set_permission_profile(PermissionProfile::workspace_write_with(
+            &[app.config.cwd.clone()],
+            codex_protocol::permissions::NetworkSandboxPolicy::Restricted,
+            /*exclude_tmpdir_env_var*/ true,
+            /*exclude_slash_tmp*/ true,
+        ))?;
+    let (mut app_server, requests, proxy) = start_recording_app_server(
+        &app.config,
+        /*blocked_thread_list*/ None,
+        /*failed_thread_name*/ Some("Unavailable name"),
+    )
+    .await?;
+    let thread_id = app_server
+        .start_thread(&app.config)
+        .await?
+        .session
+        .thread_id
+        .to_string();
+
+    for namespace in [Some("codex_app"), None] {
+        app.handle_app_server_event(
+            &app_server,
+            codex_app_server_client::AppServerEvent::ServerRequest(Box::new(
+                ServerRequest::DynamicToolCall {
+                    request_id: AppServerRequestId::Integer(100),
+                    params: codex_app_server_protocol::DynamicToolCallParams {
+                        thread_id: thread_id.clone(),
+                        turn_id: "turn-1".to_string(),
+                        call_id: "call-1".to_string(),
+                        namespace: namespace.map(str::to_string),
+                        tool: "list_threads".to_string(),
+                        arguments: serde_json::json!({}),
+                    },
+                },
+            )),
+        )
+        .await;
+        assert!(events.try_recv().is_err());
+    }
+
+    app.handle_app_server_event(
+        &app_server,
+        codex_app_server_client::AppServerEvent::ServerRequest(Box::new(
+            ServerRequest::DynamicToolCall {
+                request_id: AppServerRequestId::Integer(101),
+                params: codex_app_server_protocol::DynamicToolCallParams {
+                    thread_id: thread_id.clone(),
+                    turn_id: "turn-1".to_string(),
+                    call_id: "call-2".to_string(),
+                    namespace: Some("codex_tui".to_string()),
+                    tool: "list_threads".to_string(),
+                    arguments: serde_json::json!({}),
+                },
+            },
+        )),
+    )
+    .await;
+
+    let event = tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 5), events.recv())
+        .await?
+        .expect("dynamic tool completion event");
+    let AppEvent::DynamicToolCallCompleted {
+        request_id,
+        response,
+    } = event
+    else {
+        panic!("expected a dynamic tool completion event")
+    };
+    assert_eq!(request_id, AppServerRequestId::Integer(101));
+    assert!(response.success, "{response:?}");
+    let list_requests = recorded_params(&requests, "thread/list");
+    assert_eq!(list_requests.len(), 1);
+    assert_eq!(list_requests[0]["useStateDbOnly"], true);
+    assert_eq!(list_requests[0]["sourceKinds"], serde_json::Value::Null);
+
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    app.handle_event(
+        &mut tui,
+        &mut app_server,
+        AppEvent::DynamicToolCallCompleted {
+            request_id,
+            response,
+        },
+    )
+    .await?;
+    let completed = tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 5), async {
+        loop {
+            if let Some(response) = recorded_params(&requests, "server/request/response").pop() {
+                break response;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    assert_eq!(completed["success"], true);
+
+    app.handle_app_server_event(
+        &app_server,
+        codex_app_server_client::AppServerEvent::ServerRequest(Box::new(
+            ServerRequest::DynamicToolCall {
+                request_id: AppServerRequestId::Integer(102),
+                params: codex_app_server_protocol::DynamicToolCallParams {
+                    thread_id: thread_id.clone(),
+                    turn_id: "turn-1".to_string(),
+                    call_id: "call-3".to_string(),
+                    namespace: Some("codex_tui".to_string()),
+                    tool: "set_thread_title".to_string(),
+                    arguments: serde_json::json!({"threadId": thread_id, "title": "Renamed"}),
+                },
+            },
+        )),
+    )
+    .await;
+    let AppEvent::DynamicToolCallCompleted { response, .. } =
+        tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 5), events.recv())
+            .await?
+            .expect("dynamic mutation completion event")
+    else {
+        panic!("expected a dynamic mutation completion event")
+    };
+    assert!(response.success, "{response:?}");
+    assert_eq!(
+        recorded_params(&requests, "thread/name/set")[0]["name"],
+        "Renamed"
+    );
+
+    for (index, tool) in crate::dynamic_tools::DELEGATION_TOOLS
+        .into_iter()
+        .enumerate()
+    {
+        app.handle_app_server_event(
+            &app_server,
+            codex_app_server_client::AppServerEvent::ServerRequest(Box::new(
+                ServerRequest::DynamicToolCall {
+                    request_id: AppServerRequestId::String(format!("rejected-{index}")),
+                    params: codex_app_server_protocol::DynamicToolCallParams {
+                        thread_id: thread_id.clone(),
+                        turn_id: "turn-1".to_string(),
+                        call_id: format!("rejected-{index}"),
+                        namespace: Some("codex_tui".to_string()),
+                        tool: tool.to_string(),
+                        arguments: serde_json::json!({}),
+                    },
+                },
+            )),
+        )
+        .await;
+        let AppEvent::DynamicToolCallCompleted { response, .. } = events
+            .try_recv()
+            .expect("legacy delegation call must receive an immediate rejection")
+        else {
+            panic!("expected a legacy delegation failure response")
+        };
+        assert!(!response.success);
+    }
+
+    let creation_source = create_history_rollout(
+        &app.config,
+        ThreadHistoryMode::Legacy,
+        "Background task source",
+    )?;
+    app_server
+        .resume_thread(
+            app.config.clone(),
+            creation_source,
+            crate::app_server_session::ResumeModelSettings::RestoreFromThread,
+        )
+        .await?;
+    let project: codex_app_server_protocol::ProjectCreateResponse = app_server
+        .request_handle()
+        .request_typed(ClientRequest::ProjectCreate {
+            request_id: AppServerRequestId::String("create-source-project".to_string()),
+            params: codex_app_server_protocol::ProjectCreateParams {
+                name: "Source project".to_string(),
+                roots: vec![codex_app_server_protocol::ProjectRoot {
+                    path: app.config.cwd.clone(),
+                }],
+                metadata: None,
+                idempotency_key: "source-project".to_string(),
+            },
+        })
+        .await?;
+    let _: codex_app_server_protocol::ThreadMetadataUpdateResponse = app_server
+        .request_handle()
+        .request_typed(ClientRequest::ThreadMetadataUpdate {
+            request_id: AppServerRequestId::String("assign-source-project".to_string()),
+            params: codex_app_server_protocol::ThreadMetadataUpdateParams {
+                thread_id: creation_source.to_string(),
+                project_id: Some(project.project.id.clone()),
+                git_info: None,
+            },
+        })
+        .await?;
+    let source_settings: codex_app_server_protocol::ThreadResumeResponse = app_server
+        .request_handle()
+        .request_typed(ClientRequest::ThreadResume {
+            request_id: AppServerRequestId::String("read-source-sandbox".to_string()),
+            params: codex_app_server_protocol::ThreadResumeParams {
+                thread_id: creation_source.to_string(),
+                ..codex_app_server_protocol::ThreadResumeParams::default()
+            },
+        })
+        .await?;
+    assert!(source_settings.active_permission_profile.is_none());
+    let source_sandbox = serde_json::to_value(source_settings.sandbox)?;
+    spawn_approved_task_tool_call(
+        &app,
+        &app_server,
+        AppServerRequestId::Integer(103),
+        codex_app_server_protocol::DynamicToolCallParams {
+            thread_id: creation_source.to_string(),
+            turn_id: "turn-1".to_string(),
+            call_id: "call-4".to_string(),
+            namespace: Some("codex_tui".to_string()),
+            tool: "create_thread".to_string(),
+            arguments: serde_json::json!({
+                "prompt": "Check <main> & report",
+                "title": "Unavailable name"
+            }),
+        },
+    );
+    let registration =
+        tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 5), events.recv())
+            .await?
+            .expect("background task registration event");
+    let AppEvent::DynamicToolThreadStarted {
+        thread_id: created_thread_id,
+        registered,
+    } = registration
+    else {
+        panic!("expected background task registration before its first turn: {registration:?}")
+    };
+    assert!(recorded_params(&requests, "turn/start").is_empty());
+    app.handle_event(
+        &mut tui,
+        &mut app_server,
+        AppEvent::DynamicToolThreadStarted {
+            thread_id: created_thread_id,
+            registered,
+        },
+    )
+    .await?;
+    assert!(
+        app.agents_overview
+            .dispatched_requests
+            .contains_key(&created_thread_id)
+    );
+    let AppEvent::DynamicToolCallCompleted { response, .. } =
+        tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 5), events.recv())
+            .await?
+            .expect("background task creation completion")
+    else {
+        panic!("expected a background task completion event")
+    };
+    assert!(response.success, "{response:?}");
+    assert_eq!(
+        recorded_params(&requests, "thread/start")
+            .last()
+            .expect("background task creation")["projectId"],
+        project.project.id
+    );
+    let turn = recorded_params(&requests, "turn/start")
+        .pop()
+        .expect("background task turn request");
+    assert_eq!(
+        turn["input"][0]["text"],
+        format!(
+            "<codex_delegation>\n  <source_thread_id>{creation_source}</source_thread_id>\n  <input>Check &lt;main&gt; &amp; report</input>\n</codex_delegation>"
+        )
+    );
+    assert_eq!(turn["sandboxPolicy"], source_sandbox);
+
+    app.handle_app_server_event(
+        &app_server,
+        codex_app_server_client::AppServerEvent::ServerRequest(Box::new(exec_approval_request(
+            created_thread_id,
+            "turn-2",
+            "item-1",
+            /*approval_id*/ None,
+        ))),
+    )
+    .await;
+    assert_eq!(
+        app.agents_overview.dispatched_requests[&created_thread_id].len(),
+        1
+    );
+
+    spawn_approved_task_tool_call(
+        &app,
+        &app_server,
+        AppServerRequestId::Integer(104),
+        codex_app_server_protocol::DynamicToolCallParams {
+            thread_id: thread_id.clone(),
+            turn_id: "turn-1".to_string(),
+            call_id: "call-5".to_string(),
+            namespace: Some("codex_tui".to_string()),
+            tool: "send_message_to_thread".to_string(),
+            arguments: serde_json::json!({
+                "threadId": creation_source,
+                "prompt": "Follow <up> & report"
+            }),
+        },
+    );
+    let AppEvent::DynamicToolThreadStarted {
+        thread_id: continued_thread_id,
+        registered,
+    } = tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 5), events.recv())
+        .await?
+        .expect("follow-up task registration event")
+    else {
+        panic!("expected follow-up task registration before its next turn")
+    };
+    assert_eq!(continued_thread_id, creation_source);
+    assert_eq!(recorded_params(&requests, "turn/start").len(), 1);
+    app.handle_event(
+        &mut tui,
+        &mut app_server,
+        AppEvent::DynamicToolThreadStarted {
+            thread_id: continued_thread_id,
+            registered,
+        },
+    )
+    .await?;
+    let AppEvent::DynamicToolCallCompleted { response, .. } =
+        tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 5), events.recv())
+            .await?
+            .expect("follow-up task completion")
+    else {
+        panic!("expected a follow-up task completion event")
+    };
+    assert!(response.success, "{response:?}");
+    assert_eq!(
+        recorded_params(&requests, "turn/start")[1]["input"][0]["text"],
+        format!(
+            "<codex_delegation>\n  <source_thread_id>{thread_id}</source_thread_id>\n  <input>Follow &lt;up&gt; &amp; report</input>\n</codex_delegation>"
+        )
+    );
+
+    app.dynamic_tool_tasks.insert(
+        AppServerRequestId::Integer(105),
+        (thread_id, tokio::spawn(std::future::pending::<()>())),
+    );
+    assert_matches!(
+        app.handle_exit_mode(&mut app_server, ExitMode::ShutdownFirst)
+            .await,
+        AppRunControl::Exit(ExitReason::UserRequested)
+    );
+    let cancelled = tokio::time::timeout(Duration::from_secs(/*secs*/ 5), async {
+        loop {
+            if let Some(response) = recorded_params(&requests, "server/request/response")
+                .into_iter()
+                .find(|response| response["success"] == false)
+            {
+                break response;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    assert_eq!(cancelled["success"], false);
+    assert!(app.dynamic_tool_tasks.is_empty());
+
+    app_server.shutdown().await?;
+    proxy.await??;
+    Ok(())
 }
 
 #[tokio::test]
@@ -760,6 +1638,34 @@ async fn remote_legacy_history_start_negotiates_once_for_resume_and_fork() -> Re
             .any(|params| params["includeTurns"] == true)
     );
     assert_eq!(recorded_params(&requests, "thread/turns/list").len(), 1);
+
+    let (_status_sender, status_updates) = tokio::sync::broadcast::channel(/*capacity*/ 1);
+    let response = crate::dynamic_tools::execute(
+        app_server.request_handle(),
+        codex_app_server_protocol::DynamicToolCallParams {
+            thread_id: started.session.thread_id.to_string(),
+            turn_id: "source-turn".to_string(),
+            call_id: "legacy-wait".to_string(),
+            namespace: Some(crate::dynamic_tools::NAMESPACE.to_string()),
+            tool: "wait_threads".to_string(),
+            arguments: serde_json::json!({
+                "targets": [{"threadId": legacy_thread_id}],
+                "timeoutMs": 0
+            }),
+        },
+        codex_app_server_protocol::ThreadStartParams::default(),
+        status_updates,
+        /*app_event_tx*/ None,
+    )
+    .await;
+    assert!(response.success, "{response:?}");
+    assert!(
+        recorded_params(&requests, "thread/read")
+            .iter()
+            .any(|params| {
+                params["threadId"] == legacy_thread_id.to_string() && params["includeTurns"] == true
+            })
+    );
 
     app_server.shutdown().await?;
     proxy.await??;

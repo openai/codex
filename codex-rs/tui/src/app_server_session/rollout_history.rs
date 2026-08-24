@@ -67,6 +67,8 @@ impl AppServerSession {
             self.remote_cwd_override.as_deref(),
             model_settings,
         );
+        self.thread_tool_transport()
+            .configure_mcp(&mut params.config);
         let mut rollout_maintenance_guard = None;
         params.exclude_turns = if self.history_support == ThreadHistorySupport::Paginated {
             let known_legacy_history = self
