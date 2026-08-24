@@ -21,6 +21,7 @@ use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_NORMAL;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_DELETE;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
+use windows_sys::Win32::Storage::FileSystem::READ_CONTROL;
 use windows_sys::Win32::Storage::FileSystem::WRITE_DAC;
 use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 use windows_sys::Win32::System::IO::IO_STATUS_BLOCK_0;
@@ -115,9 +116,10 @@ pub(super) fn open_or_create_no_reparse(path: &Path) -> Result<OwnedHandle> {
     };
     let mut handle = 0;
     let status = unsafe {
+        // SetSecurityInfo can reject a WRITE_DAC-only directory handle.
         NtCreateFile(
             &mut handle,
-            WRITE_DAC,
+            READ_CONTROL | WRITE_DAC,
             &object_attributes,
             &mut io_status_block,
             ptr::null(),

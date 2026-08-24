@@ -1036,6 +1036,10 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
 }
 
 #[cfg(test)]
+#[path = "win_acl_tests.rs"]
+mod acl_tests;
+
+#[cfg(test)]
 mod tests {
     use super::Payload;
     use super::SETUP_VERSION;
