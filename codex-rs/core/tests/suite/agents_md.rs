@@ -681,6 +681,57 @@ async fn denied_project_instructions_fail_thread_creation() -> Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn symlinked_writable_root_reports_sandbox_failure_instead_of_session_corruption()
+-> Result<()> {
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    let visualization_target = home.path().join("visualization-target");
+    std::fs::create_dir(&visualization_target)?;
+    let visualization_root = home.path().join("visualizations");
+    create_directory_symlink(&visualization_target, &visualization_root);
+
+    let mut builder = test_codex().with_home(home).with_config(move |config| {
+        let mut file_system_policy = FileSystemSandboxPolicy::read_only();
+        file_system_policy.entries.push(FileSystemSandboxEntry::new(
+            config.cwd.join("private.txt").into(),
+            FileSystemAccessMode::Deny,
+        ));
+        file_system_policy.entries.push(FileSystemSandboxEntry::new(
+            visualization_root.abs().into(),
+            FileSystemAccessMode::Write,
+        ));
+        config
+            .permissions
+            .set_permission_profile(PermissionProfile::from_runtime_permissions(
+                &file_system_policy,
+                NetworkSandboxPolicy::Restricted,
+            ))
+            .expect("test config should allow the restricted filesystem policy");
+    });
+
+    let error = match builder.build(&server).await {
+        Ok(_) => anyhow::bail!("thread creation must reject the symlinked writable root"),
+        Err(error) => format!("{error:#}"),
+    };
+
+    assert!(
+        error.contains("failed to prepare fs sandbox"),
+        "thread creation should report the sandbox preparation failure: {error}"
+    );
+    assert!(
+        error.contains("symlinked writable roots are not supported"),
+        "thread creation should preserve the rejected writable root: {error}"
+    );
+    assert!(
+        !error.contains("Session data under"),
+        "sandbox preparation failure should not be diagnosed as session corruption: {error}"
+    );
+
+    Ok(())
+}
+
 /// Tightening permissions fails the turn before stale project instructions reach the model.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tightening_environment_read_permissions_invalidates_cached_project_instructions()

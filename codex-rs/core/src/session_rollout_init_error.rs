@@ -50,7 +50,7 @@ fn map_rollout_io_error(io_err: &std::io::Error, codex_home: &Path) -> Option<Co
             "Session storage path {} is blocked by an existing file. Remove or rename it so Codex can create sessions.",
             sessions_dir.display()
         ),
-        ErrorKind::InvalidData | ErrorKind::InvalidInput => format!(
+        ErrorKind::InvalidData => format!(
             "Session data under {} looks corrupt or unreadable. Clearing the sessions directory may help (this will remove saved threads).",
             sessions_dir.display()
         ),
