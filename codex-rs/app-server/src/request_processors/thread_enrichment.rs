@@ -1,4 +1,4 @@
-use super::turn_processor::can_accept_direct_input;
+use super::thread_input::can_accept_direct_input;
 use crate::thread_status::ThreadWatchManager;
 use crate::thread_status::resolve_thread_status;
 use codex_app_server_protocol::SessionSource;

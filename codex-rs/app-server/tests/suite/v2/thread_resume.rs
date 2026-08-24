@@ -6,6 +6,7 @@ use app_test_support::create_apply_patch_sse_response;
 use app_test_support::create_command_execution_sse_response;
 use app_test_support::create_fake_paginated_rollout;
 use app_test_support::create_fake_rollout;
+use app_test_support::create_fake_rollout_with_source;
 use app_test_support::create_fake_rollout_with_text_elements;
 use app_test_support::create_fake_rollout_with_token_usage;
 use app_test_support::create_final_assistant_message_sse_response;
@@ -20,12 +21,14 @@ use codex_app_server_protocol::ActivePermissionProfile;
 use codex_app_server_protocol::ApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ClientInfo;
+use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCError;
+use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::McpToolCallAppContext;
 use codex_app_server_protocol::PatchApplyStatus;
@@ -41,11 +44,15 @@ use codex_app_server_protocol::ThreadActiveFlag;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadGoalClearResponse;
+use codex_app_server_protocol::ThreadGoalGetParams;
+use codex_app_server_protocol::ThreadGoalGetResponse;
 use codex_app_server_protocol::ThreadGoalSetResponse;
 use codex_app_server_protocol::ThreadGoalStatus;
 use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListResponse;
+use codex_app_server_protocol::ThreadLoadedListParams;
+use codex_app_server_protocol::ThreadLoadedListResponse;
 use codex_app_server_protocol::ThreadMetadataGitInfoUpdateParams;
 use codex_app_server_protocol::ThreadMetadataUpdateParams;
 use codex_app_server_protocol::ThreadReadParams;
@@ -93,6 +100,7 @@ use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource as RolloutSessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -1535,6 +1543,121 @@ async fn thread_goal_get_rejects_unmaterialized_thread() -> Result<()> {
         goal_err.error.message
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn unloaded_thread_goal_mutations_respect_parent_ownership() -> Result<()> {
+    const TIMESTAMP: &str = "2026-08-20T12-00-00";
+    let server = responses::start_mock_server().await;
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&server.uri())
+        .enable_feature(Feature::Goals)
+        .enable_feature(Feature::Sqlite)
+        .write(codex_home.path())?;
+    let child_source = RolloutSessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id: ThreadId::new(),
+        depth: 1,
+        agent_path: None,
+        agent_nickname: None,
+        agent_role: None,
+    });
+    let mut app = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+
+    for (source, version) in [
+        (child_source.clone(), Some(MultiAgentVersion::V2)),
+        (child_source.clone(), Some(MultiAgentVersion::V1)),
+        (child_source, None),
+        (RolloutSessionSource::Cli, Some(MultiAgentVersion::V2)),
+    ] {
+        let rejects_mutation = matches!(source, RolloutSessionSource::SubAgent(_))
+            && version == Some(MultiAgentVersion::V2);
+        let thread_id = create_fake_rollout_with_source(
+            codex_home.path(),
+            TIMESTAMP,
+            "2026-08-20T12:00:00Z",
+            "Saved task",
+            Some("mock_provider"),
+            /*git_info*/ None,
+            source,
+        )?;
+        let path = rollout_path(codex_home.path(), TIMESTAMP, &thread_id);
+        let params = json!({
+            "threadId": thread_id,
+            "objective": "Original goal",
+            "status": "paused",
+        });
+        let request_id = app
+            .send_raw_request("thread/goal/set", Some(params))
+            .await?;
+        let original: ThreadGoalSetResponse =
+            timeout(DEFAULT_READ_TIMEOUT, app.read_response(request_id)).await??;
+
+        // The initial header has no version, as in older rollouts. Later metadata
+        // must take precedence, just as it does when the thread resumes.
+        let mut meta = read_session_meta_line(&path).await?;
+        meta.meta.multi_agent_version = version;
+        append_rollout_item_to_path(&path, &RolloutItem::SessionMeta(meta)).await?;
+
+        for (method, params) in [
+            (
+                "thread/goal/set",
+                json!({"threadId": thread_id, "objective": "Replacement goal", "status": "paused"}),
+            ),
+            ("thread/goal/clear", json!({"threadId": thread_id})),
+        ] {
+            let request_id = app.send_raw_request(method, Some(params)).await?;
+            if rejects_mutation {
+                let error = timeout(
+                    DEFAULT_READ_TIMEOUT,
+                    app.read_stream_until_error_message(RequestId::Integer(request_id)),
+                )
+                .await??;
+                assert_eq!(
+                    error.error,
+                    JSONRPCErrorError {
+                        code: -32600,
+                        message:
+                            "direct app-server input is not allowed for multi-agent v2 sub-agents"
+                                .to_string(),
+                        data: None,
+                    },
+                );
+                let retained: ThreadGoalGetResponse = app
+                    .request(|request_id| ClientRequest::ThreadGoalGet {
+                        request_id,
+                        params: ThreadGoalGetParams {
+                            thread_id: thread_id.clone(),
+                        },
+                    })
+                    .await?;
+                assert_eq!(
+                    retained,
+                    ThreadGoalGetResponse {
+                        goal: Some(original.goal.clone()),
+                    },
+                );
+            } else if method == "thread/goal/set" {
+                let _: ThreadGoalSetResponse =
+                    timeout(DEFAULT_READ_TIMEOUT, app.read_response(request_id)).await??;
+            } else {
+                let cleared: ThreadGoalClearResponse =
+                    timeout(DEFAULT_READ_TIMEOUT, app.read_response(request_id)).await??;
+                assert_eq!(cleared, ThreadGoalClearResponse { cleared: true });
+            }
+        }
+    }
+
+    let loaded: ThreadLoadedListResponse = app
+        .request(|request_id| ClientRequest::ThreadLoadedList {
+            request_id,
+            params: ThreadLoadedListParams::default(),
+        })
+        .await?;
+    assert_eq!(loaded.data, Vec::<String>::new());
     Ok(())
 }
 

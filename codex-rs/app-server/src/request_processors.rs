@@ -553,6 +553,7 @@ mod remote_control_processor;
 mod search;
 mod thread_enrichment;
 mod thread_fork_goal;
+mod thread_input;
 mod thread_processor;
 mod thread_queue_processor;
 mod thread_sections;

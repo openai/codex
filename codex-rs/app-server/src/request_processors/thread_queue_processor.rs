@@ -38,10 +38,10 @@ use codex_thread_store::ThreadStore;
 use codex_thread_store::ThreadStoreError;
 
 use super::TurnRequestProcessor;
+use super::thread_input::DIRECT_INPUT_TO_MULTI_AGENT_V2_SUBAGENT_ERROR;
+use super::thread_input::can_accept_direct_input;
 use super::thread_processor::THREAD_LIST_DEFAULT_LIMIT;
 use super::thread_processor::THREAD_LIST_MAX_LIMIT;
-use super::turn_processor::DIRECT_INPUT_TO_MULTI_AGENT_V2_SUBAGENT_ERROR;
-use super::turn_processor::can_accept_direct_input;
 use super::turn_processor::validate_user_input_image_urls;
 
 const DIRECT_INPUT_TO_UNLOADED_SUBAGENT_ERROR: &str =

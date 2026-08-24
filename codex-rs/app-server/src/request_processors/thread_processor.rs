@@ -2,7 +2,8 @@ use super::persisted_resume_settings::PersistedResumeSettings;
 use super::persisted_resume_settings::latest_persisted_resume_settings;
 use super::thread_enrichment::enrich_loaded_threads;
 use super::thread_fork_goal::inherit_thread_goal_snapshot;
-use super::turn_processor::can_accept_direct_input;
+use super::thread_input::can_accept_direct_input;
+use super::thread_input::ensure_direct_input_allowed;
 use super::*;
 use crate::error_code::method_not_found;
 use codex_app_server_protocol::SelectedCapabilityRoot;
@@ -914,6 +915,7 @@ impl ThreadRequestProcessor {
 
         Ok((thread_id, thread))
     }
+
     pub(super) async fn acquire_thread_list_state_permit(
         &self,
     ) -> Result<SemaphorePermit<'_>, JSONRPCErrorError> {
@@ -2013,6 +2015,7 @@ impl ThreadRequestProcessor {
             before_turn_id,
         } = params;
         let (thread_id, thread) = self.load_thread(&thread_id).await?;
+        ensure_direct_input_allowed(thread.as_ref()).await?;
         let config_snapshot = thread.config_snapshot().await;
         if !matches!(config_snapshot.history_mode, ThreadHistoryMode::Paginated) {
             return Err(invalid_request(
@@ -2231,6 +2234,7 @@ impl ThreadRequestProcessor {
         }
 
         let (thread_id, thread) = self.load_thread(&thread_id).await?;
+        ensure_direct_input_allowed(thread.as_ref()).await?;
         if matches!(
             thread.config_snapshot().await.history_mode,
             ThreadHistoryMode::Paginated
@@ -2284,6 +2288,7 @@ impl ThreadRequestProcessor {
         let ThreadCompactStartParams { thread_id } = params;
 
         let (_, thread) = self.load_thread(&thread_id).await?;
+        ensure_direct_input_allowed(thread.as_ref()).await?;
         self.submit_core_op(request_id, thread.as_ref(), Op::Compact)
             .await
             .map_err(|err| internal_error(format!("failed to start compaction: {err}")))?;
@@ -2364,6 +2369,10 @@ impl ThreadRequestProcessor {
         if command.is_empty() {
             return Err(invalid_request("command must not be empty"));
         }
+
+        let (_, thread) = self.load_thread(&thread_id).await?;
+        ensure_direct_input_allowed(thread.as_ref()).await?;
+
         // `thread/shellCommand` is app-server's local-host shell escape hatch,
         // not the normal turn-selected shell tool path.
         if self
@@ -2375,7 +2384,6 @@ impl ThreadRequestProcessor {
             return Err(internal_error("local environment is not configured"));
         }
 
-        let (_, thread) = self.load_thread(&thread_id).await?;
         self.submit_core_op(
             request_id,
             thread.as_ref(),
@@ -2395,6 +2403,7 @@ impl ThreadRequestProcessor {
         let event = serde_json::from_value(event)
             .map_err(|err| invalid_request(format!("invalid Guardian denial event: {err}")))?;
         let (_, thread) = self.load_thread(&thread_id).await?;
+        ensure_direct_input_allowed(thread.as_ref()).await?;
 
         self.submit_core_op(
             request_id,
