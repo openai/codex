@@ -20,6 +20,7 @@ use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
+use codex_app_server_protocol::ThreadSource;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SubAgentSource;
 
@@ -92,6 +93,15 @@ impl App {
             let _ = self.dynamic_tool_status_updates.send(status.clone());
         }
 
+        if let ServerNotification::ThreadStarted(started) = &notification
+            && started.thread.ephemeral
+            && matches!(
+                started.thread.thread_source.as_ref(),
+                Some(ThreadSource::Feature(feature)) if feature == "system"
+            )
+        {
+            return;
+        }
         // Hidden helper threads must not enter visible thread routing or overview refreshes.
         if let ServerNotificationThreadTarget::Thread(thread_id) =
             server_notification_thread_target(&notification)

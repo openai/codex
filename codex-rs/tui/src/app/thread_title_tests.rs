@@ -100,6 +100,40 @@ fn normalizes_generated_title_whitespace() {
 }
 
 #[test]
+fn removes_wrapping_quotes_and_trailing_punctuation_from_generated_titles() {
+    for title in [
+        r#""Fix login errors!""#,
+        "'Fix login errors?'",
+        "`Fix login errors.`",
+        "“Fix login errors!”",
+    ] {
+        let response = serde_json::json!({ "title": title }).to_string();
+
+        assert_eq!(
+            parse_thread_title(&response),
+            Some("Fix login errors".to_string()),
+            "response: {response}"
+        );
+    }
+}
+
+#[test]
+fn preserves_meaningful_leading_punctuation_in_generated_titles() {
+    for (title, expected) in [
+        (".NET migration.", ".NET migration"),
+        ("!important styling!", "!important styling"),
+    ] {
+        let response = serde_json::json!({ "title": title }).to_string();
+
+        assert_eq!(
+            parse_thread_title(&response),
+            Some(expected.to_string()),
+            "response: {response}"
+        );
+    }
+}
+
+#[test]
 fn rejects_invalid_or_empty_generated_titles() {
     for response in [
         "",

@@ -11,6 +11,8 @@ use codex_app_server_protocol::CurrentTimeReadParams;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::ThreadActiveFlag;
+use codex_app_server_protocol::ThreadSource;
+use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::ThreadUnsubscribeStatus;
@@ -65,6 +67,92 @@ fn overview_thread(
         name: Some(name.to_string()),
         turns: Vec::new(),
     }
+}
+
+#[tokio::test]
+async fn hidden_system_thread_does_not_refresh_shared_overview() {
+    let mut app = make_test_app().await;
+    let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+        .await
+        .expect("embedded app server");
+    let view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
+    app.chat_widget.show_bottom_pane_view(Box::new(view));
+
+    let request_id = uuid::Uuid::new_v4();
+    app.agents_overview.request_id = Some(request_id);
+
+    let parent_thread_id = ThreadId::new();
+    app.primary_thread_id = Some(parent_thread_id);
+    app.active_thread_id = Some(parent_thread_id);
+    app.ensure_thread_channel(parent_thread_id);
+    app.agents_overview
+        .dispatched_requests
+        .insert(parent_thread_id, Vec::new());
+
+    let hidden_thread_id = ThreadId::new();
+    let mut thread = overview_thread(
+        hidden_thread_id,
+        Some(parent_thread_id),
+        "Generate thread title",
+        ThreadStatus::Idle,
+    );
+    thread.ephemeral = true;
+    thread.thread_source = Some(ThreadSource::Feature("system".to_string()));
+
+    app.handle_app_server_event(
+        &app_server,
+        AppServerEvent::ServerNotification(Box::new(ServerNotification::ThreadStarted(
+            ThreadStartedNotification { thread },
+        ))),
+    )
+    .await;
+
+    assert_eq!(
+        (
+            app.agents_overview.request_id,
+            app.agents_overview.refresh_pending,
+        ),
+        (Some(request_id), false)
+    );
+    assert!(!app.thread_event_channels.contains_key(&hidden_thread_id));
+    assert!(
+        !app.agents_overview
+            .dispatched_requests
+            .contains_key(&hidden_thread_id)
+    );
+
+    let visible_thread_id = ThreadId::new();
+    let mut thread = overview_thread(
+        visible_thread_id,
+        Some(parent_thread_id),
+        "Persisted system thread",
+        ThreadStatus::Idle,
+    );
+    thread.thread_source = Some(ThreadSource::Feature("system".to_string()));
+
+    app.handle_app_server_event(
+        &app_server,
+        AppServerEvent::ServerNotification(Box::new(ServerNotification::ThreadStarted(
+            ThreadStartedNotification { thread },
+        ))),
+    )
+    .await;
+
+    assert_eq!(
+        (
+            app.agents_overview.request_id,
+            app.agents_overview.refresh_pending,
+        ),
+        (Some(request_id), true)
+    );
+    assert!(app.thread_event_channels.contains_key(&visible_thread_id));
+    assert!(
+        app.agents_overview
+            .dispatched_requests
+            .contains_key(&visible_thread_id)
+    );
+
+    app_server.shutdown().await.expect("shutdown app server");
 }
 
 #[tokio::test]
