@@ -427,6 +427,11 @@ impl NetworkProxyState {
     }
 
     pub fn virtualize_child_credentials(&self, env: &mut HashMap<String, String>) {
+        let parent_env = std::env::vars_os()
+            .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
+            .collect();
+        self.credential_broker
+            .discover_parent_credentials(&parent_env, env);
         self.credential_broker.virtualize_child_env(env);
     }
 
@@ -436,6 +441,14 @@ impl NetworkProxyState {
         command: &mut [String],
     ) {
         self.credential_broker.restore_child_env(env, command);
+    }
+
+    pub(crate) fn virtualize_brokered_text(
+        &self,
+        text: &mut String,
+        env: &HashMap<String, String>,
+    ) -> bool {
+        self.credential_broker.virtualize_text(text, env)
     }
 
     pub fn inject_request_credentials(&self, host: &str, headers: &mut rama_http::HeaderMap) {

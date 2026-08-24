@@ -1109,6 +1109,15 @@ impl NetworkProxy {
         self.state.restore_child_credentials(env, command);
     }
 
+    /// Replaces allowed credentials and removes credentials excluded from the environment.
+    pub fn virtualize_brokered_text(
+        &self,
+        text: &mut String,
+        env: &HashMap<String, String>,
+    ) -> bool {
+        self.state.virtualize_brokered_text(text, env)
+    }
+
     pub fn apply_to_env_for_environment(
         &self,
         env: &mut HashMap<String, String>,

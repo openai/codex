@@ -18,6 +18,7 @@ pub(super) static PROVIDER: CredentialProvider = CredentialProvider {
     context_env_vars: &[OPENAI_BASE_URL_ENV_VAR],
     sources: &[CredentialSource {
         env_vars: OPENAI_API_KEY_ENV_VARS,
+        binding_env_vars: &[OPENAI_BASE_URL_ENV_VAR],
         host_binding,
     }],
     reset_on_configuration_change: true,

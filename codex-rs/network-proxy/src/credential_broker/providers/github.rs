@@ -24,10 +24,12 @@ pub(super) static PROVIDER: CredentialProvider = CredentialProvider {
     sources: &[
         CredentialSource {
             env_vars: GITHUB_CLOUD_TOKEN_ENV_VARS,
+            binding_env_vars: &[],
             host_binding: github_cloud_binding,
         },
         CredentialSource {
             env_vars: GITHUB_ENTERPRISE_TOKEN_ENV_VARS,
+            binding_env_vars: &[GH_HOST_ENV_VAR],
             host_binding: github_enterprise_binding,
         },
     ],
