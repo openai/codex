@@ -61,6 +61,9 @@ use tempfile::TempDir;
 use tracing::instrument;
 use tracing::warn;
 
+#[path = "agent_plugin_mcp_overlay.rs"]
+mod agent_plugin_mcp_overlay;
+
 const DEFAULT_SKILLS_DIR_NAME: &str = "skills";
 const DEFAULT_HOOKS_CONFIG_FILE: &str = "hooks/hooks.json";
 const DEFAULT_MCP_CONFIG_FILE: &str = ".mcp.json";
@@ -1558,6 +1561,10 @@ pub(crate) async fn load_plugin_mcp_servers_from_manifest_with_format(
                 }
             }
         }
+    }
+
+    if manifest_format == PluginManifestFormat::AgentPlugin {
+        agent_plugin_mcp_overlay::apply_codex_env_overlay(plugin_root, &mut mcp_servers).await;
     }
 
     mcp_servers

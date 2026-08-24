@@ -47,6 +47,123 @@ async fn agent_plugin_overlay_apps_are_not_runtime_active() {
     assert!(load_plugin_apps(&plugin_root).await.is_empty());
 }
 
+#[tokio::test]
+async fn agent_plugin_codex_mcp_overlay_only_forwards_matching_stdio_server_env_vars() {
+    let temp_dir = TempDir::new().expect("tempdir");
+    let plugin_root = temp_dir.path().join("plugin");
+    write_file(
+        &plugin_root.join("plugin.json"),
+        &format!(
+            r#"{{"$schema":"{AGENT_PLUGIN_SCHEMA_URI}","name":"plugin","extensions":{{"com.openai":{{"interface":{{"displayName":"Portable"}}}}}}}}"#
+        ),
+    );
+    write_file(
+        &plugin_root.join("mcp.json"),
+        r#"{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "shared": {
+      "type": "stdio",
+      "command": "portable-server",
+      "args": ["portable"],
+      "env": {
+        "DB_PASSWORD": "${DB_PASSWORD}",
+        "API_TOKEN": "portable-token",
+        "REMOTE_ONLY": "${REMOTE_ONLY}",
+        "UNLISTED": "${UNLISTED}"
+      }
+    },
+    "portable-only": {"type": "stdio", "command": "portable-only"}
+  }
+}"#,
+    );
+
+    let mut expected = load_plugin_mcp_servers(&plugin_root, /*auth_mode*/ None).await;
+    let Some(McpServerConfig {
+        transport: McpServerTransportConfig::Stdio { env, env_vars, .. },
+        ..
+    }) = expected.get_mut("shared")
+    else {
+        panic!("expected portable stdio server");
+    };
+    env.as_mut()
+        .expect("portable environment")
+        .remove("DB_PASSWORD");
+    env_vars.extend(["DB_PASSWORD".into(), "API_TOKEN".into()]);
+
+    write_file(
+        &plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"legacy-plugin"}"#,
+    );
+    write_file(
+        &plugin_root.join(".mcp.json"),
+        r#"{
+  "mcpServers": {
+    "shared": {
+      "command": "legacy-server",
+      "args": ["legacy"],
+      "env_vars": ["DB_PASSWORD", "API_TOKEN", {"name": "REMOTE_ONLY", "source": "remote"}]
+    },
+    "legacy-only": {"command": "legacy-only", "env_vars": ["UNLISTED"]}
+  }
+}"#,
+    );
+
+    assert_eq!(
+        load_plugin_mcp_servers(&plugin_root, /*auth_mode*/ None).await,
+        expected
+    );
+}
+
+#[tokio::test]
+async fn agent_plugin_codex_mcp_overlay_supports_inline_legacy_servers() {
+    let temp_dir = TempDir::new().expect("tempdir");
+    let plugin_root = temp_dir.path().join("plugin");
+    write_file(
+        &plugin_root.join("plugin.json"),
+        &format!(r#"{{"$schema":"{AGENT_PLUGIN_SCHEMA_URI}","name":"plugin"}}"#),
+    );
+    write_file(
+        &plugin_root.join("mcp.json"),
+        r#"{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "shared": {
+      "type": "stdio",
+      "command": "portable-server",
+      "env": {"TOKEN": "${TOKEN}"}
+    }
+  }
+}"#,
+    );
+
+    let mut expected = load_plugin_mcp_servers(&plugin_root, /*auth_mode*/ None).await;
+    let Some(McpServerConfig {
+        transport: McpServerTransportConfig::Stdio { env, env_vars, .. },
+        ..
+    }) = expected.get_mut("shared")
+    else {
+        panic!("expected portable stdio server");
+    };
+    env.as_mut().expect("portable environment").remove("TOKEN");
+    env_vars.push("TOKEN".into());
+
+    write_file(
+        &plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{
+  "name": "legacy-plugin",
+  "mcpServers": {
+    "shared": {"command": "legacy-server", "env_vars": ["TOKEN"]}
+  }
+}"#,
+    );
+
+    assert_eq!(
+        load_plugin_mcp_servers(&plugin_root, /*auth_mode*/ None).await,
+        expected
+    );
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn agent_plugin_mcp_rejects_config_symlink_outside_plugin_root() {
