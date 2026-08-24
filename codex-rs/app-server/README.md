@@ -2271,17 +2271,19 @@ Codex supports these authentication modes. The current mode is surfaced in `acco
 
 - **API key (`apiKey`)**: Caller supplies an OpenAI API key via `account/login/start` with `type: "apiKey"`. The API key is saved and used for API requests.
 - **ChatGPT managed (`chatgpt`)** (recommended): Codex owns the ChatGPT OAuth flow and refresh tokens. Start via `account/login/start` with `type: "chatgpt"` for the browser flow or `type: "chatgptDeviceCode"` for device code; Codex persists tokens to disk and refreshes them automatically.
-- **Codex managed Amazon Bedrock auth (`amazonBedrock`, experimental)**: Caller supplies an Amazon Bedrock API key and region via `account/login/start` with `type: "amazonBedrock"`. The client must enable the `experimentalApi` initialization capability for Codex-managed Amazon Bedrock login. Codex replaces the current primary auth with the Bedrock credential and writes `model_provider = "amazon-bedrock"` to the user config.
+- **Codex managed Amazon Bedrock auth (experimental)**: Caller supplies an Amazon Bedrock API key using `type: "amazonBedrock"` or AWS access keys using `type: "amazonBedrockAccessKeys"` via `account/login/start`. The client must enable the `experimentalApi` initialization capability. Codex replaces the current primary auth with the Bedrock credential and writes `model_provider = "amazon-bedrock"` to the user config.
 - **Personal access token (`personalAccessToken`)**: Codex uses a ChatGPT-backed personal access token loaded outside the app-server login RPCs, such as with `codex login --with-access-token` or `CODEX_ACCESS_TOKEN`.
 
 ### API Overview
 
 - `account/read` — fetch current account info; optionally refresh tokens.
-- `account/login/start` — begin login (`apiKey`, `chatgpt`, `chatgptDeviceCode`, `amazonBedrock`).
+- `account/login/start` — begin login (`apiKey`, `chatgpt`, `chatgptDeviceCode`, `amazonBedrock`, `amazonBedrockAccessKeys`).
+- `account/bedrock/discover` — experimental; list available AWS profiles and identify AWS access keys or Amazon Bedrock API keys visible in the app-server environment.
+- `account/bedrock/setup` — experimental; validate a selected AWS profile or existing environment credentials, then persist the Amazon Bedrock provider configuration.
 - `account/login/completed` (notify) — emitted when a login attempt finishes (success or error).
 - `account/login/cancel` — cancel a pending managed ChatGPT login by `loginId`.
 - `account/logout` — sign out; triggers `account/updated` on success.
-- `account/updated` (notify) — emitted whenever auth mode changes (`authMode`: `apikey`, `bedrockApiKey`, `chatgpt`, `personalAccessToken`, or `null`) and includes the current ChatGPT `planType` when available.
+- `account/updated` (notify) — emitted whenever auth mode changes (`authMode`: `apikey`, `bedrockApiKey`, `bedrockAccessKeys`, `chatgpt`, `personalAccessToken`, or `null`) and includes the current ChatGPT `planType` when available.
 - `account/rateLimits/read` — fetch ChatGPT rate limits, an optional effective monthly credit limit, whether spend control has been reached, and the earned rate-limit resets currently available, including expiry details when provided by the backend. Rate-limit updates arrive via `account/rateLimits/updated` (notify); reset-credit data is snapshot-only.
 - `account/rateLimitResetCredit/consume` — consume one earned reset using a caller-provided idempotency key, optionally selecting a reset-credit ID returned by `account/rateLimits/read`.
 - `account/usage/read` — fetch ChatGPT account token-activity summary and daily buckets, or pass a valid thread UUID as `threadId` to read estimated credits, optional cost, and usage breakdowns for one thread using the app-server's active account. The optional `threadUsage` response field is absent on older servers and `null` when the billing route is unavailable.
@@ -2313,7 +2315,7 @@ Field notes:
 - `refreshToken` (bool): set `true` to force a token refresh.
 - `email` is `null` when the ChatGPT account does not have an email address.
 - `requiresOpenaiAuth` reflects the active provider; when `false`, Codex can run without OpenAI credentials.
-- Amazon Bedrock reports `usesCodexManagedCredentials: true` when it uses a Bedrock API key managed by Codex. It reports `false` for external credential paths, including the AWS credential chain and configured command auth. This identifies whether Codex-managed credentials are selected; it does not validate that the credential source can resolve credentials.
+- Amazon Bedrock reports `usesCodexManagedCredentials: true` when it uses a Bedrock API key or AWS access keys managed by Codex. It reports `false` for external credential paths, including the AWS credential chain and configured command auth. This identifies whether Codex-managed credentials are selected; it does not validate that the credential source can resolve credentials.
 
 ### 2) Log in with an API key
 
@@ -2356,7 +2358,7 @@ Field notes:
    `onboardingEntrypoint` is optional and is only emitted when the OAuth callback carries a
    recognized onboarding hint.
 
-### 3) Log in with an Amazon Bedrock API key
+### 3) Log in with Amazon Bedrock credentials
 
 This experimental flow requires the client to initialize with `experimentalApi: true`.
 
@@ -2378,7 +2380,77 @@ This experimental flow requires the client to initialize with `experimentalApi: 
    { "method": "account/updated", "params": { "authMode": "bedrockApiKey", "planType": null } }
    ```
 
-Codex stores the key and region as the primary Codex auth, replacing any previously stored login, and writes `model_provider = "amazon-bedrock"` to the active user config. Existing loaded sessions keep their current provider selection, so clients should restart the app-server before sending more model requests. This limitation will be addressed in a follow-up.
+To log in with AWS access keys instead:
+
+```json
+{
+  "method": "account/login/start",
+  "id": 30,
+  "params": {
+    "type": "amazonBedrockAccessKeys",
+    "accessKeyId": "...",
+    "secretAccessKey": "...",
+    "sessionToken": "...",
+    "region": "us-west-2"
+  }
+}
+{ "id": 30, "result": { "type": "amazonBedrock" } }
+{ "method": "account/login/completed", "params": { "loginId": null, "success": true, "error": null } }
+{ "method": "account/updated", "params": { "authMode": "bedrockAccessKeys", "planType": null } }
+```
+
+The session token is optional. Both flows store credentials in the configured auth backend
+(`auth.json` or keyring), replace any previously stored login, and select
+`model_provider = "amazon-bedrock"`; access-key login also writes the selected AWS region to the
+active user config. Neither flow changes `$CODEX_HOME/.env`. Existing loaded sessions keep their
+current provider selection, so clients should restart the app-server before sending more model
+requests. This limitation will be addressed in a follow-up.
+
+### Discover and configure AWS-managed Amazon Bedrock credentials
+
+These experimental methods require the client to initialize with `experimentalApi: true`.
+
+Discover AWS profiles and credentials already visible to the app-server process:
+
+```json
+{ "method": "account/bedrock/discover", "id": 31, "params": {} }
+{
+  "id": 31,
+  "result": {
+    "profiles": [{ "name": "engineering", "region": "us-west-2" }],
+    "environmentCredentials": [
+      { "type": "accessKeys", "region": "us-west-2" },
+      { "type": "bedrockApiKey", "region": "us-west-2" }
+    ]
+  }
+}
+```
+
+Discovery returns credential metadata only; it never includes access keys, secret access keys,
+session tokens, or Bedrock API keys. A profile or environment credential's `region` is `null`
+when no profile region or explicit `AWS_REGION` is available from that source.
+
+Set up a named AWS profile:
+
+```json
+{
+  "method": "account/bedrock/setup",
+  "id": 32,
+  "params": { "type": "profile", "profile": "engineering", "region": "us-west-2" }
+}
+{ "id": 32, "result": {} }
+```
+
+To select credentials already visible in the environment, use
+`{ "type": "environment", "region": "us-west-2" }`. The provider
+resolves available environment credentials through its normal authentication chain. Selecting
+profile or environment credentials leaves existing keys in `$CODEX_HOME/.env` unchanged.
+
+Successful setup writes `model_provider = "amazon-bedrock"` and the selected AWS region to the
+active user config, and additionally writes the selected profile for profile-based setup. Clients
+should restart the app-server before sending more model requests. Logging out while an Amazon
+Bedrock provider is selected clears the user-configured provider, profile, and region, removes
+any Codex-managed credentials, and leaves AWS-managed credentials and `$CODEX_HOME/.env` unchanged.
 
 ### 4) Log in with ChatGPT (device code flow)
 
@@ -2409,7 +2481,12 @@ Codex stores the key and region as the primary Codex auth, replacing any previou
 { "method": "account/updated", "params": { "authMode": null, "planType": null } }
 ```
 
-When using a Codex-managed Bedrock key, logout removes the key and clears `model_provider` if it is still set to `"amazon-bedrock"`. When using AWS-managed credentials, manage them through AWS or switch providers before logging out.
+When `model_provider` is `"amazon-bedrock"` or `"amazon-bedrock-runtime"`, logout clears that
+provider selection and its configured AWS profile and region, regardless of whether the
+credentials are Codex-managed or AWS-managed. If the selected model is Bedrock-specific, logout
+also clears `model`; `model_reasoning_effort` and other generic settings are preserved.
+Codex-managed credentials are removed; AWS profiles, environment credentials, and
+`$CODEX_HOME/.env` are left untouched.
 
 ### 7) Rate limits (ChatGPT)
 

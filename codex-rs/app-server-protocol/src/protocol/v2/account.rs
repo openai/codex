@@ -106,6 +106,17 @@ pub enum LoginAccountParams {
     #[serde(rename = "amazonBedrock", rename_all = "camelCase")]
     #[ts(rename = "amazonBedrock", rename_all = "camelCase")]
     AmazonBedrock { api_key: String, region: String },
+    /// [UNSTABLE] Managed Amazon Bedrock AWS access key login is experimental.
+    #[experimental("account/login/start.amazonBedrockAccessKeys")]
+    #[serde(rename = "amazonBedrockAccessKeys", rename_all = "camelCase")]
+    #[ts(rename = "amazonBedrockAccessKeys", rename_all = "camelCase")]
+    AmazonBedrockAccessKeys {
+        access_key_id: String,
+        secret_access_key: String,
+        #[ts(optional = nullable)]
+        session_token: Option<String>,
+        region: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]

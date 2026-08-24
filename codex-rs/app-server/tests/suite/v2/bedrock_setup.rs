@@ -173,7 +173,7 @@ async fn setup_bedrock_profile_and_environment() -> Result<()> {
         json!({"region": "us-east-1"})
     );
 
-    let config: toml::Value = toml::from_str(&std::fs::read_to_string(config_path)?)?;
+    let config: toml::Value = toml::from_str(&std::fs::read_to_string(&config_path)?)?;
     assert_eq!(
         config,
         toml::toml! {
@@ -247,7 +247,7 @@ async fn setup_bedrock_profile_and_environment() -> Result<()> {
     .await??;
     assert_eq!(
         error.error.message,
-        "A Bedrock API key is already configured and takes priority over AWS credentials. Run `codex logout` and try again."
+        "Codex-managed Bedrock credentials are already configured and take priority over AWS environment credentials. Run `codex logout` and try again."
     );
     assert_eq!(std::fs::read_to_string(&auth_path)?, expected_auth);
     assert_eq!(
@@ -267,7 +267,7 @@ async fn setup_bedrock_rejects_invalid_or_conflicting_credentials() -> Result<()
     for (params, expected_error) in [
         (
             json!({"type": "profile", "profile": "engineering", "region": "us-west-1"}),
-            "Amazon Bedrock Mantle does not support region `us-west-1`",
+            "Amazon Bedrock does not support region `us-west-1`",
         ),
         (
             json!({"type": "profile", "profile": " ", "region": "us-west-2"}),
@@ -280,15 +280,6 @@ async fn setup_bedrock_rejects_invalid_or_conflicting_credentials() -> Result<()
         (
             json!({"type": "environment", "region": "us-west-2"}),
             "No AWS credentials found. Please Configure AWS credentials or complete AWS sign-in, then try again.",
-        ),
-        (
-            json!({
-                "type": "accessKeys",
-                "accessKeyId": "test-id",
-                "secretAccessKey": "test-secret",
-                "region": "us-west-2",
-            }),
-            "Direct AWS access key setup is not supported yet.",
         ),
     ] {
         let request_id = app_server

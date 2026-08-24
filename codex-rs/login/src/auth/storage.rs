@@ -18,6 +18,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use tracing::warn;
 
+use super::BedrockAccessKeysAuth;
 use super::BedrockApiKeyAuth;
 use crate::token_data::TokenData;
 use codex_agent_identity::AgentIdentityJwtClaims;
@@ -58,6 +59,9 @@ pub struct AuthDotJson {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bedrock_api_key: Option<BedrockApiKeyAuth>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bedrock_access_keys: Option<BedrockAccessKeysAuth>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]

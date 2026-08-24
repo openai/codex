@@ -31,6 +31,10 @@ pub enum AuthMode {
     #[serde(rename = "bedrockApiKey")]
     #[strum(serialize = "bedrockApiKey")]
     BedrockApiKey,
+    /// Amazon Bedrock AWS access keys managed by Codex.
+    #[serde(rename = "bedrockAccessKeys")]
+    #[strum(serialize = "bedrockAccessKeys")]
+    BedrockAccessKeys,
 }
 
 impl AuthMode {
@@ -38,7 +42,11 @@ impl AuthMode {
     pub fn has_chatgpt_account(self) -> bool {
         match self {
             Self::Chatgpt | Self::ChatgptAuthTokens | Self::PersonalAccessToken => true,
-            Self::ApiKey | Self::Headers | Self::AgentIdentity | Self::BedrockApiKey => false,
+            Self::ApiKey
+            | Self::Headers
+            | Self::AgentIdentity
+            | Self::BedrockApiKey
+            | Self::BedrockAccessKeys => false,
         }
     }
 
@@ -50,7 +58,7 @@ impl AuthMode {
             | Self::Headers
             | Self::AgentIdentity
             | Self::PersonalAccessToken => true,
-            Self::ApiKey | Self::BedrockApiKey => false,
+            Self::ApiKey | Self::BedrockApiKey | Self::BedrockAccessKeys => false,
         }
     }
 }

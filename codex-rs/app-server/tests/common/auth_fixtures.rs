@@ -167,6 +167,7 @@ pub fn write_chatgpt_auth(
         agent_identity: None,
         personal_access_token: None,
         bedrock_api_key: None,
+        bedrock_access_keys: None,
     };
 
     save_auth(

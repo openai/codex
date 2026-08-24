@@ -35,6 +35,7 @@ pub fn login_with_bedrock_api_key(
             api_key: api_key.to_string(),
             region: region.to_string(),
         }),
+        bedrock_access_keys: None,
     };
     save_auth(
         codex_home,

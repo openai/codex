@@ -3,6 +3,7 @@ use std::sync::Arc;
 use codex_api::AuthError;
 use codex_api::AuthProvider;
 use codex_api::SharedAuthProvider;
+use codex_aws_auth::AwsAccessKeys;
 use codex_aws_auth::AwsAuthContext;
 use codex_aws_auth::AwsAuthError;
 use codex_aws_auth::AwsRequestToSign;
@@ -11,7 +12,6 @@ use codex_http_client::RequestBody;
 use codex_http_client::RequestCompression;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
-use codex_login::auth::BedrockApiKeyAuth;
 use codex_model_provider_info::ModelProviderAwsAuthInfo;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::error::CodexErr;
@@ -36,6 +36,7 @@ pub(super) enum BedrockAuthSource {
     CommandBearerToken,
     ConfiguredAwsProfile,
     ManagedBearerToken,
+    ManagedAccessKeys,
     EnvBearerToken,
     EnvAwsCredentials,
     AwsSdk,
@@ -65,6 +66,11 @@ pub(super) fn auth_source(
         Some(CodexAuth::BedrockApiKey(_))
     ) {
         BedrockAuthSource::ManagedBearerToken
+    } else if matches!(
+        auth_manager.and_then(AuthManager::auth_cached),
+        Some(CodexAuth::BedrockAccessKeys(_))
+    ) {
+        BedrockAuthSource::ManagedAccessKeys
     } else if non_empty_env_var_from(AWS_BEARER_TOKEN_BEDROCK_ENV_VAR, env_var).is_some() {
         BedrockAuthSource::EnvBearerToken
     } else if non_empty_env_var_from(AWS_ACCESS_KEY_ID_ENV_VAR, env_var).is_some()
@@ -78,7 +84,7 @@ pub(super) fn auth_source(
 
 pub(super) async fn resolve_auth_method(
     source: BedrockAuthSource,
-    managed_auth: Option<&BedrockApiKeyAuth>,
+    managed_auth: Option<&CodexAuth>,
     aws: &ModelProviderAwsAuthInfo,
     endpoint: BedrockEndpoint,
 ) -> Result<BedrockAuthMethod> {
@@ -88,15 +94,15 @@ pub(super) async fn resolve_auth_method(
                 .to_string(),
         )),
         BedrockAuthSource::ManagedBearerToken => {
-            let managed_auth = managed_auth.ok_or_else(|| {
-                CodexErr::Fatal(
+            let Some(CodexAuth::BedrockApiKey(auth)) = managed_auth else {
+                return Err(CodexErr::Fatal(
                     "selected Codex-managed Amazon Bedrock API key is no longer available"
                         .to_string(),
-                )
-            })?;
+                ));
+            };
             Ok(BedrockAuthMethod::ManagedBearerToken {
-                token: managed_auth.api_key.clone(),
-                region: managed_auth.region.clone(),
+                token: auth.api_key.clone(),
+                region: auth.region.clone(),
             })
         }
         BedrockAuthSource::EnvBearerToken => {
@@ -120,6 +126,27 @@ pub(super) async fn resolve_auth_method(
                 .map_err(aws_auth_error_to_codex_error)?;
             Ok(BedrockAuthMethod::AwsSdkAuth { context })
         }
+        BedrockAuthSource::ManagedAccessKeys => {
+            let Some(CodexAuth::BedrockAccessKeys(auth)) = managed_auth else {
+                return Err(CodexErr::Fatal(
+                    "selected Codex-managed Amazon Bedrock access keys are no longer available"
+                        .to_string(),
+                ));
+            };
+            let access_keys = AwsAccessKeys {
+                access_key_id: auth.access_key_id.clone(),
+                secret_access_key: auth.secret_access_key.clone(),
+                session_token: auth.session_token.clone(),
+            };
+            let config = match endpoint {
+                BedrockEndpoint::Mantle => aws_auth_config(aws),
+                BedrockEndpoint::Runtime => runtime::aws_auth_config(aws),
+            };
+            let context = AwsAuthContext::load_with_access_keys(config, access_keys)
+                .await
+                .map_err(aws_auth_error_to_codex_error)?;
+            Ok(BedrockAuthMethod::AwsSdkAuth { context })
+        }
         BedrockAuthSource::EnvAwsCredentials | BedrockAuthSource::AwsSdk => {
             let config = match endpoint {
                 BedrockEndpoint::Mantle => aws_auth_config(aws),
@@ -135,7 +162,7 @@ pub(super) async fn resolve_auth_method(
 
 pub(super) async fn resolve_provider_auth(
     source: BedrockAuthSource,
-    managed_auth: Option<&BedrockApiKeyAuth>,
+    managed_auth: Option<&CodexAuth>,
     aws: &ModelProviderAwsAuthInfo,
     endpoint: BedrockEndpoint,
 ) -> Result<SharedAuthProvider> {
@@ -154,7 +181,7 @@ pub(super) async fn resolve_provider_auth(
 
 pub(super) async fn resolve_region(
     source: BedrockAuthSource,
-    managed_auth: Option<&BedrockApiKeyAuth>,
+    managed_auth: Option<&CodexAuth>,
     aws: &ModelProviderAwsAuthInfo,
     endpoint: BedrockEndpoint,
 ) -> Result<String> {
@@ -277,6 +304,8 @@ impl AuthProvider for BedrockSigV4AuthProvider {
 #[cfg(test)]
 mod tests {
     use codex_api::AuthProvider;
+    use codex_login::auth::BedrockAccessKeysAuth;
+    use codex_login::auth::BedrockApiKeyAuth;
     use http::HeaderValue;
     use pretty_assertions::assert_eq;
 
@@ -300,6 +329,13 @@ mod tests {
                 api_key: "managed-bedrock-api-key".to_string(),
                 region: "us-east-1".to_string(),
             }));
+        let managed_access_keys = AuthManager::from_auth_for_testing(CodexAuth::BedrockAccessKeys(
+            BedrockAccessKeysAuth {
+                access_key_id: "managed-access-key-id".to_string(),
+                secret_access_key: "managed-secret-access-key".to_string(),
+                session_token: None,
+            },
+        ));
         let cases: &[(
             &ModelProviderInfo,
             Option<&AuthManager>,
@@ -321,6 +357,18 @@ mod tests {
                 Some(managed_auth.as_ref()),
                 &[AWS_BEARER_TOKEN_BEDROCK_ENV_VAR],
                 BedrockAuthSource::ManagedBearerToken,
+            ),
+            (
+                &configured_profile_provider,
+                Some(managed_access_keys.as_ref()),
+                &[AWS_BEARER_TOKEN_BEDROCK_ENV_VAR],
+                BedrockAuthSource::ConfiguredAwsProfile,
+            ),
+            (
+                &provider,
+                Some(managed_access_keys.as_ref()),
+                &[AWS_BEARER_TOKEN_BEDROCK_ENV_VAR],
+                BedrockAuthSource::ManagedAccessKeys,
             ),
             (
                 &provider,

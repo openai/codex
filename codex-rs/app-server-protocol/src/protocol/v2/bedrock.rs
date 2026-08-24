@@ -54,15 +54,6 @@ pub enum BedrockSetupParams {
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     Environment { region: String },
-    #[serde(rename_all = "camelCase")]
-    #[ts(rename_all = "camelCase")]
-    AccessKeys {
-        access_key_id: String,
-        secret_access_key: String,
-        #[ts(optional = nullable)]
-        session_token: Option<String>,
-        region: String,
-    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq, JsonSchema, TS)]

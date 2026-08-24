@@ -23,6 +23,27 @@ pub struct AwsAuthConfig {
     pub service: String,
 }
 
+/// Static AWS access keys supplied by a caller instead of the default SDK chain.
+#[derive(Clone, PartialEq, Eq)]
+pub struct AwsAccessKeys {
+    pub access_key_id: String,
+    pub secret_access_key: String,
+    pub session_token: Option<String>,
+}
+
+impl std::fmt::Debug for AwsAccessKeys {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AwsAccessKeys")
+            .field("access_key_id", &"<redacted>")
+            .field("secret_access_key", &"<redacted>")
+            .field(
+                "session_token",
+                &self.session_token.as_ref().map(|_| "<redacted>"),
+            )
+            .finish()
+    }
+}
+
 /// Generic HTTP request shape consumed by SigV4 signing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AwsRequestToSign {
@@ -96,6 +117,22 @@ impl AwsAuthContext {
             region,
             service: config.service.trim().to_string(),
         })
+    }
+
+    pub async fn load_with_access_keys(
+        config: AwsAuthConfig,
+        access_keys: AwsAccessKeys,
+    ) -> Result<Self, AwsAuthError> {
+        let mut context = Self::load(config).await?;
+        context.credentials_provider =
+            SharedCredentialsProvider::new(aws_credential_types::Credentials::new(
+                access_keys.access_key_id,
+                access_keys.secret_access_key,
+                access_keys.session_token,
+                /*expires_after*/ None,
+                "codex-managed-bedrock-access-keys",
+            ));
+        Ok(context)
     }
 
     pub async fn load_profile(config: AwsAuthConfig) -> Result<Self, AwsAuthError> {

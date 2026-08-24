@@ -576,6 +576,7 @@ c2ln",
         agent_identity: None,
         personal_access_token: None,
         bedrock_api_key: None,
+        bedrock_access_keys: None,
     };
     std::fs::create_dir_all(codex_home).expect("codex home should be created");
     std::fs::write(

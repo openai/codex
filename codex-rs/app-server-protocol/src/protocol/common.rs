@@ -54,6 +54,11 @@ pub enum AuthMode {
     #[ts(rename = "bedrockApiKey")]
     #[strum(serialize = "bedrockApiKey")]
     BedrockApiKey,
+    /// Amazon Bedrock AWS access keys managed by Codex.
+    #[serde(rename = "bedrockAccessKeys")]
+    #[ts(rename = "bedrockAccessKeys")]
+    #[strum(serialize = "bedrockAccessKeys")]
+    BedrockAccessKeys,
 }
 
 impl AuthMode {
@@ -61,7 +66,11 @@ impl AuthMode {
     pub fn has_chatgpt_account(self) -> bool {
         match self {
             Self::Chatgpt | Self::ChatgptAuthTokens | Self::PersonalAccessToken => true,
-            Self::ApiKey | Self::Headers | Self::AgentIdentity | Self::BedrockApiKey => false,
+            Self::ApiKey
+            | Self::Headers
+            | Self::AgentIdentity
+            | Self::BedrockApiKey
+            | Self::BedrockAccessKeys => false,
         }
     }
 
@@ -73,7 +82,7 @@ impl AuthMode {
             | Self::Headers
             | Self::AgentIdentity
             | Self::PersonalAccessToken => true,
-            Self::ApiKey | Self::BedrockApiKey => false,
+            Self::ApiKey | Self::BedrockApiKey | Self::BedrockAccessKeys => false,
         }
     }
 }
@@ -3234,25 +3243,47 @@ mod tests {
 
     #[test]
     fn serialize_account_login_amazon_bedrock() -> Result<()> {
-        let request = ClientRequest::LoginAccount {
-            request_id: RequestId::Integer(2),
-            params: v2::LoginAccountParams::AmazonBedrock {
-                api_key: "secret".to_string(),
-                region: "us-west-2".to_string(),
-            },
-        };
-        assert_eq!(
-            json!({
-                "method": "account/login/start",
-                "id": 2,
-                "params": {
+        for (params, expected_params) in [
+            (
+                v2::LoginAccountParams::AmazonBedrock {
+                    api_key: "secret".to_string(),
+                    region: "us-west-2".to_string(),
+                },
+                json!({
                     "type": "amazonBedrock",
                     "apiKey": "secret",
                     "region": "us-west-2"
-                }
-            }),
-            serde_json::to_value(&request)?,
-        );
+                }),
+            ),
+            (
+                v2::LoginAccountParams::AmazonBedrockAccessKeys {
+                    access_key_id: "access-key-id".to_string(),
+                    secret_access_key: "secret-access-key".to_string(),
+                    session_token: Some("session-token".to_string()),
+                    region: "us-west-2".to_string(),
+                },
+                json!({
+                    "type": "amazonBedrockAccessKeys",
+                    "accessKeyId": "access-key-id",
+                    "secretAccessKey": "secret-access-key",
+                    "sessionToken": "session-token",
+                    "region": "us-west-2"
+                }),
+            ),
+        ] {
+            let request = ClientRequest::LoginAccount {
+                request_id: RequestId::Integer(2),
+                params,
+            };
+            assert_eq!(
+                json!({
+                    "method": "account/login/start",
+                    "id": 2,
+                    "params": expected_params,
+                }),
+                serde_json::to_value(&request)?,
+            );
+        }
         assert_eq!(
             json!({"type": "amazonBedrock"}),
             serde_json::to_value(v2::LoginAccountResponse::AmazonBedrock {})?,

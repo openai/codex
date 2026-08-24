@@ -963,6 +963,7 @@ impl AuthModeWidget {
                     ApiAuthMode::AgentIdentity => AuthMode::AgentIdentity,
                     ApiAuthMode::PersonalAccessToken => AuthMode::PersonalAccessToken,
                     ApiAuthMode::BedrockApiKey => AuthMode::BedrockApiKey,
+                    ApiAuthMode::BedrockAccessKeys => AuthMode::BedrockAccessKeys,
                 })
             })
             .unwrap_or(LoginStatus::NotAuthenticated);

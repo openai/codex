@@ -1,5 +1,5 @@
 use codex_aws_auth::AwsAuthConfig;
-use codex_login::auth::BedrockApiKeyAuth;
+use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderAwsAuthInfo;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
@@ -50,14 +50,14 @@ pub(super) fn base_url(region: &str) -> Result<String> {
         Ok(format!("https://bedrock-mantle.{region}.api.aws/openai/v1"))
     } else {
         Err(CodexErr::Fatal(format!(
-            "Amazon Bedrock Mantle does not support region `{region}`"
+            "Amazon Bedrock does not support region `{region}`"
         )))
     }
 }
 
 pub(super) async fn bedrock_mantle_runtime_base_url(
     source: BedrockAuthSource,
-    managed_auth: Option<&BedrockApiKeyAuth>,
+    managed_auth: Option<&CodexAuth>,
     aws: &ModelProviderAwsAuthInfo,
 ) -> Result<String> {
     let region = resolve_region(source, managed_auth, aws, BedrockEndpoint::Mantle).await?;
@@ -84,7 +84,7 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            "Fatal error: Amazon Bedrock Mantle does not support region `us-west-1`"
+            "Fatal error: Amazon Bedrock does not support region `us-west-1`"
         );
     }
 

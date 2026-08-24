@@ -1,5 +1,6 @@
+use super::super::bedrock_auth::BedrockProviderConfig;
+use super::super::bedrock_auth::configure_bedrock_provider;
 use super::super::bedrock_auth::ensure_user_model_provider_can_be_bedrock;
-use super::super::config_processor::map_error as map_config_error;
 use super::AccountRequestProcessor;
 use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
@@ -11,12 +12,8 @@ use codex_app_server_protocol::BedrockEnvironmentCredential;
 use codex_app_server_protocol::BedrockSetupParams;
 use codex_app_server_protocol::BedrockSetupResponse;
 use codex_app_server_protocol::ClientResponsePayload;
-use codex_app_server_protocol::ConfigBatchWriteParams;
-use codex_app_server_protocol::ConfigEdit;
 use codex_app_server_protocol::JSONRPCErrorError;
-use codex_app_server_protocol::MergeStrategy;
 use codex_login::CodexAuth;
-use codex_model_provider::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_model_provider::is_supported_amazon_bedrock_region;
 
 const AWS_ACCESS_KEY_ID: &str = "AWS_ACCESS_KEY_ID";
@@ -77,22 +74,21 @@ impl AccountRequestProcessor {
         if matches!(&params, BedrockSetupParams::Environment { .. })
             && matches!(
                 self.auth_manager.auth_cached(),
-                Some(CodexAuth::BedrockApiKey(_))
+                Some(CodexAuth::BedrockApiKey(_) | CodexAuth::BedrockAccessKeys(_))
             )
         {
             return Err(invalid_request(
-                "A Bedrock API key is already configured and takes priority over AWS credentials. Run `codex logout` and try again.",
+                "Codex-managed Bedrock credentials are already configured and take priority over AWS environment credentials. Run `codex logout` and try again.",
             ));
         }
 
         let region = match &params {
             BedrockSetupParams::Profile { region, .. }
-            | BedrockSetupParams::Environment { region, .. }
-            | BedrockSetupParams::AccessKeys { region, .. } => region.trim(),
+            | BedrockSetupParams::Environment { region, .. } => region.trim(),
         };
         if !is_supported_amazon_bedrock_region(region) {
             return Err(invalid_request(format!(
-                "Amazon Bedrock Mantle does not support region `{region}`"
+                "Amazon Bedrock does not support region `{region}`"
             )));
         }
 
@@ -122,45 +118,18 @@ impl AccountRequestProcessor {
                 }
                 None
             }
-            BedrockSetupParams::AccessKeys { .. } => {
-                // TODO: Support direct AWS access key setup with Codex-managed credential storage.
-                return Err(invalid_request(
-                    "Direct AWS access key setup is not supported yet.",
-                ));
-            }
         };
 
         // TODO: Validate the selected credentials against Bedrock ListModels once supported.
         self.cancel_active_login().await;
-        self.config_manager
-            .batch_write(ConfigBatchWriteParams {
-                edits: [
-                    (
-                        "model_provider",
-                        serde_json::json!(AMAZON_BEDROCK_PROVIDER_ID),
-                    ),
-                    (
-                        "model_providers.amazon-bedrock.aws.region",
-                        serde_json::json!(region),
-                    ),
-                    (
-                        "model_providers.amazon-bedrock.aws.profile",
-                        serde_json::json!(profile),
-                    ),
-                ]
-                .into_iter()
-                .map(|(key_path, value)| ConfigEdit {
-                    key_path: key_path.to_string(),
-                    value,
-                    merge_strategy: MergeStrategy::Replace,
-                })
-                .collect(),
-                file_path: None,
-                expected_version: None,
-                reload_user_config: false,
-            })
-            .await
-            .map_err(map_config_error)?;
+        configure_bedrock_provider(
+            &self.config_manager,
+            BedrockProviderConfig {
+                region: Some(region),
+                profile: profile.as_deref(),
+            },
+        )
+        .await?;
 
         Ok(Some(BedrockSetupResponse {}.into()))
     }

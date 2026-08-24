@@ -1,11 +1,14 @@
+use super::bedrock_auth::BedrockProviderConfig;
 use super::bedrock_auth::clear_user_model_provider_if_bedrock;
-use super::bedrock_auth::configure_bedrock_for_managed_auth;
+use super::bedrock_auth::configure_bedrock_provider;
+use super::bedrock_auth::ensure_user_model_provider_can_be_bedrock;
 use super::*;
 use crate::auth_mode::auth_mode_to_api;
 use crate::external_auth::ExternalAuthBridge;
 use chrono::DateTime;
 use codex_app_server_protocol::DesktopOnboardingEntrypoint;
 use codex_login::LoginOnboardingEntrypoint;
+use codex_login::login_with_bedrock_access_keys;
 use codex_model_provider::is_supported_amazon_bedrock_region;
 
 mod bedrock_setup;
@@ -62,6 +65,15 @@ enum RefreshTokenRequestOutcome {
     NotAttemptedOrSucceeded,
     FailedTransiently,
     FailedPermanently,
+}
+
+enum BedrockLoginCredentials {
+    ApiKey(String),
+    AccessKeys {
+        access_key_id: String,
+        secret_access_key: String,
+        session_token: Option<String>,
+    },
 }
 
 impl Drop for ActiveLogin {
@@ -326,8 +338,29 @@ impl AccountRequestProcessor {
                 .await;
             }
             LoginAccountParams::AmazonBedrock { api_key, region } => {
-                self.login_amazon_bedrock_v2(request_id, api_key, region)
-                    .await;
+                self.login_amazon_bedrock_v2(
+                    request_id,
+                    BedrockLoginCredentials::ApiKey(api_key),
+                    region,
+                )
+                .await;
+            }
+            LoginAccountParams::AmazonBedrockAccessKeys {
+                access_key_id,
+                secret_access_key,
+                session_token,
+                region,
+            } => {
+                self.login_amazon_bedrock_v2(
+                    request_id,
+                    BedrockLoginCredentials::AccessKeys {
+                        access_key_id,
+                        secret_access_key,
+                        session_token,
+                    },
+                    region,
+                )
+                .await;
             }
         }
         Ok(())
@@ -420,38 +453,76 @@ impl AccountRequestProcessor {
     async fn login_amazon_bedrock_v2(
         &self,
         request_id: ConnectionRequestId,
-        api_key: String,
+        credentials: BedrockLoginCredentials,
         region: String,
     ) {
         let result = async {
             self.ensure_bedrock_login_allowed()?;
 
-            let api_key = api_key.trim();
-            if api_key.is_empty() {
-                return Err(invalid_request("Amazon Bedrock API key must not be empty."));
+            match &credentials {
+                BedrockLoginCredentials::ApiKey(api_key) => {
+                    if api_key.trim().is_empty() {
+                        return Err(invalid_request("Amazon Bedrock API key must not be empty."));
+                    }
+                }
+                BedrockLoginCredentials::AccessKeys {
+                    access_key_id,
+                    secret_access_key,
+                    ..
+                } => {
+                    if access_key_id.trim().is_empty() || secret_access_key.trim().is_empty() {
+                        return Err(invalid_request(
+                            "AWS access key ID and secret access key must not be empty.",
+                        ));
+                    }
+                }
             }
             let region = region.trim();
             if !is_supported_amazon_bedrock_region(region) {
                 return Err(invalid_request(format!(
-                    "Amazon Bedrock Mantle does not support region `{region}`"
+                    "Amazon Bedrock does not support region `{region}`"
                 )));
             }
 
-            {
-                let mut guard = self.active_login.lock().await;
-                if let Some(active) = guard.take() {
-                    drop(active);
+            self.cancel_active_login().await;
+            ensure_user_model_provider_can_be_bedrock(&self.config_manager).await?;
+            configure_bedrock_provider(
+                &self.config_manager,
+                BedrockProviderConfig {
+                    region: matches!(&credentials, BedrockLoginCredentials::AccessKeys { .. })
+                        .then_some(region),
+                    profile: None,
+                },
+            )
+            .await?;
+
+            match credentials {
+                BedrockLoginCredentials::ApiKey(api_key) => login_with_bedrock_api_key(
+                    &self.config.codex_home,
+                    api_key.trim(),
+                    region,
+                    self.config.cli_auth_credentials_store_mode,
+                    self.config.auth_keyring_backend_kind(),
+                ),
+                BedrockLoginCredentials::AccessKeys {
+                    access_key_id,
+                    secret_access_key,
+                    session_token,
+                } => {
+                    let session_token = session_token
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|token| !token.is_empty());
+                    login_with_bedrock_access_keys(
+                        &self.config.codex_home,
+                        access_key_id.trim(),
+                        secret_access_key.trim(),
+                        session_token,
+                        self.config.cli_auth_credentials_store_mode,
+                        self.config.auth_keyring_backend_kind(),
+                    )
                 }
             }
-
-            configure_bedrock_for_managed_auth(&self.config_manager).await?;
-            login_with_bedrock_api_key(
-                &self.config.codex_home,
-                api_key,
-                region,
-                self.config.cli_auth_credentials_store_mode,
-                self.config.auth_keyring_backend_kind(),
-            )
             .map_err(|err| internal_error(format!("failed to save Amazon Bedrock auth: {err}")))?;
             self.auth_manager.reload().await;
             self.config_manager.clear_cloud_config_bundle_loader();
@@ -883,16 +954,7 @@ impl AccountRequestProcessor {
         if self.auth_manager.is_workload_identity_selected() {
             return Err(self.configured_auth_owned_by_host_error());
         }
-        let managed_bedrock_auth = matches!(
-            self.auth_manager.auth_cached(),
-            Some(CodexAuth::BedrockApiKey(_))
-        );
         let config = self.load_latest_config().await;
-        if config.model_provider.is_amazon_bedrock() && !managed_bedrock_auth {
-            return Err(invalid_request(
-                "cannot log out while Amazon Bedrock is using AWS-managed credentials; manage those credentials through AWS or switch model providers before logging out Codex authentication",
-            ));
-        }
 
         // Cancel any active login attempt.
         {
@@ -909,11 +971,11 @@ impl AccountRequestProcessor {
             }
         }
 
-        self.config_manager.clear_cloud_config_bundle_loader();
-
-        if managed_bedrock_auth {
-            clear_user_model_provider_if_bedrock(&self.config_manager).await?;
+        if config.model_provider.is_amazon_bedrock() {
+            clear_user_model_provider_if_bedrock(&self.config_manager, &config).await?;
         }
+
+        self.config_manager.clear_cloud_config_bundle_loader();
 
         Self::maybe_refresh_plugin_caches_for_current_config(
             &self.config_manager,

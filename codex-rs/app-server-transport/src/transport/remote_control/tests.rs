@@ -123,6 +123,7 @@ fn remote_control_auth_dot_json(account_id: Option<&str>) -> AuthDotJson {
         agent_identity: None,
         personal_access_token: None,
         bedrock_api_key: None,
+        bedrock_access_keys: None,
     }
 }
 
