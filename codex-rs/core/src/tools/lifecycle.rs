@@ -94,7 +94,7 @@ async fn notify_tool_finish_parts(
     }
 }
 
-fn extension_tool_call_source(source: ToolCallSource) -> ExtensionToolCallSource {
+pub(crate) fn extension_tool_call_source(source: ToolCallSource) -> ExtensionToolCallSource {
     match source {
         ToolCallSource::Direct | ToolCallSource::DirectPlaintextMessage => {
             ExtensionToolCallSource::Direct

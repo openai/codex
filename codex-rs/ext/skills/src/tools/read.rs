@@ -14,6 +14,7 @@ use crate::provider::SkillReadRequest;
 use crate::render::build_alias_plan;
 
 use super::MAX_HANDLE_BYTES;
+use super::MAX_SKILL_RESPONSE_BYTES;
 use super::SkillToolAuthority;
 use super::SkillToolContext;
 use super::pagination_cursor;
@@ -26,7 +27,6 @@ use super::skill_tool_name;
 use super::validate_handle;
 
 const TOOL_NAME: &str = "read";
-const MAX_READ_RESPONSE_BYTES: usize = 512 * 1024;
 
 #[derive(Deserialize, JsonSchema)]
 struct ReadArgs {
@@ -237,7 +237,7 @@ fn page_response(
         next_cursor,
     };
     let complete = response(contents.len(), None);
-    if serialized_len(&complete)? <= MAX_READ_RESPONSE_BYTES {
+    if serialized_len(&complete)? <= MAX_SKILL_RESPONSE_BYTES {
         return Ok(complete);
     }
 
@@ -248,7 +248,7 @@ fn page_response(
             end -= 1;
         }
         let candidate = response(end, Some(pagination_cursor(contents, end)));
-        if serialized_len(&candidate)? <= MAX_READ_RESPONSE_BYTES {
+        if serialized_len(&candidate)? <= MAX_SKILL_RESPONSE_BYTES {
             return Ok(candidate);
         }
     }

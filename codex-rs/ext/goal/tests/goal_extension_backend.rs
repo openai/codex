@@ -1487,6 +1487,7 @@ fn tool_call(tool_name: &str, call_id: &str, arguments: serde_json::Value) -> To
         model: "gpt-test".to_string(),
         codex_turn_metadata: None,
         truncation_policy: TruncationPolicy::Bytes(1024),
+        source: ToolCallSource::Direct,
         conversation_history: codex_extension_api::ConversationHistory::default(),
         turn_item_emitter: Arc::new(NoopTurnItemEmitter),
         environments: Vec::new(),

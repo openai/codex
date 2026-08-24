@@ -7,6 +7,7 @@ use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::NoopTurnItemEmitter;
 use codex_extension_api::PromptSlot;
 use codex_extension_api::ToolCall;
+use codex_extension_api::ToolCallSource;
 use codex_extension_api::ToolContributor;
 use codex_extension_api::ToolExecutor;
 use codex_extension_api::ToolName;
@@ -221,6 +222,7 @@ async fn add_ad_hoc_note_tool_creates_note_file() {
             model: "gpt-test".to_string(),
             codex_turn_metadata: None,
             truncation_policy: TruncationPolicy::Bytes(1024),
+            source: ToolCallSource::Direct,
             conversation_history: codex_extension_api::ConversationHistory::default(),
             turn_item_emitter: Arc::new(NoopTurnItemEmitter),
             environments: Vec::new(),
@@ -266,6 +268,7 @@ async fn add_ad_hoc_note_tool_rejects_paths_as_filenames() {
             model: "gpt-test".to_string(),
             codex_turn_metadata: None,
             truncation_policy: TruncationPolicy::Bytes(1024),
+            source: ToolCallSource::Direct,
             conversation_history: codex_extension_api::ConversationHistory::default(),
             turn_item_emitter: Arc::new(NoopTurnItemEmitter),
             environments: Vec::new(),
@@ -312,6 +315,7 @@ async fn read_tool_reads_memory_file() {
             model: "gpt-test".to_string(),
             codex_turn_metadata: None,
             truncation_policy: TruncationPolicy::Bytes(1024),
+            source: ToolCallSource::Direct,
             conversation_history: codex_extension_api::ConversationHistory::default(),
             turn_item_emitter: Arc::new(NoopTurnItemEmitter),
             environments: Vec::new(),
@@ -428,6 +432,7 @@ async fn search_tool_accepts_multiple_queries() {
             model: "gpt-test".to_string(),
             codex_turn_metadata: None,
             truncation_policy: TruncationPolicy::Bytes(1024),
+            source: ToolCallSource::Direct,
             conversation_history: codex_extension_api::ConversationHistory::default(),
             turn_item_emitter: Arc::new(NoopTurnItemEmitter),
             environments: Vec::new(),
@@ -503,6 +508,7 @@ async fn search_tool_accepts_windowed_all_match_mode() {
             model: "gpt-test".to_string(),
             codex_turn_metadata: None,
             truncation_policy: TruncationPolicy::Bytes(1024),
+            source: ToolCallSource::Direct,
             conversation_history: codex_extension_api::ConversationHistory::default(),
             turn_item_emitter: Arc::new(NoopTurnItemEmitter),
             environments: Vec::new(),
@@ -558,6 +564,7 @@ async fn search_tool_rejects_legacy_single_query() {
             model: "gpt-test".to_string(),
             codex_turn_metadata: None,
             truncation_policy: TruncationPolicy::Bytes(1024),
+            source: ToolCallSource::Direct,
             conversation_history: codex_extension_api::ConversationHistory::default(),
             turn_item_emitter: Arc::new(NoopTurnItemEmitter),
             environments: Vec::new(),

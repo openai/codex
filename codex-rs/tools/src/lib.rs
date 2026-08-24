@@ -68,6 +68,7 @@ pub use tool_call::ConversationHistory;
 pub use tool_call::ExtensionTurnItem;
 pub use tool_call::NoopTurnItemEmitter;
 pub use tool_call::ToolCall;
+pub use tool_call::ToolCallSource;
 pub use tool_call::ToolEnvironment;
 pub use tool_call::TurnItemEmissionFuture;
 pub use tool_call::TurnItemEmitter;

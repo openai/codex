@@ -50,6 +50,7 @@ mod schema;
 
 const SKILLS_NAMESPACE: &str = "skills";
 const MAX_HANDLE_BYTES: usize = 2_048;
+const MAX_SKILL_RESPONSE_BYTES: usize = 512 * 1024;
 
 pub(crate) fn skill_tools(
     providers: SkillProviders,

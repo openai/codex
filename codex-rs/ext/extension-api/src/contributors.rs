@@ -39,7 +39,6 @@ pub use thread_lifecycle::ThreadResumeInput;
 pub use thread_lifecycle::ThreadStartInput;
 pub use thread_lifecycle::ThreadStopInput;
 pub use tool_lifecycle::ToolCallOutcome;
-pub use tool_lifecycle::ToolCallSource;
 pub use tool_lifecycle::ToolFinishInput;
 pub use tool_lifecycle::ToolLifecycleFuture;
 pub use tool_lifecycle::ToolStartInput;

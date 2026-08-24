@@ -15,6 +15,7 @@ use crate::render::truncate_utf8_to_bytes;
 use crate::warnings::bounded_warnings;
 
 use super::MAX_HANDLE_BYTES;
+use super::MAX_SKILL_RESPONSE_BYTES;
 use super::SkillToolAuthority;
 use super::SkillToolAuthoritySelector;
 use super::SkillToolContext;
@@ -29,7 +30,6 @@ use super::skill_tool_name;
 
 const TOOL_NAME: &str = "list";
 const MAX_SKILLS_PER_PAGE: usize = 20;
-const MAX_LIST_RESPONSE_BYTES: usize = 512 * 1024;
 const OVERSIZED_ENTRY_WARNING: &str =
     "Some skills were omitted because their metadata is too large.";
 
@@ -114,7 +114,7 @@ impl ToolExecutor<ToolCall> for ListTool {
                     warnings: warnings.clone(),
                     next_cursor: (end < skills.len()).then(|| pagination_cursor(&skills, end)),
                 };
-                if serialized_len(&response)? <= MAX_LIST_RESPONSE_BYTES {
+                if serialized_len(&response)? <= MAX_SKILL_RESPONSE_BYTES {
                     return skill_json_output(&response, args.authority);
                 }
                 if end.saturating_sub(start) > 1 {
@@ -137,7 +137,7 @@ fn single_entry_response_is_bounded(skill: &ListedSkill) -> bool {
         warnings: Vec::new(),
         next_cursor: Some(pagination_cursor(skill, usize::MAX)),
     })
-    .is_ok_and(|size| size <= MAX_LIST_RESPONSE_BYTES)
+    .is_ok_and(|size| size <= MAX_SKILL_RESPONSE_BYTES)
 }
 
 fn listed_skill(entry: SkillCatalogEntry) -> Option<ListedSkill> {
