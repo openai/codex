@@ -751,6 +751,9 @@
             "in_app_dictation": {
               "type": "boolean"
             },
+            "in_app_local_automation": {
+              "type": "boolean"
+            },
             "in_app_updates": {
               "type": "boolean"
             },
@@ -5722,6 +5725,9 @@
           "type": "boolean"
         },
         "in_app_dictation": {
+          "type": "boolean"
+        },
+        "in_app_local_automation": {
           "type": "boolean"
         },
         "in_app_updates": {
