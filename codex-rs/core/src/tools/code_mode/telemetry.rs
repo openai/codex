@@ -1,11 +1,14 @@
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::CodeModeToolCallFact;
 use codex_analytics::CodeModeToolCallStatus;
+use codex_analytics::TurnAnalyticsMetadata;
+use std::sync::Arc;
 
 pub(super) struct CodeModeToolCallGuard {
     analytics: AnalyticsEventsClient,
     thread_id: String,
     turn_id: String,
+    turn_metadata: Arc<dyn TurnAnalyticsMetadata>,
     call_id: String,
     pub(super) cell_id: Option<String>,
     tool_name: &'static str,
@@ -18,6 +21,7 @@ impl CodeModeToolCallGuard {
         analytics: AnalyticsEventsClient,
         thread_id: String,
         turn_id: String,
+        turn_metadata: Arc<dyn TurnAnalyticsMetadata>,
         call_id: String,
         tool_name: &'static str,
     ) -> Self {
@@ -25,6 +29,7 @@ impl CodeModeToolCallGuard {
             analytics,
             thread_id,
             turn_id,
+            turn_metadata,
             call_id,
             cell_id: None,
             tool_name,
@@ -48,6 +53,7 @@ impl Drop for CodeModeToolCallGuard {
             .track_code_mode_tool_call(CodeModeToolCallFact::Completed {
                 thread_id: self.thread_id.clone(),
                 turn_id: self.turn_id.clone(),
+                turn_metadata: self.turn_metadata.clone(),
                 call_id: self.call_id.clone(),
                 cell_id: self.cell_id.clone(),
                 tool_name: self.tool_name.to_string(),

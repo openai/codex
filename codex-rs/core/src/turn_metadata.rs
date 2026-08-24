@@ -130,6 +130,12 @@ pub(crate) struct TurnMetadataState {
     git_enrichment_complete: watch::Sender<bool>,
 }
 
+impl codex_analytics::TurnAnalyticsMetadata for TurnMetadataState {
+    fn root_turn_id(&self) -> Option<String> {
+        TurnMetadataState::root_turn_id(self)
+    }
+}
+
 impl TurnMetadataState {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(

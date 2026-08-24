@@ -61,6 +61,8 @@ use crate::facts::CompactionReason;
 use crate::facts::CompactionStatus;
 use crate::facts::CompactionStrategy;
 use crate::facts::CompactionTrigger;
+use crate::facts::ControlToolCallFact;
+use crate::facts::ControlToolCallStatus;
 use crate::facts::CustomAnalyticsFact;
 use crate::facts::ExternalAgentConfigImportCompletedInput;
 use crate::facts::ExternalAgentConfigImportFailureInput;
@@ -88,6 +90,7 @@ use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
 use crate::facts::TrackEventsContext;
+use crate::facts::TurnAnalyticsMetadata;
 use crate::facts::TurnCodexErrorFact;
 use crate::facts::TurnProfile;
 use crate::facts::TurnProfileFact;
@@ -197,6 +200,22 @@ use std::time::SystemTime;
 use tokio::sync::mpsc;
 
 const TEST_PRODUCT_CLIENT_ID: &str = "codex_work_desktop";
+
+struct TestTurnMetadata {
+    root_turn_id: Mutex<Option<String>>,
+}
+
+impl TurnAnalyticsMetadata for TestTurnMetadata {
+    fn root_turn_id(&self) -> Option<String> {
+        self.root_turn_id.lock().expect("root turn ID").clone()
+    }
+}
+
+fn test_turn_metadata(root_turn_id: Option<&str>) -> Arc<TestTurnMetadata> {
+    Arc::new(TestTurnMetadata {
+        root_turn_id: Mutex::new(root_turn_id.map(str::to_string)),
+    })
+}
 
 fn test_tracking_context(thread_id: &str, turn_id: &str) -> TrackEventsContext {
     TrackEventsContext {
@@ -438,6 +457,7 @@ fn sample_turn_resolved_config(thread_id: &str, turn_id: &str) -> TurnResolvedCo
     TurnResolvedConfigFact {
         turn_id: turn_id.to_string(),
         thread_id: thread_id.to_string(),
+        turn_metadata: test_turn_metadata(/*root_turn_id*/ None),
         num_input_images: 1,
         submission_type: None,
         ephemeral: false,
@@ -1692,6 +1712,7 @@ fn command_execution_event_serializes_expected_shape() {
                 thread_id: "thread-1".to_string(),
                 session_id: "session-thread-1".to_string(),
                 turn_id: "turn-1".to_string(),
+                root_turn_id: Some("root-turn".to_string()),
                 item_id: "item-1".to_string(),
                 cell_id: None,
                 parent_call_id: None,
@@ -1748,6 +1769,7 @@ fn command_execution_event_serializes_expected_shape() {
                 "thread_id": "thread-1",
                 "session_id": "session-thread-1",
                 "turn_id": "turn-1",
+                "root_turn_id": "root-turn",
                 "item_id": "item-1",
                 "cell_id": null,
                 "parent_call_id": null,
@@ -2873,18 +2895,31 @@ async fn code_mode_exec_wait_and_child_events_share_cell_and_response_ids() {
     let mut reducer = AnalyticsReducer::default();
     let mut events = Vec::new();
     ingest_review_prerequisites(&mut reducer, &mut events).await;
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::TurnResolvedConfig(Box::new(
+                TurnResolvedConfigFact {
+                    turn_metadata: test_turn_metadata(Some("root-a")),
+                    ..sample_turn_resolved_config("thread-1", "turn-1")
+                },
+            ))),
+            &mut events,
+        )
+        .await;
 
-    let completed =
-        |turn_id: &str, call_id: &str, tool_name: &str| CodeModeToolCallFact::Completed {
+    let completed = |turn_id: &str, root_turn_id: &str, call_id: &str, tool_name: &str| {
+        CodeModeToolCallFact::Completed {
             thread_id: "thread-1".into(),
             turn_id: turn_id.into(),
+            turn_metadata: test_turn_metadata(Some(root_turn_id)),
             call_id: call_id.into(),
             cell_id: Some("cell-1".into()),
             tool_name: tool_name.into(),
             started_at_ms: 1_000,
             completed_at_ms: 1_010,
             status: CodeModeToolCallStatus::Completed,
-        };
+        }
+    };
     ingest_code_mode_facts(
         &mut reducer,
         &mut events,
@@ -2902,7 +2937,7 @@ async fn code_mode_exec_wait_and_child_events_share_cell_and_response_ids() {
                 call_id: "child-1".into(),
                 cell_id: "cell-1".into(),
             },
-            completed("turn-1", "exec-1", "exec"),
+            completed("turn-1", "root-a", "exec-1", "exec"),
         ],
     )
     .await;
@@ -2915,7 +2950,7 @@ async fn code_mode_exec_wait_and_child_events_share_cell_and_response_ids() {
         [
             sampling_response("turn-1", "resp-b", &[]),
             sampling_response("turn-2", "resp-c", &["wait-1"]),
-            completed("turn-2", "wait-1", "wait"),
+            completed("turn-2", "root-b", "wait-1", "wait"),
             sampling_response("turn-2", "resp-d", &[]),
         ],
     )
@@ -2927,6 +2962,7 @@ async fn code_mode_exec_wait_and_child_events_share_cell_and_response_ids() {
             let event = serde_json::to_value(event).expect("serialize tool event");
             serde_json::json!({
                 "item": event["event_params"]["item_id"],
+                "root": event["event_params"]["root_turn_id"],
                 "cell": event["event_params"]["cell_id"],
                 "parent": event["event_params"]["parent_call_id"],
                 "origin": event["event_params"]["originating_response_id"],
@@ -2937,9 +2973,9 @@ async fn code_mode_exec_wait_and_child_events_share_cell_and_response_ids() {
     assert_eq!(
         actual,
         vec![
-            serde_json::json!({"item":"exec-1","cell":"cell-1","parent":null,"origin":"resp-a","subsequent":"resp-b"}),
-            serde_json::json!({"item":"child-1","cell":"cell-1","parent":"exec-1","origin":"resp-a","subsequent":"resp-b"}),
-            serde_json::json!({"item":"wait-1","cell":"cell-1","parent":"exec-1","origin":"resp-c","subsequent":"resp-d"}),
+            serde_json::json!({"item":"exec-1","root":"root-a","cell":"cell-1","parent":null,"origin":"resp-a","subsequent":"resp-b"}),
+            serde_json::json!({"item":"child-1","root":"root-a","cell":"cell-1","parent":"exec-1","origin":"resp-a","subsequent":"resp-b"}),
+            serde_json::json!({"item":"wait-1","root":"root-b","cell":"cell-1","parent":"exec-1","origin":"resp-c","subsequent":"resp-d"}),
         ]
     );
 }
@@ -3636,6 +3672,22 @@ async fn subagent_tool_items_inherit_parent_connection_metadata() {
         )
         .await;
     ingest_review_prerequisites(&mut reducer, &mut events).await;
+    for (thread_id, turn_id, root_turn_id) in [
+        ("thread-1", "turn-parent", "parent-current-root"),
+        ("thread-subagent", "turn-subagent", "child-causal-root"),
+    ] {
+        reducer
+            .ingest(
+                AnalyticsFact::Custom(CustomAnalyticsFact::TurnResolvedConfig(Box::new(
+                    TurnResolvedConfigFact {
+                        turn_metadata: test_turn_metadata(Some(root_turn_id)),
+                        ..sample_turn_resolved_config(thread_id, turn_id)
+                    },
+                ))),
+                &mut events,
+            )
+            .await;
+    }
     reducer
         .ingest(
             AnalyticsFact::Notification(Box::new(sample_turn_started_notification(
@@ -3687,6 +3739,7 @@ async fn subagent_tool_items_inherit_parent_connection_metadata() {
         [CodeModeToolCallFact::Completed {
             thread_id: "thread-subagent".into(),
             turn_id: "turn-subagent".into(),
+            turn_metadata: test_turn_metadata(Some("child-causal-root")),
             call_id: "exec-1".into(),
             cell_id: None,
             tool_name: "exec".into(),
@@ -3700,6 +3753,21 @@ async fn subagent_tool_items_inherit_parent_connection_metadata() {
 
     let payload = serde_json::to_value(&events).expect("serialize events");
     assert_eq!(payload.as_array().expect("events array").len(), 2);
+    assert_eq!(
+        payload
+            .as_array()
+            .expect("events array")
+            .iter()
+            .map(|event| json!({
+                "turn_id": event["event_params"]["turn_id"],
+                "root_turn_id": event["event_params"]["root_turn_id"],
+            }))
+            .collect::<Vec<_>>(),
+        vec![
+            json!({"turn_id": "turn-subagent", "root_turn_id": "child-causal-root"}),
+            json!({"turn_id": "turn-subagent", "root_turn_id": "child-causal-root"}),
+        ]
+    );
     assert_eq!(payload[0]["event_type"], "codex_command_execution_event");
     assert_eq!(payload[0]["event_params"]["thread_id"], "thread-subagent");
     assert_eq!(payload[0]["event_params"]["session_id"], "session-thread-1");
@@ -4520,6 +4588,7 @@ fn turn_event_serializes_expected_shape() {
             thread_id: "thread-2".to_string(),
             session_id: "session-thread-2".to_string(),
             turn_id: "turn-2".to_string(),
+            root_turn_id: Some("turn-2".to_string()),
             app_server_client: sample_app_server_client_metadata(),
             runtime: sample_runtime_metadata(),
             submission_type: None,
@@ -4593,6 +4662,7 @@ fn turn_event_serializes_expected_shape() {
                 "thread_id": "thread-2",
                 "session_id": "session-thread-2",
                 "turn_id": "turn-2",
+                "root_turn_id": "turn-2",
                 "submission_type": null,
                 "app_server_client": {
                     "product_client_id": "codex_cli_rs",
@@ -5005,11 +5075,22 @@ async fn turn_event_counts_completed_tool_items() {
         &mut reducer,
         &mut out,
         /*include_initialize*/ true,
-        /*include_resolved_config*/ true,
+        /*include_resolved_config*/ false,
         /*include_started*/ true,
         /*include_token_usage*/ false,
     )
     .await;
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::TurnResolvedConfig(Box::new(
+                TurnResolvedConfigFact {
+                    turn_metadata: test_turn_metadata(Some("root-ancestor")),
+                    ..sample_turn_resolved_config("thread-2", "turn-2")
+                },
+            ))),
+            &mut out,
+        )
+        .await;
 
     let mcp_tool_call_item = |status, duration_ms| ThreadItem::McpToolCall {
         id: "mcp-1".to_string(),
@@ -5121,6 +5202,24 @@ async fn turn_event_counts_completed_tool_items() {
             .await;
     }
 
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::ControlToolCall(ControlToolCallFact {
+                thread_id: "thread-2".to_string(),
+                turn_id: "turn-2".to_string(),
+                turn_metadata: test_turn_metadata(Some("root-ancestor")),
+                call_id: "control-1".to_string(),
+                cell_id: None,
+                tool_name: "update_plan".to_string(),
+                started_at_ms: 998,
+                completed_at_ms: 1_000,
+                status: ControlToolCallStatus::Completed,
+            })),
+            &mut out,
+        )
+        .await;
+    reducer.flush(&mut out);
+
     let payload = serde_json::to_value(&out).expect("serialize tool item events");
     let emitted_tool_events = payload
         .as_array()
@@ -5132,20 +5231,29 @@ async fn turn_event_counts_completed_tool_items() {
                 event["event_params"]["session_id"]
                     .as_str()
                     .expect("tool item event session ID"),
+                event["event_params"]["turn_id"]
+                    .as_str()
+                    .expect("tool item event turn ID"),
+                event["event_params"]["root_turn_id"]
+                    .as_str()
+                    .expect("tool item event root turn ID"),
             )
         })
         .collect::<Vec<_>>();
     assert_eq!(
         emitted_tool_events,
-        vec![
-            ("codex_command_execution_event", "session-thread-2"),
-            ("codex_file_change_event", "session-thread-2"),
-            ("codex_mcp_tool_call_event", "session-thread-2"),
-            ("codex_dynamic_tool_call_event", "session-thread-2"),
-            ("codex_collab_agent_tool_call_event", "session-thread-2"),
-            ("codex_web_search_event", "session-thread-2"),
-            ("codex_image_generation_event", "session-thread-2"),
+        [
+            "codex_command_execution_event",
+            "codex_file_change_event",
+            "codex_mcp_tool_call_event",
+            "codex_dynamic_tool_call_event",
+            "codex_collab_agent_tool_call_event",
+            "codex_web_search_event",
+            "codex_image_generation_event",
+            "codex_control_tool_call_event",
         ]
+        .map(|event_type| (event_type, "session-thread-2", "turn-2", "root-ancestor"))
+        .to_vec()
     );
 
     let mcp_tool_call_event = out
@@ -5176,7 +5284,8 @@ async fn turn_event_counts_completed_tool_items() {
         .find(|event| matches!(event, TrackEventRequest::TurnEvent(_)))
         .expect("turn event should be emitted");
     let payload = serde_json::to_value(turn_event).expect("serialize turn event");
-    assert_eq!(payload["event_params"]["total_tool_call_count"], json!(8));
+    assert_eq!(payload["event_params"]["root_turn_id"], "root-ancestor");
+    assert_eq!(payload["event_params"]["total_tool_call_count"], json!(9));
     assert_eq!(payload["event_params"]["shell_command_count"], json!(1));
     assert_eq!(payload["event_params"]["file_change_count"], json!(1));
     assert_eq!(payload["event_params"]["mcp_tool_call_count"], json!(1));
@@ -5190,19 +5299,128 @@ async fn turn_event_counts_completed_tool_items() {
 }
 
 #[tokio::test]
+async fn turn_and_tool_events_read_current_trusted_root() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+    ingest_review_prerequisites(&mut reducer, &mut events).await;
+    let turn_metadata = test_turn_metadata(Some("root-ancestor"));
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::TurnResolvedConfig(Box::new(
+                TurnResolvedConfigFact {
+                    turn_metadata: turn_metadata.clone(),
+                    ..sample_turn_resolved_config("thread-1", "turn-1")
+                },
+            ))),
+            &mut events,
+        )
+        .await;
+
+    ingest_completed_command_execution_item(
+        &mut reducer,
+        &mut events,
+        "thread-1",
+        "before-conflict",
+    )
+    .await;
+    let queued_control_call = ControlToolCallFact {
+        thread_id: "thread-1".to_string(),
+        turn_id: "turn-1".to_string(),
+        turn_metadata: turn_metadata.clone(),
+        call_id: "queued-control".to_string(),
+        cell_id: None,
+        tool_name: "view_image".to_string(),
+        started_at_ms: 998,
+        completed_at_ms: 1_000,
+        status: ControlToolCallStatus::Completed,
+    };
+    let queued_code_mode_call = CodeModeToolCallFact::Completed {
+        thread_id: "thread-1".to_string(),
+        turn_id: "turn-1".to_string(),
+        turn_metadata: turn_metadata.clone(),
+        call_id: "queued-code-mode".to_string(),
+        cell_id: None,
+        tool_name: "exec".to_string(),
+        started_at_ms: 998,
+        completed_at_ms: 1_000,
+        status: CodeModeToolCallStatus::Completed,
+    };
+    *turn_metadata.root_turn_id.lock().expect("root turn ID") = None;
+    ingest_completed_command_execution_item(
+        &mut reducer,
+        &mut events,
+        "thread-1",
+        "after-conflict",
+    )
+    .await;
+    for fact in [
+        AnalyticsFact::Custom(CustomAnalyticsFact::ControlToolCall(queued_control_call)),
+        AnalyticsFact::Custom(CustomAnalyticsFact::CodeModeToolCall(queued_code_mode_call)),
+        AnalyticsFact::Custom(CustomAnalyticsFact::TurnProfile(Box::new(
+            TurnProfileFact {
+                turn_id: "turn-1".to_string(),
+                profile: sample_turn_profile(),
+            },
+        ))),
+        AnalyticsFact::Notification(Box::new(sample_turn_completed_notification(
+            "thread-1",
+            "turn-1",
+            AppServerTurnStatus::Completed,
+            /*codex_error_info*/ None,
+        ))),
+    ] {
+        reducer.ingest(fact, &mut events).await;
+    }
+
+    let payload = serde_json::to_value(&events).expect("serialize events");
+    assert_eq!(
+        payload
+            .as_array()
+            .expect("events array")
+            .iter()
+            .map(|event| json!({
+                "event_type": event["event_type"],
+                "turn_id": event["event_params"]["turn_id"],
+                "item_id": event["event_params"].get("item_id"),
+                "root_turn_id": event["event_params"].get("root_turn_id").expect("root field"),
+            }))
+            .collect::<Vec<_>>(),
+        vec![
+            json!({"event_type": "codex_command_execution_event", "turn_id": "turn-1", "item_id": "before-conflict", "root_turn_id": "root-ancestor"}),
+            json!({"event_type": "codex_command_execution_event", "turn_id": "turn-1", "item_id": "after-conflict", "root_turn_id": null}),
+            json!({"event_type": "codex_control_tool_call_event", "turn_id": "turn-1", "item_id": "queued-control", "root_turn_id": null}),
+            json!({"event_type": "codex_dynamic_tool_call_event", "turn_id": "turn-1", "item_id": "queued-code-mode", "root_turn_id": null}),
+            json!({"event_type": "codex_turn_event", "turn_id": "turn-1", "item_id": null, "root_turn_id": null}),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn completed_background_tool_item_emits_after_turn_event() {
     let mut reducer = AnalyticsReducer::default();
     let mut out = Vec::new();
+    let turn_metadata = test_turn_metadata(Some("root-background"));
 
     ingest_turn_prerequisites(
         &mut reducer,
         &mut out,
         /*include_initialize*/ true,
-        /*include_resolved_config*/ true,
+        /*include_resolved_config*/ false,
         /*include_started*/ true,
         /*include_token_usage*/ false,
     )
     .await;
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::TurnResolvedConfig(Box::new(
+                TurnResolvedConfigFact {
+                    turn_metadata: turn_metadata.clone(),
+                    ..sample_turn_resolved_config("thread-2", "turn-2")
+                },
+            ))),
+            &mut out,
+        )
+        .await;
 
     reducer
         .ingest(
@@ -5266,6 +5484,58 @@ async fn completed_background_tool_item_emits_after_turn_event() {
     assert!(
         out.iter()
             .any(|event| matches!(event, TrackEventRequest::CommandExecution(_)))
+    );
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::ControlToolCall(ControlToolCallFact {
+                thread_id: "thread-2".to_string(),
+                turn_id: "turn-2".to_string(),
+                turn_metadata: turn_metadata.clone(),
+                call_id: "late-view-image".to_string(),
+                cell_id: None,
+                tool_name: "view_image".to_string(),
+                started_at_ms: 998,
+                completed_at_ms: 1_001,
+                status: ControlToolCallStatus::Completed,
+            })),
+            &mut out,
+        )
+        .await;
+    ingest_code_mode_facts(
+        &mut reducer,
+        &mut out,
+        [CodeModeToolCallFact::Completed {
+            thread_id: "thread-2".to_string(),
+            turn_id: "turn-2".to_string(),
+            turn_metadata,
+            call_id: "late-code-mode".to_string(),
+            cell_id: None,
+            tool_name: "exec".to_string(),
+            started_at_ms: 998,
+            completed_at_ms: 1_001,
+            status: CodeModeToolCallStatus::Interrupted,
+        }],
+    )
+    .await;
+    reducer.flush(&mut out);
+
+    assert_eq!(
+        out.iter()
+            .map(|event| {
+                let event = serde_json::to_value(event).expect("serialize event");
+                json!({
+                    "event_type": event["event_type"],
+                    "turn_id": event["event_params"]["turn_id"],
+                    "root_turn_id": event["event_params"]["root_turn_id"],
+                })
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            json!({"event_type": "codex_turn_event", "turn_id": "turn-2", "root_turn_id": "root-background"}),
+            json!({"event_type": "codex_command_execution_event", "turn_id": "turn-2", "root_turn_id": "root-background"}),
+            json!({"event_type": "codex_control_tool_call_event", "turn_id": "turn-2", "root_turn_id": "root-background"}),
+            json!({"event_type": "codex_dynamic_tool_call_event", "turn_id": "turn-2", "root_turn_id": "root-background"}),
+        ]
     );
 }
 

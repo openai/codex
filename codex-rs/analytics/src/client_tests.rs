@@ -206,6 +206,7 @@ fn sample_mcp_tool_call_event(thread_id: &str, plugin_id: Option<&str>) -> Track
                 thread_id: thread_id.to_string(),
                 session_id: format!("session-{thread_id}"),
                 turn_id: "turn-1".to_string(),
+                root_turn_id: None,
                 item_id: format!("item-{thread_id}"),
                 cell_id: None,
                 parent_call_id: None,

@@ -219,10 +219,14 @@ async fn turn_start_with_empty_input_runs_model_request() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
     let codex_home = TempDir::new()?;
-    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
+    MockResponsesConfig::new(&server.uri())
+        .with_root_config(&format!("chatgpt_base_url = \"{}\"", server.uri()))
+        .write(codex_home.path())?;
+    mount_analytics_capture(&server, codex_home.path()).await?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
+        .without_managed_config()
         .build_initialized()
         .await?;
 
@@ -266,6 +270,15 @@ async fn turn_start_with_empty_input_runs_model_request() -> Result<()> {
         &completed.turn.items[..],
         [ThreadItem::AgentMessage { text, .. }] if text == "Done"
     ));
+
+    let event = wait_for_analytics_event(&server, DEFAULT_READ_TIMEOUT, "codex_turn_event").await?;
+    assert_eq!(
+        (
+            event["event_params"]["turn_id"].as_str(),
+            event["event_params"].get("root_turn_id"),
+        ),
+        (Some(turn.id.as_str()), Some(&Value::Null))
+    );
 
     let requests = server
         .received_requests()
@@ -984,6 +997,7 @@ async fn turn_start_tracks_thread_originator_in_analytics() -> Result<()> {
     assert_eq!(event["event_params"]["thread_id"], thread.id);
     assert_eq!(event["event_params"]["session_id"], thread.session_id);
     assert_eq!(event["event_params"]["turn_id"], turn.id);
+    assert_eq!(event["event_params"]["root_turn_id"], turn.id);
     assert_eq!(
         event["event_params"]["app_server_client"]["product_client_id"],
         "codex_work_desktop"
@@ -1084,7 +1098,7 @@ async fn code_mode_exec_emits_correlated_production_analytics() -> Result<()> {
         .await?;
     let params = ThreadStartParams::default();
     let thread = app_server.start_thread(params).await?;
-    app_server
+    let turn = app_server
         .start_turn_and_wait_for_completion(TurnStartParams {
             thread_id: thread.thread.id,
             input: vec![V2UserInput::Text {
@@ -1103,12 +1117,21 @@ async fn code_mode_exec_emits_correlated_production_analytics() -> Result<()> {
     .await?;
     assert_eq!(
         json!({
+            "turnId": event["event_params"]["turn_id"],
+            "rootTurnId": event["event_params"]["root_turn_id"],
             "tool": event["event_params"]["tool_name"],
             "origin": event["event_params"]["originating_response_id"],
             "subsequent": event["event_params"]["subsequent_response_id"],
             "hasCell": event["event_params"]["cell_id"].as_str().is_some(),
         }),
-        json!({"tool":"exec","origin":"resp-1","subsequent":"resp-2","hasCell":true})
+        json!({
+            "turnId": turn.turn.id,
+            "rootTurnId": turn.turn.id,
+            "tool": "exec",
+            "origin": "resp-1",
+            "subsequent": "resp-2",
+            "hasCell": true,
+        })
     );
 
     Ok(())
@@ -1175,7 +1198,7 @@ async fn turn_profile_tracks_blocking_tool_and_follow_up_sampling() -> Result<()
         })
         .await?;
 
-    let _: TurnStartResponse = mcp
+    let TurnStartResponse { turn: first_turn } = mcp
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
             params: TurnStartParams {
@@ -1227,6 +1250,8 @@ async fn turn_profile_tracks_blocking_tool_and_follow_up_sampling() -> Result<()
     let params = &event["event_params"];
     assert_eq!(
         json!({
+            "turnId": params["turn_id"],
+            "rootTurnId": params["root_turn_id"],
             "toolBlockingIsPositive": params["tool_blocking_ms"]
                 .as_u64()
                 .is_some_and(|duration| duration > 0),
@@ -1237,6 +1262,8 @@ async fn turn_profile_tracks_blocking_tool_and_follow_up_sampling() -> Result<()
             "status": params["status"],
         }),
         json!({
+            "turnId": first_turn.id,
+            "rootTurnId": first_turn.id,
             "toolBlockingIsPositive": true,
             "samplingRequestCount": 2,
             "samplingRetryCount": 0,
@@ -1272,8 +1299,15 @@ async fn turn_profile_tracks_blocking_tool_and_follow_up_sampling() -> Result<()
         })
         .await?;
         let success = tool_name != "view_image";
+        let turn_id = if call_id == "call1" {
+            &first_turn.id
+        } else {
+            &second_turn.turn.id
+        };
         assert_eq!(
             json!({
+                "turnId": event["event_params"]["turn_id"],
+                "rootTurnId": event["event_params"]["root_turn_id"],
                 "tool": event["event_params"]["tool_name"],
                 "success": event["event_params"]["success"],
                 "status": event["event_params"]["terminal_status"],
@@ -1282,6 +1316,8 @@ async fn turn_profile_tracks_blocking_tool_and_follow_up_sampling() -> Result<()
                     .is_some(),
             }),
             json!({
+                "turnId": turn_id,
+                "rootTurnId": turn_id,
                 "tool": tool_name,
                 "success": success,
                 "status": if success { "completed" } else { "failed" },
@@ -1310,10 +1346,11 @@ async fn turn_profile_tracks_blocking_tool_and_follow_up_sampling() -> Result<()
         .await?;
     assert_eq!(
         json!({
+            "rootTurnId": second_turn_event["event_params"]["root_turn_id"],
             "total": second_turn_event["event_params"]["total_tool_call_count"],
             "dynamic": second_turn_event["event_params"]["dynamic_tool_call_count"],
         }),
-        json!({"total": 5, "dynamic": 0})
+        json!({"rootTurnId": second_turn.turn.id, "total": 5, "dynamic": 0})
     );
 
     Ok(())
@@ -3520,6 +3557,7 @@ async fn turn_start_emits_spawn_agent_item_with_model_metadata_v2() -> Result<()
     const CHILD_PROMPT: &str = "child: do work";
     const PARENT_PROMPT: &str = "spawn a child and continue";
     const SPAWN_CALL_ID: &str = "spawn-call-1";
+    const CHILD_PLAN_CALL_ID: &str = "child-plan-call";
     const REQUESTED_MODEL: &str = "gpt-5.2";
     const REQUESTED_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::Low;
 
@@ -3544,15 +3582,29 @@ async fn turn_start_emits_spawn_agent_item_with_model_metadata_v2() -> Result<()
         ]),
     )
     .await;
-    let _child_turn = responses::mount_sse_once_match(
+    let child_turn = responses::mount_sse_once_match(
         &server,
         |req: &wiremock::Request| {
             body_contains(req, CHILD_PROMPT) && !body_contains(req, SPAWN_CALL_ID)
         },
         responses::sse(vec![
             responses::ev_response_created("resp-child-1"),
-            responses::ev_assistant_message("msg-child-1", "child done"),
+            responses::ev_function_call(
+                CHILD_PLAN_CALL_ID,
+                "update_plan",
+                &json!({"plan": [{"step": "child work", "status": "completed"}]}).to_string(),
+            ),
             responses::ev_completed("resp-child-1"),
+        ]),
+    )
+    .await;
+    let _child_follow_up = responses::mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, CHILD_PLAN_CALL_ID),
+        responses::sse(vec![
+            responses::ev_response_created("resp-child-2"),
+            responses::ev_assistant_message("msg-child-2", "child done"),
+            responses::ev_completed("resp-child-2"),
         ]),
     )
     .await;
@@ -3570,7 +3622,9 @@ async fn turn_start_emits_spawn_agent_item_with_model_metadata_v2() -> Result<()
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&server.uri())
         .enable_feature(Feature::Collab)
+        .with_root_config(&format!("chatgpt_base_url = \"{}\"", server.uri()))
         .write(codex_home.path())?;
+    mount_analytics_capture(&server, codex_home.path()).await?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -3688,6 +3742,43 @@ async fn turn_start_emits_spawn_agent_item_with_model_metadata_v2() -> Result<()
     .await??;
     assert_eq!(turn_completed.thread_id, thread.id);
     assert_eq!(turn_completed.turn.id, turn.turn.id);
+
+    let child_turn_event =
+        wait_for_matching_analytics_event(&server, DEFAULT_READ_TIMEOUT, |event| {
+            event["event_type"] == "codex_turn_event"
+                && event["event_params"]["thread_id"] == receiver_thread_id
+        })
+        .await?;
+    let child_tool_event =
+        wait_for_matching_analytics_event(&server, DEFAULT_READ_TIMEOUT, |event| {
+            event["event_type"] == "codex_control_tool_call_event"
+                && event["event_params"]["item_id"] == CHILD_PLAN_CALL_ID
+        })
+        .await?;
+    let child_request = child_turn
+        .requests()
+        .into_iter()
+        .find(|request| request.body_json()["client_metadata"]["thread_id"] == receiver_thread_id)
+        .context("child should issue a model request")?
+        .body_json();
+    let child_turn_id = child_request["client_metadata"]["turn_id"]
+        .as_str()
+        .context("child request should have a turn id")?;
+    assert_ne!(child_turn_id, turn.turn.id);
+    for event in [child_turn_event, child_tool_event] {
+        assert_eq!(
+            json!({
+                "thread_id": event["event_params"]["thread_id"],
+                "turn_id": event["event_params"]["turn_id"],
+                "root_turn_id": event["event_params"]["root_turn_id"],
+            }),
+            json!({
+                "thread_id": receiver_thread_id,
+                "turn_id": child_turn_id,
+                "root_turn_id": turn.turn.id,
+            })
+        );
+    }
 
     // Reuse this live spawn setup to cover thread/delete's ThreadManager descendant path.
     let _: ThreadDeleteResponse = mcp

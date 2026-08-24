@@ -70,6 +70,7 @@ pub use facts::SkillInvocationLocation;
 pub use facts::SubAgentThreadStartedInput;
 pub use facts::ThreadInitializationMode;
 pub use facts::TrackEventsContext;
+pub use facts::TurnAnalyticsMetadata;
 pub use facts::TurnCodexErrorFact;
 pub use facts::TurnProfile;
 pub use facts::TurnProfileFact;

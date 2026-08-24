@@ -77,6 +77,7 @@ impl CodeModeWaitHandler {
             session.services.analytics_events_client.clone(),
             session.thread_id.to_string(),
             turn.sub_id.clone(),
+            turn.turn_metadata_state.clone(),
             call_id.clone(),
             WAIT_TOOL_NAME,
         );
