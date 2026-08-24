@@ -3,6 +3,7 @@ use std::io;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use codex_exec_server_protocol::JSONRPCErrorError;
+use codex_protocol::config_types::WindowsSandboxLevel;
 
 use crate::CapabilityRootsDiscoverParams;
 use crate::CapabilityRootsDiscoverResponse;
@@ -74,6 +75,42 @@ impl FileSystemHandler {
         &self,
         params: CapabilityRootsDiscoverParams,
     ) -> Result<CapabilityRootsDiscoverResponse, JSONRPCErrorError> {
+        let sandbox = params
+            .roots
+            .first()
+            .and_then(|root| root.sandbox.as_ref())
+            .filter(|sandbox| {
+                sandbox.should_run_in_sandbox()
+                    && (!cfg!(target_os = "windows")
+                        || sandbox.windows_sandbox_level != WindowsSandboxLevel::Disabled)
+                    && params
+                        .roots
+                        .iter()
+                        .all(|root| root.sandbox.as_ref() == Some(*sandbox))
+            })
+            .cloned();
+
+        if let Some(sandbox) = sandbox {
+            let mut batched_params = params.clone();
+            for root in &mut batched_params.roots {
+                root.sandbox = None;
+            }
+            let result = match self.file_system.sandboxed() {
+                Ok(file_system) => {
+                    file_system
+                        .discover_capability_roots(batched_params, &sandbox)
+                        .await
+                }
+                Err(error) => Err(error),
+            };
+            match result {
+                Ok(response) => return Ok(response),
+                Err(error) => {
+                    tracing::warn!(%error, "batched capability discovery failed; retrying roots separately");
+                }
+            }
+        }
+
         crate::discover_capability_roots(&self.file_system, params)
             .await
             .map_err(|error| invalid_request(error.to_string()))

@@ -2,6 +2,9 @@
 #![allow(clippy::expect_used)]
 
 mod common;
+#[cfg(target_os = "linux")]
+#[path = "common/fake_bwrap.rs"]
+mod fake_bwrap;
 
 #[path = "file_system/shared.rs"]
 mod shared;
@@ -55,6 +58,8 @@ use tokio::time::timeout;
 
 #[cfg(target_os = "linux")]
 use crate::common::exec_server::exec_server_with_env;
+#[cfg(target_os = "linux")]
+use crate::fake_bwrap::write_fake_bwrap;
 
 use crate::support::FileSystemImplementation;
 use crate::support::create_file_system_context;
@@ -115,55 +120,6 @@ fn alias_root_candidate() -> Result<Option<PathBuf>> {
 fn create_directory_symlink(target: &Path, alias: &Path) -> Result<()> {
     symlink(target, alias)?;
     Ok(())
-}
-
-#[cfg(target_os = "linux")]
-fn write_fake_bwrap(bin_dir: &Path) -> Result<PathBuf> {
-    std::fs::create_dir_all(bin_dir)?;
-    let fake_bwrap = bin_dir.join("bwrap");
-    std::fs::write(
-        &fake_bwrap,
-        r#"#!/bin/bash
-set -euo pipefail
-
-for arg in "$@"; do
-  if [[ "${arg}" == "--help" ]]; then
-    echo "Usage: bwrap --argv0 --perms --as-pid-1"
-    exit 0
-  fi
-done
-
-printf '%s\n' "$*" >> "${0}.log"
-
-args=("$@")
-argv0=""
-command_start=-1
-for i in "${!args[@]}"; do
-  if [[ "${args[$i]}" == "--argv0" && $((i + 1)) -lt ${#args[@]} ]]; then
-    argv0="${args[$((i + 1))]}"
-  fi
-  if [[ "${args[$i]}" == "--" ]]; then
-    command_start=$((i + 1))
-    break
-  fi
-done
-
-if [[ "${command_start}" -lt 0 || "${command_start}" -ge "${#args[@]}" ]]; then
-  echo "fake bwrap did not find an inner command" >&2
-  exit 125
-fi
-
-cmd=("${args[@]:$command_start}")
-if [[ -n "${argv0}" ]]; then
-  exec -a "${argv0}" "${cmd[@]}"
-fi
-exec "${cmd[@]}"
-"#,
-    )?;
-    let mut permissions = std::fs::metadata(&fake_bwrap)?.permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&fake_bwrap, permissions)?;
-    Ok(fake_bwrap)
 }
 
 #[test_case(FileSystemImplementation::Local ; "local")]

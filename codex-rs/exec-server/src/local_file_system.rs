@@ -83,7 +83,7 @@ impl LocalFileSystem {
         }
     }
 
-    fn sandboxed(&self) -> io::Result<&SandboxedFileSystem> {
+    pub(crate) fn sandboxed(&self) -> io::Result<&SandboxedFileSystem> {
         self.sandboxed.as_ref().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,

@@ -5,6 +5,8 @@ use codex_utils_path_uri::PathUri;
 use tokio::io;
 use tokio_util::io::ReaderStream;
 
+use crate::CapabilityRootsDiscoverParams;
+use crate::CapabilityRootsDiscoverResponse;
 use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
 use crate::ExecServerRuntimePaths;
@@ -41,6 +43,22 @@ pub struct SandboxedFileSystem {
 }
 
 impl SandboxedFileSystem {
+    #[tracing::instrument(
+        name = "capability_roots.discover_v1",
+        skip_all,
+        fields(root_count = params.roots.len())
+    )]
+    pub(crate) async fn discover_capability_roots(
+        &self,
+        params: CapabilityRootsDiscoverParams,
+        sandbox: &FileSystemSandboxContext,
+    ) -> FileSystemResult<CapabilityRootsDiscoverResponse> {
+        self.run_sandboxed(sandbox, FsHelperRequest::DiscoverCapabilityRoots(params))
+            .await?
+            .expect_capability_roots_discover()
+            .map_err(map_sandbox_error)
+    }
+
     pub(crate) async fn open_file_for_read(
         &self,
         path: &PathUri,

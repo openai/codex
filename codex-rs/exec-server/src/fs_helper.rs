@@ -5,6 +5,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use tokio::io;
 
+use crate::CapabilityRootsDiscoverParams;
+use crate::CapabilityRootsDiscoverResponse;
 use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
 use crate::ExecutorFileSystem;
@@ -13,6 +15,7 @@ use crate::ReadFileOptions;
 use crate::RemoveOptions;
 use crate::WriteFileOptions;
 use crate::local_file_system::DirectFileSystem;
+use crate::protocol::CAPABILITY_ROOTS_DISCOVER_METHOD;
 use crate::protocol::FS_CANONICALIZE_METHOD;
 use crate::protocol::FS_COPY_METHOD;
 use crate::protocol::FS_CREATE_DIRECTORY_METHOD;
@@ -51,6 +54,8 @@ pub const CODEX_FS_HELPER_ARG1: &str = "--codex-run-as-fs-helper";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "operation", content = "params")]
 pub(crate) enum FsHelperRequest {
+    #[serde(rename = "capabilityRoots/discoverV1")]
+    DiscoverCapabilityRoots(CapabilityRootsDiscoverParams),
     #[serde(rename = "fs/open")]
     Open(FsReadFileParams),
     #[serde(rename = "fs/readFile")]
@@ -94,6 +99,8 @@ pub(crate) struct FsHelperOpenResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "operation", content = "response")]
 pub(crate) enum FsHelperPayload {
+    #[serde(rename = "capabilityRoots/discoverV1")]
+    DiscoverCapabilityRoots(CapabilityRootsDiscoverResponse),
     #[serde(rename = "fs/open")]
     Open(FsHelperOpenResponse),
     #[serde(rename = "fs/readFile")]
@@ -119,6 +126,7 @@ pub(crate) enum FsHelperPayload {
 impl FsHelperPayload {
     fn operation(&self) -> &'static str {
         match self {
+            Self::DiscoverCapabilityRoots(_) => CAPABILITY_ROOTS_DISCOVER_METHOD,
             Self::Open(_) => FS_OPEN_METHOD,
             Self::ReadFile(_) => FS_READ_FILE_METHOD,
             Self::WriteFile(_) => FS_WRITE_FILE_METHOD,
@@ -129,6 +137,18 @@ impl FsHelperPayload {
             Self::Walk(_) => FS_WALK_METHOD,
             Self::Remove(_) => FS_REMOVE_METHOD,
             Self::Copy(_) => FS_COPY_METHOD,
+        }
+    }
+
+    pub(crate) fn expect_capability_roots_discover(
+        self,
+    ) -> Result<CapabilityRootsDiscoverResponse, JSONRPCErrorError> {
+        match self {
+            Self::DiscoverCapabilityRoots(response) => Ok(response),
+            other => Err(unexpected_response(
+                CAPABILITY_ROOTS_DISCOVER_METHOD,
+                other.operation(),
+            )),
         }
     }
 
@@ -223,6 +243,12 @@ pub(crate) async fn run_direct_request(
 ) -> Result<FsHelperPayload, JSONRPCErrorError> {
     let file_system = DirectFileSystem;
     match request {
+        FsHelperRequest::DiscoverCapabilityRoots(params) => {
+            let response = crate::discover_capability_roots(&file_system, params)
+                .await
+                .map_err(|error| invalid_request(error.to_string()))?;
+            Ok(FsHelperPayload::DiscoverCapabilityRoots(response))
+        }
         FsHelperRequest::Open(_) => Err(invalid_request(
             "opening a file requires descriptor handoff".to_string(),
         )),
