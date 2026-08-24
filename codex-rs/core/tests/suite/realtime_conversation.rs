@@ -588,8 +588,13 @@ async fn conversation_existing_call_attaches_without_creating_another_call() -> 
     Ok(())
 }
 
+#[test_case(None, "gpt-live-1-codex"; "default model")]
+#[test_case(Some("session-override-model"), "session-override-model"; "explicit model")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn conversation_webrtc_frameless_chatgpt_sends_codex_headers_to_backend() -> Result<()> {
+async fn conversation_webrtc_frameless_chatgpt_sends_codex_headers_to_backend(
+    model: Option<&str>,
+    expected_model: &str,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -619,7 +624,7 @@ async fn conversation_webrtc_frameless_chatgpt_sends_codex_headers_to_backend() 
             config.experimental_realtime_ws_backend_prompt = Some("backend prompt".to_string());
             config.experimental_realtime_ws_base_url = Some(realtime_ws_base_url);
         });
-    let test = builder.build(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
@@ -631,7 +636,7 @@ async fn conversation_webrtc_frameless_chatgpt_sends_codex_headers_to_backend() 
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
             codex_response_handoff_channel_prefixes: None,
-            model: Some("session-override-model".to_string()),
+            model: model.map(str::to_string),
             output_modality: RealtimeOutputModality::Audio,
             include_startup_context: false,
             initial_items: Vec::new(),
@@ -690,10 +695,12 @@ async fn conversation_webrtc_frameless_chatgpt_sends_codex_headers_to_backend() 
         json!({
             "sdp": body["sdp"],
             "delegation": body["session"]["delegation"]["type"],
+            "model": body["session"]["model"],
         }),
         json!({
             "sdp": "v=offer\r\n",
             "delegation": "client",
+            "model": expected_model,
         })
     );
 
