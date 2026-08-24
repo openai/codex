@@ -38,6 +38,7 @@ tracing = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
+assert_matches = { workspace = true }
 codex-models-manager = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 dunce = { workspace = true }

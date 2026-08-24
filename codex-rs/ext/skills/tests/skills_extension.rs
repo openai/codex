@@ -4,6 +4,7 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
+use assert_matches::assert_matches;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
@@ -1765,6 +1766,40 @@ async fn skills_list_only_returns_model_visible_bounded_metadata() -> TestResult
         Some(FunctionCallError::RespondToModel(
             "skills.list response budget leaves no room for discovery warnings".to_string()
         ))
+    );
+
+    let read_tool = tools
+        .iter()
+        .find(|tool| tool.tool_name().name == "read")
+        .ok_or("skills.read tool should be registered")?;
+    // The resource fits the 2400-byte budget before escaping, but not after.
+    let insufficient_budget_payload = ToolPayload::Function {
+        arguments: serde_json::json!({
+            "package": format!("orchestrator/{opaque_suffix}"),
+        })
+        .to_string(),
+    };
+    let error = read_tool
+        .handle(ToolCall {
+            turn_id: "turn-1".to_string(),
+            call_id: "insufficient-read-budget".to_string(),
+            tool_name: read_tool.tool_name(),
+            model: "gpt-test".to_string(),
+            codex_turn_metadata: None,
+            truncation_policy: TruncationPolicy::Bytes(2_000),
+            source: ToolCallSource::Direct,
+            conversation_history: ConversationHistory::default(),
+            turn_item_emitter: Arc::new(NoopTurnItemEmitter),
+            environments: Vec::new(),
+            payload: insufficient_budget_payload,
+        })
+        .await
+        .err()
+        .expect("skills.read should reject a response that cannot fit any contents");
+    let error = assert_matches!(error, FunctionCallError::RespondToModel(error) => error);
+    assert_eq!(
+        error,
+        "skills.read response budget leaves no room for contents"
     );
 
     Ok(())

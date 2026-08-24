@@ -824,15 +824,20 @@ async fn explicit_only_orchestrator_skill_is_hidden_but_can_be_invoked() -> Resu
     const SKILL_PACKAGE: &str = "skill://demo/explicit-only";
     const MAIN_RESOURCE: &str = "skill://demo/explicit-only/SKILL.md";
     const REFERENCED_RESOURCE: &str = "skill://demo/explicit-only/references/guide.md";
-    const REFERENCED_CONTENTS: &str = "# Referenced guide";
     const READ_CALL_ID: &str = "read-explicit-only-resource";
     const LIST_CALL_ID: &str = "list-model-visible-skills";
     const CODE_MODE_LIST_CALL_ID: &str = "list-skills-through-code-mode";
+    const CONTINUATION_CALL_ID: &str = "read-explicit-only-resource-continuation";
     const MAIN_READ_CALL_ID: &str = "read-explicit-only-main";
     const REPEATED_MAIN_READ_CALL_ID: &str = "read-explicit-only-main-again";
     const INVALID_CURSOR_CALL_ID: &str = "read-explicit-only-invalid-cursor";
     const MISSING_PACKAGE_CALL_ID: &str = "read-missing-package";
+    const CODE_MODE_CALL_ID: &str = "code-mode-skill-read";
 
+    // Fill the shared 300-byte page through the emoji; ignoring escaping would fit everything.
+    let read_prefix = "a".repeat(184);
+    let referenced_contents = format!("{read_prefix}😀\"\\\nabcdefghijklm");
+    let read_contents = referenced_contents.clone();
     let server = responses::start_mock_server().await;
     let apps_server = AppsTestServer::mount(&server).await?;
     let response = responses::mount_sse_sequence(
@@ -868,35 +873,6 @@ text({ names: result.skills.map(skill => skill.name), warnings: result.warnings,
                 ev_completed("resp-1"),
             ]),
             sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
-            sse(vec![
-                ev_response_created("resp-3"),
-                responses::ev_function_call_with_namespace(
-                    MAIN_READ_CALL_ID,
-                    "skills",
-                    "read",
-                    &json!({ "package": SKILL_PACKAGE }).to_string(),
-                ),
-                responses::ev_function_call_with_namespace(
-                    REPEATED_MAIN_READ_CALL_ID,
-                    "skills",
-                    "read",
-                    &json!({ "package": SKILL_PACKAGE, "resource": MAIN_RESOURCE }).to_string(),
-                ),
-                responses::ev_function_call_with_namespace(
-                    INVALID_CURSOR_CALL_ID,
-                    "skills",
-                    "read",
-                    &json!({ "package": SKILL_PACKAGE, "cursor": "invalid" }).to_string(),
-                ),
-                responses::ev_function_call_with_namespace(
-                    MISSING_PACKAGE_CALL_ID,
-                    "skills",
-                    "read",
-                    &json!({ "package": "skill://demo/missing" }).to_string(),
-                ),
-                ev_completed("resp-3"),
-            ]),
-            sse(vec![ev_response_created("resp-4"), ev_completed("resp-4")]),
         ],
     )
     .await;
@@ -911,7 +887,7 @@ text({ names: result.skills.map(skill => skill.name), warnings: result.warnings,
                 )
             })
         })
-        .respond_with(|request: &Request| {
+        .respond_with(move |request: &Request| {
             let body: Value = serde_json::from_slice(&request.body)
                 .expect("MCP resource request should be valid JSON");
             let result = match body["method"].as_str() {
@@ -947,7 +923,7 @@ text({ names: result.skills.map(skill => skill.name), warnings: result.warnings,
                         MAIN_RESOURCE => {
                             format!("# Explicit-only instructions\nRead {REFERENCED_RESOURCE}.")
                         }
-                        REFERENCED_RESOURCE => REFERENCED_CONTENTS.to_string(),
+                        REFERENCED_RESOURCE => read_contents.clone(),
                         _ => unreachable!("unexpected MCP resource URI: {uri}"),
                     };
                     json!({
@@ -1044,16 +1020,21 @@ text({ names: result.skills.map(skill => skill.name), warnings: result.warnings,
             "main_resource": MAIN_RESOURCE,
         })
     );
+    let first_output = requests[1]
+        .function_call_output_text(READ_CALL_ID)
+        .expect("skills.read should return the referenced resource");
+    assert!(first_output.len() <= 300);
+    let first_page = serde_json::from_str::<Value>(&first_output)?;
+    let cursor = first_page["next_cursor"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("skills.read should return a continuation cursor"))?
+        .to_string();
     assert_eq!(
-        serde_json::from_str::<Value>(
-            &requests[1]
-                .function_call_output_text(READ_CALL_ID)
-                .expect("skills.read should return the referenced resource"),
-        )?,
+        first_page,
         json!({
             "resource": REFERENCED_RESOURCE,
-            "contents": REFERENCED_CONTENTS,
-            "next_cursor": null,
+            "contents": format!("{read_prefix}😀"),
+            "next_cursor": cursor,
         })
     );
     let mut list_output = requests[1]
@@ -1080,12 +1061,80 @@ text({ names: result.skills.map(skill => skill.name), warnings: result.warnings,
     assert_eq!(events[0]["skill_name"], "demo:explicit-only");
     assert_eq!(events[0]["event_params"]["invoke_type"], "explicit");
 
+    let response = responses::mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-3"),
+                responses::ev_function_call_with_namespace(
+                    CONTINUATION_CALL_ID,
+                    "skills",
+                    "read",
+                    &json!({
+                        "package": SKILL_PACKAGE,
+                        "resource": REFERENCED_RESOURCE,
+                        "cursor": cursor,
+                    })
+                    .to_string(),
+                ),
+                responses::ev_function_call_with_namespace(
+                    MAIN_READ_CALL_ID,
+                    "skills",
+                    "read",
+                    &json!({ "package": SKILL_PACKAGE }).to_string(),
+                ),
+                responses::ev_function_call_with_namespace(
+                    REPEATED_MAIN_READ_CALL_ID,
+                    "skills",
+                    "read",
+                    &json!({ "package": SKILL_PACKAGE, "resource": MAIN_RESOURCE }).to_string(),
+                ),
+                responses::ev_function_call_with_namespace(
+                    INVALID_CURSOR_CALL_ID,
+                    "skills",
+                    "read",
+                    &json!({ "package": SKILL_PACKAGE, "cursor": "invalid" }).to_string(),
+                ),
+                responses::ev_function_call_with_namespace(
+                    MISSING_PACKAGE_CALL_ID,
+                    "skills",
+                    "read",
+                    &json!({ "package": "skill://demo/missing" }).to_string(),
+                ),
+                ev_completed("resp-3"),
+            ]),
+            sse(vec![ev_response_created("resp-4"), ev_completed("resp-4")]),
+        ],
+    )
+    .await;
+
     test.submit_turn("Continue without explicitly selecting a skill.")
         .await?;
     let requests = response.requests();
-    assert_eq!(requests.len(), 4);
+    assert_eq!(requests.len(), 2);
+    let continuation_output = requests[1]
+        .function_call_output_text(CONTINUATION_CALL_ID)
+        .expect("skills.read should return the next referenced-resource page");
+    assert!(continuation_output.len() <= 300);
+    let continuation_page = serde_json::from_str::<Value>(&continuation_output)?;
+    assert_eq!(
+        continuation_page,
+        json!({
+            "resource": REFERENCED_RESOURCE,
+            "contents": "\"\\\nabcdefghijklm",
+            "next_cursor": null,
+        })
+    );
+    assert_eq!(
+        format!(
+            "{}{}",
+            first_page["contents"].as_str().unwrap_or_default(),
+            continuation_page["contents"].as_str().unwrap_or_default()
+        ),
+        referenced_contents
+    );
     for call_id in [MAIN_READ_CALL_ID, REPEATED_MAIN_READ_CALL_ID] {
-        let output = requests[3]
+        let output = requests[1]
             .function_call_output_text(call_id)
             .expect("skills.read should return the main resource");
         assert_eq!(
@@ -1095,7 +1144,7 @@ text({ names: result.skills.map(skill => skill.name), warnings: result.warnings,
     }
     for call_id in [INVALID_CURSOR_CALL_ID, MISSING_PACKAGE_CALL_ID] {
         assert!(
-            requests[3].function_call_output_text(call_id).is_some(),
+            requests[1].function_call_output_text(call_id).is_some(),
             "failed skills.read should return a tool error for {call_id}"
         );
     }
@@ -1161,6 +1210,39 @@ text({ names: result.skills.map(skill => skill.name), warnings: result.warnings,
                 .expect("skills.list should return the next page");
         }
     }
+
+    let response = responses::mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-5"),
+                responses::ev_custom_tool_call(
+                    CODE_MODE_CALL_ID,
+                    "exec",
+                    &format!(
+                        "const result = await tools.skills__read({{package: {SKILL_PACKAGE:?}, resource: {REFERENCED_RESOURCE:?}}}); text(JSON.stringify({{contents: result.contents, next_cursor: result.next_cursor}}));"
+                    ),
+                ),
+                ev_completed("resp-5"),
+            ]),
+            sse(vec![ev_response_created("resp-6"), ev_completed("resp-6")]),
+        ],
+    )
+    .await;
+    test.submit_turn("Read the complete skill resource using code mode.")
+        .await?;
+    let requests = response.requests();
+    assert_eq!(requests.len(), 2);
+    let output = requests[1].custom_tool_call_output(CODE_MODE_CALL_ID);
+    let nested_result = output["output"]
+        .as_array()
+        .and_then(|items| items.last())
+        .and_then(|item| item["text"].as_str())
+        .ok_or_else(|| anyhow::anyhow!("code mode should return the nested skill result"))?;
+    assert_eq!(
+        serde_json::from_str::<Value>(nested_result)?,
+        json!({"contents": referenced_contents, "next_cursor": null})
+    );
 
     Ok(())
 }
