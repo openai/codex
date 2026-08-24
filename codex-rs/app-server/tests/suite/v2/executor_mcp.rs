@@ -332,6 +332,11 @@ async fn legacy_executor_skips_required_browser_and_keeps_host_owned_mcp() -> Re
                 let mut message = message?;
                 if let Message::Text(text) = &message {
                     let mut response: Value = serde_json::from_str(text)?;
+                    if let Some(result) = response.get_mut("result").and_then(Value::as_object_mut)
+                    {
+                        result.remove("environmentInfo");
+                        message = Message::Text(response.to_string().into());
+                    }
                     if let Some(capabilities) = response
                         .pointer_mut("/result/capabilities")
                         .and_then(Value::as_object_mut)

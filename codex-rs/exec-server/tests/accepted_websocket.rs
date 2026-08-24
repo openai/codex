@@ -8,6 +8,7 @@ use axum::extract::State;
 use axum::extract::WebSocketUpgrade;
 use axum::response::IntoResponse;
 use axum::routing::any;
+use codex_exec_server::EnvironmentInfo;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::EnvironmentObservedStatus;
 use codex_exec_server::EnvironmentStatus;
@@ -70,6 +71,25 @@ async fn accepted_websocket_rejects_initial_resume_session_id() -> Result<()> {
             .to_string()
             .contains("initial connection cannot resume a session"),
         "unexpected error: {error}"
+    );
+
+    server_task.abort();
+    let _ = server_task.await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn accepted_websocket_environment_info_uses_initialization_metadata() -> Result<()> {
+    let (websocket_url, mut accepted_sockets, server_task) = start_acceptor().await?;
+    let (_socket, manager) =
+        connect_executor(&websocket_url, &mut accepted_sockets, "session-1").await?;
+    let environment = manager
+        .default_environment()
+        .context("accepted environment")?;
+
+    assert_eq!(
+        timeout(TEST_TIMEOUT, environment.info()).await??,
+        EnvironmentInfo::local()
     );
 
     server_task.abort();
@@ -430,6 +450,7 @@ where
             id,
             result: serde_json::to_value(InitializeResponse {
                 session_id: session_id.to_string(),
+                environment_info: Some(EnvironmentInfo::local()),
             })?,
         }),
     )

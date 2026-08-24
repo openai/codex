@@ -83,6 +83,10 @@ pub struct InitializeParams {
 #[serde(rename_all = "camelCase")]
 pub struct InitializeResponse {
     pub session_id: String,
+    /// Executor metadata at initialization, with the same shape as `environment/info`.
+    // TODO: Make this required once all supported exec-server versions return environmentInfo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment_info: Option<EnvironmentInfo>,
 }
 
 /// Information about an execution/filesystem environment.

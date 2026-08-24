@@ -124,7 +124,7 @@ async fn stalled_handshake_unblocks_remote_executor(
 
     tokio::time::timeout(
         Duration::from_secs(2),
-        exec_server.client.environment_info(),
+        exec_server.client.environment_status(),
     )
     .await
     .context("a timed-out handshake must not leave the serial executor blocked")??;

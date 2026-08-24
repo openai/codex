@@ -36,7 +36,7 @@ impl EnvironmentRequestProcessor {
             .environment_manager
             .get_environment(&environment_id)
             .ok_or_else(|| invalid_request(format!("unknown environment id `{environment_id}`")))?;
-        let info = environment.info().await.map_err(|err| {
+        let info = environment.force_info().await.map_err(|err| {
             internal_error(format!(
                 "failed to get info for environment `{environment_id}`: {err}"
             ))

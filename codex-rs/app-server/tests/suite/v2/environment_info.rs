@@ -11,17 +11,90 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_utils_path_uri::PathUri;
+use futures::SinkExt;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::time::timeout;
+use tokio_tungstenite::accept_async;
+use tokio_tungstenite::tungstenite::Message;
 
 use super::exec_server_test_support::accept_exec_server_environment;
+use super::exec_server_test_support::read_exec_server_json;
 
 const RPC_TIMEOUT: Duration = Duration::from_secs(10);
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 const INTERNAL_ERROR_CODE: i64 = -32603;
+
+#[tokio::test]
+async fn environment_info_probes_executor_even_when_metadata_is_cached() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let exec_server_url = format!("ws://{}", listener.local_addr()?);
+    let exec_server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await?;
+        let mut websocket = accept_async(stream).await?;
+        let initialize = read_exec_server_json(&mut websocket).await?;
+        assert_eq!(initialize["method"], "initialize");
+        let response = json!({
+            "id": initialize["id"],
+            "result": {
+                "sessionId": "test-session",
+                "environmentInfo": {"shell": {"name": "bash", "path": "/bin/bash"}},
+            },
+        });
+        websocket
+            .send(Message::Text(response.to_string().into()))
+            .await?;
+        let initialized = read_exec_server_json(&mut websocket).await?;
+        assert_eq!(initialized["method"], "initialized");
+
+        for _ in 0..2 {
+            let request = read_exec_server_json(&mut websocket).await?;
+            assert_eq!(request["method"], "environment/info");
+            let response = json!({
+                "id": request["id"],
+                "error": {"code": INTERNAL_ERROR_CODE, "message": "executor unavailable"},
+            });
+            websocket
+                .send(Message::Text(response.to_string().into()))
+                .await?;
+        }
+        Ok::<_, anyhow::Error>(())
+    });
+    let mut app_server = TestAppServer::builder().without_auto_env().build().await?;
+    app_server.initialize().await?;
+    add_environment(
+        &mut app_server,
+        &exec_server_url,
+        /*connect_timeout_ms*/ None,
+    )
+    .await?;
+
+    for _ in 0..2 {
+        let request_id = app_server
+            .send_raw_request(
+                "environment/info",
+                Some(json!({"environmentId": "remote-a"})),
+            )
+            .await?;
+        let error = timeout(
+            RPC_TIMEOUT,
+            app_server.read_stream_until_error_message(RequestId::Integer(request_id)),
+        )
+        .await??;
+        assert_eq!(error, JSONRPCError {
+            id: RequestId::Integer(request_id),
+            error: JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: "failed to get info for environment `remote-a`: exec-server rejected request (-32603): executor unavailable".to_string(),
+                data: None,
+            },
+        });
+    }
+    timeout(RPC_TIMEOUT, exec_server).await???;
+    Ok(())
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn environment_info_returns_remote_environment_info() -> Result<()> {
