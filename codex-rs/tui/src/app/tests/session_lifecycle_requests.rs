@@ -302,7 +302,8 @@ async fn start_recording_app_server_with_history(
         AppServerSession::new(
             app_server,
             crate::app_server_session::ThreadParamsMode::Embedded,
-        ),
+        )
+        .with_startup_config(config),
         requests,
         proxy,
     ))
@@ -382,7 +383,7 @@ fn spawn_approved_task_tool_call(
 }
 
 #[tokio::test]
-async fn external_transport_excludes_delegation_dynamic_tools_for_both_start_paths() -> Result<()> {
+async fn external_transport_registers_dynamic_tools_and_finds_task_mentions() -> Result<()> {
     let (app, _codex_home) = make_history_test_app().await?;
     let (mut app_server, requests, proxy) = start_recording_app_server(
         &app.config,
@@ -391,8 +392,10 @@ async fn external_transport_excludes_delegation_dynamic_tools_for_both_start_pat
     )
     .await?;
 
-    app_server.start_thread(&app.config).await?;
-    crate::app_server_session::start_thread_with_request_handle(
+    let started = app_server.start_thread(&app.config).await?;
+    assert!(started.task_tools_available);
+    assert!(app_server.task_tools_available(started.session.thread_id));
+    let startup = crate::app_server_session::start_thread_with_request_handle(
         app_server.request_handle(),
         app.config.clone(),
         crate::app_server_session::ThreadParamsMode::Embedded,
@@ -400,6 +403,7 @@ async fn external_transport_excludes_delegation_dynamic_tools_for_both_start_pat
         app_server.thread_tool_transport(),
     )
     .await?;
+    assert!(startup.task_tools_available);
 
     let starts = recorded_params(&requests, "thread/start");
     assert_eq!(starts.len(), 2);
@@ -420,9 +424,68 @@ async fn external_transport_excludes_delegation_dynamic_tools_for_both_start_pat
                 }))
         );
     }
-
+    let target_id = started.session.thread_id;
+    app_server
+        .thread_inject_items(target_id, vec![App::side_boundary_prompt_item()])
+        .await?;
+    crate::init_state_db_for_app_server_target(&app.config, &crate::AppServerTarget::Embedded)
+        .await?
+        .expect("state database")
+        .set_thread_preview_if_empty(target_id, "Review database migration")
+        .await
+        .expect("seed searchable thread preview");
     app_server.shutdown().await?;
     proxy.await??;
+    let (mut restarted_app_server, _restarted_requests, restarted_proxy) =
+        start_recording_app_server(
+            &app.config,
+            /*blocked_thread_list*/ None,
+            /*failed_thread_name*/ None,
+        )
+        .await?;
+    let resumed = restarted_app_server
+        .resume_thread(
+            app.config.clone(),
+            target_id,
+            crate::app_server_session::ResumeModelSettings::RestoreFromThread,
+        )
+        .await?;
+    assert!(resumed.task_tools_available);
+    assert!(restarted_app_server.task_tools_available(target_id));
+    let forked = restarted_app_server
+        .fork_thread(app.config.clone(), target_id)
+        .await?;
+    assert!(forked.task_tools_available);
+    assert!(restarted_app_server.task_tools_available(forked.session.thread_id));
+    restarted_app_server
+        .thread_set_name(target_id, "Bluebird".to_string())
+        .await?;
+    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+
+    crate::task_mentions::spawn_search(
+        restarted_app_server.request_handle(),
+        "bbd".to_string(),
+        startup.session.thread_id,
+        app.config.cwd.to_path_buf(),
+        restarted_app_server.task_search_generation(),
+        crate::app_event_sender::AppEventSender::new(sender),
+    );
+
+    let event = tokio::time::timeout(Duration::from_secs(/*secs*/ 5), events.recv())
+        .await?
+        .expect("expected task search results");
+    let AppEvent::TaskSearchResult { matches, .. } = event else {
+        panic!("expected task search results");
+    };
+    assert!(
+        matches
+            .iter()
+            .any(|task| task.thread_id == target_id.to_string() && task.title == "Bluebird"),
+        "expected created task in {matches:?}"
+    );
+
+    restarted_app_server.shutdown().await?;
+    restarted_proxy.await??;
     Ok(())
 }
 
@@ -453,12 +516,11 @@ async fn local_daemon_registers_approval_gated_mcp_tools_for_both_start_paths() 
         )
         .await?;
 
-    let thread_id = app_server
-        .start_thread(&app.config)
-        .await?
-        .session
-        .thread_id;
-    crate::app_server_session::start_thread_with_request_handle(
+    let started = app_server.start_thread(&app.config).await?;
+    let thread_id = started.session.thread_id;
+    assert!(started.task_tools_available);
+    assert!(app_server.task_tools_available(thread_id));
+    let startup = crate::app_server_session::start_thread_with_request_handle(
         app_server.request_handle(),
         app.config.clone(),
         crate::app_server_session::ThreadParamsMode::Embedded,
@@ -466,6 +528,7 @@ async fn local_daemon_registers_approval_gated_mcp_tools_for_both_start_paths() 
         app_server.thread_tool_transport(),
     )
     .await?;
+    assert!(startup.task_tools_available);
 
     let inventory: codex_app_server_protocol::ListMcpServerStatusResponse = app_server
         .request_handle()
@@ -631,11 +694,13 @@ async fn local_daemon_registers_approval_gated_mcp_tools_for_both_start_paths() 
     };
     let AppEvent::DynamicToolThreadStarted {
         thread_id: child_thread_id,
+        task_tools_available,
         registered,
     } = registration
     else {
         panic!("expected the MCP-created task to register")
     };
+    assert!(task_tools_available);
     assert!(registered.send(()).is_ok());
     let created = creation.await??;
     assert!(created.status().is_success());
@@ -769,8 +834,10 @@ async fn older_external_server_starts_without_unsupported_dynamic_tools_or_histo
     )
     .await?;
 
-    app_server.start_thread(&app.config).await?;
-    crate::app_server_session::start_thread_with_request_handle(
+    let started = app_server.start_thread(&app.config).await?;
+    assert!(!started.task_tools_available);
+    assert!(!app_server.task_tools_available(started.session.thread_id));
+    let startup = crate::app_server_session::start_thread_with_request_handle(
         app_server.request_handle(),
         app.config.clone(),
         crate::app_server_session::ThreadParamsMode::Embedded,
@@ -778,6 +845,7 @@ async fn older_external_server_starts_without_unsupported_dynamic_tools_or_histo
         app_server.thread_tool_transport(),
     )
     .await?;
+    assert!(!startup.task_tools_available);
 
     let starts = recorded_params(&requests, "thread/start");
     assert_eq!(starts.len(), 6);
@@ -1065,6 +1133,7 @@ async fn dynamic_tool_requests_ignore_other_namespaces_and_dispatch_tui_namespac
             .expect("background task registration event");
     let AppEvent::DynamicToolThreadStarted {
         thread_id: created_thread_id,
+        task_tools_available,
         registered,
     } = registration
     else {
@@ -1076,6 +1145,7 @@ async fn dynamic_tool_requests_ignore_other_namespaces_and_dispatch_tui_namespac
         &mut app_server,
         AppEvent::DynamicToolThreadStarted {
             thread_id: created_thread_id,
+            task_tools_available,
             registered,
         },
     )
@@ -1085,6 +1155,7 @@ async fn dynamic_tool_requests_ignore_other_namespaces_and_dispatch_tui_namespac
             .dispatched_requests
             .contains_key(&created_thread_id)
     );
+    assert!(app_server.task_tools_available(created_thread_id));
     let AppEvent::DynamicToolCallCompleted { response, .. } =
         tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 5), events.recv())
             .await?
@@ -1143,6 +1214,7 @@ async fn dynamic_tool_requests_ignore_other_namespaces_and_dispatch_tui_namespac
     );
     let AppEvent::DynamicToolThreadStarted {
         thread_id: continued_thread_id,
+        task_tools_available,
         registered,
     } = tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 5), events.recv())
         .await?
@@ -1157,6 +1229,7 @@ async fn dynamic_tool_requests_ignore_other_namespaces_and_dispatch_tui_namespac
         &mut app_server,
         AppEvent::DynamicToolThreadStarted {
             thread_id: continued_thread_id,
+            task_tools_available,
             registered,
         },
     )

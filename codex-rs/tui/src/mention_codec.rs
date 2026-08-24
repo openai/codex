@@ -15,10 +15,19 @@ pub(crate) struct LinkedMention {
 pub(crate) struct DecodedHistoryText {
     pub(crate) text: String,
     pub(crate) mentions: Vec<LinkedMention>,
+    pub(crate) task_mention_ranges: Vec<std::ops::Range<usize>>,
 }
 
 #[allow(dead_code)]
 pub(crate) fn encode_history_mentions(text: &str, mentions: &[LinkedMention]) -> String {
+    encode_history_mentions_at_elements(text, mentions, &[])
+}
+
+pub(crate) fn encode_history_mentions_at_elements(
+    text: &str,
+    mentions: &[LinkedMention],
+    elements: &[codex_protocol::user_input::TextElement],
+) -> String {
     if mentions.is_empty() || text.is_empty() {
         return text.to_string();
     }
@@ -47,6 +56,23 @@ pub(crate) fn encode_history_mentions(text: &str, mentions: &[LinkedMention]) ->
             byte if byte == TOOL_MENTION_SIGIL as u8 || byte == PLUGIN_TEXT_MENTION_SIGIL as u8
         ) {
             let sigil = bytes[index] as char;
+            if sigil == PLUGIN_TEXT_MENTION_SIGIL
+                && let Some(element) = elements
+                    .iter()
+                    .find(|element| element.byte_range.start == index)
+                && let Some(name) = text.get(index + 1..element.byte_range.end)
+                && mentions_by_token
+                    .get(&(sigil, name))
+                    .and_then(VecDeque::front)
+                    .is_some_and(|path| crate::task_mentions::valid_thread_path(path).is_some())
+                && let Some(path) = mentions_by_token
+                    .get_mut(&(sigil, name))
+                    .and_then(VecDeque::pop_front)
+            {
+                out.push_str(&crate::task_mentions::format_task_link(name, path));
+                index += 1 + name.len();
+                continue;
+            }
             if sigil == TOOL_MENTION_SIGIL || starts_plaintext_mention(text, index) {
                 let name_start = index + 1;
                 if let Some(first) = bytes.get(name_start)
@@ -61,6 +87,12 @@ pub(crate) fn encode_history_mentions(text: &str, mentions: &[LinkedMention]) ->
 
                     let name = &text[name_start..name_end];
                     if (sigil == TOOL_MENTION_SIGIL || ends_plaintext_mention(bytes, name_end))
+                        && mentions_by_token
+                            .get(&(sigil, name))
+                            .and_then(VecDeque::front)
+                            .is_some_and(|path| {
+                                crate::task_mentions::valid_thread_path(path).is_none()
+                            })
                         && let Some(path) = mentions_by_token
                             .get_mut(&(sigil, name))
                             .and_then(VecDeque::pop_front)
@@ -95,9 +127,26 @@ pub(crate) fn decode_history_mentions_with_at_mentions(
     let bytes = text.as_bytes();
     let mut out = String::with_capacity(text.len());
     let mut mentions = Vec::new();
+    let mut task_mention_ranges = Vec::new();
     let mut index = 0usize;
 
     while index < bytes.len() {
+        if at_mentions_enabled
+            && let Some((name, path, end_index)) =
+                crate::task_mentions::parse_task_link(text, index)
+        {
+            let start = out.len();
+            out.push('@');
+            out.push_str(&name);
+            task_mention_ranges.push(start..out.len());
+            mentions.push(LinkedMention {
+                sigil: '@',
+                mention: name,
+                path,
+            });
+            index = end_index;
+            continue;
+        }
         if bytes[index] == b'['
             && let Some((sigil, name, path, end_index)) =
                 parse_history_linked_mention(text, bytes, index, at_mentions_enabled)
@@ -123,6 +172,7 @@ pub(crate) fn decode_history_mentions_with_at_mentions(
     DecodedHistoryText {
         text: out,
         mentions,
+        task_mention_ranges,
     }
 }
 

@@ -2163,6 +2163,104 @@ fn user_message_display_from_inputs_hides_prompt_context() {
     );
 }
 
+#[test]
+fn task_and_plugin_mentions_with_same_name_keep_prompt_order() {
+    let task = "[@same](thread://task-123)";
+    let items = [
+        UserInput::Text {
+            text: format!("{task} @same"),
+            text_elements: [0..task.len(), task.len() + 1..task.len() + 6]
+                .into_iter()
+                .map(|range| TextElement::new(range.into(), Some("@same".to_string())).into())
+                .collect(),
+        },
+        UserInput::Mention {
+            name: "same".to_string(),
+            path: "plugin://same@test".to_string(),
+        },
+    ];
+
+    assert_eq!(
+        mention_bindings_from_user_inputs(&items, "@same @same"),
+        ["thread://task-123", "plugin://same@test"].map(|path| MentionBinding {
+            sigil: '@',
+            mention: "same".to_string(),
+            path: path.to_string(),
+        })
+    );
+
+    let split_items = [
+        UserInput::Text {
+            text: format!("Task {task} "),
+            text_elements: vec![
+                TextElement::new((5..5 + task.len()).into(), Some("@same".to_string())).into(),
+            ],
+        },
+        UserInput::Text {
+            text: "@same".to_string(),
+            text_elements: vec![TextElement::new((0..5).into(), Some("@same".to_string())).into()],
+        },
+        items[1].clone(),
+    ];
+    assert_eq!(
+        mention_bindings_from_user_inputs(&split_items, "Task @same @same"),
+        mention_bindings_from_user_inputs(&items, "@same @same")
+    );
+}
+
+#[tokio::test]
+async fn task_mention_submission_and_transcript_preserve_the_visible_title() {
+    for enabled in [false, true] {
+        let (mut chat, mut events, mut ops) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.thread_id = Some(ThreadId::new());
+        chat.set_task_mentions_enabled(enabled);
+        let title = "Review database migration";
+        chat.submit_user_message(UserMessage {
+            text: format!("Inspect @{title}"),
+            local_images: Vec::new(),
+            remote_image_urls: Vec::new(),
+            text_elements: vec![TextElement::new(
+                ("Inspect ".len().."Inspect @".len() + title.len()).into(),
+                Some(format!("@{title}")),
+            )],
+            mention_bindings: vec![MentionBinding {
+                sigil: '@',
+                mention: title.to_string(),
+                path: "thread://task-123".to_string(),
+            }],
+        });
+
+        let Op::UserTurn { items, .. } = next_submit_op(&mut ops) else {
+            panic!("expected user turn");
+        };
+        if !enabled {
+            assert!(matches!(items.as_slice(), [UserInput::Text { text, .. }]
+                if text == "Inspect @Review database migration"));
+            continue;
+        }
+        assert!(matches!(items.as_slice(), [UserInput::Text { text, .. }]
+            if text.contains("MUST call `read_thread`")
+                && text.contains("\"threadId\":\"task-123\"")
+                && text.ends_with("Inspect [@Review database migration](thread://task-123)")));
+        assert_eq!(
+            mention_bindings_from_user_inputs(&items, &format!("Inspect @{title}")),
+            vec![MentionBinding {
+                sigil: '@',
+                mention: title.to_string(),
+                path: "thread://task-123".to_string(),
+            }]
+        );
+        complete_user_message_for_inputs(&mut chat, "user-task-reference", items);
+        let rendered = drain_insert_history(&mut events)
+            .into_iter()
+            .flatten()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_chatwidget_snapshot!("task_mention_transcript", rendered);
+    }
+}
+
 #[tokio::test]
 async fn committed_user_message_with_hidden_prompt_context_renders_local_images() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;

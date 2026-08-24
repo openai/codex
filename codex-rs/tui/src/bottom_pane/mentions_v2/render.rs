@@ -187,6 +187,7 @@ fn primary_spans(row: &SearchResult, base_style: Style) -> Vec<Span<'static>> {
     let name_style = match row.mention_type {
         MentionType::Plugin => base_style.magenta(),
         MentionType::Skill => base_style.dim(),
+        MentionType::Task => base_style.cyan(),
         MentionType::File | MentionType::Directory => base_style,
     };
     if let Some(indices) = row.match_indices.as_ref() {

@@ -63,10 +63,14 @@ fn sort_rows(rows: &mut [SearchResult], filter: &str) {
     let type_order = |mention_type: MentionType| match mention_type {
         MentionType::Plugin => 0,
         MentionType::Skill => 1,
-        MentionType::File | MentionType::Directory => 2,
+        MentionType::Task => 2,
+        MentionType::File | MentionType::Directory => 3,
     };
 
     rows.sort_by(|a, b| {
+        if a.mention_type == MentionType::Task && b.mention_type == MentionType::Task {
+            return std::cmp::Ordering::Equal;
+        }
         type_order(a.mention_type)
             .cmp(&type_order(b.mention_type))
             .then_with(|| compare_within_rank(a, b, filter))

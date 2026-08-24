@@ -370,6 +370,24 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn set_task_mentions_enabled(&mut self, enabled: bool) {
+        self.composer.set_task_mentions_enabled(enabled);
+        self.request_redraw();
+    }
+
+    pub(crate) fn task_mentions_enabled(&self) -> bool {
+        self.composer.task_mentions_enabled()
+    }
+
+    pub(crate) fn on_task_search_result(
+        &mut self,
+        query: &str,
+        matches: Vec<crate::task_mentions::TaskMention>,
+    ) {
+        self.composer.on_task_search_result(query, matches);
+        self.request_redraw();
+    }
+
     pub fn set_plugins_command_enabled(&mut self, enabled: bool) {
         self.composer.set_plugins_command_enabled(enabled);
         self.request_redraw();

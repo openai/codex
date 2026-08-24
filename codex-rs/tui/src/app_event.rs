@@ -341,6 +341,7 @@ pub(crate) enum AppEvent {
     /// Register a dynamically created background thread before its first turn starts.
     DynamicToolThreadStarted {
         thread_id: ThreadId,
+        task_tools_available: bool,
         registered: tokio::sync::oneshot::Sender<()>,
     },
 
@@ -348,6 +349,11 @@ pub(crate) enum AppEvent {
     DynamicToolCallCompleted {
         request_id: AppServerRequestId,
         response: DynamicToolCallResponse,
+    },
+
+    /// Register task tools inherited by a dynamically created thread.
+    TaskToolsAvailable {
+        thread_id: ThreadId,
     },
 
     /// Clear the terminal UI (screen + scrollback), start a fresh session, and keep the
@@ -438,6 +444,13 @@ pub(crate) enum AppEvent {
     FileSearchResult {
         query: String,
         matches: Vec<FileMatch>,
+    },
+
+    /// Same-host task results for the active unified mention query.
+    TaskSearchResult {
+        thread_id: ThreadId,
+        query: String,
+        matches: Vec<crate::task_mentions::TaskMention>,
     },
 
     /// Refresh account rate limits in the background.

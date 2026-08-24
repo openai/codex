@@ -55,8 +55,8 @@ pub(crate) struct HistoryEntry {
 impl HistoryEntry {
     /// Creates a text-only history entry and decodes persisted mention bindings.
     ///
-    /// Persistent history does not store attachment payloads or text-element metadata, so this
-    /// constructor intentionally leaves those fields empty. Local in-session submissions should be
+    /// Persistent history does not store attachments or original element metadata; selected task
+    /// elements are recovered from encoded links. Local in-session submissions should be
     /// recorded with the full `HistoryEntry` value built by the composer; using `new` for a local
     /// image or paste submission would make recall lose placeholder ownership.
     pub(crate) fn new(text: String) -> Self {
@@ -65,9 +65,14 @@ impl HistoryEntry {
 
     pub(crate) fn new_with_at_mentions(text: String, at_mentions_enabled: bool) -> Self {
         let decoded = decode_history_mentions_with_at_mentions(&text, at_mentions_enabled);
+        let text_elements = decoded
+            .task_mention_ranges
+            .into_iter()
+            .map(|range| TextElement::new(range.into(), /*placeholder*/ None))
+            .collect();
         Self {
             text: decoded.text,
-            text_elements: Vec::new(),
+            text_elements,
             local_image_paths: Vec::new(),
             remote_image_urls: Vec::new(),
             mention_bindings: decoded

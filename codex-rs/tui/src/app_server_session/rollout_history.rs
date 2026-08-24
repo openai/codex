@@ -26,6 +26,8 @@ impl AppServerSession {
         self.background_rollout_migration_enabled = config
             .features
             .enabled(Feature::BackgroundPaginatedRolloutMigration);
+        self.task_tool_capabilities_dir = (!self.uses_embedded_app_server())
+            .then(|| config.codex_home.join("tui-thread-reference-capabilities"));
         self
     }
 
@@ -146,6 +148,10 @@ impl AppServerSession {
             started_thread_from_resume_response(response, &config, self.thread_params_mode())
                 .await?;
         started.session.fork_parent_title = fork_parent_title;
+        if self.task_tools_available(thread_id) {
+            self.remember_task_tool_thread(thread_id);
+            started.task_tools_available = true;
+        }
         Ok(started)
     }
 }

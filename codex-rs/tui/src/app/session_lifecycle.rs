@@ -544,6 +544,8 @@ impl App {
         );
         self.replace_chat_widget(ChatWidget::new_with_app_event(init));
         self.chat_widget
+            .set_task_mentions_enabled(app_server.task_tools_available(thread_id));
+        self.chat_widget
             .note_rendered_width(tui.terminal.last_known_screen_size.width);
         if blocks_direct_input {
             self.chat_widget.set_parent_owned_thread();
@@ -638,6 +640,10 @@ impl App {
         match result {
             Ok(started) => {
                 let thread_id = started.session.thread_id;
+                if started.task_tools_available {
+                    app_server.remember_task_tool_thread(thread_id);
+                    self.chat_widget.set_task_mentions_enabled(/*enabled*/ true);
+                }
                 self.pending_primary_events.retain(|event| match event {
                     ThreadBufferedEvent::Notification(notification) => matches!(
                         server_notification_thread_target(notification),
@@ -809,6 +815,8 @@ impl App {
             initial_user_message,
         );
         self.replace_chat_widget(ChatWidget::new_with_app_event(init));
+        self.chat_widget
+            .set_task_mentions_enabled(started.task_tools_available);
         self.chat_widget
             .note_rendered_width(tui.terminal.last_known_screen_size.width);
         if started.blocks_direct_input {

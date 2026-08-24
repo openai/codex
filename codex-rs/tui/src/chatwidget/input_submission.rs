@@ -3,6 +3,18 @@
 use super::*;
 
 impl ChatWidget {
+    pub(crate) fn set_task_mentions_enabled(&mut self, enabled: bool) {
+        self.bottom_pane.set_task_mentions_enabled(enabled);
+    }
+
+    pub(crate) fn on_task_search_result(
+        &mut self,
+        query: &str,
+        matches: Vec<crate::task_mentions::TaskMention>,
+    ) {
+        self.bottom_pane.on_task_search_result(query, matches);
+    }
+
     pub(super) fn user_message_from_submission(
         &mut self,
         text: String,
@@ -143,8 +155,12 @@ impl ChatWidget {
             local_images,
             remote_image_urls,
             text_elements,
-            mention_bindings,
+            mut mention_bindings,
         } = user_message;
+        if !self.bottom_pane.task_mentions_enabled() {
+            mention_bindings
+                .retain(|binding| crate::task_mentions::valid_thread_path(&binding.path).is_none());
+        }
 
         let render_in_history = !self.turn_lifecycle.agent_turn_running;
         let mut items: Vec<UserInput> = Vec::new();
@@ -310,6 +326,7 @@ impl ChatWidget {
         }
 
         self.maybe_apply_ide_context(&mut items);
+        crate::task_mentions::apply_task_references(&mut items, &mention_bindings, self.thread_id);
 
         let collaboration_mode = if self.collaboration_modes_enabled() {
             self.active_collaboration_mask
@@ -387,22 +404,26 @@ impl ChatWidget {
                 path: binding.path.clone(),
             })
             .collect::<Vec<_>>();
-        let history_text = match &history_record {
+        let history = match &history_record {
             UserMessageHistoryRecord::UserMessageText if !submitted_message.text.is_empty() => {
-                Some(encode_history_mentions(
+                Some((
                     &submitted_message.text,
-                    &encoded_mentions,
+                    submitted_message.text_elements.as_slice(),
                 ))
             }
             UserMessageHistoryRecord::Override(history) if !history.text.is_empty() => {
-                Some(encode_history_mentions(&history.text, &encoded_mentions))
+                Some((&history.text, history.text_elements.as_slice()))
             }
             UserMessageHistoryRecord::UserMessageText | UserMessageHistoryRecord::Override(_) => {
                 None
             }
         };
-        if let Some(history_text) = history_text {
-            self.append_message_history_entry(history_text);
+        if let Some((text, elements)) = history {
+            self.append_message_history_entry(encode_history_mentions_at_elements(
+                text,
+                &encoded_mentions,
+                elements,
+            ));
         }
 
         if let Some(pending_steer) = pending_steer {

@@ -102,12 +102,16 @@ impl App {
             }
             AppEvent::DynamicToolThreadStarted {
                 thread_id,
+                task_tools_available,
                 registered,
             } => {
                 self.agents_overview
                     .dispatched_requests
                     .entry(thread_id)
                     .or_default();
+                if task_tools_available {
+                    app_server.remember_task_tool_thread(thread_id);
+                }
                 let _ = registered.send(());
             }
             AppEvent::DynamicToolCallCompleted {
@@ -128,6 +132,9 @@ impl App {
                         tracing::warn!(?request_id, %error, "failed to serialize dynamic tool response");
                     }
                 }
+            }
+            AppEvent::TaskToolsAvailable { thread_id } => {
+                app_server.remember_task_tool_thread(thread_id);
             }
             AppEvent::RequestOlderScrollbackHistory { thread_id } => {
                 if self.chat_widget.thread_id() == Some(thread_id)
@@ -1158,10 +1165,44 @@ impl App {
                 );
             }
             AppEvent::StartFileSearch(query) => {
-                self.file_search.on_user_query(query);
+                self.file_search.on_user_query(query.clone());
+                if let Some(thread_id) = self.active_thread_id
+                    && app_server.task_tools_available(thread_id)
+                    && self.config.features.enabled(Feature::MentionsV2)
+                {
+                    let cwd = self
+                        .thread_cwd(thread_id)
+                        .await
+                        .map(|cwd| cwd.to_path_buf())
+                        .or_else(|| {
+                            app_server
+                                .remote_cwd_override()
+                                .map(std::path::Path::to_path_buf)
+                        })
+                        .unwrap_or_else(|| self.config.cwd.to_path_buf());
+                    crate::task_mentions::spawn_search(
+                        app_server.request_handle(),
+                        query,
+                        thread_id,
+                        cwd,
+                        app_server.task_search_generation(),
+                        self.app_event_tx.clone(),
+                    );
+                }
             }
             AppEvent::FileSearchResult { query, matches } => {
                 self.chat_widget.apply_file_search_result(query, matches);
+            }
+            AppEvent::TaskSearchResult {
+                thread_id,
+                query,
+                matches,
+            } => {
+                if self.active_thread_id == Some(thread_id)
+                    && app_server.task_tools_available(thread_id)
+                {
+                    self.chat_widget.on_task_search_result(&query, matches);
+                }
             }
             AppEvent::RefreshRateLimits { origin } => {
                 self.refresh_rate_limits(app_server, origin);

@@ -3,6 +3,8 @@ use codex_plugin::PluginCapabilitySummary;
 
 use crate::skills_helpers::skill_description;
 use crate::skills_helpers::skill_display_name;
+use crate::task_mentions::MAX_TASK_TITLE_CHARS;
+use crate::task_mentions::TaskMention;
 
 use super::candidate::Candidate;
 use super::candidate::MentionType;
@@ -11,6 +13,7 @@ use super::candidate::Selection;
 pub(crate) fn build_search_catalog(
     skills: Option<&[SkillMetadata]>,
     plugins: Option<&[PluginCapabilitySummary]>,
+    tasks: &[TaskMention],
 ) -> Vec<Candidate> {
     let mut candidates = Vec::new();
     if let Some(skills) = skills {
@@ -20,6 +23,25 @@ pub(crate) fn build_search_catalog(
     if let Some(plugins) = plugins {
         candidates.extend(plugins.iter().map(plugin_candidate));
     }
+
+    candidates.extend(tasks.iter().map(|task| {
+        let title = task.title.split_whitespace().collect::<Vec<_>>().join(" ");
+        let title: String = title.chars().take(MAX_TASK_TITLE_CHARS).collect();
+        Candidate {
+            display_name: title.clone(),
+            description: (!task.cwd.is_empty()).then(|| task.cwd.clone()),
+            search_terms: vec![
+                title.clone(),
+                task.cwd.chars().take(MAX_TASK_TITLE_CHARS).collect(),
+                task.snippet.chars().take(MAX_TASK_TITLE_CHARS).collect(),
+            ],
+            mention_type: MentionType::Task,
+            selection: Selection::Tool {
+                insert_text: format!("@{title}"),
+                path: Some(format!("thread://{}", task.thread_id)),
+            },
+        }
+    }));
 
     candidates
 }

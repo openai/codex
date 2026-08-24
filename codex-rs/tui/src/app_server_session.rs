@@ -140,9 +140,11 @@ use color_eyre::eyre::ContextCompat;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
@@ -209,7 +211,7 @@ pub(crate) async fn request_thread_start_with_history_fallback(
     request_handle: &AppServerRequestHandle,
     mut request_id: RequestId,
     mut params: ThreadStartParams,
-) -> std::result::Result<(ThreadStartResponse, ThreadHistorySupport), TypedRequestError> {
+) -> std::result::Result<(ThreadStartResponse, ThreadHistorySupport, bool), TypedRequestError> {
     let mut history_support = ThreadHistorySupport::Paginated;
     loop {
         match request_handle
@@ -219,7 +221,14 @@ pub(crate) async fn request_thread_start_with_history_fallback(
             })
             .await
         {
-            Ok(response) => return Ok((response, history_support)),
+            Ok(response) => {
+                let task_tools_available = params.dynamic_tools.is_some()
+                    || params
+                        .config
+                        .as_ref()
+                        .is_some_and(|config| config.contains_key("mcp_servers.codex_tui"));
+                return Ok((response, history_support, task_tools_available));
+            }
             Err(TypedRequestError::Server { source, .. })
                 if params.history_mode.is_some() && is_history_pagination_unsupported(&source) =>
             {
@@ -284,6 +293,9 @@ pub(crate) struct AppServerSession {
     client: AppServerClient,
     next_request_id: i64,
     history_pagination: HashMap<ThreadId, history::ThreadHistoryPagination>,
+    task_tool_threads: HashSet<ThreadId>,
+    task_tool_capabilities_dir: Option<AbsolutePathBuf>,
+    task_search_generation: Arc<AtomicU64>,
     remote_cwd_override: Option<PathBuf>,
     thread_params_mode: ThreadParamsMode,
     background_rollout_migration_enabled: bool,
@@ -327,6 +339,7 @@ pub(crate) struct AppServerStartedThread {
     pub(crate) session: ThreadSessionState,
     pub(crate) turns: Vec<Turn>,
     pub(crate) blocks_direct_input: bool,
+    pub(crate) task_tools_available: bool,
 }
 
 pub(crate) fn source_agent_path(source: &SessionSource) -> Option<String> {
@@ -368,6 +381,9 @@ impl AppServerSession {
             client,
             next_request_id: 1,
             history_pagination: HashMap::new(),
+            task_tool_threads: HashSet::new(),
+            task_tool_capabilities_dir: None,
+            task_search_generation: Arc::new(AtomicU64::new(0)),
             remote_cwd_override: None,
             thread_params_mode,
             background_rollout_migration_enabled: true,
@@ -461,6 +477,28 @@ impl AppServerSession {
 
     pub(crate) fn uses_embedded_app_server(&self) -> bool {
         matches!(&self.client, AppServerClient::InProcess(_))
+    }
+
+    pub(crate) fn task_tools_available(&self, thread_id: ThreadId) -> bool {
+        self.task_tool_threads.contains(&thread_id)
+            || self
+                .task_tool_capabilities_dir
+                .as_ref()
+                .is_some_and(|directory| directory.join(thread_id.to_string()).is_file())
+    }
+
+    pub(crate) fn remember_task_tool_thread(&mut self, thread_id: ThreadId) {
+        if self.task_tool_threads.insert(thread_id)
+            && let Some(directory) = &self.task_tool_capabilities_dir
+            && let Err(error) = std::fs::create_dir_all(directory)
+                .and_then(|()| std::fs::write(directory.join(thread_id.to_string()), []))
+        {
+            tracing::warn!(%error, %thread_id, "failed to persist task-reference capability");
+        }
+    }
+
+    pub(crate) fn task_search_generation(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.task_search_generation)
     }
 
     pub(crate) fn codex_home_path(
@@ -720,7 +758,7 @@ impl AppServerSession {
         }
         self.thread_tool_transport().configure(&mut params);
         let request_handle = self.request_handle();
-        let (response, history_support) =
+        let (response, history_support, task_tools_available) =
             request_thread_start_with_history_fallback(&request_handle, request_id, params)
                 .await
                 .map_err(|err| {
@@ -729,7 +767,13 @@ impl AppServerSession {
         if history_support == ThreadHistorySupport::LegacyOnly {
             self.history_support = ThreadHistorySupport::LegacyOnly;
         }
-        started_thread_from_start_response(response, config, self.thread_params_mode()).await
+        let mut started =
+            started_thread_from_start_response(response, config, self.thread_params_mode()).await?;
+        started.task_tools_available = task_tools_available;
+        if task_tools_available {
+            self.remember_task_tool_thread(started.session.thread_id);
+        }
+        Ok(started)
     }
 
     pub(crate) async fn fork_thread(
@@ -870,6 +914,10 @@ impl AppServerSession {
         let mut started =
             started_thread_from_fork_response(response, &config, self.thread_params_mode()).await?;
         started.session.fork_parent_title = fork_parent.and_then(|thread| thread.name);
+        if self.task_tools_available(thread_id) {
+            started.task_tools_available = true;
+            self.remember_task_tool_thread(started.session.thread_id);
+        }
         Ok(started)
     }
 
@@ -1529,13 +1577,16 @@ pub(crate) async fn start_thread_with_request_handle(
         /*session_start_source*/ None,
     );
     thread_tool_transport.configure(&mut params);
-    let (response, _history_support) =
+    let (response, _history_support, task_tools_available) =
         request_thread_start_with_history_fallback(&request_handle, request_id, params)
             .await
             .map_err(|err| {
                 bootstrap_request_error("thread/start failed during TUI bootstrap", err)
             })?;
-    started_thread_from_start_response(response, &config, thread_params_mode).await
+    let mut started =
+        started_thread_from_start_response(response, &config, thread_params_mode).await?;
+    started.task_tools_available = task_tools_available;
+    Ok(started)
 }
 
 pub(crate) fn status_account_display_from_auth_mode(
@@ -1947,6 +1998,7 @@ async fn started_thread_from_start_response(
         session,
         turns: response.thread.turns,
         blocks_direct_input,
+        task_tools_available: false,
     })
 }
 
@@ -1964,6 +2016,7 @@ async fn started_thread_from_resume_response(
         session,
         turns: response.thread.turns,
         blocks_direct_input,
+        task_tools_available: false,
     })
 }
 
@@ -1981,6 +2034,7 @@ async fn started_thread_from_fork_response(
         session,
         turns: response.thread.turns,
         blocks_direct_input,
+        task_tools_available: false,
     })
 }
 

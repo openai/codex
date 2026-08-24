@@ -38,8 +38,16 @@ impl Popup {
     }
 
     pub(crate) fn set_candidates(&mut self, candidates: Vec<Candidate>) {
+        let selection = self.selected();
         self.candidates = candidates;
         self.refresh_rows();
+        if let Some(selection) = selection
+            && let Some(index) = self.rows.iter().position(|row| row.selection == selection)
+        {
+            self.state.selected_idx = Some(index);
+            self.state
+                .ensure_visible(self.rows.len(), MAX_POPUP_ROWS.min(self.rows.len()));
+        }
     }
 
     pub(crate) fn set_query(&mut self, query: &str) {

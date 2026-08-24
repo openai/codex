@@ -630,7 +630,7 @@ async fn execute_inner(
             if let Some(model) = arguments.model {
                 thread_start_params.model = Some(model);
             }
-            let (started, _) =
+            let (started, _, task_tools_available) =
                 crate::app_server_session::request_thread_start_with_history_fallback(
                     &handle,
                     RequestId::String(format!("tui-dynamic-{}", Uuid::new_v4())),
@@ -639,7 +639,7 @@ async fn execute_inner(
                 .await
                 .map_err(|error| error.to_string())?;
             let thread_id = started.thread.id;
-            register_background_thread(app_event_tx, &thread_id).await?;
+            register_background_thread(app_event_tx, &thread_id, task_tools_available).await?;
             if let Some(title) = arguments.title
                 && let Err(error) = request::<ThreadSetNameResponse>(&handle, |request_id| {
                     ClientRequest::ThreadSetName {
@@ -760,7 +760,12 @@ async fn execute_inner(
                 },
             )
             .await?;
-            register_background_thread(app_event_tx, &arguments.thread_id).await?;
+            register_background_thread(
+                app_event_tx,
+                &arguments.thread_id,
+                /*task_tools_available*/ false,
+            )
+            .await?;
             start_turn(
                 &handle,
                 &arguments.thread_id,
@@ -1171,11 +1176,13 @@ fn same_thread_id(first: &str, second: &str) -> bool {
 async fn register_background_thread(
     app_event_tx: Option<&AppEventSender>,
     thread_id: &str,
+    task_tools_available: bool,
 ) -> Result<(), String> {
     if let Some(app_event_tx) = app_event_tx {
         let (registered, registration) = tokio::sync::oneshot::channel();
         app_event_tx.send(AppEvent::DynamicToolThreadStarted {
             thread_id: ThreadId::from_string(thread_id).map_err(|error| error.to_string())?,
+            task_tools_available,
             registered,
         });
         registration
