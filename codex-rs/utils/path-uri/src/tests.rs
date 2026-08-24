@@ -80,6 +80,29 @@ fn non_native_uri_io_conversion_is_invalid_input() {
 }
 
 #[test]
+fn windows_uri_native_conversion_rejects_encoded_separators() {
+    for uri in [
+        "file:///C%3A/plugins/demo/..%5Coutside.json",
+        "file:///C%3a/plugins/demo/..%5coutside.json",
+        "file:///C:/plugins/demo/..%2Foutside.json",
+        "file://server/share/plugins/demo/..%5Coutside.json",
+    ] {
+        let uri = PathUri::parse(uri).expect("valid Windows file URI");
+
+        assert_eq!(uri.infer_path_convention(), Some(PathConvention::Windows));
+        assert!(containment_path_segments(&uri.0, PathConvention::Windows).is_none());
+
+        #[cfg(windows)]
+        assert_eq!(
+            uri.to_abs_path()
+                .expect_err("encoded Windows separators must not reach native conversion")
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+    }
+}
+
+#[test]
 fn file_uri_parses_a_windows_path_on_any_host() {
     let uri = PathUri::parse("file:///C:/Users/Alice%20Smith/src/main.rs")
         .expect("Windows file URI should parse on every host");
@@ -142,6 +165,14 @@ fn infers_path_conventions_from_uri_shape() {
         ("file:///home/alice/src", Some(PathConvention::Posix)),
         ("file:///C:/Users/Alice/src", Some(PathConvention::Windows)),
         ("file:///d:", Some(PathConvention::Windows)),
+        (
+            "file:///c%3A/Users/Alice/src",
+            Some(PathConvention::Windows),
+        ),
+        (
+            "file:///D%3a/Users/Alice/src",
+            Some(PathConvention::Windows),
+        ),
         ("file://server/share/src", Some(PathConvention::Windows)),
         // Opaque fallback for POSIX bytes `/tmp/null-\0-\xff-byte`.
         (
@@ -207,6 +238,10 @@ fn inferred_native_path_string_uses_the_inferred_convention() {
         (
             "file:///C:/Users/Alice%20Smith/main.rs",
             r"C:\Users\Alice Smith\main.rs",
+        ),
+        (
+            "file:///c%3A/Users/Alice/src/main.rs",
+            r"C:\Users\Alice\src\main.rs",
         ),
         ("file://server/share/main.rs", r"\\server\share\main.rs"),
         ("file://server/", "file://server/"),
@@ -994,6 +1029,8 @@ fn join_resolves_windows_same_drive_relative_path() {
     for (base, path, expected) in [
         ("file:///C:/base", r"C:tmp", "file:///C:/base/tmp"),
         ("file:///C:/base", r"c:tmp", "file:///C:/base/tmp"),
+        ("file:///C%3A/base", r"C:tmp", "file:///C%3A/base/tmp"),
+        ("file:///C%3a/base", r"c:tmp", "file:///C%3a/base/tmp"),
         ("file:///C:/base/dir", r"C:..\tmp", "file:///C:/base/tmp"),
         ("file:///C:/base", "C:", "file:///C:/base"),
     ] {

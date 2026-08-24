@@ -432,7 +432,8 @@ impl PathUri {
                 .path_segments()
                 .and_then(|mut segments| segments.find(|segment| !segment.is_empty()))
                 .is_some_and(|segment| {
-                    matches!(segment.as_bytes(), [drive, b':'] if drive.eq_ignore_ascii_case(&path_bytes[0]))
+                    is_windows_drive_uri_segment(segment)
+                        && segment.as_bytes()[0].eq_ignore_ascii_case(&path_bytes[0])
                 });
             if !same_drive {
                 return Err(PathUriParseError::InvalidFileUriPath {
@@ -497,9 +498,13 @@ impl PathUri {
     /// The URI's inferred path convention must match the current host. Conversion should succeed
     /// when the URI was created from an [`AbsolutePathBuf`] on the current host, including fallback
     /// URIs created by [`Self::from_abs_path`]. Foreign conventions are rejected rather than being
-    /// projected onto a syntactically valid but unrelated host path.
+    /// projected onto a syntactically valid but unrelated host path. Encoded Windows path
+    /// separators are rejected before native conversion can reinterpret URI segment boundaries.
     pub fn to_abs_path(&self) -> io::Result<AbsolutePathBuf> {
-        if self.infer_path_convention() != Some(PathConvention::native()) {
+        if self.infer_path_convention() != Some(PathConvention::native())
+            || (PathConvention::native() == PathConvention::Windows
+                && containment_path_segments(&self.0, PathConvention::Windows).is_none())
+        {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 PathUriParseError::InvalidFileUriPath {
@@ -700,7 +705,10 @@ fn decode_bad_path_uri(url: &Url) -> Option<Vec<u8>> {
 }
 
 fn is_windows_drive_uri_segment(segment: &str) -> bool {
-    matches!(segment.as_bytes(), [drive, b':'] if drive.is_ascii_alphabetic())
+    matches!(
+        segment.as_bytes(),
+        [drive, b':'] | [drive, b'%', b'3', b'A' | b'a'] if drive.is_ascii_alphabetic()
+    )
 }
 
 fn containment_path_segments(url: &Url, convention: PathConvention) -> Option<Vec<&str>> {
