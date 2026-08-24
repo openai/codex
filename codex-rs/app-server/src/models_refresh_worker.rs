@@ -7,7 +7,7 @@ use codex_models_manager::manager::SharedModelsManager;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-const MODELS_REFRESH_INTERVAL: Duration = Duration::from_secs(3 * 60);
+const MODELS_REFRESH_INTERVAL: Duration = Duration::from_secs(4 * 60 + 30);
 
 #[derive(Debug)]
 pub(crate) struct ModelsRefreshWorker {
