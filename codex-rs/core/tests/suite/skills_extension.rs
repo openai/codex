@@ -17,6 +17,7 @@ use codex_extension_api::ExtensionWarning;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::user_input::UserInput;
@@ -825,6 +826,8 @@ async fn explicit_only_orchestrator_skill_is_hidden_but_can_be_invoked() -> Resu
     const REFERENCED_RESOURCE: &str = "skill://demo/explicit-only/references/guide.md";
     const REFERENCED_CONTENTS: &str = "# Referenced guide";
     const READ_CALL_ID: &str = "read-explicit-only-resource";
+    const LIST_CALL_ID: &str = "list-model-visible-skills";
+    const CODE_MODE_LIST_CALL_ID: &str = "list-skills-through-code-mode";
     const MAIN_READ_CALL_ID: &str = "read-explicit-only-main";
     const REPEATED_MAIN_READ_CALL_ID: &str = "read-explicit-only-main-again";
     const INVALID_CURSOR_CALL_ID: &str = "read-explicit-only-invalid-cursor";
@@ -849,6 +852,18 @@ async fn explicit_only_orchestrator_skill_is_hidden_but_can_be_invoked() -> Resu
                         "resource": REFERENCED_RESOURCE,
                     })
                     .to_string(),
+                ),
+                responses::ev_function_call_with_namespace(
+                    LIST_CALL_ID,
+                    "skills",
+                    "list",
+                    &json!({ "authority": { "kind": "orchestrator" } }).to_string(),
+                ),
+                responses::ev_custom_tool_call(
+                    CODE_MODE_LIST_CALL_ID,
+                    "exec",
+                    r#"const result = await tools.skills__list({ authority: { kind: "orchestrator" } });
+text({ names: result.skills.map(skill => skill.name), warnings: result.warnings, next_cursor: result.next_cursor });"#,
                 ),
                 ev_completed("resp-1"),
             ]),
@@ -972,9 +987,16 @@ async fn explicit_only_orchestrator_skill_is_hidden_but_can_be_invoked() -> Resu
         // Local executors disable orchestrator skill discovery.
         .with_exec_server_url("none")
         .with_extensions(Arc::new(extensions.build()))
+        .with_model_info_override("gpt-5.5", |model_info| {
+            model_info.truncation_policy = TruncationPolicyConfig::bytes(/*limit*/ 250);
+        })
         .with_config(|config| {
             config.include_skill_instructions = true;
             config.orchestrator_skills_enabled = true;
+            config
+                .features
+                .enable(Feature::CodeMode)
+                .expect("code mode should be configurable in tests");
         });
     let test = builder.build_with_auto_env(&server).await?;
     wait_for_mcp_server(&test.codex, CODEX_APPS_MCP_SERVER_NAME).await?;
@@ -1034,6 +1056,25 @@ async fn explicit_only_orchestrator_skill_is_hidden_but_can_be_invoked() -> Resu
             "next_cursor": null,
         })
     );
+    let mut list_output = requests[1]
+        .function_call_output_text(LIST_CALL_ID)
+        .expect("skills.list should return the model-visible catalog");
+    let code_mode_output = requests[1].custom_tool_call_output(CODE_MODE_LIST_CALL_ID);
+    let code_mode_text = code_mode_output["output"]
+        .as_array()
+        .and_then(|items| items.last())
+        .and_then(|item| item["text"].as_str())
+        .ok_or_else(|| {
+            anyhow::anyhow!("Code Mode should return its skills.list result: {code_mode_output}")
+        })?;
+    assert_eq!(
+        serde_json::from_str::<Value>(code_mode_text)?,
+        json!({
+            "names": ["demo:visible", "demo:missing-policy", "demo:non-boolean-policy"],
+            "warnings": [],
+            "next_cursor": null,
+        })
+    );
     let events = wait_for_analytics_events(&server, "skill_invocation", /*expected_count*/ 1).await;
     assert_eq!(events.len(), 1);
     assert_eq!(events[0]["skill_name"], "demo:explicit-only");
@@ -1067,6 +1108,59 @@ async fn explicit_only_orchestrator_skill_is_hidden_but_can_be_invoked() -> Resu
         format!("{:x}", sha1::Sha1::digest(MAIN_RESOURCE.as_bytes()))
     );
     assert_eq!(events[1]["event_params"]["invoke_type"], "implicit");
+
+    for (name, has_more) in [
+        ("visible", true),
+        ("missing-policy", true),
+        ("non-boolean-policy", false),
+    ] {
+        assert!(list_output.len() <= 300);
+        let list_response = serde_json::from_str::<Value>(&list_output)?;
+        let next_cursor = list_response["next_cursor"].as_str();
+        assert_eq!(next_cursor.is_some(), has_more);
+        assert_eq!(
+            list_response,
+            json!({
+                "skills": [{
+                    "authority": {"kind": "orchestrator"},
+                    "package": format!("skill://demo/{name}"),
+                    "name": format!("demo:{name}"),
+                    "description": "",
+                    "main_resource": format!("skill://demo/{name}/SKILL.md"),
+                }],
+                "warnings": [],
+                "next_cursor": next_cursor,
+            })
+        );
+        if let Some(cursor) = next_cursor {
+            let call_id = format!("list-after-{name}");
+            let page = responses::mount_sse_sequence(
+                &server,
+                vec![
+                    sse(vec![
+                        ev_response_created(&call_id),
+                        responses::ev_function_call_with_namespace(
+                            &call_id,
+                            "skills",
+                            "list",
+                            &json!({
+                                "authority": { "kind": "orchestrator" },
+                                "cursor": cursor,
+                            })
+                            .to_string(),
+                        ),
+                        ev_completed(&call_id),
+                    ]),
+                    sse(vec![ev_response_created("listed"), ev_completed("listed")]),
+                ],
+            )
+            .await;
+            test.submit_turn("Continue listing skills.").await?;
+            list_output = page.requests()[1]
+                .function_call_output_text(&call_id)
+                .expect("skills.list should return the next page");
+        }
+    }
 
     Ok(())
 }

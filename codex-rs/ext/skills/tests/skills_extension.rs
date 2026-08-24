@@ -17,6 +17,7 @@ use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionMetrics;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ExtensionWarning;
+use codex_extension_api::FunctionCallError;
 use codex_extension_api::NoopTurnItemEmitter;
 use codex_extension_api::PreviousWorldStateSection;
 use codex_extension_api::RenderedWorldStateFragment;
@@ -1541,7 +1542,10 @@ async fn extreme_budget_pressure_removes_descriptions_before_omitting_entries() 
 
 #[tokio::test]
 async fn skills_list_only_returns_model_visible_bounded_metadata() -> TestResult {
-    let description = "x".repeat(1_025);
+    const OVERSIZED_WARNING: &str = "Some skills were omitted because their metadata is too large.";
+    const PROVIDER_WARNING: &str = "Some orchestrator skills could not be discovered because the provider disconnected before returning the complete catalog.";
+
+    let supplementary_warning = "w".repeat(256);
     let opaque_suffix = "\\".repeat(1_500);
     let mut entry = test_entry(
         SkillSourceKind::Orchestrator,
@@ -1549,12 +1553,25 @@ async fn skills_list_only_returns_model_visible_bounded_metadata() -> TestResult
         &format!("orchestrator/{opaque_suffix}"),
         &format!("skill://orchestrator/{opaque_suffix}/SKILL.md"),
     );
-    entry.description = description.clone();
+    entry.description = "x".repeat(1_025);
+    let [first_entry, mut middle_entry, mut final_entry] = ["p0", "p1", "p2"].map(|name| {
+        test_entry(
+            SkillSourceKind::Orchestrator,
+            "codex_apps",
+            name,
+            &format!("skill://{name}/SKILL.md"),
+        )
+    });
+    middle_entry.description = "d".repeat(110);
+    final_entry.description = "d".repeat(50);
     let providers =
         SkillProviders::new().with_orchestrator_provider(Arc::new(StaticSkillProvider {
             catalog: SkillCatalog {
                 entries: vec![
                     entry,
+                    first_entry,
+                    middle_entry,
+                    final_entry,
                     test_entry(
                         SkillSourceKind::Orchestrator,
                         "codex_apps",
@@ -1563,7 +1580,12 @@ async fn skills_list_only_returns_model_visible_bounded_metadata() -> TestResult
                     )
                     .hidden_from_prompt(),
                 ],
-                warnings: vec!["w".repeat(256); 4],
+                warnings: vec![
+                    PROVIDER_WARNING.to_string(),
+                    supplementary_warning.clone(),
+                    supplementary_warning.clone(),
+                    supplementary_warning.clone(),
+                ],
             },
             read_requests: Arc::new(Mutex::new(Vec::new())),
             list_calls: None,
@@ -1597,39 +1619,162 @@ async fn skills_list_only_returns_model_visible_bounded_metadata() -> TestResult
     let payload = ToolPayload::Function {
         arguments: serde_json::json!({"authority": {"kind": "orchestrator"}}).to_string(),
     };
-    let output = list_tool
-        .handle(ToolCall {
-            turn_id: "turn-1".to_string(),
-            call_id: "call-1".to_string(),
-            tool_name: list_tool.tool_name(),
-            model: "gpt-test".to_string(),
-            codex_turn_metadata: None,
-            truncation_policy: TruncationPolicy::Bytes(1_024),
-            source: ToolCallSource::Direct,
-            conversation_history: ConversationHistory::default(),
-            turn_item_emitter: Arc::new(NoopTurnItemEmitter),
-            environments: Vec::new(),
-            payload: payload.clone(),
-        })
-        .await?;
-    let response = output
+    let call = ToolCall {
+        turn_id: "turn-1".to_string(),
+        call_id: "call-1".to_string(),
+        tool_name: list_tool.tool_name(),
+        model: "gpt-test".to_string(),
+        codex_turn_metadata: None,
+        truncation_policy: TruncationPolicy::Bytes(10_000),
+        source: ToolCallSource::Direct,
+        conversation_history: ConversationHistory::default(),
+        turn_item_emitter: Arc::new(NoopTurnItemEmitter),
+        environments: Vec::new(),
+        payload: payload.clone(),
+    };
+    let output = list_tool.handle(call.clone()).await?;
+    let complete_response = output
         .post_tool_use_response("call-1", &payload)
         .ok_or("skills.list should expose structured output")?;
-    let rendered_description = response["skills"][0]["description"]
-        .as_str()
-        .ok_or("skills.list response should include a description")?;
+    let complete_skills = complete_response["skills"]
+        .as_array()
+        .ok_or("skills.list should return skills")?;
+    assert_eq!(complete_skills.len(), 4);
+    assert_eq!(complete_skills[0]["description"], "x".repeat(1_021) + "...");
+    assert_eq!(
+        complete_response["warnings"].as_array().map(Vec::len),
+        Some(4)
+    );
+    assert_eq!(complete_response["next_cursor"], serde_json::Value::Null);
 
-    assert_eq!(response["skills"].as_array().map(Vec::len), Some(1));
-    assert_eq!(response["warnings"].as_array().map(Vec::len), Some(4));
-    assert_eq!(response["next_cursor"], serde_json::Value::Null);
-    assert_eq!(rendered_description, "x".repeat(1_021) + "...");
-    assert_ne!(rendered_description, description);
+    let mut cursor = None;
+    for (
+        index,
+        (truncation_limit, byte_budget, expected_indices, expected_warnings, cursor_offset),
+    ) in [
+        // The escaped entry fits alone, but not alongside even one provider warning.
+        (6_458, 7_750, vec![], vec![PROVIDER_WARNING], Some("0")),
+        (6_458, 7_750, vec![0], vec![], Some("1")),
+        (266, 320, vec![1], vec![], Some("2")),
+        // A smaller budget omits the middle entry and must report the new omission.
+        (183, 220, vec![], vec![OVERSIZED_WARNING], Some("2")),
+        (183, 220, vec![3], vec![], None),
+        // Neither report may hide the other when they need separate pages.
+        (183, 220, vec![], vec![PROVIDER_WARNING], Some("0")),
+        (183, 220, vec![], vec![OVERSIZED_WARNING], Some("0")),
+        // The last retained entry fits without a cursor, despite an oversized suffix.
+        (151, 182, vec![], vec![OVERSIZED_WARNING], Some("0")),
+        (151, 182, vec![1], vec![], None),
+        // An omission notice must not displace an affordable provider warning.
+        (
+            2_000,
+            2_400,
+            vec![1, 2, 3],
+            vec![
+                PROVIDER_WARNING,
+                &supplementary_warning,
+                &supplementary_warning,
+                &supplementary_warning,
+                OVERSIZED_WARNING,
+            ],
+            None,
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let payload = ToolPayload::Function {
+            arguments: serde_json::json!({
+                "authority": {"kind": "orchestrator"},
+                "cursor": cursor,
+            })
+            .to_string(),
+        };
+        let call_id = format!("bounded-page-{index}");
+        let output = list_tool
+            .handle(ToolCall {
+                call_id: call_id.clone(),
+                truncation_policy: TruncationPolicy::Bytes(truncation_limit),
+                payload: payload.clone(),
+                ..call.clone()
+            })
+            .await?;
+        assert!(output.contains_external_context());
+        let response = output
+            .post_tool_use_response(&call_id, &payload)
+            .ok_or("skills.list should expose structured output")?;
+        assert!(serde_json::to_vec(&response)?.len() <= byte_budget);
+        let next_cursor = response["next_cursor"].as_str().map(str::to_owned);
+        assert_eq!(
+            next_cursor
+                .as_deref()
+                .and_then(|value| value.split(':').nth(1)),
+            cursor_offset
+        );
+        let expected_skills = expected_indices
+            .into_iter()
+            .map(|index| &complete_skills[index])
+            .collect::<Vec<_>>();
+        assert_eq!(
+            response,
+            serde_json::json!({
+                "skills": expected_skills,
+                "warnings": expected_warnings,
+                "next_cursor": next_cursor,
+            })
+        );
+        if index == 2 {
+            let (legacy_cursor, _) = next_cursor
+                .as_deref()
+                .and_then(|cursor| cursor.rsplit_once(':'))
+                .ok_or("cursor should include its budget")?;
+            let legacy_payload = ToolPayload::Function {
+                arguments: serde_json::json!({
+                    "authority": {"kind": "orchestrator"},
+                    "cursor": legacy_cursor,
+                })
+                .to_string(),
+            };
+            let output = list_tool
+                .handle(ToolCall {
+                    payload: legacy_payload.clone(),
+                    ..call.clone()
+                })
+                .await?;
+            assert_eq!(
+                output.post_tool_use_response(&call.call_id, &legacy_payload),
+                Some(serde_json::json!({
+                    "skills": &complete_skills[2..],
+                    "warnings": [],
+                    "next_cursor": null,
+                }))
+            );
+        }
+        cursor = next_cursor;
+    }
+
+    assert_eq!(
+        list_tool
+            .handle(ToolCall {
+                call_id: "omitted-call".to_string(),
+                truncation_policy: TruncationPolicy::Bytes(64),
+                ..call
+            })
+            .await
+            .err(),
+        Some(FunctionCallError::RespondToModel(
+            "skills.list response budget leaves no room for discovery warnings".to_string()
+        ))
+    );
 
     Ok(())
 }
 
 #[tokio::test]
 async fn orchestrator_catalog_snapshot_caches_failure() -> TestResult {
+    const PROVIDER_WARNING: &str =
+        "orchestrator skills unavailable: temporary orchestrator failure";
+
     let list_calls = Arc::new(AtomicUsize::new(0));
     let providers =
         SkillProviders::new().with_orchestrator_provider(Arc::new(StaticSkillProvider {
@@ -1695,11 +1840,38 @@ async fn orchestrator_catalog_snapshot_caches_failure() -> TestResult {
         let warning = event_rx.try_recv()?.into_warning();
         assert_eq!(warning.thread_id, thread_store.level_id());
         assert_eq!(warning.turn_id.as_deref(), Some(turn_id));
-        assert_eq!(
-            warning.message,
-            "orchestrator skills unavailable: temporary orchestrator failure"
-        );
+        assert_eq!(warning.message, PROVIDER_WARNING);
     }
+
+    let tools = registry.tool_contributors()[0].tools(&session_store, &thread_store);
+    let list_tool = tools
+        .iter()
+        .find(|tool| tool.tool_name().name == "list")
+        .ok_or("skills.list tool should be registered")?;
+    assert_eq!(
+        list_tool
+            .handle(ToolCall {
+                turn_id: "turn-1".to_string(),
+                call_id: "unavailable-skills".to_string(),
+                tool_name: list_tool.tool_name(),
+                model: "gpt-test".to_string(),
+                codex_turn_metadata: None,
+                truncation_policy: TruncationPolicy::Bytes(64),
+                source: ToolCallSource::Direct,
+                conversation_history: ConversationHistory::default(),
+                turn_item_emitter: Arc::new(NoopTurnItemEmitter),
+                environments: Vec::new(),
+                payload: ToolPayload::Function {
+                    arguments: serde_json::json!({"authority": {"kind": "orchestrator"}})
+                        .to_string(),
+                },
+            })
+            .await
+            .err(),
+        Some(FunctionCallError::RespondToModel(
+            "skills.list response budget leaves no room for discovery warnings".to_string()
+        ))
+    );
     assert_eq!(1, list_calls.load(Ordering::Relaxed));
 
     Ok(())
