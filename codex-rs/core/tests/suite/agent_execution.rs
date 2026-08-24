@@ -1,10 +1,13 @@
 use anyhow::Result;
+use codex_exec_server::CreateDirectoryOptions;
 use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::PermissionProfileSnapshot;
 use codex_protocol::protocol::EnvironmentConfig;
 use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ThreadSettingsOverrides;
+use codex_protocol::protocol::TurnEnvironmentSelections;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -13,11 +16,13 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use core_test_support::submit_thread_settings;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::time::Duration;
+use test_case::test_case;
 
 const FIRST_PROMPT: &str = "spawn the first worker";
 const FIRST_TASK: &str = "first worker task";
@@ -198,8 +203,22 @@ async fn v2_nested_spawn_checks_shared_active_execution_capacity() -> Result<()>
     Ok(())
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ResidencyReload {
+    Sender,
+    OwnerNarrowsPermissions,
+    OwnerPreservesStricterChild,
+    OwnerRevokesWorkspaceRoot,
+}
+
+#[test_case(ResidencyReload::Sender; "sender preserves stricter child")]
+#[test_case(ResidencyReload::OwnerNarrowsPermissions; "owner narrows cached permissions")]
+#[test_case(ResidencyReload::OwnerPreservesStricterChild; "owner preserves stricter child")]
+#[test_case(ResidencyReload::OwnerRevokesWorkspaceRoot; "owner revokes cached workspace root")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn v2_residency_reload_preserves_inherited_environment_and_tools() -> Result<()> {
+async fn v2_residency_reload_preserves_inherited_environment_and_tools(
+    reload: ResidencyReload,
+) -> Result<()> {
     const EVICT_PROMPT: &str = "spawn the replacement worker";
     const FOLLOWUP_PROMPT: &str = "continue the original worker";
     const FOLLOWUP_TASK: &str = "continue work in the original environment";
@@ -254,15 +273,51 @@ async fn v2_residency_reload_preserves_inherited_environment_and_tools() -> Resu
         });
     let test = builder.build_with_remote_and_local_env(&server).await?;
     let mut child_environment = test.executor_environment().selection().clone();
-    child_environment.config = EnvironmentConfigState::Ready(EnvironmentConfig {
-        allow_login_shell: test.config.permissions.allow_login_shell,
-        permission_profile: PermissionProfileSnapshot::legacy(PermissionProfile::read_only()),
-        shell_environment_policy: Default::default(),
-        exec_policy: None,
-        mcp_policy: None,
-        network_policy: None,
-        selected_capability_roots: Vec::new(),
-    });
+    let (child_permissions, parent_permissions) = match reload {
+        ResidencyReload::Sender => (
+            PermissionProfile::read_only(),
+            PermissionProfile::workspace_write(),
+        ),
+        ResidencyReload::OwnerNarrowsPermissions => {
+            (PermissionProfile::Disabled, PermissionProfile::read_only())
+        }
+        ResidencyReload::OwnerPreservesStricterChild => {
+            (PermissionProfile::read_only(), PermissionProfile::Disabled)
+        }
+        ResidencyReload::OwnerRevokesWorkspaceRoot => (
+            PermissionProfile::workspace_write(),
+            PermissionProfile::workspace_write(),
+        ),
+    };
+    if reload == ResidencyReload::OwnerRevokesWorkspaceRoot {
+        child_environment.cwd = test.workspace_path_uri("retained")?;
+        child_environment.workspace_roots = vec![
+            child_environment.cwd.clone(),
+            test.workspace_path_uri("revoked")?,
+        ];
+        for root in &child_environment.workspace_roots {
+            test.fs()
+                .create_directory(
+                    root,
+                    CreateDirectoryOptions {
+                        recursive: true,
+                        follow_symlinks: true,
+                    },
+                    /*sandbox*/ None,
+                )
+                .await?;
+        }
+    } else {
+        child_environment.config = EnvironmentConfigState::Ready(EnvironmentConfig {
+            allow_login_shell: test.config.permissions.allow_login_shell,
+            permission_profile: PermissionProfileSnapshot::legacy(child_permissions),
+            shell_environment_policy: Default::default(),
+            exec_policy: None,
+            mcp_policy: None,
+            network_policy: None,
+            selected_capability_roots: Vec::new(),
+        });
+    }
     if let Some(exec_server_url) = test.executor_environment().exec_server_url() {
         test.thread_manager
             .environment_manager()
@@ -274,8 +329,18 @@ async fn v2_residency_reload_preserves_inherited_environment_and_tools() -> Resu
     }
     let mut created_threads = test.thread_manager.subscribe_thread_created();
 
-    test.submit_turn_with_environments(FIRST_PROMPT, Some(vec![child_environment.clone()]))
-        .await?;
+    submit_thread_settings(
+        &test.codex,
+        ThreadSettingsOverrides {
+            environments: Some(TurnEnvironmentSelections::new(
+                test.config.cwd.clone(),
+                vec![child_environment.clone()],
+            )),
+            ..Default::default()
+        },
+    )
+    .await?;
+    test.submit_text_turn(FIRST_PROMPT).await?;
     let first_thread_id = created_threads.recv().await?;
     let first_thread = test.thread_manager.get_thread(first_thread_id).await?;
     wait_for_event(first_thread.as_ref(), |event| {
@@ -283,14 +348,29 @@ async fn v2_residency_reload_preserves_inherited_environment_and_tools() -> Resu
     })
     .await;
 
-    let mut sender_environment = child_environment.clone();
-    let EnvironmentConfigState::Ready(sender_config) = &mut sender_environment.config else {
-        unreachable!("child environment config should be ready");
-    };
-    sender_config.permission_profile =
-        PermissionProfileSnapshot::legacy(PermissionProfile::workspace_write());
-    test.submit_turn_with_environments(EVICT_PROMPT, Some(vec![sender_environment]))
+    let mut parent_environment = child_environment.clone();
+    if reload == ResidencyReload::OwnerRevokesWorkspaceRoot {
+        parent_environment.workspace_roots.truncate(1);
+    } else {
+        let EnvironmentConfigState::Ready(parent_config) = &mut parent_environment.config else {
+            unreachable!("child environment config should be ready");
+        };
+        parent_config.permission_profile = PermissionProfileSnapshot::legacy(parent_permissions);
+    }
+    if reload == ResidencyReload::Sender {
+        submit_thread_settings(
+            &test.codex,
+            ThreadSettingsOverrides {
+                environments: Some(TurnEnvironmentSelections::new(
+                    test.config.cwd.clone(),
+                    vec![parent_environment.clone()],
+                )),
+                ..Default::default()
+            },
+        )
         .await?;
+    }
+    test.submit_text_turn(EVICT_PROMPT).await?;
     let replacement_thread_id = created_threads.recv().await?;
     let replacement_thread = test
         .thread_manager
@@ -306,6 +386,62 @@ async fn v2_residency_reload_preserves_inherited_environment_and_tools() -> Resu
             .await
             .is_err()
     );
+
+    if reload != ResidencyReload::Sender {
+        submit_thread_settings(
+            &test.codex,
+            ThreadSettingsOverrides {
+                environments: Some(TurnEnvironmentSelections::new(
+                    test.config.cwd.clone(),
+                    vec![parent_environment.clone()],
+                )),
+                ..Default::default()
+            },
+        )
+        .await?;
+        assert_eq!(
+            test.codex.config_snapshot().await.environments.environments,
+            vec![parent_environment]
+        );
+        let result = test
+            .thread_manager
+            .ensure_multi_agent_v2_child_loaded(first_thread_id)
+            .await;
+        let expected_error = match reload {
+            ResidencyReload::OwnerRevokesWorkspaceRoot => {
+                Some("no longer matches a ready parent environment")
+            }
+            ResidencyReload::OwnerNarrowsPermissions
+            | ResidencyReload::OwnerPreservesStricterChild
+                if test.executor_environment().environment().is_remote() =>
+            {
+                Some("permissions changed on a remote executor")
+            }
+            ResidencyReload::Sender
+            | ResidencyReload::OwnerNarrowsPermissions
+            | ResidencyReload::OwnerPreservesStricterChild => None,
+        };
+        if let Some(expected_error) = expected_error {
+            let error = result.expect_err("reload must reject stale owner authority");
+            assert!(
+                error.to_string().contains(expected_error),
+                "unexpected reload error: {error}"
+            );
+            assert!(
+                test.thread_manager
+                    .get_thread(first_thread_id)
+                    .await
+                    .is_err()
+            );
+            return Ok(());
+        }
+        result?;
+        let EnvironmentConfigState::Ready(child_config) = &mut child_environment.config else {
+            unreachable!("successfully reloaded child environment config should be ready");
+        };
+        child_config.permission_profile =
+            PermissionProfileSnapshot::legacy(PermissionProfile::read_only());
+    }
 
     test.submit_text_turn(FOLLOWUP_PROMPT).await?;
     let reloaded_worker = test.thread_manager.get_thread(first_thread_id).await?;

@@ -330,6 +330,7 @@ pub(crate) struct ResumeThreadWithHistoryOptions {
     pub(crate) environment_selections: Option<Vec<TurnEnvironmentSelection>>,
     pub(crate) inherited_environments: Option<TurnEnvironmentSnapshot>,
     pub(crate) inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+    pub(crate) client_mcp_extensions: Option<ClientMcpExtensions>,
 }
 
 /// Shared, `Arc`-owned state for [`ThreadManager`]. This `Arc` is required to have a single
@@ -1012,6 +1013,39 @@ impl ThreadManager {
             client_mcp_extensions,
         ))
         .await
+    }
+
+    /// Reloads a recorded Multi-Agent V2 child through its currently loaded immediate parent.
+    ///
+    /// The child keeps the existing parent-controlled reload semantics. Callers cannot supply
+    /// configuration overrides, and an unavailable or unrecognized owner is an error.
+    pub async fn ensure_multi_agent_v2_child_loaded(
+        &self,
+        child_thread_id: ThreadId,
+    ) -> CodexResult<()> {
+        let stored_thread = self
+            .state
+            .read_stored_thread(ReadThreadParams {
+                thread_id: child_thread_id,
+                include_archived: true,
+                include_history: false,
+            })
+            .await?;
+        let Some(parent_thread_id) = stored_thread.parent_thread_id else {
+            return Err(CodexErr::InvalidRequest(format!(
+                "thread {child_thread_id} is not a recorded multi-agent v2 child"
+            )));
+        };
+        let parent = self.get_thread(parent_thread_id).await.map_err(|_| {
+            CodexErr::InvalidRequest(format!(
+                "cannot resume multi-agent v2 child {child_thread_id}: parent {parent_thread_id} is not loaded; resume the parent first"
+            ))
+        })?;
+        let config = parent.session.get_config().await.as_ref().clone();
+        let agent_control = parent.session.services.agent_control.clone();
+        agent_control
+            .ensure_v2_agent_loaded(config, child_thread_id, Some(parent))
+            .await
     }
 
     #[instrument(level = "trace", skip_all)]
@@ -1710,8 +1744,12 @@ impl ThreadManagerState {
             environment_selections,
             inherited_environments,
             inherited_exec_policy,
+            client_mcp_extensions,
         } = options;
-        let client_mcp_extensions = self.client_mcp_extensions_for_child(parent_thread_id).await;
+        let client_mcp_extensions = match client_mcp_extensions {
+            Some(client_mcp_extensions) => client_mcp_extensions,
+            None => self.client_mcp_extensions_for_child(parent_thread_id).await,
+        };
         let thread_source = initial_history.get_resumed_thread_source();
         let environments = environment_selections.or_else(|| {
             inherited_environments

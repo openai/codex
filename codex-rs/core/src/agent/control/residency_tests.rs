@@ -114,7 +114,7 @@ async fn interrupted_v2_agent_is_lost_after_residency_eviction() {
     mark_thread_completed(second.thread.as_ref()).await;
 
     let err = control
-        .ensure_v2_agent_loaded(config, first.thread_id)
+        .ensure_v2_agent_loaded(config, first.thread_id, /*parent*/ None)
         .await
         .expect_err("evicted interrupted agent should stay lost");
     match err.details() {

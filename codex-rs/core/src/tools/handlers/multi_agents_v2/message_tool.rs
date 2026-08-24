@@ -86,7 +86,7 @@ pub(crate) async fn handle_message_string_tool(
     session
         .services
         .agent_control
-        .ensure_v2_agent_loaded(resume_config, receiver_thread_id)
+        .ensure_v2_agent_loaded(resume_config, receiver_thread_id, /*parent*/ None)
         .await
         .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
     let author = turn

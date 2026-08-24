@@ -3538,6 +3538,7 @@ impl ThreadRequestProcessor {
                 &params,
                 app_server_client_name.clone(),
                 app_server_client_version.clone(),
+                /*cold_resume_history*/ None,
             )
             .await
         {
@@ -3606,6 +3607,51 @@ impl ThreadRequestProcessor {
             matches!(thread.history_mode, ThreadHistoryMode::Paginated).then_some(thread.thread_id)
         });
         let paginated_resume = paginated_thread_id.is_some();
+
+        // Parent-owned V2 children must resume through their owner, not caller configuration.
+        if let InitialHistory::Resumed(resumed_history) = &thread_history
+            && let Some((source, _)) = thread_history.get_resumed_session_sources()
+            && !can_accept_direct_input(thread_history.get_multi_agent_version(), &source)
+        {
+            let child_thread_id = resumed_history.conversation_id;
+            self.thread_manager
+                .ensure_multi_agent_v2_child_loaded(child_thread_id)
+                .await
+                .map_err(|err| {
+                    tracing::warn!(
+                        thread_id = %child_thread_id,
+                        error = %err,
+                        "failed to resume a multi-agent v2 child through its parent"
+                    );
+                    invalid_request(
+                        "cannot resume an unloaded multi-agent v2 sub-agent through its parent; resume the parent first, or use thread/read to inspect it",
+                    )
+                })?;
+
+            let cold_resume_history = paginated_resume.then(|| thread_history.get_rollout_items());
+            // Attach to the resolved child with only the caller's history-paging preferences.
+            let attach_params = ThreadResumeParams {
+                thread_id: child_thread_id.to_string(),
+                exclude_turns,
+                initial_turns_page,
+                ..Default::default()
+            };
+            return match self
+                .resume_running_thread(
+                    &request_id,
+                    &attach_params,
+                    app_server_client_name,
+                    app_server_client_version,
+                    cold_resume_history,
+                )
+                .await?
+            {
+                RunningThreadResumeResult::Handled => Ok(()),
+                RunningThreadResumeResult::NotRunning(_) => Err(invalid_request(
+                    "cannot resume an unloaded multi-agent v2 sub-agent through its parent; resume the parent first, or use thread/read to inspect it",
+                )),
+            };
+        }
 
         let history_cwd = thread_history.session_cwd();
         let runtime_workspace_roots = runtime_workspace_roots.map(resolve_runtime_workspace_roots);
@@ -3954,6 +4000,7 @@ impl ThreadRequestProcessor {
         params: &ThreadResumeParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        cold_resume_history: Option<&[RolloutItem]>,
     ) -> Result<RunningThreadResumeResult, JSONRPCErrorError> {
         let running_thread = if params.history.is_some() {
             if let Ok(existing_thread_id) = ThreadId::from_string(&params.thread_id)
@@ -4029,7 +4076,14 @@ impl ThreadRequestProcessor {
                 let is_running =
                     matches!(existing_thread.agent_status().await, AgentStatus::Running);
 
-                if !has_subscribers && matches!(loaded_status, ThreadStatus::Idle) && !is_running {
+                // Parent-owned V2 children must not be rebuilt from public resume overrides.
+                if can_accept_direct_input(
+                    existing_thread.multi_agent_version(),
+                    &config_snapshot.session_source,
+                ) && !has_subscribers
+                    && matches!(loaded_status, ThreadStatus::Idle)
+                    && !is_running
+                {
                     // A loaded idle thread is only a cache entry. Shut it down
                     // before removing it so cold resume cannot duplicate a
                     // thread that timed out during shutdown.
@@ -4154,6 +4208,19 @@ impl ThreadRequestProcessor {
             } else {
                 None
             };
+            let cold_resume_token_usage_turn_id = cold_resume_history
+                .map(|history| {
+                    let turns = paginated_turns
+                        .as_deref()
+                        .filter(|turns| !turns.is_empty())
+                        .unwrap_or_else(|| {
+                            paginated_initial_turns_page
+                                .as_ref()
+                                .map_or(&[][..], |page| page.data.as_slice())
+                        });
+                    restored_token_usage_turn_id(history, turns)
+                })
+                .filter(|turn_id| !turn_id.is_empty());
             let paginated_initial_turns_page_with_active_slot = if paginated_resume {
                 match params.initial_turns_page.as_ref() {
                     Some(params)
@@ -4181,6 +4248,7 @@ impl ThreadRequestProcessor {
                 Box::new(crate::thread_state::PendingThreadResumeRequest {
                     request_id: request_id.clone(),
                     history_items,
+                    cold_resume_token_usage_turn_id,
                     config_snapshot,
                     instruction_sources,
                     thread_summary,

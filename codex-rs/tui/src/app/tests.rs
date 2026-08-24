@@ -2189,15 +2189,7 @@ fn selected_and_resumed_threads_use_server_capability_for_v1_and_v2_children() -
 
     runtime.block_on(async {
         let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
-        let mut app_server =
-            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
-        let root = app_server
-            .start_thread(app.chat_widget.config_ref())
-            .await?;
-        let root_thread_id = root.session.thread_id;
-        app.enqueue_primary_thread_session(root.session, root.turns)
-            .await?;
-
+        let root_thread_id = ThreadId::new();
         let rollout_dir = app
             .config
             .codex_home
@@ -2206,6 +2198,29 @@ fn selected_and_resumed_threads_use_server_capability_for_v1_and_v2_children() -
             .join("01")
             .join("01");
         std::fs::create_dir_all(&rollout_dir)?;
+        let root_session_meta = SessionMeta {
+            session_id: root_thread_id.into(),
+            id: root_thread_id,
+            timestamp: "2026-01-01T00:00:00Z".to_string(),
+            cwd: app.config.cwd.to_path_buf(),
+            originator: "codex-tui-test".to_string(),
+            cli_version: "0.0.0".to_string(),
+            source: RolloutSessionSource::Cli,
+            model_provider: Some(app.config.model_provider_id.clone()),
+            multi_agent_version: Some(MultiAgentVersion::V2),
+            ..SessionMeta::default()
+        };
+        let root_session_meta_line = serde_json::json!({
+            "timestamp": "2026-01-01T00:00:00Z",
+            "type": "session_meta",
+            "payload": serde_json::to_value(root_session_meta)?,
+        });
+        std::fs::write(
+            rollout_dir.join(format!(
+                "rollout-2026-01-01T00-00-00-{root_thread_id}.jsonl"
+            )),
+            format!("{root_session_meta_line}\n"),
+        )?;
         let mut child_thread_ids = Vec::new();
         for (index, multi_agent_version) in [MultiAgentVersion::V1, MultiAgentVersion::V2]
             .into_iter()
@@ -2214,7 +2229,7 @@ fn selected_and_resumed_threads_use_server_capability_for_v1_and_v2_children() -
             let child_thread_id = ThreadId::new();
             let timestamp = format!("2026-01-01T00:00:0{index}Z");
             let session_meta = SessionMeta {
-                session_id: child_thread_id.into(),
+                session_id: root_thread_id.into(),
                 id: child_thread_id,
                 parent_thread_id: Some(root_thread_id),
                 timestamp: timestamp.clone(),
@@ -2241,7 +2256,26 @@ fn selected_and_resumed_threads_use_server_capability_for_v1_and_v2_children() -
                 "payload": serde_json::to_value(session_meta)?,
             });
             std::fs::write(rollout_path, format!("{session_meta_line}\n"))?;
+            child_thread_ids.push(child_thread_id);
+        }
 
+        // Cold-resume the persisted V2 root so its children are registered before selection.
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+        let root = app_server
+            .resume_thread(
+                app.config.clone(),
+                root_thread_id,
+                crate::app_server_session::ResumeModelSettings::PreserveExistingThread,
+            )
+            .await?;
+        app.enqueue_primary_thread_session(root.session, root.turns)
+            .await?;
+        for (child_thread_id, multi_agent_version) in child_thread_ids
+            .iter()
+            .copied()
+            .zip([MultiAgentVersion::V1, MultiAgentVersion::V2])
+        {
             assert!(
                 app.attach_live_thread_for_selection(&mut app_server, child_thread_id)
                     .await?
@@ -2250,7 +2284,6 @@ fn selected_and_resumed_threads_use_server_capability_for_v1_and_v2_children() -
                 app.agent_navigation.is_parent_owned(child_thread_id),
                 multi_agent_version == MultiAgentVersion::V2
             );
-            child_thread_ids.push(child_thread_id);
         }
 
         app.agent_navigation
