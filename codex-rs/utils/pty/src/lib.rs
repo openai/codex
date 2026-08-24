@@ -4,6 +4,8 @@ pub mod process_group;
 pub mod pty;
 #[cfg(test)]
 mod tests;
+#[cfg(unix)]
+mod unix_io;
 #[cfg(windows)]
 mod win;
 #[cfg(windows)]
