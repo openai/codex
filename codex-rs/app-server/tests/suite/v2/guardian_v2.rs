@@ -70,6 +70,7 @@ struct MockResponsesState {
     allow_luna: Notify,
     allow_guardian_review: Notify,
     classification_completed: Notify,
+    truncation_recorded: Notify,
     luna_score: f64,
     review_outcome: ReviewOutcome,
     transcript_content: TranscriptContent,
@@ -355,6 +356,11 @@ async fn guardian_v2_routes_tool_approvals(
                 |State(state): State<Arc<MockResponsesState>>, body: String| async move {
                     if body.contains("codex.guardian_v2.classification") {
                         state.classification_completed.notify_one();
+                    }
+                    if body.contains("codex.guardian_v2.classification.truncation")
+                        && body.contains("sync_review_action")
+                    {
+                        state.truncation_recorded.notify_one();
                     }
                 },
             ),
@@ -745,6 +751,10 @@ async fn guardian_v2_routes_tool_approvals(
             );
         }
         responses_state.allow_luna.notify_one();
+    }
+
+    if matches!(review_outcome, ReviewOutcome::Deny) {
+        timeout(TIMEOUT, responses_state.truncation_recorded.notified()).await?;
     }
 
     mcp_server_handle.abort();

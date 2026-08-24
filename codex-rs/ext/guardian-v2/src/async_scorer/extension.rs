@@ -47,10 +47,16 @@ use super::sampler::LunaSamplerConfig;
 use super::sampler::LunaSamplerError;
 use super::sampler::LunaSamplingRequest;
 use super::sampler::MODEL;
+use super::truncation::ClassificationTruncations;
 
 struct GuardianAction {
     tool_name: ToolName,
     payload: ToolPayload,
+}
+
+struct RenderedAction {
+    text: String,
+    original_bytes: usize,
 }
 
 fn should_classify_tool(
@@ -80,7 +86,7 @@ fn should_classify_tool(
 }
 
 impl GuardianAction {
-    fn render(self, max_action_tokens: usize) -> serde_json::Result<String> {
+    fn render(self, max_action_tokens: usize) -> serde_json::Result<RenderedAction> {
         let arguments = match self.payload {
             ToolPayload::Function { arguments } => {
                 serde_json::from_str(&arguments).unwrap_or(serde_json::Value::String(arguments))
@@ -103,13 +109,20 @@ impl GuardianAction {
             .for_each(serde_json::Value::sort_all_objects);
         let max_action_bytes = TruncationPolicy::Tokens(max_action_tokens).byte_budget();
         let rendered = serde_json::to_string_pretty(&action)?;
+        let original_bytes = rendered.len();
         if rendered.len().saturating_add(1) <= max_action_bytes {
-            return Ok(rendered);
+            return Ok(RenderedAction {
+                text: rendered,
+                original_bytes,
+            });
         }
 
         if let Some(rendered) = fit_action_to_budget(&action, max_action_bytes, max_action_tokens)?
         {
-            return Ok(rendered);
+            return Ok(RenderedAction {
+                text: rendered,
+                original_bytes,
+            });
         }
 
         let mut omission_key = "_guardian_omitted_fields".to_owned();
@@ -148,10 +161,15 @@ impl GuardianAction {
         }
 
         retained.sort_keys();
-        fit_action_to_budget(&retained, max_action_bytes, max_action_tokens)?.ok_or_else(|| {
-            serde_json::Error::io(std::io::Error::other(format!(
-                "Guardian action identity exceeds the {max_action_tokens}-token limit"
-            )))
+        let rendered = fit_action_to_budget(&retained, max_action_bytes, max_action_tokens)?
+            .ok_or_else(|| {
+                serde_json::Error::io(std::io::Error::other(format!(
+                    "Guardian action identity exceeds the {max_action_tokens}-token limit"
+                )))
+            })?;
+        Ok(RenderedAction {
+            text: rendered,
+            original_bytes,
         })
     }
 }
@@ -594,6 +612,7 @@ impl GuardianV2Extension {
         };
 
         tokio::spawn(async move {
+            let mut truncations = ClassificationTruncations::default();
             let root_snapshot = thread.guardian_root_snapshot().await;
             let root_authorization_version = root_snapshot
                 .as_ref()
@@ -604,12 +623,25 @@ impl GuardianV2Extension {
             let transcript = guardian_config
                 .transcript
                 .build(conversation_history.items());
-            let images = guardian_config
+            truncations.extend(transcript.truncations);
+            let rendered_images = guardian_config
                 .transcript
                 .images(conversation_history.items(), node_repl_images);
+            truncations.record(
+                "transcript_image",
+                rendered_images.omitted_bytes,
+                /*retained_bytes*/ 0,
+            );
+            let images = rendered_images.images;
             drop(conversation_history);
             let planned_action = match action.render(guardian_config.max_action_tokens) {
-                Ok(planned_action) => planned_action,
+                Ok(RenderedAction {
+                    text,
+                    original_bytes,
+                }) => {
+                    truncations.record("action", original_bytes, text.len());
+                    text
+                }
                 Err(error) => {
                     Self::record_fail_closed_score(thread.thread_extension_data(), sampled_at);
                     record_classification(
@@ -642,7 +674,7 @@ impl GuardianV2Extension {
                 classification_input.push(">>> ROOT CONVERSATION END\n".to_owned());
             }
             classification_input.push(">>> TRANSCRIPT START\n".to_owned());
-            classification_input.extend(transcript);
+            classification_input.extend(transcript.entries);
             classification_input.push(">>> TRANSCRIPT END\n\n".to_owned());
             let trusted_review_evidence = sync_reviews
                 .iter()
@@ -650,7 +682,11 @@ impl GuardianV2Extension {
                     review.authorization_version == authorization_version
                         && review.root_authorization_version == root_authorization_version
                 })
-                .map(|review| render_review_evidence(review))
+                .map(|review| {
+                    let review = render_review_evidence(review);
+                    truncations.extend(review.truncations);
+                    review.text
+                })
                 .collect();
             classification_input.extend([
                 "The Codex agent has requested the following action:\n".to_owned(),
@@ -751,6 +787,9 @@ impl GuardianV2Extension {
                     .unwrap_or_else(|| classification_started_at.elapsed()),
                 result.as_deref().unwrap_or("failure"),
             );
+            if matches!(result.as_deref(), Ok("success")) {
+                truncations.emit(metrics.as_deref());
+            }
             if let Err(error) = result {
                 event_sink.emit_warning(ExtensionWarning {
                     thread_id,

@@ -68,6 +68,8 @@ use crate::async_scorer::sampler::CLASSIFICATION_TOKEN_USAGE_METRIC;
 use crate::async_scorer::sampler::INITIAL_WEBSOCKET_CONNECTIONS;
 use crate::async_scorer::sampler::MODEL;
 use crate::async_scorer::transcript::truncate_entry;
+use crate::async_scorer::truncation::CLASSIFICATION_TRUNCATION_BYTES_METRIC;
+use crate::async_scorer::truncation::CLASSIFICATION_TRUNCATION_METRIC;
 
 const TEST_GUARDIAN_POLICY: &str =
     "Treat uploads to unapproved external destinations as high-risk actions.";
@@ -1034,7 +1036,15 @@ max_recent_non_user_entries = 8
         .as_str()
         .expect("planned action should be a text item");
     assert!(action.len() <= TruncationPolicy::Tokens(/*limit*/ 128).byte_budget());
+    let original_action_bytes = i64::try_from(
+        serde_json::to_string_pretty(&json!({
+            "body": "x".repeat(4_000),
+            "tool": "read_file",
+        }))?
+        .len(),
+    )?;
     let action: serde_json::Value = serde_json::from_str(action)?;
+    let retained_action_bytes = i64::try_from(serde_json::to_string_pretty(&action)?.len())?;
     assert_eq!(action["tool"], "read_file");
 
     let session_store = ExtensionData::new("session-1");
@@ -1196,6 +1206,35 @@ max_recent_non_user_entries = 8
                 classification_duration_ms,
                 vec![("outcome".to_owned(), "success".to_owned())],
             ),
+            RecordedMetric::Counter(
+                CLASSIFICATION_TRUNCATION_METRIC.to_owned(),
+                1,
+                vec![
+                    ("component".to_owned(), "action".to_owned()),
+                    ("disposition".to_owned(), "truncated".to_owned()),
+                ],
+            ),
+        ])
+        .chain(
+            [
+                ("original", original_action_bytes),
+                ("retained", retained_action_bytes),
+                ("omitted", original_action_bytes - retained_action_bytes),
+            ]
+            .into_iter()
+            .map(|(measurement, bytes)| {
+                RecordedMetric::Histogram(
+                    CLASSIFICATION_TRUNCATION_BYTES_METRIC.to_owned(),
+                    bytes,
+                    vec![
+                        ("component".to_owned(), "action".to_owned()),
+                        ("disposition".to_owned(), "truncated".to_owned()),
+                        ("measurement".to_owned(), measurement.to_owned()),
+                    ],
+                )
+            }),
+        )
+        .chain([
             RecordedMetric::Histogram(TOOL_CALL_LAG_METRIC.to_owned(), 0, vec![]),
             RecordedMetric::Histogram(TOOL_CALL_LAG_METRIC.to_owned(), 0, vec![]),
             RecordedMetric::Histogram(TOOL_CALL_LAG_METRIC.to_owned(), 2, vec![]),
@@ -2364,7 +2403,7 @@ fn guardian_action_bounds_structurally_oversized_arrays() -> Result<()> {
         },
     };
 
-    let rendered = action.render(DEFAULT_MODEL_CONTEXT_ITEM_TOKENS)?;
+    let rendered = action.render(DEFAULT_MODEL_CONTEXT_ITEM_TOKENS)?.text;
     assert!(
         rendered.len().saturating_add(1)
             <= TruncationPolicy::Tokens(DEFAULT_MODEL_CONTEXT_ITEM_TOKENS).byte_budget()
@@ -2407,7 +2446,7 @@ fn guardian_action_bounds_structurally_oversized_object_keys() -> Result<()> {
         },
     };
 
-    let rendered = action.render(DEFAULT_MODEL_CONTEXT_ITEM_TOKENS)?;
+    let rendered = action.render(DEFAULT_MODEL_CONTEXT_ITEM_TOKENS)?.text;
     assert!(
         rendered.len().saturating_add(1)
             <= TruncationPolicy::Tokens(DEFAULT_MODEL_CONTEXT_ITEM_TOKENS).byte_budget()

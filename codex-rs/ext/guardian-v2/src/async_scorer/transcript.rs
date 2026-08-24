@@ -11,6 +11,8 @@ use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::plaintext_agent_message_content;
 use codex_protocol::protocol::TruncationPolicy;
 
+use super::truncation::TruncationObservation;
+
 pub(crate) const MAX_MESSAGE_ENTRY_TOKENS: usize = 2_000;
 pub(crate) const MAX_TOOL_ENTRY_TOKENS: usize = 1_000;
 pub(crate) const MAX_MESSAGE_TRANSCRIPT_TOKENS: usize = 10_000;
@@ -32,6 +34,18 @@ struct TranscriptEntry {
     kind: TranscriptEntryKind,
     text: String,
     tokens: usize,
+    original_bytes: usize,
+    retained_bytes: usize,
+}
+
+pub(crate) struct RenderedTranscript {
+    pub(crate) entries: Vec<String>,
+    pub(crate) truncations: Vec<TruncationObservation>,
+}
+
+pub(crate) struct RenderedImages {
+    pub(crate) images: Vec<ContentItem>,
+    pub(crate) omitted_bytes: usize,
 }
 
 fn retained_tokens(
@@ -95,15 +109,20 @@ impl TranscriptConfig {
         &self,
         items: impl IntoIterator<Item = &'a ResponseItem>,
         node_repl_images: impl IntoIterator<Item = ContentItem>,
-    ) -> Vec<ContentItem> {
+    ) -> RenderedImages {
         if !self.include_images {
-            return Vec::new();
+            return RenderedImages {
+                images: Vec::new(),
+                omitted_bytes: 0,
+            };
         }
 
         let mut images = VecDeque::new();
         let mut image_bytes = 0usize;
+        let mut omitted_bytes = 0usize;
         let mut include_image = |image_url: &str, detail: Option<ImageDetail>| {
             if image_url.len() > MAX_TRANSCRIPT_IMAGE_BYTES {
+                omitted_bytes = omitted_bytes.saturating_add(image_url.len());
                 return;
             }
             while images.len() >= MAX_TRANSCRIPT_IMAGES
@@ -113,6 +132,7 @@ impl TranscriptConfig {
                     break;
                 };
                 image_bytes -= image_url.len();
+                omitted_bytes = omitted_bytes.saturating_add(image_url.len());
             }
             image_bytes += image_url.len();
             images.push_back(ContentItem::InputImage {
@@ -157,13 +177,16 @@ impl TranscriptConfig {
             }
         }
 
-        images.into_iter().collect()
+        RenderedImages {
+            images: images.into_iter().collect(),
+            omitted_bytes,
+        }
     }
 
     pub(crate) fn build<'a>(
         &self,
         items: impl IntoIterator<Item = &'a ResponseItem>,
-    ) -> Vec<String> {
+    ) -> RenderedTranscript {
         let mut entries = Vec::new();
         let mut tool_names_by_call_id = HashMap::new();
 
@@ -335,11 +358,19 @@ impl TranscriptConfig {
                     self.max_message_entry_tokens
                 }
             };
+            let original_bytes = text.len();
             let text = truncate_entry(&text, token_cap);
+            let retained_bytes = text.len();
             let entry_number = entries.len() + 1;
             let text = format!("[{entry_number}] {role}: {text}\n");
             let tokens = TruncationPolicy::Bytes(text.len()).token_budget();
-            entries.push(TranscriptEntry { kind, text, tokens });
+            entries.push(TranscriptEntry {
+                kind,
+                text,
+                tokens,
+                original_bytes,
+                retained_bytes,
+            });
         }
 
         let mut included = vec![false; entries.len()];
@@ -438,11 +469,36 @@ impl TranscriptConfig {
             included[index] = true;
         }
 
-        entries
+        let mut truncations = Vec::new();
+        let entries = entries
             .into_iter()
             .enumerate()
-            .filter_map(|(index, entry)| included[index].then_some(entry.text))
-            .collect()
+            .filter_map(|(index, entry)| {
+                let component = match entry.kind {
+                    TranscriptEntryKind::User => "transcript_user",
+                    TranscriptEntryKind::Message => "transcript_message",
+                    TranscriptEntryKind::Tool => "transcript_tool",
+                };
+                let retained_bytes = if included[index] {
+                    entry.retained_bytes
+                } else {
+                    0
+                };
+                if entry.original_bytes > retained_bytes {
+                    truncations.push(TruncationObservation {
+                        component,
+                        original_bytes: entry.original_bytes,
+                        retained_bytes,
+                    });
+                }
+                included[index].then_some(entry.text)
+            })
+            .collect();
+
+        RenderedTranscript {
+            entries,
+            truncations,
+        }
     }
 }
 
