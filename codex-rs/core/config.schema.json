@@ -1447,6 +1447,10 @@
       "additionalProperties": false,
       "description": "Optional tool-call categories available to the Guardian v2 classifier.",
       "properties": {
+        "computer_use_only": {
+          "description": "Restrict asynchronous classification and fast approvals to browser and computer-use tools.",
+          "type": "boolean"
+        },
         "sandboxed_exec_commands": {
           "description": "Include sandboxed shell command calls in Guardian v2 classification.",
           "type": "boolean"

@@ -112,6 +112,9 @@ pub struct GuardianV2TranscriptConfigToml {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GuardianV2ReviewScopeConfigToml {
+    /// Restrict asynchronous classification and fast approvals to browser and computer-use tools.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub computer_use_only: Option<bool>,
     /// Include sandboxed shell command calls in Guardian v2 classification.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sandboxed_exec_commands: Option<bool>,

@@ -64,6 +64,7 @@ use super::should_classify_tool;
 use crate::async_scorer::config::CLASSIFICATION_OUTPUT_INSTRUCTIONS;
 use crate::async_scorer::config::DEFAULT_MODEL_CONTEXT_ITEM_TOKENS;
 use crate::async_scorer::config::DEFAULT_PARENT_COMPACTION_TOKENS;
+use crate::async_scorer::config::GuardianV2ReviewScope;
 use crate::async_scorer::sampler::CLASSIFICATION_TOKEN_USAGE_METRIC;
 use crate::async_scorer::sampler::INITIAL_WEBSOCKET_CONNECTIONS;
 use crate::async_scorer::sampler::MODEL;
@@ -294,31 +295,40 @@ async fn sandboxed_shell_classification_respects_review_scope() -> Result<()> {
     };
 
     let tool_name = ToolName::plain("exec_command");
+    let standard_scope = GuardianV2ReviewScope::Standard {
+        sandboxed_exec_commands: false,
+    };
     assert!(!should_classify_tool(
-        &tool_name, &sandboxed, /*sandboxed_exec_commands*/ false
+        &tool_name,
+        &sandboxed,
+        standard_scope,
     ));
     assert!(!should_classify_tool(
         &tool_name,
         &additional_permissions,
-        /*sandboxed_exec_commands*/ false
+        standard_scope,
     ));
     assert!(should_classify_tool(
         &tool_name,
         &unsandboxed,
-        /*sandboxed_exec_commands*/ false
+        standard_scope,
     ));
     assert!(should_classify_tool(
-        &tool_name, &sandboxed, /*sandboxed_exec_commands*/ true
+        &tool_name,
+        &sandboxed,
+        GuardianV2ReviewScope::Standard {
+            sandboxed_exec_commands: true,
+        },
     ));
     assert!(should_classify_tool(
         &ToolName::plain("read_file"),
         &sandboxed,
-        /*sandboxed_exec_commands*/ false
+        standard_scope,
     ));
     assert!(should_classify_tool(
         &ToolName::namespaced("mcp", "exec_command"),
         &sandboxed,
-        /*sandboxed_exec_commands*/ false
+        standard_scope,
     ));
     skip_if_no_network!(Ok(()));
 
@@ -360,6 +370,123 @@ async fn sandboxed_shell_classification_respects_review_scope() -> Result<()> {
             .load(Ordering::Acquire),
         latest_scored_tool_call
     );
+    Ok(())
+}
+
+#[test]
+fn computer_use_only_classification_recognizes_direct_and_code_mode_tools() {
+    let payload = ToolPayload::Function {
+        arguments: r#"{"code":"await browser.goto('https://example.com')"}"#.to_owned(),
+    };
+    for (tool_name, expected) in [
+        (ToolName::namespaced("mcp__node_repl__", "js"), true),
+        (ToolName::namespaced("mcp__cua_repl__", "js"), true),
+        (ToolName::plain("mcp__node_repl__js"), true),
+        (ToolName::plain("mcp__cua_repl__js"), true),
+        (ToolName::namespaced("mcp__ordinary__", "js"), false),
+        (ToolName::plain("read_file"), false),
+        (ToolName::plain("exec_command"), false),
+    ] {
+        assert_eq!(
+            should_classify_tool(&tool_name, &payload, GuardianV2ReviewScope::ComputerUseOnly),
+            expected,
+            "unexpected classification scope for {tool_name}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn computer_use_only_scores_cannot_approve_other_actions() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let fixture = GuardianFailureFixture::new().await?;
+    let thread_store = fixture.test.codex.thread_extension_data();
+    let mut config = thread_store
+        .get::<crate::async_scorer::config::GuardianV2Config>()
+        .expect("Guardian v2 should have initialized")
+        .as_ref()
+        .clone();
+    config.review_scope = GuardianV2ReviewScope::ComputerUseOnly;
+    thread_store.insert(config);
+    thread_store.insert(SecurityRiskScore {
+        scores: BTreeMap::from([("action_risk".to_owned(), 0.25)]),
+        sampled_at: None,
+    });
+    let progress = thread_store
+        .get::<GuardianV2ScoreProgress>()
+        .expect("Guardian v2 should track score progress per thread");
+    let latest_tool_call = progress.latest_tool_call.load(Ordering::Acquire);
+    let turn_store = ExtensionData::new("turn-1");
+    let ordinary_tool = ToolName::namespaced("mcp__ordinary__", "write_record");
+    let payload = ToolPayload::Function {
+        arguments: r#"{"record":"sensitive"}"#.to_owned(),
+    };
+    fixture.registry.tool_lifecycle_contributors()[0]
+        .on_tool_start(ToolStartInput {
+            session_store: &fixture.session_store,
+            thread_store,
+            turn_store: &turn_store,
+            turn_id: "turn-1",
+            call_id: "ordinary-call",
+            tool_name: &ordinary_tool,
+            payload: &payload,
+            conversation_history: Arc::new(TestConversationHistory(Vec::new())),
+            source: ToolCallSource::CodeMode {
+                cell_id: "cell-1".to_owned(),
+                runtime_tool_call_id: "nested-1".to_owned(),
+            },
+        })
+        .await;
+    assert_eq!(
+        progress.latest_tool_call.load(Ordering::Acquire),
+        latest_tool_call,
+        "unrelated code-mode calls must not age browser/CUA scores"
+    );
+
+    for (action, expected) in [
+        (
+            json!({"tool": "mcp_tool_call", "server": "node_repl", "tool_name": "js"}),
+            Some(ReviewDecision::Approved),
+        ),
+        (
+            json!({"tool": "mcp_tool_call", "server": "cua_repl", "tool_name": "js"}),
+            Some(ReviewDecision::Approved),
+        ),
+        (
+            json!({"tool": "mcp_tool_call", "server": "ordinary", "tool_name": "js"}),
+            None,
+        ),
+        (json!({"tool": "exec_command", "server": "node_repl"}), None),
+    ] {
+        let prompt = action.to_string();
+        assert_eq!(
+            fixture
+                .registry
+                .fast_approval_decision(
+                    &fixture.session_store,
+                    thread_store,
+                    &prompt,
+                    /*extension_metrics*/ None,
+                )
+                .await,
+            expected,
+            "unexpected fast approval for {action}"
+        );
+    }
+    assert_eq!(
+        fixture
+            .registry
+            .fast_approval_decision(
+                &fixture.session_store,
+                thread_store,
+                "not valid JSON",
+                /*extension_metrics*/ None,
+            )
+            .await,
+        None,
+        "malformed approval actions must not reuse a browser score"
+    );
+
     Ok(())
 }
 

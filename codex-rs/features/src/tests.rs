@@ -164,6 +164,7 @@ reuse_parent_compaction = false
 max_parent_compaction_tokens = 384
 
 [guardianv2.review_scope]
+computer_use_only = true
 sandboxed_exec_commands = true
 
 [guardianv2.transcript]
@@ -191,6 +192,7 @@ max_recent_non_user_entries = 12
             reuse_parent_compaction: Some(false),
             max_parent_compaction_tokens: Some(384),
             review_scope: Some(crate::GuardianV2ReviewScopeConfigToml {
+                computer_use_only: Some(true),
                 sandboxed_exec_commands: Some(true),
             }),
             transcript: Some(crate::GuardianV2TranscriptConfigToml {

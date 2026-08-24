@@ -9,26 +9,52 @@ use pretty_assertions::assert_eq;
 use super::CLASSIFICATION_OUTPUT_INSTRUCTIONS;
 use super::DEFAULT_CLASSIFIER_INSTRUCTIONS;
 use super::GuardianV2Config;
+use super::GuardianV2ReviewScope;
 use crate::async_scorer::transcript::truncate_entry;
 
 #[test]
 fn sandboxed_exec_commands_are_excluded_by_default() {
     let config = GuardianV2Config::from_overrides(GuardianV2ConfigToml::default()).unwrap();
 
-    assert!(!config.sandboxed_exec_commands);
+    assert_eq!(
+        config.review_scope,
+        GuardianV2ReviewScope::Standard {
+            sandboxed_exec_commands: false,
+        }
+    );
 }
 
 #[test]
 fn sandboxed_exec_commands_can_be_included() {
     let config = GuardianV2Config::from_overrides(GuardianV2ConfigToml {
         review_scope: Some(GuardianV2ReviewScopeConfigToml {
+            computer_use_only: None,
             sandboxed_exec_commands: Some(true),
         }),
         ..Default::default()
     })
     .unwrap();
 
-    assert!(config.sandboxed_exec_commands);
+    assert_eq!(
+        config.review_scope,
+        GuardianV2ReviewScope::Standard {
+            sandboxed_exec_commands: true,
+        }
+    );
+}
+
+#[test]
+fn computer_use_only_takes_precedence_over_sandboxed_exec_commands() {
+    let config = GuardianV2Config::from_overrides(GuardianV2ConfigToml {
+        review_scope: Some(GuardianV2ReviewScopeConfigToml {
+            computer_use_only: Some(true),
+            sandboxed_exec_commands: Some(true),
+        }),
+        ..Default::default()
+    })
+    .unwrap();
+
+    assert_eq!(config.review_scope, GuardianV2ReviewScope::ComputerUseOnly);
 }
 
 #[test]

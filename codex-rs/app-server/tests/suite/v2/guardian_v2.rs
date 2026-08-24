@@ -74,6 +74,7 @@ struct MockResponsesState {
     luna_score: f64,
     review_outcome: ReviewOutcome,
     transcript_content: TranscriptContent,
+    mcp_server_name: Option<&'static str>,
     root_worker: bool,
     root_user_restriction: bool,
 }
@@ -104,6 +105,12 @@ enum GuardianRisk {
 enum ModelReviewRequirement {
     Optional,
     Required,
+}
+
+#[derive(Clone, Copy)]
+enum GuardianToolScope {
+    AllTools,
+    ComputerUseOnly { server_name: &'static str },
 }
 
 #[derive(Clone, Copy)]
@@ -245,7 +252,7 @@ async fn parent_response(
                 responses::ev_response_created(&call_id),
                 responses::ev_function_call_with_namespace(
                     &call_id,
-                    &format!("mcp__{TEST_SERVER_NAME}"),
+                    &format!("mcp__{}", state.mcp_server_name.unwrap_or(TEST_SERVER_NAME)),
                     TEST_TOOL_NAME,
                     &arguments,
                 ),
@@ -323,8 +330,34 @@ async fn guardian_v2_routes_tool_approvals(
     review_outcome: ReviewOutcome,
     transcript_content: TranscriptContent,
 ) -> Result<()> {
+    guardian_v2_routes_scoped_tool_approvals(
+        risk,
+        lifecycle,
+        requirement,
+        review_outcome,
+        transcript_content,
+        GuardianToolScope::AllTools,
+    )
+    .await
+}
+
+async fn guardian_v2_routes_scoped_tool_approvals(
+    risk: GuardianRisk,
+    lifecycle: ThreadLifecycle,
+    requirement: ModelReviewRequirement,
+    review_outcome: ReviewOutcome,
+    transcript_content: TranscriptContent,
+    scope: GuardianToolScope,
+) -> Result<()> {
+    let server_name = match scope {
+        GuardianToolScope::AllTools => TEST_SERVER_NAME,
+        GuardianToolScope::ComputerUseOnly { server_name } => server_name,
+    };
+    let classifier_in_scope = !matches!(scope, GuardianToolScope::ComputerUseOnly { .. })
+        || codex_protocol::mcp::is_node_repl_backed_server(server_name);
     let (luna_score, expected_guardian_reviews) = match (requirement, risk) {
         (ModelReviewRequirement::Required, _) => (0.25, 2),
+        (ModelReviewRequirement::Optional, _) if !classifier_in_scope => (0.25, 2),
         (ModelReviewRequirement::Optional, GuardianRisk::Low) => (0.25, 1),
         (ModelReviewRequirement::Optional, GuardianRisk::Threshold) => (0.5, 2),
         (ModelReviewRequirement::Optional, GuardianRisk::High) => (0.95, 2),
@@ -339,6 +372,7 @@ async fn guardian_v2_routes_tool_approvals(
         luna_score,
         review_outcome,
         transcript_content,
+        mcp_server_name: Some(server_name),
         root_worker: matches!(
             lifecycle,
             ThreadLifecycle::RootRollback | ThreadLifecycle::RootRestriction
@@ -385,16 +419,23 @@ async fn guardian_v2_routes_tool_approvals(
             ("approvals_reviewer = \"user\"", ApprovalsReviewer::User)
         }
     };
+    let guardian_scope_config = if matches!(scope, GuardianToolScope::ComputerUseOnly { .. }) {
+        "\n\n[features.guardianv2]\nenabled = true\n\n[features.guardianv2.review_scope]\ncomputer_use_only = true"
+    } else {
+        ""
+    };
     let mut mock_config = MockResponsesConfig::new(&responses_url)
         .with_model(MODEL)
         .with_provider_config("supports_websockets = false")
         .with_approval_policy("on-request")
         .with_root_config(reviewer_config)
         .with_extra_config(&format!(
-            "[mcp_servers.{TEST_SERVER_NAME}]\nurl = \"{mcp_server_url}/mcp\"\ndefault_tools_approval_mode = \"prompt\"\n\n[analytics]\nenabled = true\n\n[otel]\nmetrics_exporter = {{ otlp-http = {{ endpoint = \"{responses_url}/metrics\", protocol = \"json\" }} }}"
+            "[mcp_servers.{server_name}]\nurl = \"{mcp_server_url}/mcp\"\ndefault_tools_approval_mode = \"prompt\"\n\n[analytics]\nenabled = true\n\n[otel]\nmetrics_exporter = {{ otlp-http = {{ endpoint = \"{responses_url}/metrics\", protocol = \"json\" }} }}{guardian_scope_config}"
         ))
-        .enable_feature(Feature::GuardianV2)
         .enable_feature(Feature::GuardianApproval);
+    if matches!(scope, GuardianToolScope::AllTools) {
+        mock_config = mock_config.enable_feature(Feature::GuardianV2);
+    }
     if matches!(
         lifecycle,
         ThreadLifecycle::RootRollback | ThreadLifecycle::RootRestriction
@@ -507,7 +548,7 @@ async fn guardian_v2_routes_tool_approvals(
         assert_eq!(reviewed_thread_id, thread_id);
     }
 
-    if matches!(requirement, ModelReviewRequirement::Optional) {
+    if matches!(requirement, ModelReviewRequirement::Optional) && classifier_in_scope {
         let luna_request = wait_for_luna_request(responses_state.as_ref(), /*index*/ 0).await?;
         assert_eq!(
             luna_request["prompt_cache_key"],
@@ -612,17 +653,18 @@ async fn guardian_v2_routes_tool_approvals(
         responses_state.guardian_reviews.load(Ordering::SeqCst),
         expected_guardian_reviews
     );
-    if matches!(requirement, ModelReviewRequirement::Required) {
+    if matches!(requirement, ModelReviewRequirement::Required) || !classifier_in_scope {
         assert!(
             responses_state
                 .luna_requests
                 .lock()
                 .expect("Luna request lock should not be poisoned")
                 .is_empty(),
-            "protected models must not receive Guardian v2 risk scoring"
+            "out-of-scope tools and protected models must not receive Guardian v2 risk scoring"
         );
     }
     let requires_strict_review = matches!(requirement, ModelReviewRequirement::Optional)
+        && classifier_in_scope
         && matches!(risk, GuardianRisk::Threshold | GuardianRisk::High);
     let strict_review_count = app_server
         .pending_notification_methods()
@@ -651,7 +693,7 @@ async fn guardian_v2_routes_tool_approvals(
         );
     }
 
-    if matches!(requirement, ModelReviewRequirement::Optional) {
+    if matches!(requirement, ModelReviewRequirement::Optional) && classifier_in_scope {
         let state_db = StateRuntime::init(
             codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
             "mock_provider".to_owned(),
@@ -771,6 +813,27 @@ async fn guardian_v2_low_risk_actions_skip_subsequent_reviews() -> Result<()> {
         ModelReviewRequirement::Optional,
         ReviewOutcome::Allow,
         TranscriptContent::Normal,
+    )
+    .await
+}
+
+#[test_case("node_repl", GuardianRisk::Low; "low risk browser skips full review")]
+#[test_case("cua_repl", GuardianRisk::Low; "low risk computer use skips full review")]
+#[test_case("node_repl", GuardianRisk::High; "high risk browser receives full review")]
+#[test_case(TEST_SERVER_NAME, GuardianRisk::Low; "other mcp keeps synchronous review")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_v2_computer_use_only_scopes_classification_and_fast_reviews(
+    server_name: &'static str,
+    risk: GuardianRisk,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    guardian_v2_routes_scoped_tool_approvals(
+        risk,
+        ThreadLifecycle::New,
+        ModelReviewRequirement::Optional,
+        ReviewOutcome::Allow,
+        TranscriptContent::Normal,
+        GuardianToolScope::ComputerUseOnly { server_name },
     )
     .await
 }

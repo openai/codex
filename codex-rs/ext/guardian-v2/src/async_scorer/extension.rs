@@ -34,6 +34,8 @@ use codex_login::AgentIdentityAuthPolicy;
 use codex_login::AuthManager;
 use codex_model_provider::create_model_provider;
 use codex_protocol::ThreadId;
+use codex_protocol::mcp::is_node_repl_backed_server;
+use codex_protocol::mcp::is_node_repl_backed_tool;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::TruncationPolicy;
@@ -41,6 +43,7 @@ use codex_protocol::security_risk::SecurityRiskScore;
 use serde_json::json;
 
 use super::config::GuardianV2Config;
+use super::config::GuardianV2ReviewScope;
 use super::review_evidence::render_review_evidence;
 use super::sampler::LunaSampler;
 use super::sampler::LunaSamplerConfig;
@@ -62,8 +65,14 @@ struct RenderedAction {
 fn should_classify_tool(
     tool_name: &ToolName,
     payload: &ToolPayload,
-    sandboxed_exec_commands: bool,
+    review_scope: GuardianV2ReviewScope,
 ) -> bool {
+    let GuardianV2ReviewScope::Standard {
+        sandboxed_exec_commands,
+    } = review_scope
+    else {
+        return is_node_repl_backed_tool(&tool_name.name, tool_name.namespace.as_deref());
+    };
     if sandboxed_exec_commands
         || !tool_name.is_default_namespace()
         || tool_name.name != "exec_command"
@@ -367,12 +376,23 @@ impl ApprovalReviewContributor for GuardianV2Extension {
         &'a self,
         _session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,
-        _prompt: &'a str,
+        prompt: &'a str,
         extension_metrics: Option<Arc<dyn ExtensionMetrics>>,
     ) -> ExtensionFuture<'a, Option<ReviewDecision>> {
         Box::pin(async move {
             thread_store.get::<GuardianV2Enabled>()?;
             let guardian_config = thread_store.get::<GuardianV2Config>()?;
+            if guardian_config.review_scope == GuardianV2ReviewScope::ComputerUseOnly {
+                let action = serde_json::from_str::<serde_json::Value>(prompt).ok()?;
+                if action.get("tool").and_then(serde_json::Value::as_str) != Some("mcp_tool_call")
+                    || !action
+                        .get("server")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(is_node_repl_backed_server)
+                {
+                    return None;
+                }
+            }
             let score_progress = thread_store.get::<GuardianV2ScoreProgress>()?;
             let latest_scored_tool_call = score_progress
                 .latest_scored_tool_call
@@ -450,14 +470,12 @@ impl GuardianV2Extension {
         let Some(score_progress) = input.thread_store.get::<GuardianV2ScoreProgress>() else {
             return;
         };
-        if !should_classify_tool(
-            input.tool_name,
-            input.payload,
-            guardian_config.sandboxed_exec_commands,
-        ) {
-            score_progress
-                .latest_tool_call
-                .fetch_add(/*val*/ 1, Ordering::Relaxed);
+        if !should_classify_tool(input.tool_name, input.payload, guardian_config.review_scope) {
+            if guardian_config.review_scope != GuardianV2ReviewScope::ComputerUseOnly {
+                score_progress
+                    .latest_tool_call
+                    .fetch_add(/*val*/ 1, Ordering::Relaxed);
+            }
             return;
         }
         let metrics = score_progress.metrics.clone();
