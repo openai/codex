@@ -716,7 +716,7 @@ async fn agent_plugin_root_mcp_stdio_tool_round_trip_expands_reserved_paths_and_
                     overlay_call_id,
                     "mcp__agent",
                     "echo",
-                    r#"{"message":"ping","env_var":"PATH"}"#,
+                    r#"{"message":"ping","env_var":"INSTA_WORKSPACE_ROOT"}"#,
                 ),
                 ev_completed("resp-3"),
             ]),
@@ -748,10 +748,7 @@ async fn agent_plugin_root_mcp_stdio_tool_round_trip_expands_reserved_paths_and_
             "agent": {
                 "type": "stdio",
                 "command": format!("./{stdio_server_name}"),
-                "env": {
-                    "MCP_TEST_VALUE": "${PLUGIN_ROOT}|${PLUGIN_DATA}",
-                    "PATH": "${PATH}"
-                }
+                "env": {"MCP_TEST_VALUE": "${PLUGIN_ROOT}|${PLUGIN_DATA}"}
             }
         }
     });
@@ -762,7 +759,7 @@ async fn agent_plugin_root_mcp_stdio_tool_round_trip_expands_reserved_paths_and_
     std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
     std::fs::write(
         plugin_root.join(".codex-plugin/plugin.json"),
-        r#"{"name":"acme.tools","mcpServers":{"agent":{"command":"ignored","env_vars":["PATH"]}}}"#,
+        r#"{"name":"acme.tools","mcpServers":{"agent":{"command":"ignored","env_vars":["INSTA_WORKSPACE_ROOT"]}}}"#,
     )?;
     let mut builder = test_codex().with_home(Arc::clone(&codex_home));
     let test_codex = builder.build_with_remote_and_local_env(&server).await?;
@@ -824,7 +821,7 @@ async fn agent_plugin_root_mcp_stdio_tool_round_trip_expands_reserved_paths_and_
             .as_ref()
             .and_then(|content| content.get("env"))
             .and_then(serde_json::Value::as_str),
-        Some(std::env::var("PATH")?.as_str())
+        Some(std::env::var("INSTA_WORKSPACE_ROOT")?.as_str())
     );
     let requests = mock.requests();
     let search_output = requests[1].tool_search_output(search_call_id);
