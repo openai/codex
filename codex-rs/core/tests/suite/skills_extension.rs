@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use anyhow::Result;
 use codex_config::ConfigLayerEntry;
@@ -10,17 +11,23 @@ use codex_core::StartThreadOptions;
 use codex_core::TurnInputRequest;
 use codex_core::config::Config;
 use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::EnvironmentManager;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
+use codex_exec_server::RemoveOptions;
+use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ExtensionWarning;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_protocol::capabilities::CapabilityRootLocation;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::user_input::UserInput;
+use codex_skills_extension::ExecutorSkillProvider;
 use codex_skills_extension::HostSkillProvider;
 use codex_skills_extension::OrchestratorSkillProvider;
 use codex_skills_extension::SkillProvider;
@@ -52,6 +59,7 @@ use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
+use core_test_support::responses::start_websocket_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_remote;
 use core_test_support::skip_if_wine_exec;
@@ -65,6 +73,9 @@ use tempfile::TempDir;
 use tokio::time::Duration;
 use tokio::time::Instant;
 use toml::toml;
+use tracing::Level;
+use tracing_subscriber::fmt::format::FmtSpan;
+use tracing_test::internal::MockWriter;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::Request;
@@ -1252,6 +1263,7 @@ async fn production_turn_aliases_discovered_singleton_orchestrator_root() -> Res
     skip_if_no_network!(Ok(()));
 
     const SKILL_ROOT: &str = "skill://plugin_connector_1p_2330815c823c8191941e5dc465bb899f";
+    const SKILL_BODY: &str = "ORCHESTRATOR_SKILL_REMAINS_AVAILABLE_WITHOUT_HOST_DISCOVERY";
 
     let server = responses::start_mock_server().await;
     let apps_server = AppsTestServer::mount(&server).await?;
@@ -1264,16 +1276,28 @@ async fn production_turn_aliases_discovered_singleton_orchestrator_root() -> Res
     Mock::given(method("POST"))
         .and(path_regex("^/api/codex/ps/mcp/?$"))
         .and(|request: &Request| {
-            serde_json::from_slice::<Value>(&request.body)
-                .is_ok_and(|body| body["method"].as_str() == Some("resources/list"))
+            serde_json::from_slice::<Value>(&request.body).is_ok_and(|body| {
+                matches!(
+                    body["method"].as_str(),
+                    Some("resources/list" | "resources/read")
+                )
+            })
         })
         .respond_with(|request: &Request| {
             let body: Value = serde_json::from_slice(&request.body)
                 .expect("MCP resource request should be valid JSON");
-            ResponseTemplate::new(/*status*/ 200).set_body_json(json!({
-                "jsonrpc": "2.0",
-                "id": body["id"],
-                "result": {
+            let result = if body["method"] == "resources/read" {
+                let uri = format!("{SKILL_ROOT}/search/SKILL.md");
+                assert_eq!(body["params"]["uri"], uri);
+                json!({
+                    "contents": [{
+                        "uri": uri,
+                        "mimeType": "text/markdown",
+                        "text": SKILL_BODY,
+                    }],
+                })
+            } else {
+                json!({
                     "resources": [{
                         "name": "search",
                         "uri": format!("{SKILL_ROOT}/search"),
@@ -1285,7 +1309,12 @@ async fn production_turn_aliases_discovered_singleton_orchestrator_root() -> Res
                             "allow_implicit_invocation": true,
                         },
                     }],
-                },
+                })
+            };
+            ResponseTemplate::new(/*status*/ 200).set_body_json(json!({
+                "jsonrpc": "2.0",
+                "id": body["id"],
+                "result": result,
             }))
         })
         .with_priority(/*p*/ 1)
@@ -1315,16 +1344,18 @@ async fn production_turn_aliases_discovered_singleton_orchestrator_root() -> Res
         .with_config(|config| {
             config.include_skill_instructions = true;
             config.orchestrator_skills_enabled = true;
+            config
+                .features
+                .enable(Feature::SkipHostSkillDiscovery)
+                .expect("orchestrator skills must not depend on host discovery");
         });
     let test = builder.build_with_auto_env(&server).await?;
     wait_for_mcp_server(&test.codex, CODEX_APPS_MCP_SERVER_NAME).await?;
 
-    test.submit_turn("Inspect the available skills.").await?;
+    test.submit_turn("Use $demo:search.").await?;
 
-    let developer_text = response
-        .single_request()
-        .message_input_texts("developer")
-        .join("\n");
+    let request = response.single_request();
+    let developer_text = request.message_input_texts("developer").join("\n");
     assert!(
         developer_text.contains(&format!("- `o0` = `{SKILL_ROOT}`")),
         "model request should include the discovered orchestrator root: {developer_text}"
@@ -1339,6 +1370,11 @@ async fn production_turn_aliases_discovered_singleton_orchestrator_root() -> Res
     assert!(
         developer_text.contains("- Root aliases: Pass short package locators directly"),
         "model request should explain how to read aliased packages: {developer_text}"
+    );
+    let user_text = request.message_input_texts("user").join("\n");
+    assert!(
+        user_text.contains("<skill>\n<name>demo:search</name>") && user_text.contains(SKILL_BODY),
+        "orchestrator instruction reads must remain available without host discovery: {user_text}"
     );
 
     Ok(())
@@ -1415,6 +1451,371 @@ async fn production_turn_aliases_executor_skill_roots() -> Result<()> {
         !executor_catalog.contains("- Root aliases: Pass short package locators directly"),
         "Sol should not include optional resource-alias instructions: {executor_catalog}"
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn opted_in_executor_provider_skips_host_discovery_but_injects_discovered_skill() -> Result<()>
+{
+    skip_if_no_network!(Ok(()));
+    skip_if_wine_exec!(
+        Ok(()),
+        "executor-backed repo skills require matching host and executor path conventions"
+    );
+
+    const AMBIENT_SKILL_NAME: &str = "ambient-repo";
+    const AMBIENT_SKILL_BODY: &str = "AMBIENT_REPO_SKILL_SHOULD_NOT_BE_LOADED";
+    const HOST_SKILL_NAME: &str = "ambient-home";
+    const HOST_SKILL_DESCRIPTION: &str = "NON_REPO_HOST_SKILL_SHOULD_NOT_BE_LOADED";
+    const EXECUTOR_SKILL_NAME: &str = "selected-executor";
+    const EXECUTOR_SKILL_BODY: &str = "SELECTED_EXECUTOR_SKILL_REMAINS_AVAILABLE";
+    const EXECUTOR_ROOT_ID: &str = "selected-capabilities";
+
+    let buffer: &'static Mutex<Vec<u8>> = Box::leak(Box::new(Mutex::new(Vec::new())));
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_max_level(Level::TRACE)
+        .with_span_events(FmtSpan::NEW)
+        .with_writer(MockWriter::new(buffer))
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let server = responses::start_mock_server().await;
+    let websocket_server = start_websocket_server(vec![vec![
+        vec![ev_response_created("warm-1"), ev_completed("warm-1")],
+        vec![ev_response_created("resp-1"), ev_completed("resp-1")],
+        vec![ev_response_created("resp-2"), ev_completed("resp-2")],
+    ]])
+    .await;
+    let codex_home = Arc::new(TempDir::new()?);
+    write_host_skills(
+        codex_home.path(),
+        &[(HOST_SKILL_NAME, HOST_SKILL_DESCRIPTION)],
+    )?;
+    let host_skill_path = codex_home
+        .path()
+        .join("skills")
+        .join(HOST_SKILL_NAME)
+        .join("SKILL.md");
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    install_with_providers(
+        &mut extensions,
+        SkillProviders::new().with_executor_provider(Arc::new(
+            ExecutorSkillProvider::new_with_restriction_product(
+                Arc::new(EnvironmentManager::default_for_tests()),
+                /*restriction_product*/ None,
+            ),
+        )),
+        |config: &Config| SkillsExtensionConfig {
+            include_instructions: config.include_skill_instructions,
+            max_context_tokens: config.skill_max_context_tokens,
+            bundled_skills_enabled: false,
+            orchestrator_skills_enabled: false,
+            shadow_selection_enabled: false,
+        },
+    );
+    let mut builder = test_codex()
+        .with_home(codex_home)
+        .with_extensions(Arc::new(extensions.build()))
+        .with_workspace_setup(|cwd, fs| async move {
+            for (skill_dir, name, description, body) in [
+                (
+                    cwd.join(".agents/skills").join(AMBIENT_SKILL_NAME),
+                    AMBIENT_SKILL_NAME,
+                    "Ambient repository skill.",
+                    AMBIENT_SKILL_BODY,
+                ),
+                (
+                    cwd.join("selected-capabilities").join(EXECUTOR_SKILL_NAME),
+                    EXECUTOR_SKILL_NAME,
+                    "Selected executor skill.",
+                    EXECUTOR_SKILL_BODY,
+                ),
+            ] {
+                fs.create_directory(
+                    &PathUri::from_host_native_path(&skill_dir)?,
+                    CreateDirectoryOptions {
+                        recursive: true,
+                        follow_symlinks: true,
+                    },
+                    /*sandbox*/ None,
+                )
+                .await?;
+                fs.write_file(
+                    &PathUri::from_host_native_path(skill_dir.join("SKILL.md"))?,
+                    format!("---\nname: {name}\ndescription: {description}\n---\n\n{body}\n")
+                        .into_bytes(),
+                    Default::default(),
+                    /*sandbox*/ None,
+                )
+                .await?;
+            }
+            Ok(())
+        })
+        .with_config(|config| {
+            configure_catalog_test(config);
+            config
+                .features
+                .enable(Feature::SkipHostSkillDiscovery)
+                .expect("host skill discovery opt-out should be configurable");
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    let environment = test.executor_environment().selection().clone();
+    let executor_skill_root = SelectedCapabilityRoot {
+        id: EXECUTOR_ROOT_ID.to_string(),
+        location: CapabilityRootLocation::Environment {
+            environment_id: environment.environment_id.clone(),
+            path: environment.cwd.join("selected-capabilities")?,
+        },
+    };
+    let mut thread_extension_init = ExtensionDataInit::default();
+    thread_extension_init.insert(vec![executor_skill_root]);
+    let mut executor_config = test.config.clone();
+    executor_config.model_provider.base_url = Some(format!("{}/v1", websocket_server.uri()));
+    executor_config.model_provider.supports_websockets = true;
+    let executor_thread = test
+        .thread_manager
+        .start_thread(StartThreadOptions {
+            environments: Some(vec![environment.clone()]),
+            thread_extension_init,
+            ..StartThreadOptions::new(executor_config)
+        })
+        .await?;
+    let executor_skill_path = environment
+        .cwd
+        .join("selected-capabilities")?
+        .join(EXECUTOR_SKILL_NAME)?
+        .join("SKILL.md")?;
+    let normalized_executor_skill_path = executor_skill_path
+        .inferred_native_path_string()
+        .replace('\\', "/");
+    let normalized_executor_skill_path = normalized_executor_skill_path.trim_start_matches('/');
+    let executor_skill_locator =
+        format!("skill://{EXECUTOR_ROOT_ID}/{normalized_executor_skill_path}");
+
+    let prewarm = tokio::time::timeout(
+        Duration::from_secs(10),
+        websocket_server.wait_for_request(/*connection_index*/ 0, /*request_index*/ 0),
+    )
+    .await?
+    .body_json();
+    assert_eq!(prewarm["generate"].as_bool(), Some(false));
+
+    // Prewarm already materialized this file through DiscoverV1. Both turns must use that
+    // snapshot for catalog metadata and instruction reads instead of rescanning the executor.
+    test.fs()
+        .remove(
+            &executor_skill_path,
+            RemoveOptions {
+                recursive: false,
+                force: false,
+                follow_symlinks: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await?;
+
+    for turn in ["first", "next"] {
+        executor_thread
+            .thread
+            .start_or_steer_turn(TurnInputRequest::user_input(vec![
+                UserInput::Text {
+                    text: format!(
+                        "For the {turn} turn, use ${AMBIENT_SKILL_NAME}, ${HOST_SKILL_NAME}, and ${EXECUTOR_SKILL_NAME}."
+                    ),
+                    text_elements: Vec::new(),
+                },
+                UserInput::Skill {
+                    name: HOST_SKILL_NAME.to_string(),
+                    path: host_skill_path.clone(),
+                },
+                // Executor skills are authority-scoped resources, not host filesystem paths.
+                UserInput::Mention {
+                    name: EXECUTOR_SKILL_NAME.to_string(),
+                    path: executor_skill_locator.clone(),
+                },
+            ]))
+            .await?;
+        core_test_support::wait_for_event(&executor_thread.thread, |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
+    }
+
+    let requests = websocket_server.single_connection();
+    assert_eq!(requests.len(), 3);
+    for (index, request) in requests.iter().skip(1).enumerate() {
+        let request = request.body_json();
+        let message_text = |role| {
+            request["input"]
+                .as_array()
+                .expect("response.create input array")
+                .iter()
+                .filter(|item| item["role"].as_str() == Some(role))
+                .flat_map(|item| item["content"].as_array().into_iter().flatten())
+                .filter_map(|part| part["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let developer_text = message_text("developer");
+        let user_text = message_text("user");
+        // Later websocket requests can omit previously sent developer context.
+        if index == 0 {
+            assert!(
+                developer_text.contains(EXECUTOR_SKILL_NAME),
+                "selected executor skill should remain advertised: {developer_text}"
+            );
+        }
+        assert!(
+            user_text.contains(&format!("<skill>\n<name>{EXECUTOR_SKILL_NAME}</name>"))
+                && user_text.contains(EXECUTOR_SKILL_BODY),
+            "turn {index} should inject the discovered executor skill: {user_text}"
+        );
+        assert!(
+            !developer_text.contains(AMBIENT_SKILL_NAME)
+                && !developer_text.contains(HOST_SKILL_NAME)
+                && !user_text.contains(AMBIENT_SKILL_BODY)
+                && !user_text.contains(HOST_SKILL_DESCRIPTION)
+                && !user_text.contains(&format!("<skill>\n<name>{AMBIENT_SKILL_NAME}</name>"))
+                && !user_text.contains(&format!("<skill>\n<name>{HOST_SKILL_NAME}</name>")),
+            "turn {index} must not load repository or non-repository host skills; developer: {developer_text}; user: {user_text}"
+        );
+    }
+
+    executor_thread.thread.shutdown_and_wait().await?;
+    test.codex.shutdown_and_wait().await?;
+    websocket_server.shutdown().await;
+
+    let logs = String::from_utf8(buffer.lock().unwrap().clone())?;
+    for span in [
+        "startup_prewarm",
+        "turn_context.build",
+        "capability_roots.snapshot_for_step",
+        "skills.executor.catalog_snapshot",
+    ] {
+        assert!(
+            logs.contains(span),
+            "expected positive trace control {span}"
+        );
+    }
+    assert!(
+        !logs.contains("skills_for_config"),
+        "session startup, prewarm, and both turns must bypass host discovery: {logs}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn executor_only_provider_preserves_structured_repo_skill_without_discovery_opt_out()
+-> Result<()> {
+    skip_if_wine_exec!(
+        Ok(()),
+        "structured host skill inputs require matching host and executor path conventions"
+    );
+
+    const AMBIENT_SKILL_NAME: &str = "ambient-repo";
+    const AMBIENT_SKILL_BODY: &str = "AMBIENT_REPO_SKILL_REMAINS_AVAILABLE";
+
+    let server = responses::start_mock_server().await;
+    let response = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    install_with_providers(
+        &mut extensions,
+        SkillProviders::new().with_executor_provider(Arc::new(
+            ExecutorSkillProvider::new_with_restriction_product(
+                Arc::new(EnvironmentManager::default_for_tests()),
+                /*restriction_product*/ None,
+            ),
+        )),
+        |config: &Config| SkillsExtensionConfig {
+            include_instructions: config.include_skill_instructions,
+            max_context_tokens: config.skill_max_context_tokens,
+            bundled_skills_enabled: false,
+            orchestrator_skills_enabled: false,
+            shadow_selection_enabled: false,
+        },
+    );
+    let mut builder = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .with_workspace_setup(|cwd, fs| async move {
+            let skill_dir = cwd.join(".agents/skills").join(AMBIENT_SKILL_NAME);
+            fs.create_directory(
+                &PathUri::from_host_native_path(&skill_dir)?,
+                CreateDirectoryOptions {
+                    recursive: true,
+                    follow_symlinks: true,
+                },
+                /*sandbox*/ None,
+            )
+            .await?;
+            fs.write_file(
+                &PathUri::from_host_native_path(skill_dir.join("SKILL.md"))?,
+                format!(
+                    "---\nname: {AMBIENT_SKILL_NAME}\ndescription: Ambient repository skill.\n---\n\n{AMBIENT_SKILL_BODY}\n"
+                )
+                .into_bytes(),
+                Default::default(),
+                /*sandbox*/ None,
+            )
+            .await?;
+            Ok(())
+        })
+        .with_config(configure_catalog_test);
+    let test = builder.build_with_auto_env(&server).await?;
+    assert!(
+        test.codex
+            .inspect_selected_capability_roots()
+            .ready_roots
+            .is_empty(),
+        "desktop sessions without selected capability roots must retain repository skills"
+    );
+    let ambient_skill_path = test
+        .executor_environment()
+        .cwd()
+        .join(".agents/skills")
+        .join(AMBIENT_SKILL_NAME)
+        .join("SKILL.md")
+        .to_path_buf();
+    let ambient_skill_path = test
+        .fs()
+        .canonicalize(
+            &PathUri::from_host_native_path(&ambient_skill_path)?,
+            /*sandbox*/ None,
+        )
+        .await?
+        .to_abs_path()?
+        .to_path_buf();
+
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![
+            UserInput::Text {
+                text: format!("Use ${AMBIENT_SKILL_NAME}."),
+                text_elements: Vec::new(),
+            },
+            UserInput::Skill {
+                name: AMBIENT_SKILL_NAME.to_string(),
+                path: ambient_skill_path,
+            },
+        ]))
+        .await?;
+    core_test_support::wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let request = response.single_request();
+    let user_text = request.message_input_texts("user").join("\n");
+    assert!(
+        user_text.contains(&format!("<skill>\n<name>{AMBIENT_SKILL_NAME}</name>"))
+            && user_text.contains(AMBIENT_SKILL_BODY),
+        "desktop's structured absolute-path skill selection must remain available: {user_text}"
+    );
+
     Ok(())
 }
 
@@ -2246,7 +2647,13 @@ async fn production_turn_keeps_full_snapshot_host_skill_prompt() -> Result<()> {
     let mut builder = test_codex()
         .with_home(Arc::clone(&codex_home))
         .with_extensions(extensions)
-        .with_config(configure_catalog_test);
+        .with_config(|config| {
+            configure_catalog_test(config);
+            config
+                .features
+                .enable(Feature::SkipHostSkillDiscovery)
+                .expect("host skill provider must override the discovery opt-out");
+        });
     let test = builder.build_with_auto_env(&server).await?;
 
     test.submit_turn("Use $long-host.").await?;

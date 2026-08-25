@@ -620,10 +620,17 @@ async fn warm_plugins_and_skills_for_session_init(
     plugins_manager: Arc<PluginsManager>,
     skills_service: Arc<HostSkillsService>,
     turn_environments: &TurnEnvironmentSnapshot,
+    extensions: &codex_extension_api::ExtensionRegistry<Config>,
 ) -> Vec<SkillError> {
-    let fs = turn_environments.primary_filesystem();
     let plugins_input = config.plugins_config_input();
     let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
+    if config.features.enabled(Feature::SkipHostSkillDiscovery)
+        && !extensions.requires_host_skill_discovery()
+    {
+        return Vec::new();
+    }
+
+    let fs = turn_environments.primary_filesystem();
     let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
     let plugin_skill_snapshots = plugins_manager.plugin_skill_snapshots_for_config(&plugins_input);
     let skills_input = skills_load_input_from_config(config.as_ref(), effective_skill_roots)
@@ -1219,6 +1226,7 @@ impl Session {
                 Arc::clone(&plugins_manager),
                 Arc::clone(&skills_service),
                 &resolved_environments,
+                extensions.as_ref(),
             )
             .instrument(info_span!(
                 "session_init.plugin_skill_warmup",

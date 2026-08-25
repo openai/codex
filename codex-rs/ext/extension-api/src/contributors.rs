@@ -275,6 +275,13 @@ pub trait TokenUsageContributor: Send + Sync {
 /// Implementations should treat the skill resource as an opaque identity and keep this callback
 /// cheap because it runs inline with skill loading or command dispatch.
 pub trait SkillInvocationContributor: Send + Sync {
+    /// Whether this contributor needs a snapshot of host-owned skills.
+    ///
+    /// The default preserves legacy discovery for contributors that do not explicitly opt out.
+    fn requires_host_skill_discovery(&self) -> bool {
+        true
+    }
+
     /// Called after one explicit skill load or deduplicated implicit skill invocation is observed.
     fn on_skill_invocation<'a>(
         &'a self,

@@ -895,6 +895,9 @@
             "skill_search": {
               "type": "boolean"
             },
+            "skip_host_skill_discovery": {
+              "type": "boolean"
+            },
             "sqlite": {
               "type": "boolean"
             },
@@ -5899,6 +5902,9 @@
           "type": "boolean"
         },
         "skill_search": {
+          "type": "boolean"
+        },
+        "skip_host_skill_discovery": {
           "type": "boolean"
         },
         "sqlite": {

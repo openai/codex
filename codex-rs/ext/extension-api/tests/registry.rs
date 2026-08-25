@@ -96,6 +96,32 @@ impl TokenUsageContributor for AllContributors {}
 
 impl SkillInvocationContributor for AllContributors {}
 
+struct ExecutorOnlySkillContributor;
+
+impl SkillInvocationContributor for ExecutorOnlySkillContributor {
+    fn requires_host_skill_discovery(&self) -> bool {
+        false
+    }
+}
+
+#[test]
+fn host_skill_discovery_preserves_legacy_and_host_contributor_behavior() {
+    assert!(
+        ExtensionRegistryBuilder::<()>::new()
+            .build()
+            .requires_host_skill_discovery()
+    );
+
+    let mut executor_only = ExtensionRegistryBuilder::<()>::new();
+    executor_only.skill_invocation_contributor(Arc::new(ExecutorOnlySkillContributor));
+    assert!(!executor_only.build().requires_host_skill_discovery());
+
+    let mut mixed = ExtensionRegistryBuilder::<()>::new();
+    mixed.skill_invocation_contributor(Arc::new(ExecutorOnlySkillContributor));
+    mixed.skill_invocation_contributor(Arc::new(AllContributors));
+    assert!(mixed.build().requires_host_skill_discovery());
+}
+
 impl TurnInputContributor for AllContributors {
     fn contribute<'a>(
         &'a self,

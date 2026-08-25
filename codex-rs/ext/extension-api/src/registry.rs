@@ -191,6 +191,17 @@ impl<C: Sync> ExtensionRegistry<C> {
         &self.skill_invocation_contributors
     }
 
+    /// Whether any installed skill contributor needs a snapshot of host-owned skills.
+    ///
+    /// Registries without skill contributors retain legacy host discovery behavior.
+    pub fn requires_host_skill_discovery(&self) -> bool {
+        self.skill_invocation_contributors.is_empty()
+            || self
+                .skill_invocation_contributors
+                .iter()
+                .any(|contributor| contributor.requires_host_skill_discovery())
+    }
+
     /// Returns the first full approval assessment claimed by a contributor.
     pub async fn full_approval_review(
         &self,
