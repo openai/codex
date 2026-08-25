@@ -28,6 +28,7 @@ tokio = { workspace = true, features = ["rt-multi-thread"] }
 
 [target.'cfg(windows)'.dependencies]
 codex-windows-sandbox = { workspace = true }
+pathdiff = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
