@@ -1017,6 +1017,7 @@ impl App {
             None
         };
         let is_turn_started = matches!(notification, ServerNotification::TurnStarted(_));
+        let is_thread_closed = matches!(notification, ServerNotification::ThreadClosed(_));
         let notification_status_change = SideParentStatusChange::for_notification(&notification);
         let (sender, store) = {
             let channel = self.ensure_thread_channel(thread_id);
@@ -1034,7 +1035,6 @@ impl App {
                 ServerNotification::TurnCompleted(notification) => {
                     guard.active_turn_id() == Some(notification.turn.id.as_str())
                 }
-                ServerNotification::ThreadClosed(_) => true,
                 _ => false,
             };
             let notification = if guard.active {
@@ -1053,6 +1053,8 @@ impl App {
         };
         if is_turn_started {
             self.agent_navigation.mark_running(thread_id);
+        } else if is_thread_closed {
+            self.mark_agent_picker_thread_closed(thread_id);
         } else if turn_stopped {
             self.agent_navigation.mark_stopped(thread_id);
         }

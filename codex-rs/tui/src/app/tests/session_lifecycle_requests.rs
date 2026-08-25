@@ -2484,6 +2484,48 @@ async fn changing_directory_preserves_project_trust_permissions_history_and_hook
         assert!(output.contains(expected), "{path}");
         app.clear_committed_mcp_inventory_loading();
     }
+    let tracked = server.start_thread(&app.config).await?;
+    let closed = tracked.session.thread_id;
+    let channel = ThreadEventChannel::new_with_session(
+        THREAD_EVENT_CHANNEL_CAPACITY,
+        tracked.session,
+        tracked.turns,
+    );
+    app.thread_event_channels.insert(closed, channel);
+    app.agent_navigation.mark_closed(child);
+    for has_stale_replay_turn in [false, true] {
+        app.agent_navigation.upsert(
+            closed, /*agent_nickname*/ None, /*agent_role*/ None,
+            /*is_closed*/ false,
+        );
+        let channel = app.thread_event_channels.get_mut(&closed).expect("channel");
+        channel.store.lock().await.set_turns(vec![test_turn(
+            "stale-turn",
+            TurnStatus::InProgress,
+            Vec::new(),
+        )]);
+        if has_stale_replay_turn {
+            channel.mark_replay_only();
+            app.agent_navigation.mark_closed(closed);
+        } else {
+            app.enqueue_thread_notification(closed, thread_closed_notification(closed))
+                .await?;
+        }
+        requests.lock().expect("request recorder lock").clear();
+        app.change_working_directory(&mut tui, &mut server, failed.clone().abs())
+            .await;
+        assert_eq!(
+            recorded_params(&requests, "thread/backgroundTerminals/list"),
+            vec![json!({"threadId": original.to_string(), "cursor": null, "limit": 1})],
+        );
+        let output = history().join("");
+        insta::allow_duplicates! {
+            assert_snapshot!(output, @"■ Failed to change: thread/fork failed during TUI bootstrap: thread/fork failed: forced thread/name/set failure (code -32603)");
+        }
+    }
+    app.agent_navigation.upsert(
+        child, /*agent_nickname*/ None, /*agent_role*/ None, /*is_closed*/ false,
+    );
     app.set_approvals_reviewer_in_app_and_widget(ApprovalsReviewer::AutoReview);
     app.runtime_permission_profile_override =
         Some(RuntimePermissionProfileOverride::from_config(&app.config));

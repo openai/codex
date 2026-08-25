@@ -29,13 +29,25 @@ impl App {
             return self.working_directory_error("MCP inventory is still loading.");
         }
         let agents = self.agent_navigation.ordered_threads();
+        let closed_agents: HashSet<_> = agents
+            .iter()
+            .filter_map(|(id, agent)| agent.is_closed.then_some(*id))
+            .collect();
         let active = self.thread_event_channels.iter().any(|(id, channel)| {
-            let store = channel.store.try_lock();
-            *id != thread_id && !store.is_ok_and(|store| store.active_turn_id().is_none())
+            *id != thread_id
+                && !closed_agents.contains(id)
+                && !channel
+                    .store
+                    .try_lock()
+                    .is_ok_and(|store| store.active_turn_id().is_none())
         });
         if active || agents.iter().any(|(t, a)| *t != thread_id && a.is_running) {
             return self.working_directory_error("Cannot change: another agent is running.");
         }
+        let open_agents: Vec<_> = agents
+            .iter()
+            .filter_map(|(id, agent)| (!agent.is_closed).then_some(*id))
+            .collect();
         let mut config = match self.rebuild_config_for_cwd(cwd.to_path_buf()).await {
             Ok(config) => config,
             Err(err) => return self.working_directory_error(format!("Cannot load {cwd:?}: {err}")),
@@ -96,10 +108,12 @@ impl App {
         {
             return self.working_directory_error("Conversation history is not saved.");
         }
-        let mut ids: HashSet<_> = channels.keys().copied().collect();
-        for (id, agent) in self.agent_navigation.ordered_threads() {
-            ids.extend((!agent.is_closed).then_some(id));
-        }
+        let mut ids: HashSet<_> = channels
+            .keys()
+            .copied()
+            .filter(|id| !closed_agents.contains(id))
+            .collect();
+        ids.extend(open_agents);
         let descendants = ids.iter().copied().filter(|id| *id != thread_id);
         for tracked_id in std::iter::once(thread_id).chain(descendants) {
             let request = ClientRequest::ThreadBackgroundTerminalsList {
