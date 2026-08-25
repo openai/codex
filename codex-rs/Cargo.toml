@@ -101,6 +101,7 @@ members = [
     "tools",
     "v8-poc",
     "websocket-client",
+    "worktree",
     "workload-identity",
     "utils/absolute-path",
     "utils/audio",
