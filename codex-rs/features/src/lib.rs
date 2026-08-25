@@ -88,6 +88,8 @@ impl Stage {
 /// Unique features toggled via configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Feature {
+    /// Enable the interactive transcript composer and turn-selection UI.
+    TranscriptV2,
     // Stable.
     /// Enable the default shell tool.
     ShellTool,
@@ -834,6 +836,12 @@ pub struct FeatureSpec {
 }
 
 pub const FEATURES: &[FeatureSpec] = &[
+    FeatureSpec {
+        id: Feature::TranscriptV2,
+        key: "transcript_v2",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
     // Stable features.
     FeatureSpec {
         id: Feature::GhostCommit,

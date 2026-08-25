@@ -133,15 +133,19 @@ fn strict_config_is_not_supported_for_cloud_command() -> Result<()> {
 async fn features_enable_writes_feature_flag_to_config() -> Result<()> {
     let codex_home = TempDir::new()?;
 
-    let mut cmd = codex_command(codex_home.path())?;
-    cmd.args(["features", "enable", "unified_exec"])
-        .assert()
-        .success()
-        .stdout(contains("Enabled feature `unified_exec` in config.toml."));
+    for feature in ["unified_exec", "transcript_v2"] {
+        let mut cmd = codex_command(codex_home.path())?;
+        cmd.args(["features", "enable", feature])
+            .assert()
+            .success()
+            .stdout(contains(format!(
+                "Enabled feature `{feature}` in config.toml."
+            )));
 
-    let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-    assert!(config.contains("[features]"));
-    assert!(config.contains("unified_exec = true"));
+        let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+        assert!(config.contains("[features]"));
+        assert!(config.contains(&format!("{feature} = true")));
+    }
 
     Ok(())
 }

@@ -931,6 +931,9 @@
             "tool_suggest": {
               "type": "boolean"
             },
+            "transcript_v2": {
+              "type": "boolean"
+            },
             "tui_app_server": {
               "type": "boolean"
             },
@@ -5932,6 +5935,9 @@
           "type": "boolean"
         },
         "tool_suggest": {
+          "type": "boolean"
+        },
+        "transcript_v2": {
           "type": "boolean"
         },
         "tui_app_server": {

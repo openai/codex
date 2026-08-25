@@ -15,6 +15,15 @@ use toml::Table;
 use toml::Value as TomlValue;
 
 #[test]
+fn transcript_v2_resolves_explicit_config_overrides() {
+    let mut features = Features::with_defaults();
+    for enabled in [false, true, false] {
+        features.apply_map(&BTreeMap::from([("transcript_v2".to_string(), enabled)]));
+        assert_eq!(features.enabled(Feature::TranscriptV2), enabled);
+    }
+}
+
+#[test]
 fn under_development_features_are_disabled_by_default() {
     for spec in crate::FEATURES {
         if matches!(spec.stage, Stage::UnderDevelopment) {
