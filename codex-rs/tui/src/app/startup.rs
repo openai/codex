@@ -800,6 +800,17 @@ See the Codex keymap documentation for supported actions and examples."
                         }
                         AppRunControl::Continue
                     }
+                    () = async {
+                        match app.chat_widget.terminal_title_next_refresh {
+                            Some(deadline) => {
+                                tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await;
+                            }
+                            None => std::future::pending().await,
+                        }
+                    } => {
+                        app.chat_widget.refresh_terminal_title();
+                        AppRunControl::Continue
+                    }
                 };
                 if App::should_stop_waiting_for_initial_session(
                     waiting_for_initial_session_configured,
