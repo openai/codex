@@ -986,6 +986,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                         permissions: None,
                         model: None,
                         service_tier: None,
+                        service_tier_for_turn: None,
                         effort: default_effort,
                         summary: None,
                         personality: None,

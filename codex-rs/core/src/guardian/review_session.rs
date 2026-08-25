@@ -1179,6 +1179,7 @@ async fn run_review_on_session(
             })
             .on_start(TurnStartOptions {
                 final_output_json_schema: Some(params.schema.clone()),
+                service_tier: None,
                 parent_turn_id: Some(parent_turn.sub_id.clone()),
                 root_turn_id: parent_turn.turn_metadata_state.root_turn_id(),
             }),

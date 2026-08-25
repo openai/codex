@@ -98,12 +98,14 @@ impl PreparedTurnInputSettings {
     ) -> CodexResult<Arc<TurnContext>> {
         let TurnStartOptions {
             final_output_json_schema,
+            service_tier,
             parent_turn_id,
             root_turn_id,
         } = self.start_options;
         let emit_thread_settings_applied = self.thread_settings_update.is_some();
         let mut updates = self.thread_settings_update.unwrap_or_default();
         updates.final_output_json_schema = Some(final_output_json_schema);
+        updates.service_tier_for_turn = service_tier;
 
         // new_turn_with_sub_id already emits an error event when settings are invalid.
         let turn_context = session

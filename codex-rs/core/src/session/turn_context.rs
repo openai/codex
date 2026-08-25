@@ -788,7 +788,7 @@ impl Session {
         };
 
         let (
-            session_configuration,
+            mut session_configuration,
             mcp_inputs_changed,
             permission_profile_changed,
             previous_config,
@@ -816,6 +816,10 @@ impl Session {
         if permission_profile_changed {
             self.refresh_managed_network_proxy_for_current_permission_profile()
                 .await;
+        }
+        // Apply the override only to the turn's copy, after persisting thread settings.
+        if let Some(service_tier) = updates.service_tier_for_turn {
+            session_configuration.service_tier = Some(service_tier);
         }
         Ok(self
             .new_turn_from_configuration(

@@ -30,6 +30,11 @@ model?: string | null, /**
  * Override the service tier for this turn and subsequent turns.
  */
 serviceTier?: string | null | null, /**
+ * Override the service tier only when this request starts a new turn.
+ * Use "default" for standard speed. Omitted or null inherits the thread's tier.
+ * Does not change the thread's tier or a turn being steered.
+ */
+serviceTierForTurn?: string | null, /**
  * Override the reasoning effort for this turn and subsequent turns.
  */
 effort?: ReasoningEffort | null, /**

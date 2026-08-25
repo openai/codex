@@ -709,7 +709,7 @@ async fn turn_start_sends_service_tier_id_to_model_request() -> Result<()> {
         responses::ev_assistant_message("msg-1", "Done"),
         responses::ev_completed("resp-1"),
     ]);
-    let response_mock = responses::mount_sse_once(&server, body).await;
+    let response_mock = responses::mount_sse_once(&server, body.clone()).await;
 
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
@@ -736,7 +736,7 @@ async fn turn_start_sends_service_tier_id_to_model_request() -> Result<()> {
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
             params: TurnStartParams {
-                thread_id: thread.id,
+                thread_id: thread.id.clone(),
                 service_tier: Some(Some(service_tier_id.clone())),
                 input: vec![V2UserInput::Text {
                     text: "Hello".to_string(),
@@ -756,6 +756,31 @@ async fn turn_start_sends_service_tier_id_to_model_request() -> Result<()> {
         response_mock.single_request().body_json()["service_tier"],
         json!(service_tier_id)
     );
+
+    for (service_tier_for_turn, expected_service_tier) in [
+        (Some("default".to_string()), None),
+        (None, Some(json!(service_tier_id))),
+    ] {
+        let response_mock = responses::mount_sse_once(&server, body.clone()).await;
+        mcp.start_turn_and_wait_for_completion(TurnStartParams {
+            thread_id: thread.id.clone(),
+            service_tier_for_turn,
+            input: vec![V2UserInput::Text {
+                text: "Hello again".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+        assert_eq!(
+            response_mock
+                .single_request()
+                .body_json()
+                .get("service_tier")
+                .cloned(),
+            expected_service_tier
+        );
+    }
 
     Ok(())
 }
@@ -2759,6 +2784,7 @@ async fn turn_start_explicit_local_environment_updates_legacy_cwd_between_turns(
                 effort: Some(ReasoningEffort::Medium),
                 summary: Some(ReasoningSummary::Auto),
                 service_tier: None,
+                service_tier_for_turn: None,
                 personality: None,
                 output_schema: None,
                 collaboration_mode: None,
@@ -2802,6 +2828,7 @@ async fn turn_start_explicit_local_environment_updates_legacy_cwd_between_turns(
                 effort: Some(ReasoningEffort::Medium),
                 summary: Some(ReasoningSummary::Auto),
                 service_tier: None,
+                service_tier_for_turn: None,
                 personality: None,
                 output_schema: None,
                 collaboration_mode: None,

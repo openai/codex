@@ -131,6 +131,11 @@ pub struct TurnStartParams {
     )]
     #[ts(optional = nullable)]
     pub service_tier: Option<Option<String>>,
+    /// Override the service tier only when this request starts a new turn.
+    /// Use "default" for standard speed. Omitted or null inherits the thread's tier.
+    /// Does not change the thread's tier or a turn being steered.
+    #[ts(optional = nullable)]
+    pub service_tier_for_turn: Option<String>,
     /// Override the reasoning effort for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub effort: Option<ReasoningEffort>,

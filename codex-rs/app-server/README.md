@@ -903,6 +903,8 @@ The `audio` variant accepts data URLs. Other URL schemes are rejected. `localAud
 
 You can optionally specify config overrides on the new turn. If specified, these settings become the default for subsequent turns on the same thread. `outputSchema` applies only to the current turn. Experimental `environments` is turn-scoped: omit it to inherit the thread's sticky environments, pass `[]` to run the turn with no environments, or pass explicit environment ids to override the sticky selection for this turn only.
 
+`serviceTierForTurn` overrides the tier only when the request starts a new turn, without changing the thread's saved tier. Use `"default"` for standard speed, or omit it (or pass `null`) to inherit the thread's tier. It is ignored when the request steers an active turn. The existing `serviceTier` field still changes the tier for subsequent turns, including when both fields are supplied.
+
 `approvalsReviewer` accepts:
 
 - `"user"` — default. Review approval requests directly in the client.

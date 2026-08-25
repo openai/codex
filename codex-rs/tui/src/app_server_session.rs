@@ -1214,6 +1214,7 @@ impl AppServerSession {
                     permissions,
                     model: Some(model),
                     service_tier,
+                    service_tier_for_turn: None,
                     effort,
                     summary,
                     personality,
