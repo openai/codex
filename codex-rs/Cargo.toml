@@ -23,6 +23,7 @@ members = [
     "features",
     "install-context",
     "internal-extra-config", # copybara:strip-for-public
+    "internal-orchestrator-executor-contracts", # copybara:strip-for-public
     "internal-persistent-mode", # copybara:strip-for-public
     "codex-backend-openapi-models",
     "code-mode",

@@ -3494,6 +3494,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-internal-orchestrator-executor-contracts"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-core",
+ "codex-exec-server",
+ "codex-extension-api",
+ "codex-features",
+ "codex-protocol",
+ "codex-skills-extension",
+ "codex-utils-path-uri",
+ "core_test_support",
+ "test-case",
+ "tokio",
+]
+
+[[package]]
 name = "codex-internal-persistent-mode"
 version = "0.0.0"
 dependencies = [

@@ -1,0 +1,29 @@
+[package]
+name = "codex-internal-orchestrator-executor-contracts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "codex_internal_orchestrator_executor_contracts"
+path = "src/lib.rs"
+doctest = false
+test = false
+
+[lints]
+workspace = true
+
+[dependencies]
+test-case = "3.3.1"
+
+[dev-dependencies]
+anyhow = { workspace = true }
+codex-core = { workspace = true }
+codex-exec-server = { workspace = true }
+codex-extension-api = { workspace = true }
+codex-features = { workspace = true }
+codex-protocol = { workspace = true }
+codex-skills-extension = { workspace = true }
+codex-utils-path-uri = { workspace = true }
+core_test_support = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
