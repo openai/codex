@@ -9,7 +9,6 @@ use codex_exec_server::EnvironmentManager;
 use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_features::Feature;
-use codex_internal_orchestrator_executor_contracts::behavioral_contract;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::models::PermissionProfile;
@@ -31,11 +30,8 @@ use core_test_support::skip_if_target_windows;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 
-#[behavioral_contract("executor.v1"; "executor_v1")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn restricted_executor_discovery_preserves_permitted_plugin_skills(
-    contract_name: &str,
-) -> Result<()> {
+async fn restricted_executor_discovery_preserves_permitted_plugin_skills() -> Result<()> {
     skip_if_target_windows!(
         Ok(()),
         "the unelevated Windows sandbox cannot enforce restricted filesystem reads"
@@ -168,7 +164,7 @@ async fn restricted_executor_discovery_preserves_permitted_plugin_skills(
         .join("\n");
     assert!(
         developer_instructions.contains("demo-plugin:deploy"),
-        "{contract_name}: restricted capability discovery must preserve permitted executor skills: {developer_instructions}"
+        "restricted capability discovery must preserve permitted executor skills: {developer_instructions}"
     );
 
     Ok(())
