@@ -385,7 +385,12 @@ impl ChatWidget {
     pub(super) fn on_cyber_policy_error(&mut self) {
         self.input_queue.submit_pending_steers_after_interrupt = false;
         self.finalize_turn();
-        self.add_to_history(history_cell::new_cyber_policy_error_event());
+        let plan_type = if self.has_chatgpt_account {
+            self.plan_type
+        } else {
+            None
+        };
+        self.add_to_history(history_cell::new_cyber_policy_error_event(plan_type));
         self.request_redraw();
 
         // After an error ends the turn, try sending the next queued input.

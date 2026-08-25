@@ -93,6 +93,9 @@ pub(crate) struct SafetyAccessBlockCell {
 
 const SAFETY_ACCESS_BLOCK_TITLE: &str = "This content can't be shown";
 const SAFETY_ACCESS_BLOCK_LEARN_MORE_URL: &str = "https://help.openai.com/en/articles/20001326";
+const CYBER_INDIVIDUAL_TRUSTED_ACCESS_URL: &str = "https://chatgpt.com/cyber/";
+const CYBER_ENTERPRISE_TRUSTED_ACCESS_URL: &str =
+    "https://openai.com/form/enterprise-trusted-access-for-cyber/";
 
 pub(crate) fn new_safety_access_block_event() -> SafetyAccessBlockCell {
     SafetyAccessBlockCell {
@@ -101,10 +104,16 @@ pub(crate) fn new_safety_access_block_event() -> SafetyAccessBlockCell {
     }
 }
 
-pub(crate) fn new_cyber_policy_error_event() -> SafetyAccessBlockCell {
+pub(crate) fn new_cyber_policy_error_event(plan_type: Option<PlanType>) -> SafetyAccessBlockCell {
+    let trusted_access_url = match plan_type {
+        Some(
+            PlanType::Free | PlanType::Go | PlanType::Plus | PlanType::Pro | PlanType::ProLite,
+        ) => CYBER_INDIVIDUAL_TRUSTED_ACCESS_URL,
+        _ => CYBER_ENTERPRISE_TRUSTED_ACCESS_URL,
+    };
     SafetyAccessBlockCell {
         body: "We take extra caution with cybersecurity requests. If you’re a security professional, you may be able to apply for Trusted Access.",
-        trusted_access_url: "https://openai.com/form/enterprise-trusted-access-for-cyber/",
+        trusted_access_url,
     }
 }
 

@@ -752,7 +752,14 @@ fn ps_output_multiline_snapshot() {
 
 #[test]
 fn cyber_policy_error_event_snapshot() {
-    let cell = new_cyber_policy_error_event();
+    let cell = new_cyber_policy_error_event(/*plan_type*/ None);
+    let rendered = render_lines(&cell.display_lines(/*width*/ 80)).join("\n");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn cyber_policy_error_event_individual_snapshot() {
+    let cell = new_cyber_policy_error_event(Some(PlanType::Pro));
     let rendered = render_lines(&cell.display_lines(/*width*/ 80)).join("\n");
     insta::assert_snapshot!(rendered);
 }
@@ -766,7 +773,7 @@ fn safety_access_block_event_snapshot() {
 
 #[test]
 fn cyber_policy_error_event_narrow_snapshot() {
-    let cell = new_cyber_policy_error_event();
+    let cell = new_cyber_policy_error_event(/*plan_type*/ None);
     let rendered = render_lines(&cell.display_lines(/*width*/ 36)).join("\n");
     insta::assert_snapshot!(rendered);
 }

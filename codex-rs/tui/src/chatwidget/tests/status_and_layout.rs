@@ -104,7 +104,25 @@ async fn app_server_cyber_policy_error_renders_dedicated_notice() {
     let rendered = lines_to_single_string(&cells[0]);
     assert!(rendered.contains("This content can't be shown"));
     assert!(rendered.contains("extra caution with cybersecurity requests"));
+    assert!(rendered.contains("openai.com/form/enterprise-trusted-access-for-cyber"));
     assert!(!rendered.contains("server fallback message"));
+}
+
+#[tokio::test]
+async fn app_server_cyber_policy_error_uses_individual_link_for_personal_plan() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.plan_type = Some(PlanType::Free);
+    chat.has_chatgpt_account = true;
+
+    handle_error(
+        &mut chat,
+        "server fallback message",
+        Some(CodexErrorInfo::CyberPolicy),
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1);
+    assert!(lines_to_single_string(&cells[0]).contains("https://chatgpt.com/cyber/"));
 }
 
 #[tokio::test]
