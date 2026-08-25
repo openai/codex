@@ -11,7 +11,7 @@ use codex_utils_path_uri::PathUri;
 use std::path::Path;
 
 fn normalize_agents_display_path(path: &Path) -> String {
-    dunce::simplified(path).display().to_string()
+    format_directory_display(dunce::simplified(path), /*max_width*/ None)
 }
 
 pub(crate) fn compose_model_display(
@@ -273,6 +273,32 @@ mod tests {
                 &[PathUri::from_abs_path(&global_agents_path.abs())]
             ),
             format_directory_display(&global_agents_path, /*max_width*/ None)
+        );
+    }
+
+    #[tokio::test]
+    async fn compose_agents_summary_collapses_home_and_preserves_project_relative_paths() {
+        let Some(home) = dirs::home_dir() else {
+            return;
+        };
+        let codex_home = TempDir::new().expect("temp codex home");
+        let cwd = TempDir::new().expect("temp cwd");
+        let mut config = test_config(&codex_home, &cwd).await;
+        config.cwd = home.join("workspace").join("project").abs();
+
+        let paths = [
+            home.join(".codex").join("AGENTS.md"),
+            home.join("workspace").join("AGENTS.md"),
+            config.cwd.join("AGENTS.md").to_path_buf(),
+            config.cwd.join("nested").join("AGENTS.md").to_path_buf(),
+        ]
+        .map(|path| PathUri::from_abs_path(&path.abs()));
+
+        let summary = compose_agents_summary(&config, &paths);
+
+        insta::assert_snapshot!(
+            summary.replace('\\', "/"),
+            @"~/.codex/AGENTS.md, ../AGENTS.md, AGENTS.md, nested/AGENTS.md"
         );
     }
 
