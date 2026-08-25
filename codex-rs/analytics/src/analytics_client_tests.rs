@@ -5093,6 +5093,78 @@ async fn turn_lifecycle_emits_turn_event() {
 }
 
 #[tokio::test]
+async fn image_generation_events_preserve_transparent_background_metadata() {
+    for (status, transparent_background) in [
+        ("completed", Some(true)),
+        ("completed", Some(false)),
+        ("completed", None),
+        ("failed", None),
+    ] {
+        let mut reducer = AnalyticsReducer::default();
+        let mut out = Vec::new();
+
+        ingest_turn_prerequisites(
+            &mut reducer,
+            &mut out,
+            /*include_initialize*/ true,
+            /*include_resolved_config*/ true,
+            /*include_started*/ true,
+            /*include_token_usage*/ false,
+        )
+        .await;
+
+        let item = ThreadItem::ImageGeneration(ImageGenerationItem {
+            id: "image-1".to_string(),
+            status: status.to_string(),
+            revised_prompt: None,
+            result: "ok".to_string(),
+            transparent_background,
+            failure: None,
+            saved_path: None,
+        });
+
+        reducer
+            .ingest(
+                AnalyticsFact::Notification(Box::new(ServerNotification::ItemStarted(
+                    ItemStartedNotification {
+                        thread_id: "thread-2".to_string(),
+                        turn_id: "turn-2".to_string(),
+                        started_at_ms: 998,
+                        item: item.clone(),
+                    },
+                ))),
+                &mut out,
+            )
+            .await;
+        reducer
+            .ingest(
+                AnalyticsFact::Notification(Box::new(ServerNotification::ItemCompleted(
+                    ItemCompletedNotification {
+                        thread_id: "thread-2".to_string(),
+                        turn_id: "turn-2".to_string(),
+                        completed_at_ms: 1_000,
+                        item,
+                    },
+                ))),
+                &mut out,
+            )
+            .await;
+
+        let event = out
+            .iter()
+            .find(|event| matches!(event, TrackEventRequest::ImageGeneration(_)))
+            .expect("image generation event should be emitted");
+        let payload = serde_json::to_value(event).expect("serialize image generation event");
+
+        assert_eq!(
+            payload["event_params"].get("transparent_background"),
+            Some(&json!(transparent_background))
+        );
+        assert_eq!(payload["event_params"]["terminal_status"], json!(status));
+    }
+}
+
+#[tokio::test]
 async fn turn_event_counts_completed_tool_items() {
     let mut reducer = AnalyticsReducer::default();
     let mut out = Vec::new();
