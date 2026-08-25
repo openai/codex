@@ -136,7 +136,9 @@ impl KeyboardHandler for TrustDirectoryWidget {
         } else if keys::MOVE_DOWN.is_pressed(key_event) {
             self.highlighted = TrustDirectorySelection::Quit;
         } else if keys::SELECT_FIRST.is_pressed(key_event) {
-            self.handle_trust();
+            // A terminal response fragment can start with `1`; trust always requires an explicit
+            // Enter confirmation after the directory prompt is visible.
+            self.highlighted = TrustDirectorySelection::Trust;
         } else if keys::SELECT_SECOND.is_pressed(key_event)
             || keys::QUIT.is_pressed(key_event)
             || keys::CANCEL.is_pressed(key_event)
@@ -230,6 +232,24 @@ mod tests {
         let press = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
         widget.handle_key_event(press);
         assert!(widget.should_quit);
+    }
+
+    #[test]
+    fn fragmented_terminal_response_cannot_grant_directory_trust() {
+        let mut widget = widget(/*error*/ None);
+        widget.highlighted = TrustDirectorySelection::Quit;
+
+        // The prefix may have been consumed by the protected-screen input drain, leaving the
+        // numeric OSC slot as the first key delivered after the trust prompt becomes active.
+        for character in "10;rgb:ffff/ffff/ffff".chars() {
+            widget.handle_key_event(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
+        }
+
+        assert_eq!(widget.selection, None);
+        assert_eq!(widget.highlighted, TrustDirectorySelection::Trust);
+
+        widget.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(widget.selection, Some(TrustDirectorySelection::Trust));
     }
 
     #[test]

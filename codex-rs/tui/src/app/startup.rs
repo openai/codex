@@ -67,6 +67,17 @@ impl App {
                     .any(|event| matches!(event, ThreadBufferedEvent::Request(_))))
     }
 
+    /// Wait until visible and queued startup decisions cannot consume a delayed OSC response.
+    #[cfg(any(windows, test))]
+    pub(super) fn ready_for_terminal_color_probe(&self, has_pending_app_events: bool) -> bool {
+        !has_pending_app_events
+            && !self.chat_widget.has_active_view()
+            && !self.windows_sandbox.startup_world_writable_scan_pending
+            && !self.startup_pending_protected_request
+            && !self.has_queued_startup_protected_request()
+            && !self.chat_widget.has_pending_protected_request()
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn run(
         tui: &mut tui::Tui,
@@ -584,6 +595,7 @@ See the Codex keymap documentation for supported actions and examples."
                     .hide_world_writable_warning
                     .unwrap_or(false);
             if should_check {
+                app.windows_sandbox.startup_world_writable_scan_pending = true;
                 let cwd = app.config.cwd.clone();
                 let workspace_roots = app.config.effective_workspace_roots();
                 let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
@@ -596,6 +608,7 @@ See the Codex keymap documentation for supported actions and examples."
                     logs_base_dir,
                     startup_permission_profile,
                     tx,
+                    /*startup_scan*/ true,
                 );
             }
         }
@@ -623,6 +636,14 @@ See the Codex keymap documentation for supported actions and examples."
         if app_event_rx.is_empty() && !app.has_queued_startup_protected_request() {
             app.chat_widget
                 .restore_startup_draft_when_ready(&mut pending_startup_draft);
+        }
+
+        #[cfg(windows)]
+        let mut terminal_color_probe_pending = true;
+        #[cfg(windows)]
+        if app.ready_for_terminal_color_probe(!app_event_rx.is_empty()) {
+            tui.probe_default_colors_after_protected_startup();
+            terminal_color_probe_pending = false;
         }
 
         let event_stream_started_at = Instant::now();
@@ -801,6 +822,13 @@ See the Codex keymap documentation for supported actions and examples."
                         if app_event_rx.is_empty() && !app.has_queued_startup_protected_request() {
                             app.chat_widget
                                 .restore_startup_draft_when_ready(&mut pending_startup_draft);
+                        }
+                        #[cfg(windows)]
+                        if terminal_color_probe_pending
+                            && app.ready_for_terminal_color_probe(!app_event_rx.is_empty())
+                        {
+                            tui.probe_default_colors_after_protected_startup();
+                            terminal_color_probe_pending = false;
                         }
                     }
                     AppRunControl::Exit(reason) => break Ok(reason),

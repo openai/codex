@@ -1,0 +1,27 @@
+---
+source: tui/src/bottom_pane/chat_composer.rs
+expression: "format!(\"{buffer:?}\")"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 48, height: 6 },
+    content: [
+        "                                                ",
+        "› Ask Codex to do anything                      ",
+        "                                                ",
+        "                                                ",
+        "                                                ",
+        "  ? for shortcuts            100% context left  ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Rgb(244, 244, 244), underline: Reset, modifier: NONE,
+        x: 0, y: 1, fg: Reset, bg: Rgb(244, 244, 244), underline: Reset, modifier: BOLD,
+        x: 1, y: 1, fg: Reset, bg: Rgb(244, 244, 244), underline: Reset, modifier: NONE,
+        x: 2, y: 1, fg: Reset, bg: Rgb(244, 244, 244), underline: Reset, modifier: DIM,
+        x: 26, y: 1, fg: Reset, bg: Rgb(244, 244, 244), underline: Reset, modifier: NONE,
+        x: 0, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 17, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 29, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 46, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}

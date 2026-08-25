@@ -1032,6 +1032,10 @@ pub(crate) enum AppEvent {
         failed_scan: bool,
     },
 
+    /// The startup world-writable scan finished and queued any protected warning it requires.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    StartupWorldWritableScanCompleted,
+
     /// Prompt to enable the Windows sandbox feature before using Agent mode.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     OpenWindowsSandboxEnablePrompt {

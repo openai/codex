@@ -241,7 +241,10 @@ fn selection_view_params(
         footer_hint: Some(standard_popup_hint_line_for_keymap(&keymap.list)),
         items: vec![
             selection_item("Review hooks", trusting_all),
-            selection_item("Trust all and continue", trusting_all),
+            SelectionItem {
+                require_explicit_confirmation: true,
+                ..selection_item("Trust all and continue", trusting_all)
+            },
             selection_item("Continue without trusting (hooks won't run)", trusting_all),
         ],
         header: Box::new(header),
@@ -297,10 +300,13 @@ impl WidgetRef for &StandaloneSelectionView<'_> {
 
 #[cfg(test)]
 mod tests {
+    use super::StartupHooksReviewSelection;
     use super::review_is_needed;
+    use super::selected_choice;
     use super::selection_view;
     use crate::app_event::AppEvent;
     use crate::app_event_sender::AppEventSender;
+    use crate::bottom_pane::BottomPaneView;
     use crate::keymap::RuntimeKeymap;
     use crate::render::renderable::Renderable;
     use crate::test_support::PathBufExt;
@@ -311,6 +317,9 @@ mod tests {
     use codex_app_server_protocol::HookSource;
     use codex_app_server_protocol::HookTrustStatus;
     use codex_app_server_protocol::HooksListEntry;
+    use crossterm::event::KeyCode;
+    use crossterm::event::KeyEvent;
+    use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
@@ -383,6 +392,56 @@ mod tests {
     #[test]
     fn untrusted_hooks_need_review_without_bypass() {
         assert!(review_is_needed(/*bypass_hook_trust*/ false, &entry()));
+    }
+
+    #[test]
+    fn fragmented_terminal_response_cannot_grant_startup_hook_trust() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let keymap = RuntimeKeymap::defaults();
+        let mut view = selection_view(
+            &entry(),
+            /*trust_all_error*/ None,
+            /*trusting_all*/ false,
+            AppEventSender::new(tx_raw),
+            &keymap,
+        );
+
+        // A delayed OSC reply can lose its escape prefix in the protected-screen input drain.
+        for character in "20;rgb:2222/ffff/ffff".chars() {
+            view.handle_key_event(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
+            assert_ne!(
+                selected_choice(&mut view),
+                Some(StartupHooksReviewSelection::TrustAllAndContinue)
+            );
+        }
+
+        assert_eq!(view.selected_index(), Some(1));
+        view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(
+            selected_choice(&mut view),
+            Some(StartupHooksReviewSelection::TrustAllAndContinue)
+        );
+    }
+
+    #[test]
+    fn non_trust_startup_hook_shortcuts_remain_immediate() {
+        let keymap = RuntimeKeymap::defaults();
+        for (shortcut, expected) in [
+            ('1', StartupHooksReviewSelection::ReviewHooks),
+            ('3', StartupHooksReviewSelection::ContinueWithoutTrusting),
+        ] {
+            let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+            let mut view = selection_view(
+                &entry(),
+                /*trust_all_error*/ None,
+                /*trusting_all*/ false,
+                AppEventSender::new(tx_raw),
+                &keymap,
+            );
+
+            view.handle_key_event(KeyEvent::new(KeyCode::Char(shortcut), KeyModifiers::NONE));
+            assert_eq!(selected_choice(&mut view), Some(expected));
+        }
     }
 
     #[test]

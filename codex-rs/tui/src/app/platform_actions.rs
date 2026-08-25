@@ -10,6 +10,8 @@ pub(super) struct WindowsSandboxState {
     pub(super) setup_started_at: Option<Instant>,
     // One-shot suppression of the next world-writable scan after user confirmation.
     pub(super) skip_world_writable_scan_once: bool,
+    /// A startup filesystem scan can still enqueue a protected warning after the app queue drains.
+    pub(super) startup_world_writable_scan_pending: bool,
 }
 
 impl App {
@@ -21,6 +23,7 @@ impl App {
         logs_base_dir: AbsolutePathBuf,
         permission_profile: PermissionProfile,
         tx: AppEventSender,
+        startup_scan: bool,
     ) {
         let Ok(permissions) =
             codex_windows_sandbox::ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_workspace_roots(
@@ -28,6 +31,9 @@ impl App {
                 workspace_roots.as_slice(),
             )
         else {
+            if startup_scan {
+                tx.send(AppEvent::StartupWorldWritableScanCompleted);
+            }
             return;
         };
 
@@ -44,6 +50,9 @@ impl App {
             if result.is_err() {
                 // Scan failed: warn without examples.
                 send_world_writable_scan_failed(&tx);
+            }
+            if startup_scan {
+                tx.send(AppEvent::StartupWorldWritableScanCompleted);
             }
         });
     }

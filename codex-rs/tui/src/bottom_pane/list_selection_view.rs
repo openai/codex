@@ -143,6 +143,8 @@ pub(crate) struct SelectionItem {
     pub is_disabled: bool,
     pub actions: Vec<SelectionAction>,
     pub dismiss_on_select: bool,
+    /// Require an explicit accept key after a direct shortcut highlights this sensitive item.
+    pub require_explicit_confirmation: bool,
     pub dismiss_parent_on_child_accept: bool,
     pub search_value: Option<String>,
     pub disabled_reason: Option<String>,
@@ -807,6 +809,22 @@ impl ListSelectionView {
         }
     }
 
+    fn select_shortcut(&mut self, actual_idx: usize) {
+        let previously_selected = self.selected_actual_idx();
+        self.state.selected_idx = Some(actual_idx);
+        if self
+            .active_items()
+            .get(actual_idx)
+            .is_some_and(|item| item.require_explicit_confirmation)
+        {
+            if self.selected_actual_idx() != previously_selected {
+                self.fire_selection_changed();
+            }
+        } else {
+            self.accept();
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn set_search_query(&mut self, query: String) {
         self.search_query = query;
@@ -1047,8 +1065,7 @@ impl BottomPaneView for ListSelectionView {
                         .is_some_and(|shortcut| shortcut.is_press(key_event))
                         && Self::item_is_enabled(item)
                 }) {
-                    self.state.selected_idx = Some(idx);
-                    self.accept();
+                    self.select_shortcut(idx);
                     return;
                 }
                 if let Some(idx) = c
@@ -1056,8 +1073,7 @@ impl BottomPaneView for ListSelectionView {
                     .map(|d| d as usize)
                     .and_then(|number| self.actual_idx_for_enabled_number(number))
                 {
-                    self.state.selected_idx = Some(idx);
-                    self.accept();
+                    self.select_shortcut(idx);
                 }
             }
             _ => {}

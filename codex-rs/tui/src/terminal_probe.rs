@@ -16,6 +16,10 @@ use std::time::Duration;
 #[cfg(unix)]
 mod startup_replay;
 
+#[cfg(any(windows, test))]
+#[path = "terminal_probe/windows_replay.rs"]
+mod windows_replay;
+
 /// Default wall-clock budget for each startup probe group.
 pub(crate) const DEFAULT_TIMEOUT: Duration = Duration::from_millis(100);
 
@@ -709,136 +713,10 @@ mod imp {
 }
 
 #[cfg(windows)]
-mod imp {
-    use super::DefaultColors;
-    use std::io;
-    use std::time::Duration;
-    use windows_sys::Win32::Foundation::HANDLE;
-    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
-    use windows_sys::Win32::System::Console::CONSOLE_SCREEN_BUFFER_INFOEX;
-    use windows_sys::Win32::System::Console::GetConsoleScreenBufferInfoEx;
-    use windows_sys::Win32::System::Console::GetStdHandle;
-    use windows_sys::Win32::System::Console::STD_OUTPUT_HANDLE;
+#[path = "terminal_probe/windows.rs"]
+mod imp;
 
-    /// Reads default colors from the console screen buffer without consuming terminal input.
-    ///
-    /// OSC replies share the console input queue with user keystrokes on Windows. Reading them
-    /// directly during startup can discard composer typeahead, so use the non-reading console
-    /// color fallback instead.
-    pub(crate) fn default_colors(_timeout: Duration) -> io::Result<Option<DefaultColors>> {
-        let Ok(output) = std_handle(STD_OUTPUT_HANDLE) else {
-            return Ok(None);
-        };
-        Ok(query_console_default_colors(output).ok().flatten())
-    }
-
-    fn query_console_default_colors(output: HANDLE) -> io::Result<Option<DefaultColors>> {
-        let mut info = unsafe { std::mem::zeroed::<CONSOLE_SCREEN_BUFFER_INFOEX>() };
-        info.cbSize = std::mem::size_of::<CONSOLE_SCREEN_BUFFER_INFOEX>() as u32;
-        if unsafe { GetConsoleScreenBufferInfoEx(output, &mut info) } == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(Some(decode_console_default_colors(
-            info.wAttributes,
-            &info.ColorTable,
-        )))
-    }
-
-    fn decode_console_default_colors(attributes: u16, color_table: &[u32; 16]) -> DefaultColors {
-        let fg_index = (attributes & 0x0f) as usize;
-        let bg_index = ((attributes >> 4) & 0x0f) as usize;
-        // COMMON_LVB_REVERSE_VIDEO changes how cells render, but this probe is discovering the
-        // configured default colors for palette blending. Keep the attribute fg/bg indices as-is.
-        DefaultColors {
-            fg: decode_color_ref(color_table[fg_index]),
-            bg: decode_color_ref(color_table[bg_index]),
-        }
-    }
-
-    fn decode_color_ref(color_ref: u32) -> (u8, u8, u8) {
-        (
-            (color_ref & 0xff) as u8,
-            ((color_ref >> 8) & 0xff) as u8,
-            ((color_ref >> 16) & 0xff) as u8,
-        )
-    }
-
-    fn std_handle(kind: u32) -> io::Result<HANDLE> {
-        let handle = unsafe { GetStdHandle(kind) };
-        if handle == 0 || handle == INVALID_HANDLE_VALUE {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(handle)
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-        use pretty_assertions::assert_eq;
-        use windows_sys::Win32::System::Console::COMMON_LVB_REVERSE_VIDEO;
-
-        fn color_table() -> [u32; 16] {
-            [
-                0x00000000, 0x00000080, 0x00008000, 0x00008080, 0x00800000, 0x00800080, 0x00808000,
-                0x00c0c0c0, 0x00808080, 0x000000ff, 0x0000ff00, 0x0000ffff, 0x00ff0000, 0x00ff00ff,
-                0x00ffff00, 0x00ffffff,
-            ]
-        }
-
-        #[test]
-        fn decodes_console_color_attribute_indices() {
-            assert_eq!(
-                decode_console_default_colors(/*attributes*/ 0x21, &color_table()),
-                DefaultColors {
-                    fg: (128, 0, 0),
-                    bg: (0, 128, 0),
-                }
-            );
-        }
-
-        #[test]
-        fn decodes_console_color_intensity_indices() {
-            assert_eq!(
-                decode_console_default_colors(/*attributes*/ 0xe9, &color_table()),
-                DefaultColors {
-                    fg: (255, 0, 0),
-                    bg: (0, 255, 255),
-                }
-            );
-        }
-
-        #[test]
-        fn decodes_console_color_ref_byte_order() {
-            let mut colors = color_table();
-            colors[3] = 0x00112233;
-            colors[4] = 0x00aabbcc;
-
-            assert_eq!(
-                decode_console_default_colors(/*attributes*/ 0x43, &colors),
-                DefaultColors {
-                    fg: (0x33, 0x22, 0x11),
-                    bg: (0xcc, 0xbb, 0xaa),
-                }
-            );
-        }
-
-        #[test]
-        fn ignores_reverse_video_when_decoding_default_colors() {
-            assert_eq!(
-                decode_console_default_colors(
-                    /*attributes*/ COMMON_LVB_REVERSE_VIDEO | 0x21,
-                    &color_table(),
-                ),
-                DefaultColors {
-                    fg: (128, 0, 0),
-                    bg: (0, 128, 0),
-                }
-            );
-        }
-    }
-}
-
-#[cfg(any(unix, test))]
+#[cfg(any(unix, windows, test))]
 fn parse_osc_color(buffer: &[u8], slot: u8) -> Option<(u8, u8, u8)> {
     let prefix = format!("\x1B]{slot};");
     let start = find_subslice(buffer, prefix.as_bytes())?;
@@ -856,7 +734,7 @@ fn parse_default_colors(buffer: &[u8]) -> Option<DefaultColors> {
     Some(DefaultColors { fg, bg })
 }
 
-#[cfg(any(unix, test))]
+#[cfg(any(unix, windows, test))]
 fn osc_payload_end(buffer: &[u8]) -> Option<(usize, usize)> {
     let mut idx = 0;
     while idx < buffer.len() {
@@ -869,7 +747,7 @@ fn osc_payload_end(buffer: &[u8]) -> Option<(usize, usize)> {
     None
 }
 
-#[cfg(any(unix, test))]
+#[cfg(any(unix, windows, test))]
 fn parse_osc_rgb(payload: &str) -> Option<(u8, u8, u8)> {
     let (prefix, values) = payload.trim().split_once(':')?;
     if !prefix.eq_ignore_ascii_case("rgb") && !prefix.eq_ignore_ascii_case("rgba") {
@@ -886,18 +764,18 @@ fn parse_osc_rgb(payload: &str) -> Option<(u8, u8, u8)> {
     parts.next().is_none().then_some((r, g, b))
 }
 
-#[cfg(any(unix, test))]
+#[cfg(any(unix, windows, test))]
 fn parse_osc_component(component: &str) -> Option<u8> {
-    match component.len() {
-        2 => u8::from_str_radix(component, 16).ok(),
-        4 => u16::from_str_radix(component, 16)
-            .ok()
-            .map(|value| (value / 257) as u8),
-        _ => None,
+    if !(1..=4).contains(&component.len()) {
+        return None;
     }
+
+    let value = u32::from(u16::from_str_radix(component, /*radix*/ 16).ok()?);
+    let maximum = (1_u32 << (component.len() * 4)) - 1;
+    Some((value * u32::from(u8::MAX) / maximum) as u8)
 }
 
-#[cfg(any(unix, test))]
+#[cfg(any(unix, windows, test))]
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
         .windows(needle.len())
@@ -925,12 +803,15 @@ mod tests {
     }
 
     #[test]
-    fn parses_two_and_four_digit_color_components() {
+    fn parses_one_to_four_digit_color_components() {
+        assert_eq!(parse_osc_rgb("rgb:f/e/d"), Some((255, 238, 221)));
         assert_eq!(parse_osc_rgb("rgb:00/80/ff"), Some((0, 128, 255)));
+        assert_eq!(parse_osc_rgb("rgb:fff/800/000"), Some((255, 127, 0)));
         assert_eq!(
             parse_osc_rgb("rgba:ffff/8000/0000/ffff"),
             Some((255, 127, 0))
         );
+        assert_eq!(parse_osc_rgb("rgb:fffff/0/0"), None);
     }
 
     #[test]

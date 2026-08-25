@@ -498,7 +498,9 @@ pub(crate) fn init() -> Result<InitializedTerminal> {
         !keyboard_modes::keyboard_enhancement_disabled() && detect_keyboard_enhancement_supported();
 
     #[cfg(windows)]
-    probe_windows_default_colors();
+    // OSC replies can arrive after their deadline. Do not issue terminal queries before directory
+    // trust and other protected startup screens have finished accepting their security decisions.
+    crate::terminal_palette::set_default_colors_from_startup_probe(/*colors*/ None);
 
     let tui = CustomTerminal::with_options_and_cursor_position(backend, cursor_pos)?;
     let stderr_guard = terminal_stderr::TerminalStderrGuard::install()?;
@@ -691,6 +693,15 @@ impl Tui {
     // Inverse of `pause_events`.
     pub fn resume_events(&mut self) {
         self.event_broker.resume_events();
+    }
+
+    /// Discover the visible Windows theme only after protected startup decisions have completed.
+    #[cfg(windows)]
+    pub(crate) fn probe_default_colors_after_protected_startup(&mut self) {
+        self.pause_events();
+        probe_windows_default_colors();
+        self.resume_events();
+        self.frame_requester.schedule_frame();
     }
 
     /// Reclaim terminal modes and stderr after a panic hook ran inside a recovery boundary.

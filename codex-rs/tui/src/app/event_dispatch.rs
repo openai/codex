@@ -1611,6 +1611,9 @@ impl App {
                     failed_scan,
                 );
             }
+            AppEvent::StartupWorldWritableScanCompleted => {
+                self.windows_sandbox.startup_world_writable_scan_pending = false;
+            }
             AppEvent::OpenFeedbackNote {
                 category,
                 include_logs,
@@ -2298,6 +2301,7 @@ impl App {
                             logs_base_dir,
                             permission_profile,
                             tx,
+                            /*startup_scan*/ false,
                         );
                     }
                 }

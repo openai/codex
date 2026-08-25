@@ -525,6 +525,80 @@ async fn windows_sandbox_required_enable_prompt_reopens_on_cancel_when_unelevate
 }
 
 #[tokio::test]
+async fn fragmented_terminal_response_cannot_select_non_admin_windows_sandbox() {
+    for use_fallback_prompt in [false, true] {
+        let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        let preset = builtin_approval_presets()
+            .into_iter()
+            .find(|preset| preset.id == "auto")
+            .expect("auto preset");
+
+        if use_fallback_prompt {
+            chat.open_windows_sandbox_fallback_prompt(preset, /*profile_selection*/ None);
+        } else {
+            chat.open_windows_sandbox_enable_prompt(preset, /*profile_selection*/ None);
+        }
+
+        for character in "20;rgb:2222/ffff/ffff".chars() {
+            chat.handle_key_event(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
+            assert!(
+                !matches!(
+                    rx.try_recv(),
+                    Ok(AppEvent::BeginWindowsSandboxLegacySetup { .. })
+                ),
+                "a fragmented terminal response must not choose the non-admin sandbox"
+            );
+        }
+
+        assert!(chat.has_active_view());
+        chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(AppEvent::BeginWindowsSandboxLegacySetup { .. })
+        ));
+    }
+}
+
+#[tokio::test]
+async fn fragmented_terminal_response_cannot_acknowledge_world_writable_warning() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.open_world_writable_warning_confirmation(
+        /*preset*/ None,
+        /*profile_selection*/ None,
+        Vec::new(),
+        /*extra_count*/ 0,
+        /*failed_scan*/ true,
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));
+    assert!(chat.has_active_view());
+    assert!(rx.try_recv().is_err());
+
+    for character in "20;rgb:2222/ffff/ffff".chars() {
+        chat.handle_key_event(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
+        assert!(
+            !matches!(
+                rx.try_recv(),
+                Ok(AppEvent::UpdateWorldWritableWarningAcknowledged(_)
+                    | AppEvent::PersistWorldWritableWarningAcknowledged)
+            ),
+            "a fragmented terminal response must not acknowledge the world-writable warning"
+        );
+    }
+
+    assert!(chat.has_active_view());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(AppEvent::UpdateWorldWritableWarningAcknowledged(true))
+    ));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(AppEvent::PersistWorldWritableWarningAcknowledged)
+    ));
+}
+
+#[tokio::test]
 async fn required_windows_sandbox_setup_defers_configured_initial_prompt() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let initial_prompt = "fix required sandbox startup".to_string();
