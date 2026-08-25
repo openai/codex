@@ -57,6 +57,7 @@ fn skills_to_info(
                 path: skill.path_to_skills_md.clone(),
                 scope: skill.scope.into(),
                 enabled,
+                plugin_id: skill.plugin_id.clone(),
             }
         })
         .collect()

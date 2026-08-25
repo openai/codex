@@ -131,6 +131,13 @@
         "path": {
           "$ref": "#/definitions/AbsolutePathBuf"
         },
+        "pluginId": {
+          "description": "Owning plugin ID, matching `PluginSummary.id`, when known.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "scope": {
           "$ref": "#/definitions/SkillScope"
         },

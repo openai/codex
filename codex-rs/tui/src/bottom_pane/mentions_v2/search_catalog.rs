@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use codex_app_server_protocol::SkillMetadata;
 use codex_plugin::PluginCapabilitySummary;
 
@@ -15,9 +17,25 @@ pub(crate) fn build_search_catalog(
     plugins: Option<&[PluginCapabilitySummary]>,
     tasks: &[TaskMention],
 ) -> Vec<Candidate> {
+    let plugin_ids: HashSet<_> = plugins
+        .into_iter()
+        .flatten()
+        .map(|plugin| plugin.config_name.as_str())
+        .collect();
     let mut candidates = Vec::new();
     if let Some(skills) = skills {
-        candidates.extend(skills.iter().map(skill_candidate));
+        // Keep skills visible when older servers omit plugin ownership.
+        candidates.extend(
+            skills
+                .iter()
+                .filter(|skill| {
+                    !skill
+                        .plugin_id
+                        .as_deref()
+                        .is_some_and(|plugin_id| plugin_ids.contains(plugin_id))
+                })
+                .map(skill_candidate),
+        );
     }
 
     if let Some(plugins) = plugins {

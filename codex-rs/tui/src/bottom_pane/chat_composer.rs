@@ -9,6 +9,12 @@
 //! - Turning raw key streams into explicit paste operations on platforms where terminals
 //!   don't provide reliable bracketed paste (notably Windows).
 //!
+//! # Mention Menus
+//!
+//! By default, `@` lists plugins, filesystem entries, and skills. Skills are hidden when their
+//! owning plugin is listed. `$` lists individual skills and apps, but not plugins.
+//! Disabling `mentions_v2` restores file-only `@` search and adds plugins back to `$`.
+//!
 //! # Key Event Routing
 //!
 //! Most key handling goes through [`ChatComposer::handle_key_event`], which dispatches to a
@@ -4207,7 +4213,9 @@ impl ChatComposer {
             }
         }
 
-        if let Some(plugins) = self.plugins.as_ref() {
+        if !self.mentions_v2_enabled
+            && let Some(plugins) = self.plugins.as_ref()
+        {
             for plugin in plugins {
                 let (plugin_name, marketplace_name) = plugin
                     .config_name
@@ -6855,6 +6863,7 @@ mod tests {
             path: test_path_buf(&format!("/tmp/{name}/SKILL.md")).abs(),
             scope: crate::test_support::skill_scope_user(),
             enabled: true,
+            plugin_id: None,
         }
     }
 
@@ -7506,6 +7515,7 @@ mod tests {
             path: skill_path.clone(),
             scope: crate::test_support::skill_scope_user(),
             enabled: true,
+            plugin_id: None,
         }]));
 
         let ActivePopup::Skill(popup) = &composer.popups.active else {
@@ -7519,7 +7529,7 @@ mod tests {
     }
 
     #[test]
-    fn mention_items_show_plugin_owned_skill_and_app_duplicates() {
+    fn mention_items_keep_direct_skills_and_apps_with_unified_mentions() {
         let skill_path = test_path_buf("/tmp/repo/google-calendar/SKILL.md").abs();
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
@@ -7550,6 +7560,7 @@ mod tests {
             path: skill_path.clone(),
             scope: crate::test_support::skill_scope_repo(),
             enabled: true,
+            plugin_id: Some("google-calendar@debug".to_string()),
         }]));
         composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
             config_name: "google-calendar@debug".to_string(),
@@ -7595,6 +7606,25 @@ mod tests {
         );
         assert_eq!(mentions[2].category_tag, Some("[App]".to_string()));
         assert_eq!(mentions[2].path, Some("app://google_calendar".to_string()));
+
+        composer.set_mentions_v2_enabled(/*enabled*/ true);
+        assert_eq!(
+            composer
+                .mention_items()
+                .into_iter()
+                .map(|mention| (mention.insert_text, mention.path))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    "$google-calendar:availability".to_string(),
+                    Some(skill_path.display().to_string()),
+                ),
+                (
+                    "$google-calendar".to_string(),
+                    Some("app://google_calendar".to_string()),
+                ),
+            ],
+        );
     }
 
     #[test]
@@ -7629,11 +7659,32 @@ mod tests {
                 let features = codex_features::Features::with_defaults();
                 composer
                     .set_mentions_v2_enabled(features.enabled(codex_features::Feature::MentionsV2));
+                composer.set_skill_mentions(Some(vec![
+                    SkillMetadata {
+                        name: "sample-tools:search".to_string(),
+                        plugin_id: Some("sample@test".to_string()),
+                        ..test_skill_metadata("sample-search")
+                    },
+                    SkillMetadata {
+                        name: "sample:summarize".to_string(),
+                        plugin_id: Some("sample@test".to_string()),
+                        ..test_skill_metadata("sample-summarize")
+                    },
+                    SkillMetadata {
+                        name: "sample:notes".to_string(),
+                        ..test_skill_metadata("sample-notes")
+                    },
+                    SkillMetadata {
+                        name: "sample:other".to_string(),
+                        plugin_id: Some("sample@other-marketplace".to_string()),
+                        ..test_skill_metadata("sample-other")
+                    },
+                ]));
                 composer.set_text_content("@sa".to_string(), Vec::new(), Vec::new());
                 composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
                     config_name: "sample@test".to_string(),
                     display_name: "Sample Plugin".to_string(),
-                    plugin_namespace: None,
+                    plugin_namespace: Some("sample".to_string()),
                     description: Some("Plugin with skills and an MCP server".to_string()),
                     has_skills: true,
                     mcp_server_names: vec!["sample".to_string()],
@@ -7823,6 +7874,7 @@ mod tests {
             /*width*/ 72,
             /*enhanced_keys_supported*/ false,
             |composer| {
+                composer.set_mentions_v2_enabled(/*enabled*/ true);
                 composer.set_connectors_enabled(/*enabled*/ true);
                 composer.set_text_content("$goog".to_string(), Vec::new(), Vec::new());
                 composer.set_skill_mentions(Some(vec![SkillMetadata {
@@ -7843,6 +7895,7 @@ mod tests {
                     path: test_path_buf("/tmp/repo/google-calendar/SKILL.md").abs(),
                     scope: crate::test_support::skill_scope_repo(),
                     enabled: true,
+                    plugin_id: None,
                 }]));
                 composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
                 config_name: "google-calendar@debug".to_string(),

@@ -1915,6 +1915,7 @@ $skill-creator Add a new skill for triaging flaky CI and include step-by-step us
 ```
 
 Use `skills/list` to fetch the available skills (optionally scoped by `cwds`, with `forceReload`).
+Each skill includes a nullable `pluginId` matching its owning plugin's `id` in `plugin/list`, when known. Clients can use it to group plugin-owned skills without inferring ownership from names or paths. Older servers may omit this field.
 `skills/list` might reuse a cached skills result per `cwd`; setting `forceReload` to `true` refreshes the result from disk.
 The server also emits `skills/changed` notifications when watched local skill files change. Treat this as an invalidation signal and re-run `skills/list` with your current params when needed.
 Use `skills/extraRoots/set` to replace additional standalone skill roots for the current app-server process. These roots use the same layout as other standalone skill roots: each root contains skill directories, and each skill directory contains `SKILL.md`. Missing roots are accepted and load no skills until they exist. This setting is lost when app-server exits.
@@ -1932,6 +1933,7 @@ Use `skills/extraRoots/set` to replace additional standalone skill roots for the
               "name": "skill-creator",
               "description": "Create or update a Codex skill",
               "enabled": true,
+              "pluginId": null,
               "interface": {
                 "displayName": "Skill Creator",
                 "shortDescription": "Create or update a Codex skill",
