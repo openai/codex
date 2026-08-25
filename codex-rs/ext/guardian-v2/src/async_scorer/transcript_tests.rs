@@ -433,6 +433,47 @@ fn transcript_evicts_protected_messages_in_cacheable_chunks() {
 }
 
 #[test]
+fn transcript_preserves_latest_final_when_reserved_tools_fill_entry_window() {
+    let mut items = vec![
+        user_message_item("Find a flight to New York."),
+        assistant_message("Earlier booking details.", MessagePhase::FinalAnswer),
+        assistant_message(
+            "I found a $450 flight. Should I book it?",
+            MessagePhase::FinalAnswer,
+        ),
+        user_message_item("Yes."),
+    ];
+    items.extend((0..3).map(|index| ResponseItem::FunctionCall {
+        id: None,
+        name: "exec_command".to_string(),
+        namespace: None,
+        arguments: format!("recent evidence {index}"),
+        encrypted_function_args: None,
+        call_id: format!("call-{index}"),
+        internal_chat_message_metadata_passthrough: None,
+    }));
+
+    let transcript = TranscriptConfig {
+        max_recent_non_user_entries: 4,
+        ..TranscriptConfig::default()
+    }
+    .build(&items)
+    .entries;
+
+    assert_eq!(
+        transcript,
+        vec![
+            "[1] user: Find a flight to New York.\n",
+            "[3] assistant: I found a $450 flight. Should I book it?\n",
+            "[4] user: Yes.\n",
+            "[5] tool exec_command call: recent evidence 0\n",
+            "[6] tool exec_command call: recent evidence 1\n",
+            "[7] tool exec_command call: recent evidence 2\n",
+        ]
+    );
+}
+
+#[test]
 fn transcript_does_not_protect_legacy_inter_agent_instructions() {
     let communication = InterAgentCommunication::new(
         AgentPath::root(),

@@ -13,14 +13,16 @@ use codex_protocol::models::plaintext_agent_message_content;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::TruncationPolicy;
 
+use self::window::TranscriptWindow;
 use super::truncation::TruncationObservation;
+
+mod window;
 
 pub(crate) const MAX_MESSAGE_ENTRY_TOKENS: usize = 2_000;
 pub(crate) const MAX_TOOL_ENTRY_TOKENS: usize = 1_000;
 pub(crate) const MAX_MESSAGE_TRANSCRIPT_TOKENS: usize = 10_000;
 pub(crate) const MAX_TOOL_TRANSCRIPT_TOKENS: usize = 10_000;
 pub(crate) const MAX_RECENT_NON_USER_ENTRIES: usize = 40;
-const MIN_RECENT_TOOL_ENTRIES: usize = 5;
 const MAX_TRANSCRIPT_IMAGES: usize = 4;
 const MAX_TRANSCRIPT_IMAGE_BYTES: usize = 8 * 1024 * 1024;
 const MANUAL_APPROVAL_DEVELOPER_PREFIX: &str =
@@ -50,44 +52,6 @@ pub(crate) struct RenderedTranscript {
 pub(crate) struct RenderedImages {
     pub(crate) images: Vec<ContentItem>,
     pub(crate) omitted_bytes: usize,
-}
-
-fn retained_tokens(
-    entries: &[TranscriptEntry],
-    retained: &VecDeque<usize>,
-    kind: TranscriptEntryKind,
-) -> usize {
-    retained
-        .iter()
-        .filter_map(|&index| {
-            let entry = &entries[index];
-            let same_token_pool = match kind {
-                TranscriptEntryKind::ProtectedMessage | TranscriptEntryKind::Message => matches!(
-                    entry.kind,
-                    TranscriptEntryKind::ProtectedMessage | TranscriptEntryKind::Message
-                ),
-                TranscriptEntryKind::User | TranscriptEntryKind::Tool => entry.kind == kind,
-            };
-            same_token_pool.then_some(entry.tokens)
-        })
-        .sum()
-}
-
-fn evict_oldest_matching(
-    entries: &[TranscriptEntry],
-    retained: &mut VecDeque<usize>,
-    count: usize,
-    mut matches: impl FnMut(TranscriptEntryKind) -> bool,
-) {
-    let mut remaining = count;
-    retained.retain(|&index| {
-        if remaining > 0 && matches(entries[index].kind) {
-            remaining -= 1;
-            false
-        } else {
-            true
-        }
-    });
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -433,157 +397,12 @@ impl TranscriptConfig {
         let available_message_tokens = self
             .max_message_transcript_tokens
             .saturating_sub(message_tokens);
-        let mut retained_non_user: VecDeque<usize> = VecDeque::new();
-
-        // Replay non-user entries as an append-only bounded buffer. Evict ordinary evidence
-        // before protected conversation messages, removing half of whichever pool overflows so
-        // the retained prefix stays stable between overflow points without storing sampler state.
-        for (index, entry) in entries.iter().enumerate() {
-            if entry.kind == TranscriptEntryKind::User {
-                continue;
-            }
-
-            let token_budget = match entry.kind {
-                TranscriptEntryKind::Tool => self.max_tool_transcript_tokens,
-                TranscriptEntryKind::ProtectedMessage | TranscriptEntryKind::Message => {
-                    available_message_tokens
-                }
-                TranscriptEntryKind::User => unreachable!("user entries were selected separately"),
-            };
-
-            let protected_tokens = if entry.kind == TranscriptEntryKind::Message {
-                retained_non_user
-                    .iter()
-                    .filter_map(|&retained_index| {
-                        let retained = &entries[retained_index];
-                        (retained.kind == TranscriptEntryKind::ProtectedMessage)
-                            .then_some(retained.tokens)
-                    })
-                    .sum()
-            } else {
-                0
-            };
-
-            // An entry that cannot fit beside its non-evictable context must not evict evidence.
-            if protected_tokens + entry.tokens > token_budget
-                || self.max_recent_non_user_entries == 0
-            {
-                continue;
-            }
-
-            let eviction_order: &[TranscriptEntryKind] = match entry.kind {
-                TranscriptEntryKind::ProtectedMessage => &[
-                    TranscriptEntryKind::Message,
-                    TranscriptEntryKind::ProtectedMessage,
-                ],
-                TranscriptEntryKind::Message => &[TranscriptEntryKind::Message],
-                TranscriptEntryKind::Tool => &[TranscriptEntryKind::Tool],
-                TranscriptEntryKind::User => unreachable!("user entries were selected separately"),
-            };
-
-            for &eviction_kind in eviction_order {
-                if retained_tokens(&entries, &retained_non_user, entry.kind)
-                    .saturating_add(entry.tokens)
-                    <= token_budget
-                {
-                    break;
-                }
-
-                let retained_kind_count = retained_non_user
-                    .iter()
-                    .filter(|&&retained_index| entries[retained_index].kind == eviction_kind)
-                    .count();
-                if retained_kind_count == 0 {
-                    continue;
-                }
-
-                evict_oldest_matching(
-                    &entries,
-                    &mut retained_non_user,
-                    retained_kind_count.div_ceil(2),
-                    |kind| kind == eviction_kind,
-                );
-                while retained_tokens(&entries, &retained_non_user, entry.kind)
-                    .saturating_add(entry.tokens)
-                    > token_budget
-                    && retained_non_user
-                        .iter()
-                        .any(|&retained_index| entries[retained_index].kind == eviction_kind)
-                {
-                    evict_oldest_matching(
-                        &entries,
-                        &mut retained_non_user,
-                        /*count*/ 1,
-                        |kind| kind == eviction_kind,
-                    );
-                }
-            }
-
-            if retained_tokens(&entries, &retained_non_user, entry.kind)
-                .saturating_add(entry.tokens)
-                > token_budget
-            {
-                continue;
-            }
-
-            if retained_non_user.len().saturating_add(1) > self.max_recent_non_user_entries {
-                let retained_tool_count = retained_non_user
-                    .iter()
-                    .filter(|&&retained_index| {
-                        entries[retained_index].kind == TranscriptEntryKind::Tool
-                    })
-                    .count();
-                // Keep one slot available for protected context in smaller configured windows.
-                let minimum_existing_tool_entries = MIN_RECENT_TOOL_ENTRIES
-                    .min(self.max_recent_non_user_entries.saturating_sub(1))
-                    .saturating_sub(usize::from(entry.kind == TranscriptEntryKind::Tool));
-                let mut removable_tool_count =
-                    retained_tool_count.saturating_sub(minimum_existing_tool_entries);
-                let expendable_message_count = retained_non_user
-                    .iter()
-                    .filter(|&&retained_index| {
-                        entries[retained_index].kind == TranscriptEntryKind::Message
-                    })
-                    .count();
-                let ordinary_evidence_count = expendable_message_count + retained_tool_count;
-                let removable_count = expendable_message_count + removable_tool_count;
-
-                if removable_count > 0 {
-                    evict_oldest_matching(
-                        &entries,
-                        &mut retained_non_user,
-                        ordinary_evidence_count.div_ceil(2).min(removable_count),
-                        |kind| match kind {
-                            TranscriptEntryKind::Message => true,
-                            TranscriptEntryKind::Tool if removable_tool_count > 0 => {
-                                removable_tool_count -= 1;
-                                true
-                            }
-                            TranscriptEntryKind::User
-                            | TranscriptEntryKind::ProtectedMessage
-                            | TranscriptEntryKind::Tool => false,
-                        },
-                    );
-                } else if matches!(
-                    entry.kind,
-                    TranscriptEntryKind::ProtectedMessage | TranscriptEntryKind::Tool
-                ) {
-                    let entries_to_evict = retained_non_user.len().div_ceil(2);
-                    evict_oldest_matching(
-                        &entries,
-                        &mut retained_non_user,
-                        entries_to_evict,
-                        |kind| kind == TranscriptEntryKind::ProtectedMessage,
-                    );
-                } else {
-                    continue;
-                }
-            }
-
-            retained_non_user.push_back(index);
+        let mut window = TranscriptWindow::new(&entries, self, available_message_tokens);
+        for index in 0..entries.len() {
+            window.insert(index);
         }
 
-        for index in retained_non_user {
+        for index in window.into_indices() {
             included[index] = true;
         }
 
