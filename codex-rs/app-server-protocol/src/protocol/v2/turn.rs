@@ -73,6 +73,10 @@ pub struct TurnStartParams {
     #[ts(optional = nullable)]
     pub client_user_message_id: Option<String>,
     pub input: Vec<UserInput>,
+    /// Optional source classification for the caller that starts this turn.
+    /// Ignored when this request steers an already-active turn.
+    #[ts(optional = nullable)]
+    pub turn_trigger: Option<String>,
     /// Optional metadata to enrich Codex's ResponsesAPI turn metadata.
     ///
     /// Entries are flattened into the JSON string sent as

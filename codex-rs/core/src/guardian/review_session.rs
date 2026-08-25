@@ -1182,6 +1182,7 @@ async fn run_review_on_session(
                 service_tier: None,
                 parent_turn_id: Some(parent_turn.sub_id.clone()),
                 root_turn_id: parent_turn.turn_metadata_state.root_turn_id(),
+                ..Default::default()
             }),
         TurnInputMode::StartIfIdle,
     );

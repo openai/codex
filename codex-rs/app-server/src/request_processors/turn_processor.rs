@@ -539,6 +539,7 @@ impl TurnRequestProcessor {
                 })
                 .with_thread_settings(thread_settings)
                 .on_start(TurnStartOptions {
+                    turn_trigger: params.turn_trigger,
                     final_output_json_schema: params.output_schema,
                     service_tier: params.service_tier_for_turn,
                     ..Default::default()

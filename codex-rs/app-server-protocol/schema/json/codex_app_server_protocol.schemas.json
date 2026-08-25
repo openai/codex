@@ -23959,6 +23959,13 @@
           },
           "threadId": {
             "type": "string"
+          },
+          "turnTrigger": {
+            "description": "Optional source classification for the caller that starts this turn. Ignored when this request steers an already-active turn.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [

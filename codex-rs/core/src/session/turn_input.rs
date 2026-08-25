@@ -97,6 +97,7 @@ impl PreparedTurnInputSettings {
         submission_id: String,
     ) -> CodexResult<Arc<TurnContext>> {
         let TurnStartOptions {
+            turn_trigger,
             final_output_json_schema,
             service_tier,
             parent_turn_id,
@@ -111,6 +112,11 @@ impl PreparedTurnInputSettings {
         let turn_context = session
             .new_turn_with_sub_id(submission_id.clone(), updates)
             .await?;
+        if let Some(turn_trigger) = turn_trigger {
+            turn_context
+                .turn_metadata_state
+                .set_turn_trigger(turn_trigger);
+        }
         if emit_thread_settings_applied {
             thread_settings::emit_applied(session, submission_id).await;
         }

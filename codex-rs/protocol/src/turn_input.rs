@@ -143,6 +143,9 @@ pub enum TurnInputMode {
 /// child input, Core also compares root lineage to detect ambiguity.
 #[derive(Clone, Debug, Default)]
 pub struct TurnStartOptions {
+    /// Source classification for the caller that starts a new turn.
+    /// Ignored when the submitted input steers an active turn.
+    pub turn_trigger: Option<String>,
     /// Structured-output schema for a new turn. When steering, Core rejects
     /// the input if the active turn uses a different schema.
     pub final_output_json_schema: Option<Value>,
