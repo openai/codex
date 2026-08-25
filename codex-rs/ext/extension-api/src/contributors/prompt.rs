@@ -8,6 +8,8 @@ use codex_protocol::models::ContentItemKind;
 pub enum PromptSlot {
     DeveloperPolicy,
     DeveloperCapabilities,
+    /// Text inside the context-window message, supplied by `contribute_thread_context`.
+    ContextWindow,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

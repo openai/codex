@@ -15,7 +15,7 @@ pub(crate) struct TokenBudgetContext {
     first_window_id: Uuid,
     previous_window_id: Option<Uuid>,
     window_id: Uuid,
-    mcp_result: Option<String>,
+    thread_hint: Option<String>,
 }
 
 impl TokenBudgetContext {
@@ -24,14 +24,14 @@ impl TokenBudgetContext {
         first_window_id: Uuid,
         previous_window_id: Option<Uuid>,
         window_id: Uuid,
-        mcp_result: Option<String>,
+        thread_hint: Option<String>,
     ) -> Self {
         Self {
             agent_path,
             first_window_id,
             previous_window_id,
             window_id,
-            mcp_result,
+            thread_hint,
         }
     }
 }
@@ -68,8 +68,8 @@ impl ContextualUserFragment for TokenBudgetContext {
         if let Some(previous_window_id) = self.previous_window_id {
             lines.push(format!("Previous context window id: {previous_window_id}"));
         }
-        if let Some(mcp_result) = &self.mcp_result {
-            lines.push(mcp_result.clone());
+        if let Some(thread_hint) = &self.thread_hint {
+            lines.push(thread_hint.clone());
         }
         format!("\n{}\n", lines.join("\n"))
     }
