@@ -31,7 +31,6 @@ use tokio::time::Instant;
 use tokio::time::sleep_until;
 use tokio_util::sync::CancellationToken;
 
-use crate::codex_thread::GuardianAuthorizationVersion;
 use crate::context::GuardianReviewEvidence;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -462,7 +461,7 @@ async fn run_guardian_review(
         // Root rewrites and new user messages during this review make its evidence
         // stale even if it later completes against a newer prompt snapshot.
         let history = session.conversation_history_snapshot().await;
-        let authorization_version = GuardianAuthorizationVersion::from_history(history.as_ref());
+        let authorization_version = evidence.authorization_version(history.as_ref());
         let root_authorization_version = session
             .services
             .agent_control

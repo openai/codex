@@ -10,6 +10,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::compact::content_items_to_text;
+use crate::context::GuardianReviewEvidence;
 use crate::context::NodeReplReviewEvidence;
 use crate::context::NodeReplReviewEvidenceMode;
 use crate::context::node_repl_review_evidence_mode;
@@ -145,6 +146,14 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
         .root_user_authorization(session.thread_id)
         .await
         .map(|snapshot| snapshot.messages);
+    let trusted_user_inputs = session
+        .services
+        .thread_extension_data
+        .get::<GuardianReviewEvidence>()
+        .map(|evidence| {
+            evidence.user_input_fragments(history.conversation_history_snapshot().as_ref())
+        })
+        .unwrap_or_default();
     let transcript_entries = collect_guardian_transcript_entries(history.raw_items());
     let transcript_cursor = GuardianTranscriptCursor {
         parent_history_version: history.history_version(),
@@ -229,6 +238,13 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
             push_text(message.render());
         }
         push_text(">>> ROOT CONVERSATION END\n".to_string());
+    }
+    if !trusted_user_inputs.is_empty() {
+        push_text(">>> TRUSTED USER ANSWERS START\n".to_string());
+        for answer in trusted_user_inputs {
+            push_text(answer);
+        }
+        push_text(">>> TRUSTED USER ANSWERS END\n".to_string());
     }
     push_text(headings.transcript_start.to_string());
     for (index, entry) in transcript_entries.into_iter().enumerate() {

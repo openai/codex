@@ -157,6 +157,8 @@ pub enum GuardianRootMessage {
     User(String),
     /// Root assistant final output that provides untrusted conversational context.
     Assistant(String),
+    /// Bounded, already role-labeled genuine user answers and their assistant questions.
+    UserInput(String),
 }
 
 impl GuardianRootMessage {
@@ -165,6 +167,7 @@ impl GuardianRootMessage {
         let (role, text) = match self {
             Self::User(text) => ("user", text),
             Self::Assistant(text) => ("assistant", text),
+            Self::UserInput(fragment) => return fragment,
         };
         text.lines()
             .map(|line| format!("{role}: {line}\n"))
@@ -172,13 +175,15 @@ impl GuardianRootMessage {
     }
 }
 
-/// Authorization state that changes on history rewrites or genuine user messages.
+/// Authorization state that changes on history rewrites or genuine user input.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GuardianAuthorizationVersion {
     /// Conversation-history rewrite generation.
     pub history_version: u64,
     /// Number of genuine user messages in the conversation snapshot.
     pub user_message_count: usize,
+    /// Number of successful, host-produced answers to genuine user-input requests.
+    pub user_input_response_count: usize,
 }
 
 impl GuardianAuthorizationVersion {
@@ -190,6 +195,7 @@ impl GuardianAuthorizationVersion {
                 .items()
                 .filter(|item| item.is_user_message())
                 .count(),
+            user_input_response_count: 0,
         }
     }
 }
