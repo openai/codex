@@ -94,7 +94,7 @@ impl ShellSnapshot {
         async {
             let timer = config
                 .session_telemetry
-                .start_timer("codex.shell_snapshot.duration_ms", &[]);
+                .start_timer("codex.shell_snapshot.duration_ms", &[("version", "v1")]);
             let snapshot = ShellSnapshot::try_create(
                 &config.codex_home,
                 config.session_id,
@@ -105,7 +105,7 @@ impl ShellSnapshot {
             .await;
             let success_tag = if snapshot.is_ok() { "true" } else { "false" };
             let _ = timer.map(|timer| timer.record(&[("success", success_tag)]));
-            let mut counter_tags = vec![("success", success_tag)];
+            let mut counter_tags = vec![("version", "v1"), ("success", success_tag)];
             if let Some(failure_reason) = snapshot.as_ref().err() {
                 counter_tags.push(("failure_reason", *failure_reason));
             }

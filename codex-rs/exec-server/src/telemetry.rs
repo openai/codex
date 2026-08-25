@@ -159,6 +159,31 @@ impl ExecServerTelemetry {
         });
     }
 
+    #[cfg(unix)]
+    pub(crate) fn shell_snapshot_captured(
+        &self,
+        duration: Duration,
+        result: Result<(), &'static str>,
+    ) {
+        // Local execution has no exec-server telemetry owner. Use the host's
+        // configured metrics client while preserving an explicit server client.
+        let Some(metrics) = self
+            .inner
+            .as_ref()
+            .map(|inner| inner.metrics.clone())
+            .or_else(codex_otel::global)
+        else {
+            return;
+        };
+        let success = if result.is_ok() { "true" } else { "false" };
+        let mut tags = vec![("version", "v2"), ("success", success)];
+        let _ = metrics.record_duration("codex.shell_snapshot.duration_ms", duration, &tags);
+        if let Err(failure_reason) = result {
+            tags.push(("failure_reason", failure_reason));
+        }
+        let _ = metrics.counter("codex.shell_snapshot", /*inc*/ 1, &tags);
+    }
+
     pub(crate) fn remote_registration_completed(&self, result: &'static str, duration: Duration) {
         self.record_operation(REMOTE_REGISTRATION_METRICS, result, duration);
     }

@@ -26,6 +26,7 @@ use crate::protocol::ExecParams;
 use crate::protocol::ShellSnapshotRequest;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_params;
+use crate::telemetry::ExecServerTelemetry;
 
 const MAX_CACHED_SNAPSHOTS: usize = 16;
 const MAX_SNAPSHOT_BYTES: usize = 512 * 1024;
@@ -60,6 +61,7 @@ impl ShellSnapshotCache {
         &self,
         params: &ExecParams,
         prepared: &mut PreparedExecRequest,
+        telemetry: &ExecServerTelemetry,
     ) -> Result<(), JSONRPCErrorError> {
         let Some(request) = params.shell_snapshot.as_ref() else {
             return Ok(());
@@ -134,12 +136,16 @@ impl ShellSnapshotCache {
         };
         let Ok(snapshot) = snapshot
             .get_or_init(|| async {
-                capture_snapshot(params, prepared, shell_type)
-                    .await
-                    .map_err(|err| {
-                        tracing::warn!("failed to capture shell snapshot: {err:?}");
-                        Instant::now() + SNAPSHOT_RETRY_BACKOFF
-                    })
+                let started_at = std::time::Instant::now();
+                let result = capture_snapshot(params, prepared, shell_type).await;
+                telemetry.shell_snapshot_captured(
+                    started_at.elapsed(),
+                    result.as_ref().map(|_| ()).map_err(|_| "capture_failed"),
+                );
+                result.map_err(|err| {
+                    tracing::warn!("failed to capture shell snapshot: {err:?}");
+                    Instant::now() + SNAPSHOT_RETRY_BACKOFF
+                })
             })
             .await
         else {

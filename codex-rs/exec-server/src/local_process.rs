@@ -355,7 +355,7 @@ impl LocalProcess {
         #[cfg(unix)]
         self.inner
             .shell_snapshots
-            .prepare(&params, &mut prepared)
+            .prepare(&params, &mut prepared, &self.inner.telemetry)
             .await?;
         if prepared.command.is_empty() {
             return Err(invalid_params("argv must not be empty".to_string()));

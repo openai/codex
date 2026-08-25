@@ -1,6 +1,12 @@
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 
+use codex_otel::MetricsClient;
+use codex_otel::MetricsConfig;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
+use opentelemetry_sdk::metrics::InMemoryMetricExporter;
+use opentelemetry_sdk::metrics::data::AggregatedMetrics;
+use opentelemetry_sdk::metrics::data::MetricData;
 use pretty_assertions::assert_eq;
 use test_case::test_case;
 
@@ -14,7 +20,9 @@ use crate::protocol::ExecParams;
 use crate::protocol::ProcessId;
 use crate::protocol::ShellInfo;
 use crate::protocol::ShellSnapshotRequest;
+use crate::telemetry::ExecServerTelemetry;
 
+#[test_case(1; "succeeds_on_first_attempt")]
 #[test_case(2; "recovers_on_second_attempt")]
 #[test_case(3; "recovers_on_last_attempt")]
 #[test_case(4; "stops_after_three_failures")]
@@ -57,6 +65,16 @@ async fn snapshot_failure_retries_are_bounded_and_single_flight(
         network_proxy: None,
     };
     let cache = ShellSnapshotCache::default();
+    let metrics = MetricsClient::new(
+        MetricsConfig::in_memory(
+            "test",
+            "codex-exec-server",
+            env!("CARGO_PKG_VERSION"),
+            InMemoryMetricExporter::default(),
+        )
+        .with_runtime_reader(),
+    )?;
+    let telemetry = ExecServerTelemetry::new(metrics.clone());
 
     for attempt in 1..=5 {
         if attempt == recovery_attempt {
@@ -84,8 +102,8 @@ async fn snapshot_failure_retries_are_bounded_and_single_flight(
         .await
         .expect("prepare concurrent capture");
         let (first, second) = tokio::join!(
-            cache.prepare(&params, &mut prepared),
-            cache.prepare(&params, &mut concurrent),
+            cache.prepare(&params, &mut prepared, &telemetry),
+            cache.prepare(&params, &mut concurrent, &telemetry),
         );
         first.expect("capture failure must preserve command fallback");
         second.expect("concurrent request must share the capture attempt");
@@ -97,7 +115,7 @@ async fn snapshot_failure_retries_are_bounded_and_single_flight(
         tokio::time::pause();
         if attempt < recovery_attempt || recovery_attempt > MAX_SNAPSHOT_ATTEMPTS {
             cache
-                .prepare(&params, &mut prepared)
+                .prepare(&params, &mut prepared, &telemetry)
                 .await
                 .expect("capture must stay cached during backoff");
             assert_eq!(
@@ -114,6 +132,66 @@ async fn snapshot_failure_retries_are_bounded_and_single_flight(
         tokio::time::advance(SNAPSHOT_RETRY_BACKOFF).await;
         tokio::time::resume();
     }
+
+    let snapshot = metrics.snapshot()?;
+    let mut counters = BTreeMap::new();
+    let mut durations = BTreeMap::new();
+    for metric in snapshot
+        .scope_metrics()
+        .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
+    {
+        match metric.name() {
+            "codex.shell_snapshot" => {
+                let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
+                    panic!("expected shell snapshot counter");
+                };
+                for point in sum.data_points() {
+                    let tags = point
+                        .attributes()
+                        .map(|attribute| (attribute.key.to_string(), attribute.value.to_string()))
+                        .collect::<BTreeMap<_, _>>();
+                    counters.insert(tags, point.value());
+                }
+            }
+            "codex.shell_snapshot.duration_ms" => {
+                let AggregatedMetrics::F64(MetricData::Histogram(histogram)) = metric.data() else {
+                    panic!("expected shell snapshot duration histogram");
+                };
+                for point in histogram.data_points() {
+                    let tags = point
+                        .attributes()
+                        .map(|attribute| (attribute.key.to_string(), attribute.value.to_string()))
+                        .collect::<BTreeMap<_, _>>();
+                    durations.insert(tags, point.count());
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut expected_counters = BTreeMap::new();
+    let mut expected_durations = BTreeMap::new();
+    let failures = (recovery_attempt - 1).min(MAX_SNAPSHOT_ATTEMPTS) as u64;
+    for (success, count) in [
+        ("false", failures),
+        ("true", u64::from(recovery_attempt <= MAX_SNAPSHOT_ATTEMPTS)),
+    ] {
+        if count == 0 {
+            continue;
+        }
+        let mut tags = BTreeMap::from([
+            ("version".to_string(), "v2".to_string()),
+            ("success".to_string(), success.to_string()),
+        ]);
+        expected_durations.insert(tags.clone(), count);
+        if success == "false" {
+            tags.insert("failure_reason".to_string(), "capture_failed".to_string());
+        }
+        expected_counters.insert(tags, count);
+    }
+    assert_eq!(
+        (counters, durations),
+        (expected_counters, expected_durations)
+    );
     Ok(())
 }
 
