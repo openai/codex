@@ -868,18 +868,6 @@ See the Codex keymap documentation for supported actions and examples."
                 return Err(err);
             }
         };
-        let thread_id = app.chat_widget.thread_id().or(app.primary_thread_id);
-        let resume_hint = resume_hint_for_resumable_thread(
-            thread_id,
-            app.chat_widget.thread_name(),
-            app.chat_widget.rollout_path().as_deref(),
-        );
-        Ok(AppExitInfo {
-            token_usage: app.token_usage(),
-            thread_id,
-            resume_hint,
-            update_action: app.pending_update_action,
-            exit_reason,
-        })
+        Ok(app.exit_info(exit_reason))
     }
 }

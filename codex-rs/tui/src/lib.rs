@@ -21,6 +21,7 @@ pub use crate::startup_error::LocalStateDbStartupError;
 use additional_dirs::add_dir_warning_message;
 use app::App;
 pub use app::AppExitInfo;
+pub use app::DisconnectInfo;
 pub use app::ExitReason;
 use app_server_session::AppServerSession;
 use app_server_session::ThreadParamsMode;
@@ -948,6 +949,7 @@ pub async fn run_main(
             token_usage: TokenUsage::default(),
             thread_id: None,
             resume_hint: None,
+            disconnect_info: None,
             update_action: None,
             exit_reason: ExitReason::UserRequested,
         }),
@@ -1007,6 +1009,7 @@ async fn run_ratatui_app(
                         token_usage: crate::token_usage::TokenUsage::default(),
                         thread_id: None,
                         resume_hint: None,
+                        disconnect_info: None,
                         update_action: Some(action),
                         exit_reason: ExitReason::UserRequested,
                     });
@@ -1179,6 +1182,7 @@ async fn run_ratatui_app(
                 token_usage: crate::token_usage::TokenUsage::default(),
                 thread_id: None,
                 resume_hint: None,
+                disconnect_info: None,
                 update_action: None,
                 exit_reason: ExitReason::UserRequested,
             });
@@ -1251,6 +1255,7 @@ async fn run_ratatui_app(
                 token_usage: crate::token_usage::TokenUsage::default(),
                 thread_id: None,
                 resume_hint: None,
+                disconnect_info: None,
                 update_action: None,
                 exit_reason: ExitReason::Fatal(format!(
                     "No saved session found with ID {id_str}. Run `codex {action}` without an ID to choose from existing sessions."
@@ -1346,6 +1351,7 @@ async fn run_ratatui_app(
                         token_usage: crate::token_usage::TokenUsage::default(),
                         thread_id: None,
                         resume_hint: None,
+                        disconnect_info: None,
                         update_action: None,
                         exit_reason: ExitReason::UserRequested,
                     });
@@ -1440,6 +1446,7 @@ async fn run_ratatui_app(
                     token_usage: crate::token_usage::TokenUsage::default(),
                     thread_id: None,
                     resume_hint: None,
+                    disconnect_info: None,
                     update_action: None,
                     exit_reason: ExitReason::UserRequested,
                 });
@@ -1489,6 +1496,7 @@ async fn run_ratatui_app(
                 token_usage: crate::token_usage::TokenUsage::default(),
                 thread_id: None,
                 resume_hint: None,
+                disconnect_info: None,
                 update_action: None,
                 exit_reason: ExitReason::UserRequested,
             });

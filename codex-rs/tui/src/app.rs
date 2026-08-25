@@ -217,6 +217,7 @@ mod background_requests;
 mod config_persistence;
 mod connector_mentions;
 mod event_dispatch;
+mod exit_summary;
 mod file_change_approvals;
 mod history_pagination;
 mod history_ui;
@@ -421,6 +422,7 @@ pub struct AppExitInfo {
     pub token_usage: TokenUsage,
     pub thread_id: Option<ThreadId>,
     pub resume_hint: Option<String>,
+    pub disconnect_info: Option<DisconnectInfo>,
     pub update_action: Option<UpdateAction>,
     pub exit_reason: ExitReason,
 }
@@ -431,11 +433,14 @@ impl AppExitInfo {
             token_usage: TokenUsage::default(),
             thread_id: None,
             resume_hint: None,
+            disconnect_info: None,
             update_action: None,
             exit_reason: ExitReason::Fatal(message.into()),
         }
     }
 }
+
+pub use exit_summary::DisconnectInfo;
 
 #[derive(Debug)]
 pub(crate) enum AppRunControl {
@@ -446,6 +451,9 @@ pub(crate) enum AppRunControl {
 #[derive(Debug, Clone)]
 pub enum ExitReason {
     UserRequested,
+    TurnInterrupted,
+    /// The current thread was archived or deleted, rather than disconnected.
+    ThreadRemoved,
     Fatal(String),
 }
 

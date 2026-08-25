@@ -638,7 +638,7 @@ impl App {
                 self.chat_widget.on_commit_tick();
             }
             AppEvent::Exit(mode) => {
-                if mode == ExitMode::ShutdownFirst {
+                if matches!(mode, ExitMode::ShutdownFirst | ExitMode::ShutdownAfterInterrupt) {
                     self.show_shutdown_feedback(tui)?;
                 }
                 return Ok(self.handle_exit_mode(app_server, mode).await);
@@ -689,7 +689,7 @@ impl App {
                     match app_server.turn_interrupt(thread_id, turn_id).await {
                         Ok(()) => {
                             self.app_event_tx
-                                .send(AppEvent::Exit(ExitMode::ShutdownFirst));
+                                .send(AppEvent::Exit(ExitMode::ShutdownAfterInterrupt));
                         }
                         Err(error) => {
                             self.chat_widget
@@ -3062,7 +3062,7 @@ impl App {
             }
         }
         match mode {
-            ExitMode::ShutdownFirst => {
+            ExitMode::ShutdownFirst | ExitMode::ShutdownAfterInterrupt => {
                 // Mark the thread we are explicitly shutting down for exit so
                 // its shutdown completion does not trigger agent failover.
                 self.pending_shutdown_exit_thread_id =
@@ -3084,7 +3084,11 @@ impl App {
                     }
                 }
                 self.pending_shutdown_exit_thread_id = None;
-                AppRunControl::Exit(ExitReason::UserRequested)
+                AppRunControl::Exit(if mode == ExitMode::ShutdownAfterInterrupt {
+                    ExitReason::TurnInterrupted
+                } else {
+                    ExitReason::UserRequested
+                })
             }
             ExitMode::Immediate => {
                 self.pending_shutdown_exit_thread_id = None;
@@ -3111,7 +3115,7 @@ impl App {
         }
 
         match app_server.thread_archive(thread_id).await {
-            Ok(()) => AppRunControl::Exit(ExitReason::UserRequested),
+            Ok(()) => AppRunControl::Exit(ExitReason::ThreadRemoved),
             Err(err) => {
                 self.chat_widget
                     .add_error_message(format!("Failed to archive current thread: {err}"));
@@ -3138,7 +3142,7 @@ impl App {
         }
 
         match app_server.thread_delete(thread_id).await {
-            Ok(()) => AppRunControl::Exit(ExitReason::UserRequested),
+            Ok(()) => AppRunControl::Exit(ExitReason::ThreadRemoved),
             Err(err) => {
                 self.chat_widget
                     .add_error_message(format!("Failed to delete current thread: {err}"));

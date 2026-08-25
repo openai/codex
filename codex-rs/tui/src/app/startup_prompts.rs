@@ -345,6 +345,7 @@ pub(super) async fn handle_model_migration_prompt_if_needed(
                     token_usage: TokenUsage::default(),
                     thread_id: None,
                     resume_hint: None,
+                    disconnect_info: None,
                     update_action: None,
                     exit_reason: ExitReason::UserRequested,
                 }));

@@ -1,6 +1,75 @@
 use super::*;
 use pretty_assertions::assert_eq;
 
+#[tokio::test]
+async fn daemon_disconnect_exit_summary_includes_reconnect_and_stop_instructions() -> Result<()> {
+    let (mut app, _, _) = make_test_app_with_channels().await;
+    let thread_id = prepare_running_local_daemon(&mut app)?;
+    app.keymap.agents.stop = vec![crate::key_hint::plain(KeyCode::F(10))];
+    let mut exit_info = app.exit_info(ExitReason::UserRequested);
+    exit_info.token_usage = TokenUsage {
+        input_tokens: 10,
+        output_tokens: 2,
+        total_tokens: 12,
+        ..Default::default()
+    };
+    let output = exit_info
+        .format_exit_messages(/*color_enabled*/ false)
+        .join("\n")
+        .replace(&thread_id.to_string(), "THREAD_ID");
+    assert_snapshot!("daemon_disconnect_exit", output);
+    Ok(())
+}
+
+#[tokio::test]
+async fn remote_disconnect_exit_summary_does_not_require_a_local_rollout_or_print_credentials() {
+    let (mut app, _, _) = make_test_app_with_channels().await;
+    app.app_server_target = AppServerTarget::Remote {
+        endpoint: crate::RemoteAppServerEndpoint::WebSocket {
+            websocket_url: "wss://user:secret@example.com:443/?token=private#secret".to_string(),
+            auth_token: Some("secret-token".to_string()),
+        },
+    };
+    let thread_id = ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000").unwrap();
+    app.active_thread_id = Some(thread_id);
+    app.chat_widget.handle_thread_session(test_thread_session(
+        thread_id,
+        test_path_buf("/tmp/project"),
+    ));
+    let exit_info = app.exit_info(ExitReason::Fatal("connection lost".to_string()));
+    let lines = exit_info.format_exit_messages(/*color_enabled*/ false);
+    let command = shlex::split(lines[1].strip_prefix("Reconnect: ").unwrap()).unwrap();
+    assert_eq!(
+        crate::resolve_remote_addr(&command[2]).unwrap(),
+        crate::RemoteAppServerEndpoint::WebSocket {
+            websocket_url: "wss://example.com/".to_string(),
+            auth_token: None,
+        }
+    );
+    assert_snapshot!("remote_disconnect_exit", lines.join("\n"));
+}
+
+#[tokio::test]
+async fn embedded_exit_keeps_the_session_summary() {
+    let (mut app, _, _) = make_test_app_with_channels().await;
+    prepare_local_daemon_thread(&mut app).unwrap();
+    app.app_server_target = AppServerTarget::Embedded;
+    let mut exit_info = app.exit_info(ExitReason::UserRequested);
+    exit_info.token_usage = TokenUsage {
+        output_tokens: 2,
+        total_tokens: 2,
+        ..Default::default()
+    };
+    exit_info.resume_hint = Some("codex resume THREAD_ID".to_string());
+    assert_eq!(
+        exit_info.format_exit_messages(/*color_enabled*/ false),
+        vec![
+            "Token usage: total=2 input=0 output=2",
+            "To continue this session, run codex resume THREAD_ID",
+        ]
+    );
+}
+
 fn prepare_local_daemon_thread(app: &mut App) -> Result<ThreadId> {
     app.app_server_target = AppServerTarget::LocalDaemon {
         endpoint: crate::RemoteAppServerEndpoint::UnixSocket {
@@ -226,10 +295,21 @@ async fn exit_interrupts_before_requesting_shutdown() -> Result<()> {
 
     assert_matches!(control, AppRunControl::Continue);
     assert!(op_rx.try_recv().is_err());
-    assert_matches!(
-        app_event_rx.try_recv(),
-        Ok(AppEvent::Exit(ExitMode::ShutdownFirst))
-    );
+    let exit_event = app_event_rx.try_recv()?;
+    assert_matches!(exit_event, AppEvent::Exit(ExitMode::ShutdownAfterInterrupt));
+    let AppRunControl::Exit(reason) = app
+        .handle_event(&mut tui, &mut app_server, exit_event)
+        .await?
+    else {
+        panic!("stop-and-exit must exit");
+    };
+    assert_matches!(reason, ExitReason::TurnInterrupted);
+    let output = app
+        .exit_info(reason)
+        .format_exit_messages(/*color_enabled*/ false)
+        .join("\n")
+        .replace(&thread_id.to_string(), "THREAD_ID");
+    assert_snapshot!("interrupted_disconnect_exit", output);
     Ok(())
 }
 

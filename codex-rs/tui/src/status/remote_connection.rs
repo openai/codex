@@ -20,7 +20,8 @@ pub(crate) fn remote_connection_status_value(
     };
     let address = match endpoint {
         RemoteAppServerEndpoint::WebSocket { websocket_url, .. } => {
-            sanitized_websocket_display_address(websocket_url)
+            sanitized_websocket_url(websocket_url)
+                .map(|url| url.to_string())
                 .unwrap_or_else(|| "<invalid websocket URL>".to_string())
         }
         RemoteAppServerEndpoint::UnixSocket { socket_path } => {
@@ -33,13 +34,13 @@ pub(crate) fn remote_connection_status_value(
     Some(RemoteConnectionStatus { address, version })
 }
 
-fn sanitized_websocket_display_address(raw: &str) -> Option<String> {
+pub(crate) fn sanitized_websocket_url(raw: &str) -> Option<Url> {
     let mut url = Url::parse(raw).ok()?;
     let _ = url.set_username("");
     let _ = url.set_password(None);
     url.set_query(None);
     url.set_fragment(None);
-    Some(url.to_string())
+    Some(url)
 }
 
 #[cfg(test)]

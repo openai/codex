@@ -1346,6 +1346,8 @@ pub(crate) struct PermissionProfileSelection {
 pub(crate) enum ExitMode {
     /// Shutdown core and exit after completion.
     ShutdownFirst,
+    /// Unsubscribe and exit after the current turn was successfully interrupted.
+    ShutdownAfterInterrupt,
     /// Exit the UI loop immediately without waiting for shutdown.
     ///
     /// This skips `Op::Shutdown`, so any in-flight work may be dropped and

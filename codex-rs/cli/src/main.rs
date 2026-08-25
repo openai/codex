@@ -36,7 +36,6 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
 use codex_utils_cli::ProfileV2Name;
 use codex_utils_cli::SharedCliOptions;
-use owo_colors::OwoColorize;
 use std::collections::HashSet;
 use std::io::IsTerminal;
 use std::io::Write;
@@ -784,34 +783,6 @@ fn parse_socket_path(raw: &str) -> Result<AbsolutePathBuf, String> {
         .map_err(|err| format!("failed to resolve socket path `{raw}`: {err}"))
 }
 
-fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<String> {
-    let is_fatal = matches!(&exit_info.exit_reason, ExitReason::Fatal(_));
-    let AppExitInfo {
-        token_usage,
-        thread_id: conversation_id,
-        resume_hint,
-        ..
-    } = exit_info;
-
-    let mut lines = Vec::new();
-    if !token_usage.is_zero() {
-        lines.push(token_usage.to_string());
-    }
-
-    if let Some(resume_cmd) = resume_hint {
-        let command = if color_enabled {
-            resume_cmd.cyan().to_string()
-        } else {
-            resume_cmd
-        };
-        lines.push(format!("To continue this session, run {command}"));
-    } else if is_fatal && let Some(conversation_id) = conversation_id {
-        lines.push(format!("Session ID: {conversation_id}"));
-    }
-
-    lines
-}
-
 /// Handle the app exit and print the results. Optionally run the update action.
 fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
     let is_fatal = match &exit_info.exit_reason {
@@ -819,12 +790,14 @@ fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
             eprintln!("ERROR: {message}");
             true
         }
-        ExitReason::UserRequested => false,
+        ExitReason::UserRequested | ExitReason::TurnInterrupted | ExitReason::ThreadRemoved => {
+            false
+        }
     };
 
     let update_action = exit_info.update_action;
     let color_enabled = supports_color::on(Stream::Stdout).is_some();
-    for line in format_exit_messages(exit_info, color_enabled) {
+    for line in exit_info.format_exit_messages(color_enabled) {
         println!("{line}");
     }
     if is_fatal {
@@ -2625,7 +2598,7 @@ async fn run_interactive_tui(
             .map_err(std::io::Error::other)?;
     }
 
-    let remote_endpoint = match resolve_remote_endpoint(remote, remote_auth_token_env) {
+    let remote_endpoint = match resolve_remote_endpoint(remote, remote_auth_token_env.clone()) {
         Ok(remote_endpoint) => remote_endpoint,
         Err(err) if is_remote_auth_usage_error(&err) => {
             return Ok(AppExitInfo::fatal(err.to_string()));
@@ -2640,11 +2613,31 @@ async fn run_interactive_tui(
             remote_endpoint.clone(),
         )
     };
+    run_tui_with_recovery(start_tui, remote_auth_token_env.as_deref()).await
+}
+
+async fn run_tui_with_recovery<F, Fut>(
+    mut start_tui: F,
+    remote_auth_token_env: Option<&str>,
+) -> std::io::Result<AppExitInfo>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = std::io::Result<AppExitInfo>>,
+{
     let mut attempted_backups = HashSet::new();
     loop {
         // Keep the large TUI future out of the CLI dispatcher's stack frame.
         let err = match Box::pin(start_tui()).await {
-            Ok(exit_info) => return Ok(exit_info),
+            Ok(mut exit_info) => {
+                if let Some(disconnect) = &mut exit_info.disconnect_info
+                    && let Some(env_var) = remote_auth_token_env
+                {
+                    disconnect
+                        .command
+                        .extend(["--remote-auth-token-env".to_string(), env_var.to_string()]);
+                }
+                return Ok(exit_info);
+            }
             Err(err) => err,
         };
         let Some(startup_error) = local_state_db::startup_error(&err) else {
@@ -3742,6 +3735,7 @@ mod tests {
             token_usage,
             thread_id,
             resume_hint: codex_utils_cli::resume_hint(thread_name, thread_id),
+            disconnect_info: None,
             update_action: None,
             exit_reason: ExitReason::UserRequested,
         }
@@ -3753,11 +3747,45 @@ mod tests {
             token_usage: TokenUsage::default(),
             thread_id: None,
             resume_hint: None,
+            disconnect_info: None,
             update_action: None,
             exit_reason: ExitReason::UserRequested,
         };
-        let lines = format_exit_messages(exit_info, /*color_enabled*/ false);
+        let lines = exit_info.format_exit_messages(/*color_enabled*/ false);
         assert!(lines.is_empty());
+    }
+
+    #[tokio::test]
+    async fn format_exit_messages_preserves_auth_env_through_tui_runner() {
+        let exit_info = run_tui_with_recovery(
+            || async {
+                let mut exit_info = sample_exit_info(
+                    Some("123e4567-e89b-12d3-a456-426614174000"),
+                    /*thread_name*/ None,
+                );
+                exit_info.disconnect_info = Some(codex_tui::DisconnectInfo {
+                    command: vec![
+                        "codex".to_string(),
+                        "--remote".to_string(),
+                        "wss://example.com:443/".to_string(),
+                    ],
+                    stop_hint: "press ctrl + x".to_string(),
+                });
+                Ok(exit_info)
+            },
+            Some("CODEX_REMOTE_TOKEN"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            exit_info.format_exit_messages(/*color_enabled*/ false),
+            vec![
+                "Disconnected from this task. Any running work continues.",
+                "Reconnect: codex --remote wss://example.com:443/ --remote-auth-token-env CODEX_REMOTE_TOKEN resume 123e4567-e89b-12d3-a456-426614174000",
+                "Stop the current turn: run codex --remote wss://example.com:443/ --remote-auth-token-env CODEX_REMOTE_TOKEN agents, select this task, and press ctrl + x.",
+                "Token usage so far: total=2 input=0 output=2",
+            ]
+        );
     }
 
     #[test]
@@ -3766,10 +3794,11 @@ mod tests {
             token_usage: TokenUsage::default(),
             thread_id: Some(ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000").unwrap()),
             resume_hint: None,
+            disconnect_info: None,
             update_action: None,
             exit_reason: ExitReason::Fatal("boom".to_string()),
         };
-        let lines = format_exit_messages(exit_info, /*color_enabled*/ false);
+        let lines = exit_info.format_exit_messages(/*color_enabled*/ false);
         assert_eq!(
             lines,
             vec!["Session ID: 123e4567-e89b-12d3-a456-426614174000".to_string()]
@@ -3783,7 +3812,7 @@ mod tests {
             /*thread_name*/ None,
         );
         exit_info.exit_reason = ExitReason::Fatal("boom".to_string());
-        let lines = format_exit_messages(exit_info, /*color_enabled*/ false);
+        let lines = exit_info.format_exit_messages(/*color_enabled*/ false);
         assert_eq!(
             lines,
             vec![
@@ -3800,7 +3829,7 @@ mod tests {
             Some("123e4567-e89b-12d3-a456-426614174000"),
             /*thread_name*/ None,
         );
-        let lines = format_exit_messages(exit_info, /*color_enabled*/ false);
+        let lines = exit_info.format_exit_messages(/*color_enabled*/ false);
         assert_eq!(
             lines,
             vec![
@@ -3817,7 +3846,7 @@ mod tests {
             Some("123e4567-e89b-12d3-a456-426614174000"),
             /*thread_name*/ None,
         );
-        let lines = format_exit_messages(exit_info, /*color_enabled*/ true);
+        let lines = exit_info.format_exit_messages(/*color_enabled*/ true);
         assert_eq!(lines.len(), 2);
         assert!(lines[1].contains("\u{1b}[36m"));
     }
@@ -3828,7 +3857,7 @@ mod tests {
             Some("123e4567-e89b-12d3-a456-426614174000"),
             Some("my-thread"),
         );
-        let lines = format_exit_messages(exit_info, /*color_enabled*/ false);
+        let lines = exit_info.format_exit_messages(/*color_enabled*/ false);
         assert_eq!(
             lines,
             vec![

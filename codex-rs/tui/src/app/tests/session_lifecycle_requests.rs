@@ -348,6 +348,64 @@ async fn make_history_test_app() -> Result<(App, tempfile::TempDir)> {
     Ok((app, codex_home))
 }
 
+#[tokio::test]
+async fn removing_remote_thread_omits_disconnect_guidance() -> Result<()> {
+    for event in [
+        AppEvent::ArchiveCurrentThread,
+        AppEvent::DeleteCurrentThread,
+    ] {
+        let (mut app, codex_home) = make_history_test_app().await?;
+        let thread_id = ThreadId::from_string(
+            &create_fake_rollout(
+                codex_home.path(),
+                "2026-01-01T00-00-00",
+                "2026-01-01T00:00:00Z",
+                "Saved user message",
+                Some(app.config.model_provider_id.as_str()),
+                /*git_info*/ None,
+            )
+            .expect("create rollout"),
+        )?;
+        let (mut server, _, proxy) = start_recording_app_server(
+            &app.config,
+            /*blocked_thread_list*/ None,
+            /*failed_thread_name*/ None,
+        )
+        .await?;
+        let resumed = server
+            .resume_thread(
+                app.config.clone(),
+                thread_id,
+                crate::app_server_session::ResumeModelSettings::RestoreFromThread,
+            )
+            .await?;
+        app.app_server_target = AppServerTarget::Remote {
+            endpoint: crate::resolve_remote_addr("ws://127.0.0.1:4500")?,
+        };
+        app.active_thread_id = Some(thread_id);
+        app.chat_widget.handle_thread_session(resumed.session);
+        let mut tui = crate::tui::test_support::make_test_tui()?;
+        let AppRunControl::Exit(reason) = app.handle_event(&mut tui, &mut server, event).await?
+        else {
+            panic!("removing the current thread must exit");
+        };
+        assert_matches!(reason, ExitReason::ThreadRemoved);
+        let mut exit_info = app.exit_info(reason);
+        exit_info.token_usage = TokenUsage {
+            output_tokens: 2,
+            total_tokens: 2,
+            ..Default::default()
+        };
+        assert_eq!(
+            exit_info.format_exit_messages(/*color_enabled*/ false),
+            vec!["Token usage: total=2 input=0 output=2",]
+        );
+        server.shutdown().await?;
+        proxy.await??;
+    }
+    Ok(())
+}
+
 fn spawn_approved_task_tool_call(
     app: &App,
     app_server: &AppServerSession,

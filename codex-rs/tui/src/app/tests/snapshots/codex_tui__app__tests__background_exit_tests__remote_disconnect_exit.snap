@@ -1,0 +1,7 @@
+---
+source: tui/src/app/tests/background_exit_tests.rs
+expression: "lines.join(\"\\n\")"
+---
+Disconnected from this task. Work may still be running.
+Reconnect: codex --remote wss://example.com:443/ resume 123e4567-e89b-12d3-a456-426614174000
+Stop the current turn: run codex --remote wss://example.com:443/ agents, select this task, and press ctrl + x.
