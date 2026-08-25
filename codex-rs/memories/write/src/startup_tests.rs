@@ -6,6 +6,7 @@ use crate::runtime::MemoryStartupContext;
 use crate::start_memories_startup_task;
 use crate::storage::rebuild_raw_memories_file_from_memories;
 use crate::storage::sync_rollout_summaries_from_memories;
+use codex_config::test_support::CloudConfigBundleFixture;
 use codex_config::types::MemoriesConfig;
 use codex_features::Feature;
 use codex_git_utils::diff_since_latest_init;
@@ -31,6 +32,8 @@ use codex_rollout::RolloutItem;
 use codex_rollout::RolloutLine;
 use codex_state::Phase2JobClaimOutcome;
 use codex_utils_absolute_path::test_support::PathExt;
+use core_test_support::fs_wait;
+use core_test_support::hooks::trust_discovered_hooks;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
@@ -170,6 +173,150 @@ async fn memories_startup_fails_consolidation_when_worker_creates_extension_syml
         shutdown_test_codex(&test).await?;
     }
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn memories_startup_phase2_scopes_stop_hooks() -> anyhow::Result<()> {
+    for (pin_hooks, managed_response) in [
+        (false, None),
+        (true, None),
+        (true, Some(r#"{"decision":"block","reason":"denied"}"#)),
+        (true, Some(r#"{"continue":false,"stopReason":"denied"}"#)),
+    ] {
+        let server = start_mock_server().await;
+        let home = Arc::new(TempDir::new()?);
+        let db = init_state_db(&home).await?;
+        let root = memory_root(&home.path().abs());
+        seed_stage1_output(
+            db.as_ref(),
+            home.path(),
+            chrono::Utc::now(),
+            "raw memory",
+            "rollout summary",
+            "stop-hooks",
+        )
+        .await?;
+        seed_required_memory_artifacts(&root).await?;
+
+        let python = if cfg!(windows) { "python" } else { "python3" };
+        let hook_script = home.path().join("memory_hook.py");
+        let hook_log = home.path().join("stop");
+        let notify_log = home.path().join("notify");
+        let managed_log = home.path().join("managed");
+        let response = managed_response.unwrap_or("{}");
+        tokio::fs::write(
+            &hook_script,
+            format!(
+                r#"import json
+import sys
+from pathlib import Path
+
+kind = sys.argv[1]
+with Path(__file__).with_name(kind).open("a", newline="\n") as log:
+    log.write("hook invoked\n")
+if kind == "managed":
+    print({response:?})
+elif kind == "stop" and Path(json.load(sys.stdin)["cwd"]).name == "memories":
+    print('{{"decision":"block","reason":"Keep working on the project."}}')
+"#
+            ),
+        )
+        .await?;
+        tokio::fs::write(
+            home.path().join("hooks.json"),
+            serde_json::json!({"hooks": {"Stop": [{"hooks": [{
+                "type": "command",
+                "command": format!("{python} \"{}\" stop", hook_script.display()),
+            }]}]}})
+            .to_string(),
+        )
+        .await?;
+        let mut requirements = if pin_hooks {
+            "[features]\nhooks = true\n"
+        } else {
+            ""
+        }
+        .to_string();
+        if managed_response.is_some() {
+            let command =
+                serde_json::to_string(&format!("{python} \"{}\" managed", hook_script.display()))?;
+            requirements.push_str(&format!(
+                "\n[[hooks.Stop]]\n[[hooks.Stop.hooks]]\ntype = \"command\"\ncommand = {command}\n"
+            ));
+        }
+        let test = test_codex()
+            .with_home(home)
+            .with_cloud_config_bundle(
+                CloudConfigBundleFixture::loader_with_enterprise_requirement(requirements),
+            )
+            .with_config(move |config| {
+                config
+                    .features
+                    .enable(Feature::Sqlite)
+                    .expect("enable SQLite");
+                config.memories = startup_test_memories_config();
+                config.notify = Some(vec![
+                    python.to_string(),
+                    hook_script.display().to_string(),
+                    "notify".to_string(),
+                ]);
+                trust_discovered_hooks(config);
+            })
+            // Command hooks run on the app host, so the parent needs a host-local cwd.
+            .build(&server)
+            .await?;
+        let phase2 = mount_sse_once(
+            &server,
+            sse(vec![
+                ev_response_created("resp-phase2"),
+                ev_assistant_message("msg-phase2", "phase2 complete"),
+                ev_completed("resp-phase2"),
+            ]),
+        )
+        .await;
+
+        trigger_memories_startup(&test).await;
+        wait_for_single_request(&phase2).await;
+        if managed_response.is_some() {
+            assert_eq!(
+                wait_for_phase2_job_to_finish(db.as_ref()).await?,
+                Phase2JobClaimOutcome::SkippedRetryUnavailable
+            );
+            assert_eq!(
+                tokio::fs::read_to_string(managed_log).await?,
+                "hook invoked\n"
+            );
+        } else {
+            wait_for_phase2_workspace_reset(db.as_ref(), &root).await?;
+        }
+        phase2.single_request();
+        assert!(
+            !hook_log.exists(),
+            "memory worker must not run the user Stop hook"
+        );
+        assert!(
+            !notify_log.exists(),
+            "memory worker must not send legacy notifications"
+        );
+
+        if managed_response.is_none() {
+            let parent = mount_sse_once(
+                &server,
+                sse(vec![
+                    ev_response_created("resp-parent"),
+                    ev_assistant_message("msg-parent", "parent complete"),
+                    ev_completed("resp-parent"),
+                ]),
+            )
+            .await;
+            test.submit_turn("parent task").await?;
+            parent.single_request();
+            assert_eq!(tokio::fs::read_to_string(hook_log).await?, "hook invoked\n");
+            fs_wait::wait_for_path_exists(notify_log, Duration::from_secs(10)).await?;
+        }
+        shutdown_test_codex(&test).await?;
+    }
     Ok(())
 }
 

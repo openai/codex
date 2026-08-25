@@ -2220,6 +2220,58 @@ fn executor_stop_hooks_register_only_the_first_environment_and_handler() {
 }
 
 #[tokio::test]
+async fn memory_consolidation_stop_preserves_policy_and_executor_cleanup() {
+    for (source, runs_policy) in [
+        (HookSource::User, false),
+        (HookSource::Project, false),
+        (HookSource::SessionFlags, false),
+        (HookSource::Plugin, false),
+        (HookSource::System, true),
+        (HookSource::Mdm, true),
+        (HookSource::CloudRequirements, true),
+        (HookSource::CloudManagedConfig, true),
+        (HookSource::LegacyManagedConfigFile, true),
+        (HookSource::LegacyManagedConfigMdm, true),
+        (HookSource::Unknown, true),
+    ] {
+        let (mut engine, calls, mut request, expected_executor_call, _source) =
+            executor_stop_hook_fixture();
+        request.target = StopHookTarget::MemoryConsolidation;
+        let policy_call = HookMcpCall {
+            server: "security".to_string(),
+            tool: "check".to_string(),
+            environment_id: None,
+            metadata: None,
+            input: Default::default(),
+            timeout: Duration::from_secs(5),
+        };
+        let mut handler = engine.handlers[0].clone();
+        handler.source_path = cwd().join("hooks.json").into();
+        handler.source = source;
+        handler.kind = ConfiguredHandlerKind::McpTool {
+            server: policy_call.server.clone(),
+            tool: policy_call.tool.clone(),
+            input: policy_call.input.clone(),
+        };
+        engine.handlers.push(handler);
+        assert_eq!(
+            engine.preview_stop(&request).len(),
+            usize::from(runs_policy)
+        );
+
+        let outcome = engine.run_stop(request).await;
+        let expected_calls = if runs_policy {
+            vec![policy_call, expected_executor_call]
+        } else {
+            vec![expected_executor_call]
+        };
+        wait_for_mcp_calls(&calls, expected_calls.len()).await;
+        assert_eq!(*calls.lock().expect("lock MCP calls"), expected_calls);
+        assert_eq!(outcome.should_block, runs_policy);
+    }
+}
+
+#[tokio::test]
 async fn executor_stop_hooks_do_not_delay_stop_completion() {
     struct BlockingMcpExecutor {
         started: Arc<Notify>,

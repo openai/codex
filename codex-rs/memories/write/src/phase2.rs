@@ -322,6 +322,8 @@ mod agent {
         agent_config.ephemeral = true;
         agent_config.memories.generate_memories = false;
         agent_config.memories.use_memories = false;
+        // Background memory work must not send user-facing completion notifications.
+        agent_config.notify = None;
         agent_config.include_apps_instructions = false;
         agent_config.mcp_servers = Constrained::allow_only(HashMap::new());
         // Approval policy
