@@ -4,7 +4,6 @@ use crate::config::Config;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use codex_extension_api::UserInstructions;
 use codex_protocol::config_types::TrustLevel;
-use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use std::io;
 use std::sync::Arc;
@@ -20,7 +19,6 @@ pub(crate) struct AgentsMdManager {
 struct AgentsMdCache {
     selections: Option<Vec<TurnEnvironmentSelection>>,
     active_project_trust_level: Option<TrustLevel>,
-    windows_sandbox_level: Option<WindowsSandboxLevel>,
     loaded: Option<Arc<LoadedAgentsMd>>,
 }
 
@@ -38,7 +36,6 @@ impl AgentsMdManager {
         &self,
         config: &Config,
         environments: &TurnEnvironmentSnapshot,
-        windows_sandbox_level: WindowsSandboxLevel,
     ) -> io::Result<()> {
         let selections = environments
             .turn_environments()
@@ -49,28 +46,21 @@ impl AgentsMdManager {
             let mut cache = self.cache.lock().await;
             if cache.selections.as_ref() == Some(&selections)
                 && cache.active_project_trust_level == active_project_trust_level
-                && cache.windows_sandbox_level == Some(windows_sandbox_level)
             {
                 return Ok(());
             }
             cache.selections = None;
             cache.active_project_trust_level = None;
-            cache.windows_sandbox_level = None;
             cache.loaded = None;
         }
 
-        let loaded = load_project_instructions(
-            config,
-            self.user_instructions.clone(),
-            environments,
-            windows_sandbox_level,
-        )
-        .await?
-        .map(Arc::new);
+        let loaded =
+            load_project_instructions(config, self.user_instructions.clone(), environments)
+                .await?
+                .map(Arc::new);
         let mut cache = self.cache.lock().await;
         cache.selections = Some(selections);
         cache.active_project_trust_level = active_project_trust_level;
-        cache.windows_sandbox_level = Some(windows_sandbox_level);
         cache.loaded = loaded;
         Ok(())
     }

@@ -8,6 +8,7 @@ use codex_core::config::Constrained;
 use codex_core::config::NetworkProxySpec;
 use codex_core::shell::ShellType;
 use codex_core::shell::get_shell;
+use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_exec_server::REMOTE_ENVIRONMENT_ID;
@@ -21,6 +22,7 @@ use codex_protocol::approvals::NetworkPolicyRuleAction;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::PermissionProfileSnapshot;
@@ -2024,6 +2026,12 @@ async fn owner_network_policy_follows_the_selected_remote_command() -> Result<()
                     test.config.permissions.permission_profile().clone()
                 }),
                 shell_environment_policy: test.config.permissions.shell_environment_policy.clone(),
+                windows_sandbox_level: WindowsSandboxLevel::from_config(&test.config),
+                windows_sandbox_private_desktop: test
+                    .config
+                    .permissions
+                    .windows_sandbox_private_desktop,
+                use_legacy_landlock: test.config.features.use_legacy_landlock(),
                 exec_policy: None,
                 mcp_policy: None,
                 network_policy: Some(EnvironmentNetworkPolicy::from_config(

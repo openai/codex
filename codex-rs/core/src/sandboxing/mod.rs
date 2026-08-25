@@ -60,6 +60,8 @@ pub struct ExecRequest {
     pub sandbox: SandboxType,
     pub windows_sandbox_policy_cwd: PathUri,
     pub windows_sandbox_workspace_roots: Vec<AbsolutePathBuf>,
+    // TODO(anp): Reconcile these backend copies with TurnEnvironment::sandbox_context
+    // and exec_server_sandbox so local and remote launches use the same settings.
     pub windows_sandbox_level: WindowsSandboxLevel,
     pub windows_sandbox_private_desktop: bool,
     pub permission_profile: PermissionProfile,

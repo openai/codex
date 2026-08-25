@@ -878,6 +878,7 @@ mod tests {
     use codex_exec_server_test_support::environment_manager_without_environments;
     use codex_http_client::HttpClientFactory;
     use codex_http_client::OutboundProxyPolicy;
+    use codex_protocol::config_types::WindowsSandboxLevel;
     use codex_protocol::models::ActivePermissionProfile;
     use codex_protocol::models::PermissionProfile;
     use codex_protocol::protocol::TurnEnvironmentSelection;
@@ -902,6 +903,9 @@ mod tests {
     fn test_environment_config() -> EnvironmentConfig {
         EnvironmentConfig {
             allow_login_shell: true,
+            windows_sandbox_level: WindowsSandboxLevel::Disabled,
+            windows_sandbox_private_desktop: true,
+            use_legacy_landlock: false,
             permission_profile: PermissionProfileSnapshot::legacy(PermissionProfile::read_only()),
             shell_environment_policy: Default::default(),
             exec_policy: None,
@@ -1073,6 +1077,9 @@ url = "ws://127.0.0.1:8765"
         };
         let expected_config = EnvironmentConfig {
             allow_login_shell: false,
+            windows_sandbox_level: WindowsSandboxLevel::Disabled,
+            windows_sandbox_private_desktop: true,
+            use_legacy_landlock: false,
             permission_profile: PermissionProfileSnapshot::active_with_profile_workspace_roots(
                 PermissionProfile::read_only(),
                 ActivePermissionProfile::read_only(),
@@ -1309,6 +1316,9 @@ url = "ws://127.0.0.1:8765"
         let cwd = AbsolutePathBuf::current_dir().expect("cwd");
         let expected_config = EnvironmentConfig {
             allow_login_shell: false,
+            windows_sandbox_level: WindowsSandboxLevel::Disabled,
+            windows_sandbox_private_desktop: true,
+            use_legacy_landlock: false,
             permission_profile: PermissionProfileSnapshot::active_with_profile_workspace_roots(
                 PermissionProfile::read_only(),
                 ActivePermissionProfile::read_only(),
@@ -1646,6 +1656,9 @@ url = "ws://127.0.0.1:8765"
             .expect("replacement environment");
         let child_config = EnvironmentConfig {
             allow_login_shell: false,
+            windows_sandbox_level: WindowsSandboxLevel::Disabled,
+            windows_sandbox_private_desktop: true,
+            use_legacy_landlock: false,
             permission_profile: PermissionProfileSnapshot::active_with_profile_workspace_roots(
                 PermissionProfile::read_only(),
                 ActivePermissionProfile::read_only(),
@@ -1697,6 +1710,9 @@ url = "ws://127.0.0.1:8765"
             resolve_turn_environments(Arc::clone(&manager), std::slice::from_ref(&selection)).await;
         let parent_owner_config = EnvironmentConfig {
             allow_login_shell: false,
+            windows_sandbox_level: WindowsSandboxLevel::Disabled,
+            windows_sandbox_private_desktop: true,
+            use_legacy_landlock: false,
             permission_profile: PermissionProfileSnapshot::legacy(PermissionProfile::read_only()),
             shell_environment_policy: Default::default(),
             exec_policy: None,

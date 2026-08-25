@@ -1,6 +1,7 @@
 use codex_core::EnvironmentConfig;
 use codex_core::EnvironmentMcpPolicy;
 use codex_core::TurnInputRequest;
+use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -12,6 +13,7 @@ use codex_config::McpServerOAuthConfig;
 use codex_config::McpServerTransportConfig;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_features::Feature;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::mcp_policy::McpServerIdentity;
 use codex_protocol::mcp_policy::McpServerRequirement;
 use codex_protocol::models::PermissionProfile;
@@ -362,6 +364,9 @@ async fn skill_mcp_dependency_oauth_uses_configured_http_client() -> Result<()> 
         allow_login_shell: fixture.config.permissions.allow_login_shell,
         permission_profile: PermissionProfileSnapshot::legacy(PermissionProfile::Disabled),
         shell_environment_policy: Default::default(),
+        windows_sandbox_level: WindowsSandboxLevel::from_config(&fixture.config),
+        windows_sandbox_private_desktop: fixture.config.permissions.windows_sandbox_private_desktop,
+        use_legacy_landlock: fixture.config.features.use_legacy_landlock(),
         exec_policy: None,
         mcp_policy: Some(EnvironmentMcpPolicy {
             servers: Some(BTreeMap::from([(

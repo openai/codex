@@ -14,6 +14,8 @@ use crate::WindowsSandboxFilesystemOverrides;
 use crate::WindowsSandboxProxySettingsMode;
 
 /// Windows-specific inputs for an executor-native process spawn.
+// TODO(anp): Reconcile Windows backend and desktop copies with the supplied sandbox
+// context (TurnEnvironment::sandbox_context for turns), preserving this launch snapshot.
 pub struct WindowsSandboxSpawnRequest<'a> {
     pub permission_profile: &'a PermissionProfile,
     pub workspace_roots: &'a [AbsolutePathBuf],

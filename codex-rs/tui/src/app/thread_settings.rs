@@ -153,6 +153,8 @@ impl App {
             approvals_reviewer,
             permission_profile: _,
             active_permission_profile,
+            // TODO(anp): Support Windows sandbox updates through environment configuration;
+            // thread/settings/update cannot currently represent this override.
             windows_sandbox_level: _,
             model,
             effort,

@@ -1,10 +1,8 @@
 use super::mcp_refresh::McpRefreshInvalidationGuard;
 use super::*;
 use crate::environment_selection::combine_selected_capability_roots;
-use crate::tools::sandboxing::executor_windows_sandbox_level;
 use codex_exec_server::ExecutorCapabilityDiscoveryCache;
 use codex_exec_server::ExecutorCapabilityDiscoverySnapshot;
-use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::MAX_SELECTED_CAPABILITY_ROOTS;
 use codex_exec_server::ResolvedSelectedCapabilityRoot;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -98,10 +96,9 @@ impl Session {
         config: &Config,
     ) -> (McpConfig, McpRuntimeContext) {
         let originator = self.originator().await;
-        let (windows_sandbox_level, session_source, host_fallback_cwd) = {
+        let (session_source, host_fallback_cwd) = {
             let state = self.state.lock().await;
             (
-                state.session_configuration.windows_sandbox_level,
                 state.session_configuration.session_source.clone(),
                 state.session_configuration.cwd().clone(),
             )
@@ -117,7 +114,6 @@ impl Session {
                 config,
                 &ready_selected_capability_roots,
                 &environments,
-                windows_sandbox_level,
             )
             .await;
         let mcp_projection = self
@@ -210,7 +206,6 @@ impl Session {
                     &desired.config,
                     &ready_selected_capability_roots,
                     &desired.environments,
-                    desired.windows_sandbox_level,
                 )
                 .await;
             let mcp_projection = self
@@ -265,7 +260,6 @@ impl Session {
                 &desired.config,
                 &ready_selected_capability_roots,
                 &desired.environments,
-                desired.windows_sandbox_level,
             )
             .await;
         let mcp_projection = self
@@ -373,7 +367,6 @@ impl Session {
         config: &Config,
         ready_selected_capability_roots: &[SelectedCapabilityRoot],
         environments: &TurnEnvironmentSnapshot,
-        windows_sandbox_level: WindowsSandboxLevel,
     ) -> Option<Arc<ExecutorCapabilityDiscoverySnapshot>> {
         // Capability roots can currently be selected independently of turn environments, so a
         // root may be ready when there is no primary `TurnEnvironment`. Keep using the thread
@@ -408,17 +401,10 @@ impl Session {
             environments
                 .turn_environments()
                 .map(|environment| {
-                    let mut sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
-                        environment.permission_profile().clone(),
-                        environment.cwd().clone(),
-                    );
-                    sandbox.workspace_roots = environment.workspace_roots().to_vec();
-                    sandbox.windows_sandbox_level =
-                        executor_windows_sandbox_level(windows_sandbox_level, environment.cwd());
-                    sandbox.windows_sandbox_private_desktop =
-                        config.permissions.windows_sandbox_private_desktop;
-                    sandbox.use_legacy_landlock = config.features.use_legacy_landlock();
-                    (environment.selection.environment_id.clone(), sandbox)
+                    (
+                        environment.selection.environment_id.clone(),
+                        environment.sandbox_context(/*additional_permissions*/ None),
+                    )
                 })
                 .collect::<HashMap<_, _>>()
         } else {
@@ -665,7 +651,6 @@ impl Session {
                 refresh_config,
                 &ready_selected_capability_roots,
                 &environments,
-                turn_context.windows_sandbox_level,
             )
             .await;
         let mcp_projection = self

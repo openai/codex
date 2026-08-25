@@ -13,6 +13,8 @@ pub struct ElevatedSandboxProfileCaptureRequest<'a> {
     pub env_map: HashMap<String, String>,
     pub timeout_ms: Option<u64>,
     pub cancellation: Option<crate::WindowsSandboxCancellationToken>,
+    // TODO(anp): Reconcile this private-desktop copy with the supplied sandbox context
+    // (TurnEnvironment::sandbox_context for turns), preserving this launch snapshot.
     pub use_private_desktop: bool,
     pub proxy_enforced: bool,
     pub network_proxy_restricting_sid: Option<String>,

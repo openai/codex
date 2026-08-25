@@ -339,7 +339,6 @@ async fn load_agents_md(config: &TestConfig) -> Option<LoadedAgentsMd> {
         &config.config,
         config.user_instructions.clone(),
         &environments,
-        WindowsSandboxLevel::Disabled,
     )
     .await
     .expect("project instructions should load")
@@ -369,6 +368,9 @@ fn resolved_local_environments<const N: usize>(
                         workspace_roots: Vec::new(),
                         config: EnvironmentConfigState::Ready(EnvironmentConfig {
                             allow_login_shell: true,
+                            windows_sandbox_level: WindowsSandboxLevel::Disabled,
+                            windows_sandbox_private_desktop: true,
+                            use_legacy_landlock: false,
                             permission_profile: PermissionProfileSnapshot::legacy(
                                 PermissionProfile::read_only(),
                             ),
@@ -1133,15 +1135,10 @@ async fn multiple_environment_docs_use_labeled_layout_and_preserve_source_order(
     ]);
     let user_instructions = config.user_instructions.clone();
 
-    let loaded = load_project_instructions(
-        &config.config,
-        user_instructions,
-        &environments,
-        WindowsSandboxLevel::Disabled,
-    )
-    .await
-    .expect("project instructions should load")
-    .expect("instructions expected");
+    let loaded = load_project_instructions(&config.config, user_instructions, &environments)
+        .await
+        .expect("project instructions should load")
+        .expect("instructions expected");
     let inner = format!(
         r#"global instructions
 
@@ -1200,15 +1197,10 @@ async fn secondary_only_project_doc_uses_single_contributor_layout() {
     ]);
     let user_instructions = config.user_instructions.clone();
 
-    let loaded = load_project_instructions(
-        &config.config,
-        user_instructions,
-        &environments,
-        WindowsSandboxLevel::Disabled,
-    )
-    .await
-    .expect("project instructions should load")
-    .expect("instructions expected");
+    let loaded = load_project_instructions(&config.config, user_instructions, &environments)
+        .await
+        .expect("project instructions should load")
+        .expect("instructions expected");
     let inner = format!("global instructions{AGENTS_MD_SEPARATOR}secondary doc");
 
     assert_eq!(loaded.legacy_text(), inner);
@@ -1235,15 +1227,10 @@ async fn primary_only_project_doc_preserves_legacy_layout_with_multiple_bound_en
     ]);
     let user_instructions = config.user_instructions.clone();
 
-    let loaded = load_project_instructions(
-        &config.config,
-        user_instructions,
-        &environments,
-        WindowsSandboxLevel::Disabled,
-    )
-    .await
-    .expect("project instructions should load")
-    .expect("instructions expected");
+    let loaded = load_project_instructions(&config.config, user_instructions, &environments)
+        .await
+        .expect("project instructions should load")
+        .expect("instructions expected");
     let inner = format!("global instructions{AGENTS_MD_SEPARATOR}primary doc");
 
     assert_eq!(loaded.legacy_text(), inner);
@@ -1271,15 +1258,10 @@ async fn project_doc_byte_limit_is_shared_across_environments() {
     ]);
     let user_instructions = config.user_instructions.clone();
 
-    let loaded = load_project_instructions(
-        &config.config,
-        user_instructions,
-        &environments,
-        WindowsSandboxLevel::Disabled,
-    )
-    .await
-    .expect("project instructions should load")
-    .expect("instructions expected");
+    let loaded = load_project_instructions(&config.config, user_instructions, &environments)
+        .await
+        .expect("project instructions should load")
+        .expect("instructions expected");
 
     assert_eq!(
         loaded.text(),
@@ -1310,7 +1292,6 @@ async fn full_primary_environment_budget_excludes_later_environment_docs() {
         &config.config,
         /*user_instructions*/ None,
         &environments,
-        WindowsSandboxLevel::Disabled,
     )
     .await
     .expect("project instructions should load")
@@ -1343,7 +1324,6 @@ async fn secondary_environment_invalid_utf8_does_not_suppress_other_docs() {
         &config.config,
         /*user_instructions*/ None,
         &environments,
-        WindowsSandboxLevel::Disabled,
     )
     .await
     .expect("project instructions should load")

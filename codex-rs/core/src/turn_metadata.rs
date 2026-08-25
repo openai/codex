@@ -114,6 +114,8 @@ pub(crate) struct TurnMetadataState {
     subagent_kind: Option<String>,
     thread_source: Option<ThreadSource>,
     turn_id: String,
+    // TODO(anp): Derive this cached tag from TurnEnvironment::sandbox_context
+    // so metadata reflects the selected environment's backend.
     sandbox: Option<String>,
     sandbox_mode: Option<String>,
     auto_review_enabled: bool,

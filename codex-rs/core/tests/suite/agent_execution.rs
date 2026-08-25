@@ -1,6 +1,8 @@
 use anyhow::Result;
+use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_features::Feature;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::PermissionProfileSnapshot;
 use codex_protocol::protocol::EnvironmentConfig;
@@ -312,6 +314,12 @@ async fn v2_residency_reload_preserves_inherited_environment_and_tools(
             allow_login_shell: test.config.permissions.allow_login_shell,
             permission_profile: PermissionProfileSnapshot::legacy(child_permissions),
             shell_environment_policy: Default::default(),
+            windows_sandbox_level: WindowsSandboxLevel::from_config(&test.config),
+            windows_sandbox_private_desktop: test
+                .config
+                .permissions
+                .windows_sandbox_private_desktop,
+            use_legacy_landlock: test.config.features.use_legacy_landlock(),
             exec_policy: None,
             mcp_policy: None,
             network_policy: None,

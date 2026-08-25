@@ -269,6 +269,8 @@ impl ToolOrchestrator {
                 managed_network_active,
             ),
         };
+        // TODO(anp): Reconcile backend selection and both attempts with
+        // TurnEnvironment::sandbox_context; turn-wide inputs can differ from owner config.
         let initial_sandbox = if sandbox_requested && !executor_managed_process_sandbox {
             self.sandbox.select_initial(
                 &permissions,

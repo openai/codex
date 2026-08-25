@@ -2,11 +2,13 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_config::McpServerConfig;
 use codex_core::EnvironmentConfig;
+use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_features::Feature;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfileSnapshot;
 use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::ThreadSettingsOverrides;
@@ -400,6 +402,13 @@ impl ExecutorStopHookFixture {
                         self.test.config.permissions.permission_profile().clone(),
                     ),
                     shell_environment_policy: Default::default(),
+                    windows_sandbox_level: WindowsSandboxLevel::from_config(&self.test.config),
+                    windows_sandbox_private_desktop: self
+                        .test
+                        .config
+                        .permissions
+                        .windows_sandbox_private_desktop,
+                    use_legacy_landlock: self.test.config.features.use_legacy_landlock(),
                     exec_policy: None,
                     mcp_policy: None,
                     network_policy: None,

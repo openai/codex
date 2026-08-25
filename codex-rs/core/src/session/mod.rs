@@ -716,6 +716,8 @@ impl Session {
             allow_login_shell: config.permissions.allow_login_shell,
             shell_environment_policy: config.permissions.shell_environment_policy.clone(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
+            windows_sandbox_private_desktop: config.permissions.windows_sandbox_private_desktop,
+            use_legacy_landlock: config.features.use_legacy_landlock(),
             legacy_fallback_cwd: config.cwd.clone(),
             codex_home: config.codex_home.clone(),
             thread_name: None,
@@ -3254,11 +3256,7 @@ impl Session {
         let environments = turn_context.environments.refresh_readiness();
         self.services
             .agents_md_manager
-            .refresh(
-                &turn_context.config,
-                &environments,
-                turn_context.windows_sandbox_level,
-            )
+            .refresh(&turn_context.config, &environments)
             .await?;
         let loaded_agents_md = self.services.agents_md_manager.get_loaded().await;
         let selected_capability_roots = self
@@ -3271,7 +3269,6 @@ impl Session {
                 &turn_context.config,
                 &ready_selected_capability_roots,
                 &environments,
-                turn_context.windows_sandbox_level,
             )
             .or_cancel(cancellation_token)
             .await?;
@@ -3292,10 +3289,7 @@ impl Session {
                 .map(|environment| {
                     (
                         environment.selection.environment_id.clone(),
-                        turn_context.file_system_sandbox_context(
-                            /*additional_permissions*/ None,
-                            environment,
-                        ),
+                        environment.sandbox_context(/*additional_permissions*/ None),
                     )
                 })
                 .collect::<HashMap<_, _>>();

@@ -167,6 +167,8 @@ pub(crate) enum ExecPolicyCommandOrigin {
 pub(crate) struct UnmatchedCommandContext<'a> {
     pub(crate) approval_policy: AskForApproval,
     pub(crate) permission_profile: &'a PermissionProfile,
+    // TODO(anp): Reconcile this decision input with TurnEnvironment::sandbox_context
+    // so approval heuristics match the selected environment's Windows backend.
     pub(crate) windows_sandbox_level: WindowsSandboxLevel,
     pub(crate) sandbox_permissions: SandboxPermissions,
     pub(crate) command_origin: ExecPolicyCommandOrigin,
@@ -281,6 +283,8 @@ pub(crate) struct ExecApprovalRequest<'a> {
     pub(crate) approval_policy: AskForApproval,
     pub(crate) permission_profile: PermissionProfile,
     pub(crate) environment_policy: Option<&'a RequirementsExecPolicy>,
+    // TODO(anp): Reconcile this approval snapshot with TurnEnvironment::sandbox_context
+    // rather than taking the Windows backend from the turn-wide default.
     pub(crate) windows_sandbox_level: WindowsSandboxLevel,
     pub(crate) sandbox_permissions: SandboxPermissions,
     pub(crate) prefix_rule: Option<Vec<String>>,

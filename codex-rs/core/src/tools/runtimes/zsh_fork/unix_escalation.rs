@@ -532,6 +532,8 @@ fn evaluate_intercepted_exec_policy(
 struct InterceptedExecPolicyContext {
     approval_policy: AskForApproval,
     permission_profile: PermissionProfile,
+    // TODO(anp): Reconcile this policy input with TurnEnvironment::sandbox_context
+    // so intercepted commands use the selected environment's Windows backend.
     windows_sandbox_level: WindowsSandboxLevel,
     sandbox_permissions: SandboxPermissions,
     enable_shell_wrapper_parsing: bool,
@@ -557,6 +559,8 @@ fn commands_for_intercepted_exec_policy(
     vec![join_program_and_argv(program, argv)]
 }
 
+// TODO(anp): Capture these Windows and Landlock settings from
+// TurnEnvironment::sandbox_context when preparing this executor, preserving its snapshot.
 struct CoreShellCommandExecutor {
     command: Vec<String>,
     cwd: AbsolutePathBuf,

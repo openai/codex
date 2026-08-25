@@ -97,7 +97,11 @@ pub(crate) struct SessionConfiguration {
     pub(super) permission_profile_state: PermissionProfileState,
     pub(super) allow_login_shell: bool,
     pub(super) shell_environment_policy: ShellEnvironmentPolicy,
+    // TODO(anp): Reconcile these legacy thread defaults with TurnEnvironment::sandbox_context;
+    // internal sandbox decisions should use the selected environment's configuration.
     pub(super) windows_sandbox_level: WindowsSandboxLevel,
+    pub(super) windows_sandbox_private_desktop: bool,
+    pub(super) use_legacy_landlock: bool,
 
     /// Legacy thread cwd used when a turn does not select an environment.
     pub(super) legacy_fallback_cwd: AbsolutePathBuf,
@@ -144,6 +148,9 @@ impl SessionConfiguration {
             allow_login_shell: self.allow_login_shell,
             permission_profile: self.permission_profile_state.snapshot(),
             shell_environment_policy: self.shell_environment_policy.clone(),
+            windows_sandbox_level: self.windows_sandbox_level,
+            windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
+            use_legacy_landlock: self.use_legacy_landlock,
             exec_policy: None,
             mcp_policy: None,
             network_policy: None,
@@ -294,6 +301,9 @@ impl SessionConfiguration {
             service_tier: Some(self.service_tier.clone()),
             collaboration_mode: Some(self.collaboration_mode.clone()),
             personality: self.personality,
+            // TODO(anp): Include the runtime Windows sandbox override in restored settings.
+            // This omission predates TurnEnvironment::sandbox_context; rebuilding FromThread
+            // environments falls back to Config instead of retaining that override.
             ..Default::default()
         }
     }
@@ -1220,11 +1230,7 @@ impl Session {
                         otel.name = "session_init.thread_name_lookup",
                     ));
             let (agents_md_result, plugin_skill_errors, thread_name) = tokio::join!(
-                agents_md_manager.refresh(
-                    config.as_ref(),
-                    &resolved_environments,
-                    session_configuration.windows_sandbox_level,
-                ),
+                agents_md_manager.refresh(config.as_ref(), &resolved_environments),
                 plugin_skill_warmup,
                 thread_name_lookup,
             );

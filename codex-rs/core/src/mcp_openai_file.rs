@@ -180,9 +180,8 @@ async fn build_uploaded_argument_value(
             .entries
             .iter()
             .any(|entry| entry.access == FileSystemAccessMode::Deny);
-    let sandbox = requires_sandbox.then(|| {
-        turn_context.file_system_sandbox_context(additional_permissions, turn_environment)
-    });
+    let sandbox =
+        requires_sandbox.then(|| turn_environment.sandbox_context(additional_permissions));
     if sandbox.is_some() {
         let environment_info = turn_environment
             .environment

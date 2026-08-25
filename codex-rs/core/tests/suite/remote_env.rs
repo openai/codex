@@ -13,6 +13,7 @@ use codex_core::WaitForEnvironmentToolConfig;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::config::Config;
 use codex_core::config::Constrained;
+use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::EnvironmentReadyInfo;
@@ -46,6 +47,7 @@ use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
@@ -557,6 +559,12 @@ async fn environment_permissions_follow_configuration_ownership() -> Result<()> 
                         allow_login_shell: test.config.permissions.allow_login_shell,
                         permission_profile: owner_permission_profile,
                         shell_environment_policy: Default::default(),
+                        windows_sandbox_level: WindowsSandboxLevel::from_config(&test.config),
+                        windows_sandbox_private_desktop: test
+                            .config
+                            .permissions
+                            .windows_sandbox_private_desktop,
+                        use_legacy_landlock: test.config.features.use_legacy_landlock(),
                         exec_policy: None,
                         mcp_policy: None,
                         network_policy: None,
@@ -1246,6 +1254,12 @@ async fn shared_executor_keeps_ready_capability_roots_scoped_to_each_attachment(
             allow_login_shell: false,
             permission_profile: permission_profile.clone(),
             shell_environment_policy: Default::default(),
+            windows_sandbox_level: WindowsSandboxLevel::from_config(&test.config),
+            windows_sandbox_private_desktop: test
+                .config
+                .permissions
+                .windows_sandbox_private_desktop,
+            use_legacy_landlock: test.config.features.use_legacy_landlock(),
             exec_policy: None,
             mcp_policy: None,
             network_policy: None,
@@ -1284,6 +1298,12 @@ async fn shared_executor_keeps_ready_capability_roots_scoped_to_each_attachment(
                     allow_login_shell: true,
                     permission_profile: permission_profile.clone(),
                     shell_environment_policy: Default::default(),
+                    windows_sandbox_level: WindowsSandboxLevel::from_config(&test.config),
+                    windows_sandbox_private_desktop: test
+                        .config
+                        .permissions
+                        .windows_sandbox_private_desktop,
+                    use_legacy_landlock: test.config.features.use_legacy_landlock(),
                     exec_policy: None,
                     mcp_policy: None,
                     network_policy: None,
@@ -1306,6 +1326,12 @@ async fn shared_executor_keeps_ready_capability_roots_scoped_to_each_attachment(
                         allow_login_shell: false,
                         permission_profile: permission_profile.clone(),
                         shell_environment_policy: Default::default(),
+                        windows_sandbox_level: WindowsSandboxLevel::from_config(&test.config),
+                        windows_sandbox_private_desktop: test
+                            .config
+                            .permissions
+                            .windows_sandbox_private_desktop,
+                        use_legacy_landlock: test.config.features.use_legacy_landlock(),
                         exec_policy: None,
                         mcp_policy: None,
                         network_policy: None,
@@ -1367,6 +1393,12 @@ async fn shared_executor_keeps_ready_capability_roots_scoped_to_each_attachment(
                             allow_login_shell: false,
                             permission_profile: permission_profile.clone(),
                             shell_environment_policy: Default::default(),
+                            windows_sandbox_level: WindowsSandboxLevel::from_config(&test.config),
+                            windows_sandbox_private_desktop: test
+                                .config
+                                .permissions
+                                .windows_sandbox_private_desktop,
+                            use_legacy_landlock: test.config.features.use_legacy_landlock(),
                             exec_policy: None,
                             mcp_policy: None,
                             network_policy: None,
@@ -1436,6 +1468,9 @@ async fn owner_network_policy_rejects_unsupported_environment_authority() -> Res
         allow_login_shell: test.config.permissions.allow_login_shell,
         permission_profile: PermissionProfileSnapshot::legacy(PermissionProfile::Disabled),
         shell_environment_policy: test.config.permissions.shell_environment_policy.clone(),
+        windows_sandbox_level: WindowsSandboxLevel::from_config(&test.config),
+        windows_sandbox_private_desktop: test.config.permissions.windows_sandbox_private_desktop,
+        use_legacy_landlock: test.config.features.use_legacy_landlock(),
         exec_policy: None,
         mcp_policy: None,
         network_policy: Some(EnvironmentNetworkPolicy::from_config(
@@ -1520,6 +1555,9 @@ async fn pending_attachment_installs_configuration_before_waiting_turn_resumes()
         allow_login_shell,
         permission_profile: PermissionProfileSnapshot::legacy(PermissionProfile::read_only()),
         shell_environment_policy: Default::default(),
+        windows_sandbox_level: WindowsSandboxLevel::from_config(&test.config),
+        windows_sandbox_private_desktop: test.config.permissions.windows_sandbox_private_desktop,
+        use_legacy_landlock: test.config.features.use_legacy_landlock(),
         exec_policy: None,
         mcp_policy: None,
         network_policy: None,
@@ -2174,6 +2212,12 @@ async fn deferred_executor_spawn_agent_inherits_ready_step_environments(
                 vec![owner_profile_workspace_root.clone()],
             ),
             shell_environment_policy: Default::default(),
+            windows_sandbox_level: WindowsSandboxLevel::from_config(&test.config),
+            windows_sandbox_private_desktop: test
+                .config
+                .permissions
+                .windows_sandbox_private_desktop,
+            use_legacy_landlock: test.config.features.use_legacy_landlock(),
             exec_policy: None,
             mcp_policy: None,
             network_policy: None,

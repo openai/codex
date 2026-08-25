@@ -773,6 +773,8 @@ async fn augment_mcp_tool_request_meta_with_sandbox_state(
     else {
         return Ok(meta);
     };
+    // TODO(anp): Build this metadata from the server's captured
+    // TurnEnvironment::sandbox_context instead of the runtime-wide Landlock value.
     let permission_profile = prepared_call.config().permission_profile.clone();
     let sandbox_state = serde_json::to_value(SandboxState {
         permission_profile,

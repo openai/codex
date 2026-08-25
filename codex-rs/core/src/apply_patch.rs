@@ -25,6 +25,8 @@ pub(crate) fn prepare_apply_patch(
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     action: ApplyPatchAction,
 ) -> Result<ApplyPatchRuntimeInvocation, FunctionCallError> {
+    // TODO(anp): Reconcile patch approval with TurnEnvironment::sandbox_context
+    // so the Windows backend matches the environment that will apply the patch.
     match assess_patch_safety(
         &action,
         turn_context.approval_policy(),

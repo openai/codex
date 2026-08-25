@@ -11,6 +11,7 @@ use crate::session::tests::build_world_state_from_turn_context;
 use crate::session::tests::make_session_and_context;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
+use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_extension_api::empty_extension_registry;
 use codex_history::InitialHistory;
 use codex_history::ResumedHistory;
@@ -18,6 +19,7 @@ use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::ResponseItemId;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::mcp::MCP_APP_UI_EXTENSION_ID;
 use codex_protocol::mcp::OPENAI_FORM_EXTENSION_ID;
@@ -1019,6 +1021,9 @@ async fn spawn_internal_session_preserves_parent_lineage_without_forking_history
             allow_login_shell: true,
             permission_profile: config.permissions.permission_profile_state().snapshot(),
             shell_environment_policy: Default::default(),
+            windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
+            windows_sandbox_private_desktop: config.permissions.windows_sandbox_private_desktop,
+            use_legacy_landlock: config.features.use_legacy_landlock(),
             exec_policy: Some(codex_execpolicy::RequirementsExecPolicy::new(
                 codex_execpolicy::Policy::empty(),
             )),

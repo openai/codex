@@ -32,9 +32,11 @@ use codex_config::loader::project_trust_key;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_config::types::ToolSuggestDisabledTool;
+use codex_config::types::WindowsSandboxModeToml;
 use core_test_support::test_codex::TurnInputRequest as ExternalTurnInputRequest;
 
 use codex_features::Feature;
+use codex_file_system::FileSystemSandboxContext;
 use codex_http_client::ClientRouteClass;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
@@ -4340,6 +4342,8 @@ async fn set_rate_limits_retains_previous_credits() {
         allow_login_shell: config.permissions.allow_login_shell,
         shell_environment_policy: config.permissions.shell_environment_policy.clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
+        windows_sandbox_private_desktop: config.permissions.windows_sandbox_private_desktop,
+        use_legacy_landlock: config.features.use_legacy_landlock(),
         legacy_fallback_cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
@@ -4451,6 +4455,8 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         allow_login_shell: config.permissions.allow_login_shell,
         shell_environment_policy: config.permissions.shell_environment_policy.clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
+        windows_sandbox_private_desktop: config.permissions.windows_sandbox_private_desktop,
+        use_legacy_landlock: config.features.use_legacy_landlock(),
         legacy_fallback_cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
@@ -5007,6 +5013,8 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         allow_login_shell: config.permissions.allow_login_shell,
         shell_environment_policy: config.permissions.shell_environment_policy.clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
+        windows_sandbox_private_desktop: config.permissions.windows_sandbox_private_desktop,
+        use_legacy_landlock: config.features.use_legacy_landlock(),
         legacy_fallback_cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
@@ -5794,6 +5802,8 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         allow_login_shell: config.permissions.allow_login_shell,
         shell_environment_policy: config.permissions.shell_environment_policy.clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
+        windows_sandbox_private_desktop: config.permissions.windows_sandbox_private_desktop,
+        use_legacy_landlock: config.features.use_legacy_landlock(),
         legacy_fallback_cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
@@ -5942,6 +5952,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         allow_login_shell: config.permissions.allow_login_shell,
         shell_environment_policy: config.permissions.shell_environment_policy.clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
+        windows_sandbox_private_desktop: config.permissions.windows_sandbox_private_desktop,
+        use_legacy_landlock: config.features.use_legacy_landlock(),
         legacy_fallback_cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
@@ -6230,6 +6242,8 @@ async fn make_session_with_config_and_rx(
         allow_login_shell: config.permissions.allow_login_shell,
         shell_environment_policy: config.permissions.shell_environment_policy.clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
+        windows_sandbox_private_desktop: config.permissions.windows_sandbox_private_desktop,
+        use_legacy_landlock: config.features.use_legacy_landlock(),
         legacy_fallback_cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
@@ -6351,6 +6365,8 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         allow_login_shell: config.permissions.allow_login_shell,
         shell_environment_policy: config.permissions.shell_environment_policy.clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
+        windows_sandbox_private_desktop: config.permissions.windows_sandbox_private_desktop,
+        use_legacy_landlock: config.features.use_legacy_landlock(),
         legacy_fallback_cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
@@ -8153,6 +8169,8 @@ where
         allow_login_shell: config.permissions.allow_login_shell,
         shell_environment_policy: config.permissions.shell_environment_policy.clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
+        windows_sandbox_private_desktop: config.permissions.windows_sandbox_private_desktop,
+        use_legacy_landlock: config.features.use_legacy_landlock(),
         legacy_fallback_cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
@@ -8844,13 +8862,23 @@ async fn conflicting_ready_environment_root_ids_keep_first_location() {
     });
 }
 
+/// Capability discovery must use environment-owned permissions and sandbox backends,
+/// even when the thread defaults differ.
 #[tokio::test]
 async fn capability_discovery_uses_environment_permission_profile() {
     let (session, mut turn_context) = make_session_and_context().await;
-    Arc::make_mut(&mut turn_context.config)
+    let config = Arc::make_mut(&mut turn_context.config);
+    config
         .permissions
         .set_permission_profile(PermissionProfile::Disabled)
         .expect("unrestricted permission profile should be allowed");
+    config.permissions.windows_sandbox_mode = Some(WindowsSandboxModeToml::Unelevated);
+    config.permissions.windows_sandbox_private_desktop = true;
+    config
+        .features
+        .disable(Feature::UseLegacyLandlock)
+        .expect("disable legacy Landlock");
+    turn_context.windows_sandbox_level = WindowsSandboxLevel::RestrictedToken;
     let mut environment = turn_context
         .environments
         .primary()
@@ -8864,13 +8892,24 @@ async fn capability_discovery_uses_environment_permission_profile() {
         access: FileSystemAccessMode::Deny,
         missing_path_behavior: None,
     });
-    environment.config_mut().permission_profile =
+    let environment_config = environment.config_mut();
+    environment_config.permission_profile =
         PermissionProfileSnapshot::legacy(PermissionProfile::from_runtime_permissions(
             &file_system_policy,
             NetworkSandboxPolicy::Restricted,
         ));
-    let expected_sandbox = turn_context
-        .file_system_sandbox_context(/*additional_permissions*/ None, &environment);
+    environment_config.windows_sandbox_level = WindowsSandboxLevel::Elevated;
+    environment_config.windows_sandbox_private_desktop = false;
+    environment_config.use_legacy_landlock = true;
+    let expected_sandbox = FileSystemSandboxContext {
+        permissions: environment.permission_profile().clone().into(),
+        cwd: Some(environment.cwd().clone()),
+        workspace_roots: environment.workspace_roots().to_vec(),
+        windows_sandbox_level: WindowsSandboxLevel::Elevated,
+        windows_sandbox_private_desktop: false,
+        windows_sandbox_proxy_settings_mode: None,
+        use_legacy_landlock: true,
+    };
     let environment_id = environment.selection.environment_id.clone();
     turn_context.environments.environments[0] = TurnEnvironmentState::Ready(environment);
 
@@ -8879,7 +8918,6 @@ async fn capability_discovery_uses_environment_permission_profile() {
             &turn_context.config,
             /*ready_selected_capability_roots*/ &[],
             &turn_context.environments,
-            turn_context.windows_sandbox_level,
         )
         .await
         .expect("restricted environment should trigger capability discovery");

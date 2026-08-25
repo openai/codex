@@ -1,5 +1,6 @@
 use codex_core::EnvironmentConfig;
 use codex_core::TurnInputRequest;
+use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use core_test_support::test_codex::local_selections;
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -15,6 +16,7 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::PermissionProfileSnapshot;
 use codex_protocol::models::ResponseItem;
@@ -402,6 +404,13 @@ async fn exec_command_uses_installed_environment_shell_policy_with_explicit_over
                         .clone(),
                     ..Default::default()
                 },
+                windows_sandbox_level: WindowsSandboxLevel::from_config(&harness.test().config),
+                windows_sandbox_private_desktop: harness
+                    .test()
+                    .config
+                    .permissions
+                    .windows_sandbox_private_desktop,
+                use_legacy_landlock: harness.test().config.features.use_legacy_landlock(),
                 exec_policy: None,
                 mcp_policy: None,
                 network_policy: None,
