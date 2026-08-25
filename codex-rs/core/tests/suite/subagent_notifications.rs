@@ -2582,6 +2582,17 @@ async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn() -> R
         )
     );
 
+    // Fresh turn input is sampled before queued mail is drained. Let that first
+    // request complete successfully so the next request can include the result.
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, READ_RESULT_PROMPT)
+                && !body_contains(request, "peer follow-up finished")
+        },
+        sse(vec![ev_completed("resp-routing-root-before-mail")]),
+    )
+    .await;
     let root_result_request = mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {
