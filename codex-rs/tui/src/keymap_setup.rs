@@ -1100,6 +1100,24 @@ mod tests {
     }
 
     #[test]
+    fn picker_repeat_last_change_render_snapshot() {
+        let runtime = RuntimeKeymap::defaults();
+        let params = build_keymap_picker_params_for_selected_action(
+            &runtime,
+            &TuiKeymap::default(),
+            "vim_normal",
+            "repeat_last_change",
+        );
+        let rendered = render_picker(params, /*width*/ 120);
+        let repeat_row = rendered
+            .lines()
+            .find(|line| line.contains("Repeat Last Change"))
+            .expect("repeat-last-change row should render");
+
+        assert_snapshot!("keymap_picker_repeat_last_change", repeat_row);
+    }
+
+    #[test]
     fn picker_all_tab_items_remain_searchable() {
         let runtime = RuntimeKeymap::defaults();
         let params = build_keymap_picker_params(&runtime, &TuiKeymap::default());

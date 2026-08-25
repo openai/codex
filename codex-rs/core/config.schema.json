@@ -3801,6 +3801,7 @@
               "open_line_above": null,
               "open_line_below": null,
               "paste_after": null,
+              "repeat_last_change": null,
               "replace_char": null,
               "start_change_operator": null,
               "start_delete_operator": null,
@@ -4608,6 +4609,7 @@
             "open_line_above": null,
             "open_line_below": null,
             "paste_after": null,
+            "repeat_last_change": null,
             "replace_char": null,
             "start_change_operator": null,
             "start_delete_operator": null,
@@ -5015,6 +5017,14 @@
             }
           ],
           "description": "Paste after cursor (`p`)."
+        },
+        "repeat_last_change": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Repeat the last complete edit (`.`)."
         },
         "replace_char": {
           "allOf": [

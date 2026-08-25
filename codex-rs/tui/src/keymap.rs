@@ -188,6 +188,7 @@ pub(crate) struct VimNormalKeymap {
     pub(crate) move_line_end: Vec<KeyBinding>,
     pub(crate) delete_char: Vec<KeyBinding>,
     pub(crate) replace_char: Vec<KeyBinding>,
+    pub(crate) repeat_last_change: Vec<KeyBinding>,
     pub(crate) substitute_char: Vec<KeyBinding>,
     pub(crate) delete_to_line_end: Vec<KeyBinding>,
     pub(crate) change_to_line_end: Vec<KeyBinding>,
@@ -717,6 +718,7 @@ impl RuntimeKeymap {
             move_line_end: resolve_local!(keymap, defaults, vim_normal, move_line_end),
             delete_char: resolve_local!(keymap, defaults, vim_normal, delete_char),
             replace_char: resolve_local!(keymap, defaults, vim_normal, replace_char),
+            repeat_last_change: resolve_local!(keymap, defaults, vim_normal, repeat_last_change),
             substitute_char: resolve_local!(keymap, defaults, vim_normal, substitute_char),
             delete_to_line_end: resolve_local!(keymap, defaults, vim_normal, delete_to_line_end),
             change_to_line_end: resolve_local!(keymap, defaults, vim_normal, change_to_line_end),
@@ -812,6 +814,10 @@ impl RuntimeKeymap {
                 vim_normal.substitute_char.as_slice(),
             ),
             (
+                keymap.vim_normal.repeat_last_change.as_ref(),
+                vim_normal.repeat_last_change.as_slice(),
+            ),
+            (
                 keymap.vim_normal.change_to_line_end.as_ref(),
                 vim_normal.change_to_line_end.as_slice(),
             ),
@@ -857,6 +863,15 @@ impl RuntimeKeymap {
         }
         if keymap.vim_normal.replace_char.is_none() {
             vim_normal.replace_char.retain(|binding| {
+                !configured_vim_normal_bindings_to_preserve.contains(binding)
+                    && !chords.bindings.iter().any(|chord| {
+                        chord.action.context == KeymapContext::VimNormal
+                            && chord.chord.prefix.parts() == binding.parts()
+                    })
+            });
+        }
+        if keymap.vim_normal.repeat_last_change.is_none() {
+            vim_normal.repeat_last_change.retain(|binding| {
                 !configured_vim_normal_bindings_to_preserve.contains(binding)
                     && !chords.bindings.iter().any(|chord| {
                         chord.action.context == KeymapContext::VimNormal
@@ -1327,6 +1342,7 @@ impl RuntimeKeymap {
                 ],
                 delete_char: default_bindings![plain(KeyCode::Char('x'))],
                 replace_char: default_bindings![plain(KeyCode::Char('r'))],
+                repeat_last_change: default_bindings![plain(KeyCode::Char('.'))],
                 substitute_char: default_bindings![plain(KeyCode::Char('s'))],
                 delete_to_line_end: default_bindings![
                     shift(KeyCode::Char('d')),
@@ -1861,6 +1877,10 @@ impl RuntimeKeymap {
                 ("move_line_end", self.vim_normal.move_line_end.as_slice()),
                 ("delete_char", self.vim_normal.delete_char.as_slice()),
                 ("replace_char", self.vim_normal.replace_char.as_slice()),
+                (
+                    "repeat_last_change",
+                    self.vim_normal.repeat_last_change.as_slice(),
+                ),
                 (
                     "substitute_char",
                     self.vim_normal.substitute_char.as_slice(),
@@ -2956,6 +2976,30 @@ mod tests {
         keymap.vim_normal.replace_char = Some(one("r"));
 
         expect_conflict(&keymap, "move_left", "replace_char");
+    }
+
+    #[test]
+    fn configured_legacy_vim_normal_bindings_prune_new_repeat_default() {
+        let mut keymap = TuiKeymap::default();
+        keymap.vim_normal.move_left = Some(one("."));
+
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("config should parse");
+
+        assert_eq!(runtime.vim_normal.repeat_last_change, Vec::new());
+    }
+
+    #[test]
+    fn configured_vim_normal_chord_prefix_prunes_new_repeat_default() {
+        let mut keymap = TuiKeymap::default();
+        keymap.vim_normal.move_line_start = Some(one(". g"));
+
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("config should parse");
+
+        assert!(runtime.vim_normal.repeat_last_change.is_empty());
+        assert!(runtime.chords.bindings.iter().any(|binding| {
+            binding.action.context == KeymapContext::VimNormal
+                && binding.chord.prefix == key_hint::plain(KeyCode::Char('.'))
+        }));
     }
 
     #[test]
