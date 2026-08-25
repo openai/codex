@@ -966,6 +966,7 @@ fn sample_command_approval_request(request_id: i64, approval_id: Option<&str>) -
     ServerRequest::CommandExecutionRequestApproval {
         request_id: RequestId::Integer(request_id),
         params: CommandExecutionRequestApprovalParams {
+            kind: Default::default(),
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
             item_id: "item-1".to_string(),
@@ -1031,6 +1032,7 @@ fn sample_guardian_review_completed(
     review_id: &str,
     target_item_id: Option<&str>,
     status: GuardianApprovalReviewStatus,
+    action: GuardianApprovalReviewAction,
 ) -> ServerNotification {
     ServerNotification::ItemGuardianApprovalReviewCompleted(
         ItemGuardianApprovalReviewCompletedNotification {
@@ -1047,11 +1049,7 @@ fn sample_guardian_review_completed(
                 user_authorization: None,
                 rationale: None,
             },
-            action: GuardianApprovalReviewAction::Command {
-                source: AppServerGuardianCommandSource::Shell,
-                command: "echo hi".to_string(),
-                cwd: test_path_buf("/tmp").abs(),
-            },
+            action,
         },
     )
 }
@@ -3137,6 +3135,11 @@ async fn guardian_completed_notification_publishes_review_event_with_thread_meta
                 "guardian-review-1",
                 Some("item-1"),
                 GuardianApprovalReviewStatus::Denied,
+                GuardianApprovalReviewAction::Command {
+                    source: AppServerGuardianCommandSource::Shell,
+                    command: "echo hi".to_string(),
+                    cwd: test_path_buf("/tmp").abs(),
+                },
             ))),
             &mut events,
         )
@@ -3184,6 +3187,29 @@ async fn terminal_reviews_denormalize_counts_onto_tool_item_events() {
             &mut events,
         )
         .await;
+    events.clear();
+
+    reducer
+        .ingest(
+            AnalyticsFact::Notification(Box::new(sample_guardian_review_completed(
+                "guardian-stdin-review-1",
+                Some("item-1"),
+                GuardianApprovalReviewStatus::Denied,
+                GuardianApprovalReviewAction::WriteStdin {
+                    approval_id: "stdin-approval-1".to_string(),
+                    process_id: "42".to_string(),
+                    stdin: "confirm\n".to_string(),
+                    cwd: test_path_buf("/tmp").abs().into(),
+                },
+            ))),
+            &mut events,
+        )
+        .await;
+    let review_payload = serde_json::to_value(&events[0]).expect("serialize review event");
+    assert_eq!(
+        review_payload["event_params"]["subject_kind"],
+        "write_stdin"
+    );
     events.clear();
 
     ingest_completed_command_execution_item(&mut reducer, &mut events, "thread-1", "item-1").await;

@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests/guardian.rs
+expression: "normalize_snapshot_paths(render_bottom_popup(&chat, 80))"
+---
+• Reviewing approval request (0s • esc to interrupt)
+  └ send input to terminal 42: "confirm\n"
+
+
+› Ask Codex to do anything
+
+  gpt-5.6-sol default · /tmp/project

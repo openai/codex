@@ -48,6 +48,15 @@ pub(crate) fn action_summary(action: &GuardianAssessmentAction) -> String {
             shlex::try_join(command.iter().map(String::as_str))
                 .unwrap_or_else(|_| command.join(" "))
         }
+        GuardianAssessmentAction::WriteStdin {
+            process_id, stdin, ..
+        } => {
+            let stdin = crate::text_formatting::truncate_text(
+                &format!("{stdin:?}"),
+                /*max_graphemes*/ 80,
+            );
+            format!("send input to terminal {process_id}: {stdin}")
+        }
         GuardianAssessmentAction::ApplyPatch { files, .. } => {
             if files.len() == 1 {
                 format!("apply_patch touching {}", files[0].display())

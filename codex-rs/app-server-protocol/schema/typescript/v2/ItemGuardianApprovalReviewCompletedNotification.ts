@@ -28,6 +28,8 @@ reviewId: string,
  * In most cases, one review maps to one target item. The exceptions are
  * - execve reviews, where a single command may contain multiple execve
  *   calls to review (only possible when using the shell_zsh_fork feature)
+ * - stdin reviews, which refer to the existing parent command item and
+ *   have a separate approval ID in the action payload
  * - network policy reviews, where there is no target item
  *
  * A network call is triggered by a CommandExecution item, so having a

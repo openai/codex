@@ -178,6 +178,7 @@ fn reviewed_action_tag(action: &GuardianReviewedAction) -> &'static str {
     match action {
         GuardianReviewedAction::Shell { .. } => "shell",
         GuardianReviewedAction::UnifiedExec { .. } => "unified_exec",
+        GuardianReviewedAction::WriteStdin { .. } => "write_stdin",
         GuardianReviewedAction::Execve { .. } => "execve",
         GuardianReviewedAction::ApplyPatch {} => "apply_patch",
         GuardianReviewedAction::NetworkAccess { .. } => "network_access",

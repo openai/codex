@@ -37,6 +37,7 @@ use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use codex_models_manager::manager::StaticModelsManager;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_protocol::ThreadId;
+use codex_protocol::approvals::GuardianAssessmentAction;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::ContentItem;
@@ -1361,6 +1362,49 @@ async fn build_guardian_prompt_items_explains_network_access_review_scope() -> a
         );
     });
 
+    Ok(())
+}
+
+#[test]
+fn guardian_write_stdin_preserves_input_and_foreign_cwd() -> serde_json::Result<()> {
+    let cwd = PathUri::parse("file:///C:/workspace").expect("valid executor cwd");
+    let input = "confirm\n";
+    let action = GuardianApprovalRequest::WriteStdin {
+        id: "terminal-open".to_string(),
+        approval_id: "terminal-write".to_string(),
+        process_id: 1000,
+        input: input.to_string(),
+        cwd: cwd.clone(),
+        tty: true,
+    };
+
+    assert_eq!(
+        guardian_approval_request_to_json(&action)?,
+        serde_json::json!({
+            "tool": "write_stdin",
+            "session_id": 1000,
+            "chars": input,
+            "cwd": r"C:\workspace",
+            "sandbox_permissions": "require_escalated",
+            "tty": true,
+        }),
+    );
+    assert_eq!(
+        guardian_assessment_action(&action),
+        GuardianAssessmentAction::WriteStdin {
+            approval_id: "terminal-write".to_string(),
+            process_id: "1000".to_string(),
+            stdin: input.to_string(),
+            cwd,
+        },
+    );
+    assert_eq!(
+        (
+            guardian_request_target_item_id(&action),
+            guardian_request_turn_id(&action, "current-turn"),
+        ),
+        (Some("terminal-open"), "current-turn"),
+    );
     Ok(())
 }
 

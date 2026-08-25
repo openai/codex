@@ -179,7 +179,7 @@ impl ChatWidget {
         };
 
         let mut items = vec![SelectionItem {
-            name: "Command".to_string(),
+            name: "Action".to_string(),
             description: Some("Rationale".to_string()),
             is_disabled: true,
             search_value: Some(String::new()),

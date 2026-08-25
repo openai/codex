@@ -257,6 +257,7 @@ async fn command_execution_request_approval_strips_additional_permissions_withou
             message: OutgoingMessage::Request(ServerRequest::CommandExecutionRequestApproval {
                 request_id: RequestId::Integer(1),
                 params: codex_app_server_protocol::CommandExecutionRequestApprovalParams {
+                    kind: Default::default(),
                     thread_id: "thr_123".to_string(),
                     turn_id: "turn_123".to_string(),
                     item_id: "call_123".to_string(),
@@ -323,6 +324,7 @@ async fn command_execution_request_approval_keeps_additional_permissions_with_ca
             message: OutgoingMessage::Request(ServerRequest::CommandExecutionRequestApproval {
                 request_id: RequestId::Integer(1),
                 params: codex_app_server_protocol::CommandExecutionRequestApprovalParams {
+                    kind: Default::default(),
                     thread_id: "thr_123".to_string(),
                     turn_id: "turn_123".to_string(),
                     item_id: "call_123".to_string(),

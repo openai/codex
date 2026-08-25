@@ -77,6 +77,7 @@ export type { CommandExecTerminateResponse } from "./CommandExecTerminateRespons
 export type { CommandExecWriteParams } from "./CommandExecWriteParams";
 export type { CommandExecWriteResponse } from "./CommandExecWriteResponse";
 export type { CommandExecutionApprovalDecision } from "./CommandExecutionApprovalDecision";
+export type { CommandExecutionApprovalKind } from "./CommandExecutionApprovalKind";
 export type { CommandExecutionOutputDeltaNotification } from "./CommandExecutionOutputDeltaNotification";
 export type { CommandExecutionRequestApprovalParams } from "./CommandExecutionRequestApprovalParams";
 export type { CommandExecutionRequestApprovalResponse } from "./CommandExecutionRequestApprovalResponse";

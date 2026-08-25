@@ -949,6 +949,7 @@ async fn startup_thread_started_discards_another_threads_buffered_events() {
     let request = ServerRequest::CommandExecutionRequestApproval {
         request_id: AppServerRequestId::Integer(1),
         params: CommandExecutionRequestApprovalParams {
+            kind: Default::default(),
             thread_id: other_thread_id.to_string(),
             turn_id: "turn-1".to_string(),
             item_id: "item-1".to_string(),

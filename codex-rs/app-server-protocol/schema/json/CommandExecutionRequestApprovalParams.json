@@ -269,6 +269,14 @@
         }
       ]
     },
+    "CommandExecutionApprovalKind": {
+      "description": "Distinguishes a command approval from input sent to an existing terminal.",
+      "enum": [
+        "command",
+        "writeStdin"
+      ],
+      "type": "string"
+    },
     "FileSystemAccessMode": {
       "enum": [
         "read",
@@ -525,7 +533,7 @@
   },
   "properties": {
     "approvalId": {
-      "description": "Unique identifier for this specific approval callback.\n\nFor regular shell/unified_exec approvals, this is null.\n\nFor zsh-exec-bridge subcommand approvals, multiple callbacks can belong to one parent `itemId`, so `approvalId` is a distinct opaque callback id (a UUID) used to disambiguate routing.",
+      "description": "Unique identifier for this specific approval callback.\n\nFor regular shell/unified_exec approvals, this is null.\n\nFor zsh-exec-bridge subcommand approvals, multiple callbacks can belong to one parent `itemId`, so `approvalId` is a distinct opaque callback id (a UUID) used to disambiguate routing. Stdin approvals also use a distinct callback id; inspect `kind` to distinguish them.",
       "type": [
         "string",
         "null"
@@ -569,6 +577,15 @@
     },
     "itemId": {
       "type": "string"
+    },
+    "kind": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/CommandExecutionApprovalKind"
+        }
+      ],
+      "default": "command",
+      "description": "Kind of action under review. Defaults to `command` for older servers."
     },
     "networkApprovalContext": {
       "anyOf": [

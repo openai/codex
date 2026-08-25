@@ -1,0 +1,12 @@
+---
+source: tui/src/chatwidget/tests/guardian.rs
+expression: "render_bottom_popup(&chat, 110)"
+---
+  Auto-review Denials
+  Select a denied action to approve.
+
+
+  Action                                  Rationale
+› send input to terminal 42: "confirm\n"  Would confirm a destructive operation.
+
+  Press enter to confirm or esc to go back
