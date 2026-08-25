@@ -5,6 +5,7 @@ use chrono::DateTime;
 use codex_app_server_protocol::ThreadHistoryChangeSet;
 use codex_app_server_protocol::project_rollout_line;
 use codex_protocol::ThreadId;
+use codex_rollout::RolloutItem;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncSeekExt;
 use tracing::warn;
@@ -204,7 +205,9 @@ async fn read_projection_steps(
                 ),
             });
         }
-        let changes = if subagent_history_start_ordinal.is_some_and(|start| ordinal < start) {
+        let is_inherited_subagent_history =
+            subagent_history_start_ordinal.is_some_and(|start| ordinal < start);
+        let changes = if is_inherited_subagent_history {
             ThreadHistoryChangeSet::default()
         } else {
             project_rollout_line(&line)
@@ -213,6 +216,8 @@ async fn read_projection_steps(
             .changed_items
             .iter()
             .any(|item| item.started_at_ms.is_none())
+            || (!is_inherited_subagent_history
+                && matches!(&line.item, RolloutItem::RealtimeItem(_)))
         {
             match DateTime::parse_from_rfc3339(line.timestamp.as_str()) {
                 Ok(timestamp) => Some(timestamp.timestamp_millis()),
@@ -259,13 +264,19 @@ async fn read_projection_steps(
                 .ok_or_else(|| ThreadStoreError::Internal {
                     message: "rollout ordinal exceeds SQLite integer range".to_string(),
                 })?;
-        projections.push(RolloutProjectionStep::Line(ProjectedRolloutLine {
-            ordinal,
-            start_byte_offset: line_start_offset,
-            end_byte_offset: line_end_offset,
-            fallback_created_at_ms,
-            changes,
-        }));
+        projections.push(RolloutProjectionStep::Line(Box::new(
+            ProjectedRolloutLine {
+                ordinal,
+                start_byte_offset: line_start_offset,
+                end_byte_offset: line_end_offset,
+                fallback_created_at_ms,
+                changes,
+                realtime_item: match line.item {
+                    RolloutItem::RealtimeItem(item) if !is_inherited_subagent_history => Some(item),
+                    _ => None,
+                },
+            },
+        )));
         next_ordinal = next_line_ordinal;
         next_offset = line_end_offset;
         line_start_offset = line_end_offset;

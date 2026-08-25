@@ -363,6 +363,18 @@ pub trait ThreadStore: Any + Send + Sync {
         })
     }
 
+    /// Lists bounded ordinary and realtime thread history in rollout order.
+    fn list_timeline(
+        &self,
+        _params: crate::ListTimelineParams,
+    ) -> ThreadStoreFuture<'_, crate::TimelinePage> {
+        Box::pin(async {
+            Err(ThreadStoreError::Unsupported {
+                operation: "thread/timeline/list",
+            })
+        })
+    }
+
     /// Applies a literal metadata patch and returns the updated thread when one was materialized.
     ///
     /// `None` means the update succeeded without materializing a thread, for example because the

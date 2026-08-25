@@ -1320,6 +1320,7 @@ pub(super) fn extract_memory_mode(items: &[RolloutItem]) -> Option<String> {
         | RolloutItem::Compacted(_)
         | RolloutItem::TurnContext(_)
         | RolloutItem::WorldState(_)
+        | RolloutItem::RealtimeItem(_)
         | RolloutItem::SecurityRiskScore(_)
         | RolloutItem::EventMsg(_) => None,
     })

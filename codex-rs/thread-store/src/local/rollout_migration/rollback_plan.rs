@@ -219,7 +219,7 @@ impl RollbackPlanner {
                     self.pending_turn_records.push(index);
                 }
             }
-            RolloutItem::WorldState(_) => {}
+            RolloutItem::WorldState(_) | RolloutItem::RealtimeItem(_) => {}
             RolloutItem::SecurityRiskScore(_) => self.record_boundaries[index] = None,
         }
 

@@ -87,7 +87,8 @@ fn keep_forked_rollout_item(item: &RolloutItem, preserve_reference_context_item:
             | ResponseItem::ContextCompaction { .. }
             | ResponseItem::Other => false,
         },
-        RolloutItem::InterAgentCommunication(_)
+        RolloutItem::RealtimeItem(_)
+        | RolloutItem::InterAgentCommunication(_)
         | RolloutItem::InterAgentCommunicationMetadata { .. }
         | RolloutItem::SecurityRiskScore(_) => false,
         // Full-history forks preserve the cached prompt prefix and can keep diffing
@@ -1001,6 +1002,7 @@ impl AgentControl {
                     }
                     true
                 }
+                RolloutItem::RealtimeItem(_) => false,
                 RolloutItem::EventMsg(_)
                 | RolloutItem::SessionMeta(_)
                 | RolloutItem::TurnContext(_)

@@ -1014,6 +1014,12 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadRealtimeStopResponse,
     },
+    #[experimental("thread/timeline/list")]
+    ThreadTimelineList => "thread/timeline/list" {
+        params: v2::ThreadTimelineListParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadTimelineListResponse,
+    },
     #[experimental("thread/realtime/listVoices")]
     ThreadRealtimeListVoices => "thread/realtime/listVoices" {
         params: v2::ThreadRealtimeListVoicesParams,
@@ -1917,6 +1923,12 @@ server_notification_definitions! {
     ThreadRealtimeStarted => "thread/realtime/started" (v2::ThreadRealtimeStartedNotification),
     #[experimental("thread/realtime/itemAdded")]
     ThreadRealtimeItemAdded => "thread/realtime/itemAdded" (v2::ThreadRealtimeItemAddedNotification),
+    #[experimental("thread/realtime/item/started")]
+    ThreadRealtimeItemStarted => "thread/realtime/item/started" (v2::ThreadRealtimeItemStartedNotification),
+    #[experimental("thread/realtime/item/transcript/delta")]
+    ThreadRealtimeItemTranscriptDelta => "thread/realtime/item/transcript/delta" (v2::ThreadRealtimeItemTranscriptDeltaNotification),
+    #[experimental("thread/realtime/item/completed")]
+    ThreadRealtimeItemCompleted => "thread/realtime/item/completed" (v2::ThreadRealtimeItemCompletedNotification),
     #[experimental("thread/realtime/transcript/delta")]
     ThreadRealtimeTranscriptDelta => "thread/realtime/transcript/delta" (v2::ThreadRealtimeTranscriptDeltaNotification),
     #[experimental("thread/realtime/transcript/done")]

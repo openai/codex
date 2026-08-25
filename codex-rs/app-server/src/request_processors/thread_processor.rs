@@ -870,6 +870,35 @@ impl ThreadRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
+    pub(crate) async fn thread_timeline_list(
+        &self,
+        params: ThreadTimelineListParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        let thread_id = ThreadId::from_string(&params.thread_id)
+            .map_err(|error| invalid_request(format!("invalid thread id: {error}")))?;
+        let page = self
+            .thread_store
+            .list_timeline(StoreListTimelineParams {
+                thread_id,
+                cursor: params.cursor,
+                page_size: params
+                    .limit
+                    .map(|limit| limit as usize)
+                    .unwrap_or(THREAD_ITEMS_DEFAULT_LIMIT)
+                    .clamp(1, THREAD_ITEMS_MAX_LIMIT),
+            })
+            .await
+            .map_err(paginated_history_list_error)?;
+        Ok(Some(
+            ThreadTimelineListResponse {
+                data: page.items,
+                next_cursor: page.next_cursor,
+                active_realtime_session_at_page_start: page.active_realtime_session_at_page_start,
+            }
+            .into(),
+        ))
+    }
+
     pub(crate) async fn thread_shell_command(
         &self,
         request_id: &ConnectionRequestId,

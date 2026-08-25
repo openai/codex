@@ -528,6 +528,9 @@ impl TurnRequestProcessor {
                 },
             )
             .await?;
+        self.seal_realtime_transcript_before_user_input(thread_id, &mapped_items)
+            .await?;
+
         let submission = thread
             .start_or_steer_turn(
                 TurnInputRequest::new(TurnInput::UserInput {
@@ -901,12 +904,12 @@ impl TurnRequestProcessor {
         request_id: &ConnectionRequestId,
         params: TurnSteerParams,
     ) -> Result<TurnSteerResponse, JSONRPCErrorError> {
-        let (_, thread) = self
-            .load_thread(&params.thread_id)
-            .await
-            .inspect_err(|error| {
-                self.track_error_response(request_id, error, /*error_type*/ None);
-            })?;
+        let (thread_id, thread) =
+            self.load_thread(&params.thread_id)
+                .await
+                .inspect_err(|error| {
+                    self.track_error_response(request_id, error, /*error_type*/ None);
+                })?;
         self.ensure_direct_input_allowed(request_id, thread.as_ref())
             .await?;
 
@@ -931,6 +934,9 @@ impl TurnRequestProcessor {
             .map(V2UserInput::into_core)
             .collect();
         let additional_context = map_additional_context(params.additional_context);
+
+        self.seal_realtime_transcript_before_user_input(thread_id, &mapped_items)
+            .await?;
 
         let submission = thread
             .steer_turn(
@@ -1025,6 +1031,37 @@ impl TurnRequestProcessor {
             }
         };
         Ok(TurnSteerResponse { turn_id })
+    }
+
+    async fn seal_realtime_transcript_before_user_input(
+        &self,
+        thread_id: ThreadId,
+        input: &[CoreInputItem],
+    ) -> Result<(), JSONRPCErrorError> {
+        let thread_state = self.thread_state_manager.thread_state(thread_id).await;
+        if !thread_state
+            .lock()
+            .await
+            .realtime_history
+            .should_seal_user_input(input)
+        {
+            return Ok(());
+        }
+        let listener = self
+            .thread_state_manager
+            .current_listener_command_tx(thread_id)
+            .ok_or_else(|| internal_error("thread listener is not running"))?;
+        let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
+        listener
+            .send(ThreadListenerCommand::SealRealtimeUserInput {
+                input: input.to_vec(),
+                completion_tx,
+            })
+            .map_err(|_| internal_error("thread listener is not running"))?;
+        completion_rx
+            .await
+            .map_err(|_| internal_error("thread listener stopped before sealing realtime input"))?
+            .map_err(internal_error)
     }
 
     async fn prepare_realtime_conversation_thread(

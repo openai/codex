@@ -6,12 +6,15 @@ use super::SandboxPolicy;
 use super::Thread;
 use super::ThreadHistoryMode;
 use super::ThreadItem;
+use super::ThreadRealtimeItem;
 use super::ThreadSection;
 use super::ThreadSectionAppearance;
 use super::ThreadSource;
 use super::Turn;
 use super::TurnEnvironmentParams;
+use super::TurnError;
 use super::TurnItemsView;
+use super::TurnStatus;
 use super::UserInput;
 use super::shared::v2_enum_from_core;
 use crate::JsonSchema;
@@ -1745,6 +1748,75 @@ pub struct ThreadItemsListResponse {
     /// Opaque cursor to pass as `cursor` when reversing `sortDirection`.
     /// This is only populated when the page contains at least one item.
     pub backwards_cursor: Option<String>,
+}
+
+/// EXPERIMENTAL - list ordinary and realtime thread history in rollout order.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadTimelineListParams {
+    pub thread_id: String,
+    #[ts(optional = nullable)]
+    pub cursor: Option<String>,
+    #[ts(optional = nullable)]
+    pub limit: Option<u32>,
+}
+
+/// EXPERIMENTAL - one item or turn boundary in canonical rollout order.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+#[ts(tag = "type", rename_all = "camelCase", export_to = "v2/")]
+pub enum ThreadTimelineEntry {
+    Item {
+        #[ts(type = "number")]
+        position: u64,
+        #[schemars(rename = "turnId")]
+        #[serde(rename = "turnId")]
+        #[ts(rename = "turnId")]
+        turn_id: String,
+        item: Box<ThreadItem>,
+    },
+    Realtime {
+        #[ts(type = "number")]
+        position: u64,
+        item: ThreadRealtimeItem,
+    },
+    TurnStarted {
+        #[ts(type = "number")]
+        position: u64,
+        #[ts(rename = "turnId")]
+        turn_id: String,
+        #[ts(rename = "startedAt", type = "number | null")]
+        started_at: Option<i64>,
+    },
+    TurnCompleted {
+        #[ts(type = "number")]
+        position: u64,
+        #[ts(rename = "turnId")]
+        turn_id: String,
+        status: TurnStatus,
+        error: Option<TurnError>,
+        #[ts(rename = "startedAt", type = "number | null")]
+        started_at: Option<i64>,
+        #[ts(rename = "completedAt", type = "number | null")]
+        completed_at: Option<i64>,
+        #[ts(rename = "durationMs", type = "number | null")]
+        duration_ms: Option<i64>,
+    },
+}
+
+/// EXPERIMENTAL - a bounded timeline page with its resolved opening voice state.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadTimelineListResponse {
+    pub data: Vec<ThreadTimelineEntry>,
+    pub next_cursor: Option<String>,
+    pub active_realtime_session_at_page_start: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

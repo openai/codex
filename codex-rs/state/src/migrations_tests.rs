@@ -375,6 +375,109 @@ INSERT INTO thread_items (thread_id, turn_id, item_id, rollout_ordinal, created_
 }
 
 #[tokio::test]
+async fn realtime_items_preserve_older_thread_history_writers() {
+    let sqlite_home = crate::runtime::test_support::unique_temp_dir();
+    tokio::fs::create_dir_all(&sqlite_home)
+        .await
+        .expect("sqlite home should be created");
+    let _cleanup = scopeguard::guard(sqlite_home.clone(), |sqlite_home| {
+        let _ = std::fs::remove_dir_all(sqlite_home);
+    });
+    let sqlite = crate::SqliteConfig::new_for_testing(sqlite_home.as_path().abs());
+    let older_migrator = Migrator {
+        migrations: Cow::Owned(
+            THREAD_HISTORY_MIGRATOR
+                .migrations
+                .iter()
+                .filter(|migration| migration.version < 5)
+                .cloned()
+                .collect(),
+        ),
+        ignore_missing: true,
+        locking: THREAD_HISTORY_MIGRATOR.locking,
+        table_name: THREAD_HISTORY_MIGRATOR.table_name.clone(),
+        create_schemas: THREAD_HISTORY_MIGRATOR.create_schemas.clone(),
+        no_tx: THREAD_HISTORY_MIGRATOR.no_tx,
+    };
+    let pool = sqlite
+        .open_thread_history_db(&older_migrator, /*telemetry_override*/ None)
+        .await
+        .expect("existing thread history migrations should apply");
+    sqlx::query(
+        "INSERT INTO thread_items (thread_id, turn_id, item_id, rollout_ordinal, created_at_ms, item_json) VALUES ('thread-1', 'turn-1', 'existing-item', 1, 100, '{}')",
+    )
+    .execute(&pool)
+    .await
+    .expect("existing turn-scoped item should be inserted");
+
+    THREAD_HISTORY_MIGRATOR
+        .run(&pool)
+        .await
+        .expect("realtime item migration should apply");
+    let turn_id_not_null = sqlx::query_scalar::<_, i64>(
+        "SELECT \"notnull\" FROM pragma_table_info('thread_items') WHERE name = 'turn_id'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("existing thread item schema should remain inspectable");
+    assert_eq!(turn_id_not_null, 1);
+
+    sqlx::query(
+        "INSERT INTO thread_realtime_items (thread_id, item_id, rollout_ordinal, created_at_ms, item_type, item_json) VALUES ('thread-1', 'realtime-item', 2, 200, 'realtime_session_started', '{}')",
+    )
+    .execute(&pool)
+    .await
+    .expect("thread-scoped realtime item should be inserted separately");
+    sqlx::query(
+        "INSERT INTO thread_history_projection_state (thread_id, next_rollout_byte_offset, next_rollout_ordinal) VALUES ('thread-1', 0, 0)",
+    )
+    .execute(&pool)
+    .await
+    .expect("thread projection checkpoint should be inserted");
+
+    let older_pool = sqlite
+        .open_thread_history_db(&older_migrator, /*telemetry_override*/ None)
+        .await
+        .expect("older binaries should tolerate the additive realtime migration");
+    sqlx::query(
+        "INSERT INTO thread_items (thread_id, turn_id, item_id, rollout_ordinal, created_at_ms, item_json) VALUES ('thread-1', 'turn-1', 'older-writer-item', 3, 300, '{}')",
+    )
+    .execute(&older_pool)
+    .await
+    .expect("older binaries should continue writing ordinary turn-scoped items");
+    let ordinary_items = sqlx::query_as::<_, (String, String)>(
+        "SELECT item_id, turn_id FROM thread_items WHERE thread_id = ? ORDER BY rollout_ordinal",
+    )
+    .bind("thread-1")
+    .fetch_all(&older_pool)
+    .await
+    .expect("older binaries should never observe turnless realtime items");
+    assert_eq!(
+        ordinary_items,
+        vec![
+            ("existing-item".to_string(), "turn-1".to_string()),
+            ("older-writer-item".to_string(), "turn-1".to_string()),
+        ]
+    );
+    sqlx::query("DELETE FROM thread_history_projection_state WHERE thread_id = ?")
+        .bind("thread-1")
+        .execute(&older_pool)
+        .await
+        .expect("older binaries should delete their known projection checkpoint");
+    let remaining_realtime_items = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM thread_realtime_items WHERE thread_id = ?",
+    )
+    .bind("thread-1")
+    .fetch_one(&pool)
+    .await
+    .expect("read realtime items after an older writer deleted the thread");
+    assert_eq!(remaining_realtime_items, 0);
+
+    older_pool.close().await;
+    pool.close().await;
+}
+
+#[tokio::test]
 async fn agent_job_tables_are_dropped_when_upgrading() {
     let sqlite_home = crate::runtime::test_support::unique_temp_dir();
     tokio::fs::create_dir_all(&sqlite_home)

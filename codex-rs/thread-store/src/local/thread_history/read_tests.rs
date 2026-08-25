@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use chrono::Utc;
 use codex_app_server_protocol::CodexErrorInfo;
+use codex_app_server_protocol::ThreadTimelineEntry;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HistoryPosition;
@@ -10,6 +11,11 @@ use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadHistoryMode;
+use codex_protocol::realtime::BemItemPresentation;
+use codex_protocol::realtime::RealtimeItem;
+use codex_protocol::realtime::RealtimeItemContent;
+use codex_protocol::realtime::RealtimeSessionOutcome;
+use codex_protocol::realtime::RealtimeTranscriptRole;
 use codex_rollout::RolloutItem;
 use codex_rollout::RolloutLine;
 use pretty_assertions::assert_eq;
@@ -17,6 +23,7 @@ use tempfile::TempDir;
 
 use super::*;
 use crate::ItemSortKey;
+use crate::ListTimelineParams;
 use crate::SearchThreadOccurrencesParams;
 use crate::SortDirection;
 use crate::StoredTurnError;
@@ -223,6 +230,385 @@ async fn list_items_pages_whole_thread_and_per_turn_rows() {
         .await
         .expect("next turn item page");
     assert_eq!(item_ids(&next_turn_page), vec!["item-3"]);
+}
+
+#[tokio::test]
+async fn timeline_interleaves_items_and_restores_page_boundary_session_state() {
+    let (_home, store, thread_id) = store_with_mode(ThreadHistoryMode::Paginated).await;
+    let db = history_db(&store).await;
+    for (item_id, ordinal) in [
+        ("before", 10),
+        ("middle", 20),
+        ("after", 30),
+        ("closed", 40),
+    ] {
+        insert_item(db, thread_id, "turn-1", item_id, ordinal).await;
+    }
+    for (ordinal, item) in [
+        (
+            11,
+            RealtimeItem {
+                id: "voice-1:started".to_string(),
+                realtime_session_id: "voice-1".to_string(),
+                content: RealtimeItemContent::RealtimeSessionStarted,
+            },
+        ),
+        (
+            12,
+            RealtimeItem {
+                id: "voice-1:source:0".to_string(),
+                realtime_session_id: "voice-1".to_string(),
+                content: RealtimeItemContent::TranscriptSegment {
+                    role: RealtimeTranscriptRole::Assistant,
+                    text: "Before the artifact".to_string(),
+                },
+            },
+        ),
+        (
+            21,
+            RealtimeItem {
+                id: "artifact".to_string(),
+                realtime_session_id: "voice-1".to_string(),
+                content: RealtimeItemContent::BemItemPromoted {
+                    turn_id: "turn-1".to_string(),
+                    item_id: "middle".to_string(),
+                    presentation: BemItemPresentation::InlineMarkdown,
+                },
+            },
+        ),
+        (
+            31,
+            RealtimeItem {
+                id: "voice-1:closed".to_string(),
+                realtime_session_id: "voice-1".to_string(),
+                content: RealtimeItemContent::RealtimeSessionClosed {
+                    outcome: RealtimeSessionOutcome::Ended,
+                },
+            },
+        ),
+    ] {
+        let item_json = serde_json::to_string(&item).expect("serialize realtime item");
+        sqlx::query(
+            r#"
+INSERT INTO thread_realtime_items (
+    thread_id, item_id, rollout_ordinal, created_at_ms, item_type, item_json
+) VALUES (?, ?, ?, ?, json_extract(?, '$.type'), ?)
+            "#,
+        )
+        .bind(thread_id.to_string())
+        .bind(&item.id)
+        .bind(ordinal)
+        .bind(ordinal * 1_000)
+        .bind(&item_json)
+        .bind(&item_json)
+        .execute(db)
+        .await
+        .expect("insert realtime item");
+    }
+
+    let latest = store
+        .list_timeline(ListTimelineParams {
+            thread_id,
+            cursor: None,
+            page_size: 3,
+        })
+        .await
+        .expect("list latest timeline page");
+    assert_eq!(
+        latest
+            .items
+            .iter()
+            .map(|item| match item {
+                ThreadTimelineEntry::Item { position, .. }
+                | ThreadTimelineEntry::Realtime { position, .. }
+                | ThreadTimelineEntry::TurnStarted { position, .. }
+                | ThreadTimelineEntry::TurnCompleted { position, .. } => *position,
+            })
+            .collect::<Vec<_>>(),
+        vec![30, 31, 40]
+    );
+    assert_eq!(
+        latest.active_realtime_session_at_page_start,
+        Some("voice-1".to_string())
+    );
+    let older = store
+        .list_timeline(ListTimelineParams {
+            thread_id,
+            cursor: latest.next_cursor,
+            page_size: 3,
+        })
+        .await
+        .expect("list older timeline page");
+    assert_eq!(
+        older
+            .items
+            .iter()
+            .map(|item| match item {
+                ThreadTimelineEntry::Item { position, .. }
+                | ThreadTimelineEntry::Realtime { position, .. }
+                | ThreadTimelineEntry::TurnStarted { position, .. }
+                | ThreadTimelineEntry::TurnCompleted { position, .. } => *position,
+            })
+            .collect::<Vec<_>>(),
+        vec![12, 20, 21]
+    );
+    assert_eq!(
+        older.active_realtime_session_at_page_start,
+        Some("voice-1".to_string())
+    );
+    let oldest = store
+        .list_timeline(ListTimelineParams {
+            thread_id,
+            cursor: older.next_cursor,
+            page_size: 3,
+        })
+        .await
+        .expect("list oldest timeline page");
+    assert_eq!(oldest.active_realtime_session_at_page_start, None);
+    assert!(matches!(
+        oldest.items.as_slice(),
+        [
+            ThreadTimelineEntry::Item { position: 10, .. },
+            ThreadTimelineEntry::Realtime { position: 11, .. }
+        ]
+    ));
+
+    let ordinary_items = store
+        .list_items(item_params(
+            thread_id,
+            /*turn_id*/ None,
+            /*cursor*/ None,
+            /*page_size*/ 10,
+            SortDirection::Asc,
+        ))
+        .await
+        .expect("existing item API excludes realtime facts");
+    assert_eq!(
+        item_ids(&ordinary_items),
+        vec!["before", "middle", "after", "closed"]
+    );
+}
+
+#[tokio::test]
+async fn timeline_turn_boundaries_page_through_shared_ordinals() {
+    let (_home, store, thread_id) = store_with_mode(ThreadHistoryMode::Paginated).await;
+    let db = history_db(&store).await;
+    let error = r#"{"message":"failed","codexErrorInfo":null,"additionalDetails":null}"#;
+    for (turn_id, start, end, status, error_json) in [
+        ("complete", 10, Some(20), "completed", None),
+        ("interrupt", 20, Some(30), "interrupted", None),
+        ("failed", 30, Some(40), "failed", Some(error)),
+        ("running", 40, None, "inProgress", None),
+    ] {
+        insert_turn(
+            db, thread_id, turn_id, start, status, error_json, /*first_user_item_id*/ None,
+            /*final_agent_item_id*/ None,
+        )
+        .await;
+        sqlx::query("UPDATE thread_turns SET rollout_end_ordinal = ?, started_at = ?, completed_at = ?, duration_ms = ? WHERE thread_id = ? AND turn_id = ?")
+            .bind(end)
+            .bind(start)
+            .bind(end)
+            .bind(end.map(|end| (end - start) * 1000))
+            .bind(thread_id.to_string())
+            .bind(turn_id)
+            .execute(db)
+            .await
+            .expect("set turn boundary");
+    }
+    insert_item(
+        db, thread_id, "complete", "item", /*rollout_ordinal*/ 20,
+    )
+    .await;
+
+    let all = store
+        .list_timeline(ListTimelineParams {
+            thread_id,
+            cursor: None,
+            page_size: 20,
+        })
+        .await
+        .expect("full timeline");
+    let mut cursor = None;
+    let mut paged = Vec::new();
+    loop {
+        let page = store
+            .list_timeline(ListTimelineParams {
+                thread_id,
+                cursor,
+                page_size: 1,
+            })
+            .await
+            .expect("single-entry timeline page");
+        assert_eq!(page.items.len(), 1);
+        paged.extend(page.items);
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+    paged.reverse();
+    assert_eq!(paged, all.items);
+    assert_eq!(
+        all.items
+            .iter()
+            .map(crate::local::thread_history::realtime::entry_key)
+            .collect::<Vec<_>>(),
+        vec![
+            (10, 0, "complete"),
+            (20, 0, "interrupt"),
+            (20, 1, "item"),
+            (20, 3, "complete"),
+            (30, 0, "failed"),
+            (30, 3, "interrupt"),
+            (40, 0, "running"),
+            (40, 3, "failed")
+        ]
+    );
+    let completed = all
+        .items
+        .into_iter()
+        .filter(|entry| matches!(entry, ThreadTimelineEntry::TurnCompleted { .. }))
+        .collect::<Vec<_>>();
+    let expected = [
+        ("complete", 10, 20, "completed", serde_json::Value::Null),
+        ("interrupt", 20, 30, "interrupted", serde_json::Value::Null),
+        (
+            "failed",
+            30,
+            40,
+            "failed",
+            serde_json::from_str(error).expect("error"),
+        ),
+    ]
+    .into_iter()
+    .map(|(id, start, end, status, error)| {
+        serde_json::from_value(
+            serde_json::json!({"type":"turnCompleted", "position":end, "turnId":id,
+                "status":status, "error":error, "startedAt":start, "completedAt":end,
+                "durationMs":10000}),
+        )
+        .expect("expected boundary")
+    })
+    .collect::<Vec<ThreadTimelineEntry>>();
+    assert_eq!(completed, expected);
+}
+
+#[tokio::test]
+async fn timeline_page_state_excludes_realtime_events_after_fork_cutoff() {
+    let (home, store, child_id) = store_with_mode(ThreadHistoryMode::Paginated).await;
+    let source_id = ThreadId::default();
+    let source_path = rollout_path(home.path(), source_id);
+    write_rollout_with_end(
+        source_path.as_path(),
+        source_id,
+        /*history_base*/ None,
+        /*next_ordinal*/ 5,
+    );
+    write_rollout_with_end(
+        rollout_path(home.path(), child_id).as_path(),
+        child_id,
+        Some(history_position(
+            source_path.as_path(),
+            source_id,
+            /*end_ordinal_exclusive*/ 3,
+        )),
+        /*next_ordinal*/ 2,
+    );
+
+    let db = history_db(&store).await;
+    insert_turn(
+        db,
+        source_id,
+        "source-turn",
+        /*rollout_ordinal*/ 1,
+        "completed",
+        /*error_json*/ None,
+        /*first_user_item_id*/ None,
+        /*final_agent_item_id*/ None,
+    )
+    .await;
+    sqlx::query("UPDATE thread_turns SET rollout_end_ordinal = 4 WHERE thread_id = ?")
+        .bind(source_id.to_string())
+        .execute(db)
+        .await
+        .expect("source turn end");
+    insert_item(
+        db,
+        child_id,
+        "child-turn",
+        "child-item",
+        /*rollout_ordinal*/ 4,
+    )
+    .await;
+    for (ordinal, item) in [
+        (
+            1,
+            RealtimeItem {
+                id: "voice:started".to_string(),
+                realtime_session_id: "voice".to_string(),
+                content: RealtimeItemContent::RealtimeSessionStarted,
+            },
+        ),
+        (
+            3,
+            RealtimeItem {
+                id: "voice:closed".to_string(),
+                realtime_session_id: "voice".to_string(),
+                content: RealtimeItemContent::RealtimeSessionClosed {
+                    outcome: RealtimeSessionOutcome::Ended,
+                },
+            },
+        ),
+    ] {
+        let item_json = serde_json::to_string(&item).expect("serialize realtime item");
+        sqlx::query(
+            r#"
+INSERT INTO thread_realtime_items (
+    thread_id, item_id, rollout_ordinal, created_at_ms, item_type, item_json
+) VALUES (?, ?, ?, ?, json_extract(?, '$.type'), ?)
+            "#,
+        )
+        .bind(source_id.to_string())
+        .bind(&item.id)
+        .bind(ordinal)
+        .bind(ordinal * 1_000)
+        .bind(&item_json)
+        .bind(&item_json)
+        .execute(db)
+        .await
+        .expect("insert realtime boundary");
+    }
+
+    let page = store
+        .list_timeline(ListTimelineParams {
+            thread_id: child_id,
+            cursor: None,
+            page_size: 1,
+        })
+        .await
+        .expect("list forked timeline page");
+
+    assert_eq!(
+        page.active_realtime_session_at_page_start,
+        Some("voice".to_string())
+    );
+    let inherited = store
+        .list_timeline(ListTimelineParams {
+            thread_id: child_id,
+            cursor: page.next_cursor,
+            page_size: 10,
+        })
+        .await
+        .expect("inherited timeline");
+    assert_eq!(
+        inherited
+            .items
+            .iter()
+            .map(crate::local::thread_history::realtime::entry_key)
+            .collect::<Vec<_>>(),
+        vec![(1, 0, "source-turn"), (1, 2, "voice:started")]
+    );
 }
 
 #[tokio::test]

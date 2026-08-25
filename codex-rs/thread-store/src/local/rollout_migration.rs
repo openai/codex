@@ -1152,17 +1152,27 @@ impl LocalThreadStore {
             let fallback_created_at_ms = DateTime::parse_from_rfc3339(&line.timestamp)
                 .map_err(migration_error)?
                 .timestamp_millis();
-            batch.push(RolloutProjectionStep::Line(ProjectedRolloutLine {
-                ordinal,
-                start_byte_offset: offset,
-                end_byte_offset: next_offset,
-                fallback_created_at_ms: Some(fallback_created_at_ms),
-                changes: if subagent_history_start_ordinal.is_some_and(|start| ordinal < start) {
-                    Default::default()
-                } else {
-                    project_rollout_line(&line)
+            let is_inherited_subagent_history =
+                subagent_history_start_ordinal.is_some_and(|start| ordinal < start);
+            batch.push(RolloutProjectionStep::Line(Box::new(
+                ProjectedRolloutLine {
+                    ordinal,
+                    start_byte_offset: offset,
+                    end_byte_offset: next_offset,
+                    fallback_created_at_ms: Some(fallback_created_at_ms),
+                    changes: if is_inherited_subagent_history {
+                        Default::default()
+                    } else {
+                        project_rollout_line(&line)
+                    },
+                    realtime_item: match line.item {
+                        RolloutItem::RealtimeItem(item) if !is_inherited_subagent_history => {
+                            Some(item)
+                        }
+                        _ => None,
+                    },
                 },
-            }));
+            )));
             offset = next_offset;
 
             if offset.saturating_sub(batch_start) >= PROJECTION_BATCH_BYTES {

@@ -4,6 +4,7 @@ use std::sync::Arc;
 use chrono::DateTime;
 use chrono::Utc;
 use codex_app_server_protocol::CodexErrorInfo;
+use codex_app_server_protocol::ThreadTimelineEntry;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
@@ -512,6 +513,22 @@ pub struct ItemPage {
     pub next_cursor: Option<String>,
     /// Opaque cursor for fetching in the opposite direction.
     pub backwards_cursor: Option<String>,
+}
+
+/// Parameters for reading a bounded mixed thread timeline.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ListTimelineParams {
+    pub thread_id: ThreadId,
+    pub cursor: Option<String>,
+    pub page_size: usize,
+}
+
+/// Ordinary items, realtime facts, and the session state preceding their page.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TimelinePage {
+    pub items: Vec<ThreadTimelineEntry>,
+    pub next_cursor: Option<String>,
+    pub active_realtime_session_at_page_start: Option<String>,
 }
 
 /// Parameters for searching visible message occurrences within one paginated thread.

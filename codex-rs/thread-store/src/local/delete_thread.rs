@@ -649,6 +649,13 @@ mod tests {
         .await
         .expect("insert item");
         sqlx::query(
+            "INSERT INTO thread_realtime_items (thread_id, item_id, rollout_ordinal, created_at_ms, item_type, item_json) VALUES (?, 'realtime-1', 3, 1, 'realtime_session_started', '{}')",
+        )
+        .bind(thread_id_string.as_str())
+        .execute(&pool)
+        .await
+        .expect("insert realtime item");
+        sqlx::query(
             "INSERT INTO thread_history_projection_state (thread_id, next_rollout_byte_offset, next_rollout_ordinal) VALUES (?, 3, 3)",
         )
         .bind(thread_id_string.as_str())
@@ -668,21 +675,23 @@ mod tests {
             }
         ));
         assert!(rollout_path.exists());
-        let counts = sqlx::query_as::<_, (i64, i64, i64)>(
+        let counts = sqlx::query_as::<_, (i64, i64, i64, i64)>(
             r#"
 SELECT
     (SELECT COUNT(*) FROM thread_turns WHERE thread_id = ?),
     (SELECT COUNT(*) FROM thread_items WHERE thread_id = ?),
+    (SELECT COUNT(*) FROM thread_realtime_items WHERE thread_id = ?),
     (SELECT COUNT(*) FROM thread_history_projection_state WHERE thread_id = ?)
             "#,
         )
         .bind(thread_id_string.as_str())
         .bind(thread_id_string.as_str())
         .bind(thread_id_string.as_str())
+        .bind(thread_id_string.as_str())
         .fetch_one(&pool)
         .await
         .expect("read preserved history rows");
-        assert_eq!(counts, (1, 1, 1));
+        assert_eq!(counts, (1, 1, 1, 1));
     }
 
     #[tokio::test]
@@ -726,6 +735,13 @@ SELECT
         .await
         .expect("insert item");
         sqlx::query(
+            "INSERT INTO thread_realtime_items (thread_id, item_id, rollout_ordinal, created_at_ms, item_type, item_json) VALUES (?, 'realtime-1', 3, 1, 'realtime_session_started', '{}')",
+        )
+        .bind(thread_id_string.as_str())
+        .execute(&pool)
+        .await
+        .expect("insert realtime item");
+        sqlx::query(
             "INSERT INTO thread_history_projection_state (thread_id, next_rollout_byte_offset, next_rollout_ordinal) VALUES (?, 3, 3)",
         )
         .bind(thread_id_string.as_str())
@@ -759,21 +775,23 @@ SELECT
             .expect("delete thread");
         assert!(!lock_path.exists());
 
-        let counts = sqlx::query_as::<_, (i64, i64, i64)>(
+        let counts = sqlx::query_as::<_, (i64, i64, i64, i64)>(
             r#"
 SELECT
     (SELECT COUNT(*) FROM thread_turns WHERE thread_id = ?),
     (SELECT COUNT(*) FROM thread_items WHERE thread_id = ?),
+    (SELECT COUNT(*) FROM thread_realtime_items WHERE thread_id = ?),
     (SELECT COUNT(*) FROM thread_history_projection_state WHERE thread_id = ?)
             "#,
         )
         .bind(thread_id_string.as_str())
         .bind(thread_id_string.as_str())
         .bind(thread_id_string.as_str())
+        .bind(thread_id_string.as_str())
         .fetch_one(&pool)
         .await
         .expect("read remaining history rows");
-        assert_eq!(counts, (0, 0, 0));
+        assert_eq!(counts, (0, 0, 0, 0));
     }
 
     #[tokio::test]
