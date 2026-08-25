@@ -35,6 +35,7 @@ use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
+use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::openai_models::GuardianV2ModelConfig;
 use codex_protocol::openai_models::GuardianV2TranscriptModelConfig;
@@ -2096,6 +2097,74 @@ async fn contributor_bounds_configured_policy_in_luna_developer_instructions() -
                 crate::async_scorer::config::DEFAULT_MODEL_CONTEXT_ITEM_TOKENS,
             )
             .byte_budget()
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn contributor_preserves_final_assistant_messages_after_tool_eviction() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let mut history = vec![
+        responses::user_message_item("Find a flight to New York."),
+        ResponseItem::Message {
+            id: None,
+            role: "assistant".to_owned(),
+            content: vec![ContentItem::OutputText {
+                text: "I found a $450 flight. Should I book it?".to_owned(),
+            }],
+            phase: Some(MessagePhase::FinalAnswer),
+            internal_chat_message_metadata_passthrough: None,
+        },
+        responses::user_message_item("Yes."),
+        ResponseItem::Message {
+            id: None,
+            role: "assistant".to_owned(),
+            content: vec![ContentItem::OutputText {
+                text: "Searching airline websites.".to_owned(),
+            }],
+            phase: Some(MessagePhase::Commentary),
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ];
+    history.extend((0..6).map(|index| ResponseItem::FunctionCall {
+        id: None,
+        name: "exec_command".to_owned(),
+        namespace: None,
+        arguments: format!("booking step {index}"),
+        encrypted_function_args: None,
+        call_id: format!("call-{index}"),
+        internal_chat_message_metadata_passthrough: None,
+    }));
+    let configuration = "[features.guardianv2]\nenabled = true\n\n[features.guardianv2.transcript]\nmax_recent_non_user_entries = 4\n";
+
+    let (request, _test, _registry) = sample_configured_conversation_history(
+        history,
+        r#"{"path":"README.md"}"#,
+        Some(TEST_GUARDIAN_POLICY),
+        configuration,
+        /*model_defaults*/ None,
+    )
+    .await?;
+    let entries = request["input"][2]["content"]
+        .as_array()
+        .expect("Luna request should contain separate transcript text items")
+        .iter()
+        .filter_map(|entry| entry["text"].as_str())
+        .filter(|entry| entry.starts_with('['))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        entries,
+        vec![
+            "[1] user: Find a flight to New York.\n",
+            "[2] assistant: I found a $450 flight. Should I book it?\n",
+            "[3] user: Yes.\n",
+            "[8] tool exec_command call: booking step 3\n",
+            "[9] tool exec_command call: booking step 4\n",
+            "[10] tool exec_command call: booking step 5\n",
+        ]
     );
 
     Ok(())
