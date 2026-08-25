@@ -583,7 +583,7 @@ impl ChatWidget {
         self.bottom_pane.set_goal_status_indicator(goal_indicator);
     }
 
-    pub(super) fn refresh_goal_status_indicator_for_time_tick(&mut self) {
+    pub(crate) fn refresh_goal_status_indicator_for_time_tick(&mut self) {
         if self.collaboration_mode_indicator().is_some() {
             return;
         }

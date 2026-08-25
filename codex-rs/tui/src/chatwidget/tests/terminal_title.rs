@@ -1,7 +1,66 @@
 //! Terminal-title focused tests for live chatwidget status-surface behavior.
 
 use super::*;
+use crate::bottom_pane::goal_status_indicator_line;
 use pretty_assertions::assert_eq;
+
+#[tokio::test]
+async fn goal_clock_refresh_redraws_only_when_elapsed_label_changes() {
+    let (frame_requester, mut draw_rx) = FrameRequester::test_channel();
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual_with_auth(
+        /*model_override*/ None,
+        /*has_chatgpt_account*/ false,
+        /*has_codex_backend_auth*/ false,
+        frame_requester,
+    )
+    .await;
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
+    chat.bottom_pane.set_task_running(/*running*/ true);
+    chat.bottom_pane.hide_status_indicator();
+    let observed_at = Instant::now() - Duration::from_secs(/*secs*/ 90);
+    chat.turn_lifecycle.goal_status_active_turn_started_at = Some(observed_at);
+    let goal = AppThreadGoal {
+        thread_id: "thread-1".to_string(),
+        objective: "Keep improving the benchmark".to_string(),
+        status: AppThreadGoalStatus::Active,
+        token_budget: None,
+        tokens_used: 0,
+        time_used_seconds: 60,
+        created_at: 0,
+        updated_at: 0,
+    };
+    chat.on_thread_goal_updated(goal.clone(), /*turn_id*/ None);
+    let initial_indicator = chat.current_goal_status_indicator.clone();
+    while draw_rx.try_recv().is_ok() {}
+
+    chat.current_goal_status = Some(GoalStatusState::new(goal, observed_at));
+    chat.refresh_goal_status_indicator_for_time_tick();
+    chat.refresh_terminal_title();
+    assert!(draw_rx.try_recv().is_ok());
+    assert!(chat.terminal_title_next_refresh.is_some());
+
+    chat.refresh_goal_status_indicator_for_time_tick();
+    chat.refresh_terminal_title();
+    assert_eq!(
+        draw_rx.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    );
+    let labels = [
+        initial_indicator.as_ref(),
+        chat.current_goal_status_indicator.as_ref(),
+    ]
+    .map(|indicator| {
+        let line = goal_status_indicator_line(indicator).expect("active goal indicator");
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>()
+    });
+    insta::assert_snapshot!(labels.join("\n"), @r"
+    Pursuing goal (1m)
+    Pursuing goal (2m)
+    ");
+}
 
 #[tokio::test]
 async fn terminal_title_shows_action_required_while_exec_approval_is_pending() {

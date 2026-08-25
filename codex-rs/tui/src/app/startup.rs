@@ -808,6 +808,7 @@ See the Codex keymap documentation for supported actions and examples."
                             None => std::future::pending().await,
                         }
                     } => {
+                        app.chat_widget.refresh_goal_status_indicator_for_time_tick();
                         app.chat_widget.refresh_terminal_title();
                         AppRunControl::Continue
                     }
