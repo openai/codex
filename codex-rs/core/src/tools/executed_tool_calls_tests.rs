@@ -199,7 +199,8 @@ fn executed_tool_call_recorder_bounds_retained_history_and_reports_omissions() {
         .retained_calls
         .values()
         .map(serialized_json_bytes)
-        .sum::<usize>();
+        .sum::<serde_json::Result<usize>>()
+        .expect("retained calls must serialize");
     assert!(retained_bytes <= MAX_EXECUTED_TOOL_CALL_FULL_ARGUMENT_BYTES_PER_OUTPUT);
 
     let metadata = prompt

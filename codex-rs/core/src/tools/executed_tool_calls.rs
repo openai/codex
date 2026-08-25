@@ -12,6 +12,7 @@ use serde_json::Value as JsonValue;
 use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolPayload;
 use crate::tools::router::ToolCall;
+use crate::utils::json::serialized_json_bytes;
 
 const MAX_EXECUTED_TOOL_CALL_ARGUMENT_BYTES: usize = 8 * 1024;
 const MAX_EXECUTED_TOOL_CALL_FULL_ARGUMENT_BYTES_PER_OUTPUT: usize = 32 * 1024;
@@ -37,28 +38,6 @@ struct ExecutedToolCallRecorderState {
 struct RecordedCell {
     pending_calls: Vec<ExecutedToolCall>,
     pending_full_argument_bytes: usize,
-}
-
-#[derive(Default)]
-struct JsonByteCounter(usize);
-
-impl std::io::Write for JsonByteCounter {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.0 = self.0.saturating_add(bytes.len());
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-fn serialized_json_bytes<T: serde::Serialize + ?Sized>(value: &T) -> usize {
-    let mut counter = JsonByteCounter::default();
-    if serde_json::to_writer(&mut counter, value).is_err() {
-        return usize::MAX;
-    }
-    counter.0
 }
 
 impl ExecutedToolCallRecorder {
@@ -87,8 +66,10 @@ impl ExecutedToolCallRecorder {
 
         let original_bytes = match &call.payload {
             ToolPayload::Function { arguments } => arguments.len(),
-            ToolPayload::Custom { input } => serialized_json_bytes(input),
-            ToolPayload::ToolSearch { arguments } => serialized_json_bytes(arguments),
+            ToolPayload::Custom { input } => serialized_json_bytes(input).unwrap_or(usize::MAX),
+            ToolPayload::ToolSearch { arguments } => {
+                serialized_json_bytes(arguments).unwrap_or(usize::MAX)
+            }
         };
         let name = codex_tools::code_mode_name_for_tool_name(&call.tool_name);
         let recorded_call = if original_bytes > MAX_EXECUTED_TOOL_CALL_ARGUMENT_BYTES {

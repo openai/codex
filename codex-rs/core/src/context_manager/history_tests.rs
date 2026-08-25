@@ -2724,7 +2724,7 @@ fn text_only_items_unchanged() {
         id: None,
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {
-            text: "Hello world, this is a response.".to_string(),
+            text: "Hello, \"world\"!\nこんにちは".to_string(),
         }],
         phase: None,
         internal_chat_message_metadata_passthrough: None,
