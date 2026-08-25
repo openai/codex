@@ -223,6 +223,11 @@ pub(crate) fn tool_call_history_cell(
     let prompt = prompt.as_deref().unwrap_or_default();
 
     match tool {
+        // V2 uses SubAgentActivity for display; these variants are analytics-only.
+        CollabAgentTool::SendMessage
+        | CollabAgentTool::FollowupTask
+        | CollabAgentTool::InterruptAgent
+        | CollabAgentTool::ListAgents => None,
         CollabAgentTool::SpawnAgent => {
             if matches!(status, CollabAgentToolCallStatus::InProgress) {
                 return None;

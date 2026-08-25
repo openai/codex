@@ -244,6 +244,10 @@ impl EventProcessorWithJsonOutput {
                 id: make_id(),
                 details: ThreadItemDetails::CollabToolCall(CollabToolCallItem {
                     tool: match tool {
+                        CollabAgentTool::SendMessage
+                        | CollabAgentTool::FollowupTask
+                        | CollabAgentTool::InterruptAgent
+                        | CollabAgentTool::ListAgents => return None,
                         CollabAgentTool::SpawnAgent => CollabTool::SpawnAgent,
                         CollabAgentTool::SendInput => CollabTool::SendInput,
                         CollabAgentTool::ResumeAgent => CollabTool::Wait,
@@ -291,6 +295,7 @@ impl EventProcessorWithJsonOutput {
                         CollabAgentToolCallStatus::InProgress => CollabToolCallStatus::InProgress,
                         CollabAgentToolCallStatus::Completed => CollabToolCallStatus::Completed,
                         CollabAgentToolCallStatus::Failed => CollabToolCallStatus::Failed,
+                        CollabAgentToolCallStatus::Interrupted => return None,
                     },
                 }),
             }),

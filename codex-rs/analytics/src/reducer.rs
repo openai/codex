@@ -3274,6 +3274,7 @@ fn collab_tool_call_outcome(
     match status {
         CollabAgentToolCallStatus::InProgress => None,
         CollabAgentToolCallStatus::Completed => Some((ToolItemTerminalStatus::Completed, None)),
+        CollabAgentToolCallStatus::Interrupted => Some((ToolItemTerminalStatus::Interrupted, None)),
         CollabAgentToolCallStatus::Failed => Some((
             ToolItemTerminalStatus::Failed,
             Some(ToolItemFailureKind::ToolError),
@@ -3298,6 +3299,10 @@ fn collab_agent_tool_name(tool: &CollabAgentTool) -> &'static str {
         CollabAgentTool::ResumeAgent => "resume_agent",
         CollabAgentTool::Wait => "wait_agent",
         CollabAgentTool::CloseAgent => "close_agent",
+        CollabAgentTool::SendMessage => "send_message",
+        CollabAgentTool::FollowupTask => "followup_task",
+        CollabAgentTool::InterruptAgent => "interrupt_agent",
+        CollabAgentTool::ListAgents => "list_agents",
     }
 }
 
