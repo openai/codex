@@ -9,6 +9,8 @@ use crate::events::compact::PostCompactRequest;
 use crate::events::compact::PreCompactOutcome;
 use crate::events::compact::PreCompactRequest;
 use crate::events::compact::StatelessHookOutcome;
+use crate::events::interrupt::InterruptOutcome;
+use crate::events::interrupt::InterruptRequest;
 use crate::events::permission_request::PermissionRequestOutcome;
 use crate::events::permission_request::PermissionRequestRequest;
 use crate::events::post_tool_use::PostToolUseOutcome;
@@ -169,6 +171,7 @@ impl ConfiguredHandler {
             codex_protocol::protocol::HookEventName::SubagentStart => "subagent-start",
             codex_protocol::protocol::HookEventName::SubagentStop => "subagent-stop",
             codex_protocol::protocol::HookEventName::Stop => "stop",
+            codex_protocol::protocol::HookEventName::Interrupt => "interrupt",
         }
     }
 
@@ -451,6 +454,14 @@ impl ClaudeHooksEngine {
             .maybe_spill_prompt_fragments(outcome.continuation_fragments)
             .await;
         outcome
+    }
+
+    pub(crate) fn preview_interrupt(&self) -> Vec<HookRunSummary> {
+        crate::events::interrupt::preview(&self.handlers)
+    }
+
+    pub(crate) async fn run_interrupt(&self, request: InterruptRequest) -> InterruptOutcome {
+        crate::events::interrupt::run(self, request).await
     }
 }
 

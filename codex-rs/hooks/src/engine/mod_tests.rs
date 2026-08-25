@@ -45,6 +45,7 @@ use super::ConfiguredHandler;
 use super::ConfiguredHandlerKind;
 use super::HandlerSourcePath;
 use super::HookListEntryHandler;
+use crate::events::interrupt::InterruptRequest;
 use crate::events::pre_tool_use::PreToolUseRequest;
 use crate::events::stop::StopHookTarget;
 use crate::events::stop::StopRequest;
@@ -2356,6 +2357,109 @@ async fn mcp_tool_hooks_expand_event_input_and_apply_pre_tool_decisions() {
             }))
             .expect("object input"),
             timeout: Duration::from_secs(20),
+        }]
+    );
+}
+
+#[tokio::test]
+async fn mcp_interrupt_hooks_expand_event_input_and_bound_timeout() {
+    let temp = tempdir().expect("create temp dir");
+    let config_path =
+        AbsolutePathBuf::try_from(temp.path().join("config.toml")).expect("absolute config path");
+    fs::write(
+        temp.path().join("hooks.json"),
+        serde_json::json!({
+            "hooks": {
+                "Interrupt": [{
+                    "hooks": [{
+                        "type": "mcp_tool",
+                        "server": "security",
+                        "tool": "notify",
+                        "input": {
+                            "event": "${hook_event_name}",
+                            "turn_id": "${turn_id}",
+                            "permission_mode": "${permission_mode}",
+                        },
+                        "timeout": 20,
+                    }],
+                }],
+            },
+        })
+        .to_string(),
+    )
+    .expect("write MCP Interrupt hooks.json");
+    let config_layer_stack = ConfigLayerStack::new(
+        vec![ConfigLayerEntry::new(
+            ConfigLayerSource::User {
+                file: config_path,
+                profile: None,
+            },
+            TomlValue::Table(Default::default()),
+        )],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("config layer stack");
+
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let executor = StaticMcpExecutor {
+        calls: Arc::clone(&calls),
+        output: serde_json::json!({
+            "systemMessage": "interrupt observed",
+        })
+        .to_string(),
+        outputs_by_tool: HashMap::new(),
+    };
+    let engine = ClaudeHooksEngine::new(
+        /*enabled*/ true,
+        /*bypass_hook_trust*/ true,
+        Some(&config_layer_stack),
+        Vec::new(),
+        Vec::new(),
+        command_runtime(CommandShell {
+            program: String::new(),
+            args: Vec::new(),
+        }),
+        Arc::new(executor),
+    );
+    let outcome = engine
+        .run_interrupt(InterruptRequest {
+            session_id: ThreadId::new(),
+            turn_id: "turn-1".to_string(),
+            cwd: cwd(),
+            transcript_path: None,
+            model: "gpt-test".to_string(),
+            permission_mode: "default".to_string(),
+        })
+        .await;
+
+    assert_eq!(outcome.hook_events.len(), 1);
+    assert_eq!(
+        outcome.hook_events[0].run.handler_type,
+        HookHandlerType::McpTool
+    );
+    assert_eq!(outcome.hook_events[0].run.status, HookRunStatus::Completed);
+    assert_eq!(
+        outcome.hook_events[0].run.entries,
+        vec![HookOutputEntry {
+            kind: HookOutputEntryKind::Warning,
+            text: "interrupt observed".to_string(),
+        }]
+    );
+    assert_eq!(
+        *calls.lock().expect("lock MCP calls"),
+        vec![HookMcpCall {
+            server: "security".to_string(),
+            tool: "notify".to_string(),
+            environment_id: None,
+            metadata: None,
+            input: serde_json::from_value(serde_json::json!({
+                "event": "Interrupt",
+                "turn_id": "turn-1",
+                "permission_mode": "default",
+            }))
+            .expect("object input"),
+            timeout: Duration::from_secs(3),
         }]
     );
 }

@@ -4811,6 +4811,17 @@ async fn user_prompt_submit_app_server_hook_notifications_render_snapshot() {
 }
 
 #[tokio::test]
+async fn interrupt_hook_events_render_snapshot() {
+    assert_hook_events_snapshot(
+        codex_app_server_protocol::HookEventName::Interrupt,
+        "interrupt:0:/tmp/hooks.json",
+        "cleaning up the interrupted turn",
+        "interrupt_hook_events_render_snapshot",
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn pre_tool_use_hook_events_render_snapshot() {
     assert_hook_events_snapshot(
         codex_app_server_protocol::HookEventName::PreToolUse,

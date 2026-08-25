@@ -20,7 +20,7 @@ pub use engine::dispatcher::hook_execution_mode_label;
 pub use engine::dispatcher::hook_handler_type_label;
 pub use events::common::SubagentHookContext;
 /// Hook event names as they appear in hooks JSON and config files.
-pub const HOOK_EVENT_NAMES: [&str; 11] = [
+pub const HOOK_EVENT_NAMES: [&str; 12] = [
     "PreToolUse",
     "PermissionRequest",
     "PostToolUse",
@@ -32,6 +32,7 @@ pub const HOOK_EVENT_NAMES: [&str; 11] = [
     "SubagentStart",
     "SubagentStop",
     "Stop",
+    "Interrupt",
 ];
 
 /// Hook event names whose matcher fields are meaningful during dispatch.
@@ -55,6 +56,8 @@ pub use events::compact::PostCompactRequest;
 pub use events::compact::PreCompactOutcome;
 pub use events::compact::PreCompactRequest;
 pub use events::compact::StatelessHookOutcome;
+pub use events::interrupt::InterruptOutcome;
+pub use events::interrupt::InterruptRequest;
 pub use events::permission_request::PermissionRequestDecision;
 pub use events::permission_request::PermissionRequestOutcome;
 pub use events::permission_request::PermissionRequestRequest;
@@ -102,6 +105,7 @@ pub fn hook_event_key_label(event_name: HookEventName) -> &'static str {
         HookEventName::SubagentStart => "subagent_start",
         HookEventName::SubagentStop => "subagent_stop",
         HookEventName::Stop => "stop",
+        HookEventName::Interrupt => "interrupt",
     }
 }
 
