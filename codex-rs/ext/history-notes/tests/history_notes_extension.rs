@@ -4,11 +4,14 @@ use codex_config::LoaderOverrides;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::TokenBudgetConfig;
+use codex_extension_api::ContentItemKind;
 use codex_extension_api::ConversationHistory;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::NoopTurnItemEmitter;
+use codex_extension_api::PromptFragment;
+use codex_extension_api::PromptSlot;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ToolCall;
 use codex_extension_api::ToolCallSource;
@@ -40,6 +43,7 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
+const THREAD_HINT: &str = "Recent notes (up to 5, most-recent first):\n- /root/worker/notes/latest.md (2 lines, 14 UTF-8 bytes)";
 
 #[tokio::test]
 async fn installed_extension_exposes_and_invokes_history_notes_tools() -> TestResult {
@@ -50,6 +54,12 @@ async fn installed_extension_exposes_and_invokes_history_notes_tools() -> TestRe
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "encrypted_output": "enc_payload"
         })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/backend-api/codex/alpha/notes/v2/thread_hint"))
+        .and(header("x-openai-actor-authorization", "actor-biscuit"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"text": THREAD_HINT})))
         .mount(&server)
         .await;
     let codex_home = TempDir::new()?;
@@ -142,8 +152,20 @@ async fn installed_extension_exposes_and_invokes_history_notes_tools() -> TestRe
         )
     );
 
+    let hints = registry.context_contributors()[0]
+        .contribute_thread_context(&session_store, &thread_store)
+        .await;
+    assert_eq!(
+        hints,
+        vec![PromptFragment::new(
+            PromptSlot::ContextWindow,
+            THREAD_HINT,
+            ContentItemKind("notes.thread_hint".to_string()),
+        )]
+    );
+
     let requests = server.received_requests().await.expect("recorded requests");
-    assert_eq!(requests.len(), 1);
+    assert_eq!(requests.len(), 2);
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&requests[0].body)?,
         json!({
@@ -155,12 +177,47 @@ async fn installed_extension_exposes_and_invokes_history_notes_tools() -> TestRe
         })
     );
 
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&requests[1].body)?,
+        json!({
+            "context": {
+                "session_id": "session-123",
+                "current_agent_name": "/root/worker",
+            }
+        })
+    );
+
+    for result in [
+        json!({"text": ""}),
+        json!({"text": "x".repeat(4_001)}),
+        json!({"encrypted_output": "old-backend-hint"}),
+    ] {
+        server.reset().await;
+        Mock::given(method("POST"))
+            .and(path("/backend-api/codex/alpha/notes/v2/thread_hint"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(result))
+            .mount(&server)
+            .await;
+        assert!(
+            registry.context_contributors()[0]
+                .contribute_thread_context(&session_store, &thread_store)
+                .await
+                .is_empty()
+        );
+    }
+
     let mut disabled_config = config.clone();
     disabled_config.token_budget = None;
     for contributor in registry.config_contributors() {
         contributor.on_config_changed(&session_store, &thread_store, &config, &disabled_config);
     }
     assert!(exposed_tools(&registry, &session_store, &thread_store).is_empty());
+    assert!(
+        registry.context_contributors()[0]
+            .contribute_thread_context(&session_store, &thread_store)
+            .await
+            .is_empty()
+    );
 
     Ok(())
 }

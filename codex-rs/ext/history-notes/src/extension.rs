@@ -2,9 +2,13 @@ use std::sync::Arc;
 
 use codex_core::config::Config;
 use codex_extension_api::ConfigContributor;
+use codex_extension_api::ContentItemKind;
+use codex_extension_api::ContextContributor;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::PromptFragment;
+use codex_extension_api::PromptSlot;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ToolCall;
@@ -13,10 +17,14 @@ use codex_extension_api::ToolExecutor;
 use codex_login::AuthManager;
 use codex_model_provider::create_model_provider;
 use codex_protocol::AgentPath;
+use serde_json::json;
 
 use crate::backend::HistoryNotesBackend;
 use crate::tools::HistoryNotesAction;
 use crate::tools::HistoryNotesTool;
+
+// Bound model context even when note paths are unusually long.
+const MAX_THREAD_HINT_BYTES: usize = 4_000;
 
 struct HistoryNotesExtension {
     auth_manager: Arc<AuthManager>,
@@ -82,6 +90,46 @@ impl ConfigContributor<Config> for HistoryNotesExtension {
     }
 }
 
+impl ContextContributor for HistoryNotesExtension {
+    fn contribute_thread_context<'a>(
+        &'a self,
+        session_store: &'a ExtensionData,
+        thread_store: &'a ExtensionData,
+    ) -> ExtensionFuture<'a, Vec<PromptFragment>> {
+        Box::pin(async move {
+            let Some(config) = thread_store.get::<HistoryNotesExtensionConfig>() else {
+                return Vec::new();
+            };
+            let Some(identity) = thread_store.get::<HistoryNotesAgentIdentity>() else {
+                return Vec::new();
+            };
+            let Ok(result) = config
+                .backend
+                .call(
+                    "alpha/notes/v2/thread_hint",
+                    session_store.level_id(),
+                    &identity.agent_name,
+                    json!({}),
+                )
+                .await
+            else {
+                return Vec::new();
+            };
+            let Some(text) = result.get("text").and_then(serde_json::Value::as_str) else {
+                return Vec::new();
+            };
+            if text.is_empty() || text.len() > MAX_THREAD_HINT_BYTES {
+                return Vec::new();
+            }
+            vec![PromptFragment::new(
+                PromptSlot::ContextWindow,
+                text,
+                ContentItemKind("notes.thread_hint".to_string()),
+            )]
+        })
+    }
+}
+
 impl ToolContributor for HistoryNotesExtension {
     fn tools(
         &self,
@@ -114,5 +162,6 @@ pub fn install(registry: &mut ExtensionRegistryBuilder<Config>, auth_manager: Ar
     let extension = Arc::new(HistoryNotesExtension { auth_manager });
     registry.thread_lifecycle_contributor(extension.clone());
     registry.config_contributor(extension.clone());
+    registry.prompt_contributor(extension.clone());
     registry.tool_contributor(extension);
 }
