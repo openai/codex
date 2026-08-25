@@ -1,6 +1,9 @@
 name: internal-release-artifacts
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
