@@ -5,6 +5,7 @@ mod memories;
 mod project;
 mod queued_item;
 mod rollout_migration_state;
+mod thread_artifact;
 mod thread_goal;
 mod thread_metadata;
 
@@ -27,6 +28,10 @@ pub use queued_item::QueuedUserSubmissionRecord;
 pub use rollout_migration_state::RolloutMigrationCursor;
 pub use rollout_migration_state::RolloutMigrationSkippedRollout;
 pub use rollout_migration_state::RolloutMigrationState;
+pub use thread_artifact::ThreadArtifact;
+pub use thread_artifact::ThreadArtifactAttachmentOutcome;
+pub use thread_artifact::ThreadArtifactPage;
+pub use thread_artifact::ThreadArtifactRemovalOutcome;
 pub use thread_goal::ThreadGoal;
 pub use thread_goal::ThreadGoalStatus;
 pub use thread_metadata::Anchor;
