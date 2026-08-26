@@ -63,6 +63,7 @@ use rmcp::model::JsonObject;
 use rmcp::model::ListToolsResult;
 use rmcp::model::MetaObject;
 use rmcp::model::PrimitiveSchemaDefinition;
+use rmcp::model::RequestMetaObject;
 use rmcp::model::ServerCapabilities;
 use rmcp::model::ServerInfo;
 use rmcp::model::Tool;
@@ -1264,6 +1265,47 @@ impl ServerHandler for ToolAppsMcpServer {
 
         let mut meta = MetaObject::new();
         meta.0.insert("calledBy".to_string(), json!("mcp-app"));
+
+        // Node REPL requests strict review inside tools/call, despite its read-only annotation.
+        let turn_metadata = context.meta.0.0.get("x-codex-turn-metadata");
+        if turn_metadata
+            .and_then(|metadata| metadata.get("node_repl_auto_review_required"))
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+        {
+            let approval_meta = json!({
+                "codex_request_type": "approval_request",
+                "codex_approval_kind": "mcp_tool_call",
+                "codex_strict_auto_review": true,
+                "tool_name": TEST_TOOL_NAME,
+                "tool_params": request.arguments,
+                "x-codex-turn-metadata": turn_metadata,
+            });
+            let result = context
+                .peer
+                .create_elicitation(ElicitRequestParams::FormElicitationParams {
+                    meta: Some(RequestMetaObject::from(
+                        approval_meta
+                            .as_object()
+                            .expect("approval metadata")
+                            .clone(),
+                    )),
+                    message: "Review tool execution".to_string(),
+                    requested_schema: ElicitationSchema::new(Default::default()),
+                })
+                .await
+                .map_err(|err| {
+                    rmcp::ErrorData::internal_error(err.to_string(), /*data*/ None)
+                })?;
+            assert_eq!(
+                serde_json::to_value(result).expect("elicitation response"),
+                json!({
+                    "action": "accept",
+                    "content": {},
+                    "_meta": { "approvals_reviewer": "auto_review" },
+                })
+            );
+        }
 
         if message == LARGE_RESPONSE_MESSAGE {
             let large_text = "large-mcp-content-".repeat(DEFAULT_OUTPUT_BYTES_CAP / 8);

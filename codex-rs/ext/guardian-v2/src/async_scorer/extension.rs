@@ -521,12 +521,15 @@ impl GuardianV2Extension {
             }
         };
         let parent_model = input.thread_store.get::<ModelInfo>();
-        if parent_model.as_ref().is_some_and(|model| {
-            config
-                .config_layer_stack
-                .requirements()
-                .auto_review_required_for_model(&model.slug)
-        }) {
+        // Computer-use-only scores cannot approve other tools for required models.
+        if guardian_config.review_scope != GuardianV2ReviewScope::ComputerUseOnly
+            && parent_model.as_ref().is_some_and(|model| {
+                config
+                    .config_layer_stack
+                    .requirements()
+                    .auto_review_required_for_model(&model.slug)
+            })
+        {
             input.thread_store.remove::<SecurityRiskScore>();
             return;
         }
