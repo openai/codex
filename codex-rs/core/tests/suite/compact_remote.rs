@@ -1328,7 +1328,7 @@ async fn remote_manual_compact_chatgpt_auth_reuses_service_tier_and_prompt_cache
     Ok(())
 }
 
-#[test_case(None; "default_preserves_images")]
+#[test_case(None; "default_trims_images")]
 #[test_case(Some(false); "disabled_preserves_images")]
 #[test_case(Some(true); "enabled_trims_images")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1433,7 +1433,7 @@ async fn remote_compact_v2_charges_retained_images_to_token_budget(
             follow_up.inputs_of_type("compaction")[0]["encrypted_content"],
             "IMAGE_BUDGET_SUMMARY"
         );
-        let dropped = if image_budget_enabled == Some(true) {
+        let dropped = if image_budget_enabled.unwrap_or(true) {
             cycle
         } else {
             0
