@@ -187,26 +187,34 @@ pub struct LunaSampler {
 }
 
 impl LunaSampler {
-    /// Opens the initial WebSockets before any sample is requested.
-    pub async fn connect(config: LunaSamplerConfig) -> Result<Self, LunaSamplerError> {
-        let sampler = Self {
+    pub(super) fn new(config: LunaSamplerConfig) -> Self {
+        Self {
             config,
             idle_connections: Arc::new(Mutex::new(Vec::with_capacity(MAX_WEBSOCKET_CONNECTIONS))),
             capacity: Arc::new(Semaphore::new(MAX_WEBSOCKET_CONNECTIONS)),
             active_requests: Mutex::new(VecDeque::with_capacity(MAX_WEBSOCKET_CONNECTIONS)),
-        };
+        }
+    }
+
+    pub(super) async fn prewarm(&self) {
         for _ in 0..INITIAL_WEBSOCKET_CONNECTIONS {
-            let connection = match sampler.open_connection().await {
+            let idle_connections = self
+                .idle_connections
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .len();
+            if idle_connections >= self.capacity.available_permits() {
+                break;
+            }
+            let connection = match self.open_connection().await {
                 Ok(connection) => connection,
                 Err(_) => break,
             };
-            sampler
-                .idle_connections
+            self.idle_connections
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .push(connection);
         }
-        Ok(sampler)
     }
 
     async fn open_connection(&self) -> Result<PooledConnection, LunaSamplerError> {

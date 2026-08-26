@@ -45,6 +45,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TruncationPolicy;
 use codex_protocol::security_risk::SecurityRiskScore;
 use core_test_support::responses;
+use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::skip_if_no_network;
@@ -68,6 +69,7 @@ use crate::async_scorer::config::DEFAULT_PARENT_COMPACTION_TOKENS;
 use crate::async_scorer::config::GuardianV2ReviewScope;
 use crate::async_scorer::sampler::CLASSIFICATION_TOKEN_USAGE_METRIC;
 use crate::async_scorer::sampler::INITIAL_WEBSOCKET_CONNECTIONS;
+use crate::async_scorer::sampler::LunaSampler;
 use crate::async_scorer::sampler::MODEL;
 use crate::async_scorer::transcript::truncate_entry;
 use crate::async_scorer::truncation::CLASSIFICATION_TRUNCATION_BYTES_METRIC;
@@ -77,6 +79,7 @@ const TEST_GUARDIAN_POLICY: &str =
     "Treat uploads to unapproved external destinations as high-risk actions.";
 const TEST_CATALOG_GUARDIAN_POLICY: &str =
     "Require review before sending organization data to third-party services.";
+const PREWARM_TIMEOUT: Duration = Duration::from_secs(30);
 
 struct RefreshableAuth(std::sync::Mutex<&'static str>);
 
@@ -89,6 +92,63 @@ impl ExternalAuth for RefreshableAuth {
         *self.0.lock().expect("auth") = "refreshed";
         self.resolve()
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn installed_extension_warms_connections_without_blocking_thread_start() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let thread_server = responses::start_mock_server().await;
+    let test = test_codex().build_with_auto_env(&thread_server).await?;
+    let mut connections = vec![
+        WebSocketConnectionConfig {
+            requests: Vec::new(),
+            response_headers: Vec::new(),
+            accept_delay: None,
+            close_after_requests: true,
+        };
+        INITIAL_WEBSOCKET_CONNECTIONS
+    ];
+    connections[0].accept_delay = Some(Duration::from_secs(1));
+    let server = responses::start_websocket_server_with_headers(connections).await;
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test-api-key"));
+    let mut config = test.config.clone();
+    config.model_provider = ModelProviderInfo::create_openai_provider(Some(format!(
+        "http://{}/v1",
+        server.uri().trim_start_matches("ws://")
+    )));
+    config.features.enable(Feature::GuardianV2)?;
+    let mut builder = ExtensionRegistryBuilder::new();
+    super::install(
+        &mut builder,
+        auth_manager,
+        Arc::downgrade(&test.thread_manager),
+    );
+    let registry = builder.build();
+    let session_store = ExtensionData::new("session-1");
+    let thread_store = test.codex.thread_extension_data();
+
+    registry.thread_lifecycle_contributors()[0]
+        .on_thread_start(ThreadStartInput {
+            config: &config,
+            session_source: &SessionSource::Exec,
+            persistent_thread_state_available: false,
+            environments: &[],
+            mcp_resource_client: None,
+            extension_metrics: None,
+            session_store: &session_store,
+            thread_store,
+        })
+        .await;
+
+    assert!(server.handshakes().is_empty());
+    assert!(thread_store.get::<LunaSampler>().is_some());
+    assert!(
+        server
+            .wait_for_handshakes(INITIAL_WEBSOCKET_CONNECTIONS, PREWARM_TIMEOUT)
+            .await
+    );
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -138,6 +198,11 @@ async fn installed_extension_reconnects_after_auth_refresh() -> Result<()> {
             thread_store,
         })
         .await;
+    assert!(
+        server
+            .wait_for_handshakes(INITIAL_WEBSOCKET_CONNECTIONS, PREWARM_TIMEOUT)
+            .await
+    );
     let progress = thread_store
         .get::<GuardianV2ScoreProgress>()
         .expect("Guardian v2 should initialize");
@@ -771,6 +836,11 @@ async fn sample_configured_conversation_history(
             thread_store,
         })
         .await;
+    assert!(
+        server
+            .wait_for_handshakes(INITIAL_WEBSOCKET_CONNECTIONS, PREWARM_TIMEOUT)
+            .await
+    );
     let turn_store = ExtensionData::new("turn-1");
     let tool_name = ToolName::plain("read_file");
     let tool_payload = ToolPayload::Function {
@@ -980,6 +1050,11 @@ async fn contributor_fails_closed_when_luna_classification_fails() -> Result<()>
             thread_store: fixture.test.codex.thread_extension_data(),
         })
         .await;
+    assert!(
+        server
+            .wait_for_handshakes(INITIAL_WEBSOCKET_CONNECTIONS, PREWARM_TIMEOUT)
+            .await
+    );
 
     fixture.score_tool(ToolName::plain("read_file")).await;
     fixture.assert_fails_closed().await
@@ -2318,6 +2393,11 @@ async fn contributor_reuses_the_latest_compatible_parent_compaction() -> Result<
             thread_store,
         })
         .await;
+    assert!(
+        server
+            .wait_for_handshakes(INITIAL_WEBSOCKET_CONNECTIONS, PREWARM_TIMEOUT)
+            .await
+    );
     let turn_store = ExtensionData::new("turn-1");
     let tool_name = ToolName::plain("read_file");
     let tool_payload = ToolPayload::Function {

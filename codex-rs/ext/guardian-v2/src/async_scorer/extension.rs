@@ -319,7 +319,7 @@ impl ThreadLifecycleContributor<Config> for GuardianV2Extension {
             } else {
                 None
             };
-            let sampler = LunaSampler::connect(LunaSamplerConfig {
+            let sampler_config = LunaSamplerConfig {
                 provider: create_model_provider(
                     input.config.model_provider.clone(),
                     Some(Arc::clone(&self.auth_manager)),
@@ -340,32 +340,29 @@ impl ThreadLifecycleContributor<Config> for GuardianV2Extension {
                 service_tier: input.config.service_tier.clone(),
                 luna_compaction_hash,
                 metrics: input.extension_metrics.clone(),
-            })
-            .await;
+            };
 
-            match sampler {
-                Ok(sampler) => {
-                    if guardian_config.transcript.include_images {
-                        input
-                            .thread_store
-                            .get_or_init(NodeReplReviewEvidence::default)
-                            .enable_image_capture();
-                    }
-                    input.thread_store.insert(sampler);
-                    input.thread_store.insert(guardian_config);
-                    input.thread_store.insert(GuardianV2ScoreProgress {
-                        metrics: input.extension_metrics.clone(),
-                        ..Default::default()
-                    });
-                    input.thread_store.insert(GuardianReviewEvidence::default());
-                    input.thread_store.insert(GuardianV2Enabled);
-                }
-                Err(error) => self.event_sink.emit_warning(ExtensionWarning {
-                    thread_id,
-                    turn_id: None,
-                    message: format!("Guardian V2 Luna initialization failed: {error}"),
-                }),
+            if guardian_config.transcript.include_images {
+                input
+                    .thread_store
+                    .get_or_init(NodeReplReviewEvidence::default)
+                    .enable_image_capture();
             }
+            input.thread_store.remove::<LunaSampler>();
+            let sampler = input
+                .thread_store
+                .get_or_init(|| LunaSampler::new(sampler_config));
+            input.thread_store.insert(guardian_config);
+            input.thread_store.insert(GuardianV2ScoreProgress {
+                metrics: input.extension_metrics.clone(),
+                ..Default::default()
+            });
+            input.thread_store.insert(GuardianReviewEvidence::default());
+            input.thread_store.insert(GuardianV2Enabled);
+
+            tokio::spawn(async move {
+                sampler.prewarm().await;
+            });
         })
     }
 }
