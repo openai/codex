@@ -137,6 +137,33 @@ fn multi_agent_v2_feature_toggle_preserves_nested_configuration() {
 }
 
 #[test]
+fn sleep_tool_feature_toggle_preserves_mode() {
+    let tmp = tempdir().expect("tmpdir");
+    let codex_home = tmp.path();
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    std::fs::write(
+        &config_path,
+        "[features.sleep_tool]\nmode = \"always_on\"\n",
+    )
+    .expect("write config");
+
+    for enabled in [false, true] {
+        ConfigEditsBuilder::new(codex_home)
+            .set_feature_enabled("sleep_tool", enabled)
+            .apply_blocking()
+            .expect("toggle feature");
+        let actual: TomlValue =
+            toml::from_str(&std::fs::read_to_string(&config_path).expect("read config"))
+                .expect("parse config");
+        let expected: TomlValue = toml::from_str(&format!(
+            "[features.sleep_tool]\nenabled = {enabled}\nmode = \"always_on\"\n",
+        ))
+        .expect("parse expected config");
+        assert_eq!(actual, expected);
+    }
+}
+
+#[test]
 fn network_proxy_feature_toggle_preserves_credential_broker_configuration() {
     let tmp = tempdir().expect("tmpdir");
     let codex_home = tmp.path();

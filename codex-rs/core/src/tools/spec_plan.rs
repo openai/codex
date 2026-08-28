@@ -62,6 +62,7 @@ use crate::tools::router::ToolRouter;
 use crate::tools::tool_namespaces_info::collect_tool_namespaces_info;
 use codex_extension_api::ExtensionData;
 use codex_features::Feature;
+use codex_features::SleepToolMode;
 use codex_login::AuthManager;
 use codex_protocol::DEFAULT_FUNCTION_NAMESPACE;
 use codex_protocol::account::PlanType;
@@ -1160,23 +1161,31 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
         registry.add(GetContextRemainingHandler);
     }
 
-    if features.enabled(Feature::CurrentTimeReminder) {
-        registry.add(CurrentTimeHandler);
-        if turn_context
-            .config
-            .current_time_reminder
-            .as_ref()
-            .is_some_and(|config| config.sleep_tool)
-        {
-            registry.add(SleepHandler);
-        }
-    } else if context
+    let current_time_reminder_enabled = features.enabled(Feature::CurrentTimeReminder);
+    let model_has_clock = context
         .model_info
         .experimental_supported_tools
         .iter()
-        .any(|tool| tool == "clock")
-    {
+        .any(|tool| tool == "clock");
+    if current_time_reminder_enabled || model_has_clock {
         registry.add(CurrentTimeHandler);
+    }
+    if features.enabled(Feature::SleepTool)
+        && match turn_context.config.sleep_tool_mode {
+            SleepToolMode::AlwaysOn => true,
+            SleepToolMode::ModelDriven => {
+                if current_time_reminder_enabled {
+                    turn_context
+                        .config
+                        .current_time_reminder
+                        .as_ref()
+                        .is_some_and(|config| config.sleep_tool)
+                } else {
+                    model_has_clock
+                }
+            }
+        }
+    {
         registry.add(SleepHandler);
     }
 

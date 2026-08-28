@@ -904,6 +904,9 @@
             "skip_host_skill_discovery": {
               "type": "boolean"
             },
+            "sleep_tool": {
+              "$ref": "#/definitions/FeatureToml_for_SleepToolConfigToml"
+            },
             "sqlite": {
               "type": "boolean"
             },
@@ -1256,6 +1259,16 @@
         },
         {
           "$ref": "#/definitions/RolloutBudgetConfigToml"
+        }
+      ]
+    },
+    "FeatureToml_for_SleepToolConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/SleepToolConfigToml"
         }
       ]
     },
@@ -3495,6 +3508,37 @@
         }
       },
       "type": "object"
+    },
+    "SleepToolConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "mode": {
+          "$ref": "#/definitions/SleepToolMode"
+        }
+      },
+      "type": "object"
+    },
+    "SleepToolMode": {
+      "description": "How the sleep tool is selected when its feature gate is enabled.",
+      "oneOf": [
+        {
+          "description": "Preserve the existing model and legacy clock configuration defaults.",
+          "enum": [
+            "model_driven"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Register sleep regardless of the model or legacy clock configuration.",
+          "enum": [
+            "always_on"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "ThreadStoreToml": {
       "oneOf": [
@@ -6056,6 +6100,9 @@
         },
         "skip_host_skill_discovery": {
           "type": "boolean"
+        },
+        "sleep_tool": {
+          "$ref": "#/definitions/FeatureToml_for_SleepToolConfigToml"
         },
         "sqlite": {
           "type": "boolean"

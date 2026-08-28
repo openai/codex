@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicU64;
@@ -425,6 +426,117 @@ async fn system_time_source_adds_current_time_reminder(clock_setup: ClockSetup) 
         &reminders[0],
     );
 
+    Ok(())
+}
+
+#[test_case(ReasoningEffort::High, true; "model_enabled")]
+#[test_case(ReasoningEffort::High, false; "model_disabled")]
+#[test_case(ReasoningEffort::Persistent, true; "persistent_enabled")]
+#[test_case(ReasoningEffort::Persistent, false; "persistent_disabled")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn client_feature_map_can_disable_sleep_tool(
+    reasoning_effort: ReasoningEffort,
+    sleep_tool_enabled: bool,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let reminders_enabled = reasoning_effort == ReasoningEffort::Persistent;
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let test = test_codex()
+        .with_model_info_override("gpt-5.5", |model_info| {
+            model_info
+                .experimental_supported_tools
+                .push("clock".to_string());
+        })
+        .with_config(move |config| {
+            config.model_reasoning_effort = Some(reasoning_effort);
+            let mut features = config.features.get().clone();
+            features.apply_map(&BTreeMap::from([(
+                "sleep_tool".to_string(),
+                sleep_tool_enabled,
+            )]));
+            config
+                .features
+                .set(features)
+                .expect("test features should be allowed");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    test.submit_text_turn("what time is it?").await?;
+
+    let request = responses.single_request();
+    assert_eq!(
+        ["curr_time", "sleep"].map(|name| request.tool_by_name("clock", name).is_some()),
+        [true, sleep_tool_enabled]
+    );
+    assert_eq!(
+        current_time_reminders(&request).is_empty(),
+        !reminders_enabled
+    );
+    Ok(())
+}
+
+#[test_case("[features]\nsleep_tool = true", Some(true), [true, true]; "boolean_enabled")]
+#[test_case("[features]\nsleep_tool = false", Some(true), [true, false]; "boolean_disabled")]
+#[test_case("[features.sleep_tool]\nmode = 'always_on'", None, [false, true]; "always_on_without_model_clock")]
+#[test_case("[features.sleep_tool]\nenabled = false\nmode = 'always_on'", Some(true), [true, false]; "disabled_overrides_always_on")]
+#[test_case("[features.sleep_tool]\nmode = 'model_driven'", None, [false, false]; "model_driven_without_model_clock")]
+#[test_case("[features.sleep_tool]\nmode = 'model_driven'", Some(false), [true, false]; "model_driven_preserves_legacy_disable")]
+#[test_case("[features.sleep_tool]\nmode = 'always_on'", Some(false), [true, true]; "always_on_overrides_legacy_disable")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sleep_tool_configuration_controls_registration(
+    sleep_config: &str,
+    legacy_sleep_tool: Option<bool>,
+    expected_tools: [bool; 2],
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let mut config_toml = sleep_config.to_string();
+    if let Some(sleep_tool) = legacy_sleep_tool {
+        config_toml.push_str(&format!(
+            "\n[features.current_time_reminder]\nenabled = true\nsleep_tool = {sleep_tool}\n"
+        ));
+    }
+    let test = test_codex()
+        .with_model_info_override("gpt-5.5", |model_info| {
+            model_info
+                .experimental_supported_tools
+                .retain(|tool| tool != "clock");
+        })
+        .with_pre_build_hook(move |home| {
+            std::fs::write(home.join("config.toml"), config_toml)
+                .expect("sleep tool configuration should be written");
+        })
+        .with_config(|config| {
+            config.model_reasoning_effort = Some(ReasoningEffort::High);
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    test.submit_text_turn("check the available clock tools")
+        .await?;
+
+    let request = responses.single_request();
+    assert_eq!(
+        ["curr_time", "sleep"].map(|name| request.tool_by_name("clock", name).is_some()),
+        expected_tools
+    );
+    assert_eq!(
+        current_time_reminders(&request).is_empty(),
+        legacy_sleep_tool.is_none()
+    );
     Ok(())
 }
 

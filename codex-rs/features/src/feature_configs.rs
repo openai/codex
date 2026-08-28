@@ -396,6 +396,32 @@ impl FeatureConfig for CurrentTimeReminderConfigToml {
     }
 }
 
+/// How the sleep tool is selected when its feature gate is enabled.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SleepToolMode {
+    /// Preserve the existing model and legacy clock configuration defaults.
+    #[default]
+    ModelDriven,
+    /// Register sleep regardless of the model or legacy clock configuration.
+    AlwaysOn,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SleepToolConfigToml {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<SleepToolMode>,
+}
+
+impl FeatureConfig for SleepToolConfigToml {
+    fn enabled(&self) -> Option<bool> {
+        self.enabled
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RemovedAppsMcpPathOverrideConfigToml {
