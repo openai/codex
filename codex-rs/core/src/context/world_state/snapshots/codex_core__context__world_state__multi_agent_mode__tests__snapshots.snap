@@ -15,7 +15,9 @@ Absent -> {"mode":"explicitRequestOnly"} (role - developer)
 None
 
 {"mode":"explicitRequestOnly"} -> {"mode":"proactive"} (role - developer)
-<multi_agent_mode>Proactive multi-agent delegation is active. Any earlier instruction requiring an explicit user request before spawning sub-agents no longer applies. Use sub-agents when parallel work would materially improve speed or quality. This mode remains active until a later multi-agent mode developer message changes it.</multi_agent_mode>
+<multi_agent_mode>Proactive multi-agent delegation is active. Any earlier developer instruction requiring an explicit user request before spawning sub-agents no longer applies. This mode remains active until a later multi-agent mode developer message changes it. User requests override this hint.
+
+If any point you can parallelize work by delegating tasks to another agent (no matter if you are root or subagent), you should do so using collaboration tools if it could save time or improve quality.</multi_agent_mode>
 
 {"mode":"proactive"} -> {} (role - developer)
 <multi_agent_mode>Any earlier instruction enabling proactive multi-agent delegation no longer applies. Do not spawn sub-agents unless the user or applicable AGENTS.md/skill instructions explicitly ask for sub-agents, delegation, or parallel agent work.</multi_agent_mode>
