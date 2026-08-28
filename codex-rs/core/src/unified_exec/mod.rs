@@ -2,6 +2,7 @@
 //!
 //! Responsibilities
 //! - Manages interactive processes (create, reuse, buffer output with caps).
+//! - Supports completion-only calls that terminate on timeout or cancellation.
 //! - Uses the shared ToolOrchestrator to handle approval, sandbox selection, and
 //!   retry semantics in a single, descriptive flow.
 //! - Spawns the PTY from a sandbox-transformed `ExecRequest`; on sandbox denial,
@@ -49,6 +50,7 @@ use codex_core_plugins::PluginMetricsSidecar;
 mod async_watcher;
 mod errors;
 mod head_tail_buffer;
+mod oneshot;
 mod process;
 mod process_manager;
 mod process_state;

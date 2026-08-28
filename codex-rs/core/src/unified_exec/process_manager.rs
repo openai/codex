@@ -12,6 +12,8 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use super::oneshot::Completion;
+
 use crate::codex_thread::BackgroundTerminalInfo;
 use crate::exec_env::CODEX_PERMISSION_PROFILE_ENV_VAR;
 use crate::exec_env::CODEX_THREAD_ID_ENV_VAR;
@@ -474,6 +476,16 @@ impl UnifiedExecProcessManager {
         request: ExecCommandRequest,
         context: &UnifiedExecContext,
     ) -> Result<ExecCommandToolOutput, UnifiedExecError> {
+        self.exec_command_inner(request, context, /*completion*/ None)
+            .await
+    }
+
+    pub(super) async fn exec_command_inner(
+        &self,
+        request: ExecCommandRequest,
+        context: &UnifiedExecContext,
+        mut completion: Option<&mut Completion<'_>>,
+    ) -> Result<ExecCommandToolOutput, UnifiedExecError> {
         let cwd = request.cwd.clone();
         let process = self
             .open_session_with_sandbox(&request, cwd.clone(), context)
@@ -492,6 +504,9 @@ impl UnifiedExecProcessManager {
             escalated,
         } = attempt;
         let process = Arc::new(process);
+        if let Some(completion) = completion.as_ref() {
+            let _ = completion.process.set(Arc::clone(&process));
+        }
         let network_denial_monitor = deferred_network_approval.as_ref().map(|deferred| {
             terminate_process_on_network_denial(
                 Arc::clone(&process),
@@ -576,13 +591,28 @@ impl UnifiedExecProcessManager {
         // For the initial exec_command call, we both stream output to events
         // (via start_streaming_output above) and collect a snapshot here for
         // the tool response body.
-        let deadline = start + Duration::from_millis(yield_time_ms);
+        let wait = completion.as_ref().map_or_else(
+            || Duration::from_millis(yield_time_ms),
+            |completion| completion.timeout,
+        );
+        let deadline = start
+            .checked_add(wait)
+            .ok_or_else(|| UnifiedExecError::process_failed("timeout_ms is too large".into()))?;
         let collected_output = Self::collect_output_until_deadline(
             process.output_handles(),
             Some(context.session.subscribe_elicitation_pause_state()),
             deadline,
         )
         .await;
+        if let Some(completion) = completion.as_mut()
+            && !process.has_exited()
+        {
+            completion.timed_out = true;
+            process.mark_timed_out();
+            if let Err(err) = process.terminate_confirmed().await {
+                process.fail_and_terminate(err.to_string());
+            }
+        }
         let wall_time = Instant::now().saturating_duration_since(start);
 
         let original_token_count = usize::try_from(approx_tokens_from_byte_count(
@@ -659,15 +689,20 @@ impl UnifiedExecProcessManager {
                     {
                         return Err(fail_process_with_message(entry.process.as_ref(), message));
                     }
-                    process
-                        .check_for_sandbox_denial_with_text(&text)
-                        .await
-                        .map_err(|err| {
-                            err.with_output_collection_metadata(
-                                original_token_count,
-                                output_omitted_bytes,
-                            )
-                        })?;
+                    if !completion
+                        .as_ref()
+                        .is_some_and(|completion| completion.timed_out)
+                    {
+                        process
+                            .check_for_sandbox_denial_with_text(&text)
+                            .await
+                            .map_err(|err| {
+                                err.with_output_collection_metadata(
+                                    original_token_count,
+                                    output_omitted_bytes,
+                                )
+                            })?;
+                    }
                     let metrics_sidecar = entry
                         .plugin_metrics_sidecar
                         .as_ref()
@@ -727,6 +762,7 @@ impl UnifiedExecProcessManager {
                 text.clone(),
                 exit,
                 wall_time,
+                process.timed_out(),
             )
             .await;
 

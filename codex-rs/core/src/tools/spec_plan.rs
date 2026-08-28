@@ -1061,7 +1061,6 @@ fn add_shell_tools(context: &CoreToolPlanContext<'_>, registry: &mut ToolRegistr
     let environment_mode = tool_environment_mode(context.environments);
     if !environment_mode.has_environment()
         || !features.enabled(Feature::ShellTool)
-        || !features.enabled(Feature::UnifiedExec)
         || matches!(context.model_info.shell_type, ConfigShellToolType::Disabled)
     {
         return;
@@ -1070,7 +1069,7 @@ fn add_shell_tools(context: &CoreToolPlanContext<'_>, registry: &mut ToolRegistr
     let allow_login_shell = any_environment_allows_login_shell(context.environments);
     let exec_permission_approvals_enabled = features.enabled(Feature::ExecPermissionApprovals);
     let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
-    registry.add(ExecCommandHandler::new(ExecCommandHandlerOptions {
+    let options = ExecCommandHandlerOptions {
         allow_login_shell,
         exec_permission_approvals_enabled,
         include_environment_id,
@@ -1078,8 +1077,16 @@ fn add_shell_tools(context: &CoreToolPlanContext<'_>, registry: &mut ToolRegistr
             turn_context,
             context.environments,
         ),
-    }));
-    registry.add(WriteStdinHandler);
+    };
+    if features.enabled(Feature::UnifiedExec) {
+        registry.add(ExecCommandHandler::new(options));
+        registry.add(WriteStdinHandler);
+    } else {
+        // Managed requirements are the only configuration path that can keep
+        // unified exec disabled. Preserve command execution without exposing a
+        // resumable process or write_stdin authority prohibited by policy.
+        registry.add(ExecCommandHandler::one_shot(options));
+    }
 }
 
 fn unified_exec_should_include_shell_parameter(

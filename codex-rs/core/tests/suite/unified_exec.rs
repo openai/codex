@@ -1,3 +1,4 @@
+use codex_config::test_support::CloudConfigBundleFixture;
 use codex_core::EnvironmentConfig;
 use codex_core::TurnInputRequest;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
@@ -3224,6 +3225,132 @@ async fn unified_exec_timeout_and_followup_poll() -> Result<()> {
         output_text.contains("ready"),
         "expected ready output, got {output_text:?}"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn managed_unified_exec_disable_runs_commands_without_retained_authority() -> Result<()> {
+    skip_if_target_windows!(Ok(()), "uses a POSIX-only command fixture");
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_cloud_config_bundle(
+        CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            r#"
+[features]
+unified_exec = false
+shell_tool = true
+"#,
+        ),
+    );
+    let test = builder.build_with_auto_env(&server).await?;
+    let late_marker = test.config.cwd.join("one-shot-late-marker");
+    let call_id = "managed-one-shot";
+    let args = json!({
+        "cmd": "sleep 1; printf late > one-shot-late-marker",
+        "timeout_ms": 10,
+    });
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    submit_unified_exec_turn(&test, "run one-shot command", PermissionProfile::Disabled).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let outputs = collect_tool_outputs(
+        &request_log
+            .requests()
+            .iter()
+            .map(core_test_support::responses::ResponsesRequest::body_json)
+            .collect::<Vec<_>>(),
+    )?;
+    let output = outputs.get(call_id).expect("missing one-shot output");
+    assert_eq!(output.process_id, None);
+    assert_eq!(output.exit_code, Some(124));
+
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
+    assert!(
+        fs::metadata(late_marker.as_path()).is_err(),
+        "timed-out one-shot command must not survive to write the marker"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn managed_one_shot_command_is_terminated_when_the_turn_is_interrupted() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_target_windows!(Ok(()), "uses a POSIX command and process checks");
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_cloud_config_bundle(
+        CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            r#"
+[features]
+unified_exec = false
+shell_tool = true
+"#,
+        ),
+    );
+    let test = builder.build_with_auto_env(&server).await?;
+    let temp_dir = tempfile::tempdir()?;
+    let pid_path = temp_dir.path().join("managed_one_shot_pid");
+    let command = format!(
+        "printf '%s' $$ > '{}' && exec sleep 3000",
+        pid_path.to_string_lossy()
+    );
+    let call_id = "managed-one-shot-interrupt";
+    let args = json!({
+        "cmd": command,
+        "timeout_ms": 30_000,
+    });
+    mount_sse_sequence(
+        &server,
+        vec![sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ])],
+    )
+    .await;
+
+    submit_unified_exec_turn(
+        &test,
+        "interrupt one-shot command",
+        PermissionProfile::Disabled,
+    )
+    .await?;
+    wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::ExecCommandBegin(event) if event.call_id == call_id => Some(()),
+        _ => None,
+    })
+    .await;
+    let pid = wait_for_pid_file(&pid_path).await?;
+
+    test.codex.submit(Op::Interrupt).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnAborted(_))
+    })
+    .await;
+    wait_for_process_exit(&pid).await?;
 
     Ok(())
 }
