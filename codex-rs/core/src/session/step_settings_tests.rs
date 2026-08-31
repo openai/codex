@@ -411,6 +411,7 @@ async fn model_resolution_preserves_startup_overrides_and_instruction_provenance
     let auto_review = AutoReviewMessages {
         policy: Some("catalog review policy".to_string()),
         policy_template: Some("catalog review template".to_string()),
+        node_repl_policy: None,
         rejection_instructions: None,
         timeout_instructions: None,
     };

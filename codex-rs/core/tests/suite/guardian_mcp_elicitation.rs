@@ -243,6 +243,7 @@ async fn server_initiated_mcp_elicitation_can_require_synchronous_auto_review(
                 .auto_review = Some(AutoReviewMessages {
                 policy: None,
                 policy_template: None,
+                node_repl_policy: None,
                 rejection_instructions: Some(REJECTION_INSTRUCTIONS.to_string()),
                 timeout_instructions: None,
             });

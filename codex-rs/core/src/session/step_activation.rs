@@ -8,6 +8,7 @@ use super::step_settings::StepSettingsUpdate;
 use super::turn_context::TurnContext;
 use crate::config::Config;
 use crate::config::ConstraintResult;
+use crate::context::GuardianNodeReplPolicy;
 use crate::exec_policy::AllowPrefixRules;
 use crate::guardian::BUNDLED_GUARDIAN_POLICY_TEMPLATE;
 use codex_features::Feature;
@@ -173,6 +174,17 @@ fn check_legacy_model_safety(
     // catalog refresh. V1 uses the admitted config; V2 can use the live config.
     // An unchanged explicit reviewer override prevents both fallback paths.
     if destination.auto_review_model_override.is_none() {
+        let destination_node_repl_policy =
+            GuardianNodeReplPolicy::from_model_messages(destination.model_messages.as_ref());
+        for model in retained_models {
+            let policy = GuardianNodeReplPolicy::from_model_messages(model.model_messages.as_ref());
+            if policy != destination_node_repl_policy {
+                return Err(
+                    "the destination changes the Guardian parent-fallback node REPL policy"
+                        .to_string(),
+                );
+            }
+        }
         for config in [admitted_config, live_config] {
             let destination_policy =
                 config.resolve_guardian_policy(destination.model_messages.as_ref());

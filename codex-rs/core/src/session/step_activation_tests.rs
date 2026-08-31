@@ -861,6 +861,7 @@ fn parent_review_messages(model: &mut ModelInfo) -> &mut AutoReviewMessages {
         .get_or_insert(AutoReviewMessages {
             policy: None,
             policy_template: None,
+            node_repl_policy: None,
             rejection_instructions: None,
             timeout_instructions: None,
         })
@@ -996,6 +997,11 @@ async fn parent_fallback_preserves_explicit_empty_and_bundled_defaults() {
     );
     parent_review_messages(&mut destination).policy = None;
     assert_eq!(check(&destination), Ok(()));
+    parent_review_messages(&mut destination).node_repl_policy = Some(String::new());
+    assert_eq!(
+        check(&destination),
+        Err("the destination changes the Guardian parent-fallback node REPL policy".to_string())
+    );
 }
 
 #[tokio::test]
@@ -1008,6 +1014,7 @@ async fn unchanged_explicit_reviewer_does_not_use_parent_policy() {
     parent_review_messages(&mut admitted).policy = Some("catalog policy A".to_string());
     parent_review_messages(&mut destination).policy = Some("catalog policy B".to_string());
     parent_review_messages(&mut destination).policy_template = Some(String::new());
+    parent_review_messages(&mut destination).node_repl_policy = Some(String::new());
     assert_eq!(
         check_legacy_model_safety(
             &admitted,

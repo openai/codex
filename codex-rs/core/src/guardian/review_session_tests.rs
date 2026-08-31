@@ -100,6 +100,7 @@ async fn test_review_params() -> GuardianReviewSessionParams {
         parent_session: Arc::new(session),
         parent_context: GuardianReviewContext::from(Arc::new(turn)),
         spawn_config,
+        node_repl_policy: GuardianNodeReplPolicy::from_model_messages(/*messages*/ None),
         request: GuardianApprovalRequest::ExecCommand {
             id: "shell-1".to_string(),
             command: vec!["git".to_string(), "status".to_string()],
@@ -212,8 +213,23 @@ async fn guardian_review_session_config_change_invalidates_cached_session() {
         cached_reuse_key
             .clone()
             .with_node_repl_policy_eligibility(/*required*/ false),
-        cached_reuse_key.with_node_repl_policy_eligibility(/*required*/ true),
+        cached_reuse_key
+            .clone()
+            .with_node_repl_policy_eligibility(/*required*/ true),
         "switching parent-model Node REPL eligibility must invalidate reviewer history"
+    );
+    let messages = serde_json::from_value(serde_json::json!({
+        "auto_review": { "node_repl_policy": "Catalog REPL policy." }
+    }))
+    .expect("catalog model messages");
+    assert_ne!(
+        cached_reuse_key.clone().with_node_repl_policy(
+            &GuardianNodeReplPolicy::from_model_messages(/*messages*/ None),
+        ),
+        cached_reuse_key.with_node_repl_policy(&GuardianNodeReplPolicy::from_model_messages(Some(
+            &messages
+        )),),
+        "changing the effective Node REPL policy must invalidate reviewer history"
     );
 
     let mut compaction_enabled_config = cached_spawn_config;
@@ -385,6 +401,7 @@ async fn guardian_review_session_config_prefers_managed_policy_and_uses_catalog_
         auto_review: Some(AutoReviewMessages {
             policy: Some("Use the catalog Guardian policy.".to_string()),
             policy_template: Some(catalog_template.to_string()),
+            node_repl_policy: None,
             rejection_instructions: None,
             timeout_instructions: None,
         }),
@@ -426,6 +443,7 @@ async fn guardian_review_session_config_preserves_explicit_empty_catalog_policy(
         auto_review: Some(AutoReviewMessages {
             policy: Some(String::new()),
             policy_template: None,
+            node_repl_policy: None,
             rejection_instructions: None,
             timeout_instructions: None,
         }),
@@ -475,6 +493,7 @@ async fn guardian_review_session_config_preserves_explicit_empty_catalog_templat
         auto_review: Some(AutoReviewMessages {
             policy: Some(catalog_policy.to_string()),
             policy_template: Some(String::new()),
+            node_repl_policy: None,
             rejection_instructions: None,
             timeout_instructions: None,
         }),
@@ -721,7 +740,8 @@ async fn run_review_removes_trunk_when_event_stream_is_broken() {
             .await
             .history_version(),
     )
-    .with_environments(params.parent_context.environments());
+    .with_environments(params.parent_context.environments())
+    .with_node_repl_policy(&params.node_repl_policy);
     let manager = Arc::new(GuardianReviewSessionManager {
         state: Arc::new(Mutex::new(GuardianReviewSessionState {
             trunk: Some(Arc::new(review_session)),

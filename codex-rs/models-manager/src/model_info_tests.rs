@@ -42,6 +42,7 @@ fn base_instruction_override_is_literal_and_preserves_catalog_messages() {
     let auto_review = AutoReviewMessages {
         policy: Some("review policy".to_string()),
         policy_template: Some("review policy template".to_string()),
+        node_repl_policy: None,
         rejection_instructions: Some("rejection instructions".to_string()),
         timeout_instructions: Some(String::new()),
     };

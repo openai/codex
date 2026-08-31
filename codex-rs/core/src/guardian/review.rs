@@ -33,6 +33,7 @@ use tokio::time::Instant;
 use tokio::time::sleep_until;
 use tokio_util::sync::CancellationToken;
 
+use crate::context::GuardianNodeReplPolicy;
 use crate::context::GuardianReviewEvidence;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -822,6 +823,7 @@ pub(crate) fn spawn_approval_request_review(
 
 pub(super) struct GuardianReviewSessionConfig {
     pub(super) spawn_config: crate::config::Config,
+    pub(super) node_repl_policy: GuardianNodeReplPolicy,
     model: String,
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
     default_review_model_id: String,
@@ -923,6 +925,9 @@ pub(super) async fn guardian_review_session_config(
     }
     Ok(GuardianReviewSessionConfig {
         spawn_config,
+        node_repl_policy: GuardianNodeReplPolicy::from_model_messages(
+            guardian_model_info.model_messages.as_ref(),
+        ),
         model: guardian_model,
         reasoning_effort: guardian_reasoning_effort,
         default_review_model_id: default_review_model_id.to_string(),
@@ -973,6 +978,7 @@ async fn run_guardian_review_session_before_deadline(
                 parent_session: Arc::clone(&session),
                 parent_context: context.clone(),
                 spawn_config: session_config.spawn_config,
+                node_repl_policy: session_config.node_repl_policy,
                 request,
                 reasons,
                 schema,

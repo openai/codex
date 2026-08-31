@@ -655,15 +655,19 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case("first_node", "node_repl"; "injects_policy_for_first_node_action")]
-#[test_case("shell_then_nodes", "node_repl"; "reuses_shell_reviewer_and_injects_policy_once")]
-#[test_case("ineligible_node", "node_repl"; "omits_policy_for_ineligible_parent_model")]
-#[test_case("first_node", "cua_repl"; "injects_policy_for_first_cua_action")]
-#[test_case("shell_then_nodes", "cua_repl"; "reuses_shell_reviewer_and_injects_cua_policy_once")]
-#[test_case("ineligible_node", "cua_repl"; "omits_cua_policy_for_ineligible_parent_model")]
+#[test_case("first_node", "node_repl", None; "injects_policy_for_first_node_action")]
+#[test_case("shell_then_nodes", "node_repl", None; "reuses_shell_reviewer_and_injects_policy_once")]
+#[test_case("ineligible_node", "node_repl", None; "omits_policy_for_ineligible_parent_model")]
+#[test_case("first_node", "cua_repl", None; "injects_policy_for_first_cua_action")]
+#[test_case("shell_then_nodes", "cua_repl", None; "reuses_shell_reviewer_and_injects_cua_policy_once")]
+#[test_case("ineligible_node", "cua_repl", None; "omits_cua_policy_for_ineligible_parent_model")]
+#[test_case("shell_then_nodes", "node_repl", Some("Catalog REPL policy."); "catalog_node_policy")]
+#[test_case("shell_then_nodes", "cua_repl", Some("Catalog REPL policy."); "catalog_cua_policy")]
+#[test_case("first_node", "node_repl", Some(""); "empty_catalog_policy")]
 async fn guardian_node_repl_policy_follows_production_approval_path(
     scenario: &str,
     repl_server: &'static str,
+    node_repl_policy: Option<&'static str>,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
@@ -676,8 +680,33 @@ async fn guardian_node_repl_policy_follows_production_approval_path(
     let mcp_server_bin = remote_aware_stdio_server_bin()?;
     let node_repl_auto_review_required = scenario != "ineligible_node";
     let mut builder = test_codex()
+        .with_model_info_override("gpt-5.6-luna", move |model| {
+            model
+                .model_messages
+                .as_mut()
+                .expect("reviewer model messages")
+                .auto_review = Some(AutoReviewMessages {
+                policy: None,
+                policy_template: None,
+                node_repl_policy: node_repl_policy.map(str::to_string),
+                rejection_instructions: None,
+                timeout_instructions: None,
+            });
+        })
         .with_model_info_override("gpt-5.4", move |model| {
             model.node_repl_auto_review_required = node_repl_auto_review_required;
+            model.auto_review_model_override = Some("gpt-5.6-luna".to_string());
+            model
+                .model_messages
+                .as_mut()
+                .expect("acting model messages")
+                .auto_review = Some(AutoReviewMessages {
+                policy: None,
+                policy_template: None,
+                node_repl_policy: Some("Acting-model REPL policy.".to_string()),
+                rejection_instructions: None,
+                timeout_instructions: None,
+            });
         })
         .with_config(move |config| {
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
@@ -754,7 +783,8 @@ async fn guardian_node_repl_policy_follows_production_approval_path(
         .collect::<Vec<_>>();
     assert_eq!(guardian_requests.len(), actions.len());
 
-    let policy = include_str!("../../assets/guardian/node_repl_policy.md");
+    let bundled_policy = include_str!("../../assets/guardian/node_repl_policy.md");
+    let policy = node_repl_policy.unwrap_or(bundled_policy);
     let first_guardian_thread = guardian_requests[0].body_json()["client_metadata"]["thread_id"]
         .as_str()
         .expect("Guardian reviewer thread id")
@@ -766,15 +796,19 @@ async fn guardian_node_repl_policy_follows_production_approval_path(
             "shell and Node approvals must reuse the same Guardian reviewer"
         );
         let expected = usize::from(
-            node_repl_auto_review_required && !(scenario == "shell_then_nodes" && index == 0),
+            node_repl_auto_review_required
+                && !policy.is_empty()
+                && !(scenario == "shell_then_nodes" && index == 0),
         );
         assert_eq!(
             request
                 .message_input_texts("developer")
-                .iter()
-                .filter(|text| text.as_str() == policy)
-                .count(),
-            expected,
+                .into_iter()
+                .filter(|text| {
+                    [bundled_policy, "Acting-model REPL policy.", policy].contains(&text.as_str())
+                })
+                .collect::<Vec<_>>(),
+            vec![policy.to_string(); expected],
             "Node REPL policy must appear exactly once on eligible Node reviews"
         );
         if expected == 1 && (index == 0 || scenario == "shell_then_nodes" && index == 1) {
@@ -1243,6 +1277,7 @@ async fn guardian_denial_rejects_tool_call_with_rationale(
                 .auto_review = Some(AutoReviewMessages {
                 policy: None,
                 policy_template: None,
+                node_repl_policy: None,
                 rejection_instructions: Some("Reviewer-only rejection instructions.".to_string()),
                 timeout_instructions: None,
             });
@@ -1256,6 +1291,7 @@ async fn guardian_denial_rejects_tool_call_with_rationale(
                 .auto_review = Some(AutoReviewMessages {
                 policy: None,
                 policy_template: None,
+                node_repl_policy: None,
                 rejection_instructions: rejection_instructions.map(str::to_string),
                 timeout_instructions: None,
             });
@@ -1404,6 +1440,7 @@ async fn guardian_timeout_rejects_tool_call_with_acting_model_instructions(
                 .auto_review = Some(AutoReviewMessages {
                 policy: None,
                 policy_template: None,
+                node_repl_policy: None,
                 rejection_instructions: None,
                 timeout_instructions: timeout_instructions.map(str::to_string),
             });
