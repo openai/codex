@@ -1596,7 +1596,7 @@ async fn vim_mode_default_disabled_starts_composer_in_insert_mode() {
 }
 
 #[tokio::test]
-async fn vim_mode_default_enabled_starts_composer_in_normal_mode() {
+async fn vim_mode_default_enabled_starts_composer_in_insert_mode() {
     let chat = make_startup_chat_with_cli_overrides(vec![(
         "tui.vim_mode_default".to_string(),
         TomlValue::Boolean(true),
@@ -1606,8 +1606,13 @@ async fn vim_mode_default_enabled_starts_composer_in_normal_mode() {
     assert!(chat.bottom_pane.composer_is_vim_enabled());
     assert!(chat.composer_is_empty());
     let mut chat = chat;
-    chat.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
-    assert_eq!(chat.bottom_pane.composer_text(), "");
+    let empty_startup_draft = chat.bottom_pane.composer_draft_snapshot();
+    chat.restore_startup_draft(empty_startup_draft);
+    chat.handle_key_event(KeyCode::Char('x').into());
+    chat.handle_key_event(KeyCode::Right.into());
+    chat.handle_key_event(KeyCode::Esc.into());
+    chat.handle_key_event(KeyCode::Char('.').into());
+    assert_eq!(chat.bottom_pane.composer_text(), "xx");
 }
 
 async fn make_startup_chat_with_cli_overrides(

@@ -133,6 +133,10 @@ impl TextArea {
                     self.vim_pending = VimPending::None;
                     return true;
                 }
+                (KeyCode::Backspace, KeyModifiers::NONE) if input.editor.is_empty() => {
+                    self.vim_pending = VimPending::None;
+                    return true;
+                }
                 (KeyCode::Enter, KeyModifiers::NONE) => {}
                 _ => {
                     input.editor.input_with_keymap(event, &self.editor_keymap);

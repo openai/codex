@@ -265,9 +265,11 @@ impl ChatWidget {
         if let Some(keymap) = runtime_keymap {
             widget.bottom_pane.set_keymap_bindings(&keymap);
         }
-        widget
-            .bottom_pane
-            .set_vim_enabled(widget.config.tui_vim_mode_default);
+        if widget.config.tui_vim_mode_default {
+            widget.bottom_pane.enable_vim_in_insert_mode();
+        } else {
+            widget.bottom_pane.set_vim_enabled(/*enabled*/ false);
+        }
         widget
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());

@@ -69,7 +69,7 @@ impl ChatWidget {
             startup_offset
                 .saturating_add(draft.cursor)
                 .saturating_add(cursor_adjustment)
-        } else if existing_has_content {
+        } else if existing_has_content || !startup_has_content {
             existing_cursor
         } else {
             self.restore_composer_state(Self::composer_state_from_user_message(

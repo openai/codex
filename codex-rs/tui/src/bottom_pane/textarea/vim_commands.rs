@@ -85,10 +85,10 @@ pub(super) enum VimAction {
 
 #[derive(Debug, Default)]
 pub(super) struct VimCommandState {
-    pending_change: Vec<VimEdit>,
+    pub(super) pending_change: Vec<VimEdit>,
     last_change: Vec<VimEdit>,
     changed: bool,
-    replaying: bool,
+    pub(super) replaying: bool,
 }
 
 impl TextArea {
