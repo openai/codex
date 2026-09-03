@@ -1,0 +1,17 @@
+---
+source: tui/src/chatwidget/tests/bedrock_catalog_tests.rs
+expression: "render_bottom_popup(&chat, 100)"
+---
+  Select Model and Effort
+  Access legacy models by running codex -m <model_name> or in your config.toml
+
+› 1. global.openai.gpt-5.6-sol (current)  Latest frontier agentic coding model.
+  2. global.openai.gpt-6-astra            Our most capable model for complex, demanding work.
+  3. global.openai.gpt-5.6-terra          Balanced agentic coding model for everyday work.
+  4. global.openai.gpt-5.6-luna           Fast and affordable agentic coding model.
+  5. us.openai.gpt-5.6-sol                Latest frontier agentic coding model.
+  6. us.openai.gpt-6-astra                Our most capable model for complex, demanding work.
+  7. us.openai.gpt-5.6-terra              Balanced agentic coding model for everyday work.
+  8. us.openai.gpt-5.6-luna               Fast and affordable agentic coding model.
+
+  Press enter to confirm or esc to go back

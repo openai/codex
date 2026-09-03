@@ -1,0 +1,13 @@
+---
+source: tui/src/chatwidget/tests/bedrock_catalog_tests.rs
+expression: "render_bottom_popup(&chat, 100)"
+---
+  Select Reasoning Level for openai.gpt-6-astra
+
+› 1. Low (default)    Fast responses with lighter reasoning
+  2. Medium           Balances speed and reasoning depth for everyday tasks
+  3. High             Greater reasoning depth for complex problems
+  4. Extra high       Extra high reasoning depth for complex problems
+  5. More reasoning…  Max consumes usage limits faster
+
+  Press enter to confirm or esc to go back
