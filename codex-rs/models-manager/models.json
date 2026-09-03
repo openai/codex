@@ -160,7 +160,7 @@
         {
           "id": "priority",
           "name": "Fast",
-          "description": "1.5x speed, increased usage"
+          "description": "2x speed, increased usage"
         }
       ],
       "additional_speed_tiers": [
