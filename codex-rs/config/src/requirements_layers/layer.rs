@@ -102,6 +102,13 @@ impl ComposableRequirementsLayer {
             (regular_toml, requirements)
         };
 
+        // Merge aliases under one key after validating each individual layer.
+        if let Some(table) = regular_toml.as_table_mut()
+            && let Some(features) = table.remove("feature_requirements")
+        {
+            table.insert("features".to_string(), features);
+        }
+
         // Hostname lookup is configuration-driven and may block on DNS, so only
         // resolve it when this layer contains hostname-based sandbox selectors.
         let hostname = requirements
