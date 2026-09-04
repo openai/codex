@@ -3,6 +3,7 @@ mod capability_discovery;
 mod capability_discovery_cache;
 mod client;
 mod client_api;
+mod client_telemetry;
 mod client_transport;
 mod connection;
 mod environment;

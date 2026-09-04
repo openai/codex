@@ -1,3 +1,4 @@
+use codex_otel::EXEC_SERVER_CLIENT_REQUEST_COUNT_METRIC;
 use codex_otel::MetricsClient;
 use codex_otel::MetricsConfig;
 use codex_otel::OtelExporter;
@@ -187,6 +188,12 @@ fn otlp_http_exporter_sends_metrics_to_collector() -> Result<()> {
 
     metrics.counter("codex.turns", /*inc*/ 1, &[("source", "test")])?;
     metrics.counter("codex.api_request", /*inc*/ 1, &[("status", "200")])?;
+    metrics.counter_with_description(
+        EXEC_SERVER_CLIENT_REQUEST_COUNT_METRIC,
+        "Client-side exec-server RPC attempts.",
+        /*inc*/ 1,
+        &[("method", "fs/readFile")],
+    )?;
     metrics.record_duration(
         "codex.api_request.duration_ms",
         Duration::from_millis(100),
@@ -258,6 +265,10 @@ fn otlp_http_exporter_sends_metrics_to_collector() -> Result<()> {
         body.contains("\"codex.api_request\""),
         "expected API-request counter not found; body prefix: {}",
         &body.chars().take(2000).collect::<String>()
+    );
+    assert!(
+        body.contains(EXEC_SERVER_CLIENT_REQUEST_COUNT_METRIC),
+        "custom OTLP must retain the exec-server client counter excluded from built-in Statsig"
     );
     assert!(
         body.contains("\"codex.api_request.duration_ms\""),
