@@ -757,6 +757,10 @@ pub struct Tui {
     #[serde(default)]
     pub vim_mode_default: bool,
 
+    /// Escape returns from async questions to the composer, preserving the answer draft.
+    #[serde(default = "default_true")]
+    pub question_esc_back: bool,
+
     /// Start the TUI in raw scrollback mode for copy-friendly transcript output.
     /// Defaults to `false`.
     #[serde(default)]

@@ -1,14 +1,9 @@
 //! The chat composer is the bottom-pane text input state machine.
 //!
-//! It is responsible for:
-//!
-//! - Editing the input buffer (a [`TextArea`]), including placeholder "elements" for attachments.
-//! - Routing keys to the active popup (slash commands, file search, skill/apps/task mentions).
-//! - Promoting typed slash commands into atomic elements when the command name is completed.
-//! - Handling submit vs newline on Enter.
-//! - Showing a single yellow prompt arrow while the active model is Luna Reserve.
-//! - Turning raw key streams into explicit paste operations on platforms where terminals
-//!   don't provide reliable bracketed paste (notably Windows).
+//! It edits the [`TextArea`] buffer and attachment elements, routes popup keys, promotes
+//! completed slash commands to atomic elements, and handles Enter submission/newlines.
+//! It also shows Luna Reserve's yellow prompt arrow and detects unbracketed paste bursts
+//! from raw key streams, particularly on Windows.
 //!
 //! The plain-text preset keeps command prefixes literal, including `!`, so Enter and Tab
 //! submit ordinary text without enabling shell mode.
@@ -178,6 +173,8 @@
 //! Shift, or Windows AltGr) into
 //! [`PasteBurst`](super::paste_burst::PasteBurst), which buffers bursts and later flushes them
 //! through [`ChatComposer::handle_paste`].
+//! Parent views must keep flushing editors that lose focus while input is buffered; a hidden
+//! editor's pending burst can otherwise keep the shared draw loop waiting indefinitely.
 //!
 //! The burst detector intentionally treats ASCII and non-ASCII differently:
 //!
@@ -313,6 +310,7 @@ mod completion_target;
 mod draft_state;
 mod footer_state;
 mod history_search;
+mod inline_input;
 mod popup_state;
 mod reconnect;
 mod slash_input;
@@ -575,9 +573,9 @@ struct MentionCompletionTarget {
     prebuilt_mentions: Option<Vec<MentionItem>>,
 }
 
-#[derive(Clone, Debug)]
-struct ComposerDraft {
-    text: String,
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(super) struct ComposerDraft {
+    pub(super) text: String,
     text_elements: Vec<TextElement>,
     local_image_paths: Vec<PathBuf>,
     remote_image_urls: Vec<String>,
@@ -1464,7 +1462,7 @@ impl ChatComposer {
             .should_handle_vim_insert_escape(key_event)
     }
 
-    fn vim_mode_indicator_span(&self) -> Option<Span<'static>> {
+    pub(crate) fn vim_mode_indicator_span(&self) -> Option<Span<'static>> {
         self.draft.textarea.vim_mode_indicator_span()
     }
 
@@ -1621,7 +1619,7 @@ impl ChatComposer {
         self.sync_popups();
     }
 
-    fn current_cursor(&self) -> usize {
+    pub(crate) fn current_cursor(&self) -> usize {
         self.draft.textarea.cursor() + if self.draft.is_bash_mode { 1 } else { 0 }
     }
 
@@ -1674,7 +1672,7 @@ impl ChatComposer {
         Some(element.map_range(|_| (start..end).into()))
     }
 
-    fn snapshot_draft(&self) -> ComposerDraft {
+    pub(super) fn snapshot_draft(&self) -> ComposerDraft {
         ComposerDraft {
             text: self.current_text(),
             text_elements: self.current_text_elements(),
@@ -1686,7 +1684,7 @@ impl ChatComposer {
         }
     }
 
-    fn restore_draft(&mut self, draft: ComposerDraft) {
+    pub(super) fn restore_draft(&mut self, draft: ComposerDraft) {
         let ComposerDraft {
             text,
             text_elements,
@@ -3206,8 +3204,7 @@ impl ChatComposer {
                 | InputResult::ServiceTierCommand(_)
                 | InputResult::CommandWithArgs(_, _, _)
         ) {
-            self.vim_history = VimHistory::default();
-            self.draft.textarea.enter_vim_insert_mode();
+            self.reset_vim_mode();
         }
     }
 

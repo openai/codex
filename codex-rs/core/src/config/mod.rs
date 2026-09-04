@@ -754,6 +754,7 @@ pub struct Config {
 
     /// Start the composer in Vim mode (`Normal`) by default.
     pub tui_vim_mode_default: bool,
+    pub tui_question_esc_back: bool,
 
     /// Start the TUI in raw scrollback mode for copy-friendly transcript output.
     pub tui_raw_output_mode: bool,
@@ -4354,6 +4355,7 @@ impl Config {
                 .as_ref()
                 .map(|t| t.model_availability_nux.clone())
                 .unwrap_or_default(),
+            tui_question_esc_back: cfg.tui.as_ref().map(|t| t.question_esc_back).unwrap_or(true),
             tui_vim_mode_default: cfg
                 .tui
                 .as_ref()

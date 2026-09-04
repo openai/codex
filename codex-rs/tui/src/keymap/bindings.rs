@@ -259,6 +259,8 @@ define_runtime_action_bindings! {
         previous_permission_mode,
         next_permission_mode,
         edit_queued_message,
+        prompt_stack_back,
+        skip_question,
     ],
     "composer" => Composer, composer, composer [
         submit,

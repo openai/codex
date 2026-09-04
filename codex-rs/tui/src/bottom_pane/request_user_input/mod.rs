@@ -18,7 +18,7 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
 mod layout;
-mod render;
+pub(super) mod render;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;

@@ -121,8 +121,12 @@ pub(crate) struct ChatKeymap {
     pub(crate) previous_permission_mode: Vec<KeyBinding>,
     /// Switch to the next available permission mode.
     pub(crate) next_permission_mode: Vec<KeyBinding>,
-    /// Edit the most recently queued message.
+    /// Move up through async questions, then edit the most recently queued message.
     pub(crate) edit_queued_message: Vec<KeyBinding>,
+    /// Move back through async questions toward the composer.
+    pub(crate) prompt_stack_back: Vec<KeyBinding>,
+    /// Skip the focused question.
+    pub(crate) skip_question: Vec<KeyBinding>,
 }
 
 /// Composer-level keybindings validated in the second app-scope conflict pass.
@@ -684,6 +688,8 @@ impl RuntimeKeymap {
                 &defaults.chat.edit_queued_message,
                 "tui.keymap.chat.edit_queued_message",
             )?,
+            prompt_stack_back: resolve_local!(keymap, defaults, chat, prompt_stack_back),
+            skip_question: resolve_local!(keymap, defaults, chat, skip_question),
         };
 
         let composer = ComposerKeymap {
@@ -1170,6 +1176,37 @@ impl RuntimeKeymap {
             cancel: resolve_local!(keymap, defaults, vim_text_object, cancel),
         };
 
+        // New question shortcuts yield individually to existing explicit bindings.
+        for (configured, bindings, aliases) in [
+            (
+                keymap.chat.prompt_stack_back.as_ref(),
+                &mut chat.prompt_stack_back,
+                vec![
+                    ("alt-down", key_hint::alt(KeyCode::Down)),
+                    ("shift-right", key_hint::shift(KeyCode::Right)),
+                ],
+            ),
+            (
+                keymap.chat.skip_question.as_ref(),
+                &mut chat.skip_question,
+                vec![("ctrl-]", key_hint::ctrl(KeyCode::Char(']')))],
+            ),
+        ] {
+            if configured.is_none() {
+                bindings.retain(|binding| {
+                    !aliases.iter().any(|(alias, candidate)| {
+                        binding == candidate
+                            && (configured_main_surface_alias_is_used(keymap, alias)
+                                || configured_context_alias_is_used(&keymap.list, alias)
+                                || configured_context_alias_is_used(&keymap.vim_search, alias))
+                    }) && !chords.bindings.iter().any(|chord| {
+                        chord.action.context.overlaps(KeymapContext::Chat)
+                            && binding.normalized_parts() == chord.chord.prefix.normalized_parts()
+                    })
+                });
+            }
+        }
+
         // Reasoning arrow aliases are fallback defaults: existing explicit
         // bindings on the same input path keep the keys, while explicit
         // reasoning bindings remain authoritative.
@@ -1474,6 +1511,8 @@ impl RuntimeKeymap {
                 previous_permission_mode: default_bindings![],
                 next_permission_mode: default_bindings![],
                 edit_queued_message: default_bindings![alt(KeyCode::Up), shift(KeyCode::Left)],
+                prompt_stack_back: default_bindings![alt(KeyCode::Down), shift(KeyCode::Right)],
+                skip_question: default_bindings![ctrl(KeyCode::Char(']'))],
             },
             composer: ComposerKeymap {
                 submit: default_bindings![plain(KeyCode::Enter)],
@@ -1753,6 +1792,8 @@ impl RuntimeKeymap {
                 &self.chat.previous_permission_mode,
             ),
             ("next_permission_mode", &self.chat.next_permission_mode),
+            ("prompt_stack_back", &self.chat.prompt_stack_back),
+            ("skip_question", &self.chat.skip_question),
         ] {
             if bindings.iter().any(|binding| {
                 let (code, modifiers) = binding.parts();
@@ -1826,6 +1867,11 @@ impl RuntimeKeymap {
                 "chat.edit_queued_message",
                 self.chat.edit_queued_message.as_slice(),
             ),
+            (
+                "chat.prompt_stack_back",
+                self.chat.prompt_stack_back.as_slice(),
+            ),
+            ("chat.skip_question", self.chat.skip_question.as_slice()),
             ("composer.submit", self.composer.submit.as_slice()),
             ("composer.queue", self.composer.queue.as_slice()),
             (
@@ -1919,6 +1965,24 @@ impl RuntimeKeymap {
             [],
         )?;
 
+        // Async question shortcuts run before option selection and text editing.
+        validate_no_shadow_with_allowed_overlaps(
+            "async_questions",
+            [
+                (
+                    "chat.prompt_stack_back",
+                    self.chat.prompt_stack_back.as_slice(),
+                ),
+                ("chat.skip_question", self.chat.skip_question.as_slice()),
+            ],
+            [
+                ("list.move_up", self.list.move_up.as_slice()),
+                ("list.move_down", self.list.move_down.as_slice()),
+                ("list.accept", self.list.accept.as_slice()),
+            ],
+            [],
+        )?;
+
         // While the composer is focused, these main-surface handlers always
         // consume matching keys before the event reaches the textarea editor.
         validate_no_shadow_with_allowed_overlaps(
@@ -1949,6 +2013,11 @@ impl RuntimeKeymap {
                     "chat.next_permission_mode",
                     self.chat.next_permission_mode.as_slice(),
                 ),
+                (
+                    "chat.prompt_stack_back",
+                    self.chat.prompt_stack_back.as_slice(),
+                ),
+                ("chat.skip_question", self.chat.skip_question.as_slice()),
                 ("composer.submit", self.composer.submit.as_slice()),
                 ("toggle_vim_mode", self.app.toggle_vim_mode.as_slice()),
                 ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
@@ -2071,7 +2140,7 @@ impl RuntimeKeymap {
         let mut seen: HashMap<(KeyCode, KeyModifiers), &'static str> = HashMap::new();
         for (action, bindings) in approval_overlay_bindings {
             for binding in bindings {
-                let key = binding.parts();
+                let key = binding.normalized_parts();
                 if let Some(previous) = seen.insert(key, action) {
                     // Approval overlays intentionally reserve Esc as a stable
                     // cancellation path even though decline options may also
@@ -2106,7 +2175,7 @@ fn validate_unique<'a>(
     let mut seen: HashMap<(KeyCode, KeyModifiers), &'static str> = HashMap::new();
     for (action, bindings) in pairs {
         for binding in bindings {
-            let key = binding.parts();
+            let key = binding.normalized_parts();
             if let Some(previous) = seen.insert(key, action) {
                 return Err(format!(
                     "Ambiguous `tui.keymap.{context}` bindings: `{previous}` and `{action}` use the same key. \
@@ -2128,18 +2197,18 @@ fn validate_no_shadow_with_allowed_overlaps<const N: usize, const M: usize, cons
     let mut seen: HashMap<(KeyCode, KeyModifiers), &'static str> = HashMap::new();
     for (action, bindings) in primary {
         for binding in bindings {
-            seen.insert(binding.parts(), action);
+            seen.insert(binding.normalized_parts(), action);
         }
     }
     for (action, bindings) in shadowed {
         for binding in bindings {
-            let key = binding.parts();
+            let key = binding.normalized_parts();
             if let Some(previous) = seen.get(&key) {
                 if allowed_overlaps.iter().any(
                     |(allowed_primary, allowed_shadowed, allowed_binding)| {
                         *allowed_primary == *previous
                             && *allowed_shadowed == action
-                            && allowed_binding.parts() == key
+                            && allowed_binding.normalized_parts() == key
                     },
                 ) {
                     continue;
@@ -2319,7 +2388,9 @@ fn configured_context_alias_is_used(context: &impl Serialize, alias: &str) -> bo
 
 fn keymap_value_contains_alias(value: &serde_json::Value, alias: &str) -> bool {
     match value {
-        serde_json::Value::String(value) => value == alias,
+        serde_json::Value::String(value) => parse_keybinding(value)
+            .zip(parse_keybinding(alias))
+            .is_some_and(|(a, b)| a.normalized_parts() == b.normalized_parts()),
         serde_json::Value::Array(values) => values
             .iter()
             .any(|value| keymap_value_contains_alias(value, alias)),
@@ -2366,7 +2437,10 @@ See the Codex keymap documentation for supported actions and examples.",
             )
         })?;
 
-        if !parsed.contains(&binding) {
+        if !parsed
+            .iter()
+            .any(|previous: &KeyBinding| previous.normalized_parts() == binding.normalized_parts())
+        {
             parsed.push(binding);
         }
     }
@@ -3559,6 +3633,28 @@ mod tests {
         keymap.list.move_right = Some(one("f12"));
 
         expect_conflict(&keymap, "chat.interrupt_turn", "list.move_right");
+    }
+
+    #[test]
+    fn interrupt_turn_rejects_question_back_and_skip_bindings() {
+        for (key, action) in [
+            ("alt-down", "chat.prompt_stack_back"),
+            ("ctrl-]", "chat.skip_question"),
+            ("ctrl-5", "chat.skip_question"),
+            ("ctrl-] x", "chat.skip_question"),
+            ("ctrl-5 x", "chat.skip_question"),
+        ] {
+            let mut keymap = TuiKeymap::default();
+            keymap.chat.interrupt_turn = Some(one(key));
+            if key == "alt-down" {
+                keymap.chat.prompt_stack_back = Some(one(key));
+            } else {
+                let runtime = RuntimeKeymap::from_config(&keymap).unwrap();
+                assert!(runtime.chat.skip_question.is_empty());
+                keymap.chat.skip_question = Some(one("ctrl-]"));
+            }
+            expect_conflict(&keymap, "chat.interrupt_turn", action);
+        }
     }
 
     #[test]

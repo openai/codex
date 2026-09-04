@@ -127,6 +127,7 @@ impl HistoryEntry {
 /// State machine that manages shell-style history navigation (Up/Down) inside
 /// the chat composer. This struct is intentionally decoupled from the
 /// rendering widget so the logic remains isolated and easier to test.
+#[derive(Clone)]
 pub(crate) struct ChatComposerHistory {
     /// Thread that owns persistent lookup responses for this metadata snapshot.
     thread_id: Option<ThreadId>,

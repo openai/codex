@@ -7,7 +7,6 @@ version.workspace = true
 [lib]
 name = "codex_context_fragments"
 path = "src/lib.rs"
-test = false
 doctest = false
 
 [lints]
@@ -16,3 +15,6 @@ workspace = true
 [dependencies]
 codex-protocol = { workspace = true }
 codex-utils-string = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

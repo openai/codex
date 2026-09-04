@@ -61,6 +61,8 @@ mod actionable_banner;
 mod app_link_view;
 mod apply_patch_header;
 mod approval_overlay;
+#[expect(dead_code)]
+mod async_questions;
 mod hook_status;
 mod mcp_server_elicitation;
 mod multi_select_picker;
@@ -1792,14 +1794,12 @@ impl BottomPane {
     }
 
     pub(crate) fn flush_paste_burst_if_due(&mut self) -> bool {
-        // Give the active view the first chance to flush paste-burst state so
-        // overlays that reuse the composer behave consistently.
-        if let Some(view) = self.view_stack.last_mut()
-            && view.flush_paste_burst_if_due()
-        {
-            return true;
+        // A covering view and the main composer can both retain buffered typing.
+        let mut flushed = self.composer.flush_paste_burst_if_due();
+        if let Some(view) = self.view_stack.last_mut() {
+            flushed |= view.flush_paste_burst_if_due();
         }
-        self.composer.flush_paste_burst_if_due()
+        flushed
     }
 
     pub(crate) fn is_in_paste_burst(&self) -> bool {
@@ -2131,6 +2131,49 @@ mod tests {
             network_approval_context: None,
             additional_permissions: None,
         })
+    }
+
+    #[test]
+    fn flush_buffered_typing_in_background_and_covering_editors() {
+        let (tx, _rx) = unbounded_channel();
+        let tx = AppEventSender::new(tx);
+        let mut pane = test_pane(tx.clone());
+        for ch in "main draft".chars() {
+            pane.handle_key_event(KeyEvent::from(KeyCode::Char(ch)));
+        }
+        assert!(pane.composer.is_in_paste_burst());
+        let request = ToolRequestUserInputParams {
+            thread_id: "thread".into(),
+            turn_id: "turn".into(),
+            item_id: "call".into(),
+            is_blocking: true,
+            auto_resolution_ms: None,
+            questions: vec![codex_app_server_protocol::ToolRequestUserInputQuestion {
+                id: "question".into(),
+                header: String::new(),
+                question: "Which way?".into(),
+                is_other: false,
+                is_secret: false,
+                options: None,
+            }],
+        };
+        let mut covering = RequestUserInputOverlay::new_with_keymap(
+            request,
+            tx,
+            /*has_input_focus*/ true,
+            /*enhanced_keys_supported*/ false,
+            /*disable_paste_burst*/ false,
+            RuntimeKeymap::defaults(),
+        );
+        for ch in "modal".chars() {
+            covering.handle_key_event(KeyEvent::from(KeyCode::Char(ch)));
+        }
+        assert!(covering.is_in_paste_burst());
+        pane.push_view(Box::new(covering));
+        std::thread::sleep(paste_burst::PasteBurst::recommended_active_flush_delay());
+        assert!(pane.flush_paste_burst_if_due());
+        assert!(!pane.is_in_paste_burst());
+        assert_eq!(pane.composer_text(), "main draft");
     }
 
     #[test]

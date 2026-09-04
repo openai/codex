@@ -11,7 +11,7 @@
 /// knowing about their data model. Passing a stale length after filtering would
 /// leave selection pointing at the wrong row, so callers should clamp or move
 /// through this type immediately after changing their visible row set.
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub(crate) struct ScrollState {
     pub selected_idx: Option<usize>,
     pub scroll_top: usize,

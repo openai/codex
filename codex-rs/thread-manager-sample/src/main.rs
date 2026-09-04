@@ -242,6 +242,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         tui_session_picker_view: SessionPickerViewMode::Dense,
         tui_resume_cwd: None,
         tui_vim_mode_default: false,
+        tui_question_esc_back: true,
         cwd: cwd.clone(),
         workspace_roots: vec![cwd],
         workspace_roots_explicit: false,

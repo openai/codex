@@ -34,6 +34,7 @@ codex-arg0 = { workspace = true }
 codex-install-context = { workspace = true }
 codex-cloud-config = { workspace = true }
 codex-config = { workspace = true }
+codex-context-fragments = { workspace = true }
 codex-connectors = { workspace = true }
 codex-core-plugins = { workspace = true }
 codex-history = { workspace = true }

@@ -397,6 +397,8 @@ fn effective_configured_binding(
 }
 
 pub(crate) fn normalize_chord_binding(binding: KeyBinding) -> KeyBinding {
+    let (key, modifiers) = binding.normalized_parts();
+    let binding = KeyBinding::new(key, modifiers);
     if binding.parts() == crate::key_hint::ctrl(KeyCode::Char('7')).parts() {
         crate::key_hint::ctrl(KeyCode::Char('/'))
     } else {

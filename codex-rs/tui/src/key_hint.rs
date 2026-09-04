@@ -96,6 +96,14 @@ impl KeyBinding {
         (self.key, self.modifiers)
     }
 
+    /// Legacy Ctrl+] is reported as Ctrl+5; keep matching and conflicts consistent.
+    pub(crate) fn normalized_parts(&self) -> (KeyCode, KeyModifiers) {
+        match self.parts() {
+            (KeyCode::Char('5'), KeyModifiers::CONTROL) => ctrl(KeyCode::Char(']')).parts(),
+            parts => parts,
+        }
+    }
+
     pub(crate) fn display_label(&self) -> String {
         let modifiers = modifiers_to_string(self.modifiers);
         let key = match self.key {
@@ -123,13 +131,13 @@ pub(crate) fn normalize_key_parts(
     if modifiers.is_empty()
         && let Some(ctrl_char) = c0_control_char_to_ctrl_char(ch)
     {
-        return (KeyCode::Char(ctrl_char), KeyModifiers::CONTROL | modifiers);
+        return normalize_key_parts(KeyCode::Char(ctrl_char), KeyModifiers::CONTROL);
     }
     if ch.is_ascii_uppercase() {
         modifiers.insert(KeyModifiers::SHIFT);
         return (KeyCode::Char(ch.to_ascii_lowercase()), modifiers);
     }
-    (key, modifiers)
+    KeyBinding::new(key, modifiers).normalized_parts()
 }
 
 fn c0_control_char_to_ctrl_char(ch: char) -> Option<char> {
@@ -350,6 +358,7 @@ mod tests {
             ('z', '\u{001a}'),
             ('4', '\u{001c}'),
             ('5', '\u{001d}'),
+            (']', '\u{001d}'),
             ('6', '\u{001e}'),
             ('7', '\u{001f}'),
         ];

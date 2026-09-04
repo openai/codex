@@ -3889,6 +3889,8 @@
               "interrupt_turn": null,
               "next_permission_mode": null,
               "previous_permission_mode": null,
+              "prompt_stack_back": null,
+              "skip_question": null,
               "toggle_voice_mute": null
             },
             "composer": {
@@ -4084,6 +4086,11 @@
           ],
           "default": "composer",
           "description": "Where the terminal pet should anchor vertically.\n\nDefaults to `composer`, which follows the current TUI composer viewport."
+        },
+        "question_esc_back": {
+          "default": true,
+          "description": "Escape returns from async questions to the composer, preserving the answer draft.",
+          "type": "boolean"
         },
         "raw_output_mode": {
           "default": false,
@@ -4303,7 +4310,7 @@
               "$ref": "#/definitions/KeybindingsSpec"
             }
           ],
-          "description": "Edit the most recently queued message."
+          "description": "Move up through pending async questions, then edit the most recently queued message."
         },
         "increase_reasoning_effort": {
           "allOf": [
@@ -4336,6 +4343,22 @@
             }
           ],
           "description": "Switch to the previous available permission mode."
+        },
+        "prompt_stack_back": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move back through pending async questions toward the composer."
+        },
+        "skip_question": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Skip the focused question."
         },
         "toggle_voice_mute": {
           "allOf": [
@@ -4690,6 +4713,8 @@
             "interrupt_turn": null,
             "next_permission_mode": null,
             "previous_permission_mode": null,
+            "prompt_stack_back": null,
+            "skip_question": null,
             "toggle_voice_mute": null
           }
         },

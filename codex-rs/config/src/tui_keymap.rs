@@ -135,8 +135,12 @@ pub struct TuiChatKeymap {
     pub previous_permission_mode: Option<KeybindingsSpec>,
     /// Switch to the next available permission mode.
     pub next_permission_mode: Option<KeybindingsSpec>,
-    /// Edit the most recently queued message.
+    /// Move up through pending async questions, then edit the most recently queued message.
     pub edit_queued_message: Option<KeybindingsSpec>,
+    /// Move back through pending async questions toward the composer.
+    pub prompt_stack_back: Option<KeybindingsSpec>,
+    /// Skip the focused question.
+    pub skip_question: Option<KeybindingsSpec>,
 }
 
 /// Composer context keybindings. These override corresponding `global` actions.

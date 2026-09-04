@@ -273,6 +273,8 @@ pub(super) fn binding_slot<'a>(
         ("chat", "previous_permission_mode") => Some(&mut keymap.chat.previous_permission_mode),
         ("chat", "next_permission_mode") => Some(&mut keymap.chat.next_permission_mode),
         ("chat", "edit_queued_message") => Some(&mut keymap.chat.edit_queued_message),
+        ("chat", "prompt_stack_back") => Some(&mut keymap.chat.prompt_stack_back),
+        ("chat", "skip_question") => Some(&mut keymap.chat.skip_question),
         ("composer", "submit") => Some(&mut keymap.composer.submit),
         ("composer", "queue") => Some(&mut keymap.composer.queue),
         ("composer", "toggle_shortcuts") => Some(&mut keymap.composer.toggle_shortcuts),

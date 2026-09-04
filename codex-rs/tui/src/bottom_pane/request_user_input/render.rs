@@ -427,7 +427,7 @@ impl RequestUserInputOverlay {
 ///
 /// This keeps footer spacing stable by anchoring the options block to the
 /// bottom of its allocated region.
-fn render_rows_bottom_aligned(
+pub(in crate::bottom_pane) fn render_rows_bottom_aligned(
     area: Rect,
     buf: &mut Buffer,
     rows: &[crate::bottom_pane::selection_popup_common::GenericDisplayRow],
@@ -471,7 +471,7 @@ fn render_rows_bottom_aligned(
 /// overflows, it truncates at the last word boundary when possible (falling back to the last
 /// fitting character), trims trailing whitespace, then appends an ellipsis styled to match the
 /// last visible span (or the line style if nothing was kept).
-fn truncate_line_word_boundary_with_ellipsis(
+pub(in crate::bottom_pane) fn truncate_line_word_boundary_with_ellipsis(
     line: Line<'static>,
     max_width: usize,
 ) -> Line<'static> {

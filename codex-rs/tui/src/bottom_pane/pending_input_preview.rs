@@ -26,7 +26,7 @@ pub(crate) struct PendingInputPreview {
     pub queued_messages: Vec<String>,
     /// Key combination rendered in the hint line.  Defaults to Alt+Up but may
     /// be overridden for terminals where that chord is unavailable.
-    edit_binding: Option<key_hint::ShortcutHint>,
+    pub(super) edit_binding: Option<key_hint::ShortcutHint>,
     /// Key combination rendered for immediately interrupting and sending steers.
     interrupt_binding: Option<key_hint::ShortcutHint>,
 }
