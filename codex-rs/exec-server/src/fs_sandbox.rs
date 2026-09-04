@@ -18,6 +18,7 @@ use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
 use codex_utils_absolute_path::AbsolutePathBuf;
+#[cfg(not(target_os = "linux"))]
 use codex_utils_absolute_path::canonicalize_preserving_symlinks;
 use codex_utils_path_uri::PathUri;
 #[cfg(any(windows, test))]
@@ -110,6 +111,9 @@ impl FileSystemSandboxRunner {
             &helper_read_roots,
             cwd.native.as_path(),
         );
+        // Linux resolves aliases in the sandbox helper. Doing it here also probes
+        // unrelated permission roots synchronously on the executor's runtime thread.
+        #[cfg(not(target_os = "linux"))]
         normalize_file_system_policy_root_aliases(&mut file_system_policy);
         let network_policy = NetworkSandboxPolicy::Restricted;
         let permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
@@ -248,6 +252,7 @@ fn add_helper_runtime_permissions(
     }
 }
 
+#[cfg(not(target_os = "linux"))]
 fn normalize_file_system_policy_root_aliases(file_system_policy: &mut FileSystemSandboxPolicy) {
     for entry in &mut file_system_policy.entries {
         // Alias normalization uses this executor's filesystem; leave foreign
@@ -260,6 +265,7 @@ fn normalize_file_system_policy_root_aliases(file_system_policy: &mut FileSystem
     }
 }
 
+#[cfg(not(target_os = "linux"))]
 fn normalize_top_level_alias(path: AbsolutePathBuf) -> AbsolutePathBuf {
     let raw_path = path.to_path_buf();
     for ancestor in raw_path.ancestors() {
