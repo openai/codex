@@ -3986,7 +3986,6 @@ dependencies = [
  "codex-otel",
  "codex-protocol",
  "codex-utils-output-truncation",
- "codex-utils-template",
  "pretty_assertions",
  "serde",
  "serde_json",

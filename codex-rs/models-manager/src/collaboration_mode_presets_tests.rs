@@ -15,17 +15,11 @@ fn preset_names_use_mode_display_names() {
 }
 
 #[test]
-fn default_mode_instructions_replace_mode_names_placeholder() {
+fn default_mode_instructions_follow_user_input_tool_availability() {
     let default_instructions = default_preset()
         .developer_instructions
         .expect("default preset should include instructions")
         .expect("default instructions should be set");
-
-    assert!(!default_instructions.contains("{{KNOWN_MODE_NAMES}}"));
-
-    let known_mode_names = format_mode_names(&TUI_VISIBLE_COLLABORATION_MODES);
-    let expected_snippet = format!("Known mode names are {known_mode_names}.");
-    assert!(default_instructions.contains(&expected_snippet));
 
     assert!(default_instructions.contains(
         "Use the `request_user_input` tool only when it is listed in the available tools"
