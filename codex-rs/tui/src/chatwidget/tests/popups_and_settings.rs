@@ -2769,6 +2769,47 @@ async fn apps_popup_keeps_existing_full_snapshot_while_partial_refresh_loads() {
 }
 
 #[tokio::test]
+async fn apps_popup_replaces_loading_state_after_initial_refresh_failure() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    set_chatgpt_auth(&mut chat);
+    chat.config
+        .features
+        .enable(Feature::Apps)
+        .expect("test config should allow feature update");
+    chat.bottom_pane.set_connectors_enabled(/*enabled*/ true);
+
+    chat.add_connectors_output();
+    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("Loading apps..."));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::FetchConnectorsList { .. }));
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::FetchInstalledConnectorMentions { .. })
+    );
+
+    chat.on_connectors_loaded(
+        Err("app/list failed: 403 Forbidden".to_string()),
+        /*is_final*/ true,
+    );
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(!popup.contains("Loading apps..."), "{popup}");
+    assert!(!popup.contains("403 Forbidden"), "{popup}");
+    assert!(popup.contains("Failed to load apps."), "{popup}");
+    assert_chatwidget_snapshot!("apps_popup_error_state", popup);
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RefreshConnectors {
+            force_refetch: true
+        })
+    );
+    chat.refresh_connectors(/*force_refetch*/ true);
+    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("Loading apps..."));
+}
+
+#[tokio::test]
 async fn apps_refresh_failure_without_full_snapshot_falls_back_to_installed_apps() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);

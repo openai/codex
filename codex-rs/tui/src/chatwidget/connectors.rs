@@ -116,6 +116,12 @@ impl ChatWidget {
 
     fn queue_connectors_refresh(&mut self, force_refetch: bool) {
         if self.begin_connectors_refresh(force_refetch) {
+            if matches!(self.connectors.cache, ConnectorsCacheState::Loading) {
+                let _ = self.bottom_pane.replace_selection_view_if_active(
+                    CONNECTORS_SELECTION_VIEW_ID,
+                    self.connectors_loading_popup_params(),
+                );
+            }
             self.app_event_tx.send(AppEvent::FetchConnectorsList {
                 force_refetch,
                 generation: self.connectors.generation,
@@ -220,6 +226,40 @@ impl ChatWidget {
                 is_disabled: true,
                 ..Default::default()
             }],
+            ..Default::default()
+        }
+    }
+
+    fn connectors_error_popup_params(&self) -> SelectionViewParams {
+        let mut header = ColumnRenderable::new();
+        header.push(Line::from("Apps".bold()));
+        header.push(Line::from("Failed to load apps.".dim()));
+
+        SelectionViewParams {
+            view_id: Some(CONNECTORS_SELECTION_VIEW_ID),
+            header: Box::new(header),
+            footer_hint: Some(self.bottom_pane.standard_popup_hint_line()),
+            items: vec![
+                SelectionItem {
+                    name: "App directory unavailable".to_string(),
+                    description: Some(
+                        "The app directory request failed. Retry, or press Esc to continue."
+                            .to_string(),
+                    ),
+                    is_disabled: true,
+                    ..Default::default()
+                },
+                SelectionItem {
+                    name: "Retry".to_string(),
+                    description: Some("Reload installed and available apps.".to_string()),
+                    actions: vec![Box::new(|tx| {
+                        tx.send(AppEvent::RefreshConnectors {
+                            force_refetch: true,
+                        });
+                    })],
+                    ..Default::default()
+                },
+            ],
             ..Default::default()
         }
     }
@@ -435,6 +475,10 @@ impl ChatWidget {
                     self.refresh_connectors_popup_if_open(&snapshot.connectors);
                     self.connectors.cache = ConnectorsCacheState::Ready(snapshot);
                 } else {
+                    let _ = self.bottom_pane.replace_selection_view_if_active(
+                        CONNECTORS_SELECTION_VIEW_ID,
+                        self.connectors_error_popup_params(),
+                    );
                     self.connectors.cache = ConnectorsCacheState::Failed(err);
                 }
             }
