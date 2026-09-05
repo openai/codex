@@ -839,6 +839,13 @@ impl CodexThread {
         self.session.refresh_mcp_config(next_config).await;
     }
 
+    /// Refreshes this thread's Apps tools before returning their runtime state.
+    pub async fn refresh_codex_apps_tools(
+        &self,
+    ) -> anyhow::Result<codex_mcp::CodexAppsToolSnapshot> {
+        self.session.refresh_codex_apps_tools().await
+    }
+
     pub async fn environment_selections(&self) -> Vec<TurnEnvironmentSelection> {
         self.session.services.turn_environments.selections()
     }

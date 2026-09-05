@@ -22,6 +22,7 @@ use tokio::sync::Notify;
 use super::McpBinding;
 use super::PreparedMcpCall;
 use crate::binding_clients::McpBindingClients;
+use crate::client_tool_catalog::ClientToolCatalog;
 use crate::connection_manager::McpConnectionSet;
 use crate::rmcp_client::ManagedClient;
 use crate::server::McpServerMetadata;
@@ -46,7 +47,7 @@ impl InProcessTransportFactory for TestInProcessTransportFactory {
 struct TestStep {
     step: Arc<McpBinding>,
     client: Arc<RmcpClient>,
-    tool_catalog_revision: Arc<tokio::sync::RwLock<u64>>,
+    tool_catalog: Arc<ClientToolCatalog>,
 }
 
 async fn test_step(
@@ -76,6 +77,7 @@ async fn test_step(
             .await
             .expect("create in-process MCP client"),
     );
+    let tool_catalog = Arc::new(ClientToolCatalog::new(vec![tool.clone()]));
     let managed_client = Arc::new(ManagedClient {
         client: Arc::clone(&client),
         server_info: McpServerInfo {
@@ -86,7 +88,7 @@ async fn test_step(
             icons: None,
             website_url: None,
         },
-        tools: vec![tool.clone()],
+        tool_catalog: Arc::clone(&tool_catalog),
         tool_timeout: None,
         server_instructions: None,
         server_supports_sandbox_state_meta_capability: supports_sandbox_state_meta,
@@ -97,7 +99,6 @@ async fn test_step(
         Arc::clone(&managed_client),
     )])));
     let connections = Arc::new(McpConnectionSet::empty(/*prefix_mcp_tool_names*/ true));
-    let tool_catalog_revision = Arc::new(tokio::sync::RwLock::new(0));
     let mut config = crate::mcp::tests::test_mcp_config(std::env::temp_dir());
     if label == "old" {
         config.approval_policy = Constrained::allow_any(AskForApproval::Never);
@@ -114,7 +115,6 @@ async fn test_step(
         managed_client,
         Arc::clone(&config),
         /*catalog_revision*/ 0,
-        Arc::clone(&tool_catalog_revision),
         tool.clone(),
         McpServerMetadata {
             environment_id: format!("{label}-environment"),
@@ -142,7 +142,7 @@ async fn test_step(
             calls,
         )),
         client,
-        tool_catalog_revision,
+        tool_catalog,
     }
 }
 
@@ -296,7 +296,13 @@ async fn prepared_call_is_rejected_after_catalog_refresh() {
         .prepare_call(SERVER_NAME, TOOL_NAME)
         .expect("step should prepare the advertised tool");
 
-    *step.tool_catalog_revision.write().await += 1;
+    step.tool_catalog
+        .refresh(
+            || async { Ok((step.step.tools().to_vec(), ())) },
+            |_, ()| {},
+        )
+        .await
+        .expect("refresh tool catalog");
 
     let error = prepared
         .call(
@@ -324,7 +330,13 @@ async fn stale_prepared_call_does_not_run_preparation() {
         .step
         .prepare_call(SERVER_NAME, TOOL_NAME)
         .expect("step should prepare the advertised tool");
-    *step.tool_catalog_revision.write().await += 1;
+    step.tool_catalog
+        .refresh(
+            || async { Ok((step.step.tools().to_vec(), ())) },
+            |_, ()| {},
+        )
+        .await
+        .expect("refresh tool catalog");
     let prepared_side_effect_ran = Arc::new(AtomicBool::new(false));
     let marker = Arc::clone(&prepared_side_effect_ran);
 
@@ -366,13 +378,20 @@ async fn preparation_holds_catalog_authority_until_it_finishes() {
     });
 
     preparation_started.notified().await;
+    let refresh = step.tool_catalog.refresh(
+        || async { Ok((step.step.tools().to_vec(), ())) },
+        |_, ()| {},
+    );
+    tokio::pin!(refresh);
     assert!(
-        step.tool_catalog_revision.try_write().is_err(),
+        futures::poll!(&mut refresh).is_pending(),
         "catalog replacement must wait for irreversible call preparation"
     );
     finish_preparation.notify_one();
     call.await
         .expect("call task should finish")
         .expect_err("the test preparation should stop the call");
-    assert!(step.tool_catalog_revision.try_write().is_ok());
+    refresh
+        .await
+        .expect("catalog refresh should finish after preparation");
 }

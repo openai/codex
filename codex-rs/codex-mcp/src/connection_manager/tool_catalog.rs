@@ -19,6 +19,8 @@ use super::McpServerMetadata;
 use crate::binding::McpBinding;
 use crate::binding::PreparedMcpCall;
 use crate::binding_clients::McpBindingClients;
+use crate::client_tool_catalog::ClientToolCatalogRevision;
+use crate::client_tool_catalog::CodexAppsToolSnapshot;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::rmcp_client::CODEX_APPS_REFRESH_DURATION_METRIC;
 use crate::rmcp_client::MCP_TOOLS_LIST_DURATION_METRIC;
@@ -57,7 +59,10 @@ pub fn tool_is_model_visible(tool: &ToolInfo) -> bool {
 }
 
 impl McpConnectionSet {
-    pub(crate) async fn stable_catalog_revision(&self) -> Option<u64> {
+    pub(crate) async fn stable_catalog_revisions(
+        &self,
+    ) -> Option<HashMap<String, ClientToolCatalogRevision>> {
+        let mut revisions = HashMap::new();
         for (server_name, view) in &self.servers {
             if !view
                 .connection
@@ -67,7 +72,7 @@ impl McpConnectionSet {
             {
                 return None;
             }
-            let Some(client) = view.connection.client.ready_transport() else {
+            let Some(client) = view.connection.client.ready_client() else {
                 if !view.connection.client.is_codex_apps_mcp_server
                     && self.required_servers.binary_search(server_name).is_err()
                     && matches!(view.connection.client.client.peek(), Some(Err(_)))
@@ -76,11 +81,19 @@ impl McpConnectionSet {
                 }
                 return None;
             };
-            if client.is_closed().await {
+            if client.client.is_closed().await {
                 return None;
             }
+            let revision = client.tool_catalog.read(|catalog| catalog.revision).await;
+            revisions.insert(
+                server_name.clone(),
+                ClientToolCatalogRevision {
+                    catalog: Arc::clone(&client.tool_catalog),
+                    revision,
+                },
+            );
         }
-        Some(*self.tool_catalog_revision.read().await)
+        Some(revisions)
     }
 
     /// Returns all tools with model-visible names normalized.
@@ -102,30 +115,15 @@ impl McpConnectionSet {
                 .client
                 .startup_complete
                 .load(Ordering::Acquire);
-            let catalog_override = if server_name == CODEX_APPS_MCP_SERVER_NAME {
-                self.codex_apps_tools_override.read().await.clone()
-            } else {
-                None
-            };
-            let server_tools = async {
-                match catalog_override {
-                    Some(tools) => {
-                        let tools = filter_tools(tools, &view.tool_filter);
-                        Ok(prepare_codex_apps_tools_for_model(
-                            tools,
-                            &self.tool_plugin_provenance,
-                        ))
-                    }
-                    None => view.listed_tools(&self.tool_plugin_provenance).await,
-                }
-            }
-            .instrument(trace_span!(
-                "list_tools_for_server",
-                server_name = %server_name,
-                has_cached_tools,
-                startup_complete
-            ))
-            .await;
+            let server_tools = view
+                .listed_tools(&self.tool_plugin_provenance)
+                .instrument(trace_span!(
+                    "list_tools_for_server",
+                    server_name = %server_name,
+                    has_cached_tools,
+                    startup_complete
+                ))
+                .await;
             let result = match server_tools {
                 Ok(server_tools) => Ok(server_tools
                     .into_iter()
@@ -170,10 +168,6 @@ impl McpConnectionSet {
         (tools, errors)
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "catalog capture must remain serialized with catalog replacement"
-    )]
     pub(crate) async fn capture_binding_with_metadata(
         self: &Arc<Self>,
         config: Arc<crate::McpConfig>,
@@ -181,9 +175,8 @@ impl McpConnectionSet {
         required_servers: &[String],
         required_plugins: &HashSet<String>,
     ) -> McpBinding {
-        let revision = self.tool_catalog_revision.read().await;
         let mut listed_tools = Vec::new();
-        let mut clients = std::collections::HashMap::new();
+        let mut clients = HashMap::new();
         let optional_mcp_startup_grace = config.optional_mcp_startup_grace;
         let server_snapshots = join_all(self.servers.iter().map(|(server_name, view)| async move {
             if !view
@@ -269,13 +262,11 @@ impl McpConnectionSet {
                     return None;
                 };
                 client.tool_timeout = view.tool_timeout;
-                let catalog_override = if server_name == CODEX_APPS_MCP_SERVER_NAME {
-                    self.codex_apps_tools_override.read().await.clone()
-                } else {
-                    None
-                };
-                let server_tools = catalog_override.unwrap_or_else(|| client.tools.clone());
-                (Some(Arc::new(client)), server_tools)
+                let (revision, server_tools) = client
+                    .tool_catalog
+                    .read(|catalog| (catalog.revision, catalog.tools.clone()))
+                    .await;
+                (Some((Arc::new(client), revision)), server_tools)
             };
             let server_tools = filter_tools(server_tools, &view.tool_filter);
             let server_tools = if server_name == CODEX_APPS_MCP_SERVER_NAME {
@@ -301,12 +292,11 @@ impl McpConnectionSet {
         }))
         .await;
         for (server_name, client, server_tools) in server_results.into_iter().flatten() {
-            if let Some(client) = client {
-                clients.insert(server_name, client);
+            if let Some((client, revision)) = client {
+                clients.insert(server_name, (client, revision));
             }
             listed_tools.extend(server_tools);
         }
-        let clients = Arc::new(McpBindingClients::new(clients));
         let listed_tools = normalize_tools_for_model_with_prefix(
             listed_tools,
             self.prefix_mcp_tool_names,
@@ -316,14 +306,18 @@ impl McpConnectionSet {
         let mut calls = std::collections::HashMap::with_capacity(listed_tools.len());
         for tool_info in listed_tools {
             let model_visible = crate::tool_is_model_visible(&tool_info);
-            let Some(client) = clients.client(&tool_info.server_name) else {
+            let Some((client, revision)) = clients.get(&tool_info.server_name) else {
                 if model_visible {
                     tools.push(tool_info);
                 }
                 continue;
             };
-            let Some(call) = self.prepare_call(&tool_info, client, Arc::clone(&config), *revision)
-            else {
+            let Some(call) = self.prepare_call(
+                &tool_info,
+                Arc::clone(client),
+                Arc::clone(&config),
+                *revision,
+            ) else {
                 trace!(
                     server_name = %tool_info.server_name,
                     tool_name = %tool_info.tool.name,
@@ -342,6 +336,12 @@ impl McpConnectionSet {
                 tools.push(tool_info);
             }
         }
+        let clients = Arc::new(McpBindingClients::new(
+            clients
+                .into_iter()
+                .map(|(server_name, (client, _))| (server_name, client))
+                .collect(),
+        ));
         McpBinding::new(
             Arc::clone(self),
             clients,
@@ -366,7 +366,6 @@ impl McpConnectionSet {
             client,
             config,
             tool_catalog_revision,
-            Arc::clone(&self.tool_catalog_revision),
             tool_info.clone(),
             view.metadata.clone(),
             self.plugin_id_for_mcp_server_name(server_name)
@@ -375,67 +374,48 @@ impl McpConnectionSet {
         )
     }
 
-    /// Force-refresh Codex Apps tools and publish one new exact catalog revision.
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "catalog publication must remain serialized with captured tool calls"
-    )]
-    pub async fn hard_refresh_codex_apps_tools_cache(&self) -> Result<Vec<ToolInfo>> {
-        let _refresh = self.codex_apps_refresh_lock.lock().await;
+    /// Refreshes one exact Apps catalog, preserving the raw inventory for app policy.
+    pub(crate) async fn refresh_codex_apps_client_catalog(
+        &self,
+        config: &crate::McpConfig,
+    ) -> Result<CodexAppsToolSnapshot> {
         let refresh_start = Instant::now();
         let view = self
             .servers
             .get(CODEX_APPS_MCP_SERVER_NAME)
             .ok_or_else(|| anyhow!("unknown MCP server '{CODEX_APPS_MCP_SERVER_NAME}'"))?;
-        let managed_client = view
-            .connection
-            .client()
-            .await
-            .context("failed to get client")?;
-
-        let list_start = Instant::now();
-        let fetch_ticket =
-            managed_client
-                .codex_apps_tools_cache_context
-                .as_ref()
-                .map(|cache_context| {
-                    cache_context.begin_fetch(ConnectorRuntimeFetchSource::HardRefresh)
-                });
-        let client_tools = list_tools_for_client_uncached(
-            CODEX_APPS_MCP_SERVER_NAME,
-            /*is_codex_apps_mcp_server*/ true,
-            /*codex_apps_refresh_trigger*/ "explicit",
-            &managed_client.client,
-            view.tool_timeout,
-            view.catalog_item_limit,
-            managed_client.server_instructions.as_deref(),
-        )
-        .await
-        .with_context(|| {
-            format!("failed to refresh tools for MCP server '{CODEX_APPS_MCP_SERVER_NAME}'")
-        })?;
-
-        let mut tool_catalog_revision = self.tool_catalog_revision.write().await;
-        let tools = match (
-            managed_client.codex_apps_tools_cache_context.as_ref(),
-            fetch_ticket,
-        ) {
-            (Some(cache_context), Some(fetch_ticket)) => cache_context.publish_if_newest_accepted(
-                fetch_ticket,
-                &managed_client.server_info,
-                client_tools.clone(),
-            ),
-            (None, None) => client_tools.clone(),
-            _ => unreachable!("Codex Apps fetch ticket requires cache context"),
-        };
-        *self.codex_apps_tools_override.write().await = Some(client_tools);
-        *tool_catalog_revision += 1;
-        drop(tool_catalog_revision);
+        let (tools, _) = self.refresh_codex_apps_tool_catalog().await?;
+        let server_has_permission = config
+            .permission_profile_for_server(CODEX_APPS_MCP_SERVER_NAME)
+            .is_some();
+        let model_visible_tool_names = tools
+            .iter()
+            .filter(|tool| {
+                server_has_permission
+                    && view.tool_filter.allows(&tool.tool.name)
+                    && tool_is_model_visible(tool)
+            })
+            .map(|tool| tool.tool.name.to_string())
+            .collect();
         emit_duration(
-            MCP_TOOLS_LIST_DURATION_METRIC,
-            list_start.elapsed(),
-            &[("cache", "miss")],
+            CODEX_APPS_REFRESH_DURATION_METRIC,
+            refresh_start.elapsed(),
+            &[("path", "legacy"), ("trigger", "explicit")],
         );
+        Ok(CodexAppsToolSnapshot {
+            tools,
+            model_visible_tool_names,
+        })
+    }
+
+    /// Refreshes Apps tools and returns the prepared shared-cache winner for discovery.
+    pub async fn refresh_codex_apps_tools_for_discovery(&self) -> Result<Vec<ToolInfo>> {
+        let refresh_start = Instant::now();
+        let view = self
+            .servers
+            .get(CODEX_APPS_MCP_SERVER_NAME)
+            .ok_or_else(|| anyhow!("unknown MCP server '{CODEX_APPS_MCP_SERVER_NAME}'"))?;
+        let (_, tools) = self.refresh_codex_apps_tool_catalog().await?;
         let tools = prepare_codex_apps_tools_for_model(
             filter_tools(tools, &view.tool_filter),
             &self.tool_plugin_provenance,
@@ -453,6 +433,72 @@ impl McpConnectionSet {
             &[("path", "legacy"), ("trigger", "explicit")],
         );
         Ok(tools)
+    }
+
+    /// Publishes the exact client catalog and returns both raw inventories.
+    async fn refresh_codex_apps_tool_catalog(&self) -> Result<(Vec<ToolInfo>, Vec<ToolInfo>)> {
+        let view = self
+            .servers
+            .get(CODEX_APPS_MCP_SERVER_NAME)
+            .ok_or_else(|| anyhow!("unknown MCP server '{CODEX_APPS_MCP_SERVER_NAME}'"))?;
+        let managed_client = view
+            .connection
+            .client()
+            .await
+            .context("failed to get client")?;
+        let (client_tools, tools, list_start) = managed_client
+            .tool_catalog
+            .refresh(
+                || async {
+                    let list_start = Instant::now();
+                    let fetch_ticket = managed_client.codex_apps_tools_cache_context.as_ref().map(
+                        |cache_context| {
+                            cache_context.begin_fetch(ConnectorRuntimeFetchSource::HardRefresh)
+                        },
+                    );
+                    let client_tools = list_tools_for_client_uncached(
+                        CODEX_APPS_MCP_SERVER_NAME,
+                        /*is_codex_apps_mcp_server*/ true,
+                        /*codex_apps_refresh_trigger*/ "explicit",
+                        &managed_client.client,
+                        view.tool_timeout,
+                        view.catalog_item_limit,
+                        managed_client.server_instructions.as_deref(),
+                    )
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "failed to refresh tools for MCP server '{CODEX_APPS_MCP_SERVER_NAME}'"
+                        )
+                    })?;
+                    Ok((client_tools, (fetch_ticket, list_start)))
+                },
+                |client_tools, (fetch_ticket, list_start)| {
+                    // Discovery may accept another client's newer fetch. The catalog
+                    // retains the tools fetched through this exact connection.
+                    let tools = match (
+                        managed_client.codex_apps_tools_cache_context.as_ref(),
+                        fetch_ticket,
+                    ) {
+                        (Some(cache_context), Some(fetch_ticket)) => cache_context
+                            .publish_if_newest_accepted(
+                                fetch_ticket,
+                                &managed_client.server_info,
+                                client_tools.to_vec(),
+                            ),
+                        (None, None) => client_tools.to_vec(),
+                        _ => unreachable!("Codex Apps fetch ticket requires cache context"),
+                    };
+                    (client_tools.to_vec(), tools, list_start)
+                },
+            )
+            .await?;
+        emit_duration(
+            MCP_TOOLS_LIST_DURATION_METRIC,
+            list_start.elapsed(),
+            &[("cache", "miss")],
+        );
+        Ok((client_tools, tools))
     }
 
     fn with_server_metadata(mut tool: ToolInfo, metadata: &McpServerMetadata) -> ToolInfo {
