@@ -4,7 +4,7 @@ use super::*;
 
 impl AsyncQuestions {
     pub(crate) fn handles_key_as_editing(&self, key: KeyEvent) -> bool {
-        self.composer.handles_key_as_editing(key)
+        self.focus_is_notes() && self.composer.handles_key_as_editing(key)
     }
 
     pub(super) fn edit(&mut self, key: KeyEvent) {
@@ -31,6 +31,12 @@ impl AsyncQuestions {
         }
     }
 
+    pub(super) fn select_option(&mut self, index: usize) {
+        self.state.pending[self.state.current_idx]
+            .options_state
+            .selected_idx = Some(index);
+    }
+
     pub(crate) fn set_keymap(&mut self, keymap: &RuntimeKeymap) {
         self.keymap = keymap.clone();
         self.composer.set_keymap_bindings(keymap);
@@ -43,7 +49,11 @@ impl AsyncQuestions {
 
 impl BottomPaneView for AsyncQuestions {
     fn keymap_contexts(&self) -> crate::keymap::KeymapContextSet {
-        self.composer.keymap_contexts().with(KeymapContext::Chat)
+        if self.has_options() {
+            crate::keymap::KeymapContextSet::new(KeymapContext::List).with(KeymapContext::Chat)
+        } else {
+            self.composer.keymap_contexts().with(KeymapContext::Chat)
+        }
     }
 
     fn handle_key_event(&mut self, key: KeyEvent) {
@@ -52,9 +62,6 @@ impl BottomPaneView for AsyncQuestions {
         }
         if self.handles_key_as_editing(key) {
             self.edit(key);
-            return;
-        }
-        if key.kind != KeyEventKind::Press && self.keymap.composer.submit.is_pressed(key) {
             return;
         }
         if self.keymap.chat.interrupt_turn.is_pressed(key) {
@@ -69,11 +76,48 @@ impl BottomPaneView for AsyncQuestions {
         }
         if self.keymap.chat.edit_queued_message.is_pressed(key) {
             self.navigate(/*forward*/ true);
-        } else if self.keymap.chat.prompt_stack_back.is_pressed(key) {
-            self.navigate(/*forward*/ false);
-        } else {
-            self.edit(key);
+            return;
         }
+        if self.keymap.chat.prompt_stack_back.is_pressed(key) {
+            self.navigate(/*forward*/ false);
+            return;
+        }
+        if !self.has_options() {
+            if key.kind == KeyEventKind::Press || !self.keymap.composer.submit.is_pressed(key) {
+                self.edit(key);
+            }
+            return;
+        }
+        let count = self.options_len();
+        let visible = self.visible_options.get().1.max(1);
+        let mut state = self.state.pending[self.state.current_idx].options_state;
+        match self.keymap.list.action_for(key) {
+            Some(ListAction::MoveUp) => state.move_up_wrap(count),
+            Some(ListAction::MoveDown) => state.move_down_wrap(count),
+            Some(ListAction::PageUp) => state.page_up_clamped(count, visible),
+            Some(ListAction::PageDown) => state.page_down_clamped(count, visible),
+            Some(ListAction::JumpTop) => state.jump_top(count, visible),
+            Some(ListAction::JumpBottom) => state.jump_bottom(count, visible),
+            Some(ListAction::Accept) => {
+                if key.kind == KeyEventKind::Press {
+                    self.go_next_or_submit();
+                }
+            }
+            Some(ListAction::Cancel) => self.set_expanded(/*expanded*/ false),
+            Some(ListAction::MoveLeft | ListAction::MoveRight) => {}
+            None => {
+                if key.kind == KeyEventKind::Press
+                    && !crate::key_hint::has_ctrl_or_alt(key.modifiers)
+                    && let KeyCode::Char(ch) = key.code
+                    && let Some(index) = self.option_index_for_digit(ch)
+                {
+                    self.select_option(index);
+                    self.go_next_or_submit();
+                    return;
+                }
+            }
+        }
+        self.state.pending[self.state.current_idx].options_state = state;
     }
 
     fn is_complete(&self) -> bool {
@@ -95,7 +139,7 @@ impl BottomPaneView for AsyncQuestions {
             return false;
         }
         self.composer.flush_pending_input();
-        self.composer.handle_paste(text)
+        !self.has_options() && self.composer.handle_paste(text)
     }
     fn flush_paste_burst_if_due(&mut self) -> bool {
         self.composer.flush_paste_burst_if_due()

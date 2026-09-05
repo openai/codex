@@ -1,0 +1,11 @@
+---
+source: tui/src/bottom_pane/async_questions/state_tests.rs
+expression: "buffer_text(&render_editor(&editor, 50, 8))"
+---
+
+  Second
+
+  › 2. A suggested answer that is long enough to
+       wrap across multiple rows
+
+  Expand terminal to read the entire option

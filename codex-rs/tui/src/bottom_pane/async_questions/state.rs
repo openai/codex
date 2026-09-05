@@ -11,12 +11,31 @@ impl AsyncQuestions {
             return;
         }
         let was_empty = self.state.pending.is_empty();
-        self.state
-            .pending
-            .extend(questions.iter().map(|question| PendingQuestion {
-                question: question.clone(),
+        self.state.pending.extend(questions.iter().map(|question| {
+            // Bound work before cloning or wrapping model-authored suggestions.
+            let question = AsyncUserInputQuestion {
+                title: question.title.clone(),
+                options: question.options.as_ref().map(|options| {
+                    options
+                        .iter()
+                        .take(32)
+                        .filter(|label| label.len() <= 512)
+                        .cloned()
+                        .collect()
+                }),
+            };
+            let has_options = question
+                .options
+                .as_ref()
+                .is_some_and(|options| !options.is_empty());
+            let mut options_state = ScrollState::new();
+            options_state.selected_idx = has_options.then_some(0);
+            PendingQuestion {
+                question,
+                options_state,
                 draft: ComposerDraft::default(),
-            }));
+            }
+        }));
         if was_empty {
             self.state.current_idx = 0;
             self.restore_current_draft();
@@ -38,6 +57,7 @@ impl AsyncQuestions {
             return false;
         };
         self.save_current_draft();
+        self.visible_options.set((0, 0));
         self.state.current_idx = next;
         self.restore_current_draft();
         true
@@ -51,7 +71,27 @@ impl AsyncQuestions {
         let Some(answer) = self.current_answer() else {
             return;
         };
-        let text = answer.draft.text_with_pending();
+        let selected = answer
+            .options_state
+            .selected_idx
+            .and_then(|index| answer.question.options.as_ref()?.get(index))
+            .map(String::as_str)
+            .unwrap_or_default();
+        // Only a fully displayed model-authored option may become user authorization.
+        let (first, count) = self.visible_options.get();
+        let index = self.selected_option_index().unwrap_or(0);
+        if !self.focus_is_notes() && !(first..first + count).contains(&index) {
+            self.composer.show_footer_flash(
+                "Expand terminal to read the entire option".into(),
+                std::time::Duration::from_secs(5),
+            );
+            return;
+        }
+        let text = if self.focus_is_notes() {
+            answer.draft.text_with_pending()
+        } else {
+            selected.to_string()
+        };
         let text = text.trim();
         let framing = AnsweredQuestion::new(&answer.question.title).render();
         let limit = codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS - framing.chars().count();
@@ -70,6 +110,7 @@ impl AsyncQuestions {
             return;
         }
         self.composer.flush_pending_input();
+        self.visible_options.set((0, 0));
         self.state.pending.remove(self.state.current_idx);
         if self.state.current_idx >= self.state.pending.len() {
             self.state.current_idx = 0;

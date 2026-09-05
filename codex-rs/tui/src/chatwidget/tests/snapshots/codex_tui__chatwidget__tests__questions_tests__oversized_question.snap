@@ -1,11 +1,9 @@
 ---
 source: tui/src/chatwidget/tests/questions_tests.rs
-expression: rendered
+expression: "render_bottom_popup(&chat, 80)"
 ---
-• Working (0s • esc to interrupt)
+  What next?
 
-  Only question?
-
-  A typed answer
+  Type your answer
 
   enter submit   ctrl + ] skip   ⌥ + ↓ main prompt

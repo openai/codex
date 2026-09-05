@@ -1,0 +1,6 @@
+---
+source: tui/src/bottom_pane/async_questions/state_tests.rs
+expression: buffer_text(&clipped)
+---
+
+  Long question Long question Long question

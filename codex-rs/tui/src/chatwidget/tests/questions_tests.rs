@@ -80,6 +80,41 @@ fn question_count(chat: &ChatWidget) -> usize {
         .unanswered_count()
 }
 
+#[tokio::test]
+async fn selected_answers_preserve_long_labels_and_reject_oversized_submissions() {
+    for (length, snapshot) in [
+        (300, "named_question"),
+        (
+            codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS,
+            "oversized_question",
+        ),
+    ] {
+        let (mut chat, _rx, mut ops) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.thread_id = Some(ThreadId::new());
+        let label = format!("{} but do not deploy", "x".repeat(length));
+        chat.add_async_questions(
+            "message",
+            &[question("What next?", Some(vec![label.clone()]))],
+        );
+        chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+        insta::assert_snapshot!(snapshot, render_bottom_popup(&chat, /*width*/ 80));
+        let saved = question_count(&chat);
+        chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+        if length > 512 {
+            assert_eq!(question_count(&chat), saved);
+            assert!(ops.try_recv().is_err());
+            chat.bottom_pane
+                .handle_paste("x".repeat(codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS));
+            chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+            assert_eq!(question_count(&chat), saved);
+            let rendered = render_bottom_popup(&chat, /*width*/ 80);
+            insta::assert_snapshot!(rendered.lines().find(|line| line.contains("Answer too long")).unwrap(), @"  Answer too long; limit 1048562 characters");
+        } else {
+            assert_answer(ops.try_recv().unwrap(), &format!("> What next?\n\n{label}"));
+        }
+    }
+}
+
 fn open_questions(chat: &mut ChatWidget, options: Option<Vec<String>>) {
     chat.thread_id = Some(ThreadId::new());
     chat.on_agent_message_item_completed(
@@ -126,11 +161,29 @@ async fn question_queue_key_does_not_steer_the_running_turn() {
 }
 
 #[tokio::test]
+async fn question_key_repeats_do_not_consume_another_question() {
+    for key in [KeyCode::Enter, KeyCode::Char('1')] {
+        let (mut chat, _rx, mut ops) = make_chatwidget_manual(/*model_override*/ None).await;
+        open_questions(&mut chat, Some(vec!["First".into()]));
+        chat.handle_key_event(KeyEvent::from(key));
+        ops.try_recv().unwrap();
+        let mut repeat = KeyEvent::from(key);
+        repeat.kind = KeyEventKind::Repeat;
+        chat.handle_key_event(repeat);
+        assert!(ops.try_recv().is_err());
+        assert_eq!(question_count(&chat), 1);
+        chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+        assert!(ops.try_recv().is_err());
+    }
+}
+
+#[tokio::test]
 async fn single_question_spacing_with_working_status() {
     let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.bottom_pane.set_task_running(/*running*/ true);
     chat.add_async_questions("single", &[question("Only question?", /*options*/ None)]);
     chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+    chat.bottom_pane.handle_paste("A typed answer".into());
     let rendered = render_bottom_popup(&chat, /*width*/ 80);
     let rows: Vec<_> = rendered.lines().collect();
     let question = rows
@@ -139,6 +192,8 @@ async fn single_question_spacing_with_working_status() {
         .unwrap();
     assert!(rows[question - 2].contains("Working"));
     assert!(rows[question - 1].is_empty());
+    assert_eq!(rows[question + 2].trim(), "A typed answer");
+    assert!(rows[question + 3].is_empty());
     insta::assert_snapshot!("single_question_working_spacing", rendered);
 }
 

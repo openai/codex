@@ -19,6 +19,14 @@ impl ChatComposer {
         self.restore_draft(draft);
     }
 
+    pub(crate) fn inline_flash(&self) -> Option<Line<'static>> {
+        self.footer
+            .flash
+            .as_ref()
+            .filter(|_| self.footer.flash_visible())
+            .map(|flash| flash.line.clone())
+    }
+
     pub(crate) fn reset_vim_mode(&mut self) {
         self.vim_history = VimHistory::default();
         self.draft.textarea.enter_vim_insert_mode();

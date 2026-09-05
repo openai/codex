@@ -8,21 +8,32 @@ use crate::bottom_pane::ChatComposerConfig;
 use crate::bottom_pane::InputResult;
 use crate::bottom_pane::bottom_pane_view::BottomPaneView;
 use crate::bottom_pane::chat_composer::ComposerDraft;
+use crate::bottom_pane::scroll_state::ScrollState;
+use crate::bottom_pane::selection_popup_common::GenericDisplayRow;
+use crate::bottom_pane::selection_popup_common::measure_rows_height;
 use crate::key_hint::KeyBindingListExt;
 use crate::keymap::KeymapContext;
+use crate::keymap::ListAction;
 use crate::keymap::RuntimeKeymap;
 use codex_protocol::items::AsyncUserInputQuestion;
+use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use std::collections::HashSet;
+use unicode_width::UnicodeWidthStr;
 
 mod input;
+mod layout;
 mod render;
 mod state;
+
+pub(super) const TIP_SEPARATOR: &str = "   ";
+pub(super) const DESIRED_SPACERS_BETWEEN_SECTIONS: u16 = 2;
 
 #[derive(Debug, Clone, PartialEq)]
 struct PendingQuestion {
     question: AsyncUserInputQuestion,
+    options_state: ScrollState,
     draft: ComposerDraft,
 }
 
@@ -45,6 +56,7 @@ pub(crate) struct AsyncQuestions {
     pub(crate) expanded: bool,
     pub(crate) delivery_enabled: bool,
     pub(crate) submission: Option<QuestionSubmission>,
+    visible_options: std::cell::Cell<(usize, usize)>,
     pub(crate) next_hint: Option<crate::key_hint::ShortcutHint>,
     keymap: RuntimeKeymap,
     pub(super) composer: ChatComposer,
@@ -74,6 +86,7 @@ impl AsyncQuestions {
             expanded: false,
             delivery_enabled: true,
             submission: None,
+            visible_options: std::cell::Cell::new((0, 0)),
             next_hint: None,
             keymap,
             composer,
@@ -96,6 +109,74 @@ impl AsyncQuestions {
         let current = self.state.current_idx + 1;
         let total = self.unanswered_count();
         format!("{current} of {total}")
+    }
+
+    fn options(&self) -> &[String] {
+        self.current_question()
+            .and_then(|q| q.options.as_deref())
+            .unwrap_or_default()
+    }
+    fn has_options(&self) -> bool {
+        !self.options().is_empty()
+    }
+
+    fn options_len(&self) -> usize {
+        self.options().len()
+    }
+
+    fn option_index_for_digit(&self, ch: char) -> Option<usize> {
+        let idx = ch.to_digit(10)?.checked_sub(1)? as usize;
+        (idx < self.options_len()).then_some(idx)
+    }
+
+    fn selected_option_index(&self) -> Option<usize> {
+        self.current_answer()
+            .and_then(|answer| answer.options_state.selected_idx)
+    }
+
+    pub(super) fn wrapped_question_lines(&self, width: u16) -> Vec<String> {
+        self.current_question()
+            .map(|q| {
+                textwrap::wrap(&q.title, width.max(1) as usize)
+                    .into_iter()
+                    .map(|line| line.to_string())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    }
+
+    fn focus_is_notes(&self) -> bool {
+        !self.has_options()
+    }
+
+    pub(super) fn option_rows(&self) -> Vec<GenericDisplayRow> {
+        self.options()
+            .iter()
+            .enumerate()
+            .map(|(index, label)| {
+                let prefix = if self.selected_option_index() == Some(index) {
+                    '›'
+                } else {
+                    ' '
+                };
+                let number = index + 1;
+                let prefix = format!("{prefix} {number}. ");
+                GenericDisplayRow {
+                    name: format!("{prefix}{label}"),
+                    wrap_indent: Some(prefix.width()),
+                    ..Default::default()
+                }
+            })
+            .collect()
+    }
+
+    pub(super) fn options_required_height(&self, width: u16) -> u16 {
+        if !self.has_options() {
+            return 0;
+        }
+        let rows = self.option_rows();
+        let state = ScrollState::default();
+        measure_rows_height(&rows, &state, rows.len(), width.saturating_add(1))
     }
 
     fn save_current_draft(&mut self) {

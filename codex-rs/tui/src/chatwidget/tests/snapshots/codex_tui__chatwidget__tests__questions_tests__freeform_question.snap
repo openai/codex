@@ -7,3 +7,5 @@ expression: "render_bottom_popup(&chat, 80)"
   Which way?
 
   Type your answer
+
+  enter submit   ctrl + ] skip   ⌥ + ↓ main prompt   ⌥ + ↑ next question
