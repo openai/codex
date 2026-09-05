@@ -1,5 +1,14 @@
-//! Same-build helper lifecycle, private runtime initialization and owned transport. No devices yet.
+//! Same-build helper lifecycle with privately owned runtime, transport and opt-in local devices.
 
+#[cfg_attr(
+    not(any(
+        target_os = "macos",
+        all(target_os = "linux", target_env = "gnu"),
+        all(windows, target_env = "msvc")
+    )),
+    path = "devices_unavailable.rs"
+)]
+mod devices;
 mod runtime;
 mod transport;
 mod transport_runtime;
@@ -12,6 +21,8 @@ use std::time::Duration;
 use codex_realtime_webrtc::Message;
 use codex_realtime_webrtc::encode_frame;
 use codex_realtime_webrtc::read_message;
+
+const DEVICE_SERVICE_INTERVAL: Duration = Duration::from_millis(/*millis*/ 5);
 
 const BUILD_COMMIT: &str = match option_env!("STABLE_GIT_COMMIT") {
     Some(commit) => commit,
@@ -80,8 +91,28 @@ fn run(
     let executor = tokio::runtime::Runtime::new()?;
     let mut transport = None;
     let mut answered = false;
+    let mut devices: Option<devices::Devices> = None;
     loop {
-        let reply = match receiver.recv() {
+        let message = if let Some(devices) = &devices {
+            devices.service()?;
+            receiver.recv_timeout(DEVICE_SERVICE_INTERVAL)
+        } else {
+            receiver
+                .recv()
+                .map_err(|_| mpsc::RecvTimeoutError::Disconnected)
+        };
+        let reply = match message {
+            Ok(Message::OpenDevices {}) if devices.is_none() && runtime.is_some() && answered => {
+                devices = Some(devices::Devices::open()?);
+                Message::DevicesOpened {}
+            }
+            Ok(Message::SetAudioControls { controls }) => {
+                devices
+                    .as_ref()
+                    .ok_or_else(|| io::Error::other("audio devices not open"))?
+                    .set_controls(controls)?;
+                Message::AudioControlsApplied {}
+            }
             Ok(Message::StartTransport {}) if transport.is_none() => {
                 let peer = start_transport(&executor)?;
                 let sdp = executor.block_on(peer.offer()).map_err(io::Error::other)?;
@@ -108,13 +139,15 @@ fn run(
                 Message::RuntimeReady {}
             }
             Ok(Message::Close {}) => {
+                let _ = devices.take();
                 if let Some(mut peer) = transport.take() {
                     executor.block_on(peer.close()).map_err(io::Error::other)?;
                 }
                 output.write_all(&encode_frame(&Message::Closed {})?)?;
                 return output.flush();
             }
-            Err(_) => return Ok(()),
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
             Ok(
                 Message::Hello { .. }
                 | Message::Ready {}
@@ -123,6 +156,9 @@ fn run(
                 | Message::ApplyAnswer { .. }
                 | Message::Offer { .. }
                 | Message::TransportReady {}
+                | Message::OpenDevices {}
+                | Message::DevicesOpened {}
+                | Message::AudioControlsApplied {}
                 | Message::Closed {},
             ) => return Err(io::Error::other("invalid voice control sequence")),
         };

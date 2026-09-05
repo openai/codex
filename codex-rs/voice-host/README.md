@@ -1,8 +1,8 @@
 # Private voice helper foundation
 
 `codex-voice-host` establishes the inherited-pipe lifecycle for the proposed
-bundled voice process and owns WebRTC negotiation. It does not open devices or
-enable voice in the TUI. The existing CLI is unchanged.
+bundled voice process and owns WebRTC negotiation and opt-in local devices.
+It does not enable voice in the TUI. The existing CLI is unchanged.
 
 Frames are a big-endian u32 length followed by at most 128 KiB of JSON. SDP is
 limited to 64 KiB and redacted in diagnostics. The
@@ -21,6 +21,38 @@ After `ready`, `startTransport` gathers an `offer`; `applyAnswer` returns
 without native audio initialization and does not establish audio readiness.
 Negotiation has a deadline; `close` tears down the peer before acknowledging exit.
 UDP and TCP peer tests use real sockets, without a backend or audio devices.
+
+After native initialization and transport negotiation, `openDevices` opens the
+default microphone and speaker, initially muted and suppressed. `setAudioControls`
+invalidates old queued audio. Device errors or queue overflow end the helper.
+Startup callbacks emit silence without collecting references until worker service
+begins. After unmute, capture waits for a following callback's device timestamp
+and rejects buffers captured before that cutoff, including buffers crossing it.
+This can discard speech onset; it relies on backend timestamp estimates and does
+not establish a precise physical mute boundary.
+Both streams request roughly 10 ms callbacks within the device's supported range
+and the 8,192-frame queue budget. Unknown or incompatible ranges are rejected;
+there is no fallback to an unbounded default. Backends may deliver smaller
+callbacks than requested, so capture and rendered references pack samples into
+full 256-frame queue slots across callbacks without allocating. Each block keeps
+its oldest sample timestamp. Partial blocks are discarded on generation changes
+or rejected capture callbacks, including mute and invalid or backwards capture timestamps.
+Packing retains fewer than 256 samples (5.33 ms at 48 kHz; 32 ms at 8 kHz);
+delivery also waits for the next callback. Speaker rendering remains immediate.
+Selected callbacks must leave room for packing and the 5 ms service interval before capture becomes
+stale at one second. The queue's sample capacity must span more than that service
+interval.
+Processing lag can still overflow a queue. Before devices open, the worker blocks
+on commands instead of polling.
+`devicesOpened` confirms device opening only: capture/reference are drained locally
+until the following media stage connects encoding, decoding and the peer.
+
+Cargo Linux builds require ALSA development inputs discoverable by pkg-config
+(for example `libasound2-dev` on Debian/Ubuntu). Bazel uses the declared `alsa_lib`
+source target through `alsa-sys`; macOS uses CoreAudio and Windows uses WASAPI.
+CPAL and its native link inputs belong only to the helper. Producing a closed
+Linux distribution still requires the prepared ALSA SDK/runtime/configuration
+closure; a successful source build does not establish that packaging proof.
 
 Bazel stamps the binary with `STABLE_GIT_COMMIT`. Cargo builders must provide the
 same variable; an unstamped source build reports `dev` via `--build-commit` and is
