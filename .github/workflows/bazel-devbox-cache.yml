@@ -1,0 +1,63 @@
+name: Bazel devbox cache
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  warm-devbox-cache:
+    timeout-minutes: 30
+    runs-on: ubuntu-24.04
+    name: Warm devbox Bazel cache
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Prepare Bazel CI
+        id: prepare_bazel
+        uses: ./.github/actions/prepare-bazel-ci
+        with:
+          target: x86_64-unknown-linux-gnu
+          cache-scope: bazel-${{ github.job }}
+
+      - name: bazel build //codex-rs/cli:codex for devbox cache
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+        shell: bash
+        run: |
+          # Keep this aligned with the documented devbox hot-cache probe:
+          # `bazel build --config=ci-linux --remote_download_toplevel //codex-rs/cli:codex`.
+          # The ordinary Bazel test/release jobs exercise broader but different
+          # action keys, so they do not guarantee a fresh devbox startup build
+          # can stay on the remote cache fast path.
+          ./.github/scripts/run-bazel-ci.sh \
+            --remote-download-toplevel \
+            --print-failed-action-summary \
+            -- \
+            build \
+            --build_metadata=COMMIT_SHA=${GITHUB_SHA} \
+            --build_metadata=TAG_job=warm-devbox-cache \
+            -- \
+            //codex-rs/cli:codex
+
+      - name: Upload Bazel execution logs
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: bazel-execution-logs-warm-devbox-cache
+          path: ${{ runner.temp }}/bazel-execution-logs
+          if-no-files-found: ignore
+
+      - name: Save bazel repository cache
+        if: always() && !cancelled() && steps.prepare_bazel.outputs.repository-cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ${{ steps.prepare_bazel.outputs.repository-cache-path }}
+          key: ${{ steps.prepare_bazel.outputs.repository-cache-key }}
