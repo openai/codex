@@ -20,6 +20,7 @@ mod audio_track;
     path = "devices_unavailable.rs"
 )]
 mod devices;
+mod incoming;
 mod runtime;
 mod transport;
 mod transport_runtime;
@@ -104,6 +105,10 @@ fn run(
     let mut answered = false;
     let mut devices: Option<devices::Devices> = None;
     loop {
+        if let Some(peer) = &mut transport {
+            // The next media stage feeds these owned packets into the jitter/decode pipeline.
+            while peer.incoming.take().map_err(io::Error::other)?.is_some() {}
+        }
         let message = if let Some(devices) = &mut devices {
             let peer = transport
                 .as_mut()
@@ -136,6 +141,12 @@ fn run(
                 Message::DevicesOpened {}
             }
             Ok(Message::SetAudioControls { controls }) => {
+                transport
+                    .as_ref()
+                    .ok_or_else(|| io::Error::other("voice peer not started"))?
+                    .incoming
+                    .set_suppressed(controls.speaker_suppressed)
+                    .map_err(io::Error::other)?;
                 devices
                     .as_mut()
                     .ok_or_else(|| io::Error::other("audio devices not open"))?

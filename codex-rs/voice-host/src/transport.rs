@@ -60,6 +60,7 @@ impl PeerConnectionEventHandler for Events {
 }
 
 pub(crate) struct Transport {
+    pub(crate) incoming: crate::incoming::Incoming,
     pub(crate) audio: crate::audio_track::AudioTrack,
     connection: Arc<dyn PeerConnection>,
     gathered: Arc<Notify>,
@@ -74,6 +75,7 @@ impl Transport {
 
     async fn with_runtime(runtime: Arc<dyn webrtc::runtime::Runtime>) -> Result<Self> {
         let (media, audio) = crate::audio_track::AudioTrack::new()?;
+        let (incoming, ingress) = crate::incoming::Incoming::new();
         let gathered = Arc::new(Notify::new());
         // Upstream defaults exhaust checks after 1.4s, including checks sent before
         // a TCP connection exists. Keep probing throughout our negotiation deadline.
@@ -84,6 +86,7 @@ impl Transport {
         settings.set_ice_connection_attempts(Some(check_interval), Some(attempts));
         let connection: Arc<dyn PeerConnection> = Arc::new(
             PeerConnectionBuilder::new()
+                .with_interceptor_registry(rtc::interceptor::Registry::from(ingress))
                 .with_media_engine(media)
                 .with_runtime(runtime)
                 .with_setting_engine(settings)
@@ -128,6 +131,7 @@ impl Transport {
             sender.send_replace(false);
         });
         Ok(Self {
+            incoming,
             audio,
             connection,
             gathered,

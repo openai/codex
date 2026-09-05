@@ -14,6 +14,7 @@ use webrtc::media_stream::MediaStreamTrack;
 use webrtc::media_stream::track_local::static_sample::TrackLocalStaticSample;
 use webrtc::peer_connection::MediaEngine;
 
+pub(crate) const OPUS_PAYLOAD_TYPE: u8 = 111;
 pub(crate) const SEND_TIMEOUT: Duration = Duration::from_millis(/*millis*/ 100);
 
 pub(crate) struct EncodedAudio {
@@ -42,7 +43,7 @@ impl AudioTrack {
             .register_codec(
                 RTCRtpCodecParameters {
                     rtp_codec: codec.clone(),
-                    payload_type: 111,
+                    payload_type: OPUS_PAYLOAD_TYPE,
                 },
                 RtpCodecKind::Audio,
             )
@@ -84,7 +85,7 @@ impl AudioTrack {
                 self.track
                     .write_sample(
                         self.ssrc,
-                        /*payload_type*/ 111,
+                        /*payload_type*/ OPUS_PAYLOAD_TYPE,
                         &Sample {
                             duration,
                             ..Default::default()
@@ -99,7 +100,7 @@ impl AudioTrack {
             self.track
                 .write_sample(
                     self.ssrc,
-                    /*payload_type*/ 111,
+                    /*payload_type*/ OPUS_PAYLOAD_TYPE,
                     &Sample {
                         data: frame.data.into(),
                         duration,
