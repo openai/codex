@@ -1,0 +1,163 @@
+//! Verify question input delivery, retained drafts, and visible editor behavior.
+use super::*;
+use codex_protocol::items::AsyncUserInputQuestion;
+use pretty_assertions::assert_eq;
+
+fn questions() -> Vec<AsyncUserInputQuestion> {
+    vec![
+        question("Which way?", /*options*/ None),
+        question("Any details?", /*options*/ None),
+    ]
+}
+
+#[tokio::test]
+async fn unavailable_send_keeps_answer_and_skip_remains_available() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.add_async_questions("message", &questions());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+    chat.bottom_pane.handle_paste("kept answer".into());
+    chat.blocks_direct_input = true;
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    assert_eq!(question_count(&chat), 2);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::CONTROL));
+    assert_eq!(question_count(&chat), 1);
+}
+
+#[tokio::test]
+async fn accepted_question_answer_uses_existing_delivery_and_keeps_main_draft() {
+    for queued in [false, true] {
+        let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.thread_id = Some(ThreadId::new());
+        chat.bottom_pane
+            .set_composer_text("main draft".into(), Vec::new(), Vec::new());
+        chat.input_queue.suppress_queue_autosend = queued;
+        chat.add_async_questions("message", &questions());
+        chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+        chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+        assert_eq!(question_count(&chat), 2);
+        if !queued {
+            insta::assert_snapshot!(
+                "freeform_question",
+                render_bottom_popup(&chat, /*width*/ 80)
+            );
+        }
+        chat.bottom_pane.handle_paste("!literal answer".into());
+        chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+        assert_eq!(question_count(&chat), 1);
+        assert_eq!(chat.bottom_pane.composer_text(), "main draft");
+        let expected = "> Which way?\n\n!literal answer";
+        if queued {
+            assert_eq!(
+                chat.input_queue.queued_user_messages.front().unwrap().text,
+                expected
+            );
+            assert!(op_rx.try_recv().is_err());
+        } else {
+            assert_answer(op_rx.try_recv().unwrap(), expected);
+        }
+    }
+}
+
+#[tokio::test]
+async fn disconnected_questions_remain_editable_without_sending() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.add_async_questions("message", &questions());
+    chat.pause_for_disconnect();
+    chat.handle_disconnected_key(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+    chat.bottom_pane.handle_paste("offline draft".into());
+    chat.handle_disconnected_key(KeyEvent::from(KeyCode::Enter));
+    assert_eq!(question_count(&chat), 2);
+    assert!(op_rx.try_recv().is_err());
+    chat.handle_disconnected_key(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::CONTROL));
+    assert_eq!(question_count(&chat), 2);
+}
+
+fn question_count(chat: &ChatWidget) -> usize {
+    chat.bottom_pane
+        .questions
+        .as_ref()
+        .unwrap()
+        .unanswered_count()
+}
+
+fn open_questions(chat: &mut ChatWidget, options: Option<Vec<String>>) {
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_agent_message_item_completed(
+        AgentMessageItem {
+            id: "review".into(),
+            content: Vec::new(),
+            phase: None,
+            memory_citation: None,
+            delivery: None,
+            questions: Some(vec![
+                AsyncUserInputQuestion {
+                    title: "First?".into(),
+                    options,
+                },
+                question("Second?", Some(vec!["Next".into()])),
+            ]),
+        },
+        "turn",
+        /*from_replay*/ false,
+    );
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+    render_bottom_popup(chat, /*width*/ 80);
+}
+
+#[tokio::test]
+async fn question_queue_key_does_not_steer_the_running_turn() {
+    let (mut chat, _rx, mut ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    open_questions(&mut chat, /*options*/ None);
+    chat.on_task_started();
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+    chat.bottom_pane.handle_paste("kept".into());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::ALT));
+    chat.bottom_pane.handle_paste("  later  ".into());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Tab));
+    assert_eq!(
+        chat.input_queue.queued_user_messages.front().unwrap().text,
+        "> First?\n\nlater"
+    );
+    let mut repeat = KeyEvent::from(KeyCode::Tab);
+    repeat.kind = KeyEventKind::Repeat;
+    chat.handle_key_event(repeat);
+    assert_eq!(question_count(&chat), 1);
+    assert!(ops.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn single_question_spacing_with_working_status() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.bottom_pane.set_task_running(/*running*/ true);
+    chat.add_async_questions("single", &[question("Only question?", /*options*/ None)]);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+    let rendered = render_bottom_popup(&chat, /*width*/ 80);
+    let rows: Vec<_> = rendered.lines().collect();
+    let question = rows
+        .iter()
+        .position(|line| line.trim() == "Only question?")
+        .unwrap();
+    assert!(rows[question - 2].contains("Working"));
+    assert!(rows[question - 1].is_empty());
+    insta::assert_snapshot!("single_question_working_spacing", rendered);
+}
+
+fn assert_answer(op: Op, expected: &str) {
+    let Op::UserTurn { items, .. } = op else {
+        panic!("user turn")
+    };
+    assert_eq!(
+        items,
+        vec![UserInput::Text {
+            text: expected.into(),
+            text_elements: Vec::new()
+        }]
+    );
+}
+
+fn question(title: &str, options: Option<Vec<String>>) -> AsyncUserInputQuestion {
+    AsyncUserInputQuestion {
+        title: title.into(),
+        options,
+    }
+}

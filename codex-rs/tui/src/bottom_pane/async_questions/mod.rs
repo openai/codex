@@ -2,12 +2,14 @@
 //! Only locally accepted submissions remove questions; arrival and expiry never steal focus.
 
 use crate::app_event_sender::AppEventSender;
+use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::ChatComposer;
 use crate::bottom_pane::ChatComposerConfig;
 use crate::bottom_pane::InputResult;
 use crate::bottom_pane::bottom_pane_view::BottomPaneView;
 use crate::bottom_pane::chat_composer::ComposerDraft;
 use crate::key_hint::KeyBindingListExt;
+use crate::keymap::KeymapContext;
 use crate::keymap::RuntimeKeymap;
 use codex_protocol::items::AsyncUserInputQuestion;
 use crossterm::event::KeyEvent;
@@ -116,3 +118,7 @@ impl AsyncQuestions {
         self.state.pending.len()
     }
 }
+
+#[cfg(test)]
+#[path = "state_tests.rs"]
+mod tests;

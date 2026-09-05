@@ -14,6 +14,9 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
+        if self.handle_question_key(key_event) {
+            return;
+        }
         if self.bottom_pane.has_active_view()
             && !matches!(
                 key_event,
@@ -521,7 +524,7 @@ impl ChatWidget {
     ///
     /// When the double-press quit shortcut is enabled, pressing the same shortcut again before
     /// expiry requests a shutdown-first quit.
-    fn on_ctrl_c(&mut self) {
+    pub(super) fn on_ctrl_c(&mut self) {
         let key = key_hint::ctrl(KeyCode::Char('c'));
         let modal_or_popup_active = !self.bottom_pane.no_modal_or_popup_active();
         let should_pause_active_goal = self

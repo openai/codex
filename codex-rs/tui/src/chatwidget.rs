@@ -357,6 +357,7 @@ mod input_flow;
 mod input_restore;
 mod input_submission;
 mod interrupts;
+mod questions;
 use self::interrupts::InterruptManager;
 mod keymap_picker;
 mod mcp_startup;

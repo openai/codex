@@ -1153,6 +1153,39 @@ mod tests {
     }
 
     #[test]
+    fn picker_question_actions_snapshot() {
+        let runtime = RuntimeKeymap::defaults();
+        let params = build_keymap_picker_params_for_selected_action(
+            &runtime,
+            &TuiKeymap::default(),
+            "chat",
+            "skip_question",
+        );
+        assert_snapshot!(
+            "keymap_question_actions",
+            render_picker(params, /*width*/ 120)
+        );
+        let descriptions = ["edit_queued_message", "prompt_stack_back", "skip_question"]
+            .map(|action| {
+                render_picker(
+                    build_keymap_action_menu_params(
+                        "chat".into(),
+                        action.into(),
+                        &runtime,
+                        &TuiKeymap::default(),
+                    ),
+                    /*width*/ 120,
+                )
+                .split("\n\n")
+                .next()
+                .unwrap()
+                .to_string()
+            })
+            .join("\n\n");
+        assert_snapshot!("keymap_question_action_descriptions", descriptions);
+    }
+
+    #[test]
     fn picker_all_tab_items_remain_searchable() {
         let runtime = RuntimeKeymap::defaults();
         let params = build_keymap_picker_params(&runtime, &TuiKeymap::default());

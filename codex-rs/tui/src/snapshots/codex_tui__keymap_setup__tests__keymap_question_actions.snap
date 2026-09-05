@@ -1,0 +1,22 @@
+---
+source: tui/src/keymap_setup.rs
+expression: "render_picker(params, 120)"
+---
+
+  Keymap
+  All configurable shortcuts.
+  141 actions, 0 customized, 5 unbound.
+
+  [All]  Common  Customized (0)  Unbound (5)  App  Composer  Editor  Vim  Navigation  Agents  Approval  Debug
+
+  Type to search shortcuts
+  Chat           Interrupt Turn             esc
+  Chat           Decrease Reasoning Effort  alt-,, shift-down
+  Chat           Increase Reasoning Effort  alt-., shift-up
+  Chat         - Previous Permission Mode   unbound
+  Chat         - Next Permission Mode       unbound
+  Chat           Edit Queued Message        alt-up, shift-left
+  Chat           Prompt Stack Back          alt-down, shift-right
+› Chat           Skip Question              ctrl-]
+
+  left/right group · enter edit shortcut · * custom · - unbound · esc close

@@ -2693,11 +2693,23 @@ mod tests {
             keymap.chat.previous_permission_mode = None;
             keymap.chat.next_permission_mode = Some(one(binding));
             assert!(RuntimeKeymap::from_config(&keymap).is_err());
+            keymap.chat.next_permission_mode = None;
+            keymap.chat.skip_question = Some(one(binding));
+            assert!(RuntimeKeymap::from_config(&keymap).is_err());
+            keymap.chat.skip_question = None;
+            keymap.chat.prompt_stack_back = Some(one(binding));
+            assert!(RuntimeKeymap::from_config(&keymap).is_err());
         }
         #[cfg(windows)]
         {
             let mut keymap = TuiKeymap::default();
             keymap.chat.next_permission_mode = Some(one("ctrl-alt-q"));
+            assert!(RuntimeKeymap::from_config(&keymap).is_err());
+            keymap.chat.next_permission_mode = None;
+            keymap.chat.skip_question = Some(one("ctrl-alt-q"));
+            assert!(RuntimeKeymap::from_config(&keymap).is_err());
+            keymap.chat.skip_question = None;
+            keymap.chat.prompt_stack_back = Some(one("ctrl-alt-q"));
             assert!(RuntimeKeymap::from_config(&keymap).is_err());
         }
         let mut keymap = TuiKeymap::default();

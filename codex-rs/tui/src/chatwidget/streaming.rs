@@ -322,6 +322,9 @@ impl ChatWidget {
         turn_id: &str,
         from_replay: bool,
     ) {
+        if !from_replay && let Some(questions) = &item.questions {
+            self.add_async_questions(&item.id, questions);
+        }
         self.transcript.last_completed_agent_message = Some((turn_id.to_string(), item.id.clone()));
         let mut message = String::new();
         for content in &item.content {
@@ -378,11 +381,14 @@ impl ChatWidget {
                 }
             });
         }
-        self.status_state.pending_status_indicator_restore = match item.phase {
-            // Models that don't support preambles only output AgentMessageItems on turn completion.
-            Some(MessagePhase::FinalAnswer) | None => !self.input_queue.pending_steers.is_empty(),
-            Some(MessagePhase::Commentary) => true,
-        };
+        self.status_state.pending_status_indicator_restore = item.questions.is_some()
+            || match item.phase {
+                // Models that don't support preambles only output AgentMessageItems on turn completion.
+                Some(MessagePhase::FinalAnswer) | None => {
+                    !self.input_queue.pending_steers.is_empty()
+                }
+                Some(MessagePhase::Commentary) => true,
+            };
         self.maybe_restore_status_indicator_after_stream_idle();
     }
 

@@ -1,0 +1,9 @@
+---
+source: tui/src/chatwidget/tests/questions_tests.rs
+expression: "render_bottom_popup(&chat, 80)"
+---
+  1 of 2
+
+  Which way?
+
+  Type your answer

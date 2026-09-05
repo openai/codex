@@ -1,0 +1,24 @@
+---
+source: tui/src/keymap_setup.rs
+expression: descriptions
+---
+
+  Edit Shortcut
+  Edit Queued Message · Chat
+  Current alt-up, shift-left · Default keymap
+  Config `tui.keymap.chat.edit_queued_message`
+  Move up through questions, then edit the last queued message.
+
+
+  Edit Shortcut
+  Prompt Stack Back · Chat
+  Current alt-down, shift-right · Default keymap
+  Config `tui.keymap.chat.prompt_stack_back`
+  Move back through questions toward the composer.
+
+
+  Edit Shortcut
+  Skip Question · Chat
+  Current ctrl-] · Default keymap
+  Config `tui.keymap.chat.skip_question`
+  Skip the focused question.
