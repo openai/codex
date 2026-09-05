@@ -512,11 +512,10 @@ impl GuardianV2Extension {
         let thread_id = input.thread_store.level_id().to_owned();
         let turn_id = input.turn_id.to_owned();
         let root_turn_id = input.root_turn_id.map(str::to_owned);
-        let guardian_ticket = input
+        let parent_response_id = input
             .turn_store
-            .get::<codex_protocol::guardian_ticket::GuardianTicket>()
-            .as_deref()
-            .cloned();
+            .get::<codex_api::ResponseId>()
+            .map(|id| id.0.clone());
         let thread_context: Result<_, String> = async {
             let parsed_thread_id =
                 ThreadId::from_string(&thread_id).map_err(|error| error.to_string())?;
@@ -839,7 +838,7 @@ impl GuardianV2Extension {
                 let instructions = guardian_config.render_classifier_instructions(policy);
                 let output = match sampler
                     .sample(LunaSamplingRequest {
-                        guardian_ticket,
+                        parent_response_id,
                         instructions,
                         trusted_review_evidence,
                         trusted_tool_context,

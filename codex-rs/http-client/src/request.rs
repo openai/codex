@@ -11,7 +11,7 @@ use std::time::Duration;
 /// Clones share the encoded allocation. Internally, the body can also hold the
 /// final compressed wire bytes while retaining the original JSON only when
 /// request-body trace logging is enabled.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EncodedJsonBody {
     bytes: Bytes,
     trace_bytes: Option<Bytes>,
@@ -33,24 +33,8 @@ impl EncodedJsonBody {
         &self.bytes
     }
 
-    /// Omits credential-bearing bodies from tracing and debug output, including retries.
-    pub fn without_body_logging(mut self) -> Self {
-        self.trace_bytes = Some(Bytes::from_static(b"<redacted>"));
-        self
-    }
-
     pub(crate) fn trace_bytes(&self) -> &[u8] {
         self.trace_bytes.as_ref().unwrap_or(&self.bytes)
-    }
-}
-
-impl std::fmt::Debug for EncodedJsonBody {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("EncodedJsonBody")
-            .field("body", &String::from_utf8_lossy(self.trace_bytes()))
-            .field("prepared", &self.prepared)
-            .finish()
     }
 }
 
@@ -136,13 +120,7 @@ impl Request {
             self.body,
             Some(RequestBody::Json(_) | RequestBody::EncodedJson(_))
         );
-        let retained_trace_bytes = match self.body.as_ref() {
-            Some(RequestBody::EncodedJson(body)) => body.trace_bytes.clone(),
-            Some(RequestBody::Json(_) | RequestBody::Raw(_)) | None => None,
-        };
-        let trace_bytes = if retained_trace_bytes.is_some() {
-            retained_trace_bytes
-        } else if self.compression != RequestCompression::None
+        let trace_bytes = if self.compression != RequestCompression::None
             && tracing::enabled!(target: "codex_http_client::transport", tracing::Level::TRACE)
         {
             match self.body.as_ref() {

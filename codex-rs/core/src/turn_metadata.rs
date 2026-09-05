@@ -393,6 +393,14 @@ impl TurnMetadataState {
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
+        // Extract Guardian's internal parent before filtering configured metadata keys.
+        // Ordinary app-server client metadata stays in `extra`.
+        let parent_response_id =
+            if self.subagent_header.as_deref() == Some(crate::guardian::GUARDIAN_REVIEWER_NAME) {
+                extra.remove("parent_response_id")
+            } else {
+                None
+            };
         for key in self
             .responses_api_metadata
             .read()
@@ -402,6 +410,7 @@ impl TurnMetadataState {
             extra.remove(key);
         }
         let mut metadata = CodexResponsesMetadata {
+            parent_response_id,
             turn_id: Some(self.turn_id.clone()),
             agent_name: Some(self.agent_name.clone()),
             forked_from_thread_id: self.forked_from_thread_id,

@@ -185,7 +185,6 @@ impl std::fmt::Debug for TurnEnvironment {
 /// Request options for one turn, separate from persistent thread settings.
 #[derive(Default)]
 pub(crate) struct NewTurnContextOptions {
-    pub(crate) guardian_ticket: Option<codex_protocol::guardian_ticket::GuardianTicket>,
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) cyber_access_program: Option<CyberAccessProgram>,
 }
@@ -193,8 +192,6 @@ pub(crate) struct NewTurnContextOptions {
 /// The context needed for a single turn of the thread.
 #[derive(Debug)]
 pub struct TurnContext {
-    /// Receipt selected for this Guardian turn, separate from its own responses.
-    pub(crate) guardian_ticket: Option<codex_protocol::guardian_ticket::GuardianTicket>,
     pub(crate) sub_id: String,
     pub(crate) trace_id: Option<String>,
     pub(crate) realtime_active: bool,
@@ -540,7 +537,6 @@ impl TurnContext {
             windows_sandbox_level: self.windows_sandbox_level,
             available_models,
             unified_exec_shell_mode: self.unified_exec_shell_mode.clone(),
-            guardian_ticket: self.guardian_ticket.clone(),
             final_output_json_schema: self.final_output_json_schema.clone(),
             dynamic_tools: self.dynamic_tools.clone(),
             turn_metadata_state: self.turn_metadata_state.clone(),
@@ -785,7 +781,6 @@ impl Session {
         let extension_data = Arc::new(codex_extension_api::ExtensionData::new(sub_id.clone()));
         extension_data.insert(skills_snapshot);
         TurnContext {
-            guardian_ticket: None,
             sub_id,
             trace_id: current_span_trace_id(),
             realtime_active: false,
@@ -1040,7 +1035,6 @@ impl Session {
         turn_context.extension_data.insert(trusted_plugin_roots);
         turn_context.realtime_active = self.conversation.running_state().await.is_some();
 
-        turn_context.guardian_ticket = options.guardian_ticket;
         turn_context.final_output_json_schema = options.final_output_json_schema;
         if turn_context.config.model_provider_id == codex_model_provider_info::OPENAI_PROVIDER_ID {
             turn_context.cyber_access_program = options.cyber_access_program;

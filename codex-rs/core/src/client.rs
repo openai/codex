@@ -1104,14 +1104,24 @@ impl ModelClient {
             && provider.aws.is_none()
     }
 
-    fn set_guardian_ticket_request(
+    fn set_guardian_metadata(
         &self,
         metadata: &mut Option<HashMap<String, String>>,
+        parent_response_id: Option<&str>,
         auth: Option<&CodexAuth>,
         endpoint: ResponsesEndpoint,
     ) {
         if let Some(metadata) = metadata.as_mut() {
-            metadata.remove("guardian_ticket_requested");
+            metadata.remove("guardian_credits_requested");
+            metadata.remove("parent_response_id");
+        }
+        if endpoint == ResponsesEndpoint::Guardian
+            && let Some(parent_response_id) = parent_response_id
+        {
+            metadata.get_or_insert_with(HashMap::new).insert(
+                "parent_response_id".to_owned(),
+                parent_response_id.to_owned(),
+            );
         }
         if self.free_guardian_enabled
             && endpoint == ResponsesEndpoint::Responses
@@ -1125,7 +1135,7 @@ impl ModelClient {
         {
             metadata
                 .get_or_insert_with(HashMap::new)
-                .insert("guardian_ticket_requested".to_owned(), "true".to_owned());
+                .insert("guardian_credits_requested".to_owned(), "true".to_owned());
         }
     }
 
@@ -1351,7 +1361,6 @@ impl ModelClientSession {
             },
             compression,
             turn_state: Some(Arc::clone(&self.turn_state)),
-            guardian_ticket: responses_metadata.guardian_ticket.clone(),
         }
     }
 
@@ -1641,8 +1650,9 @@ impl ModelClientSession {
                 service_tier.clone(),
                 responses_metadata,
             )?;
-            self.client.set_guardian_ticket_request(
+            self.client.set_guardian_metadata(
                 &mut request.client_metadata,
+                responses_metadata.parent_response_id.as_deref(),
                 client_setup.auth.as_ref(),
                 endpoint,
             );
@@ -1900,8 +1910,9 @@ impl ModelClientSession {
                 ),
                 ..ResponseCreateWsRequest::from(&request)
             };
-            self.client.set_guardian_ticket_request(
+            self.client.set_guardian_metadata(
                 &mut ws_payload.client_metadata,
+                responses_metadata.parent_response_id.as_deref(),
                 client_setup.auth.as_ref(),
                 endpoint,
             );
@@ -1922,7 +1933,6 @@ impl ModelClientSession {
                     ws_request,
                     self.websocket_session.connection_reused(),
                     Some(Arc::clone(&self.turn_state)),
-                    responses_metadata.guardian_ticket.as_ref(),
                 )
                 .await;
             if let Some(original_item_ids) = original_item_ids {

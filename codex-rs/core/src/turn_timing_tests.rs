@@ -29,9 +29,7 @@ async fn turn_timing_state_records_ttft_only_once_per_turn() {
     state.mark_turn_started(Instant::now()).await;
     assert_eq!(
         state
-            .record_ttft_for_response_event(&ResponseEvent::Created {
-                guardian_ticket: None
-            })
+            .record_ttft_for_response_event(&ResponseEvent::Created { response_id: None })
             .await,
         None
     );

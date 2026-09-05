@@ -192,7 +192,7 @@ async fn connect_sampler(config: LunaSamplerConfig) -> Result<LunaSampler> {
 
 fn sample_request(parent_turn_id: &str) -> LunaSamplingRequest {
     LunaSamplingRequest {
-        guardian_ticket: None,
+        parent_response_id: None,
         instructions: "Return high for high risk or low for low risk.".to_owned(),
         trusted_review_evidence: Vec::new(),
         trusted_tool_context: None,
@@ -447,7 +447,7 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_classifications
 
     let first = sampler
         .sample(LunaSamplingRequest {
-            guardian_ticket: None,
+            parent_response_id: None,
             instructions: "Return high for high risk or low for low risk.".to_owned(),
             trusted_review_evidence: Vec::new(),
             trusted_tool_context: None,
@@ -479,7 +479,7 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_classifications
     manager.refresh_token_from_authority().await?;
     let second = sampler
         .sample(LunaSamplingRequest {
-            guardian_ticket: None,
+            parent_response_id: None,
             instructions: "Return high for high risk or low for low risk.".to_owned(),
             trusted_review_evidence: Vec::new(),
             trusted_tool_context: None,
@@ -655,7 +655,7 @@ async fn sampler_returns_classification_token_before_terminal_response_events() 
     let output = tokio::time::timeout(
         Duration::from_secs(2),
         sampler.sample(LunaSamplingRequest {
-            guardian_ticket: None,
+            parent_response_id: None,
             instructions: "Return high for high risk or low for low risk.".to_owned(),
             trusted_review_evidence: Vec::new(),
             trusted_tool_context: None,
@@ -1119,7 +1119,7 @@ async fn sampler_limits_transient_recovery_attempts() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn guardian_ticket_survives_classifier_transport_retry() -> Result<()> {
+async fn parent_response_id_survives_classifier_transport_retry() -> Result<()> {
     skip_if_no_network!(Ok(()));
     for free_guardian in [false, true] {
         let healthy = responses::start_websocket_server(vec![vec![vec![
@@ -1146,10 +1146,9 @@ async fn guardian_ticket_survives_classifier_transport_retry() -> Result<()> {
             );
         }
         let sampler = connect_sampler(config).await?;
-        let raw_ticket = "t".repeat(43);
+        let parent_response_id = "resp-parent";
         let mut request = sample_request("turn-1");
-        request.guardian_ticket =
-            codex_protocol::guardian_ticket::GuardianTicket::from_server(&raw_ticket);
+        request.parent_response_id = Some(parent_response_id.to_owned());
         assert_eq!(sampler.sample(request).await?, "low");
         for server in [&expired, &healthy] {
             let requests = server.single_connection();
@@ -1157,12 +1156,12 @@ async fn guardian_ticket_survives_classifier_transport_retry() -> Result<()> {
             let body = requests[0].body_json();
             assert_eq!(
                 (
-                    body["client_metadata"].get("guardian_ticket").cloned(),
-                    body["client_metadata"].get("guardian_ticket_requested"),
+                    body["client_metadata"].get("parent_response_id").cloned(),
+                    body["client_metadata"].get("guardian_credits_requested"),
                 ),
-                (free_guardian.then(|| json!(raw_ticket)), None)
+                (free_guardian.then(|| json!(parent_response_id)), None)
             );
-            assert!(!body["input"].to_string().contains(&raw_ticket));
+            assert!(!body["input"].to_string().contains(parent_response_id));
         }
     }
 

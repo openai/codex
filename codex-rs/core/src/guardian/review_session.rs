@@ -1300,8 +1300,14 @@ async fn run_review_on_session(
                 }),
                 ..Default::default()
             })
+            .with_responses_metadata(
+                params
+                    .parent_context
+                    .parent_response_id
+                    .as_ref()
+                    .map(|id| HashMap::from([("parent_response_id".to_owned(), id.clone())])),
+            )
             .on_start(TurnStartOptions {
-                guardian_ticket: params.parent_context.guardian_ticket.clone(),
                 final_output_json_schema: Some(params.schema.clone()),
                 service_tier: None,
                 parent_turn_id: Some(parent_turn.sub_id.clone()),

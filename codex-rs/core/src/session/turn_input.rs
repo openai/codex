@@ -121,7 +121,6 @@ impl PreparedTurnInputSettings {
         kind: TurnStartKind,
     ) -> CodexResult<Option<Arc<TurnContext>>> {
         let TurnStartOptions {
-            guardian_ticket,
             turn_trigger,
             final_output_json_schema,
             service_tier,
@@ -139,7 +138,6 @@ impl PreparedTurnInputSettings {
         updates.service_tier_for_turn = service_tier;
 
         let options = NewTurnContextOptions {
-            guardian_ticket,
             final_output_json_schema,
             cyber_access_program,
         };

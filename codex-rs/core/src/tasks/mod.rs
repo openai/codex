@@ -473,7 +473,6 @@ impl Session {
             .new_turn_with_default_settings(
                 sub_id,
                 NewTurnContextOptions {
-                    guardian_ticket: start_options.guardian_ticket,
                     final_output_json_schema: start_options.final_output_json_schema,
                     cyber_access_program: start_options.cyber_access_program,
                 },

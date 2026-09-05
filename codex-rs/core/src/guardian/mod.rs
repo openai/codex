@@ -88,8 +88,8 @@ const GUARDIAN_RECENT_ENTRY_LIMIT: usize = 40;
 /// step-scoped things past their lifetime (like MCP bindings)
 #[derive(Clone)]
 pub(crate) struct GuardianReviewContext {
-    /// Ticket from the response currently handled in this execution context.
-    pub(crate) guardian_ticket: Option<codex_protocol::guardian_ticket::GuardianTicket>,
+    /// The response currently handled in this execution context.
+    pub(crate) parent_response_id: Option<String>,
     turn: Arc<TurnContext>,
     environments: TurnEnvironmentSnapshot,
     // Model and reasoning inputs are carried for the follow-up Guardian and V2 migrations.
@@ -109,11 +109,10 @@ impl GuardianReviewContext {
         settings: &ResolvedStepSettings,
     ) -> Self {
         Self {
-            guardian_ticket: turn
+            parent_response_id: turn
                 .extension_data
-                .get::<codex_protocol::guardian_ticket::GuardianTicket>()
-                .as_deref()
-                .cloned(),
+                .get::<codex_api::ResponseId>()
+                .map(|id| id.0.clone()),
             environments: turn.environments.clone(),
             model_info: Arc::clone(&settings.model_info),
             reasoning_effort: settings.reasoning_effort().cloned(),
@@ -136,12 +135,11 @@ impl GuardianReviewContext {
 impl From<&Arc<StepContext>> for GuardianReviewContext {
     fn from(step: &Arc<StepContext>) -> Self {
         Self {
-            guardian_ticket: step
+            parent_response_id: step
                 .turn
                 .extension_data
-                .get::<codex_protocol::guardian_ticket::GuardianTicket>()
-                .as_deref()
-                .cloned(),
+                .get::<codex_api::ResponseId>()
+                .map(|id| id.0.clone()),
             turn: Arc::clone(&step.turn),
             environments: step.environments.clone(),
             model_info: Arc::clone(&step.settings.model_info),
@@ -156,11 +154,10 @@ impl From<&Arc<StepContext>> for GuardianReviewContext {
 impl From<Arc<TurnContext>> for GuardianReviewContext {
     fn from(turn: Arc<TurnContext>) -> Self {
         Self {
-            guardian_ticket: turn
+            parent_response_id: turn
                 .extension_data
-                .get::<codex_protocol::guardian_ticket::GuardianTicket>()
-                .as_deref()
-                .cloned(),
+                .get::<codex_api::ResponseId>()
+                .map(|id| id.0.clone()),
             environments: turn.environments.clone(),
             model_info: Arc::clone(turn.model_info()),
             reasoning_effort: turn.reasoning_effort().cloned(),

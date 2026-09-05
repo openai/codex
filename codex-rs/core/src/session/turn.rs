@@ -1437,10 +1437,10 @@ async fn run_sampling_request(
     let mut original_input = None;
     let mut executed_tool_calls_by_output = HashMap::new();
     loop {
-        // A retry must not lend a previous response's ticket to the next tool call.
+        // A retry must not attribute the next tool call to the previous response.
         turn_context
             .extension_data
-            .remove::<codex_protocol::guardian_ticket::GuardianTicket>();
+            .remove::<codex_api::ResponseId>();
         let prompt_input = if let Some(input) = initial_input.take() {
             input
         } else {
@@ -2376,9 +2376,11 @@ async fn try_run_sampling_request(
         record_turn_ttft_metric(&turn_context, &event).await;
 
         match event {
-            ResponseEvent::Created { guardian_ticket } => {
-                if let Some(ticket) = guardian_ticket {
-                    turn_context.extension_data.insert(ticket);
+            ResponseEvent::Created { response_id } => {
+                if let Some(response_id) = response_id {
+                    turn_context
+                        .extension_data
+                        .insert(codex_api::ResponseId(response_id));
                 }
             }
             ResponseEvent::OutputItemDone(mut item) => {

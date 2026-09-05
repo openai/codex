@@ -619,7 +619,6 @@ impl Session {
             request_kind,
         );
         CodexResponsesMetadata {
-            guardian_ticket: turn_context.guardian_ticket.clone(),
             window_number: Some(window_number),
             context_window_id: Some(context_window_id),
             history_ingest_requested: turn_context

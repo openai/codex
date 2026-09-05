@@ -73,6 +73,10 @@ async fn turn_start_forwards_client_metadata_to_responses_request_v2() -> Result
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(thread_req)).await??;
 
     let client_metadata = HashMap::from([
+        (
+            "parent_response_id".to_string(),
+            "client-correlation".to_string(),
+        ),
         ("fiber_run_id".to_string(), "fiber-start-123".to_string()),
         ("origin".to_string(), "gaas".to_string()),
         (
@@ -109,6 +113,20 @@ async fn turn_start_forwards_client_metadata_to_responses_request_v2() -> Result
         .as_deref()
         .map(parse_json_header)
         .expect("x-codex-turn-metadata header should be present");
+    let body = request.body_json();
+    let body_turn_metadata = parse_json_header(
+        body["client_metadata"]["x-codex-turn-metadata"]
+            .as_str()
+            .expect("turn metadata"),
+    );
+    assert_eq!(
+        (
+            metadata["parent_response_id"].as_str(),
+            body_turn_metadata["parent_response_id"].as_str(),
+            body["client_metadata"].get("parent_response_id"),
+        ),
+        (Some("client-correlation"), Some("client-correlation"), None),
+    );
     assert_eq!(metadata["fiber_run_id"].as_str(), Some("fiber-start-123"));
     assert_eq!(metadata["origin"].as_str(), Some("gaas"));
     assert_eq!(metadata["thread_source"].as_str(), Some("automation"));
@@ -603,6 +621,10 @@ async fn turn_start_forwards_client_metadata_to_responses_websocket_request_body
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(thread_req)).await??;
 
     let client_metadata = HashMap::from([
+        (
+            "parent_response_id".to_string(),
+            "client-correlation".to_string(),
+        ),
         ("fiber_run_id".to_string(), "fiber-start-123".to_string()),
         ("origin".to_string(), "gaas".to_string()),
     ]);
@@ -646,6 +668,13 @@ async fn turn_start_forwards_client_metadata_to_responses_websocket_request_body
         .as_str()
         .map(parse_json_header)
         .expect("websocket x-codex-turn-metadata client metadata should be present");
+    assert_eq!(
+        (
+            metadata["parent_response_id"].as_str(),
+            request["client_metadata"].get("parent_response_id"),
+        ),
+        (Some("client-correlation"), None),
+    );
     assert_eq!(metadata["fiber_run_id"].as_str(), Some("fiber-start-123"));
     assert_eq!(metadata["origin"].as_str(), Some("gaas"));
     assert_eq!(metadata["thread_source"].as_str(), Some("automation"));
