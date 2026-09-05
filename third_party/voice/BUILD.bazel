@@ -1,4 +1,6 @@
 # All native build consumers must receive the same pinned source manifest.
+exports_files(["opus-toolchain.cmake"])
+
 filegroup(
     name = "source_inputs",
     srcs = [

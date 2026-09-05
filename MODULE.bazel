@@ -146,6 +146,8 @@ single_version_override(
 bazel_dep(name = "rules_platform", version = "0.1.0")
 bazel_dep(name = "aws-lc", version = "5.1.0.bcr.1")
 bazel_dep(name = "rules_rs", version = "0.0.96")
+bazel_dep(name = "rules_foreign_cc", version = "0.15.1")
+
 single_version_override(
     module_name = "rules_rs",
     patch_strip = 1,
@@ -547,6 +549,29 @@ crate.annotation(
 )
 
 inject_repo(crate, "llvm", "llvm-project", "macos_sdk")
+
+# The bundled Opus encoder uses CMake; supply executable tools and their data,
+# rather than relying on a build worker's PATH. Versions are pinned by the module.
+crate.annotation(
+    build_script_data = ["//third_party/voice:opus-toolchain.cmake"],
+    build_script_env = {
+        "CMAKE": "$${pwd}/$(CMAKE)",
+        "CMAKE_GENERATOR": "Ninja",
+        "CMAKE_TOOLCHAIN_FILE": "$(execpath @@//third_party/voice:opus-toolchain.cmake)",
+        "CODEX_VOICE_NINJA": "$${pwd}/$(NINJA)",
+    },
+    build_script_toolchains = [
+        "@rules_foreign_cc//toolchains:current_cmake_toolchain",
+        "@rules_foreign_cc//toolchains:current_ninja_toolchain",
+    ],
+    build_script_tools = [
+        "@rules_foreign_cc//toolchains:current_cmake_toolchain",
+        "@rules_foreign_cc//toolchains:current_ninja_toolchain",
+    ],
+    crate = "opusic-sys",
+)
+
+inject_repo(crate, "rules_foreign_cc")
 
 crate.annotation(
     # Provide the hermetic SDK path so the build script doesn't try to invoke an unavailable `xcrun --show-sdk-path`.
