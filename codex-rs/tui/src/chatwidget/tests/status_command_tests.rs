@@ -52,6 +52,15 @@ async fn status_command_refresh_updates_cached_limits_for_future_status_outputs(
     chat.finish_status_rate_limit_refresh(first_request_id, vec![snapshot(/*percent*/ 92.0)]);
     drain_insert_history(&mut rx);
 
+    chat.dispatch_command(SlashCommand::Copy);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::CopySelection { text, label, .. })
+            if label == "Whole status" && text.contains("8% left")
+    );
+    assert_matches!(rx.try_recv(), Ok(AppEvent::SettingsSelectionClosed));
+
     chat.dispatch_command(SlashCommand::Status);
     let refreshed = match rx.try_recv() {
         Ok(AppEvent::InsertHistoryCell(cell)) => {

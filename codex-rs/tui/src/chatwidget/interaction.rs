@@ -320,53 +320,70 @@ impl ChatWidget {
     }
 
     pub(super) fn show_copy_picker(&mut self) {
-        let Some(markdown) = self
+        let mut choices = Vec::new();
+        if let Some(status_targets) = &self.transcript.last_status_copy_targets {
+            choices.push((
+                "Whole status".to_string(),
+                Arc::<str>::from(status_targets.handle.copy_text()),
+                CopyFormat::PlainText,
+            ));
+            choices.extend(
+                status_targets
+                    .fields
+                    .iter()
+                    .cloned()
+                    .map(|(label, text)| (label, text, CopyFormat::PlainText)),
+            );
+        } else if let Some(markdown) = self
             .transcript
             .last_agent_markdown
-            .clone()
+            .as_deref()
             .filter(|markdown| !markdown.is_empty())
-        else {
+        {
+            choices.push((
+                "Whole response".to_string(),
+                Arc::<str>::from(markdown),
+                CopyFormat::Markdown,
+            ));
+            let source = self
+                .transcript
+                .last_agent_source
+                .as_deref()
+                .unwrap_or(markdown);
+            choices.extend(
+                crate::markdown::extract_copy_targets(source)
+                    .into_iter()
+                    .filter_map(|target| match target {
+                        crate::markdown::CopyTarget::Code { language, content } => Some((
+                            language.map_or_else(
+                                || "Code block".to_string(),
+                                |language| format!("{language} code"),
+                            ),
+                            content,
+                            CopyFormat::PlainText,
+                        )),
+                        crate::markdown::CopyTarget::Quote(content) => {
+                            let content: String = content
+                                .split_inclusive('\n')
+                                .map(|line| {
+                                    crate::git_action_directives::strip_line_directives(line).0
+                                })
+                                .collect();
+                            (!content.trim().is_empty()).then(|| {
+                                (
+                                    "Blockquote".to_string(),
+                                    Arc::from(content),
+                                    CopyFormat::PlainText,
+                                )
+                            })
+                        }
+                    }),
+            );
+        }
+        if choices.is_empty() {
             self.copy_last_agent_markdown();
             return;
-        };
-
-        let mut choices = vec![(
-            "Whole response".to_string(),
-            Arc::<str>::from(markdown.as_str()),
-            CopyFormat::Markdown,
-        )];
-        let source = self
-            .transcript
-            .last_agent_source
-            .as_deref()
-            .unwrap_or(&markdown);
-        choices.extend(
-            crate::markdown::extract_copy_targets(source)
-                .into_iter()
-                .filter_map(|target| match target {
-                    crate::markdown::CopyTarget::Code { language, content } => Some((
-                        language.map_or_else(
-                            || "Code block".to_string(),
-                            |language| format!("{language} code"),
-                        ),
-                        content,
-                        CopyFormat::PlainText,
-                    )),
-                    crate::markdown::CopyTarget::Quote(content) => {
-                        let content: String = content
-                            .split_inclusive('\n')
-                            .map(|line| crate::git_action_directives::strip_line_directives(line).0)
-                            .collect();
-                        (!content.trim().is_empty()).then(|| {
-                            (
-                                "Blockquote".to_string(),
-                                Arc::from(content),
-                                CopyFormat::PlainText,
-                            )
-                        })
-                    }
-                }),
-        );
+        }
 
         let items = choices
             .into_iter()
@@ -392,7 +409,7 @@ impl ChatWidget {
             .collect();
 
         self.show_selection_view(SelectionViewParams {
-            title: Some("Copy from response".to_string()),
+            title: Some("Copy to clipboard".to_string()),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             ..Default::default()

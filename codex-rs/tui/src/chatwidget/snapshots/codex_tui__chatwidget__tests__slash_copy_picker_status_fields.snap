@@ -1,0 +1,14 @@
+---
+source: tui/src/chatwidget/tests/slash_commands.rs
+assertion_line: 2032
+expression: "render_bottom_popup(&chat,\n100).replace(&directory,\n\"[[workspace]]\").replace(crate::version::CODEX_CLI_VERSION, \"VERSION\")"
+---
+  Copy to clipboard
+
+› 1. Whole status  >_ OpenAI Codex (vVERSION)
+  2. Model         gpt-5.4
+  3. Directory     [[workspace]]
+  4. Thread name   Clipboard example
+  5. Session ID    00000000-0000-0000-0000-000000000123
+
+  Press enter to confirm or esc to go back

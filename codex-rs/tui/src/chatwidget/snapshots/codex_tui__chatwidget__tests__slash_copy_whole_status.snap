@@ -1,0 +1,20 @@
+---
+source: tui/src/chatwidget/tests/slash_commands.rs
+assertion_line: 2041
+expression: "whole_status.replace(&directory,\n\"[[workspace]]\").replace(crate::version::CODEX_CLI_VERSION, \"VERSION\")"
+---
+>_ OpenAI Codex (vVERSION)
+
+Visit https://chatgpt.com/codex/settings/usage for up-to-date
+information on rate limits and credits
+
+ Model:                gpt-5.4 (reasoning medium, summaries auto)
+ Directory:            [[workspace]]
+ Permissions:          Read Only (Ask for approval)
+ Agents.md:            <none>
+ Thread name:          Clipboard example
+ Collaboration mode:   Default
+ Session:              00000000-0000-0000-0000-000000000123
+
+ Token usage:          0 total  (0 input + 0 output)
+ Limits:               data not available yet

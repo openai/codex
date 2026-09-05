@@ -26,7 +26,7 @@ expression: commands
 /recap - summarize the current conversation now
 /agents - view and switch between all active agent sessions
 /side - start a side conversation in an ephemeral fork
-/copy - copy the last response, code block, or quote
+/copy - copy the last response or part of it
 /export - export the conversation as markdown
 /raw - toggle raw scrollback mode for copy-friendly terminal selection
 /diff - show git diff (including untracked files)

@@ -268,10 +268,28 @@ impl ChatWidget {
             handle.reserve_thread_usage_label_width();
             handle.set_thread_usage(self.estimated_thread_usage().cloned());
             self.add_to_history(cell);
-            self.request_thread_usage_for_status(handle);
+            self.request_thread_usage_for_status(handle.clone());
         } else {
             self.add_to_history(cell);
         }
+        // Capture the displayed status inputs before later configuration or thread changes.
+        let mut copy_targets = vec![
+            ("Model".to_string(), Arc::<str>::from(model)),
+            (
+                "Directory".to_string(),
+                Arc::from(self.config.cwd.display().to_string()),
+            ),
+        ];
+        if let Some(name) = self.thread_name.as_deref().filter(|name| !name.is_empty()) {
+            copy_targets.push(("Thread name".to_string(), Arc::from(name)));
+        }
+        if let Some(thread_id) = self.thread_id {
+            copy_targets.push(("Session ID".to_string(), Arc::from(thread_id.to_string())));
+        }
+        self.transcript.last_status_copy_targets = Some(super::transcript::StatusCopySource {
+            handle,
+            fields: copy_targets,
+        });
     }
 
     pub(crate) fn finish_status_rate_limit_refresh(

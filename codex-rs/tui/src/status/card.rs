@@ -79,13 +79,23 @@ struct StatusRateLimitState {
 
 #[derive(Debug, Clone)]
 pub(crate) struct StatusHistoryHandle {
-    rate_limit_state: Arc<RwLock<StatusRateLimitState>>,
-    thread_usage: StatusThreadUsage,
+    card: Arc<StatusHistoryCell>,
 }
 
 impl StatusHistoryHandle {
+    pub(crate) fn copy_text(&self) -> String {
+        self.card
+            .content_lines(u16::MAX)
+            .iter()
+            .map(|line| line.to_string().trim_end().to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+            .trim()
+            .to_string()
+    }
+
     pub(crate) fn reserve_thread_usage_label_width(&self) {
-        self.thread_usage.reserve_label_width();
+        self.card.thread_usage.reserve_label_width();
     }
 
     pub(crate) fn finish_rate_limit_refresh(
@@ -100,6 +110,7 @@ impl StatusHistoryHandle {
         };
         #[expect(clippy::expect_used)]
         let mut state = self
+            .card
             .rate_limit_state
             .write()
             .expect("status history rate-limit state poisoned");
@@ -111,7 +122,7 @@ impl StatusHistoryHandle {
         &self,
         estimate: Option<codex_app_server_protocol::ThreadUsage>,
     ) {
-        self.thread_usage.set_estimate(estimate);
+        self.card.thread_usage.set_estimate(estimate);
     }
 }
 
@@ -234,7 +245,7 @@ pub(crate) fn new_status_output_with_rate_limits_handle(
     refreshing_rate_limits: bool,
 ) -> (CompositeHistoryCell, StatusHistoryHandle) {
     let command = PlainHistoryCell::new(vec!["/status".magenta().into()]);
-    let (card, handle) = StatusHistoryCell::new(
+    let card = Arc::new(StatusHistoryCell::new(
         config,
         requires_openai_auth,
         runtime_model_provider_base_url,
@@ -253,7 +264,10 @@ pub(crate) fn new_status_output_with_rate_limits_handle(
         reasoning_effort_override,
         agents_summary,
         refreshing_rate_limits,
-    );
+    ));
+    let handle = StatusHistoryHandle {
+        card: Arc::clone(&card),
+    };
 
     (
         CompositeHistoryCell::new(vec![Box::new(command), Box::new(card)]),
@@ -282,7 +296,7 @@ impl StatusHistoryCell {
         reasoning_effort_override: Option<Option<ReasoningEffort>>,
         agents_summary: String,
         refreshing_rate_limits: bool,
-    ) -> (Self, StatusHistoryHandle) {
+    ) -> Self {
         let approval_policy = AskForApproval::from(config.permissions.approval_policy.value());
         let permission_profile = config.permissions.effective_permission_profile();
         let workspace_roots = config.effective_workspace_roots();
@@ -370,30 +384,24 @@ impl StatusHistoryCell {
         let agents_summary = Arc::new(RwLock::new(agents_summary));
         let thread_usage = StatusThreadUsage::default();
 
-        (
-            Self {
-                model_name,
-                model_details,
-                directory: config.cwd.to_path_buf(),
-                permissions,
-                collaboration_mode: collaboration_mode.map(ToString::to_string),
-                model_provider,
-                remote_connection: remote_connection.cloned(),
-                show_chatgpt_usage_link,
-                account,
-                thread_name,
-                session_id,
-                forked_from,
-                token_usage,
-                agents_summary,
-                rate_limit_state: rate_limit_state.clone(),
-                thread_usage: thread_usage.clone(),
-            },
-            StatusHistoryHandle {
-                rate_limit_state,
-                thread_usage,
-            },
-        )
+        Self {
+            model_name,
+            model_details,
+            directory: config.cwd.to_path_buf(),
+            permissions,
+            collaboration_mode: collaboration_mode.map(ToString::to_string),
+            model_provider,
+            remote_connection: remote_connection.cloned(),
+            show_chatgpt_usage_link,
+            account,
+            thread_name,
+            session_id,
+            forked_from,
+            token_usage,
+            agents_summary,
+            rate_limit_state,
+            thread_usage,
+        }
     }
 
     fn token_usage_spans(&self) -> Vec<Span<'static>> {
@@ -726,8 +734,8 @@ fn status_approval_label(
     approval.to_string()
 }
 
-impl HistoryCell for StatusHistoryCell {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+impl StatusHistoryCell {
+    fn content_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(Line::from(vec![
             Span::from(format!("{}>_ ", FieldFormatter::INDENT)).dim(),
@@ -889,6 +897,17 @@ impl HistoryCell for StatusHistoryCell {
             lines.extend(thread_usage_lines);
         }
 
+        lines
+    }
+}
+
+impl HistoryCell for Arc<StatusHistoryCell> {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let available_inner_width = usize::from(width.saturating_sub(4));
+        if available_inner_width == 0 {
+            return Vec::new();
+        }
+        let lines = self.content_lines(width);
         let content_width = lines.iter().map(line_width).max().unwrap_or(0);
         let inner_width = content_width.min(available_inner_width);
         let truncated_lines: Vec<Line<'static>> = lines

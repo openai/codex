@@ -53,6 +53,7 @@ impl ChatWidget {
     }
 
     pub(super) fn handle_service_tier_command_dispatch(&mut self, command: ServiceTierCommand) {
+        self.transcript.last_status_copy_targets = None;
         if self.active_side_conversation {
             self.add_error_message(format!(
                 "'/{}' is unavailable in side conversations. {SIDE_SLASH_COMMAND_UNAVAILABLE_HINT}",
@@ -145,6 +146,9 @@ impl ChatWidget {
     }
 
     pub(super) fn dispatch_command(&mut self, cmd: SlashCommand) {
+        if cmd != SlashCommand::Copy {
+            self.transcript.last_status_copy_targets = None;
+        }
         if !self.ensure_slash_command_allowed_in_side_conversation(cmd) {
             return;
         }
@@ -596,6 +600,9 @@ impl ChatWidget {
         args: String,
         text_elements: Vec<TextElement>,
     ) {
+        if cmd != SlashCommand::Copy {
+            self.transcript.last_status_copy_targets = None;
+        }
         if !self.ensure_slash_command_allowed_in_side_conversation(cmd) {
             return;
         }
@@ -710,6 +717,9 @@ impl ChatWidget {
         cmd: SlashCommand,
         prepared: PreparedSlashCommandArgs,
     ) {
+        if cmd != SlashCommand::Copy {
+            self.transcript.last_status_copy_targets = None;
+        }
         let PreparedSlashCommandArgs {
             args,
             text_elements,

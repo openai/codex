@@ -1374,6 +1374,7 @@ impl ChatWidget {
     }
 
     fn on_user_message_display(&mut self, display: UserMessageDisplay) {
+        self.transcript.last_status_copy_targets = None;
         self.last_rendered_user_message_display = Some(display.clone());
         if !display.message.trim().is_empty()
             || !display.text_elements.is_empty()
@@ -1842,6 +1843,7 @@ impl ChatWidget {
                 | AppCommand::Review { .. }
                 | AppCommand::RunUserShellCommand { .. }
         ) {
+            self.transcript.last_status_copy_targets = None;
             self.input_queue.user_turn_pending_start = true;
         }
         if matches!(op, AppCommand::Interrupt) && self.turn_lifecycle.agent_turn_running {
