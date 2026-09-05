@@ -32,6 +32,25 @@ impl ChatComposer {
         self.draft.textarea.enter_vim_insert_mode();
     }
 
+    /// Refresh at traversal start without resetting recalled entries or pending lookups.
+    pub(crate) fn copy_history_for_key(&mut self, composer: &Self, key: KeyEvent) {
+        let recall = self.is_empty()
+            && !self.history.is_navigating()
+            && if self.draft.textarea.is_vim_normal_mode() {
+                self.vim_normal_keymap.move_up.is_pressed(key)
+                    || self.vim_normal_keymap.move_down.is_pressed(key)
+            } else {
+                self.editor_keymap.move_up.is_pressed(key)
+                    || self.editor_keymap.move_down.is_pressed(key)
+            };
+        let search =
+            self.history_search_previous_keys.is_pressed(key) && !self.handles_key_as_editing(key);
+        if self.history_search.is_none() && (recall || search) {
+            self.history = composer.history.clone();
+            self.history.reset_navigation();
+        }
+    }
+
     /// Give modal editing precedence over a containing view's submit/navigation keys.
     /// Up/Down remain available to inline choices; j/k keep their Vim editing behavior.
     pub(crate) fn handles_key_as_editing(&self, key: KeyEvent) -> bool {

@@ -28,25 +28,35 @@ impl BottomPane {
         })
     }
 
-    pub(super) fn question_summary(&self) -> Option<Line<'static>> {
+    pub(crate) fn restore_questions(&mut self, state: Option<QuestionState>) {
+        if let Some(state) = state {
+            self.question_editor().restore(state);
+        }
+        self.request_redraw();
+    }
+
+    pub(super) fn question_summary(&self, now: Instant) -> Option<Vec<Line<'static>>> {
         let questions = self
             .questions
             .as_ref()
             .filter(|q| !q.expanded && q.unanswered_count() > 0)?;
         let count = questions.unanswered_count();
-        let hint = self
-            .pending_input_preview
-            .edit_binding
-            .map(|key| format!(" · {} to answer", key.display_label()))
+        let countdown = questions
+            .countdown(now)
+            .map(|text| format!(" · {text}"))
             .unwrap_or_default();
-        Some(Line::from(vec![
+        let mut lines = vec![Line::from(vec![
             "  ? ".dim(),
             Span::styled(
                 format!("{count} question{}", if count == 1 { "" } else { "s" }),
                 crate::style::accent_style(),
             )
             .bold(),
-            hint.dim(),
-        ]))
+            countdown.dim(),
+        ])];
+        if let Some(binding) = self.pending_input_preview.edit_binding {
+            lines.push(Line::from(vec!["    ".into(), binding.into(), " to answer".into()]).dim());
+        }
+        Some(lines)
     }
 }

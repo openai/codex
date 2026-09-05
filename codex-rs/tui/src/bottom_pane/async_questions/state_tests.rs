@@ -29,6 +29,27 @@ fn editor() -> AsyncQuestions {
 }
 
 #[test]
+fn replay_preserves_drafts_and_does_not_reopen_handled_questions() {
+    let mut original = editor();
+    original.set_expanded(/*expanded*/ true);
+    original.accept_answer();
+    original.handle_key_event(KeyEvent::from(KeyCode::Char('2')));
+    let saved = original.capture();
+    for replay_first in [false, true] {
+        let mut restored = editor();
+        if !replay_first {
+            restored.state = QuestionState::default();
+        }
+        restored.restore(saved.clone());
+        restored.append("message", &[question("First", /*options*/ None)]);
+        assert_eq!(restored.capture(), saved);
+        restored.accept_answer();
+        restored.append("message", &[question("First", /*options*/ None)]);
+        assert_eq!(restored.unanswered_count(), 0);
+    }
+}
+
+#[test]
 fn arrival_preserves_vim_undo_and_navigation_flushes_buffered_input() {
     let mut editor = editor();
     editor.set_expanded(/*expanded*/ true);
@@ -172,6 +193,33 @@ fn question_choice_remaps_paging_and_inline_feedback() {
     assert_eq!(editor.selected_option_index(), Some(0));
     editor.render(area, &mut buffer);
     insta::assert_snapshot!("question_remapped_choice_footer", buffer_text(&buffer));
+}
+
+#[test]
+fn question_inline_history_search() {
+    let mut editor = editor();
+    editor.navigate(/*forward*/ true);
+    editor.state.pending[1].question.options =
+        Some((1..=12).map(|i| format!("Option {i}")).collect());
+    editor.select_option(/*index*/ 12);
+    editor
+        .composer
+        .record_replayed_user_message_history(crate::bottom_pane::HistoryEntry::new(
+            "earlier answer".into(),
+        ));
+    editor.handle_paste("original answer".into());
+    let saved = editor.capture();
+    editor.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+    editor.handle_key_event(KeyEvent::from(KeyCode::Char('e')));
+    let buffer = render_editor(&editor, /*width*/ 50, /*height*/ 12);
+    assert!(
+        buffer
+            .content
+            .iter()
+            .any(|cell| cell.modifier.contains(Modifier::REVERSED))
+    );
+    insta::assert_snapshot!("question_inline_history_search", buffer_text(&buffer));
+    assert_eq!(editor.capture(), saved);
 }
 
 #[test]
@@ -327,4 +375,20 @@ fn existing_cross_context_keymaps_load_without_misleading_submit_hints() {
         editor.handle_key_event(KeyEvent::from(KeyCode::F(12)));
         assert!(editor.submission.is_none());
     }
+}
+
+#[test]
+fn question_navigation_resets_history_recall() {
+    let mut editor = editor();
+    for text in ["older", "newer"] {
+        editor.composer.record_replayed_user_message_history(
+            crate::bottom_pane::HistoryEntry::new(text.into()),
+        );
+    }
+    editor.handle_key_event(KeyCode::Up.into());
+    assert_eq!(editor.composer.current_text(), "newer");
+    editor.navigate(/*forward*/ true);
+    editor.navigate(/*forward*/ false);
+    editor.handle_key_event(KeyCode::Up.into());
+    assert_eq!(editor.composer.current_text(), "newer");
 }

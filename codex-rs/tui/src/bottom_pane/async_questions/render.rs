@@ -210,6 +210,8 @@ impl AsyncQuestions {
         }
         let next = if self.state.current_idx + 1 < self.state.pending.len() {
             Some("next question")
+        } else if self.has_queued_messages {
+            Some("queued messages")
         } else {
             None
         };

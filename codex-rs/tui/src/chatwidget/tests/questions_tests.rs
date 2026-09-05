@@ -136,6 +136,12 @@ async fn question_inputs_support_vim_editing_and_search() {
         }
         assert!(chat.bottom_pane.questions.as_ref().unwrap().expanded);
         let normal = render_bottom_popup(&chat, /*width*/ 80);
+        let editor = chat.bottom_pane.questions.as_mut().unwrap();
+        editor.delivery_enabled = false;
+        chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+        assert_eq!(render_bottom_popup(&chat, /*width*/ 80), normal);
+        let editor = chat.bottom_pane.questions.as_mut().unwrap();
+        editor.delivery_enabled = true;
         for ch in "dw".chars() {
             chat.handle_key_event(KeyEvent::from(KeyCode::Char(ch)));
         }
@@ -167,6 +173,101 @@ async fn question_inputs_support_vim_editing_and_search() {
             format!("NORMAL\n{normal}\n\nSEARCH\n{search}")
         );
     }
+}
+
+#[tokio::test]
+async fn question_history_search_uses_updated_bindings() {
+    for (binding, word) in [("f12", "earlier"), ("ctrl-x r", "persistent")] {
+        let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        let thread_id = ThreadId::new();
+        chat.thread_id = Some(thread_id);
+        chat.bottom_pane
+            .set_history_metadata(thread_id, /*log_id*/ 7, /*entry_count*/ 1);
+        chat.bottom_pane.record_replayed_user_message_history(
+            crate::bottom_pane::HistoryEntry::with_pending_and_remote(
+                "[Image #2]earlier answer".into(),
+                vec![TextElement::new((0..10).into(), Some("[Image #2]".into()))],
+                vec![PathBuf::from("/tmp/image.png")],
+                Vec::new(),
+                vec!["https://example.com/remote.png".into()],
+            ),
+        );
+        chat.add_async_questions("message", &questions());
+        let config = toml::from_str(&format!(
+            "[composer]\nhistory_search_previous = '{binding}'"
+        ))
+        .unwrap();
+        let keymap = RuntimeKeymap::from_config(&config).unwrap();
+        chat.apply_keymap_update(config, &keymap);
+        chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+        chat.bottom_pane.record_replayed_user_message_history(
+            crate::bottom_pane::HistoryEntry::new("newest answer".into()),
+        );
+        for (key, expected) in [
+            (KeyCode::Up, "newest answer"),
+            (KeyCode::Up, "earlier answer"),
+            (KeyCode::Down, "newest answer"),
+        ] {
+            chat.handle_key_event(KeyEvent::from(key));
+            let rendered = render_bottom_popup(&chat, /*width*/ 80);
+            assert!(
+                rendered.contains(expected),
+                "{key:?}: expected {expected}, got {rendered}"
+            );
+        }
+        chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        // Chords reach the editor using the dispatch binding resolved by the app.
+        let (key, modifiers) = keymap.composer.history_search_previous[0].parts();
+        chat.handle_key_event(KeyEvent::new(key, modifiers));
+        for ch in word.chars() {
+            chat.handle_key_event(KeyEvent::from(KeyCode::Char(ch)));
+        }
+        if binding != "f12" {
+            chat.bottom_pane.on_history_lookup_response(
+                crate::app_event::HistoryLookupResponse::Entry {
+                    offset: 0,
+                    log_id: 7,
+                    entry: Some("persistent answer".into()),
+                },
+            );
+        }
+        chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+        assert!(op_rx.try_recv().is_err());
+        chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+        assert_answer(
+            op_rx.try_recv().unwrap(),
+            &format!("> Which way?\n\n{word} answer"),
+        );
+    }
+}
+
+#[tokio::test]
+async fn question_editor_keeps_working_status_and_queued_messages_visible() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.show_welcome_banner = false;
+    chat.bottom_pane.set_task_running(/*running*/ true);
+    chat.bottom_pane
+        .set_composer_text("main draft".into(), Vec::new(), Vec::new());
+    chat.input_queue
+        .queued_user_messages
+        .push_back(UserMessage::from("queued follow-up".to_string()).into());
+    chat.refresh_pending_input_preview();
+    chat.add_async_questions("message", &questions());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+    let open = render_bottom_popup(&chat, /*width*/ 80);
+    let open = open.split("\n  1 of 2").next().unwrap().trim_end();
+    chat.bottom_pane.set_task_running(/*running*/ false);
+    assert!(chat.bottom_pane.questions.as_ref().unwrap().expanded);
+    chat.input_queue.queued_user_messages.clear();
+    chat.refresh_pending_input_preview();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Esc));
+    chat.bottom_pane.set_status_line_enabled(/*enabled*/ false);
+    let completed = render_bottom_popup(&chat, /*width*/ 80);
+    let completed = completed.split("\n\n›").next().unwrap();
+    insta::assert_snapshot!(
+        "questions_with_status_and_queue",
+        format!("OPEN\n{open}\n\nONLY QUESTIONS\n{completed}")
+    );
 }
 
 #[tokio::test]
@@ -275,6 +376,94 @@ async fn question_key_repeats_do_not_consume_another_question() {
 }
 
 #[tokio::test]
+async fn question_queue_pop_becomes_an_ordinary_composer_draft() {
+    let (mut chat, _rx, mut ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    for text in ["older", "newer"] {
+        chat.input_queue
+            .queued_user_messages
+            .push_back(UserMessage::from(text).into());
+    }
+    open_questions(&mut chat, /*options*/ None);
+    let forward = KeyEvent::new(KeyCode::Up, KeyModifiers::ALT);
+    chat.handle_key_event(forward);
+    insta::assert_snapshot!(
+        "last_question_with_queue",
+        render_bottom_popup(&chat, /*width*/ 80)
+    );
+    chat.handle_key_event(forward);
+    assert_eq!(chat.bottom_pane.composer_text(), "newer");
+    chat.bottom_pane.handle_paste(" edited".into());
+    chat.handle_key_event(forward);
+    assert!(chat.bottom_pane.questions.as_ref().unwrap().expanded);
+    assert_eq!(chat.bottom_pane.composer_text(), "newer edited");
+    chat.handle_key_event(forward);
+    assert_eq!(chat.bottom_pane.composer_text(), "older");
+    assert!(chat.input_queue.queued_user_messages.is_empty());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    assert_answer(ops.try_recv().unwrap(), "older");
+    chat.handle_key_event(forward);
+    assert!(chat.bottom_pane.questions.as_ref().unwrap().expanded);
+    assert!(
+        !chat
+            .bottom_pane
+            .questions
+            .as_ref()
+            .unwrap()
+            .has_queued_messages
+    );
+}
+
+#[tokio::test]
+async fn question_drafts_survive_navigation_and_snapshot_replay() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.bottom_pane
+        .set_composer_text("main draft".into(), Vec::new(), Vec::new());
+    open_questions(&mut chat, /*options*/ None);
+    chat.bottom_pane.handle_paste("first draft".into());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Char('2')));
+    chat.bottom_pane.handle_paste("second draft".into());
+    let saved = chat.capture_thread_input_state();
+    let (mut chat, _rx, mut ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    let item = AppServerThreadItem::AgentMessage {
+        id: "buffered".into(),
+        text: String::new(),
+        phase: None,
+        memory_citation: None,
+        delivery: None,
+        questions: Some(vec![question("Buffered?", /*options*/ None)]),
+    };
+    for kind in [
+        ReplayKind::ResumeInitialMessages,
+        ReplayKind::ThreadSnapshot,
+    ] {
+        chat.replay_thread_item(item.clone(), "turn".into(), kind);
+        assert!(chat.bottom_pane.questions.is_none());
+    }
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            item,
+            thread_id: "thread".into(),
+            turn_id: "turn".into(),
+            completed_at_ms: 0,
+        }),
+        Some(ReplayKind::ThreadSnapshot),
+    );
+    assert_eq!(question_count(&chat), 1);
+    chat.restore_reconnected_input(saved);
+    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("second draft"));
+    chat.pause_unavailable_thread();
+    chat.handle_question_key(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::CONTROL));
+    chat.handle_question_key(KeyEvent::from(KeyCode::Enter));
+    assert_eq!(question_count(&chat), 3);
+    assert!(ops.try_recv().is_err());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::ALT));
+    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("first draft"));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::ALT));
+    assert_eq!(chat.bottom_pane.composer_text(), "main draft");
+}
+
+#[tokio::test]
 async fn single_question_spacing_with_working_status() {
     let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.bottom_pane.set_task_running(/*running*/ true);
@@ -287,7 +476,7 @@ async fn single_question_spacing_with_working_status() {
         .iter()
         .position(|line| line.trim() == "Only question?")
         .unwrap();
-    assert!(rows[question - 2].contains("Working"));
+    assert!(rows[question - 2].contains("Queued follow-up inputs"));
     assert!(rows[question - 1].is_empty());
     assert_eq!(rows[question + 2].trim(), "A typed answer");
     assert!(rows[question + 3].is_empty());

@@ -54,6 +54,9 @@ impl ChatWidget {
     }
 
     pub(crate) fn pause_unavailable_thread(&mut self) {
+        if let Some(questions) = &mut self.bottom_pane.questions {
+            questions.delivery_enabled = false;
+        }
         self.turn_lifecycle
             .restore_running(/*running*/ false, Instant::now());
         self.update_task_running_state();

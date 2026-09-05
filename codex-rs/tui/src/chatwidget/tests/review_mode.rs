@@ -376,6 +376,7 @@ async fn restore_thread_input_state_restores_pending_steers_without_downgrading_
 
     chat.restore_thread_input_state(
         Some(ThreadInputState {
+            questions: None,
             composer: None,
             safety_buffering_prompt: None,
             pending_steers: VecDeque::from([expected_pending.clone()]),

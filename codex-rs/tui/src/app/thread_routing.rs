@@ -1477,7 +1477,7 @@ impl App {
         snapshot.turns = turns;
         snapshot
             .events
-            .retain(ThreadEventStore::event_survives_session_refresh);
+            .retain_mut(ThreadEventStore::event_survives_session_refresh);
     }
 
     /// Opens the `/subagents` picker after refreshing cached labels for known threads.

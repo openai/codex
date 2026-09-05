@@ -21,6 +21,7 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use std::collections::HashSet;
 use std::time::Duration;
+use std::time::Instant;
 use unicode_width::UnicodeWidthStr;
 
 mod input;
@@ -34,16 +35,19 @@ pub(super) const DESIRED_SPACERS_BETWEEN_SECTIONS: u16 = 2;
 
 #[derive(Debug, Clone, PartialEq)]
 struct PendingQuestion {
+    message_id: String,
     question: AsyncUserInputQuestion,
     options_state: ScrollState,
     draft: ComposerDraft,
+    expires_at: Option<Instant>,
 }
 
 /// Locally retained async questions; replayed message IDs cannot resurrect handled answers.
 #[derive(Debug, Clone, Default, PartialEq)]
-struct QuestionState {
+pub(crate) struct QuestionState {
     pending: Vec<PendingQuestion>,
     current_idx: usize,
+    expanded: bool,
     seen_ids: HashSet<String>,
 }
 
@@ -56,6 +60,7 @@ pub(crate) struct AsyncQuestions {
     app_event_tx: AppEventSender,
     state: QuestionState,
     pub(crate) expanded: bool,
+    pub(crate) has_queued_messages: bool,
     pub(crate) delivery_enabled: bool,
     pub(crate) submission: Option<QuestionSubmission>,
     visible_options: std::cell::Cell<(usize, usize)>,
@@ -80,7 +85,10 @@ impl AsyncQuestions {
             enhanced_keys_supported,
             "Type your answer".into(),
             disable_paste_burst,
-            ChatComposerConfig::plain_text(),
+            ChatComposerConfig {
+                reset_vim_on_submission: false,
+                ..ChatComposerConfig::plain_text()
+            },
         );
         composer.set_keymap_bindings(&keymap);
         composer.set_footer_hint_override(Some(Vec::new()));
@@ -88,6 +96,7 @@ impl AsyncQuestions {
             app_event_tx,
             state: QuestionState::default(),
             expanded: false,
+            has_queued_messages: false,
             delivery_enabled: true,
             submission: None,
             visible_options: std::cell::Cell::new((0, 0)),

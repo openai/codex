@@ -1756,6 +1756,7 @@ async fn restore_thread_input_state_applies_running_state_policy() {
         text_elements: Vec::new(),
     });
     let input_state = ThreadInputState {
+        questions: None,
         composer: Some(ThreadComposerState {
             text: "composer draft".to_string(),
             ..Default::default()
@@ -2441,8 +2442,12 @@ async fn reconnect_holds_only_recovered_input_until_manually_edited() {
         chat.set_queue_autosend_suppressed(/*suppressed*/ false);
         if let Some(text) = recovered {
             assert!(!chat.maybe_send_next_queued_input());
-            assert_eq!(chat.pop_latest_queued_composer_state().unwrap().text, text);
+            chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+            assert_eq!(chat.bottom_pane.composer_text(), text);
             assert_no_submit_op(&mut ops);
+            chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+            assert_matches!(next_submit_op(&mut ops), Op::UserTurn { .. });
+            chat.input_queue.user_turn_pending_start = false;
         }
         chat.input_queue
             .queued_user_messages

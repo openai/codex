@@ -440,6 +440,16 @@ impl ChatWidget {
         notification: ItemCompletedNotification,
         replay_kind: Option<ReplayKind>,
     ) {
+        // Buffered live notifications can introduce questions; historical turn replay cannot.
+        if replay_kind == Some(ReplayKind::ThreadSnapshot)
+            && let ThreadItem::AgentMessage {
+                id,
+                questions: Some(questions),
+                ..
+            } = &notification.item
+        {
+            self.add_async_questions(id, questions);
+        }
         match notification.item {
             item @ ThreadItem::CommandExecution { .. } => self.on_command_execution_completed(item),
             item => self.handle_thread_item(

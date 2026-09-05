@@ -1,0 +1,6 @@
+---
+source: tui/src/bottom_pane/questions_tests.rs
+expression: "pane.question_summary(now).unwrap().iter().map(ToString::to_string).collect::<Vec<_>>().join(\"\\n\")"
+---
+  ? 2 questions · 15s
+    ⌥ + ↑ to answer

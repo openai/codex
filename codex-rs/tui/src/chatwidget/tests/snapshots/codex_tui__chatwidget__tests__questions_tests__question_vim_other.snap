@@ -3,6 +3,8 @@ source: tui/src/chatwidget/tests/questions_tests.rs
 expression: "format!(\"NORMAL\\n{normal}\\n\\nSEARCH\\n{search}\")"
 ---
 NORMAL
+• Queued follow-up inputs
+
   Which way?
 
     1. Named
@@ -12,6 +14,8 @@ NORMAL
   enter submit   ctrl + ] skip   ⌥ + ↓ main prompt
 
 SEARCH
+• Queued follow-up inputs
+
   Which way?
 
     1. Named

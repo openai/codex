@@ -98,6 +98,11 @@ impl ChatWidget {
         pending_draft: &mut Option<ComposerDraftSnapshot>,
     ) {
         if self.has_active_view()
+            || self
+                .bottom_pane
+                .questions
+                .as_ref()
+                .is_some_and(|q| q.expanded)
             || self.has_pending_protected_request()
             || !self.bottom_pane.composer_input_enabled()
         {
@@ -432,7 +437,7 @@ impl ChatWidget {
         }
     }
 
-    pub(crate) fn capture_thread_input_state(&self) -> Option<ThreadInputState> {
+    pub(crate) fn capture_thread_input_state(&mut self) -> Option<ThreadInputState> {
         let draft = self.bottom_pane.composer_draft_snapshot();
         let composer = ThreadComposerState {
             text: draft.text,
@@ -443,6 +448,11 @@ impl ChatWidget {
             pending_pastes: draft.pending_pastes,
         };
         Some(ThreadInputState {
+            questions: self
+                .bottom_pane
+                .questions
+                .as_deref_mut()
+                .map(crate::bottom_pane::AsyncQuestions::capture),
             composer: composer.has_content().then_some(composer),
             safety_buffering_prompt: self.safety_buffering_prompt.clone(),
             pending_steers: self.input_queue.pending_steers.clone(),
@@ -474,6 +484,7 @@ impl ChatWidget {
         let restored_task_running =
             preserve_in_flight_turn && input_state.as_ref().is_some_and(|state| state.task_running);
         if let Some(input_state) = input_state {
+            self.bottom_pane.restore_questions(input_state.questions);
             self.input_queue.recovered_queue = input_state.recovered_queue;
             self.current_collaboration_mode = input_state.current_collaboration_mode;
             self.active_collaboration_mask = input_state.active_collaboration_mask;

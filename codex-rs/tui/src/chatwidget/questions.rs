@@ -12,6 +12,7 @@ impl ChatWidget {
         questions: &[AsyncUserInputQuestion],
     ) {
         self.bottom_pane.push_async_questions(message_id, questions);
+        self.refresh_pending_input_preview();
     }
 
     pub(super) fn handle_question_key(&mut self, key: KeyEvent) -> bool {
@@ -49,7 +50,6 @@ impl ChatWidget {
                     self.request_redraw();
                     return true;
                 }
-                return true;
             } else if forward
                 && self.bottom_pane.no_modal_or_popup_active()
                 && let Some(questions) = self
@@ -59,6 +59,19 @@ impl ChatWidget {
                     .filter(|q| q.unanswered_count() > 0)
             {
                 questions.set_expanded(/*expanded*/ true);
+                self.request_redraw();
+                return true;
+            }
+            if expanded
+                && forward
+                && !self.blocks_direct_input
+                && let Some(composer) = self.pop_latest_queued_composer_state()
+            {
+                if let Some(questions) = &mut self.bottom_pane.questions {
+                    questions.set_expanded(/*expanded*/ false);
+                }
+                self.restore_composer_state(composer);
+                self.refresh_pending_input_preview();
                 self.request_redraw();
                 return true;
             }

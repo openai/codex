@@ -4,7 +4,6 @@ expression: "render_bottom_popup(&chat, 100)"
 ---
 • Queued follow-up inputs
   ↳ queued
-    shift + ← edit last queued message
 
   1 of 2
 

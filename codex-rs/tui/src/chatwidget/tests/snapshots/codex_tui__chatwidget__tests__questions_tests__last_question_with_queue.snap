@@ -1,0 +1,15 @@
+---
+source: tui/src/chatwidget/tests/questions_tests.rs
+expression: "render_bottom_popup(&chat, 80)"
+---
+• Queued follow-up inputs
+  ↳ older
+  ↳ newer
+
+  2 of 2
+  Second?
+
+  › 1. Next
+    2. Other
+
+  enter submit   ctrl + ] skip   ⌥ + ↓ prev question   ⌥ + ↑ queued messages

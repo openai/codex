@@ -1,0 +1,15 @@
+---
+source: tui/src/bottom_pane/async_questions/state_tests.rs
+expression: buffer_text(&buffer)
+---
+
+  2 of 2
+  Second
+
+    11. Option 11
+    12. Option 12
+  › 13. earlier answer
+        reverse-i-search: e  enter accept · esc
+
+  enter submit   ctrl + ] skip   option 13/13
+  ⌥ + ↓ prev question

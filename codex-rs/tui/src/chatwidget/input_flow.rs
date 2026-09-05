@@ -247,6 +247,10 @@ impl ChatWidget {
 
     /// Rebuild and update the bottom-pane pending-input preview.
     pub(super) fn refresh_pending_input_preview(&mut self) {
+        let has_queued = self.has_queued_follow_up_messages();
+        if let Some(questions) = &mut self.bottom_pane.questions {
+            questions.has_queued_messages = has_queued;
+        }
         let preview = self.input_queue.preview();
         self.bottom_pane.set_pending_input_preview(
             preview.queued_messages,

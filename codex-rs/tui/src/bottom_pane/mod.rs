@@ -55,6 +55,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
+use ratatui::widgets::Paragraph;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -67,6 +68,9 @@ mod async_questions;
 mod hook_status;
 mod mcp_server_elicitation;
 mod multi_select_picker;
+#[cfg(test)]
+#[path = "questions_tests.rs"]
+mod question_tests;
 mod questions;
 mod request_user_input;
 mod status_line_setup;
@@ -89,6 +93,7 @@ pub(crate) use approval_overlay::McpElicitationApprovalRequest;
 pub(crate) use approval_overlay::PermissionsApprovalRequest;
 pub(crate) use approval_overlay::format_requested_permissions_rule;
 pub(crate) use async_questions::AsyncQuestions;
+pub(crate) use async_questions::QuestionState;
 pub(crate) use async_questions::QuestionSubmission;
 pub(crate) use mcp_server_elicitation::McpServerElicitationFormRequest;
 pub(crate) use mcp_server_elicitation::McpServerElicitationOverlay;
@@ -724,6 +729,9 @@ impl BottomPane {
         if self.view_stack.is_empty()
             && let Some(questions) = self.questions.as_mut().filter(|q| q.expanded)
         {
+            questions
+                .composer
+                .copy_history_for_key(&self.composer, key_event);
             questions.composer.set_task_running(self.is_task_running);
             questions.handle_key_event(key_event);
             if records_composer_activity {
@@ -1878,29 +1886,28 @@ impl BottomPane {
     }
 
     pub(crate) fn on_history_lookup_response(&mut self, response: HistoryLookupResponse) {
-        let updated = match response {
-            HistoryLookupResponse::Entry {
-                offset,
-                log_id,
-                entry,
-            } => self
-                .composer
-                .on_history_entry_response(log_id, offset, entry),
-            HistoryLookupResponse::Batch {
-                cursor,
-                log_id,
-                entries,
-                next_older_cursor,
-            } => {
-                self.composer
-                    .on_history_batch_response(log_id, cursor, entries, next_older_cursor)
-            }
-            HistoryLookupResponse::BatchError { cursor, log_id } => {
-                self.composer.on_history_batch_error(log_id, cursor)
-            }
-        };
+        let mut updated = false;
+        for composer in std::iter::once(&mut self.composer)
+            .chain(self.questions.iter_mut().map(|q| &mut q.composer))
+        {
+            updated |= match response.clone() {
+                HistoryLookupResponse::Entry {
+                    offset,
+                    log_id,
+                    entry,
+                } => composer.on_history_entry_response(log_id, offset, entry),
+                HistoryLookupResponse::Batch {
+                    cursor,
+                    log_id,
+                    entries,
+                    next_older_cursor,
+                } => composer.on_history_batch_response(log_id, cursor, entries, next_older_cursor),
+                HistoryLookupResponse::BatchError { cursor, log_id } => {
+                    composer.on_history_batch_error(log_id, cursor)
+                }
+            };
+        }
         if updated {
-            self.composer.sync_popups();
             self.request_redraw();
         }
     }
@@ -1990,7 +1997,12 @@ impl BottomPane {
                 );
             }
             let has_pending_thread_approvals = !self.pending_thread_approvals.is_empty();
-            let has_pending_input = !self.pending_input_preview.queued_messages.is_empty()
+            let has_questions = self
+                .questions
+                .as_ref()
+                .is_some_and(|q| q.unanswered_count() > 0);
+            let has_pending_input = has_questions
+                || !self.pending_input_preview.queued_messages.is_empty()
                 || !self.pending_input_preview.pending_steers.is_empty()
                 || !self.pending_input_preview.rejected_steers.is_empty();
             let has_status_or_footer = self.status_widget().is_some()
@@ -2009,7 +2021,15 @@ impl BottomPane {
             }
             flex.push(
                 /*flex*/ 1,
-                RenderableItem::Borrowed(&self.pending_input_preview),
+                if has_questions {
+                    RenderableItem::Owned(Box::new(
+                        pending_input_preview::PendingInputPreviewContent(
+                            &self.pending_input_preview,
+                        ),
+                    ))
+                } else {
+                    RenderableItem::Borrowed(&self.pending_input_preview)
+                },
             );
             let question_editor = self.questions.as_ref().filter(|q| q.expanded);
             if !has_inline_previews
@@ -2018,8 +2038,11 @@ impl BottomPane {
             {
                 flex.push(/*flex*/ 0, RenderableItem::Owned("".into()));
             }
-            if let Some(summary) = self.question_summary() {
-                flex.push(/*flex*/ 0, RenderableItem::Owned(Box::new(summary)));
+            if let Some(summary) = self.question_summary(Instant::now()) {
+                flex.push(
+                    /*flex*/ 0,
+                    RenderableItem::Owned(Box::new(Paragraph::new(summary))),
+                );
             }
             let mut flex2 = FlexRenderable::new();
             flex2.push(/*flex*/ 1, RenderableItem::Owned(flex.into()));
@@ -2170,7 +2193,7 @@ mod tests {
         snapshot_buffer(&buf)
     }
 
-    fn test_pane(app_event_tx: AppEventSender) -> BottomPane {
+    pub(super) fn test_pane(app_event_tx: AppEventSender) -> BottomPane {
         test_pane_with_disable_paste_burst(app_event_tx, /*disable_paste_burst*/ false)
     }
 
