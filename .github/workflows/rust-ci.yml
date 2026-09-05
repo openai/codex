@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  # --- Detect what changed so the fast PR workflow only runs relevant jobs ----
+  # --- Detect changed paths so the fast PR workflow only runs relevant jobs ---
   changed:
     name: Detect changed areas
     runs-on: ubuntu-24.04
