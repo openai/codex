@@ -50,6 +50,24 @@ a shared Opus build with Rust consumers or a reduced dependency count.
 Rust `opus` 0.4.0 is available through Socket. Adding Rust transport dependencies
 and establishing a shared Opus build remain separate integration work.
 
+## Native development inputs
+
+The private native CI job also emits `sdk.tar.gz` from the same inspected prefix.
+It contains headers (including the target's GLib configuration), development
+library names, import/static libraries and pkg-config metadata. `sdk.json`
+records the target, source commit, pinned manifest and every exported file hash.
+Shared-library bytes must match the native inspection receipt; other development
+files are hashed during export. This is provenance, not an authenticity check.
+
+Meson generates relocatable pkg-config metadata using its standard option.
+Consumers must restrict `PKG_CONFIG_LIBDIR` to the SDK, clear `PKG_CONFIG_PATH`,
+and use `pkg-config --define-prefix` for libffi/PCRE2/zlib metadata too. Only the
+required native metadata is exported; capture Opus uses `opusic-sys`. Native
+library loader paths are not changed by SDK export. These build inputs do not replace the
+separate runtime projection and are never copied into users' Codex packages.
+Cargo/Bazel native providers, final helper linkage and moved-package execution
+remain separate integration work; exporting an SDK does not enable voice.
+
 ## Native build recipe
 
 `build_native.py` runs the unmodified upstream build systems in a new output

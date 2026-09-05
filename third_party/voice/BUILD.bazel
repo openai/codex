@@ -39,6 +39,7 @@ filegroup(
         "macos_runtime.py",
         "package_runtime.py",
         "runtime.py",
+        "sdk.py",
         "windows_runtime.py",
         ":source_inputs",
     ],

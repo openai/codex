@@ -248,6 +248,7 @@ class NativeBuild:
                 "--wrap-mode=nofallback",
                 "-Dauto_features=disabled",
                 "-Ddefault_library=shared",
+                "-Dpkgconfig.relocatable=true",
                 *options,
             ],
         )
