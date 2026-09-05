@@ -96,6 +96,8 @@ use uuid::Uuid;
 
 pub(crate) use codex_app_server_client::legacy_core;
 
+pub(crate) use worktree_startup::ManagedTuiWorktree;
+
 mod additional_dirs;
 mod app;
 mod app_backtrack;
@@ -214,6 +216,7 @@ mod tui;
 mod ui_consts;
 mod unarchive_prompt;
 pub(crate) mod update_action;
+mod worktree_startup;
 pub use update_action::UpdateAction;
 #[cfg(not(debug_assertions))]
 pub use update_action::get_update_action;
@@ -1009,6 +1012,7 @@ async fn run_ratatui_app(
     log_db: Option<log_db::LogDbLayer>,
     mut state_db: Option<StateDbHandle>,
     environment_manager: Arc<EnvironmentManager>,
+    managed_worktree: Option<ManagedTuiWorktree>,
     startup_draft: startup_draft::StartupDraft,
 ) -> color_eyre::Result<AppExitInfo> {
     let uses_remote_workspace = app_server_target.uses_remote_workspace();
@@ -1257,12 +1261,14 @@ async fn run_ratatui_app(
                     if !uses_remote_workspace
                         && (onboarding_result.directory_trust_persisted || show_login_screen)
                     {
-                        load_config_or_exit(
+                        load_config_or_exit_with_fallback_cwd(
                             cli_kv_overrides.clone(),
                             overrides.clone(),
                             loader_overrides.clone(),
                             cloud_config_bundle.clone(),
                             strict_config,
+                            /*fallback_cwd*/ None,
+                            managed_worktree.as_ref(),
                         )
                         .await
                     } else {
@@ -1581,6 +1587,7 @@ async fn run_ratatui_app(
                         cloud_config_bundle.clone(),
                         strict_config,
                         fallback_cwd,
+                        managed_worktree.as_ref(),
                     ),
                 )
                 .await
@@ -1784,6 +1791,7 @@ async fn run_ratatui_app(
         startup_bootstrap,
         startup_hooks_browser,
         startup_draft,
+        managed_worktree,
     )
     .await;
 
@@ -1886,10 +1894,12 @@ async fn load_config_or_exit(
         cloud_config_bundle,
         strict_config,
         /*fallback_cwd*/ None,
+        /*worktree*/ None,
     )
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn load_config_or_exit_with_fallback_cwd(
     cli_kv_overrides: Vec<(String, toml::Value)>,
     overrides: ConfigOverrides,
@@ -1897,25 +1907,64 @@ async fn load_config_or_exit_with_fallback_cwd(
     cloud_config_bundle: CloudConfigBundleLoader,
     strict_config: bool,
     fallback_cwd: Option<PathBuf>,
+    worktree: Option<&ManagedTuiWorktree>,
 ) -> Config {
     #[allow(clippy::print_stderr)]
-    match ConfigBuilder::default()
-        .cli_overrides(cli_kv_overrides)
-        .harness_overrides(overrides)
-        .loader_overrides(loader_overrides)
-        .strict_config(strict_config)
-        .cloud_config_bundle(cloud_config_bundle)
-        .fallback_cwd(fallback_cwd)
-        .build()
-        .await
+    match load_config_with_worktree_source_policy(
+        cli_kv_overrides,
+        overrides,
+        loader_overrides,
+        cloud_config_bundle,
+        strict_config,
+        fallback_cwd,
+        worktree,
+    )
+    .await
     {
         Ok(config) => config,
         Err(err) => {
             restore_terminal_before_fatal_exit();
             eprintln!("Error loading configuration: {err}");
+            if let Some(worktree) = worktree {
+                worktree.report_startup_failure();
+            }
             std::process::exit(1);
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn load_config_with_worktree_source_policy(
+    cli_kv_overrides: Vec<(String, toml::Value)>,
+    overrides: ConfigOverrides,
+    loader_overrides: LoaderOverrides,
+    cloud_config_bundle: CloudConfigBundleLoader,
+    strict_config: bool,
+    fallback_cwd: Option<PathBuf>,
+    worktree: Option<&ManagedTuiWorktree>,
+) -> std::io::Result<Config> {
+    let config = ConfigBuilder::default()
+        .cli_overrides(cli_kv_overrides.clone())
+        .harness_overrides(overrides.clone())
+        .loader_overrides(loader_overrides.clone())
+        .strict_config(strict_config)
+        .cloud_config_bundle(cloud_config_bundle.clone())
+        .fallback_cwd(fallback_cwd)
+        .build()
+        .await
+        .map_err(std::io::Error::other)?;
+    if let Some(worktree) = worktree {
+        worktree
+            .check_source_policy(
+                &cli_kv_overrides,
+                &overrides,
+                &loader_overrides,
+                &cloud_config_bundle,
+                strict_config,
+            )
+            .await?;
+    }
+    Ok(config)
 }
 
 #[allow(clippy::print_stderr)]
@@ -2499,6 +2548,23 @@ requires_openai_auth = {requires_openai_auth}
         assert_eq!(
             error.to_string(),
             "`tui.resume_cwd = \"current\"` requires `--cd` when using a remote workspace"
+        );
+        let explicit = resolve_startup_resume_or_fork_cwd(
+            &mut tui,
+            &config,
+            /*state_db*/ None,
+            &resume_picker::SessionSelection::Resume(resume_picker::SessionTarget {
+                path: None,
+                thread_id: ThreadId::new(),
+                history_mode: None,
+            }),
+            Some(Path::new("/remote-only/project")),
+            /*uses_remote_workspace*/ true,
+            /*uses_remote_workspace_or_environment*/ true,
+        )
+        .await?;
+        assert!(
+            matches!(explicit, ResolveCwdOutcome::Continue(Some(cwd)) if cwd == config.cwd.as_path())
         );
         Ok(())
     }

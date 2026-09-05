@@ -25,6 +25,7 @@ fn spawn_startup_thread_start(
     local_settings: crate::local_settings::LocalSettings,
     config: Config,
     app_event_tx: AppEventSender,
+    worktree: Option<crate::ManagedTuiWorktree>,
 ) {
     let request_handle = app_server.request_handle();
     let thread_params_mode = app_server.thread_params_mode();
@@ -39,7 +40,13 @@ fn spawn_startup_thread_start(
             remote_cwd_override,
             thread_tool_transport,
         )
-        .await;
+        .await
+        .and_then(|started| {
+            if let Some(worktree) = worktree.as_ref() {
+                worktree.bind(started.session.thread_id)?;
+            }
+            Ok(started)
+        });
         app_event_tx.send(AppEvent::StartupThreadStarted { result });
     });
 }
@@ -102,6 +109,7 @@ impl App {
         startup_bootstrap: Option<AppServerBootstrap>,
         startup_hooks_browser: Option<HooksListEntry>,
         mut startup_draft: StartupDraftPump,
+        managed_worktree: Option<crate::ManagedTuiWorktree>,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
 
@@ -295,6 +303,7 @@ impl App {
                         local_settings.clone(),
                         config.clone(),
                         app_event_tx.clone(),
+                        managed_worktree.clone(),
                     );
                 }
                 // Count a startup tooltip once the initial chat widget can render it.
@@ -457,6 +466,11 @@ impl App {
                 else {
                     return Ok(cancel_session_start(app_server).await);
                 };
+                if let Some(worktree) = managed_worktree.as_ref()
+                    && let Err(err) = worktree.bind(forked.session.thread_id)
+                {
+                    return shutdown_on_startup_error(app_server, err).await;
+                }
                 let init = crate::chatwidget::ChatWidgetInit {
                     local_settings: local_settings.clone(),
                     config: config.clone(),

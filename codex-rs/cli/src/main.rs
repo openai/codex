@@ -2486,6 +2486,11 @@ fn reject_unsupported_worktree_for_subcommand(
     }
 
     match subcommand {
+        None => Ok(()),
+        Some(Subcommand::Fork(command)) if command.session_id.is_some() && !command.last => Ok(()),
+        Some(Subcommand::Fork(_)) => {
+            anyhow::bail!("`codex fork --worktree` requires an explicit session ID")
+        }
         Some(Subcommand::Exec(command)) => match &command.command {
             None | Some(ExecCommand::Fork(_)) => Ok(()),
             Some(ExecCommand::Resume(_)) => anyhow::bail!(
@@ -2496,7 +2501,9 @@ fn reject_unsupported_worktree_for_subcommand(
             }
         },
         _ => {
-            anyhow::bail!("`--worktree` currently supports only `codex exec` and `codex exec fork`")
+            anyhow::bail!(
+                "`--worktree` supports new interactive sessions, `codex fork`, `codex exec`, and `codex exec fork`"
+            )
         }
     }
 }
@@ -3317,10 +3324,18 @@ mod tests {
     }
 
     #[test]
-    fn exec_worktree_flag_supports_root_local_and_nested_fork_positions() {
+    fn worktree_flag_supports_interactive_exec_and_explicit_fork_positions() {
         let arguments = [
+            vec!["codex", "--worktree"],
+            vec!["codex", "--worktree", "hello"],
             vec!["codex", "--worktree", "exec", "hello"],
             vec!["codex", "exec", "--worktree", "hello"],
+            vec![
+                "codex",
+                "fork",
+                "--worktree",
+                "019f1234-5678-7000-8000-000000000001",
+            ],
             vec![
                 "codex",
                 "exec",
@@ -3338,7 +3353,7 @@ mod tests {
                     &cli.subcommand,
                 )
                 .is_ok(),
-                "headless worktree command should be accepted: {arguments:?}",
+                "supported worktree command should be accepted: {arguments:?}",
             );
         }
     }
@@ -3346,8 +3361,9 @@ mod tests {
     #[test]
     fn worktree_flag_rejects_unsupported_session_and_management_commands() {
         let arguments = [
-            vec!["codex", "--worktree"],
             vec!["codex", "--worktree", "login"],
+            vec!["codex", "fork", "--worktree"],
+            vec!["codex", "fork", "--worktree", "--last"],
             vec!["codex", "exec", "resume", "--worktree", "session"],
             vec!["codex", "exec", "review", "--worktree"],
             vec!["codex", "resume", "--worktree", "session"],
@@ -3363,17 +3379,17 @@ mod tests {
             ],
         ];
 
+        let mut errors = Vec::new();
         for arguments in arguments {
             let cli = MultitoolCli::try_parse_from(&arguments).expect("parse shared worktree flag");
-            assert!(
-                reject_unsupported_worktree_for_subcommand(
-                    cli.interactive.shared.worktree,
-                    &cli.subcommand,
-                )
-                .is_err(),
-                "unsupported command must be rejected: {arguments:?}",
-            );
+            let error = reject_unsupported_worktree_for_subcommand(
+                cli.interactive.shared.worktree,
+                &cli.subcommand,
+            )
+            .expect_err("unsupported worktree command");
+            errors.push(format!("{}: {error}", arguments.join(" ")));
         }
+        insta::assert_snapshot!("unsupported_worktree_commands", errors.join("\n"));
     }
 
     #[test]

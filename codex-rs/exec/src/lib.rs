@@ -9,6 +9,7 @@ mod event_processor;
 mod event_processor_with_human_output;
 pub(crate) mod event_processor_with_jsonl_output;
 pub(crate) mod exec_events;
+mod worktree;
 
 pub use cli::Cli;
 pub use cli::Command;
@@ -234,6 +235,7 @@ struct ExecRunArgs {
 struct ManagedExecWorktree {
     manager: WorktreeManager,
     checkout: PathBuf,
+    source_cwd: PathBuf,
 }
 
 fn exec_root_span() -> tracing::Span {
@@ -259,7 +261,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     }
 
     let Cli {
-        command,
+        mut command,
         strict_config,
         shared,
         thread_source,
@@ -398,7 +400,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
             })
             .fallback_cwd(Some(config_cwd.to_path_buf()))
             .strict_config(strict_config)
-            .cloud_config_bundle(gate_cloud_config)
+            .cloud_config_bundle(gate_cloud_config.clone())
             .build()
             .await?;
         if !gate_config.features.enabled(Feature::Worktrees) {
@@ -406,9 +408,39 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
                 "--worktree requires the worktrees feature; enable it with --enable worktrees"
             );
         }
+        if let Some(ExecCommand::Fork(args)) = command.as_mut() {
+            let saved_cwd = worktree::fork_source(
+                args,
+                &gate_config,
+                &arg0_paths,
+                &cli_kv_overrides,
+                &loader_overrides,
+                gate_cloud_config.clone(),
+                strict_config,
+            )
+            .await?;
+            if resolved_cwd.is_none() {
+                config_cwd = AbsolutePathBuf::from_absolute_path(saved_cwd)?;
+            }
+        }
+        let source_config = ConfigBuilder::default()
+            .codex_home(codex_home.to_path_buf())
+            .cli_overrides(cli_kv_overrides.clone())
+            .loader_overrides(LoaderOverrides {
+                ignore_project_config: true,
+                ..loader_overrides.clone()
+            })
+            .fallback_cwd(Some(config_cwd.to_path_buf()))
+            .strict_config(strict_config)
+            .cloud_config_bundle(gate_cloud_config)
+            .build()
+            .await?;
+        if source_config.active_project.is_untrusted() {
+            anyhow::bail!("--worktree requires a source that is not explicitly untrusted");
+        }
         for path in &mut add_dir {
             if path.is_relative() {
-                *path = config_cwd.as_path().join(&*path);
+                *path = std::env::current_dir()?.join(&*path);
             }
         }
         // Allocation belongs to the host, not this session's project, profile, or overrides.
@@ -433,6 +465,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         Some(ManagedExecWorktree {
             manager,
             checkout: checkout.root,
+            source_cwd: checkout.source_cwd,
         })
     } else {
         None
@@ -456,6 +489,27 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         /*enable_codex_api_key_env*/ false,
     )
     .await?;
+    if let Some(worktree) = managed_worktree.as_ref() {
+        // Destination auth can fetch source policy that the host bootstrap could not.
+        let source_config = ConfigBuilder::default()
+            .codex_home(codex_home.to_path_buf())
+            .cli_overrides(cli_kv_overrides.clone())
+            .loader_overrides(LoaderOverrides {
+                ignore_project_config: true,
+                ..loader_overrides.clone()
+            })
+            .fallback_cwd(Some(worktree.source_cwd.clone()))
+            .strict_config(strict_config)
+            .cloud_config_bundle(cloud_config_bundle.clone())
+            .build()
+            .await?;
+        if source_config.active_project.is_untrusted() {
+            anyhow::bail!(
+                "--worktree requires a source that is not explicitly untrusted; unused checkout at {} remains. Remove it manually with `git worktree remove` when safe",
+                worktree.checkout.display()
+            );
+        }
+    }
     let run_cli_overrides = cli_kv_overrides.clone();
     let run_loader_overrides = loader_overrides.clone();
     let run_cloud_config_bundle = cloud_config_bundle.clone();

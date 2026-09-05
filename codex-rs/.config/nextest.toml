@@ -37,6 +37,11 @@ filter = 'test(rmcp_client) | test(humanlike_typing_1000_chars_appears_live_no_p
 slow-timeout = { period = "1m", terminate-after = 4 }
 
 [[profile.default.overrides]]
+# This end-to-end case launches several CLI subprocesses and checks cloud policy.
+filter = 'package(codex-exec) & test(worktree_start_and_fork_use_host_pool_and_preserve_legacy_resume)'
+slow-timeout = { period = "30s", terminate-after = 4 }
+
+[[profile.default.overrides]]
 filter = 'test(approval_matrix_covers_all_modes)'
 slow-timeout = { period = "30s", terminate-after = 2 }
 

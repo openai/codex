@@ -393,11 +393,17 @@ mod tests {
             additional_writable_roots: vec![PathBuf::from("rel")],
             ..Default::default()
         };
-        let normalized = normalize_harness_overrides_for_cwd(overrides, &base_cwd)?;
+        let mut normalized = normalize_harness_overrides_for_cwd(overrides, &base_cwd)?;
+        let destination = temp_dir.path().join("worktree").abs();
+        normalized.cwd = Some(destination.to_path_buf());
+        let normalized = normalize_harness_overrides_for_cwd(normalized, &destination)?;
 
         assert_eq!(
-            normalized.additional_writable_roots,
-            vec![base_cwd.join("rel").into_path_buf()]
+            (normalized.cwd, normalized.additional_writable_roots),
+            (
+                Some(destination.to_path_buf()),
+                vec![base_cwd.join("rel").into_path_buf()]
+            )
         );
         Ok(())
     }
