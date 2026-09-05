@@ -2533,7 +2533,6 @@ dependencies = [
  "codex-install-context",
  "codex-login",
  "codex-mcp",
- "codex-mcp-server",
  "codex-memories-write",
  "codex-model-provider",
  "codex-models-manager",
@@ -3811,45 +3810,6 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
-]
-
-[[package]]
-name = "codex-mcp-server"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "app_test_support",
- "codex-arg0",
- "codex-config",
- "codex-core",
- "codex-exec-server",
- "codex-extension-api",
- "codex-features",
- "codex-git-attribution",
- "codex-home",
- "codex-image-generation-extension",
- "codex-login",
- "codex-otel",
- "codex-protocol",
- "codex-shell-command",
- "codex-skills-extension",
- "codex-utils-absolute-path",
- "codex-utils-cli",
- "codex-utils-json-to-toml",
- "core_test_support",
- "mcp_test_support",
- "os_info",
- "pretty_assertions",
- "rmcp",
- "schemars 0.8.22",
- "serde",
- "serde_json",
- "shlex",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "wiremock",
 ]
 
 [[package]]
@@ -9673,25 +9633,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
-]
-
-[[package]]
-name = "mcp_test_support"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "codex-login",
- "codex-mcp-server",
- "codex-terminal-detection",
- "codex-utils-cargo-bin",
- "core_test_support",
- "os_info",
- "pretty_assertions",
- "rmcp",
- "serde_json",
- "shlex",
- "tokio",
- "wiremock",
 ]
 
 [[package]]
