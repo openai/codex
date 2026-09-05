@@ -285,6 +285,11 @@ impl Session {
         input: Vec<TurnInput>,
         task: T,
     ) {
+        // Inherited or recovered roots are applied before task start. Otherwise this
+        // task owns its turn, including background work. Later mail cannot change it.
+        turn_context
+            .turn_metadata_state
+            .set_root_turn_id(turn_context.sub_id.clone());
         let task: Arc<dyn AnySessionTask> = Arc::new(task);
         let task_kind = task.kind();
         let span_name = task.span_name();
@@ -307,14 +312,7 @@ impl Session {
             .await
             .clear_turn(&turn_context.sub_id);
 
-        let (pending_items, start_options) = self.input_queue.drain_mailbox_input_items().await;
-        if turn_context.turn_metadata_state.root_turn_id().is_none()
-            && let Some(root_turn_id) = start_options.root_turn_id
-        {
-            turn_context
-                .turn_metadata_state
-                .set_root_turn_id(root_turn_id);
-        }
+        let (pending_items, _) = self.input_queue.drain_mailbox_input_items().await;
         let turn_state = {
             let mut active = self.active_turn.lock().await;
             let turn = active.get_or_insert_with(ActiveTurn::default);

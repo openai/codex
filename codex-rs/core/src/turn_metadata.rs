@@ -93,7 +93,10 @@ pub async fn detached_memory_responses_metadata(
     permission_profile: &PermissionProfile,
     sandbox: Option<&str>,
 ) -> CodexResponsesMetadata {
+    let turn_id = uuid::Uuid::now_v7().to_string();
     let mut metadata = CodexResponsesMetadata {
+        turn_id: Some(turn_id.clone()),
+        root_turn_id: Some(turn_id),
         request_kind: Some(CodexResponsesRequestKind::Memory),
         thread_source: Some(ThreadSource::MemoryConsolidation),
         subagent_header: subagent_header_value(session_source),
@@ -338,24 +341,6 @@ impl TurnMetadataState {
 
     pub(crate) fn root_turn_id(&self) -> Option<String> {
         self.root_turn_id.get().cloned()
-    }
-
-    pub(crate) fn can_start_root_turn(&self, session_source: &SessionSource) -> bool {
-        if session_source.is_non_root_agent() {
-            return false;
-        }
-        match &self.thread_source {
-            // Desktop create/fork/send lacks trusted app-server provenance; fail closed.
-            Some(
-                ThreadSource::Subagent
-                | ThreadSource::GuardianReview
-                | ThreadSource::MemoryConsolidation,
-            ) => false,
-            Some(ThreadSource::Feature(feature)) => {
-                !matches!(feature.as_str(), "system" | "title") && !feature.starts_with("ambient")
-            }
-            Some(ThreadSource::User) | None => true,
-        }
     }
 
     pub(crate) fn set_responsesapi_client_metadata(

@@ -386,9 +386,9 @@ async fn turn_start_with_empty_input_runs_model_request() -> Result<()> {
     assert_eq!(
         (
             event["event_params"]["turn_id"].as_str(),
-            event["event_params"].get("root_turn_id"),
+            event["event_params"]["root_turn_id"].as_str(),
         ),
-        (Some(turn.id.as_str()), Some(&Value::Null))
+        (Some(turn.id.as_str()), Some(turn.id.as_str()))
     );
 
     let requests = server

@@ -1259,7 +1259,7 @@ async fn assert_remote_manual_compact_request_parity(
         .await?;
     wait_for_turn_complete(&codex).await;
 
-    codex.submit(Op::Compact).await?;
+    let compact_turn_id = codex.submit(Op::Compact).await?;
     wait_for_turn_complete(&codex).await;
 
     let response_requests = responses_mock.requests();
@@ -1280,6 +1280,13 @@ async fn assert_remote_manual_compact_request_parity(
     let compact_request = compact_mock.single_request();
     let normal_body = normal_request.body_json();
     let compact_body = compact_request.body_json();
+    let compact_metadata: Value = serde_json::from_str(
+        &compact_request
+            .header("x-codex-turn-metadata")
+            .expect("compaction turn metadata"),
+    )?;
+    assert_eq!(compact_metadata["turn_id"], compact_turn_id);
+    assert_eq!(compact_metadata["root_turn_id"], compact_turn_id);
     let expected_routing_hint = |body: &Value| {
         if !uses_codex_backend {
             return None;

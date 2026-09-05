@@ -139,7 +139,7 @@ async fn wait_for_git_enrichment(state: &TurnMetadataState) -> Value {
 }
 
 #[tokio::test]
-async fn detached_memory_responses_metadata_omits_turn_identity() {
+async fn detached_memory_responses_metadata_starts_an_independent_root_turn() {
     let (_temp_dir, repo_path) = create_clean_git_repo("repo-東京").await;
 
     let thread_manager = crate::ThreadManager::with_models_provider_for_tests(
@@ -147,7 +147,7 @@ async fn detached_memory_responses_metadata_omits_turn_identity() {
         crate::config::test_config().await.model_provider,
     );
 
-    let header = detached_memory_responses_metadata(
+    let metadata = detached_memory_responses_metadata(
         &thread_manager,
         String::new(),
         String::new(),
@@ -158,9 +158,8 @@ async fn detached_memory_responses_metadata_omits_turn_identity() {
         &PermissionProfile::read_only(),
         Some("none"),
     )
-    .await
-    .turn_metadata_json()
-    .expect("header");
+    .await;
+    let header = metadata.turn_metadata_json().expect("header");
     assert!(header.is_ascii());
     assert!(!header.contains("東京"));
     let parsed: Value = serde_json::from_str(&header).expect("valid json");
@@ -173,8 +172,18 @@ async fn detached_memory_responses_metadata_omits_turn_identity() {
     assert!(parsed.get("session_id").is_none());
     assert!(parsed.get("thread_id").is_none());
     assert!(parsed.get("forked_from_thread_id").is_none());
-    assert!(parsed.get("turn_id").is_none());
-    assert!(parsed.get(ROOT_TURN_ID_KEY).is_none());
+    let turn_id = parsed["turn_id"].as_str().expect("memory turn ID");
+    uuid::Uuid::parse_str(turn_id).expect("memory turn ID is a UUID");
+    assert_eq!(parsed[ROOT_TURN_ID_KEY], parsed["turn_id"]);
+    let client_metadata = metadata.client_metadata();
+    assert_eq!(
+        client_metadata.get("turn_id").map(String::as_str),
+        Some(turn_id)
+    );
+    assert_eq!(
+        client_metadata.get(ROOT_TURN_ID_KEY).map(String::as_str),
+        Some(turn_id)
+    );
     assert!(parsed.get(WINDOW_ID_KEY).is_none());
 
     let expected_repo_path = repo_path.to_string_lossy().into_owned();
@@ -221,10 +230,14 @@ async fn detached_memory_responses_metadata_omits_empty_workspace_metadata() {
     .turn_metadata_json()
     .expect("detached memory should emit its request kind");
     let parsed: Value = serde_json::from_str(&header).expect("valid json");
+    let turn_id = parsed["turn_id"].as_str().expect("memory turn ID");
+    uuid::Uuid::parse_str(turn_id).expect("memory turn ID is a UUID");
 
     assert_eq!(
         parsed,
         serde_json::json!({
+            "turn_id": turn_id,
+            "root_turn_id": turn_id,
             "request_kind": "memory",
             "sandbox_mode": "read-only",
             "thread_source": "memory_consolidation",

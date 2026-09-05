@@ -3274,11 +3274,11 @@ async fn thread_goal_keeps_original_root_until_external_objective_edit() -> Resu
     );
     responses::assert_root_turn(&reopened_request, Some(original_turn.turn.id.as_str()))?;
     let continuation_request = serde_json::from_slice::<serde_json::Value>(&requests[7])?;
-    assert_ne!(
-        continuation_request["client_metadata"]["turn_id"].as_str(),
-        Some(edited_turn_id)
-    );
-    responses::assert_root_turn(&continuation_request, /*expected*/ None)?;
+    let continuation_turn_id = continuation_request["client_metadata"]["turn_id"]
+        .as_str()
+        .expect("independent continuation turn ID");
+    assert_ne!(continuation_turn_id, edited_turn_id);
+    responses::assert_root_turn(&continuation_request, Some(continuation_turn_id))?;
     responses::assert_parent_turn(&continuation_request, /*expected*/ None)?;
 
     server.shutdown().await;
@@ -3446,7 +3446,7 @@ async fn thread_goal_lifecycle_emits_analytics_and_clear_deletes_goal() -> Resul
         goal_request_body["client_metadata"]["turn_id"],
         causal_turn_id
     );
-    responses::assert_root_turn(&goal_request_body, /*expected*/ None)?;
+    responses::assert_root_turn(&goal_request_body, Some(causal_turn_id))?;
     responses::assert_parent_turn(&goal_request_body, /*expected*/ None)?;
 
     let clear_id = mcp
