@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
+use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use app_test_support::write_chatgpt_auth;
 use axum::Json;
@@ -22,9 +23,17 @@ use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_features::Feature;
+use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use rmcp::handler::server::ServerHandler;
+use rmcp::model::CallToolRequestParams;
+use rmcp::model::CallToolResult;
+use rmcp::model::ContentBlock;
 use rmcp::model::ListToolsResult;
 use rmcp::model::ServerCapabilities;
 use rmcp::model::ServerInfo;
@@ -141,14 +150,6 @@ async fn installed_apps_thread_id_uses_effective_thread_config() -> Result<()> {
     let ThreadStartResponse { thread, .. } =
         timeout(DEFAULT_TIMEOUT, app_server.read_response(request_id)).await??;
 
-    let request_id = app_server
-        .send_apps_installed_request(AppsInstalledParams {
-            thread_id: Some(thread.id),
-            force_refresh: false,
-        })
-        .await?;
-    let response: AppsInstalledResponse =
-        timeout(DEFAULT_TIMEOUT, app_server.read_response(request_id)).await??;
     let alpha = expected
         .apps
         .iter_mut()
@@ -156,8 +157,153 @@ async fn installed_apps_thread_id_uses_effective_thread_config() -> Result<()> {
         .expect("alpha app should be installed");
     alpha.enabled = false;
     alpha.callable = false;
-    assert_eq!(response, expected);
 
+    for force_refresh in [false, true] {
+        let request_id = app_server
+            .send_apps_installed_request(AppsInstalledParams {
+                thread_id: Some(thread.id.clone()),
+                force_refresh,
+            })
+            .await?;
+        let response: AppsInstalledResponse =
+            timeout(DEFAULT_TIMEOUT, app_server.read_response(request_id)).await??;
+        assert_eq!(response, expected);
+    }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn installed_apps_thread_refresh_updates_live_tools_and_retains_them_on_failure() -> Result<()>
+{
+    let fixture = InstalledAppsFixture::start().await?;
+    fixture.set_tools(vec![connector_tool("alpha", "Alpha")?]);
+    let responses_server = responses::start_mock_server().await;
+    let codex_home = configured_codex_home(fixture.base_url())?;
+    MockResponsesConfig::new(&responses_server.uri())
+        .with_root_config(&format!(
+            "chatgpt_base_url = {:?}\nmcp_oauth_credentials_store = \"file\"",
+            fixture.base_url()
+        ))
+        .enable_feature(Feature::Apps)
+        .write(codex_home.path())?;
+    let mut app_server = start_app_server(codex_home.path()).await?;
+    let ThreadStartResponse { thread, .. } = app_server
+        .start_thread(ThreadStartParams::default())
+        .await?;
+
+    let initial_model_request = responses::mount_sse_once(
+        &responses_server,
+        responses::sse(vec![responses::ev_completed("before-refresh")]),
+    )
+    .await;
+    let completed = timeout(
+        DEFAULT_TIMEOUT,
+        app_server.start_turn_and_wait_for_completion(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "Which tools are available?".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        }),
+    )
+    .await??;
+    assert_eq!(completed.turn.status, TurnStatus::Completed);
+    assert!(
+        initial_model_request
+            .single_request()
+            .tool_by_name("mcp__codex_apps__alpha", "connector_alpha")
+            .is_some()
+    );
+
+    fixture.set_tools(vec![connector_tool("beta", "Beta")?]);
+    let expected = AppsInstalledResponse {
+        apps: vec![InstalledApp {
+            id: "beta".to_string(),
+            runtime_name: Some("Beta".to_string()),
+            enabled: true,
+            callable: true,
+        }],
+    };
+
+    for (call_id, refresh_fails) in [("after-refresh", false), ("after-failed-refresh", true)] {
+        if refresh_fails {
+            fixture.fail_next_list_tools();
+        }
+        let list_tools_calls = fixture.list_tools_calls();
+        let mut request_id = app_server
+            .send_apps_installed_request(AppsInstalledParams {
+                thread_id: Some(thread.id.clone()),
+                force_refresh: true,
+            })
+            .await?;
+        if refresh_fails {
+            let error = timeout(
+                DEFAULT_TIMEOUT,
+                app_server.read_stream_until_error_message(RequestId::Integer(request_id)),
+            )
+            .await??;
+            assert_eq!(error.error.code, -32603);
+            request_id = app_server
+                .send_apps_installed_request(AppsInstalledParams {
+                    thread_id: Some(thread.id.clone()),
+                    force_refresh: false,
+                })
+                .await?;
+        }
+        let installed: AppsInstalledResponse =
+            timeout(DEFAULT_TIMEOUT, app_server.read_response(request_id)).await??;
+        assert_eq!(installed, expected);
+        assert_eq!(fixture.list_tools_calls(), list_tools_calls + 1);
+
+        let model_requests = responses::mount_sse_sequence(
+            &responses_server,
+            vec![
+                responses::sse(vec![
+                    responses::ev_function_call_with_namespace(
+                        call_id,
+                        "mcp__codex_apps__beta",
+                        "connector_beta",
+                        "{}",
+                    ),
+                    responses::ev_completed(call_id),
+                ]),
+                responses::sse(vec![responses::ev_completed("done")]),
+            ],
+        )
+        .await;
+        let completed = timeout(
+            DEFAULT_TIMEOUT,
+            app_server.start_turn_and_wait_for_completion(TurnStartParams {
+                thread_id: thread.id.clone(),
+                input: vec![UserInput::Text {
+                    text: "Call Beta.".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            }),
+        )
+        .await??;
+        assert_eq!(completed.turn.status, TurnStatus::Completed);
+        let requests = model_requests.requests();
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests[0]
+                .tool_by_name("mcp__codex_apps__beta", "connector_beta")
+                .is_some()
+        );
+        assert!(
+            requests[0]
+                .tool_by_name("mcp__codex_apps__alpha", "connector_alpha")
+                .is_none()
+        );
+        assert_eq!(
+            requests[1].function_call_output(call_id)["output"][1],
+            json!({"type": "input_text", "text": "called connector_beta"})
+        );
+        assert_eq!(fixture.list_tools_calls(), list_tools_calls + 1);
+    }
     Ok(())
 }
 
@@ -249,6 +395,17 @@ struct InstalledAppsMcpServer {
 impl ServerHandler for InstalledAppsMcpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    }
+
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        _context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
+    ) -> Result<rmcp::model::CallToolResponse, rmcp::ErrorData> {
+        Ok(
+            CallToolResult::success(vec![ContentBlock::text(format!("called {}", request.name))])
+                .into(),
+        )
     }
 
     fn list_tools(
