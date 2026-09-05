@@ -15,7 +15,10 @@ impl Devices {
         Self::open().map(|_| ())
     }
 
-    pub(super) fn service(&self) -> io::Result<()> {
-        Self::open().map(|_| ())
+    pub(super) async fn service(
+        &mut self,
+        _: &mut crate::audio_track::AudioTrack,
+    ) -> io::Result<usize> {
+        Self::open().map(|_| 0)
     }
 }

@@ -44,8 +44,14 @@ stale at one second. The queue's sample capacity must span more than that servic
 interval.
 Processing lag can still overflow a queue. Before devices open, the worker blocks
 on commands instead of polling.
-`devicesOpened` confirms device opening only: capture/reference are drained locally
-until the following media stage connects encoding, decoding and the peer.
+`devicesOpened` confirms device opening only. Capture now uses Rubato resampling,
+Sonora echo/noise/gain processing and 20 ms Opus encoding before sending RTP.
+Mute resets retained capture history and rejects delayed pre-unmute buffers.
+The receive/decode pipeline and TUI connection remain subsequent stages.
+
+The capture encoder uses `opus 0.4.0` and its bundled `opusic-sys` build, which
+requires CMake and a C compiler. This is separate from the runtime's decoder Opus
+copy; final symbol binding and packaging validation must cover both copies.
 
 Cargo Linux builds require ALSA development inputs discoverable by pkg-config
 (for example `libasound2-dev` on Debian/Ubuntu). Bazel uses the declared `alsa_lib`

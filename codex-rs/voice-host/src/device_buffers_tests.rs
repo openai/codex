@@ -41,7 +41,7 @@ fn unmute_rejects_backlog_until_capture_reaches_the_following_callback() {
 
 #[test]
 fn suppression_discards_partial_and_queued_previous_generations() {
-    let buffers = Buffers::new();
+    let buffers = Buffers::new(/*input_rate*/ 48_000, /*output_rate*/ 48_000);
     let mut playback = Playback::default();
     Buffers::set_disabled(&buffers.speaker, /*disabled*/ false).unwrap();
     let generation = buffers.speaker.load(Ordering::Acquire);
@@ -68,7 +68,7 @@ fn suppression_discards_partial_and_queued_previous_generations() {
 
 #[test]
 fn output_is_finite_and_bounded_and_underflow_is_silence() {
-    let buffers = Buffers::new();
+    let buffers = Buffers::new(/*input_rate*/ 48_000, /*output_rate*/ 48_000);
     Buffers::set_disabled(&buffers.speaker, /*disabled*/ false).unwrap();
     let generation = buffers.speaker.load(Ordering::Acquire);
     let mut samples = [0.0; BLOCK];
@@ -91,7 +91,7 @@ fn output_is_finite_and_bounded_and_underflow_is_silence() {
 
 #[test]
 fn repeated_controls_preserve_epoch_but_transitions_invalidate_capture() {
-    let buffers = Buffers::new();
+    let buffers = Buffers::new(/*input_rate*/ 48_000, /*output_rate*/ 48_000);
     Buffers::set_disabled(&buffers.microphone, /*disabled*/ false).unwrap();
     let first = buffers.microphone.load(Ordering::Acquire);
     Buffers::set_disabled(&buffers.microphone, /*disabled*/ false).unwrap();
@@ -103,7 +103,7 @@ fn repeated_controls_preserve_epoch_but_transitions_invalidate_capture() {
 
 #[test]
 fn tiny_callbacks_share_slots_and_preserve_the_oldest_timestamp() {
-    let buffers = Buffers::new();
+    let buffers = Buffers::new(/*input_rate*/ 48_000, /*output_rate*/ 48_000);
     let start = Instant::now();
     for queue in [&buffers.capture, &buffers.rendered] {
         let mut packer = FramePacker::default();
@@ -209,4 +209,44 @@ fn packing_preserves_a_remainder_timestamp_across_uneven_callbacks() {
         ),
     );
     assert!(queue.is_empty());
+}
+
+#[test]
+fn capture_queue_retains_high_rate_audio_during_bounded_service_pause() {
+    let buffers = Buffers::new(/*input_rate*/ 384_000, /*output_rate*/ 48_000);
+    let mut packer = FramePacker::default();
+    let start = Instant::now();
+    // 630 ms covers a pending batch's 500 ms deadline, an in-flight 100 ms
+    // send and callback/service margins. Consumption is deliberately paused.
+    let samples = 384_000 * 63 / 100;
+    for offset in (0..samples).step_by(17) {
+        assert!(packer.push(
+            Frame {
+                samples: [0.25; BLOCK],
+                len: (samples - offset).min(17),
+                at: start + Duration::from_secs_f64(offset as f64 / 384_000.0),
+                generation: 2,
+            },
+            /*rate*/ 384_000.0,
+            &buffers.capture,
+        ));
+    }
+    assert_eq!(buffers.capture.len(), samples / BLOCK);
+    // Enlarging the queue must not turn overflow into unbounded accumulation.
+    for _ in buffers.capture.len()..=buffers.capture.capacity() {
+        let available = buffers.capture.len() < buffers.capture.capacity();
+        assert_eq!(
+            packer.push(
+                Frame {
+                    samples: [0.25; BLOCK],
+                    len: BLOCK,
+                    at: start,
+                    generation: 2,
+                },
+                /*rate*/ 384_000.0,
+                &buffers.capture,
+            ),
+            available,
+        );
+    }
 }

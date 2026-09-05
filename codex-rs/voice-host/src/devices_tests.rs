@@ -3,7 +3,7 @@ use pretty_assertions::assert_eq;
 
 #[test]
 fn startup_output_waits_for_service_but_later_overflow_still_fails() {
-    let buffers = Buffers::new();
+    let buffers = Buffers::new(/*input_rate*/ 48_000, /*output_rate*/ 384_000);
     let mut state = OutputState::default();
     let mut output = [1.0_f32; BLOCK * 2];
     let start = Instant::now();
@@ -46,7 +46,7 @@ fn startup_output_waits_for_service_but_later_overflow_still_fails() {
         ),
     );
     Buffers::set_disabled(&buffers.speaker, /*disabled*/ false).unwrap();
-    for _ in 0..QUEUE_CAPACITY {
+    for _ in 0..buffers.rendered.capacity() {
         render_output(
             &mut output,
             /*channels*/ 2,
@@ -96,7 +96,7 @@ fn callback_configuration_fits_supported_range_and_actual_queue() {
                 buffer_size: cpal::BufferSize::Fixed(frames),
             }
         );
-        let buffers = Buffers::new();
+        let buffers = Buffers::new(rate, rate);
         for queue in [&buffers.capture, &buffers.rendered] {
             for offset in (0..frames as usize).step_by(BLOCK) {
                 assert!(
@@ -115,23 +115,20 @@ fn callback_configuration_fits_supported_range_and_actual_queue() {
 }
 
 #[test]
-fn callback_configuration_reserves_room_for_partial_and_following_callbacks() {
-    for min in [6_016, 6_017, 8_192] {
+fn callback_configuration_fits_dynamic_queue_with_following_callbacks() {
+    for min in [6_016, 8_192] {
         let supported = cpal::SupportedStreamConfig::new(
             /*channels*/ 1,
             384_000,
             cpal::SupportedBufferSize::Range { min, max: 16_384 },
             cpal::SampleFormat::F32,
         );
-        let config = bounded_stream_config(&supported);
-        if min != 6_016 {
-            assert!(config.is_err(), "minimum callback size {min}");
-            continue;
-        }
-        let cpal::BufferSize::Fixed(frames) = config.unwrap().buffer_size else {
+        let cpal::BufferSize::Fixed(frames) =
+            bounded_stream_config(&supported).unwrap().buffer_size
+        else {
             panic!("callback size must be bounded");
         };
-        let buffers = Buffers::new();
+        let buffers = Buffers::new(/*input_rate*/ 48_000, /*output_rate*/ 384_000);
         buffers.serviced.store(true, Ordering::Release);
         let mut output = OutputState::default();
         let start = Instant::now();
@@ -146,7 +143,11 @@ fn callback_configuration_reserves_room_for_partial_and_following_callbacks() {
                 &mut output,
             );
         }
-        assert_eq!(buffers.rendered.len(), QUEUE_CAPACITY - 1);
+        assert_eq!(
+            buffers.rendered.len(),
+            (BLOCK - 1 + frames as usize + 15 * 128) / BLOCK,
+        );
+        assert!(buffers.rendered.len() < buffers.rendered.capacity());
         assert!(!buffers.failed.load(Ordering::Acquire));
     }
 }
@@ -192,8 +193,40 @@ fn callback_timing_must_fit_service_and_stale_limits() {
 }
 
 #[test]
+fn callback_pair_must_fit_the_processing_deadline() {
+    for (input_rate, input_frames, output_rate, output_frames, accepted) in [
+        (8_000, 7_680, 48_000, 480, false),
+        (8_000, 2_000, 8_000, 2_000, false),
+        (48_000, 480, 48_000, 480, true),
+        (44_100, 441, 48_000, 480, true),
+        (8_000, 1_600, 48_000, 480, true),
+    ] {
+        for (rate, frames) in [(input_rate, input_frames), (output_rate, output_frames)] {
+            let supported = cpal::SupportedStreamConfig::new(
+                /*channels*/ 1,
+                rate,
+                cpal::SupportedBufferSize::Range {
+                    min: frames,
+                    max: frames,
+                },
+                cpal::SampleFormat::F32,
+            );
+            assert!(bounded_stream_config(&supported).is_ok());
+        }
+        let processor = processing::Processor::new(input_rate, output_rate).unwrap();
+        assert_eq!(
+            processor
+                .validate_callback_timing(input_frames, output_frames)
+                .is_ok(),
+            accepted,
+            "input={input_rate}/{input_frames}, output={output_rate}/{output_frames}",
+        );
+    }
+}
+
+#[test]
 fn tiny_output_callbacks_pack_references_without_delaying_rendering() {
-    let buffers = Buffers::new();
+    let buffers = Buffers::new(/*input_rate*/ 48_000, /*output_rate*/ 384_000);
     buffers.serviced.store(true, Ordering::Release);
     Buffers::set_disabled(&buffers.speaker, /*disabled*/ false).unwrap();
     let generation = buffers.speaker.load(Ordering::Acquire);
@@ -229,12 +262,36 @@ fn tiny_output_callbacks_pack_references_without_delaying_rendering() {
 }
 
 #[test]
+fn rendered_queue_retains_high_rate_callbacks_during_bounded_service_pause() {
+    let buffers = Buffers::new(/*input_rate*/ 48_000, /*output_rate*/ 384_000);
+    buffers.serviced.store(true, Ordering::Release);
+    let mut state = OutputState::default();
+    let start = Instant::now();
+    let samples = 384_000 * 63 / 100;
+    for offset in (0..samples).step_by(17) {
+        let mut output = [1.0_f32; 34];
+        let len = (samples - offset).min(17) * 2;
+        render_output(
+            &mut output[..len],
+            /*channels*/ 2,
+            /*rate*/ 384_000.0,
+            start + Duration::from_secs_f64(offset as f64 / 384_000.0),
+            &buffers,
+            &mut state,
+        );
+        assert_eq!(&output[..len], &[0.0; 34][..len]);
+        assert!(!buffers.failed.load(Ordering::Acquire));
+    }
+    assert_eq!(buffers.rendered.len(), samples / BLOCK);
+}
+
+#[test]
 fn suppressed_output_does_not_fail_when_reference_queue_is_full() {
-    let buffers = Buffers::new();
+    let buffers = Buffers::new(/*input_rate*/ 48_000, /*output_rate*/ 384_000);
     buffers.serviced.store(true, Ordering::Release);
     let mut state = OutputState::default();
     let mut output = [1.0_f32; BLOCK];
-    for _ in 0..QUEUE_CAPACITY * 3 {
+    for _ in 0..buffers.rendered.capacity() * 3 {
         render_output(
             &mut output,
             /*channels*/ 1,
@@ -245,7 +302,7 @@ fn suppressed_output_does_not_fail_when_reference_queue_is_full() {
         );
         assert_eq!(output, [0.0; BLOCK]);
     }
-    assert_eq!(buffers.rendered.len(), QUEUE_CAPACITY);
+    assert_eq!(buffers.rendered.len(), buffers.rendered.capacity());
     assert!(!buffers.failed.load(Ordering::Acquire));
     Buffers::set_disabled(&buffers.speaker, /*disabled*/ false).unwrap();
     render_output(
@@ -261,7 +318,7 @@ fn suppressed_output_does_not_fail_when_reference_queue_is_full() {
 
 #[test]
 fn stream_xruns_recover_without_clearing_device_failure() {
-    let buffers = Buffers::new();
+    let buffers = Buffers::new(/*input_rate*/ 48_000, /*output_rate*/ 48_000);
     handle_stream_error(&buffers, cpal::ErrorKind::Xrun.into());
     assert!(!buffers.failed.load(Ordering::Acquire));
     handle_stream_error(&buffers, cpal::ErrorKind::DeviceNotAvailable.into());

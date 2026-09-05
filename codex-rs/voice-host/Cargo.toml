@@ -16,6 +16,7 @@ codex-process-hardening = { workspace = true }
 codex-realtime-webrtc = { workspace = true }
 futures = { workspace = true }
 libloading = "=0.8.9"
+rand = { workspace = true }
 rtc = "=0.20.3"
 tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
 webrtc = "=0.20.3"
@@ -23,6 +24,9 @@ webrtc = "=0.20.3"
 [target.'cfg(any(target_os = "macos", all(target_os = "linux", target_env = "gnu"), all(windows, target_env = "msvc")))'.dependencies]
 cpal = "=0.18.2"
 crossbeam-queue = "0.3.12"
+opus = "=0.4.0"
+rubato = { version = "=5.0.0", default-features = false }
+sonora = { version = "=0.2.0", default-features = false }
 
 [dev-dependencies]
 anyhow = { workspace = true }

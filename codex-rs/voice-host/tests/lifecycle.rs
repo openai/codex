@@ -27,6 +27,7 @@ use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 use webrtc::data_channel::DataChannel;
+use webrtc::peer_connection::MediaEngine;
 use webrtc::peer_connection::PeerConnection;
 use webrtc::peer_connection::PeerConnectionBuilder;
 use webrtc::peer_connection::PeerConnectionEventHandler;
@@ -307,7 +308,10 @@ async fn installed_client_negotiates_and_closes_over_udp_and_tcp() -> Result<()>
             let gathered = Arc::new(Notify::new());
             let mut settings = SettingEngine::default();
             settings.set_lite(/*lite*/ true);
+            let mut media = MediaEngine::default();
+            media.register_default_codecs()?;
             let builder = PeerConnectionBuilder::new()
+                .with_media_engine(media)
                 .with_setting_engine(settings)
                 .with_handler(Arc::new(RemoteEvents {
                     channels: sender,

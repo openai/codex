@@ -55,7 +55,9 @@ async fn check_negotiation(runtime: Arc<dyn webrtc::runtime::Runtime>) {
             let gathered = Arc::new(Notify::new());
             let mut settings = webrtc::peer_connection::SettingEngine::default();
             settings.set_lite(/*lite*/ true);
+            let (media, _) = crate::audio_track::AudioTrack::new().unwrap();
             let builder = PeerConnectionBuilder::new()
+                .with_media_engine(media)
                 .with_setting_engine(settings)
                 .with_handler(Arc::new(RemoteEvents(sender, gathered.clone())));
             let remote = if tcp {

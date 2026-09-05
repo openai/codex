@@ -1,5 +1,16 @@
 //! Same-build helper lifecycle with privately owned runtime, transport and opt-in local devices.
+//! Queued privacy controls take priority over starting another capture batch.
 
+// Non-native helper targets negotiate transport but have no device backend to send audio.
+#[cfg_attr(
+    not(any(
+        target_os = "macos",
+        all(target_os = "linux", target_env = "gnu"),
+        all(windows, target_env = "msvc")
+    )),
+    allow(dead_code)
+)]
+mod audio_track;
 #[cfg_attr(
     not(any(
         target_os = "macos",
@@ -89,13 +100,19 @@ fn run(
     output.flush()?;
     let mut runtime = None;
     let executor = tokio::runtime::Runtime::new()?;
-    let mut transport = None;
+    let mut transport: Option<transport::Transport> = None;
     let mut answered = false;
     let mut devices: Option<devices::Devices> = None;
     loop {
-        let message = if let Some(devices) = &devices {
-            devices.service()?;
-            receiver.recv_timeout(DEVICE_SERVICE_INTERVAL)
+        let message = if let Some(devices) = &mut devices {
+            let peer = transport
+                .as_mut()
+                .ok_or_else(|| io::Error::other("voice peer not started"))?;
+            wait_for_control(&receiver, || {
+                executor.block_on(devices.service(&mut peer.audio))?;
+                Ok(())
+            })?
+            .ok_or(mpsc::RecvTimeoutError::Disconnected)
         } else {
             receiver
                 .recv()
@@ -108,7 +125,7 @@ fn run(
             }
             Ok(Message::SetAudioControls { controls }) => {
                 devices
-                    .as_ref()
+                    .as_mut()
                     .ok_or_else(|| io::Error::other("audio devices not open"))?
                     .set_controls(controls)?;
                 Message::AudioControlsApplied {}
@@ -164,6 +181,21 @@ fn run(
         };
         output.write_all(&encode_frame(&reply)?)?;
         output.flush()?;
+    }
+}
+
+// Pending privacy controls and shutdown always precede the next capture batch.
+// A command arriving after service begins cannot retract an already in-flight packet.
+fn wait_for_control(
+    receiver: &mpsc::Receiver<Message>,
+    mut service: impl FnMut() -> io::Result<()>,
+) -> io::Result<Option<Message>> {
+    loop {
+        match receiver.recv_timeout(DEVICE_SERVICE_INTERVAL) {
+            Ok(message) => return Ok(Some(message)),
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(None),
+            Err(mpsc::RecvTimeoutError::Timeout) => service()?,
+        }
     }
 }
 

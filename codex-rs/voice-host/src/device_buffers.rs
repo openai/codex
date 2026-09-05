@@ -1,5 +1,6 @@
 //! Preallocated callback buffers pack small callbacks into full queue slots without locks.
-//! Generation changes and rejected capture buffers discard incomplete frames.
+//! Generation changes, rejected capture buffers and capture gaps discard incomplete frames.
+//! Capture/render capacity covers the worker deadline; playback and callback limits stay fixed.
 
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
@@ -11,6 +12,9 @@ use crossbeam_queue::ArrayQueue;
 
 pub(super) const BLOCK: usize = 256;
 pub(super) const QUEUE_CAPACITY: usize = 32;
+pub(super) const MAX_CALLBACK_FRAMES: usize = BLOCK * QUEUE_CAPACITY;
+// Allow ordinary timestamp jitter consistently at both capture buffering boundaries.
+pub(super) const CAPTURE_GAP_TOLERANCE: Duration = Duration::from_millis(/*millis*/ 20);
 
 pub(super) struct Frame {
     pub(super) samples: [f32; BLOCK],
@@ -29,6 +33,17 @@ pub(super) struct FramePacker {
 impl FramePacker {
     pub(super) fn reset(&mut self) {
         self.frame = None;
+    }
+
+    // Capture checks continuity before packing can hide a gap inside an old partial block.
+    // Render callbacks retain their separate existing packing behavior.
+    pub(super) fn discard_capture_gap(&mut self, start: Instant, rate: f64) {
+        if self.frame.as_ref().is_some_and(|partial| {
+            let end = partial.at + Duration::from_secs_f64(partial.len as f64 / rate);
+            start.saturating_duration_since(end) > CAPTURE_GAP_TOLERANCE
+        }) {
+            self.reset();
+        }
     }
 
     pub(super) fn push(&mut self, frame: Frame, rate: f64, queue: &ArrayQueue<Frame>) -> bool {
@@ -80,10 +95,19 @@ pub(super) struct Buffers {
 }
 
 impl Buffers {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(input_rate: u32, output_rate: u32) -> Self {
+        // Rates are validated before opening devices. A pending batch can defer
+        // capture consumption until its freshness deadline plus one in-flight send.
+        let budget = super::processing::MAX_PROCESSING_DELAY
+            + crate::audio_track::SEND_TIMEOUT
+            + 2 * crate::DEVICE_SERVICE_INTERVAL;
+        let capacity = |rate: u32| {
+            let samples = (u128::from(rate) * budget.as_nanos()).div_ceil(1_000_000_000);
+            (samples as usize + MAX_CALLBACK_FRAMES + BLOCK).div_ceil(BLOCK)
+        };
         Self {
-            capture: ArrayQueue::new(QUEUE_CAPACITY),
-            rendered: ArrayQueue::new(QUEUE_CAPACITY),
+            capture: ArrayQueue::new(capacity(input_rate)),
+            rendered: ArrayQueue::new(capacity(output_rate)),
             playback: ArrayQueue::new(QUEUE_CAPACITY),
             microphone: AtomicU64::new(/*v*/ 1),
             speaker: AtomicU64::new(/*v*/ 1),

@@ -5,6 +5,10 @@
 
 #[path = "device_buffers.rs"]
 mod buffers;
+#[path = "capture_worker.rs"]
+mod capture_worker;
+#[path = "processing.rs"]
+mod processing;
 
 use std::io;
 use std::sync::Arc;
@@ -25,6 +29,7 @@ use buffers::Buffers;
 use buffers::CaptureBoundary;
 use buffers::Frame;
 use buffers::FramePacker;
+use buffers::MAX_CALLBACK_FRAMES;
 use buffers::Playback;
 use buffers::QUEUE_CAPACITY;
 
@@ -33,7 +38,7 @@ const MAX_CAPTURE_AGE: Duration = Duration::from_secs(/*secs*/ 1);
 pub(super) struct Devices {
     _input: cpal::Stream,
     _output: cpal::Stream,
-    buffers: Arc<Buffers>,
+    worker: capture_worker::CaptureWorker,
 }
 
 macro_rules! stream {
@@ -79,7 +84,22 @@ impl Devices {
         }
         let input_stream_config = bounded_stream_config(&input_config)?;
         let output_stream_config = bounded_stream_config(&output_config)?;
-        let buffers = Arc::new(Buffers::new());
+        let buffers = Arc::new(Buffers::new(
+            input_config.sample_rate(),
+            output_config.sample_rate(),
+        ));
+        let processor =
+            processing::Processor::new(input_config.sample_rate(), output_config.sample_rate())
+                .map_err(io::Error::other)?;
+        let (cpal::BufferSize::Fixed(input_frames), cpal::BufferSize::Fixed(output_frames)) = (
+            input_stream_config.buffer_size,
+            output_stream_config.buffer_size,
+        ) else {
+            return Err(io::Error::other("audio callback size unavailable"));
+        };
+        processor
+            .validate_callback_timing(input_frames, output_frames)
+            .map_err(io::Error::other)?;
         let input = stream!(
             input_config.sample_format(),
             build_input,
@@ -105,37 +125,26 @@ impl Devices {
         Ok(Self {
             _input: input,
             _output: output,
-            buffers,
+            worker: capture_worker::CaptureWorker {
+                buffers,
+                processor,
+                pending: Default::default(),
+            },
         })
     }
 
     pub(super) fn set_controls(
-        &self,
+        &mut self,
         controls: codex_realtime_webrtc::AudioControls,
     ) -> io::Result<()> {
-        Buffers::set_disabled(&self.buffers.microphone, controls.microphone_muted)?;
-        Buffers::set_disabled(&self.buffers.speaker, controls.speaker_suppressed)
+        self.worker.set_controls(controls)
     }
 
-    pub(super) fn service(&self) -> io::Result<()> {
-        // Some backends start callbacks during stream construction, before open returns.
-        self.buffers.serviced.store(true, Ordering::Release);
-        // Device-only stage: consume locally until the media worker is attached.
-        // Reading timestamps here also rejects a stalled callback before readiness is reused.
-        for queue in [&self.buffers.capture, &self.buffers.rendered] {
-            for _ in 0..queue.capacity() {
-                let Some(frame) = queue.pop() else {
-                    break;
-                };
-                if frame.at.elapsed() > MAX_CAPTURE_AGE {
-                    return Err(io::Error::other("audio device processing fell behind"));
-                }
-            }
-        }
-        if self.buffers.failed.load(Ordering::Acquire) {
-            return Err(io::Error::other("audio device failed"));
-        }
-        Ok(())
+    pub(super) async fn service(
+        &mut self,
+        audio: &mut crate::audio_track::AudioTrack,
+    ) -> io::Result<usize> {
+        self.worker.service(audio, Instant::now).await
     }
 }
 
@@ -146,13 +155,8 @@ fn bounded_stream_config(
         return Err(io::Error::other("audio callback size range unavailable"));
     };
     let mut config = supported.config();
-    // Leave room for a partial block and smaller callbacks arriving before service.
-    let service_frames = (f64::from(config.sample_rate)
-        * super::DEVICE_SERVICE_INTERVAL.as_secs_f64())
-    .ceil() as usize;
-    let callback_capacity = (BLOCK * QUEUE_CAPACITY).saturating_sub(service_frames + BLOCK);
     let min = min.max(1);
-    let max = max.min(callback_capacity as u32);
+    let max = max.min(MAX_CALLBACK_FRAMES as u32);
     if min > max {
         return Err(io::Error::other("unsupported audio callback size range"));
     }
@@ -225,6 +229,7 @@ where
                         .unwrap_or_default(),
                 )
                 .unwrap_or_else(Instant::now);
+            capture.discard_capture_gap(start, rate);
             for (index, chunk) in data.chunks(BLOCK * channels).enumerate() {
                 let mut frame = Frame {
                     samples: [0.0; BLOCK],
