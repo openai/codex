@@ -169,19 +169,27 @@ impl<M: Clone> PluginLoadOutcome<M> {
     }
 
     pub fn effective_plugin_hook_sources(&self) -> Vec<PluginHookSource> {
+        self.iter_effective_plugin_hook_sources().cloned().collect()
+    }
+
+    pub fn iter_effective_plugin_hook_sources(&self) -> impl Iterator<Item = &PluginHookSource> {
         self.plugins
             .iter()
             .filter(|plugin| plugin.is_active())
-            .flat_map(|plugin| plugin.hook_sources.iter().cloned())
-            .collect()
+            .flat_map(|plugin| plugin.hook_sources.iter())
     }
 
     pub fn effective_plugin_hook_warnings(&self) -> Vec<String> {
+        self.iter_effective_plugin_hook_warnings()
+            .cloned()
+            .collect()
+    }
+
+    pub fn iter_effective_plugin_hook_warnings(&self) -> impl Iterator<Item = &String> {
         self.plugins
             .iter()
             .filter(|plugin| plugin.is_active())
-            .flat_map(|plugin| plugin.hook_load_warnings.iter().cloned())
-            .collect()
+            .flat_map(|plugin| plugin.hook_load_warnings.iter())
     }
 
     pub fn capability_summaries(&self) -> &[PluginCapabilitySummary] {

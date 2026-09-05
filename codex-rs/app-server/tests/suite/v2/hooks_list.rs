@@ -26,7 +26,9 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_core::config::set_project_trust_level;
+use codex_core_plugins::store::PluginStore;
 use codex_features::Feature;
+use codex_plugin::PluginId;
 use codex_protocol::config_types::TrustLevel;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::skip_if_host_windows;
@@ -547,6 +549,102 @@ async fn plugin_upgrade_refreshes_hook_runtime_for_loaded_session() -> Result<()
         timeout(DEFAULT_TIMEOUT, mcp.read_response(archive_id)).await??;
     assert_eq!(std::fs::read_to_string(&hook_log_path)?, "1\n3\n");
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn loaded_session_refreshes_externally_updated_plugin_hooks() -> Result<()> {
+    skip_if_host_windows!(Ok(()));
+    skip_if_remote!(Ok(()), "command hooks use host-local script and log paths");
+
+    let server = create_mock_responses_server_sequence_unchecked(vec![
+        create_final_assistant_message_sse_response("Version 1")?,
+        create_final_assistant_message_sse_response("Version 2")?,
+        create_final_assistant_message_sse_response("Rollback")?,
+    ])
+    .await;
+    let codex_home = TempDir::new()?;
+    let source = TempDir::new()?;
+    let hook_log_path = codex_home.path().join("plugin-hook-versions.log");
+    let plugin_id = PluginId::parse("demo@test")?;
+    let store = PluginStore::new(codex_home.path().to_path_buf());
+    write_versioned_plugin_hook(source.path(), "1.0.0", &hook_log_path)?;
+    store.install(AbsolutePathBuf::try_from(source.path())?, plugin_id.clone())?;
+    MockResponsesConfig::new(&server.uri())
+        .enable_feature(Feature::Plugins)
+        .enable_feature(Feature::CodexHooks)
+        .write(codex_home.path())?;
+    let mut config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+    config.push_str("\n[plugins.\"demo@test\"]\nenabled = true\n");
+    std::fs::write(codex_home.path().join("config.toml"), config)?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+    let list_id = mcp
+        .send_hooks_list_request(HooksListParams {
+            cwds: vec![codex_home.path().to_path_buf()],
+        })
+        .await?;
+    let HooksListResponse { data } = timeout(DEFAULT_TIMEOUT, mcp.read_response(list_id)).await??;
+    let trusted_hooks = data[0]
+        .hooks
+        .iter()
+        .map(|hook| {
+            (
+                hook.key.clone(),
+                serde_json::json!({ "trusted_hash": hook.current_hash }),
+            )
+        })
+        .collect::<serde_json::Map<String, serde_json::Value>>();
+    let trust_id = mcp
+        .send_config_batch_write_request(ConfigBatchWriteParams {
+            edits: vec![ConfigEdit {
+                key_path: "hooks.state".to_string(),
+                value: serde_json::Value::Object(trusted_hooks),
+                merge_strategy: MergeStrategy::Upsert,
+            }],
+            file_path: None,
+            expected_version: None,
+            reload_user_config: true,
+        })
+        .await?;
+    let _: codex_app_server_protocol::ConfigWriteResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(trust_id)).await??;
+    let start_id = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let ThreadStartResponse { thread, .. } =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(start_id)).await??;
+
+    let mut expected_versions = String::new();
+    for version in ["1.0.0", "2.0.0", "0.9.0"] {
+        // This test process updates the shared store without notifying app-server.
+        write_versioned_plugin_hook(source.path(), version, &hook_log_path)?;
+        store.install(AbsolutePathBuf::try_from(source.path())?, plugin_id.clone())?;
+        let turn_id = mcp
+            .send_turn_start_request(TurnStartParams {
+                thread_id: thread.id.clone(),
+                input: vec![V2UserInput::Text {
+                    text: format!("run version {version}"),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            })
+            .await?;
+        let _: TurnStartResponse = timeout(DEFAULT_TIMEOUT, mcp.read_response(turn_id)).await??;
+        timeout(
+            DEFAULT_TIMEOUT,
+            mcp.read_stream_until_notification_message("turn/completed"),
+        )
+        .await??;
+        expected_versions.push_str(&format!("{version}\n"));
+        assert_eq!(std::fs::read_to_string(&hook_log_path)?, expected_versions);
+    }
     Ok(())
 }
 

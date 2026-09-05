@@ -63,6 +63,8 @@ pub struct Hooks {
     environment: Arc<Vec<(OsString, OsString)>>,
     after_agent: Vec<Hook>,
     engine: ClaudeHooksEngine,
+    plugin_hook_sources: Vec<PluginHookSource>,
+    plugin_hook_load_warnings: Vec<String>,
 }
 
 impl Hooks {
@@ -98,6 +100,15 @@ impl Hooks {
         )
     }
 
+    pub fn matches_plugin_hooks<'a>(
+        &self,
+        sources: impl IntoIterator<Item = &'a PluginHookSource>,
+        warnings: impl IntoIterator<Item = &'a String>,
+    ) -> bool {
+        self.plugin_hook_sources.iter().eq(sources)
+            && self.plugin_hook_load_warnings.iter().eq(warnings)
+    }
+
     pub fn with_executor_hooks(&self, executor_hooks: Vec<ExecutorPluginHookSource>) -> Self {
         let mut hooks = self.clone();
         hooks.engine.set_executor_hooks(executor_hooks);
@@ -124,8 +135,8 @@ impl Hooks {
             config.feature_enabled,
             config.bypass_hook_trust,
             config.config_layer_stack.as_ref(),
-            config.plugin_hook_sources,
-            config.plugin_hook_load_warnings,
+            config.plugin_hook_sources.clone(),
+            config.plugin_hook_load_warnings.clone(),
             command_runtime,
             mcp_executor,
         );
@@ -133,6 +144,8 @@ impl Hooks {
             environment,
             after_agent,
             engine,
+            plugin_hook_sources: config.plugin_hook_sources,
+            plugin_hook_load_warnings: config.plugin_hook_load_warnings,
         }
     }
 
