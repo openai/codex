@@ -363,6 +363,9 @@ impl ExtensionMetrics for RecordingMetrics {
     }
 
     fn histogram(&self, name: &str, value: i64, tags: &[(&str, &str)]) {
+        if name == "codex.guardian_v2.connection.duration_ms" {
+            return;
+        }
         self.0.lock().unwrap().push(RecordedMetric::Histogram(
             name.to_owned(),
             value,
@@ -3327,7 +3330,7 @@ async fn assert_parent_compaction_reuse(thread_context_enabled: bool) -> Result<
             sample,
             RecordedMetric::Counter(name, 1, tags)
                 if name == CLASSIFICATION_METRIC
-                    && tags == &[("outcome".to_owned(), "failure".to_owned())]
+                    && tags.contains(&("outcome".to_owned(), "failure".to_owned()))
         )
     }));
 

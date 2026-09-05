@@ -216,6 +216,9 @@ impl ExtensionMetrics for RecordingMetrics {
     fn counter(&self, _name: &str, _inc: i64, _tags: &[(&str, &str)]) {}
 
     fn histogram(&self, name: &str, value: i64, tags: &[(&str, &str)]) {
+        if name == "codex.guardian_v2.connection.duration_ms" {
+            return;
+        }
         self.0.lock().unwrap().push((
             name.to_owned(),
             value,

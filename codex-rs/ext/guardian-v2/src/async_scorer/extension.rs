@@ -60,6 +60,7 @@ use super::metrics::TOOL_CALL_LAG_METRIC;
 use super::metrics::record_classification;
 use super::metrics::record_classification_risk;
 use super::metrics::record_fast_decision;
+use super::metrics::sampler_failure_reason;
 use super::review_evidence::render_review_evidence;
 use super::sampler::LunaSampler;
 use super::sampler::LunaSamplerConfig;
@@ -541,6 +542,7 @@ impl GuardianV2Extension {
                     metrics.as_deref(),
                     classification_started_at.elapsed(),
                     "failure",
+                    Some("thread_context_error"),
                 );
                 event_sink.emit_warning(ExtensionWarning {
                     thread_id,
@@ -586,6 +588,7 @@ impl GuardianV2Extension {
                     metrics.as_deref(),
                     classification_started_at.elapsed(),
                     "failure",
+                    Some("configuration_error"),
                 );
                 self.event_sink.emit_warning(ExtensionWarning {
                     thread_id: input.thread_store.level_id().to_owned(),
@@ -621,6 +624,7 @@ impl GuardianV2Extension {
                 metrics.as_deref(),
                 classification_started_at.elapsed(),
                 "skipped",
+                /*failure_reason*/ None,
             );
             return;
         }
@@ -647,6 +651,7 @@ impl GuardianV2Extension {
                         metrics.as_deref(),
                         classification_started_at.elapsed(),
                         "failure",
+                        Some("parent_compaction_error"),
                     );
                     return;
                 }
@@ -745,6 +750,7 @@ impl GuardianV2Extension {
                         metrics.as_deref(),
                         classification_started_at.elapsed(),
                         "failure",
+                        Some("context_build_error"),
                     );
                     event_sink.emit_warning(ExtensionWarning {
                         thread_id,
@@ -776,6 +782,7 @@ impl GuardianV2Extension {
                         metrics.as_deref(),
                         classification_started_at.elapsed(),
                         "failure",
+                        Some("action_serialization_error"),
                     );
                     event_sink.emit_warning(ExtensionWarning {
                         thread_id,
@@ -808,6 +815,7 @@ impl GuardianV2Extension {
                 format!("{planned_action}\n"),
                 ">>> APPROVAL REQUEST END\n".to_owned(),
             ]);
+            let mut failure_reason = "invalid_output";
             let mut classification_risk = None;
             let mut classification_finished_at = None;
             let result: Result<ClassificationOutcome, String> = async {
@@ -857,7 +865,10 @@ impl GuardianV2Extension {
                     Err(LunaSamplerError::Superseded) => {
                         return Ok(ClassificationOutcome::Superseded);
                     }
-                    Err(error) => return Err(error.to_string()),
+                    Err(error) => {
+                        failure_reason = sampler_failure_reason(&error);
+                        return Err(error.to_string());
+                    }
                 };
                 let (action_risk, risk_level) = match output.as_str() {
                     "high" => (1.0, "high"),
@@ -865,6 +876,7 @@ impl GuardianV2Extension {
                     _ => return Err("invalid Guardian V2 classification".to_owned()),
                 };
                 classification_risk = Some(risk_level);
+                failure_reason = "action_deserialization_error";
                 let score = SecurityRiskScore {
                     scores: BTreeMap::from([("action_risk".to_owned(), action_risk)]),
                     call_id: Some(call_id.clone()),
@@ -940,7 +952,12 @@ impl GuardianV2Extension {
                 Ok(ClassificationOutcome::Superseded) => "superseded",
                 Err(_) => "failure",
             };
-            record_classification(metrics.as_deref(), duration, outcome);
+            record_classification(
+                metrics.as_deref(),
+                duration,
+                outcome,
+                result.is_err().then_some(failure_reason),
+            );
             if let Some(analytics) = analytics {
                 analytics.track_guardian_v2_event(GuardianV2Event {
                     thread_id: thread_id.clone(),

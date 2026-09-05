@@ -46,6 +46,7 @@ use tokio::sync::Semaphore;
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
+use super::metrics::sampler_failure_reason;
 use super::trusted_skills::GuardianTrustedSkillsFragment;
 use super::trusted_tools::GuardianTrustedToolFragment;
 
@@ -329,10 +330,24 @@ impl LunaSampler {
             /*turn_state*/ None,
             /*telemetry*/ None,
         );
-        let connection = tokio::time::timeout(provider_info.websocket_connect_timeout(), connect)
+        let started_at = Instant::now();
+        let result = tokio::time::timeout(provider_info.websocket_connect_timeout(), connect)
             .await
-            .map_err(|_| LunaSamplerError::ConnectionTimeout)?
-            .map_err(LunaSamplerError::Api)?;
+            .map_err(|_| LunaSamplerError::ConnectionTimeout)
+            .and_then(|result| result.map_err(LunaSamplerError::Api));
+        if let Some(metrics) = self.config.metrics.as_deref() {
+            let outcome = if result.is_ok() { "success" } else { "failure" };
+            let mut tags = vec![("endpoint", endpoint.path()), ("outcome", outcome)];
+            if let Err(error) = &result {
+                tags.push(("failure_reason", sampler_failure_reason(error)));
+            }
+            metrics.histogram(
+                "codex.guardian_v2.connection.duration_ms",
+                i64::try_from(started_at.elapsed().as_millis()).unwrap_or(i64::MAX),
+                &tags,
+            );
+        }
+        let connection = result?;
         if auth_changes
             .as_ref()
             .is_some_and(|auth| auth.has_changed().unwrap_or(true))
