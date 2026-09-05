@@ -207,6 +207,9 @@ pub struct RevertThreadParams {
     pub thread_id: ThreadId,
     /// First turn excluded from the retained history.
     pub before_turn_id: String,
+    /// Resolved runtime version to preserve when its turn context is removed.
+    /// When absent, keep the version in the existing session metadata.
+    pub multi_agent_version: Option<MultiAgentVersion>,
 }
 
 /// Frozen source history and model context for a reference-backed fork.

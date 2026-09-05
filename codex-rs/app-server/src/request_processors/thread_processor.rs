@@ -2189,6 +2189,7 @@ impl ThreadRequestProcessor {
             .revert_thread(codex_thread_store::RevertThreadParams {
                 thread_id,
                 before_turn_id,
+                multi_agent_version: thread.multi_agent_version(),
             })
             .await
             .map_err(|err| thread_store_mutation_error("revert", err));
