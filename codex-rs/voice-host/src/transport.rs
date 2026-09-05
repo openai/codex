@@ -64,7 +64,7 @@ pub(crate) struct Transport {
     connection: Arc<dyn PeerConnection>,
     gathered: Arc<Notify>,
     observer: JoinHandle<()>,
-    ready: watch::Receiver<bool>,
+    pub(crate) ready: watch::Receiver<bool>,
 }
 
 impl Transport {

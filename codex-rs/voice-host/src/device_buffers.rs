@@ -1,8 +1,10 @@
+//! Meter reads clear accumulated peaks and surface callback failures.
 //! Preallocated callback buffers pack small callbacks into full queue slots without locks.
 //! Generation changes, rejected capture buffers and capture gaps discard incomplete frames.
 //! Capture/render capacity covers the worker deadline; playback and callback limits stay fixed.
 
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU16;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -92,9 +94,21 @@ pub(super) struct Buffers {
     pub(super) speaker: AtomicU64,
     pub(super) serviced: AtomicBool,
     pub(super) failed: AtomicBool,
+    pub(super) microphone_peak: AtomicU16,
+    pub(super) speaker_peak: AtomicU16,
 }
 
 impl Buffers {
+    pub(super) fn take_state(&self) -> std::io::Result<codex_realtime_webrtc::AudioState> {
+        if self.failed.load(Ordering::Acquire) {
+            return Err(std::io::Error::other("audio device failed"));
+        }
+        Ok(codex_realtime_webrtc::AudioState {
+            microphone_peak: self.microphone_peak.swap(/*val*/ 0, Ordering::AcqRel),
+            speaker_peak: self.speaker_peak.swap(/*val*/ 0, Ordering::AcqRel),
+        })
+    }
+
     pub(super) fn new(input_rate: u32, output_rate: u32) -> Self {
         // Rates are validated before opening devices. A pending batch can defer
         // capture consumption until its freshness deadline plus one in-flight send.
@@ -113,6 +127,8 @@ impl Buffers {
             speaker: AtomicU64::new(/*v*/ 1),
             serviced: AtomicBool::new(false),
             failed: AtomicBool::new(false),
+            microphone_peak: AtomicU16::new(/*v*/ 0),
+            speaker_peak: AtomicU16::new(/*v*/ 0),
         }
     }
 

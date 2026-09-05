@@ -8,11 +8,19 @@ use serde::Serialize;
 
 pub const MAX_FRAME_BYTES: usize = 128 * 1024;
 
-#[derive(Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AudioControls {
     pub microphone_muted: bool,
     pub speaker_suppressed: bool,
+}
+
+/// Peaks contain levels only, never retained audio or backend messages.
+#[derive(Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AudioState {
+    pub microphone_peak: u16,
+    pub speaker_peak: u16,
 }
 
 /// SDP contains ICE credentials. Bound it at construction and never expose it in diagnostics.
@@ -77,6 +85,8 @@ pub enum Message {
     DevicesOpened {},
     SetAudioControls { controls: AudioControls },
     AudioControlsApplied {},
+    InspectAudio {},
+    AudioState { state: AudioState },
     Close {},
     Closed {},
 }

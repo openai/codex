@@ -11,12 +11,18 @@ doctest = false
 workspace = true
 
 [dependencies]
+codex-build-info = { workspace = true }
 anyhow = { workspace = true }
 codex-install-context = { workspace = true }
 codex-utils-pty = { workspace = true }
+futures = { workspace = true, features = ["std"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-tokio = { workspace = true, features = ["sync", "time"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
 
 [dev-dependencies]
+ctor = { workspace = true }
 pretty_assertions = { workspace = true }
+
+[target.'cfg(unix)'.dev-dependencies]
+libc = { workspace = true }

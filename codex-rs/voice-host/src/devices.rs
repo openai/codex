@@ -12,6 +12,7 @@ mod processing;
 
 use std::io;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU16;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
@@ -60,6 +61,10 @@ macro_rules! stream {
 }
 
 impl Devices {
+    pub(super) fn take_state(&self) -> io::Result<codex_realtime_webrtc::AudioState> {
+        self.worker.buffers.take_state()
+    }
+
     pub(super) fn open() -> io::Result<Self> {
         let host = cpal::default_host();
         let input = host
@@ -178,6 +183,13 @@ fn bounded_stream_config(
     Ok(config)
 }
 
+fn record_peak(peak: &AtomicU16, sample: f32) {
+    peak.fetch_max(
+        (sample.abs().min(1.0) * f32::from(u16::MAX)) as u16,
+        Ordering::Relaxed,
+    );
+}
+
 // CPAL reports recoverable underruns/overruns through the same callback as device loss.
 fn handle_stream_error(buffers: &Buffers, error: cpal::Error) {
     if error.kind() != cpal::ErrorKind::Xrun {
@@ -247,6 +259,7 @@ where
                         buffers.failed.store(true, Ordering::Release);
                         return;
                     }
+                    record_peak(&buffers.microphone_peak, *output);
                 }
                 if !capture.push(frame, rate, &buffers.capture) {
                     buffers.failed.store(true, Ordering::Release);
@@ -320,6 +333,7 @@ fn render_output<T>(
             let rendered = T::from_sample(output.playback.next(buffers));
             frame.fill(rendered);
             *sample = f32::from_sample(rendered);
+            record_peak(&buffers.speaker_peak, *sample);
         }
         if !output.reference.push(reference, rate, &buffers.rendered) {
             buffers.failed.store(true, Ordering::Release);

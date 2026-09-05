@@ -66,6 +66,7 @@ fn startup_output_waits_for_service_but_later_overflow_still_fails() {
         &mut state,
     );
     assert!(buffers.failed.load(Ordering::Acquire));
+    assert!(buffers.take_state().is_err());
 }
 
 #[test]
@@ -257,6 +258,25 @@ fn tiny_output_callbacks_pack_references_without_delaying_rendering() {
         );
         assert_eq!(output, [0.5; 32]);
     }
+    for sample in [-0.75, 0.25] {
+        record_peak(&buffers.microphone_peak, sample);
+    }
+    assert_eq!(
+        buffers.take_state().unwrap(),
+        codex_realtime_webrtc::AudioState {
+            microphone_peak: 49151,
+            speaker_peak: 32767,
+        }
+    );
+    assert_eq!(buffers.take_state().unwrap(), Default::default());
+    record_peak(&buffers.microphone_peak, /*sample*/ 1.5);
+    assert_eq!(
+        buffers.take_state().unwrap(),
+        codex_realtime_webrtc::AudioState {
+            microphone_peak: u16::MAX,
+            speaker_peak: 0,
+        }
+    );
     assert_eq!(buffers.rendered.len(), 7);
     assert!(!buffers.failed.load(Ordering::Acquire));
 }

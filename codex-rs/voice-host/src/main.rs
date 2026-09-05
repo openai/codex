@@ -119,6 +119,18 @@ fn run(
                 .map_err(|_| mpsc::RecvTimeoutError::Disconnected)
         };
         let reply = match message {
+            Ok(Message::InspectAudio {}) => {
+                if answered && transport.as_ref().is_none_or(|peer| !*peer.ready.borrow()) {
+                    return Err(io::Error::other("voice connection closed"));
+                }
+                Message::AudioState {
+                    state: devices
+                        .as_ref()
+                        .map(devices::Devices::take_state)
+                        .transpose()?
+                        .unwrap_or_default(),
+                }
+            }
             Ok(Message::OpenDevices {}) if devices.is_none() && runtime.is_some() && answered => {
                 devices = Some(devices::Devices::open()?);
                 Message::DevicesOpened {}
@@ -176,6 +188,7 @@ fn run(
                 | Message::OpenDevices {}
                 | Message::DevicesOpened {}
                 | Message::AudioControlsApplied {}
+                | Message::AudioState { .. }
                 | Message::Closed {},
             ) => return Err(io::Error::other("invalid voice control sequence")),
         };

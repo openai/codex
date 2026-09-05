@@ -4230,8 +4230,12 @@ name = "codex-realtime-webrtc"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "codex-build-info",
  "codex-install-context",
  "codex-utils-pty",
+ "ctor 0.6.3",
+ "futures",
+ "libc",
  "pretty_assertions",
  "serde",
  "serde_json",
@@ -4633,6 +4637,7 @@ dependencies = [
  "codex-app-server-client",
  "codex-app-server-protocol",
  "codex-arg0",
+ "codex-build-info",
  "codex-cloud-config",
  "codex-config",
  "codex-connectors",

@@ -28,6 +28,53 @@ pub struct VoiceHost {
 }
 
 impl VoiceHost {
+    /// Open local devices only after answer negotiation. They initially remain muted/suppressed.
+    pub async fn open_devices(mut self) -> Result<Self> {
+        self.exchange(Message::OpenDevices {}, Message::DevicesOpened {}, DEADLINE)
+            .await?;
+        Ok(self)
+    }
+
+    /// Acknowledgement follows invalidation of the helper's previous capture/render generations.
+    pub async fn set_audio_controls(&mut self, controls: crate::AudioControls) -> Result<()> {
+        self.exchange(
+            Message::SetAudioControls { controls },
+            Message::AudioControlsApplied {},
+            DEADLINE,
+        )
+        .await
+    }
+
+    /// Enqueue startup controls synchronously so the facade can order them with setters.
+    /// The returned future owns only the acknowledgement wait, never the facade control lock.
+    pub(crate) fn begin_audio_controls(
+        &mut self,
+        controls: crate::AudioControls,
+    ) -> Result<impl std::future::Future<Output = Result<()>> + '_> {
+        self.process
+            .writer_sender()
+            .try_send(encode_frame(&Message::SetAudioControls { controls })?)
+            .map_err(|_| anyhow::anyhow!("voice helper input unavailable"))?;
+        let deadline = tokio::time::Instant::now() + DEADLINE;
+        Ok(async move {
+            let response = tokio::time::timeout_at(deadline, self.output.next()).await??;
+            ensure!(
+                response == Message::AudioControlsApplied {},
+                "unexpected voice helper response"
+            );
+            Ok(())
+        })
+    }
+
+    /// Consume peaks and detect helper loss even when neither device is producing audio.
+    pub async fn inspect_audio(&mut self) -> Result<crate::AudioState> {
+        let response = self.request(Message::InspectAudio {}, DEADLINE).await?;
+        let Message::AudioState { state } = response else {
+            anyhow::bail!("unexpected voice helper response");
+        };
+        Ok(state)
+    }
+
     /// Gather an offer in the helper. This establishes neither connectivity nor audio readiness.
     pub async fn start_transport(mut self) -> Result<(Self, crate::SessionDescription)> {
         let response = self
