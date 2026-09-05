@@ -115,6 +115,84 @@ async fn selected_answers_preserve_long_labels_and_reject_oversized_submissions(
     }
 }
 
+#[tokio::test]
+async fn question_inputs_support_vim_editing_and_search() {
+    for (name, options) in [("single", None), ("other", Some(vec!["Named".to_string()]))] {
+        let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.thread_id = Some(ThreadId::new());
+        chat.show_welcome_banner = false;
+        chat.bottom_pane.set_vim_enabled(/*enabled*/ true);
+        chat.add_async_questions("message", &[question("Which way?", options.clone())]);
+        chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+        if options.is_some() {
+            chat.handle_key_event(KeyEvent::from(KeyCode::Char('2')));
+        }
+        chat.handle_key_event(KeyEvent::from(KeyCode::Char('i')));
+        chat.bottom_pane
+            .handle_paste("alpha beta\nalpha gamma".into());
+        chat.handle_key_event(KeyEvent::from(KeyCode::Esc));
+        for ch in "0k".chars() {
+            chat.handle_key_event(KeyEvent::from(KeyCode::Char(ch)));
+        }
+        assert!(chat.bottom_pane.questions.as_ref().unwrap().expanded);
+        let normal = render_bottom_popup(&chat, /*width*/ 80);
+        for ch in "dw".chars() {
+            chat.handle_key_event(KeyEvent::from(KeyCode::Char(ch)));
+        }
+        assert!(!render_bottom_popup(&chat, /*width*/ 80).contains("alpha beta"));
+        chat.handle_key_event(KeyEvent::from(KeyCode::Char('u')));
+        assert!(render_bottom_popup(&chat, /*width*/ 80).contains("alpha beta"));
+        chat.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        assert!(!render_bottom_popup(&chat, /*width*/ 80).contains("alpha beta"));
+        chat.handle_key_event(KeyEvent::from(KeyCode::Char('u')));
+        for ch in "/gamma".chars() {
+            chat.handle_key_event(KeyEvent::from(KeyCode::Char(ch)));
+        }
+        let search = render_bottom_popup(&chat, /*width*/ 80);
+        chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+        assert_eq!(question_count(&chat), 1);
+        assert!(op_rx.try_recv().is_err());
+        for ch in "ciw".chars() {
+            chat.handle_key_event(KeyEvent::from(KeyCode::Char(ch)));
+        }
+        chat.bottom_pane.handle_paste("delta".into());
+        chat.handle_key_event(KeyEvent::from(KeyCode::Esc));
+        chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+        assert_answer(
+            op_rx.try_recv().unwrap(),
+            "> Which way?\n\nalpha beta\nalpha delta",
+        );
+        insta::assert_snapshot!(
+            format!("question_vim_{name}"),
+            format!("NORMAL\n{normal}\n\nSEARCH\n{search}")
+        );
+    }
+}
+
+#[tokio::test]
+async fn async_questions_reject_blank_answers_but_allow_explicit_skip() {
+    for options in [None, Some(vec!["Named".to_string()])] {
+        let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.thread_id = Some(ThreadId::new());
+        chat.add_async_questions("message", &[question("Which way?", options.clone())]);
+        chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+        if options.is_some() {
+            chat.handle_key_event(KeyEvent::from(KeyCode::Char('2')));
+        }
+        for text in ["", " \t\n"] {
+            chat.bottom_pane.handle_paste(text.into());
+            let before = render_bottom_popup(&chat, /*width*/ 80);
+            chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+            assert_eq!(render_bottom_popup(&chat, /*width*/ 80), before);
+            assert!(chat.input_queue.queued_user_messages.is_empty());
+            assert!(op_rx.try_recv().is_err());
+        }
+        chat.handle_key_event(KeyEvent::new(KeyCode::Char('5'), KeyModifiers::CONTROL));
+        assert_eq!(question_count(&chat), 0);
+        assert!(op_rx.try_recv().is_err());
+    }
+}
+
 fn open_questions(chat: &mut ChatWidget, options: Option<Vec<String>>) {
     chat.thread_id = Some(ThreadId::new());
     chat.on_agent_message_item_completed(
@@ -158,6 +236,25 @@ async fn question_queue_key_does_not_steer_the_running_turn() {
     chat.handle_key_event(repeat);
     assert_eq!(question_count(&chat), 1);
     assert!(ops.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn question_choices_deliver_digits_and_leading_letters() {
+    for (key, text, expected) in [
+        ('2', "", "Second"),
+        ('j', "ust text", "just text"),
+        ('k', "eep it", "keep it"),
+    ] {
+        let (mut chat, _rx, mut ops) = make_chatwidget_manual(/*model_override*/ None).await;
+        open_questions(&mut chat, Some(vec!["First".into(), "Second".into()]));
+        chat.handle_key_event(KeyEvent::from(KeyCode::Char(key)));
+        if !text.is_empty() {
+            chat.bottom_pane.handle_paste(text.into());
+            chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+        }
+        assert_answer(ops.try_recv().unwrap(), &format!("> First?\n\n{expected}"));
+        assert_eq!(question_count(&chat), 1);
+    }
 }
 
 #[tokio::test]
@@ -214,5 +311,29 @@ fn question(title: &str, options: Option<Vec<String>>) -> AsyncUserInputQuestion
     AsyncUserInputQuestion {
         title: title.into(),
         options,
+    }
+}
+
+#[tokio::test]
+async fn questions_and_queued_messages_share_the_resolved_shortcut() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.input_queue
+        .queued_user_messages
+        .push_back(UserMessage::from("queued".to_string()).into());
+    chat.refresh_pending_input_preview();
+    for binding in [key_hint::shift(KeyCode::Left), key_hint::alt(KeyCode::Up)] {
+        chat.bottom_pane
+            .set_queued_message_edit_binding(Some(binding.into()));
+        let hint = binding.display_label();
+        assert!(render_bottom_popup(&chat, /*width*/ 100).contains(&hint));
+        chat.add_async_questions(&hint, &questions());
+        assert!(render_bottom_popup(&chat, /*width*/ 100).contains(&format!("{hint} to answer")));
+        let (key, modifiers) = binding.parts();
+        chat.handle_key_event(KeyEvent::new(key, modifiers));
+        insta::assert_snapshot!(
+            format!("question_queue_hint_{}", key),
+            render_bottom_popup(&chat, /*width*/ 100)
+        );
+        chat.handle_key_event(KeyEvent::from(KeyCode::Esc));
     }
 }

@@ -3,12 +3,11 @@ source: tui/src/bottom_pane/async_questions/state_tests.rs
 expression: buffer_text(&buffer)
 ---
 
+  2 of 2
   Second
 
-  › 1. A suggested answer that is
-       long enough to wrap across
-       multiple rows
-    2. Other
+  › 1. Other
+    2. Other (write an answer)
 
   enter submit   ctrl + ] skip
-  ⌥ + ↓ main prompt
+  ⌥ + ↓ prev question

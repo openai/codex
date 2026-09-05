@@ -1,0 +1,20 @@
+---
+source: tui/src/bottom_pane/async_questions/state_tests.rs
+expression: buffer_text(&buffer)
+---
+
+  Second
+
+    1. A suggested answer that is long enough to
+       wrap across multiple rows
+  › 2. long draft
+       long draft
+       long draft
+       long draft
+       long draft
+       long draft
+       long draft
+
+
+  enter submit   ctrl + ] skip
+  ⌥ + ↓ main prompt

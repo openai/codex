@@ -5,10 +5,12 @@ expression: buffer_text(&buffer)
 
   Second
 
-  › 1. A suggested answer that is
+    1. A suggested answer that is
        long enough to wrap across
        multiple rows
-    2. Other
+  › 2. An alternative answer that
+       wraps across several option
+       rows
 
   enter submit   ctrl + ] skip
   ⌥ + ↓ main prompt

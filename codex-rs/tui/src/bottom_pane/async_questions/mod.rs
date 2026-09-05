@@ -20,6 +20,7 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use std::collections::HashSet;
+use std::time::Duration;
 use unicode_width::UnicodeWidthStr;
 
 mod input;
@@ -27,6 +28,7 @@ mod layout;
 mod render;
 mod state;
 
+const OTHER_OPTION_LABEL: &str = "Other";
 pub(super) const TIP_SEPARATOR: &str = "   ";
 pub(super) const DESIRED_SPACERS_BETWEEN_SECTIONS: u16 = 2;
 
@@ -59,6 +61,8 @@ pub(crate) struct AsyncQuestions {
     visible_options: std::cell::Cell<(usize, usize)>,
     pub(crate) next_hint: Option<crate::key_hint::ShortcutHint>,
     keymap: RuntimeKeymap,
+    // Ignore autorepeat from the number key that opened Other.
+    other_selector: Option<KeyCode>,
     pub(super) composer: ChatComposer,
 }
 
@@ -89,6 +93,7 @@ impl AsyncQuestions {
             visible_options: std::cell::Cell::new((0, 0)),
             next_hint: None,
             keymap,
+            other_selector: None,
             composer,
         }
     }
@@ -116,12 +121,13 @@ impl AsyncQuestions {
             .and_then(|q| q.options.as_deref())
             .unwrap_or_default()
     }
+
     fn has_options(&self) -> bool {
         !self.options().is_empty()
     }
 
     fn options_len(&self) -> usize {
-        self.options().len()
+        self.options().len() + usize::from(self.has_options())
     }
 
     fn option_index_for_digit(&self, ch: char) -> Option<usize> {
@@ -146,12 +152,17 @@ impl AsyncQuestions {
     }
 
     fn focus_is_notes(&self) -> bool {
-        !self.has_options()
+        !self.has_options() || self.other_selected()
     }
 
     pub(super) fn option_rows(&self) -> Vec<GenericDisplayRow> {
+        if !self.has_options() {
+            return Vec::new();
+        };
+        let other = self.other_label();
         self.options()
             .iter()
+            .chain(std::iter::once(&other))
             .enumerate()
             .map(|(index, label)| {
                 let prefix = if self.selected_option_index() == Some(index) {
@@ -174,25 +185,62 @@ impl AsyncQuestions {
         if !self.has_options() {
             return 0;
         }
+        let row_width = width.saturating_add(1);
         let rows = self.option_rows();
-        let state = ScrollState::default();
-        measure_rows_height(&rows, &state, rows.len(), width.saturating_add(1))
+        if self.other_selected() {
+            let prefix = self.other_prefix_width(width);
+            measure_rows_height(
+                &rows[..rows.len() - 1],
+                &ScrollState::default(),
+                rows.len(),
+                row_width,
+            ) + self
+                .composer
+                .inline_input_height(width.saturating_sub(prefix).max(1))
+                .clamp(1, 8)
+        } else {
+            measure_rows_height(&rows, &ScrollState::default(), rows.len(), row_width)
+        }
     }
 
     fn save_current_draft(&mut self) {
         self.composer.flush_pending_input();
-        let draft = self.composer.snapshot_draft();
-        if let Some(answer) = self.current_answer_mut() {
-            answer.draft = draft;
+        if self.focus_is_notes() {
+            let draft = self.composer.snapshot_draft();
+            if let Some(answer) = self.current_answer_mut() {
+                answer.draft = draft;
+            }
         }
     }
 
     fn restore_current_draft(&mut self) {
+        self.sync_composer_placeholder();
         let draft = self
             .current_answer()
             .map(|answer| answer.draft.clone())
             .unwrap_or_default();
         self.composer.restore_inline_draft(draft);
+    }
+
+    fn other_placeholder(&self) -> &'static str {
+        if self
+            .options()
+            .iter()
+            .any(|label| label.eq_ignore_ascii_case("Other"))
+        {
+            "Other (write an answer)"
+        } else {
+            OTHER_OPTION_LABEL
+        }
+    }
+
+    fn sync_composer_placeholder(&mut self) {
+        let text = if self.other_selected() {
+            self.other_placeholder()
+        } else {
+            "Type your answer"
+        };
+        self.composer.set_placeholder_text(text.to_string());
     }
 
     pub(crate) fn unanswered_count(&self) -> usize {

@@ -1,0 +1,20 @@
+---
+source: tui/src/chatwidget/tests/questions_tests.rs
+expression: "format!(\"NORMAL\\n{normal}\\n\\nSEARCH\\n{search}\")"
+---
+NORMAL
+  Which way?
+
+  alpha beta
+  alpha gamma
+                                                                   Vim: Normal
+  enter submit   ctrl + ] skip   ⌥ + ↓ main prompt
+
+SEARCH
+  Which way?
+
+  alpha beta
+  alpha gamma
+  /gamma
+                                                                   Vim: Normal
+  enter submit   ctrl + ] skip   ⌥ + ↓ main prompt

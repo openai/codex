@@ -6,6 +6,7 @@ use crossterm::event::KeyModifiers;
 use pretty_assertions::assert_eq;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Modifier;
 
 fn editor() -> AsyncQuestions {
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
@@ -76,6 +77,55 @@ fn long_prompt_keeps_the_active_input_visible() {
     insta::assert_snapshot!("long_prompt_active_input", text);
 }
 
+#[test]
+fn selected_other_renders_as_a_dim_placeholder() {
+    let mut editor = editor();
+    editor.navigate(/*forward*/ true);
+    editor.handle_key_event(KeyEvent::from(KeyCode::Char('2')));
+    let mut repeat = KeyEvent::from(KeyCode::Char('2'));
+    repeat.kind = KeyEventKind::Repeat;
+    editor.handle_key_event(repeat);
+    assert!(editor.composer.is_empty());
+    editor.handle_paste("saved".into());
+    editor.handle_key_event(KeyEvent::from(KeyCode::Up));
+    editor.handle_key_event(KeyEvent::from(KeyCode::Char('2')));
+    editor.handle_key_event(repeat);
+    assert_eq!(editor.composer.current_text(), "saved");
+    editor.handle_key_event(KeyEvent::from(KeyCode::Char('2')));
+    editor.handle_key_event(repeat);
+    assert_eq!(editor.composer.current_text(), "saved22");
+    editor.on_ctrl_c();
+    editor.state.pending[1].question.title = "Long question ".repeat(40);
+    let buffer = render_editor(&editor, /*width*/ 50, /*height*/ 10);
+    let area = buffer.area;
+    assert!(editor.cursor_pos(area).is_some());
+    let input = editor.other_input_area(
+        editor
+            .layout_sections(crate::bottom_pane::selection_popup_common::menu_surface_inset(area))
+            .options_area,
+    );
+    for offset in 0..5 {
+        assert_eq!(buffer[(input.x + offset, input.y)].modifier, Modifier::DIM);
+    }
+    insta::assert_snapshot!("selected_other_placeholder", buffer_text(&buffer));
+    editor.state.pending[1].question.title = "Second".into();
+    render_editor(&editor, /*width*/ 50, /*height*/ 10);
+    editor.set_vim_enabled(/*enabled*/ true);
+    editor.handle_key_event(KeyEvent::from(KeyCode::Char('i')));
+    editor.handle_paste("draft".into());
+    editor.handle_key_event(KeyEvent::from(KeyCode::Esc));
+    editor.handle_key_event(KeyEvent::from(KeyCode::Up));
+    assert_eq!(editor.selected_option_index(), Some(0));
+    editor.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    assert!(editor.submission.take().is_some());
+    editor.handle_key_event(KeyEvent::from(KeyCode::Char('x')));
+    editor.handle_key_event(KeyEvent::from(KeyCode::Esc));
+    for _ in 0..2 {
+        editor.handle_key_event(KeyEvent::from(KeyCode::Char('u')));
+    }
+    assert_eq!(editor.composer.current_text(), "");
+}
+
 fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
     (buffer.area.y..buffer.area.bottom())
         .map(|y| {
@@ -87,6 +137,60 @@ fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[test]
+fn question_choice_remaps_paging_and_inline_feedback() {
+    use codex_config::types::KeybindingSpec;
+    use codex_config::types::KeybindingsSpec;
+    use codex_config::types::TuiKeymap;
+    let mut editor = editor();
+    editor.navigate(/*forward*/ true);
+    editor.state.pending[1].question.options = Some(
+        (1..=12)
+            .map(|i| format!("Option {i} is long enough to wrap across rows"))
+            .collect(),
+    );
+    let mut config = TuiKeymap::default();
+    config.list.move_down = Some(KeybindingsSpec::One(KeybindingSpec("x".into())));
+    config.list.accept = Some(KeybindingsSpec::One(KeybindingSpec("f9".into())));
+    config.list.jump_top = Some(KeybindingsSpec::One(KeybindingSpec("7".into())));
+    editor.set_keymap(&RuntimeKeymap::from_config(&config).unwrap());
+    editor.handle_key_event(KeyEvent::from(KeyCode::Down));
+    assert_eq!(editor.selected_option_index(), Some(0));
+    editor.handle_key_event(KeyEvent::from(KeyCode::Char('x')));
+    assert_eq!(editor.selected_option_index(), Some(1));
+    let mut buffer = render_editor(&editor, /*width*/ 50, /*height*/ 12);
+    let area = buffer.area;
+    let visible = editor.visible_options.get().1;
+    assert_eq!(visible, 2);
+    editor.handle_key_event(KeyEvent::from(KeyCode::PageDown));
+    assert_eq!(editor.selected_option_index(), Some(1 + visible));
+    editor.handle_key_event(KeyEvent::from(KeyCode::Char('7')));
+    assert_eq!(editor.selected_option_index(), Some(0));
+    editor.handle_key_event(KeyEvent::from(KeyCode::Char('7')));
+    assert_eq!(editor.selected_option_index(), Some(0));
+    editor.render(area, &mut buffer);
+    insta::assert_snapshot!("question_remapped_choice_footer", buffer_text(&buffer));
+}
+
+#[test]
+fn question_other_remains_visible_at_nine_columns_and_distinguishes_named_other() {
+    let mut editor = editor();
+    editor.navigate(/*forward*/ true);
+    editor.state.pending[1].question.options = Some(vec!["Other".into()]);
+    editor.handle_paste("other".into());
+    editor.on_ctrl_c();
+    editor.handle_key_event(KeyEvent::from(KeyCode::Up));
+    let buffer = render_editor(&editor, /*width*/ 50, /*height*/ 12);
+    insta::assert_snapshot!("question_named_other", buffer_text(&buffer));
+    editor.select_option(/*index*/ 1);
+    editor.handle_paste("x".into());
+    let buffer = render_editor(&editor, /*width*/ 9, /*height*/ 8);
+    let narrow = buffer.area;
+    assert!(editor.cursor_pos(narrow).is_some());
+    assert!(buffer.content.iter().any(|cell| cell.symbol() == "x"));
+    insta::assert_snapshot!("question_narrow_other", buffer_text(&buffer));
 }
 
 #[test]
@@ -136,12 +240,13 @@ fn question_wrapped_options_and_other_share_the_text_indent() {
     assert_eq!(
         editor.current_answer().unwrap().options_state,
         ScrollState {
-            selected_idx: Some(31),
-            scroll_top: 32 - editor.visible_options.get().1,
+            selected_idx: Some(editor.options_len() - 1),
+            scroll_top: editor.options_len() - editor.visible_options.get().1,
         }
     );
+    editor.handle_key_event(KeyEvent::from(KeyCode::Up));
     render_editor(&editor, /*width*/ 80, /*height*/ 80);
-    assert_eq!(editor.visible_options.get(), (0, 32));
+    assert_eq!(editor.visible_options.get(), (0, editor.options_len()));
     editor.state.pending[editor.state.current_idx]
         .question
         .title = "Long question ".repeat(3 * 65_536);
@@ -164,6 +269,35 @@ fn question_wrapped_options_and_other_share_the_text_indent() {
         assert_eq!(editor.expanded, action != "cancel");
         assert!(editor.submission.is_none());
     }
+}
+
+#[test]
+fn question_wrapped_other_shares_the_text_indent() {
+    let mut editor = editor();
+    editor.state.pending.remove(0);
+    editor.state.pending[0].question.options = Some(vec![
+        "A suggested answer that is long enough to wrap across multiple rows".into(),
+    ]);
+    editor.select_option(/*index*/ 1);
+    editor.handle_paste("An alternative answer that wraps across several option rows".into());
+    let buffer = render_editor(&editor, /*width*/ 36, /*height*/ 16);
+    insta::assert_snapshot!("question_wrapped_other", buffer_text(&buffer));
+    editor.composer.clear_for_ctrl_c();
+    editor.handle_paste(" \n ".into());
+    editor.select_option(/*index*/ 0);
+    assert_eq!(editor.other_label(), "Other");
+    editor.select_option(/*index*/ 1);
+    editor
+        .composer
+        .set_text_content("long draft\n".repeat(1000), Vec::new(), Vec::new());
+    editor.composer.move_cursor_to_end();
+    let buffer = render_editor(&editor, /*width*/ 50, /*height*/ 18);
+    assert_eq!(editor.cursor_pos(buffer.area), Some((7, 12)));
+    insta::assert_snapshot!("question_capped_other", buffer_text(&buffer));
+    editor.select_option(/*index*/ 0);
+    assert!(editor.other_label().len() <= 128);
+    editor.state.pending[0].draft.text = format!("a{}", "\u{301}".repeat(10_000));
+    assert!(editor.other_label().len() <= 512);
 }
 
 fn question(title: &str, options: Option<Vec<String>>) -> AsyncUserInputQuestion {

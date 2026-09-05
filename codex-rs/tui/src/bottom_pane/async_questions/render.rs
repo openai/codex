@@ -57,7 +57,9 @@ impl Renderable for AsyncQuestions {
         // The shared measurer reserves a scrollbar column; this renderer uses the full width.
         let option_rows = self.option_rows();
 
-        if self.has_options() && sections.options_area.height > 0 {
+        if self.other_selected() {
+            self.render_inline_options(sections.options_area, buf);
+        } else if self.has_options() && sections.options_area.height > 0 {
             let mut options_state = self.state.pending[self.state.current_idx].options_state;
             let selected = options_state.selected_idx.unwrap_or(0);
             let heights: Vec<_> = option_rows
@@ -109,6 +111,25 @@ impl Renderable for AsyncQuestions {
             content_area.width,
             sections.footer_lines,
         );
+        let input_bottom = if self.other_selected() {
+            sections.options_area.bottom()
+        } else {
+            sections.notes_area.bottom()
+        };
+        if self.focus_is_notes()
+            && footer_area.y > input_bottom
+            && let Some(mode) = self.composer.vim_mode_indicator_span()
+        {
+            Line::from(mode).right_aligned().render(
+                Rect::new(
+                    content_area.x,
+                    footer_area.y - 1,
+                    content_area.width,
+                    /*height*/ 1,
+                ),
+                buf,
+            );
+        }
         let option_tip = (self.has_options()
             && sections.options_area.height > 0
             && self.options_required_height(content_area.width) > sections.options_area.height)
@@ -130,7 +151,11 @@ impl Renderable for AsyncQuestions {
             return None;
         }
         let sections = self.layout_sections(content_area);
-        let input_area = sections.notes_area;
+        let input_area = if self.other_selected() {
+            self.other_input_area(sections.options_area)
+        } else {
+            sections.notes_area
+        };
         if input_area.width == 0 || input_area.height == 0 {
             return None;
         }
@@ -171,15 +196,7 @@ impl AsyncQuestions {
                 .bold(),
             );
         }
-        if self.focus_is_notes()
-            && let Some(mode) = self.composer.vim_mode_indicator_span()
-        {
-            tips.push(Span::from(mode.content.into_owned()).dim());
-        }
-        if let Some(key) = self
-            .keymap
-            .primary_hint(KeymapContext::Chat, "skip_question")
-        {
+        if let Some(key) = chat_hint("skip_question") {
             tips.push(format!("{} skip", key.display_label()).dim());
         }
         tips.extend(option_tip);

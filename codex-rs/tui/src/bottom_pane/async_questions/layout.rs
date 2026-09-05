@@ -34,7 +34,9 @@ impl AsyncQuestions {
         let progress_pref = u16::from(self.unanswered_count() > 1);
         let min_notes = u16::from(!has_options).min(area.height);
         let available = area.height.saturating_sub(min_notes);
-        let question_height = question_lines.len().min(usize::from(available)) as u16;
+        let question_height = question_lines.len().min(usize::from(
+            available.saturating_sub(u16::from(self.other_selected())),
+        )) as u16;
         question_lines.truncate(usize::from(question_height));
         let mut remaining = available.saturating_sub(question_height);
         let mut options_height = 0;

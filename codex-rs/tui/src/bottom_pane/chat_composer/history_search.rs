@@ -463,7 +463,7 @@ impl ChatComposer {
     /// footer area is collapsed or too narrow, the x coordinate is clamped inside the hint rect so
     /// terminal backends do not receive an off-screen cursor position.
     pub(super) fn history_search_cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        let search = self.history_search.as_ref()?;
+        self.history_search.as_ref()?;
         let [_, _, _, popup_rect] = self.layout_areas(area);
         if popup_rect.is_empty() {
             return None;
@@ -488,17 +488,27 @@ impl ChatComposer {
             return None;
         }
 
+        let indent = (FOOTER_INDENT_COLS as u16).min(hint_rect.width.saturating_sub(1));
+        self.history_search_query_cursor_pos(Rect {
+            x: hint_rect.x.saturating_add(indent),
+            width: hint_rect.width.saturating_sub(indent),
+            ..hint_rect
+        })
+    }
+
+    pub(super) fn history_search_query_cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
+        let search = self.history_search.as_ref()?;
+        if area.is_empty() {
+            return None;
+        }
         let prompt_width = Line::from("reverse-i-search: ").width() as u16;
         let query_width = Line::from(search.query.clone()).width() as u16;
-        let desired_x = hint_rect
+        let desired_x = area
             .x
-            .saturating_add(FOOTER_INDENT_COLS as u16)
             .saturating_add(prompt_width)
             .saturating_add(query_width);
-        let max_x = hint_rect
-            .x
-            .saturating_add(hint_rect.width.saturating_sub(1));
-        Some((desired_x.min(max_x), hint_rect.y))
+        let max_x = area.x.saturating_add(area.width.saturating_sub(1));
+        Some((desired_x.min(max_x), area.y))
     }
 }
 

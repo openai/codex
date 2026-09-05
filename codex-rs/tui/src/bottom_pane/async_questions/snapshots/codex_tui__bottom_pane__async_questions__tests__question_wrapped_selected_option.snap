@@ -10,4 +10,4 @@ expression: buffer_text(&clipped)
        multiple rows
 
   enter submit   ctrl + ] skip
-  option 2/2   ⌥ + ↓ main prompt
+  option 2/3   ⌥ + ↓ main prompt
