@@ -3,7 +3,6 @@ use super::ConnectionOrigin;
 use super::TransportEvent;
 use super::auth::WebsocketAuthPolicy;
 use super::auth::authorize_upgrade;
-use super::auth::is_unauthenticated_non_loopback_listener;
 use super::forward_incoming_message;
 use super::next_connection_id;
 use super::serialize_outgoing_message;
@@ -19,6 +18,7 @@ use axum::extract::ws::WebSocketUpgrade;
 use axum::http::HeaderMap;
 use axum::http::Request;
 use axum::http::StatusCode;
+use axum::http::Uri;
 use axum::http::header::ORIGIN;
 use axum::middleware;
 use axum::middleware::Next;
@@ -54,10 +54,14 @@ fn colorize(text: &str, style: Style) -> String {
 }
 
 #[allow(clippy::print_stderr)]
-fn print_websocket_startup_banner(addr: SocketAddr) {
+fn print_websocket_startup_banner(addr: SocketAddr, auth_policy: &WebsocketAuthPolicy) {
     let title = colorize("codex app-server (WebSockets)", Style::new().bold().cyan());
     let listening_label = colorize("listening on:", Style::new().dimmed());
-    let listen_url = colorize(&format!("ws://{addr}"), Style::new().green());
+    let raw_listen_url = match auth_policy.generated_query_token() {
+        Some(token) => format!("ws://{addr}/?token={token}"),
+        None => format!("ws://{addr}"),
+    };
+    let listen_url = colorize(&raw_listen_url, Style::new().green());
     let ready_label = colorize("readyz:", Style::new().dimmed());
     let ready_url = colorize(&format!("http://{addr}/readyz"), Style::new().green());
     let health_label = colorize("healthz:", Style::new().dimmed());
@@ -106,9 +110,10 @@ async fn websocket_upgrade_handler(
     websocket: WebSocketUpgrade,
     ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
     State(state): State<WebSocketListenerState>,
+    uri: Uri,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    if let Err(err) = authorize_upgrade(&headers, state.auth_policy.as_ref()) {
+    if let Err(err) = authorize_upgrade(&uri, &headers, state.auth_policy.as_ref()) {
         warn!(
             %peer_addr,
             message = err.message(),
@@ -132,17 +137,9 @@ pub async fn start_websocket_acceptor(
     shutdown_token: CancellationToken,
     auth_policy: WebsocketAuthPolicy,
 ) -> IoResult<JoinHandle<()>> {
-    if is_unauthenticated_non_loopback_listener(bind_address, &auth_policy) {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!(
-                "refusing to start non-loopback websocket listener {bind_address} without auth; configure `--ws-auth capability-token` or `--ws-auth signed-bearer-token`"
-            ),
-        ));
-    }
     let listener = TcpListener::bind(bind_address).await?;
     let local_addr = listener.local_addr()?;
-    print_websocket_startup_banner(local_addr);
+    print_websocket_startup_banner(local_addr, &auth_policy);
     info!("app-server websocket listening on ws://{local_addr}");
 
     let router = Router::new()
