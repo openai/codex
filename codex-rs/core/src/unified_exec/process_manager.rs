@@ -102,6 +102,7 @@ const UNIFIED_EXEC_ENV: [(&str, &str); 10] = [
 const NETWORK_ACCESS_DENIED_MESSAGE: &str =
     "Network access was denied by the Codex sandbox network proxy.";
 const LATE_NETWORK_DENIAL_GRACE_PERIOD: Duration = Duration::from_millis(100);
+const MAX_STDIN_APPROVAL_BYTES: usize = 8_000;
 const INTERRUPT: &str = "\u{3}";
 
 /// Test-only override for deterministic unified exec process IDs.
@@ -862,7 +863,7 @@ impl UnifiedExecProcessManager {
             // Bound the entire serialized action plus its reason, including JSON
             // escaping. Reject, never execute an unreviewed tail.
             let oversized = reviewed.text.len().saturating_add(approval_reason.len())
-                > crate::guardian::GUARDIAN_MAX_ACTION_BYTES;
+                > MAX_STDIN_APPROVAL_BYTES;
             let size_check_result = if reviewed.truncated {
                 "formatter_truncated"
             } else if oversized {

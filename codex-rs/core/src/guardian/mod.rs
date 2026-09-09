@@ -67,7 +67,7 @@ const GUARDIAN_MAX_TOOL_ENTRY_TOKENS: usize = codex_guardian_context::ContextPro
     .tool_tokens;
 pub(crate) const GUARDIAN_MAX_ROOT_MESSAGE_TOKENS: usize = 900;
 pub(crate) const GUARDIAN_MAX_NODE_REPL_TOOL_RESULT_TOKENS: usize = 6_000;
-pub(crate) const GUARDIAN_MAX_ACTION_BYTES: usize = 8_000;
+pub(crate) const GUARDIAN_MAX_ACTION_BYTES: usize = 50_000 * 4;
 const GUARDIAN_MAX_ACTION_STRING_TOKENS: usize = 16_000;
 
 /// Captures review inputs from the issuing step without retaining its MCP bindings or tool router.

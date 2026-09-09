@@ -1238,7 +1238,7 @@ fn guardian_action_formatters_reject_large_aggregate_payloads() {
     let action = GuardianApprovalRequest::ApplyPatch {
         id: "patch-1".to_string(),
         cwd: test_path_buf("/tmp").abs().into(),
-        files: vec![file; 1_000],
+        files: vec![file; 20_000],
         patch: String::new(),
     };
 
@@ -1250,7 +1250,7 @@ fn guardian_action_formatters_reject_large_aggregate_payloads() {
             error
                 .expect_err("aggregate action should exceed the review limit")
                 .to_string(),
-            "Guardian action exceeds the 8000-byte review limit"
+            "Guardian action exceeds the 200000-byte review limit"
         );
     }
 }
