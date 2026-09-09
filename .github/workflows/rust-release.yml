@@ -527,6 +527,8 @@ jobs:
           PY
           mkdir -p "voice-unsigned/${TARGET}"
           cp -R "$runtime" "voice-unsigned/${TARGET}/runtime"
+          # GNU tar extraction and signing need writable copies of Bazel outputs.
+          chmod -R u+w "voice-unsigned/${TARGET}/runtime"
           cp bazel-bin/codex-rs/voice-host/codex-voice-host "voice-unsigned/${TARGET}/codex-voice-host"
           tar -C "voice-unsigned/${TARGET}" -czf "voice-unsigned-${TARGET}.tar.gz" runtime codex-voice-host
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
