@@ -925,7 +925,7 @@ jobs:
             --archive-dir "dist/${TARGET}" \
             --rg-bin "signed-resources/${TARGET}/rg" \
             --zsh-bin "signed-resources/${TARGET}/zsh" \
-            "${voice_args[@]}"
+            ${voice_args[@]+"${voice_args[@]}"}
 
       - name: Build unsigned macOS DMG
         if: ${{ matrix.build_dmg == 'true' }}
