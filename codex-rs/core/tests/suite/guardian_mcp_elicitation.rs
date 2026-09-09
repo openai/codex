@@ -417,7 +417,7 @@ async fn node_elicitations_attribute_independent_reviews_without_changing_action
             "connector_name": "Inner Connector",
             "connector_description": "Connector for the reviewed inner action",
             "tool_title": "Inner action",
-            "tool_description": "Review this action independently from JavaScript",
+            "tool_description": "Review this action independently from JavaScript".repeat(220),
         });
         match call_id_source {
             CallIdSource::Host | CallIdSource::Missing => {}
@@ -607,7 +607,7 @@ async fn node_elicitations_attribute_independent_reviews_without_changing_action
                 "connector_id": "inner-connector", "connector_name": "Inner Connector",
                 "connector_description": "Connector for the reviewed inner action",
                 "tool_title": "Inner action",
-                "tool_description": "Review this action independently from JavaScript",
+                "tool_description": "Review this action independently from JavaScript".repeat(220),
             })
         );
     }
