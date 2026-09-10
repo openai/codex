@@ -96,6 +96,16 @@ fn command(permissions: &PermissionProfile, cwd: &Path) -> MxcCommand {
 }
 
 #[test]
+fn empty_command_is_rejected_before_native_launch() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let mut parsed = command(&PermissionProfile::read_only(), root.path());
+    parsed.command.clear();
+    let error = build_request(&parsed, root.path(), Vec::new(), &[], &[]).unwrap_err();
+    assert_eq!(error.to_string(), "MXC command must not be empty");
+    Ok(())
+}
+
+#[test]
 fn native_grants_preserve_denies_and_read_only_carveouts() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let canonical = canonical_root(&temp)?;
@@ -425,6 +435,111 @@ fn root_deny_keeps_only_narrow_explicit_grants() -> Result<()> {
 }
 
 #[test]
+fn windows_temp_roots_use_filtered_environment_and_keep_explicit_denies() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let canonical = canonical_root(&temp)?;
+    let root = canonical.as_path();
+    let first = root.join("temp").join("~");
+    let second = root.join("tmp with spaces");
+    let denied = first.join("secret");
+    let fs = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry::new(
+            FileSystemPath::Special {
+                value: FileSystemSpecialPath::Tmpdir,
+            },
+            FileSystemAccessMode::Write,
+        ),
+        FileSystemSandboxEntry::new(
+            FileSystemPath::Special {
+                value: FileSystemSpecialPath::SlashTmp,
+            },
+            FileSystemAccessMode::Write,
+        ),
+        entry(&denied, FileSystemAccessMode::Deny)?,
+    ]);
+    let profile =
+        PermissionProfile::from_runtime_permissions(&fs, NetworkSandboxPolicy::Restricted);
+    let request = build_request(
+        &command(&profile, root),
+        root,
+        vec![
+            format!("temp={}", first.display()),
+            format!("Tmp={}", second.display()),
+        ],
+        &[],
+        &[],
+    )?;
+    assert_eq!(
+        request.policy.readwrite_paths,
+        vec![first.to_str().unwrap(), second.to_str().unwrap()]
+    );
+    assert_eq!(request.policy.denied_paths, vec![denied.to_str().unwrap()]);
+
+    for value in [
+        None,
+        Some(""),
+        Some("relative"),
+        Some("~/scratch"),
+        Some("~\\scratch"),
+        Some("C:temp"),
+        Some("\\temp"),
+    ] {
+        let request = build_request(
+            &command(&profile, root),
+            root,
+            value
+                .map(|value| vec![format!("TEMP={value}"), format!("TMP={value}")])
+                .unwrap_or_default(),
+            &[],
+            &[],
+        )?;
+        assert_eq!(request.policy.readwrite_paths, Vec::<String>::new());
+        assert_eq!(request.policy.denied_paths, vec![denied.to_str().unwrap()]);
+    }
+    Ok(())
+}
+
+#[test]
+fn minimal_platform_roots_preserve_explicit_denies() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let root = canonical_root(&temp)?;
+    let allowed = root.join("platform");
+    let denied = root.join("secret");
+    for include_defaults in [false, true] {
+        let mut entries = vec![entry(&denied, FileSystemAccessMode::Deny)?];
+        if include_defaults {
+            entries.push(FileSystemSandboxEntry::new(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Minimal,
+                },
+                FileSystemAccessMode::Read,
+            ));
+        }
+        let profile = PermissionProfile::from_runtime_permissions(
+            &FileSystemSandboxPolicy::restricted(entries),
+            NetworkSandboxPolicy::Restricted,
+        );
+        let request = build_request(
+            &command(&profile, &root),
+            &root,
+            Vec::new(),
+            &[],
+            &[allowed.clone(), denied.clone()],
+        )?;
+        let expected_read = if include_defaults {
+            vec![allowed.to_str().unwrap().to_owned()]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(
+            (request.policy.readonly_paths, request.policy.denied_paths),
+            (expected_read, vec![denied.to_str().unwrap().to_owned()])
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn symbolic_root_preserves_equal_path_precedence_and_denies() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let base = canonical_root(&temp)?;
@@ -535,6 +650,48 @@ fn narrowing_one_volume_keeps_the_other_volume_root_grant() -> Result<()> {
             ]
         );
     }
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn volume_enumeration_uses_windows_identity_for_read_write_overrides() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let root = canonical_root(&temp)?;
+    let child = root.join("MiXeD");
+    std::fs::create_dir(&child)?;
+    let alias = child.to_str().unwrap().to_ascii_lowercase();
+    let fs = FileSystemSandboxPolicy::restricted(vec![
+        entry(&root, FileSystemAccessMode::Read)?,
+        entry(Path::new(&alias), FileSystemAccessMode::Write)?,
+    ]);
+    let profile =
+        PermissionProfile::from_runtime_permissions(&fs, NetworkSandboxPolicy::Restricted);
+    let request = build_request(
+        &command(&profile, &root),
+        &root,
+        Vec::new(),
+        std::slice::from_ref(&root),
+        &[],
+    )?;
+    assert_eq!(
+        request.policy.readwrite_paths,
+        vec![
+            PathUri::from_host_native_path(&alias)?
+                .to_abs_path()?
+                .as_path()
+                .to_str()
+                .unwrap()
+                .to_owned()
+        ]
+    );
+    let readonly_child: Vec<_> = request
+        .policy
+        .readonly_paths
+        .into_iter()
+        .filter(|path| path.eq_ignore_ascii_case(child.to_str().unwrap()))
+        .collect();
+    assert_eq!(readonly_child, Vec::<String>::new());
     Ok(())
 }
 

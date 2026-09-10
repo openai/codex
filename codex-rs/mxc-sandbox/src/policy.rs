@@ -44,7 +44,7 @@ pub enum PolicyError {
     RelativePolicyCwd,
     #[error("MXC requires an absolute command working directory")]
     RelativeCommandCwd,
-    #[error("MXC symbolic filesystem paths other than :root are not implemented")]
+    #[error("MXC policy contains an unresolved symbolic filesystem path")]
     UnsupportedSymbolicPath,
     #[error("MXC requires a Unicode command working directory")]
     NonUnicodeCommandCwd,
@@ -69,7 +69,7 @@ pub fn build_request(
     command_cwd: &Path,
     env: Vec<String>,
     volume_roots: &[PathBuf],
-    _platform_read_roots: &[PathBuf],
+    platform_read_roots: &[PathBuf],
 ) -> Result<ExecutionRequest, PolicyError> {
     if command.command.is_empty() {
         return Err(PolicyError::EmptyCommand);
@@ -82,7 +82,44 @@ pub fn build_request(
     if !command_cwd.is_absolute() {
         return Err(PolicyError::RelativeCommandCwd);
     }
-    let policy = permissions.file_system_sandbox_policy();
+    let mut policy = permissions.file_system_sandbox_policy();
+    // Resolve Windows temporary directories from the filtered command
+    // environment, including case-insensitive names.
+    let mut temp_values = HashMap::new();
+    for (key, value) in env.iter().filter_map(|entry| entry.split_once('=')) {
+        if key.eq_ignore_ascii_case("TEMP") || key.eq_ignore_ascii_case("TMP") {
+            temp_values.insert(key.to_ascii_uppercase(), value);
+        }
+    }
+    let temp_paths = ["TEMP", "TMP"]
+        .into_iter()
+        .filter_map(|key| temp_values.get(key).copied())
+        .filter(|path| Path::new(path).is_absolute())
+        .map(AbsolutePathBuf::from_absolute_path)
+        .collect::<std::io::Result<Vec<_>>>()?;
+    policy.entries = policy
+        .entries
+        .into_iter()
+        .flat_map(|entry| {
+            match &entry.path {
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Tmpdir,
+                } => temp_paths
+                    .iter()
+                    .map(|path| {
+                        let mut entry = entry.clone();
+                        entry.path = path.clone().into();
+                        entry
+                    })
+                    .collect(),
+                // /tmp has no special meaning on the Windows executor.
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::SlashTmp,
+                } => Vec::new(),
+                _ => vec![entry],
+            }
+        })
+        .collect();
     let full_disk_write = policy.has_full_disk_write_access();
     let volumes = volume_roots
         .iter()
@@ -140,6 +177,9 @@ pub fn build_request(
             .filter(|(_, path)| fs.can_read_local_path_with_cwd(path.as_path(), cwd))
             .map(|(key, path)| (key.clone(), path.clone())),
     );
+    if policy.include_platform_defaults() {
+        read.extend(collect_paths(platform_read_roots.iter().cloned())?);
+    }
     write.retain(|key, _| !carveouts.contains_key(key) && !deny.contains_key(key));
     read.retain(|key, _| !write.contains_key(key) && !deny.contains_key(key));
     let volume_roots = volume_roots
@@ -268,15 +308,14 @@ pub(super) fn materialize_volume_roots(
             })),
             FileSystemPath::Special {
                 value:
-                    FileSystemSpecialPath::Minimal
-                    | FileSystemSpecialPath::ProjectRoots { .. }
+                    FileSystemSpecialPath::ProjectRoots { .. }
                     | FileSystemSpecialPath::Tmpdir
                     | FileSystemSpecialPath::SlashTmp,
             } => return Err(PolicyError::UnsupportedSymbolicPath),
             FileSystemPath::Path { .. }
             | FileSystemPath::GlobPattern { .. }
             | FileSystemPath::Special {
-                value: FileSystemSpecialPath::Unknown { .. },
+                value: FileSystemSpecialPath::Minimal | FileSystemSpecialPath::Unknown { .. },
             } => entries.push(entry),
         }
     }
