@@ -1,5 +1,6 @@
 //! Takes incoming Opus RTP before the upstream track queue, preserving network arrival time.
 //! Packet and byte permits follow owned data through the consumer, not merely through this queue.
+//! Stale or saturated media is discarded so a slow worker can resume with fresh speaker audio.
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -106,7 +107,7 @@ impl Incoming {
             };
             if epoch.is_multiple_of(2) && packet.epoch == epoch {
                 if packet.at.elapsed() > Duration::from_secs(/*secs*/ 1) {
-                    return Err("incoming audio fell behind");
+                    continue;
                 }
                 return Ok(Some(packet));
             }
@@ -127,38 +128,35 @@ impl Ingress {
             return Ok(());
         }
         let size = packet.marshal_size();
-        let accepted = (|| {
-            if size > PACKET_BYTES
-                || packet.header.payload_type != crate::audio_track::OPUS_PAYLOAD_TYPE
-                || self.stream.is_some_and(|ssrc| ssrc != packet.header.ssrc)
-            {
-                return None;
-            }
-            self.stream = Some(packet.header.ssrc);
-            let packet_permit = self.state.packets.clone().try_acquire_owned().ok()?;
-            let bytes_permit = self
-                .state
-                .bytes
-                .clone()
-                .try_acquire_many_owned(size as u32)
-                .ok()?;
-            let mut data = vec![0; size];
-            if packet.marshal_to(&mut data).ok()? != size {
-                return None;
-            }
-            self.sender
-                .try_send(ReceivedRtp {
-                    data,
-                    at: message.now,
-                    epoch,
-                    _packet: packet_permit,
-                    _bytes: bytes_permit,
-                })
-                .ok()
-        })();
-        if accepted.is_none() {
+        if size > PACKET_BYTES
+            || packet.header.payload_type != crate::audio_track::OPUS_PAYLOAD_TYPE
+            || self.stream.is_some_and(|ssrc| ssrc != packet.header.ssrc)
+        {
             self.state.failed.store(true, Ordering::Release);
+            return Ok(());
         }
+        self.stream = Some(packet.header.ssrc);
+        if message.now.elapsed() > Duration::from_secs(/*secs*/ 1) {
+            return Ok(());
+        }
+        let Ok(packet_permit) = self.state.packets.clone().try_acquire_owned() else {
+            return Ok(());
+        };
+        let Ok(bytes_permit) = self.state.bytes.clone().try_acquire_many_owned(size as u32) else {
+            return Ok(());
+        };
+        let mut data = vec![0; size];
+        if packet.marshal_to(&mut data).ok() != Some(size) {
+            self.state.failed.store(true, Ordering::Release);
+            return Ok(());
+        }
+        let _ = self.sender.try_send(ReceivedRtp {
+            data,
+            at: message.now,
+            epoch,
+            _packet: packet_permit,
+            _bytes: bytes_permit,
+        });
         // Consume here: no second copy is retained by the upstream track-event queue.
         Ok(())
     }

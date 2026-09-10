@@ -2,7 +2,7 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 #[test]
-fn startup_output_waits_for_service_but_later_overflow_still_fails() {
+fn startup_output_waits_for_service_and_later_overflow_discards_reference() {
     let buffers = Buffers::new(/*input_rate*/ 48_000, /*output_rate*/ 384_000);
     let mut state = OutputState::default();
     let mut output = [1.0_f32; BLOCK * 2];
@@ -65,8 +65,9 @@ fn startup_output_waits_for_service_but_later_overflow_still_fails() {
         &buffers,
         &mut state,
     );
-    assert!(buffers.failed.load(Ordering::Acquire));
-    assert!(buffers.take_state().is_err());
+    assert!(!buffers.failed.load(Ordering::Acquire));
+    assert!(buffers.render_dropped.load(Ordering::Acquire));
+    assert!(buffers.take_state().is_ok());
 }
 
 #[test]
@@ -332,7 +333,8 @@ fn suppressed_output_does_not_fail_when_reference_queue_is_full() {
         &buffers,
         &mut state,
     );
-    assert!(buffers.failed.load(Ordering::Acquire));
+    assert!(!buffers.failed.load(Ordering::Acquire));
+    assert!(buffers.render_dropped.load(Ordering::Acquire));
 }
 
 #[test]

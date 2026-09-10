@@ -1,4 +1,5 @@
-//! A single Opus RTP track. Elapsed mute time advances its clock without inventing packet loss.
+//! A single Opus RTP track. Muted capture sends generated silence to keep the peer alive;
+//! elapsed time still advances its clock without inventing packet loss.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -26,6 +27,7 @@ pub(crate) struct AudioTrack {
     pub(crate) track: Arc<TrackLocalStaticSample>,
     ssrc: u32,
     end: Option<Instant>,
+    silence: Option<Vec<u8>>,
 }
 
 impl AudioTrack {
@@ -70,8 +72,45 @@ impl AudioTrack {
                 track: Arc::new(track),
                 ssrc,
                 end: None,
+                silence: None,
             },
         ))
+    }
+
+    /// Send only synthetic silence while muted, never a device or processing buffer.
+    /// Reuse the encoded packet and pace it by the same RTP clock as live capture.
+    #[cfg(any(
+        target_os = "macos",
+        all(target_os = "linux", target_env = "gnu"),
+        all(windows, target_env = "msvc")
+    ))]
+    pub(crate) async fn send_muted_silence(&mut self, at: Instant) -> Result<(), &'static str> {
+        if self.end.is_some_and(|end| at < end) {
+            return Ok(());
+        }
+        if self.silence.is_none() {
+            let mut encoder = opus::Encoder::new(
+                /*sample_rate*/ 48_000,
+                opus::Channels::Mono,
+                opus::Application::Voip,
+            )
+            .map_err(|_| "failed to create voice silence encoder")?;
+            let mut data = vec![0; 1275];
+            let len = encoder
+                .encode_float(&[0.0; 960], &mut data)
+                .map_err(|_| "failed to encode voice silence")?;
+            data.truncate(len);
+            self.silence = Some(data);
+        }
+        self.send(EncodedAudio {
+            data: self
+                .silence
+                .as_ref()
+                .ok_or("voice silence unavailable")?
+                .clone(),
+            at,
+        })
+        .await
     }
 
     pub(crate) async fn send(&mut self, frame: EncodedAudio) -> Result<(), &'static str> {

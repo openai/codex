@@ -133,11 +133,14 @@ impl RealtimeWebrtcSession {
             .name("voice-session".into())
             .spawn(move || {
                 let task = async {
-                    let host = VoiceHost::connect(&package, &build_commit)
-                        .await?
-                        .initialize_runtime()
-                        .await?;
-                    let (host, sdp) = host.start_transport().await?;
+                    let host = report_failure(
+                        "connect",
+                        VoiceHost::connect(&package, &build_commit).await,
+                    )?;
+                    let host =
+                        report_failure("initialize_runtime", host.initialize_runtime().await)?;
+                    let (host, sdp) =
+                        report_failure("start_transport", host.start_transport().await)?;
                     offer
                         .send(sdp.into_sdp())
                         .map_err(|_| anyhow::anyhow!("voice startup cancelled"))?;
@@ -274,29 +277,50 @@ async fn run(
                             return Ok(());
                         }
                     };
-                    host = host.open_devices().await?;
+                    host = report_failure("open_devices", host.open_devices().await)?;
                     let applied = startup_controls(&mut commands, controls, |initial| {
                         host.begin_audio_controls(initial)
-                    })?;
-                    applied.await?;
+                    });
+                    let applied = report_failure("queue_startup_controls", applied)?;
+                    report_failure("apply_startup_controls", applied.await)?;
                     connected = true;
                     let _ = complete.send(Ok(()));
                 }
                 Some(Command::Controls(next)) => {
                     if connected {
-                        host.set_audio_controls(next).await?;
+                        report_failure("set_audio_controls", host.set_audio_controls(next).await)?;
                     }
                 }
                 Some(Command::Answer(..)) => anyhow::bail!("voice answer already applied"),
-                None => return host.close().await,
+                None => return report_failure("close", host.close().await),
             },
             _ = poll.tick() => {
-                let audio = host.inspect_audio().await?;
+                let audio = report_failure("inspect_audio", host.inspect_audio().await)?;
                 state.microphone.fetch_max(audio.microphone_peak, Ordering::Release);
                 state.speaker.fetch_max(audio.speaker_peak, Ordering::Release);
             }
         }
     }
+}
+
+// Keep diagnostics bounded and independent of untyped native, SDP, or device error text.
+fn report_failure<T>(stage: &'static str, result: Result<T>) -> Result<T> {
+    result.inspect_err(|error| {
+        let kind = if error.is::<tokio::time::error::Elapsed>() {
+            "timeout"
+        } else if let Some(error) = error.downcast_ref::<std::io::Error>() {
+            match error.kind() {
+                std::io::ErrorKind::UnexpectedEof
+                | std::io::ErrorKind::BrokenPipe
+                | std::io::ErrorKind::ConnectionReset => "closed",
+                std::io::ErrorKind::InvalidData => "protocol",
+                _ => "io",
+            }
+        } else {
+            "other"
+        };
+        tracing::warn!(stage, kind, "voice session operation failed");
+    })
 }
 
 // Devices are still disabled. The snapshot and request enqueue share the setters' lock;

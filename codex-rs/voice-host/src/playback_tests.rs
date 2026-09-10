@@ -123,16 +123,19 @@ fn delay_contention_preserves_the_last_snapshot_without_failing_the_device() {
 }
 
 #[test]
-fn invalid_samples_and_stalled_consumption_fail_without_growing_the_queue() {
+fn invalid_samples_fail_but_stalled_consumption_drops_and_resumes() {
     let (buffers, _, writer) = active(/*rate*/ 8000);
     assert_eq!(
         writer.write(&f32::NAN.to_le_bytes()),
         Err("invalid speaker sample")
     );
     writer.write(&vec![0; BLOCK * 4]).unwrap();
-    assert_eq!(
-        writer.write(&vec![0; BLOCK * 4]),
-        Err("speaker fell behind")
-    );
+    assert_eq!(writer.write(&vec![0; BLOCK * 4]), Ok(BLOCK * 4));
     assert_eq!(buffers.queued.load(Ordering::Acquire), BLOCK as u32);
+    let mut playback = Playback::default();
+    for _ in 0..BLOCK {
+        assert!(playback.next(&buffers).is_some());
+    }
+    assert_eq!(writer.write(&vec![0; BLOCK * 4]), Ok(BLOCK * 4));
+    assert!(!buffers.failed.load(Ordering::Acquire));
 }

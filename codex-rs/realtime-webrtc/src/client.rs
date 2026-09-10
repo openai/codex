@@ -12,6 +12,7 @@ use codex_utils_pty::SpawnedProcess;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
 
+use crate::HelperExitStage;
 use crate::Message;
 use crate::encode_frame;
 use crate::message_reader::MessageReader;
@@ -41,6 +42,7 @@ pub struct VoiceHost {
     process: ProcessHandle,
     output: MessageReader,
     exit: oneshot::Receiver<i32>,
+    observed_exit: Option<Option<i32>>,
 }
 
 impl VoiceHost {
@@ -73,7 +75,7 @@ impl VoiceHost {
             .map_err(|_| anyhow::anyhow!("voice helper input unavailable"))?;
         let deadline = tokio::time::Instant::now() + DEADLINE;
         Ok(async move {
-            let response = tokio::time::timeout_at(deadline, self.output.next()).await??;
+            let response = tokio::time::timeout_at(deadline, self.next_response()).await??;
             ensure!(
                 response == Message::AudioControlsApplied {},
                 "unexpected voice helper response"
@@ -166,6 +168,7 @@ impl VoiceHost {
             process: session,
             output: MessageReader::new(stdout_rx),
             exit: exit_rx,
+            observed_exit: None,
         };
         host.exchange(
             Message::Hello {
@@ -187,7 +190,11 @@ impl VoiceHost {
         if result.is_err() {
             self.process.terminate();
         }
-        let code = timeout(DEADLINE, &mut self.exit).await??;
+        let code = match self.observed_exit {
+            Some(Some(code)) => code,
+            Some(None) => anyhow::bail!("voice helper exit status unavailable"),
+            None => timeout(DEADLINE, &mut self.exit).await??,
+        };
         result?;
         ensure!(code == 0, "voice helper failed during shutdown");
         Ok(())
@@ -213,9 +220,36 @@ impl VoiceHost {
                 .send(encode_frame(&request)?)
                 .await
                 .map_err(|_| anyhow::anyhow!("voice helper input closed"))?;
-            Ok(self.output.next().await?)
+            self.next_response().await
         })
         .await?
+    }
+
+    async fn next_response(&mut self) -> Result<Message> {
+        match self.output.next().await {
+            Ok(response) => Ok(response),
+            Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
+                // The helper can exit just after closing stdout. Wait briefly for its
+                // status; never log its untyped stderr, SDP, or native error text.
+                let exit_code = match self.observed_exit {
+                    Some(status) => status,
+                    None => {
+                        match timeout(Duration::from_millis(/*millis*/ 250), &mut self.exit).await {
+                            Ok(status) => {
+                                let status = status.ok();
+                                self.observed_exit = Some(status);
+                                status
+                            }
+                            Err(_) => None,
+                        }
+                    }
+                };
+                let phase = exit_code.and_then(HelperExitStage::from_code);
+                tracing::warn!(?phase, ?exit_code, "voice helper output closed");
+                Err(error.into())
+            }
+            Err(error) => Err(error.into()),
+        }
     }
 }
 

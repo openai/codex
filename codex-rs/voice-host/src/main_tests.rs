@@ -60,7 +60,7 @@ fn blocked_startup_fixture() {
     if std::env::var_os(CHILD_ENV).as_deref() != Some(std::ffi::OsStr::new("1")) {
         return;
     }
-    run(|_| {
+    run(&Cell::new(HelperExitStage::Transport), |_| {
         io::stderr().write_all(STARTUP_BLOCKED)?;
         io::stderr().flush()?;
         loop {
@@ -121,7 +121,10 @@ async fn parent_pipe_loss_terminates_helper_with_blocked_transport_startup() {
         assert!(child.try_wait().unwrap().is_none());
         drop(input);
         let output = child.wait_with_output().await.unwrap();
-        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            output.status.code(),
+            Some(HelperExitStage::ParentGone.code())
+        );
         assert_eq!((output.stdout, output.stderr), (vec![], vec![]));
     })
     .await

@@ -1,5 +1,5 @@
 //! Owns local device streams on the helper worker. Callbacks allocate no buffers and take no locks.
-//! Small callbacks share full queue slots; processing lag still fails the session closed.
+//! Small callbacks share full queue slots; overload discards stale media and resumes fresh audio.
 //! Capture and actual rendered output carry device timing.
 //! References start with worker service; unmute rejects earlier device capture buffers.
 
@@ -207,7 +207,9 @@ impl Devices {
         audio: &mut crate::audio_track::AudioTrack,
     ) -> io::Result<usize> {
         if let Some(playout) = &self.playout {
-            playout.check().map_err(io::Error::other)?;
+            playout
+                .check()
+                .map_err(|_| io::Error::other(crate::service_failure::ServiceFailure::Playout))?;
         }
         self.worker.service(audio, Instant::now).await
     }
@@ -338,7 +340,8 @@ where
                     record_peak(&buffers.microphone_peak, *output);
                 }
                 if !capture.push(frame, rate, &buffers.capture) {
-                    buffers.failed.store(true, Ordering::Release);
+                    capture.reset();
+                    buffers.capture_dropped.store(true, Ordering::Release);
                     return;
                 }
             }
@@ -429,7 +432,8 @@ fn render_output<T>(
             record_peak(&buffers.speaker_peak, *sample);
         }
         if !output.reference.push(reference, rate, &buffers.rendered) {
-            buffers.failed.store(true, Ordering::Release);
+            output.reference.reset();
+            buffers.render_dropped.store(true, Ordering::Release);
         }
     }
     if let Some(end) = delivered_until {
