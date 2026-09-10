@@ -2811,7 +2811,11 @@ async fn try_run_sampling_request(
                 )
                 .await;
                 let budget_result = sess
-                    .record_token_usage_info(&turn_context, token_usage.as_ref())
+                    .record_token_usage_info(
+                        &turn_context,
+                        &step_context.settings,
+                        token_usage.as_ref(),
+                    )
                     .await;
                 should_emit_token_count = true;
                 should_emit_turn_diff = true;

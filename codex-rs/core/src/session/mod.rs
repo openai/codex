@@ -4533,7 +4533,7 @@ impl Session {
         token_usage: Option<&TokenUsage>,
     ) -> CodexResult<()> {
         let result = self
-            .record_token_usage_info(turn_context, token_usage)
+            .record_token_usage_info(turn_context, &turn_context.initial_settings, token_usage)
             .await;
         self.send_token_count_event(turn_context).await;
         result
@@ -4576,6 +4576,7 @@ impl Session {
     pub(crate) async fn record_token_usage_info(
         &self,
         turn_context: &TurnContext,
+        settings: &ResolvedStepSettings,
         token_usage: Option<&TokenUsage>,
     ) -> CodexResult<()> {
         if let Some(token_usage) = token_usage {
@@ -4591,6 +4592,17 @@ impl Session {
                 }
                 state.token_info()
             };
+            let turn_state = self
+                .input_queue
+                .turn_state_for_sub_id(&self.active_turn, &turn_context.sub_id)
+                .await;
+            if let Some(turn_state) = turn_state {
+                turn_state.lock().await.token_usage_by_model.record(
+                    settings.selected_collaboration_mode().model(),
+                    settings.telemetry(&turn_context.session_telemetry),
+                    token_usage,
+                );
+            }
             let budget_result = self.record_rollout_budget_usage(token_usage);
             if let Some(token_info) = token_info.as_ref() {
                 for contributor in self.services.extensions.token_usage_contributors() {
