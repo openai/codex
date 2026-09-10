@@ -1,12 +1,13 @@
-//! Path facts for filesystem denial parsing. Native callers and callers resolving
+//! Path facts for configuration parsing. Native callers and callers resolving
 //! another platform use the same resolver after fact capture.
 
 use codex_utils_absolute_path::AbsolutePathBufGuard;
+use codex_utils_path_uri::LegacyAppPathStringError;
 use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
 use std::cell::RefCell;
 
-/// The owning environment's path convention, base directory, and home for denials.
+/// The owning environment's path convention, base directory, and home for configuration.
 #[derive(Clone, Debug)]
 pub struct ConfigPathContext {
     convention: PathConvention,
@@ -27,6 +28,35 @@ impl ConfigPathContext {
             base_dir,
             user_home_dir,
         }
+    }
+
+    /// Returns the path grammar supplied by the owning environment.
+    pub fn convention(&self) -> PathConvention {
+        self.convention
+    }
+
+    /// Resolves configuration text to a URI using the supplied directory and home facts.
+    pub fn resolve_path(&self, input: &str) -> Result<PathUri, LegacyAppPathStringError> {
+        PathUri::resolve_config_path_uri(
+            input,
+            self.convention,
+            self.base_dir.as_ref(),
+            self.user_home_dir.as_ref(),
+        )
+    }
+
+    /// Resolves against a supplied base using this context's grammar and home.
+    pub fn resolve_against(
+        &self,
+        input: &str,
+        base: &PathUri,
+    ) -> Result<PathUri, LegacyAppPathStringError> {
+        PathUri::resolve_config_path_uri(
+            input,
+            self.convention,
+            Some(base),
+            self.user_home_dir.as_ref(),
+        )
     }
 
     pub(crate) fn enter(&self) -> PathContextGuard {
@@ -74,13 +104,10 @@ pub(crate) fn resolve(input: &str) -> Result<String, String> {
             ConfigPathContext::new(convention, base, home)
         }
     };
-    PathUri::resolve_config_path(
-        input,
-        context.convention,
-        context.base_dir.as_ref(),
-        context.user_home_dir.as_ref(),
-    )
-    .map_err(|error| error.to_string())
+    context
+        .resolve_path(input)
+        .and_then(|path| path.to_config_path_string(context.convention()))
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

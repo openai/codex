@@ -239,6 +239,56 @@ description = "Project-scoped profile."
     Ok(())
 }
 
+#[tokio::test]
+async fn permission_profile_list_resolves_roots_against_requested_cwd() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let workspace = TempDir::new()?;
+    let unsafe_cwd = workspace.path().join("[workspace]");
+    std::fs::create_dir_all(&unsafe_cwd)?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        r#"
+default_permissions = ":workspace"
+
+[permissions.scoped.workspace_roots]
+"private/*.env" = true
+
+[permissions.scoped.filesystem]
+":workspace_roots" = "write"
+"#,
+    )?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+
+    for (cwd, allowed) in [(unsafe_cwd.as_path(), false), (workspace.path(), true)] {
+        let request_id = mcp
+            .send_permission_profile_list_request(PermissionProfileListParams {
+                cursor: None,
+                limit: None,
+                cwd: Some(cwd.to_string_lossy().into_owned()),
+            })
+            .await?;
+        let response = read_response::<PermissionProfileListResponse>(&mut mcp, request_id).await?;
+        assert_eq!(
+            response
+                .data
+                .into_iter()
+                .find(|profile| profile.id == "scoped"),
+            Some(PermissionProfileSummary {
+                id: "scoped".to_string(),
+                description: None,
+                allowed,
+            }),
+            "cwd={}",
+            cwd.display(),
+        );
+    }
+    Ok(())
+}
+
 async fn read_response<T: serde::de::DeserializeOwned>(
     mcp: &mut TestAppServer,
     request_id: i64,

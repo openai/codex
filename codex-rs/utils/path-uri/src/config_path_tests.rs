@@ -5,13 +5,22 @@ use pretty_assertions::assert_eq;
 
 #[test]
 fn configuration_paths_resolve_with_the_supplied_platform_and_home() {
-    for (convention, base, home, input, expected) in [
+    for (convention, base, home, input, expected, expected_uri) in [
         (
             PathConvention::Posix,
             "file:///work/project",
             "file:///home/user",
             "~/a b/雪%/",
             "/home/user/a b/雪%",
+            "file:///home/user/a%20b/%E9%9B%AA%25",
+        ),
+        (
+            PathConvention::Posix,
+            "file:///work/project",
+            "file:///home/user",
+            "/",
+            "/",
+            "file:///",
         ),
         (
             PathConvention::Windows,
@@ -19,6 +28,23 @@ fn configuration_paths_resolve_with_the_supplied_platform_and_home() {
             "file:///C:/Users/user",
             r"..\private\",
             r"C:\work\private",
+            "file:///C:/work/private",
+        ),
+        (
+            PathConvention::Windows,
+            "file:///C:/work/project",
+            "file:///C:/Users/user",
+            r"d:\private\*.env\",
+            r"D:\private\*.env",
+            "file:///D:/private/*.env",
+        ),
+        (
+            PathConvention::Windows,
+            "file:///C:/work/project",
+            "file:///C:/Users/user",
+            r"D:\",
+            r"D:\",
+            "file:///D:",
         ),
         (
             PathConvention::Windows,
@@ -26,6 +52,15 @@ fn configuration_paths_resolve_with_the_supplied_platform_and_home() {
             "file:///C:/Users/user",
             r"~\a b\雪%\",
             r"C:\Users\user\a b\雪%",
+            "file:///C:/Users/user/a%20b/%E9%9B%AA%25",
+        ),
+        (
+            PathConvention::Windows,
+            "file:///C:/work",
+            "file:///C:/Users/user",
+            r"\\SERVER\Share\private\*.env\",
+            r"\\server\Share\private\*.env",
+            "file://server/Share/private/*.env",
         ),
         (
             PathConvention::Windows,
@@ -33,10 +68,16 @@ fn configuration_paths_resolve_with_the_supplied_platform_and_home() {
             "file:///C:/Users/user",
             r"\\server\share",
             r"\\server\share\",
+            "file://server/share",
         ),
     ] {
         let base = PathUri::parse(base).unwrap();
         let home = PathUri::parse(home).unwrap();
+        assert_eq!(
+            PathUri::resolve_config_path_uri(input, convention, Some(&base), Some(&home)),
+            Ok(PathUri::parse(expected_uri).unwrap()),
+            "{input:?}",
+        );
         assert_eq!(
             PathUri::resolve_config_path(input, convention, Some(&base), Some(&home)),
             Ok(expected.to_string()),
@@ -91,7 +132,8 @@ fn configuration_paths_reject_ambiguous_or_lossy_denials() {
     for input in [
         r"\\server\.\private",
         r"\\server\..\private",
-        r"C:\base\a:b\private",
+        r"\\.\COM1",
+        r"C:\private\file:stream",
         r"C:\base\a:b\..\private",
     ] {
         assert!(
@@ -126,5 +168,61 @@ fn configuration_paths_reject_ambiguous_or_lossy_denials() {
             Some(&opaque)
         ),
         Ok("/private".to_string()),
+    );
+}
+
+#[test]
+fn glob_resolution_rejects_metacharacters_in_used_directory_facts() {
+    for (convention, prefix, separator) in [
+        (PathConvention::Posix, "/home/", "/"),
+        (PathConvention::Windows, r"C:\Users\", r"\"),
+    ] {
+        let clean = LegacyAppPathString::from_string(format!("{prefix}sam"))
+            .to_path_uri(convention)
+            .unwrap();
+        for name in ["sam[1]", "sam{1,2}"] {
+            let directory = LegacyAppPathString::from_string(format!("{prefix}{name}"))
+                .to_path_uri(convention)
+                .unwrap();
+            // The directory remains valid as a literal path, and unused facts
+            // cannot reject an absolute pattern supplied by the user.
+            let absolute = format!("{prefix}ordinary{separator}*.key");
+            let literal = format!("{prefix}{name}{separator}private{separator}key");
+            for (input, base, home, expected) in [
+                ("private/*.key", &directory, None, None),
+                ("~/private/*.key", &clean, Some(&directory), None),
+                ("private/key", &directory, None, Some(literal.as_str())),
+                (
+                    absolute.as_str(),
+                    &directory,
+                    Some(&directory),
+                    Some(absolute.as_str()),
+                ),
+            ] {
+                assert_eq!(
+                    PathUri::resolve_config_path(input, convention, Some(base), home)
+                        .ok()
+                        .as_deref(),
+                    expected,
+                    "{convention:?}: {name}: {input}",
+                );
+            }
+        }
+        assert_eq!(
+            PathUri::resolve_config_path("~/private/*.key", convention, Some(&clean), Some(&clean),),
+            Ok(format!("{prefix}sam{separator}private{separator}*.key")),
+        );
+    }
+}
+
+#[test]
+fn glob_directory_validation_rejects_posix_escape_characters() {
+    let directory = LegacyAppPathString::from_string(r"/home/sam\name")
+        .to_path_uri(PathConvention::Posix)
+        .unwrap();
+    assert!(
+        directory
+            .validate_glob_directory(PathConvention::Posix)
+            .is_err()
     );
 }

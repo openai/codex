@@ -1,6 +1,10 @@
 use super::*;
+use codex_config::ConfigPathContext;
 use codex_core::config::permission_profile_catalog;
 use codex_hooks::HookListEntryHandler;
+use codex_utils_absolute_path::AbsolutePathBufGuard;
+use codex_utils_path_uri::PathConvention;
+use codex_utils_path_uri::PathUri;
 use futures::StreamExt;
 
 #[derive(Clone)]
@@ -413,22 +417,26 @@ impl CatalogRequestProcessor {
         params: PermissionProfileListParams,
     ) -> Result<PermissionProfileListResponse, JSONRPCErrorError> {
         let PermissionProfileListParams { cursor, limit, cwd } = params;
-        let config_layer_stack = match cwd {
-            Some(cwd) => {
-                let cwd = PathBuf::from(cwd);
-                let (_, config_layer_stack) = self
-                    .resolve_cwd_config(&cwd)
-                    .await
-                    .map_err(|err| internal_error(format!("failed to reload config: {err}")))?;
-                config_layer_stack
-            }
-            None => self
-                .config_manager
-                .load_config_layers(/*cwd*/ None)
+        let (cwd, config_layer_stack) = match cwd {
+            Some(cwd) => self
+                .resolve_cwd_config(&PathBuf::from(cwd))
                 .await
                 .map_err(|err| internal_error(format!("failed to reload config: {err}")))?,
+            None => (
+                self.config.cwd.clone(),
+                self.config_manager
+                    .load_config_layers(/*cwd*/ None)
+                    .await
+                    .map_err(|err| internal_error(format!("failed to reload config: {err}")))?,
+            ),
         };
-        let profiles = permission_profile_catalog(&config_layer_stack)
+        let context = ConfigPathContext::new(
+            PathConvention::native(),
+            Some(PathUri::from_abs_path(&cwd)),
+            AbsolutePathBufGuard::home_directory()
+                .and_then(|home| PathUri::from_host_native_path(home).ok()),
+        );
+        let profiles = permission_profile_catalog(&config_layer_stack, &context)
             .map_err(|err| internal_error(format!("failed to resolve permission profiles: {err}")))?
             .into_iter()
             .map(|profile| PermissionProfileSummary {

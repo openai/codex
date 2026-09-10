@@ -12,6 +12,7 @@ use codex_agent_roles::load_agent_roles;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
+use codex_config::ConfigPathContext;
 use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
 use codex_config::ConstrainedWithSource;
@@ -129,6 +130,7 @@ use codex_rmcp_client::McpOAuthRefreshMode;
 pub use codex_thread_store::ExtraConfig;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
+use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
 use http::HeaderValue;
 use rmcp::model::ElicitationCapability;
@@ -149,9 +151,6 @@ use std::time::Duration;
 use crate::config::permissions::BUILT_IN_READ_ONLY_PROFILE;
 use crate::config::permissions::BUILT_IN_WORKSPACE_PROFILE;
 use crate::config::permissions::apply_network_proxy_feature_config;
-use crate::config::permissions::builtin_permission_profile;
-use crate::config::permissions::compile_permission_profile_selection;
-use crate::config::permissions::compile_permission_profile_workspace_roots;
 use crate::config::permissions::default_builtin_permission_profile_name;
 use crate::config::permissions::get_readable_roots_required_for_codex_runtime;
 use crate::config::permissions::network_proxy_config_for_profile_selection;
@@ -167,6 +166,7 @@ mod managed_features;
 mod metrics;
 mod network_proxy_spec;
 mod otel;
+mod permission_path;
 mod permission_profile_catalog;
 mod permission_profile_selection;
 mod permissions;
@@ -197,6 +197,8 @@ use permission_profile_catalog::permission_profile_is_allowed;
 use permission_profile_catalog::validate_permission_profile_for_deny_read;
 pub use permission_profile_selection::ResolvedPermissionProfileSelection;
 pub use permission_profile_selection::resolve_permission_profile_selection;
+pub use permissions::CompiledPermissionProfile;
+pub use permissions::WorkspaceWriteSettings;
 pub use permissions::compile_permission_profile;
 pub(crate) use permissions::is_builtin_permission_profile_name;
 pub use permissions::resolve_permission_profile;
@@ -3384,10 +3386,16 @@ impl Config {
         } else {
             persisted_permission_profile_id.as_deref()
         };
+        let permission_path_context = ConfigPathContext::new(
+            PathConvention::native(),
+            Some(PathUri::from_abs_path(&resolved_cwd)),
+            AbsolutePathBufGuard::home_directory()
+                .and_then(|home| PathUri::from_host_native_path(home).ok()),
+        );
         let effective_permission_selection = resolve_effective_permission_selection(
             cfg.permissions.as_ref(),
             default_permissions_override.as_deref(),
-            persisted_permission_profile_id,
+            persisted_permission_profile_id.map(|profile_id| (profile_id, &permission_path_context)),
             cfg.default_permissions.as_deref(),
             requirements_toml,
             &mut startup_warnings,
@@ -3423,6 +3431,7 @@ impl Config {
         let custom_permission_profiles = permission_profile_catalog_from_permissions(
             &config_layer_stack,
             effective_permission_selection.profiles.as_ref(),
+            &permission_path_context,
         )?
         .into_iter()
         .filter(|profile| !is_builtin_permission_profile_name(&profile.id))
@@ -3507,7 +3516,12 @@ impl Config {
                     default_builtin_permission_profile_name(&active_project, windows_sandbox_level)
                 });
             let builtin_workspace_write_settings = if using_implicit_builtin_profile {
-                cfg.sandbox_workspace_write.as_ref()
+                cfg.sandbox_workspace_write.as_ref().map(|settings| WorkspaceWriteSettings {
+                    writable_roots: settings.writable_roots.iter().map(PathUri::from_abs_path).collect(),
+                    network_access: settings.network_access,
+                    exclude_tmpdir_env_var: settings.exclude_tmpdir_env_var,
+                    exclude_slash_tmp: settings.exclude_slash_tmp,
+                })
             } else {
                 None
             };
@@ -3515,37 +3529,21 @@ impl Config {
                 effective_permission_selection.profiles.as_ref(),
                 default_permissions,
             )?;
-            let (mut file_system_sandbox_policy, network_sandbox_policy) =
-                compile_permission_profile_selection(
-                    effective_permission_selection.profiles.as_ref(),
-                    default_permissions,
-                    builtin_workspace_write_settings,
-                    &mut startup_warnings,
-                )?;
-            let mut configured_workspace_roots = compile_permission_profile_workspace_roots(
+            let CompiledPermissionProfile {
+                permission_profile,
+                workspace_roots: configured_workspace_roots,
+            } = compile_permission_profile(
                 effective_permission_selection.profiles.as_ref(),
                 default_permissions,
-                resolved_cwd.as_path(),
+                &permission_path_context,
+                builtin_workspace_write_settings.as_ref(),
+                &mut startup_warnings,
             )?;
-            if using_implicit_builtin_profile
-                && default_permissions == BUILT_IN_WORKSPACE_PROFILE
-                && let Some(sandbox_workspace_write) = cfg.sandbox_workspace_write.as_ref()
-            {
-                configured_workspace_roots.extend(sandbox_workspace_write.writable_roots.clone());
-            }
-            dedupe_absolute_paths(&mut configured_workspace_roots);
-            file_system_sandbox_policy = file_system_sandbox_policy
-                .with_materialized_project_roots_for_workspace_roots(&configured_workspace_roots);
-            let permission_profile = if let Some(permission_profile) =
-                builtin_permission_profile(default_permissions, builtin_workspace_write_settings)
-            {
-                permission_profile
-            } else {
-                PermissionProfile::from_runtime_permissions(
-                    &file_system_sandbox_policy,
-                    network_sandbox_policy,
-                )
-            };
+            let file_system_sandbox_policy = permission_profile.file_system_sandbox_policy();
+            let configured_workspace_roots = configured_workspace_roots
+                .iter()
+                .map(PathUri::to_abs_path)
+                .collect::<std::io::Result<Vec<_>>>()?;
             let active_permission_profile = if using_implicit_builtin_profile
                 && default_permissions == BUILT_IN_WORKSPACE_PROFILE
                 && cfg.sandbox_workspace_write.is_some()
@@ -4620,7 +4618,7 @@ fn merge_managed_permission_profiles(
 fn resolve_effective_permission_selection<'a>(
     configured_profiles: Option<&PermissionsToml>,
     default_permissions_override: Option<&'a str>,
-    persisted_profile_id: Option<&'a str>,
+    persisted_profile_id: Option<(&'a str, &ConfigPathContext)>,
     configured_default_profile_id: Option<&'a str>,
     requirements_toml: &'a ConfigRequirementsToml,
     startup_warnings: &mut Vec<String>,
@@ -4628,17 +4626,16 @@ fn resolve_effective_permission_selection<'a>(
     let profiles = merge_managed_permission_profiles(configured_profiles, requirements_toml)?;
     validate_user_permission_profile_names(profiles.as_ref())?;
     validate_required_permission_profile_catalog(requirements_toml, profiles.as_ref())?;
-    let valid_persisted_profile_id = persisted_profile_id.filter(|profile_id| {
-        is_builtin_permission_profile_name(profile_id)
-            || profiles.as_ref().is_some_and(|profiles| {
-                compile_permission_profile_selection(
-                    Some(profiles),
-                    profile_id,
-                    /*workspace_write*/ None,
-                    &mut Vec::new(),
-                )
-                .is_ok()
-            })
+    let valid_persisted_profile_id = persisted_profile_id.and_then(|(profile_id, context)| {
+        compile_permission_profile(
+            profiles.as_ref(),
+            profile_id,
+            context,
+            /*workspace_write*/ None,
+            &mut Vec::new(),
+        )
+        .is_ok()
+        .then_some(profile_id)
     });
     let selected_profile_id = resolve_default_permissions(
         default_permissions_override.or(valid_persisted_profile_id),

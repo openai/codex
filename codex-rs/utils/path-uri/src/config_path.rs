@@ -17,6 +17,18 @@ impl PathUri {
         base: Option<&Self>,
         user_home_dir: Option<&Self>,
     ) -> Result<String, LegacyAppPathStringError> {
+        Self::resolve_config_path_uri(input, convention, base, user_home_dir)?
+            .to_config_path_string(convention)
+    }
+
+    /// Resolves and validates configuration text as a URI using only supplied path facts.
+    /// Normalizes trailing separators while preserving the path's root.
+    pub fn resolve_config_path_uri(
+        input: &str,
+        convention: PathConvention,
+        base: Option<&Self>,
+        user_home_dir: Option<&Self>,
+    ) -> Result<Self, LegacyAppPathStringError> {
         Self::validate_config_path_text(input, convention)?;
         let path = LegacyAppPathString::from_string(input);
         let resolved = if convention.home_relative_suffix(input).is_some() {
@@ -25,6 +37,9 @@ impl PathUri {
                     path: input.to_string(),
                 })?;
             home.validate_config_path(convention)?;
+            if contains_glob_metacharacter(input) {
+                home.validate_glob_directory(convention)?;
+            }
             path.resolve_against(home, Some(home))?
         } else {
             match path.to_path_uri(convention) {
@@ -32,18 +47,46 @@ impl PathUri {
                 Err(error) => {
                     let base = base.ok_or(error)?;
                     base.validate_config_path(convention)?;
+                    if contains_glob_metacharacter(input) {
+                        base.validate_glob_directory(convention)?;
+                    }
                     path.resolve_against(base, /*user_home_dir*/ None)?
                 }
             }
         };
         resolved.validate_config_path(convention)?;
         // Config paths historically omit trailing separators except at a root.
-        let resolved = resolved.join(".")?;
-        let mut rendered = LegacyAppPathString::from_path_uri(&resolved, convention)?.into_string();
-        if resolved.0.host_str().is_some() && resolved.parent().is_none() {
+        Ok(resolved.join(".")?)
+    }
+
+    /// Renders an already resolved configuration path with legacy root separators.
+    /// Use [`Self::resolve_config_path_uri`] to validate and normalize config input first.
+    pub fn to_config_path_string(
+        &self,
+        convention: PathConvention,
+    ) -> Result<String, LegacyAppPathStringError> {
+        let mut rendered = LegacyAppPathString::from_path_uri(self, convention)?.into_string();
+        if self.0.host_str().is_some() && self.parent().is_none() {
             rendered.push('\\');
         }
         Ok(rendered)
+    }
+
+    /// Checks that a literal directory can be inserted into a glob unchanged.
+    /// Rejects metacharacters instead of turning directory names into patterns.
+    /// POSIX backslashes would escape the following pattern character.
+    pub fn validate_glob_directory(
+        &self,
+        convention: PathConvention,
+    ) -> Result<(), LegacyAppPathStringError> {
+        self.validate_config_path(convention)?;
+        let path = LegacyAppPathString::from_path_uri(self, convention)?.into_string();
+        if contains_glob_metacharacter(&path)
+            || convention == PathConvention::Posix && path.contains('\\')
+        {
+            return Err(LegacyAppPathStringError::UnsupportedConfigPath { path, convention });
+        }
+        Ok(())
     }
 
     /// Checks that a resolved configuration URI has a lossless native spelling
@@ -122,6 +165,11 @@ impl PathUri {
         }
         Ok(())
     }
+}
+
+fn contains_glob_metacharacter(path: &str) -> bool {
+    path.chars()
+        .any(|character| matches!(character, '*' | '?' | '[' | ']' | '{' | '}'))
 }
 
 #[cfg(test)]

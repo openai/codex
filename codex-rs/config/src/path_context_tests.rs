@@ -202,3 +202,54 @@ fn missing_supplied_home_does_not_fall_back_to_native_home() {
         assert!(compose_requirements_for_hostname([layer], /*hostname*/ None).is_err());
     });
 }
+
+#[test]
+fn denial_resolution_rejects_glob_syntax_in_supplied_facts() {
+    for directory in ["file:///home/sam[1]", "file:///C:/Users/sam[1]"] {
+        let directory = PathUri::parse(directory).unwrap();
+        let context = ConfigPathContext::new(
+            directory.infer_path_convention().unwrap(),
+            Some(directory.clone()),
+            Some(directory),
+        );
+        // Literal denials also reject metacharacters introduced by path facts.
+        for input in [
+            "private/*.key",
+            "~/private/*.key",
+            "private/key",
+            "~/private/key",
+        ] {
+            let layer = RequirementsLayerEntry::from_toml(
+                RequirementSource::Unknown,
+                format!("[permissions.filesystem]\ndeny_read = ['{input}']"),
+            )
+            .with_path_context(context.clone());
+            assert!(compose_requirements_for_hostname([layer], /*hostname*/ None).is_err());
+        }
+    }
+}
+
+#[test]
+fn native_and_supplied_denials_reject_the_same_unsafe_facts() {
+    let parent = tempdir().unwrap();
+    let directory = parent.path().join("sam[1]");
+    let _base_guard = AbsolutePathBufGuard::new(&directory);
+    AbsolutePathBufGuard::with_home_directory(&directory, || {
+        let inputs = [
+            "private/*.key",
+            "~/private/*.key",
+            "private/key",
+            "~/private/key",
+        ];
+        let native = inputs.map(FilesystemDenyReadPattern::from_input);
+        assert!(native.iter().all(Result::is_err));
+        let directory = PathUri::from_host_native_path(&directory).unwrap();
+        let context = ConfigPathContext::new(
+            PathConvention::native(),
+            Some(directory.clone()),
+            Some(directory),
+        );
+        let _context_guard = context.enter();
+        assert_eq!(inputs.map(FilesystemDenyReadPattern::from_input), native);
+    });
+}

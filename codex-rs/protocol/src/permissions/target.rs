@@ -47,12 +47,15 @@ impl FileSystemSandboxPolicy {
     }
 
     /// Preserves workspace-root symbols and adds their executor-owned concrete paths.
+    /// Legacy home-relative workspace denials clear all grants when their target is unknown.
     pub fn with_materialized_project_roots_for_path_uris(mut self, roots: &[PathUri]) -> Self {
-        for entry in self
+        let Some(materialized) = self
             .clone()
-            .materialize_project_roots_with_path_uris(roots)
-            .entries
-        {
+            .try_materialize_project_roots_with_path_uris(roots)
+        else {
+            return Self::restricted(Vec::new());
+        };
+        for entry in materialized.entries {
             if !self.entries.contains(&entry) {
                 self.entries.push(entry);
             }

@@ -716,6 +716,7 @@ impl FilesystemDenyReadPattern {
         .map_err(|error| error.to_string())?;
         if !input.chars().any(is_glob_metacharacter) {
             let path = deserialize_absolute_path(input)?;
+            validate_literal_denial_path(&path)?;
             return Ok(Self(path));
         }
 
@@ -736,6 +737,9 @@ impl FilesystemDenyReadPattern {
         } else {
             deserialize_absolute_path(directory_prefix)?
         };
+        // The prefix is literal even when supplied home/base facts contain
+        // glob syntax. Reject it before appending the user's pattern suffix.
+        validate_literal_denial_path(&normalized_prefix)?;
         let normalized = if suffix.is_empty() {
             normalized_prefix
         } else if normalized_prefix == "/" {
@@ -766,6 +770,14 @@ impl<'de> Deserialize<'de> for FilesystemDenyReadPattern {
         let input = String::deserialize(deserializer)?;
         Self::from_input(&input).map_err(D::Error::custom)
     }
+}
+
+fn validate_literal_denial_path(path: &str) -> Result<(), String> {
+    let convention = crate::path_context::convention();
+    codex_utils_path_uri::LegacyAppPathString::from_string(path)
+        .to_path_uri(convention)
+        .and_then(|path| path.validate_glob_directory(convention))
+        .map_err(|error| error.to_string())
 }
 
 fn deserialize_absolute_path(input: &str) -> Result<String, String> {

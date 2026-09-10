@@ -11,6 +11,7 @@ use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLoadError;
 use codex_config::ConfigLoadOptions;
+use codex_config::ConfigPathContext;
 use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
 use codex_config::ConfigRequirementsWithSources;
@@ -41,6 +42,8 @@ use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathConvention;
+use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -2511,7 +2514,14 @@ extends = ":workspace"
         .await?;
 
     assert_eq!(
-        permission_profile_catalog(&config.config_layer_stack)?,
+        permission_profile_catalog(
+            &config.config_layer_stack,
+            &ConfigPathContext::new(
+                PathConvention::native(),
+                Some(PathUri::from_abs_path(&cwd)),
+                /*user_home_dir*/ None,
+            ),
+        )?,
         vec![
             PermissionProfileCatalogEntry {
                 id: ":read-only".to_string(),
