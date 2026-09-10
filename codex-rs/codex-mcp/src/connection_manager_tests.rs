@@ -2099,65 +2099,81 @@ async fn codex_apps_extension_does_not_share_host_owned_tools_cache() -> anyhow:
 
     let server_config: McpServerConfig =
         serde_json::from_value(serde_json::json!({ "url": "http://127.0.0.1:1" }))?;
-    let mut config = crate::mcp::tests::test_mcp_config(codex_home.path().to_path_buf());
-    config.host_owned_apps_protocol_mode = crate::McpProtocolMode::V20260728;
-    let mut catalog = crate::ResolvedMcpCatalog::builder();
-    catalog.register(crate::McpServerRegistration::from_extension(
-        CODEX_APPS_MCP_SERVER_NAME.to_string(),
-        "test-extension",
-        /*contribution_order*/ 0,
-        server_config.clone(),
-    ));
-    config.mcp_server_catalog = catalog.build();
+    for (hosted_mode, extension_mode, expected_mode) in [
+        (
+            crate::McpProtocolMode::V20260728,
+            None,
+            crate::McpProtocolMode::Legacy,
+        ),
+        (
+            crate::McpProtocolMode::Legacy,
+            Some(crate::McpProtocolMode::V20260728),
+            crate::McpProtocolMode::V20260728,
+        ),
+    ] {
+        let mut config = crate::mcp::tests::test_mcp_config(codex_home.path().to_path_buf());
+        config.host_owned_apps_protocol_mode = hosted_mode;
+        let mut registration = crate::McpServerRegistration::from_extension(
+            CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            "test-extension",
+            /*contribution_order*/ 0,
+            server_config.clone(),
+        );
+        if let Some(mode) = extension_mode {
+            registration = registration.with_protocol_mode(mode);
+        }
+        let mut catalog = crate::ResolvedMcpCatalog::builder();
+        catalog.register(registration);
+        config.mcp_server_catalog = catalog.build();
 
-    let startup_cancellation_token = CancellationToken::new();
-    startup_cancellation_token.cancel();
-    let manager = McpConnectionSet::new(
-        /*previous*/ None,
-        McpPublicationGate::already_published(),
-        McpRuntimeInput {
-            startup_policy: McpStartupPolicy::Eager,
-            config: Arc::new(config),
-            plugins_available: false,
-            ready_selected_capability_roots: Vec::new(),
-            mcp_servers: HashMap::from([(
-                CODEX_APPS_MCP_SERVER_NAME.to_string(),
-                EffectiveMcpServer::configured(server_config),
-            )]),
-            submit_id: "cache-ownership-test".to_string(),
-            tx_event: None,
-            startup_cancellation_token,
-            runtime_context: McpRuntimeContext::new(
-                Arc::new(environment_manager_without_environments()),
-                codex_home.path().to_path_buf(),
-            ),
-            codex_apps_tools_cache,
-            tool_catalog_cache: McpToolCatalogCache::default(),
-            codex_apps_tools_cache_key: cache_key,
-            client_mcp_extensions: ClientMcpExtensions::default(),
-            auth: None,
-            auth_manager: None,
-            elicitation_reviewer: None,
-            elicitation_lifecycle: None,
-        },
-        ElicitationRequestRouter::default(),
-    )
-    .await;
+        let startup_cancellation_token = CancellationToken::new();
+        startup_cancellation_token.cancel();
+        let manager = McpConnectionSet::new(
+            /*previous*/ None,
+            McpPublicationGate::already_published(),
+            McpRuntimeInput {
+                startup_policy: McpStartupPolicy::Eager,
+                config: Arc::new(config),
+                plugins_available: false,
+                ready_selected_capability_roots: Vec::new(),
+                mcp_servers: HashMap::from([(
+                    CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                    EffectiveMcpServer::configured(server_config.clone()),
+                )]),
+                submit_id: "cache-ownership-test".to_string(),
+                tx_event: None,
+                startup_cancellation_token,
+                runtime_context: McpRuntimeContext::new(
+                    Arc::new(environment_manager_without_environments()),
+                    codex_home.path().to_path_buf(),
+                ),
+                codex_apps_tools_cache: codex_apps_tools_cache.clone(),
+                tool_catalog_cache: McpToolCatalogCache::default(),
+                codex_apps_tools_cache_key: cache_key.clone(),
+                client_mcp_extensions: ClientMcpExtensions::default(),
+                auth: None,
+                auth_manager: None,
+                elicitation_reviewer: None,
+                elicitation_lifecycle: None,
+            },
+            ElicitationRequestRouter::default(),
+        )
+        .await;
 
-    let client = manager.test_client(CODEX_APPS_MCP_SERVER_NAME);
-    assert_eq!(
-        manager.servers[CODEX_APPS_MCP_SERVER_NAME].protocol_mode,
-        crate::McpProtocolMode::Legacy,
-        "an ordinary extension named codex_apps must not inherit the hosted protocol default"
-    );
-    assert!(
-        client.codex_apps_tools_cache_context.is_none(),
-        "an extension must not receive the host-owned Apps cache"
-    );
-    assert!(
-        !client.has_cached_tools(),
-        "an extension must not expose cached host-owned Apps tools"
-    );
+        let client = manager.test_client(CODEX_APPS_MCP_SERVER_NAME);
+        assert_eq!(
+            manager.servers[CODEX_APPS_MCP_SERVER_NAME].protocol_mode, expected_mode,
+            "an ordinary extension must use its own mode, not the hosted protocol default"
+        );
+        assert!(
+            client.codex_apps_tools_cache_context.is_none(),
+            "an extension must not receive the host-owned Apps cache"
+        );
+        assert!(
+            !client.has_cached_tools(),
+            "an extension must not expose cached host-owned Apps tools"
+        );
+    }
 
     Ok(())
 }

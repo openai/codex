@@ -100,6 +100,7 @@ mod json_result;
 mod live_cli;
 mod mcp_auth_elicitation;
 mod mcp_auth_refresh;
+mod mcp_extension_protocol;
 mod mcp_optional_startup_grace;
 #[cfg(unix)]
 mod mcp_refresh_cleanup;

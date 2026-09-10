@@ -21,6 +21,7 @@ pub use capabilities::NoopResponseItemInjector;
 pub use capabilities::ResponseItemInjectionFuture;
 pub use capabilities::ResponseItemInjector;
 pub use codex_context_fragments::ContextualUserFragment;
+pub use codex_mcp::McpProtocolMode;
 pub use codex_mcp::ToolInfo as McpToolInfo;
 pub use codex_protocol::models::ContentItemKind;
 pub use codex_protocol::models::ResponseItem;

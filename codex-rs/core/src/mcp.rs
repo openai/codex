@@ -179,6 +179,21 @@ impl McpManager {
                             ),
                         )));
                     }
+                    McpServerContribution::SetWithProtocolMode {
+                        name,
+                        config,
+                        protocol_mode,
+                    } => {
+                        overlays.push(OrderedMcpOverlay::Set(Box::new(
+                            McpServerRegistration::from_extension(
+                                name,
+                                contributor.id(),
+                                contribution_order,
+                                *config,
+                            )
+                            .with_protocol_mode(protocol_mode),
+                        )));
+                    }
                     McpServerContribution::HostedApps { config } => {
                         overlays.push(OrderedMcpOverlay::Set(Box::new(
                             McpServerRegistration::from_hosted_apps(

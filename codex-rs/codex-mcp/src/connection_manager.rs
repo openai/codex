@@ -314,12 +314,17 @@ impl McpConnectionSet {
             };
             let metadata = McpServerMetadata::from(&server);
             let configured_config = server.config().clone();
-            let protocol_mode = if is_host_owned_codex_apps
-                && matches!(
-                    &configured_config.transport,
-                    McpServerTransportConfig::StreamableHttp { .. }
-                ) {
-                host_owned_apps_protocol_mode
+            let protocol_mode = if matches!(
+                &configured_config.transport,
+                McpServerTransportConfig::StreamableHttp { .. }
+            ) {
+                registration
+                    .and_then(crate::ResolvedMcpServer::protocol_mode)
+                    .unwrap_or(if is_host_owned_codex_apps {
+                        host_owned_apps_protocol_mode
+                    } else {
+                        default_protocol_mode
+                    })
             } else {
                 default_protocol_mode
             };
