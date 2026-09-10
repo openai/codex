@@ -12,7 +12,6 @@ use codex_protocol::protocol::GuardianRiskLevel;
 use codex_protocol::protocol::GuardianUserAuthorization;
 use codex_protocol::protocol::ReviewDecision;
 
-use crate::GuardianAssessment;
 use crate::GuardianReviewError;
 use crate::GuardianReviewOutcome;
 
@@ -22,6 +21,11 @@ const REJECTION_INSTRUCTIONS: &str = concat!(
     "Proceed only with a materially safer alternative, ",
     "or if the user explicitly approves the action after being informed of the risk. ",
     "Otherwise, stop and request user input.",
+);
+const REVIEW_FAILURE_INSTRUCTIONS: &str = concat!(
+    "The action was not executed because automatic approval review could not be completed. ",
+    "This is a review failure, not a determination that the action is unsafe. ",
+    "Do not bypass the approval check; resolve the error or ask the user for guidance.",
 );
 const TIMEOUT_INSTRUCTIONS: &str = concat!(
     "The automatic permission approval review did not finish before its deadline. ",
@@ -111,12 +115,19 @@ pub fn complete_review(
                 | GuardianReviewError::Parse { message } => {
                     analytics.decision = GuardianReviewDecision::Denied;
                     analytics.terminal_status = GuardianReviewTerminalStatus::FailedClosed;
-                    GuardianAssessment {
-                        risk_level: GuardianRiskLevel::High,
-                        user_authorization: GuardianUserAuthorization::Unknown,
-                        outcome: GuardianAssessmentOutcome::Deny,
-                        rationale: format!("Automatic approval review failed: {message}"),
-                    }
+                    let rationale = format!("Automatic approval review failed: {message}");
+                    // Keep the existing blocked status for client compatibility.
+                    event.status = GuardianAssessmentStatus::Denied;
+                    event.rationale = Some(rationale.clone());
+                    return ReviewCompletion {
+                        decision: ReviewDecision::denied(format!(
+                            "{rationale}\n{REVIEW_FAILURE_INSTRUCTIONS}"
+                        )),
+                        event,
+                        warning: Some(rationale),
+                        analytics,
+                        assessment_outcome: None,
+                    };
                 }
             }
         }

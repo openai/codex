@@ -2985,7 +2985,7 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
         "denial rationale should not fall back to the generic missing payload error"
     );
     assert!(
-        rejection.contains("Reason: Automatic approval review failed:")
+        rejection.starts_with("Automatic approval review failed:")
             && rejection.contains(error_message),
         "rejection message should include guardian rationale: {rejection}"
     );

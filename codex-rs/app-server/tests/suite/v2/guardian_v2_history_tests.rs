@@ -18,8 +18,6 @@ use codex_app_server_protocol::ApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::GuardianApprovalReview;
 use codex_app_server_protocol::GuardianApprovalReviewStatus;
-use codex_app_server_protocol::GuardianRiskLevel;
-use codex_app_server_protocol::GuardianUserAuthorization;
 use codex_app_server_protocol::ItemGuardianApprovalReviewCompletedNotification;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
@@ -445,8 +443,8 @@ async fn guardians_retain_evidence_after_compaction_and_discard_it_after_rollbac
                 assessment.review,
                 GuardianApprovalReview {
                     status: GuardianApprovalReviewStatus::Denied,
-                    risk_level: Some(GuardianRiskLevel::High),
-                    user_authorization: Some(GuardianUserAuthorization::Unknown),
+                    risk_level: None,
+                    user_authorization: None,
                     rationale: Some(format!("Automatic approval review failed: {reason}")),
                 }
             );
@@ -475,9 +473,9 @@ async fn guardians_retain_evidence_after_compaction_and_discard_it_after_rollbac
                 })
                 .expect("declined tool result");
             assert!(
-                output
-                    .to_string()
-                    .contains("This action was rejected due to unacceptable risk."),
+                output.to_string().contains(
+                    "This is a review failure, not a determination that the action is unsafe."
+                ),
                 "tool must not execute: {output}",
             );
             assert_eq!(

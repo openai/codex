@@ -1030,7 +1030,10 @@ async fn wait_for_guardian_review_preserves_structured_session_error() {
     )
     .await;
 
-    let GuardianReviewSessionOutcome::SessionFailed { error, error_info } = outcome else {
+    let GuardianReviewSessionOutcome::SessionFailed {
+        error, error_info, ..
+    } = outcome
+    else {
         panic!("expected structured session failure");
     };
     assert_eq!(error.to_string(), "temporary failure");

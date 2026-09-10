@@ -398,6 +398,7 @@ async fn run_review_on_session(
                 GuardianReviewSessionOutcome::SessionFailed {
                     error,
                     error_info: None,
+                    retry_at: None,
                 },
                 false,
                 analytics_result,
@@ -429,6 +430,7 @@ async fn run_review_on_session(
                     GuardianReviewSessionOutcome::SessionFailed {
                         error: error.into(),
                         error_info: None,
+                        retry_at: None,
                     },
                     false,
                     analytics_result,
@@ -721,6 +723,7 @@ async fn run_review_on_session(
                 GuardianReviewSessionOutcome::SessionFailed {
                     error: anyhow!("guardian review input was not started: {submission:?}"),
                     error_info: None,
+                    retry_at: None,
                 },
                 false,
                 analytics_result,
@@ -731,6 +734,7 @@ async fn run_review_on_session(
                 GuardianReviewSessionOutcome::SessionFailed {
                     error: err.into(),
                     error_info: None,
+                    retry_at: None,
                 },
                 false,
                 analytics_result,
@@ -945,6 +949,10 @@ async fn wait_for_guardian_review(
                                     GuardianReviewSessionOutcome::SessionFailed {
                                         error: anyhow!(error.message),
                                         error_info: error.codex_error_info,
+                                        retry_at: review_session.session.services.thread_extension_data
+                                            .get::<crate::responses_retry::ExhaustedResponseRetry>()
+                                            .filter(|advice| advice.turn_id == expected_turn_id)
+                                            .and_then(|advice| advice.retry_at),
                                     },
                                     true,
                                     true,

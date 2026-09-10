@@ -39,8 +39,14 @@ where
         if attempt_count >= max_attempts || !should_retry_guardian_review(&outcome) {
             return (outcome, analytics_result);
         }
+        let retry_at = match &outcome {
+            GuardianReviewOutcome::Error(GuardianReviewError::Session { retry_at, .. }) => {
+                *retry_at
+            }
+            _ => None,
+        };
         if let Some(error) =
-            wait_before_guardian_retry(attempt_count, deadline, external_cancel).await
+            wait_before_guardian_retry(attempt_count, retry_at, deadline, external_cancel).await
         {
             return (GuardianReviewOutcome::Error(error), analytics_result);
         }
@@ -50,13 +56,16 @@ where
 
 async fn wait_before_guardian_retry(
     attempt_count: i64,
+    retry_not_before: Option<Instant>,
     deadline: Instant,
     external_cancel: Option<&CancellationToken>,
 ) -> Option<GuardianReviewError> {
     let exponential_delay = 200.0 * 2.0_f64.powi(attempt_count.saturating_sub(1) as i32);
     let jitter = rand::rng().random_range(0.9..1.1);
     let retry_delay = Duration::from_millis((exponential_delay * jitter) as u64);
-    let retry_at = (Instant::now() + retry_delay).min(deadline);
+    let retry_at = (Instant::now() + retry_delay)
+        .max(retry_not_before.unwrap_or_else(Instant::now))
+        .min(deadline);
     tokio::select! {
         _ = sleep_until(retry_at) => {
             (Instant::now() >= deadline).then_some(GuardianReviewError::Timeout)
@@ -72,21 +81,43 @@ async fn wait_before_guardian_retry(
 }
 
 fn should_retry_guardian_review(outcome: &GuardianReviewOutcome) -> bool {
-    matches!(
-        outcome,
-        GuardianReviewOutcome::Error(
-            GuardianReviewError::Session {
-                error_info: Some(
-                    CodexErrorInfo::ServerOverloaded
-                        | CodexErrorInfo::HttpConnectionFailed { .. }
-                        | CodexErrorInfo::ResponseStreamConnectionFailed { .. }
-                        | CodexErrorInfo::InternalServerError
-                        | CodexErrorInfo::ResponseStreamDisconnected { .. }
-                ),
-                ..
-            } | GuardianReviewError::Parse { .. }
-        )
-    )
+    match outcome {
+        GuardianReviewOutcome::Error(GuardianReviewError::Parse { .. }) => true,
+        GuardianReviewOutcome::Error(GuardianReviewError::Session {
+            error_info: Some(error),
+            ..
+        }) => match error {
+            CodexErrorInfo::RateLimitExceeded
+            | CodexErrorInfo::ServerOverloaded
+            | CodexErrorInfo::InternalServerError => true,
+            CodexErrorInfo::HttpConnectionFailed { http_status_code }
+            | CodexErrorInfo::ResponseStreamConnectionFailed { http_status_code }
+            | CodexErrorInfo::ResponseStreamDisconnected { http_status_code }
+            | CodexErrorInfo::ResponseTooManyFailedAttempts { http_status_code } => {
+                matches!(http_status_code, None | Some(408 | 429 | 500..=599))
+            }
+            CodexErrorInfo::ContextWindowExceeded
+            | CodexErrorInfo::SessionBudgetExceeded
+            | CodexErrorInfo::UsageLimitExceeded
+            | CodexErrorInfo::CyberPolicy
+            | CodexErrorInfo::MisalignmentPolicyViolation
+            | CodexErrorInfo::Unauthorized
+            | CodexErrorInfo::BadRequest
+            | CodexErrorInfo::SandboxError
+            | CodexErrorInfo::ActiveTurnNotSteerable { .. }
+            | CodexErrorInfo::ThreadRollbackFailed
+            | CodexErrorInfo::Other => false,
+        },
+        GuardianReviewOutcome::Completed(_)
+        | GuardianReviewOutcome::Error(
+            GuardianReviewError::PromptBuild { .. }
+            | GuardianReviewError::Session {
+                error_info: None, ..
+            }
+            | GuardianReviewError::Timeout
+            | GuardianReviewError::Cancelled,
+        ) => false,
+    }
 }
 
 #[cfg(test)]
