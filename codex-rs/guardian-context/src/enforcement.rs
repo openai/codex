@@ -20,6 +20,7 @@ use crate::composition::SectionOutput;
 /// Eviction priority within a profile; older items at the same priority go first.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum BudgetPriority {
+    ToolDescription,
     Commentary,
     Tool,
     Image,

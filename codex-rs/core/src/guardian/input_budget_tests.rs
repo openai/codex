@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 fn required_context(text: String) -> ComposedContext {
     let action = PlannedAction {
+        tool_descriptions: None,
         json: text,
         kind: PlannedActionKind::Command,
         reason: None,

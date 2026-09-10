@@ -585,7 +585,7 @@ pub(crate) fn guardian_request_turn_id<'a>(
 pub(crate) fn format_guardian_action_pretty(
     action: &GuardianApprovalRequest,
 ) -> serde_json::Result<FormattedGuardianAction> {
-    let value = guardian_approval_request_to_json(action)?;
+    let value = guardian_action_for_review(action)?;
     let (value, truncated) = truncate_guardian_action_value(value);
     let text = enforce_guardian_action_byte_limit(serde_json::to_string_pretty(&value)?)?;
     Ok(FormattedGuardianAction { text, truncated })
@@ -603,7 +603,18 @@ fn enforce_guardian_action_byte_limit(text: String) -> serde_json::Result<String
 pub(crate) fn format_guardian_action_compact(
     action: &GuardianApprovalRequest,
 ) -> serde_json::Result<String> {
-    enforce_guardian_action_byte_limit(serde_json::to_string(&guardian_approval_request_to_json(
-        action,
-    )?)?)
+    enforce_guardian_action_byte_limit(serde_json::to_string(&guardian_action_for_review(action)?)?)
+}
+
+fn guardian_action_for_review(action: &GuardianApprovalRequest) -> serde_json::Result<Value> {
+    let mut value = guardian_approval_request_to_json(action)?;
+    if matches!(action, GuardianApprovalRequest::McpToolCall { .. })
+        && let Some(fields) = value.as_object_mut()
+    {
+        // Only host-provided metadata is optional. A nested argument named
+        // "description" is still part of the exact action under review.
+        fields.remove("tool_description");
+        fields.remove("connector_description");
+    }
+    Ok(value)
 }

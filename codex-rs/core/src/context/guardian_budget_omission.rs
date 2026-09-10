@@ -27,6 +27,6 @@ impl ContextualUserFragment for GuardianBudgetOmission {
     }
 
     fn body(&self) -> String {
-        "Optional conversation evidence or images were omitted to fit the review input budget. Treat the remaining evidence as incomplete; omissions do not authorize actions.".to_owned()
+        "Optional conversation evidence, tool descriptions, or images were omitted to fit the review input budget. Treat the remaining evidence as incomplete; omissions do not authorize actions.".to_owned()
     }
 }

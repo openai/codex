@@ -3,12 +3,60 @@
 use super::*;
 use crate::budget::section_tokens;
 use crate::composition::user_message;
+use codex_protocol::models::ResponseItem;
 use pretty_assertions::assert_eq;
 
 fn text(value: &str) -> ContentItem {
     ContentItem::InputText {
         text: value.to_owned(),
     }
+}
+
+#[test]
+fn planned_action_budget_omits_descriptions_without_changing_arguments() {
+    let action = crate::PlannedAction {
+        json: r#"{"tool":"write_record","arguments":{"description":"required payload"}}"#
+            .to_owned(),
+        kind: crate::PlannedActionKind::Command,
+        reason: None,
+        tool_descriptions: Some("optional tool description ".repeat(/*n*/ 100)),
+    };
+    let required = action.render(crate::ActionPresentation::SyncFull);
+    let context = crate::CollectedContext {
+        sections: vec![crate::ContextSection::PlannedAction(action)],
+    }
+    .compose(
+        crate::ContextPresentation::SyncFull {
+            session_id: "review",
+        },
+        crate::RenderedTranscript {
+            items: Vec::new(),
+            omission_note: None,
+            truncations: Vec::new(),
+        },
+    )
+    .unwrap();
+    let mut required_items = required.iter().map(|item| text(item)).collect::<Vec<_>>();
+    required_items.push(text("evidence omitted"));
+    let budget = crate::estimate_input_tokens(&user_message(required_items.clone())) + 100;
+    let selected = context
+        .enforce_budget(
+            RequestBudget {
+                max_input_tokens: budget,
+                existing_context_tokens: 0,
+            },
+            "evidence omitted".to_owned(),
+        )
+        .unwrap();
+    // The sync preamble is also required and remains ahead of the action.
+    let messages = selected.into_messages();
+    let ResponseItem::Message { content, .. } = &messages[0] else {
+        panic!("expected user evidence");
+    };
+    assert_eq!(
+        &content[content.len() - required_items.len()..],
+        required_items
+    );
 }
 
 #[test]

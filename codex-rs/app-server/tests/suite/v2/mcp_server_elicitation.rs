@@ -916,13 +916,22 @@ impl ElicitationRoundTripFixture {
                     "connector_id": CONNECTOR_ID,
                     "connector_name": CONNECTOR_NAME,
                     "connected_account_email": CONNECTED_ACCOUNT_EMAIL,
-                    "tool_description": "Confirm a calendar action.",
                     "annotations": {
                         "destructive_hint": false,
                         "open_world_hint": false,
                         "read_only_hint": true,
                     },
                 }),
+            );
+            assert!(
+                guardian_request
+                    .message_input_texts("user")
+                    .iter()
+                    .any(|text| {
+                        text.starts_with("<guardian_tool_descriptions>")
+                            && text.contains("Confirm a calendar action.")
+                            && text.ends_with("</guardian_tool_descriptions>")
+                    })
             );
         }
 

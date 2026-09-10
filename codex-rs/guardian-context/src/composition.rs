@@ -227,7 +227,18 @@ impl CollectedContext {
                     )
                 }
                 ContextSection::PlannedAction(planned) => {
-                    (11, "planned_action", text_content(planned.render(action)))
+                    let mut items = planned
+                        .render(action)
+                        .into_iter()
+                        .map(|text| Budgeted::required(ContentItem::InputText { text }))
+                        .collect::<Vec<_>>();
+                    if let Some(text) = planned.tool_descriptions {
+                        items.push(Budgeted::optional(
+                            ContentItem::InputText { text },
+                            BudgetPriority::ToolDescription,
+                        ));
+                    }
+                    (11, "planned_action", SectionDelivery::UserContent(items))
                 }
             };
             sections.push((position, SectionOutput { id, delivery }));

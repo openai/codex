@@ -16,7 +16,9 @@ use codex_guardian_context::SectionInput;
 use codex_guardian_context::default_registry;
 use codex_protocol::models::ResponseItem;
 
+use crate::context::ContextualUserFragment;
 use crate::context::GuardianReviewEvidence;
+use crate::context::GuardianToolDescriptions;
 use crate::context::NodeReplReviewEvidence;
 use crate::context::NodeReplReviewEvidenceMode;
 use crate::context::node_repl_review_evidence_mode;
@@ -119,6 +121,20 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
     let planned_action_json = format_guardian_action_pretty(&request)?;
     let planned_action = PlannedAction {
         json: planned_action_json.text,
+        tool_descriptions: if let GuardianApprovalRequest::McpToolCall {
+            tool_description,
+            connector_description,
+            ..
+        } = &request
+        {
+            GuardianToolDescriptions::new(
+                tool_description.as_deref(),
+                connector_description.as_deref(),
+            )
+            .map(|descriptions| descriptions.render())
+        } else {
+            None
+        },
         kind: match &request {
             GuardianApprovalRequest::NetworkAccess { trigger, .. } => PlannedActionKind::Network {
                 has_trigger: trigger.is_some(),

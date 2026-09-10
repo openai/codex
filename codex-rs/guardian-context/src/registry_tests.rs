@@ -207,6 +207,7 @@ fn reused_registry_preserves_section_identity_and_source_roles() {
         denied_globs: vec!["**/*.key".into()],
     };
     let action = super::PlannedAction {
+        tool_descriptions: None,
         json: r#"{"tool":"read_file","path":"debug-secret.json"}"#.into(),
         kind: super::PlannedActionKind::Command,
         reason: Some("debug-secret reason".into()),

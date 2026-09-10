@@ -403,7 +403,10 @@ async fn node_elicitations_attribute_independent_reviews_without_changing_action
     let actions = [
         (
             "access_browser_origin",
-            json!({"origin": "https://example.com"}),
+            json!({
+                "origin": "https://example.com",
+                "description": "payload ".repeat(/*n*/ 256) + "required argument suffix",
+            }),
         ),
         ("webmcp:write_record", json!({"record": {"value": 42}})),
     ];
@@ -605,11 +608,11 @@ async fn node_elicitations_attribute_independent_reviews_without_changing_action
                 "tool": "mcp_tool_call", "server": server_name,
                 "tool_name": meta[index]["tool_name"], "arguments": meta[index]["tool_params"],
                 "connector_id": "inner-connector", "connector_name": "Inner Connector",
-                "connector_description": "Connector for the reviewed inner action",
                 "tool_title": "Inner action",
-                "tool_description": "Review this action independently from JavaScript".repeat(220),
             })
         );
+        assert!(prompt.contains("<guardian_tool_descriptions>"));
+        assert!(prompt.contains("Connector for the reviewed inner action"));
     }
     let [tool_item] = tool_items.as_slice() else {
         panic!("expected one completed enclosing tool item: {tool_items:?}");

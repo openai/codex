@@ -515,6 +515,7 @@ impl GuardianV2Extension {
             };
             let action_section = PlannedAction {
                 json: planned_action.clone(),
+                tool_descriptions: None,
                 kind: PlannedActionKind::Command,
                 reason: None,
             };
