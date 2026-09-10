@@ -209,6 +209,13 @@
         }
 
         if (needsSetup) {
+          // The login server selects one of these platform origins from the OAuth issuer.
+          if (
+            platformUrl !== "https://platform.openai.com" &&
+            platformUrl !== "https://platform.api.openai.org"
+          ) {
+            return;
+          }
           const setupBox = document.getElementById("setup-box");
           const countdownNode = document.getElementById("countdown");
           setupBox.style.display = "block";

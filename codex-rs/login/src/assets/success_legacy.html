@@ -166,6 +166,13 @@
         const idToken = params.get('id_token');
         // Show different message and optional redirect when setup is required
         if (needsSetup) {
+          // The login server selects one of these platform origins from the OAuth issuer.
+          if (
+            platformUrl !== 'https://platform.openai.com' &&
+            platformUrl !== 'https://platform.api.openai.org'
+          ) {
+            return;
+          }
           const setupBox = document.querySelector('.setup-box');
           setupBox.style.display = 'flex';
           const redirectUrlObj = new URL('/org-setup', platformUrl);
