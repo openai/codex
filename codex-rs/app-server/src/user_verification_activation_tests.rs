@@ -26,6 +26,32 @@ async fn user_verification_initialize_owns_advertisement_and_eligibility() -> Re
         (ConnectionOrigin::InProcess, "other-ui", true, true, false),
         (ConnectionOrigin::InProcess, "codex-tui", false, true, false),
         (ConnectionOrigin::InProcess, "codex-tui", true, false, false),
+        (ConnectionOrigin::Stdio, "Codex Desktop", true, true, true),
+        (
+            ConnectionOrigin::InProcess,
+            "Codex Desktop",
+            true,
+            true,
+            false,
+        ),
+        (
+            ConnectionOrigin::WebSocket,
+            "Codex Desktop",
+            true,
+            true,
+            false,
+        ),
+        (
+            ConnectionOrigin::RemoteControl,
+            "Codex Desktop",
+            true,
+            true,
+            false,
+        ),
+        (ConnectionOrigin::Stdio, "other-ui", true, true, false),
+        (ConnectionOrigin::Stdio, "codex_desktop", true, true, false),
+        (ConnectionOrigin::Stdio, "Codex Desktop", false, true, false),
+        (ConnectionOrigin::Stdio, "Codex Desktop", true, false, false),
     ] {
         let probe: fn() -> bool = if supported { || true } else { || false };
         let mut h = Harness::new(origin, probe).await?;

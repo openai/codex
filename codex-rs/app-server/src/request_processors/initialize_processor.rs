@@ -14,6 +14,7 @@ use codex_protocol::mcp::OPENAI_ELICITATION_EXTENSION_ID;
 use super::*;
 use crate::message_processor::ConnectionSessionState;
 use crate::message_processor::InitializedConnectionSessionState;
+use crate::transport::ConnectionOrigin;
 
 const NON_ORIGINATING_CLIENT_NAMES: &[&str] = &["codex_app_server_daemon", "codex-backend"];
 
@@ -95,14 +96,14 @@ impl InitializeRequestProcessor {
                 "Invalid clientInfo.name: '{name}'. Must be a valid HTTP header value."
             )));
         }
-        // The bundled TUI shares this build and implements the typed verification UI.
-        // Independently deployed UIs need their own rollout before receiving this mode.
+        // Activate only the embedded TUI and local desktop host. Client-supplied
+        // extensions cannot opt other hosts into verification.
         let user_verification_enabled = experimental_api_enabled
             && matches!(
-                session.origin,
-                crate::transport::ConnectionOrigin::InProcess
+                (session.origin, name.as_str()),
+                (ConnectionOrigin::InProcess, "codex-tui")
+                    | (ConnectionOrigin::Stdio, "Codex Desktop")
             )
-            && name == "codex-tui"
             && tokio::task::spawn_blocking(self.user_verification.device_supported)
                 .await
                 .unwrap_or(false);
