@@ -1,13 +1,10 @@
-//! Builds the production synchronous reviewer settings without starting a session.
-//! Keep these settings and the policy prompt identical for core and extension callers.
+//! Applies extension-owned reviewer settings to host configuration and builds context.
+//! Managed constraints, live network rules and policy prompt construction stay in the host.
 
 use std::collections::HashMap;
 
-use codex_features::Feature;
 use codex_protocol::models::BaseInstructionsProvenance;
-use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ModelMessages;
-use codex_protocol::protocol::AskForApproval;
 use tracing::warn;
 
 use crate::config::Config;
@@ -18,16 +15,6 @@ use crate::config::TokenBudgetConfig;
 use super::prompt::BUNDLED_GUARDIAN_POLICY_TEMPLATE;
 use super::prompt::guardian_policy_prompt_with_config_and_template;
 
-pub(super) fn read_only_guardian_permission_profile(
-    permission_profile: &PermissionProfile,
-) -> PermissionProfile {
-    permission_profile
-        .intersect_with_read_only()
-        .unwrap_or(PermissionProfile::External {
-            network: codex_protocol::permissions::NetworkSandboxPolicy::Restricted,
-        })
-}
-
 /// Builds the existing read-only reviewer configuration with its policy and live network rules.
 pub fn build_guardian_review_session_config(
     parent_config: &Config,
@@ -37,17 +24,23 @@ pub fn build_guardian_review_session_config(
     model_messages: Option<&ModelMessages>,
 ) -> anyhow::Result<Config> {
     let mut guardian_config = parent_config.clone();
-    guardian_config.model = Some(active_model.to_string());
-    guardian_config.model_reasoning_effort = reasoning_effort;
-    guardian_config.model_provider.request_max_retries = Some(1);
-    guardian_config.model_provider.stream_max_retries = Some(1);
-    guardian_config.include_skill_instructions = false;
-    guardian_config.memories.use_memories = false;
-    guardian_config.memories.dedicated_tools = false;
-    // Clear inherited startup activation and keep an explicit configuration so model
-    // defaults cannot re-enable token-budget mode after the feature is disabled below.
-    guardian_config.token_budget_startup_config = None;
-    guardian_config.token_budget = Some(TokenBudgetConfig::default());
+    let overrides = codex_guardian_reviewer::reviewer_config_overrides(
+        parent_config.permissions.permission_profile(),
+        active_model,
+        reasoning_effort,
+    );
+    guardian_config.model = Some(overrides.model);
+    guardian_config.model_reasoning_effort = overrides.reasoning_effort;
+    guardian_config.model_provider.request_max_retries = Some(overrides.request_max_retries);
+    guardian_config.model_provider.stream_max_retries = Some(overrides.stream_max_retries);
+    guardian_config.include_skill_instructions = overrides.include_skill_instructions;
+    guardian_config.memories.use_memories = overrides.use_memories;
+    guardian_config.memories.dedicated_tools = overrides.dedicated_memory_tools;
+    if !overrides.inherit_token_budget {
+        // An explicit disabled config prevents model defaults from reactivating it.
+        guardian_config.token_budget_startup_config = None;
+        guardian_config.token_budget = Some(TokenBudgetConfig::default());
+    }
     let catalog_auto_review = model_messages.and_then(|messages| messages.auto_review.as_ref());
     let tenant_policy_config = parent_config.resolve_guardian_policy(model_messages);
     let policy_template = catalog_auto_review
@@ -58,24 +51,25 @@ pub fn build_guardian_review_session_config(
         policy_template,
     ));
     guardian_config.base_instructions_provenance = Some(BaseInstructionsProvenance::Custom);
-    guardian_config.notify = None;
-    guardian_config.developer_instructions = None;
-    guardian_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
-    let guardian_permission_profile =
-        read_only_guardian_permission_profile(parent_config.permissions.permission_profile());
+    guardian_config.notify = overrides.notify;
+    guardian_config.developer_instructions = overrides.developer_instructions;
+    guardian_config.permissions.approval_policy =
+        Constrained::allow_only(overrides.approval_policy);
     guardian_config
         .permissions
-        .set_permission_profile(guardian_permission_profile)
+        .set_permission_profile(overrides.permission_profile)
         .map_err(|err| {
             anyhow::anyhow!("guardian review session could not set permission profile: {err}")
         })?;
-    guardian_config.include_apps_instructions = false;
-    guardian_config
-        .mcp_servers
-        .set(HashMap::new())
-        .map_err(|err| {
-            anyhow::anyhow!("guardian review session could not clear MCP servers: {err}")
-        })?;
+    guardian_config.include_apps_instructions = overrides.include_apps_instructions;
+    if !overrides.inherit_mcp_servers {
+        guardian_config
+            .mcp_servers
+            .set(HashMap::new())
+            .map_err(|err| {
+                anyhow::anyhow!("guardian review session could not clear MCP servers: {err}")
+            })?;
+    }
     if let Some(live_network_config) = live_network_config
         && guardian_config.permissions.network.is_some()
     {
@@ -91,18 +85,7 @@ pub fn build_guardian_review_session_config(
             guardian_config.permissions.permission_profile(),
         )?);
     }
-    for feature in [
-        Feature::Collab,
-        Feature::MultiAgentV2,
-        Feature::GuardianV2,
-        Feature::TokenBudget,
-        Feature::ContextManagement,
-        Feature::CodexHooks,
-        Feature::Apps,
-        Feature::Plugins,
-        Feature::WebSearchRequest,
-        Feature::WebSearchCached,
-    ] {
+    for feature in overrides.disabled_features {
         guardian_config.features.disable(feature).map_err(|err| {
             anyhow::anyhow!(
                 "guardian review session could not disable `features.{}`: {err}",

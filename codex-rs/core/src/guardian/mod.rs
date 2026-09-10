@@ -54,7 +54,6 @@ pub(crate) use review::new_guardian_review_id;
 pub(crate) use review::record_guardian_denial_for_test;
 pub(crate) use review::routes_approval_policy_to_guardian;
 pub(crate) use review::routes_approval_to_guardian;
-pub use review_session::GuardianReviewSession;
 pub use review_session::GuardianReviewSessionHost;
 pub(crate) use review_session::GuardianReviewSessionManager;
 pub(crate) use review_session::prewarm_guardian_review_session;

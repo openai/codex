@@ -19,7 +19,6 @@ codex-core = { workspace = true }
 codex-extension-api = { workspace = true }
 codex-features = { workspace = true }
 codex-guardian-context = { workspace = true }
-codex-guardian-reviewer = { workspace = true }
 codex-history = { workspace = true }
 codex-http-client = { workspace = true }
 codex-login = { workspace = true }

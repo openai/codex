@@ -1157,9 +1157,17 @@ async fn interrupt_and_drain_turn_ignores_prior_turn_completion() {
         .await
         .expect("queue current turn abort");
 
-    interrupt_and_drain_turn(&review_session, "current-turn")
-        .await
-        .expect("drain current turn");
+    let cancellation = CancellationToken::new();
+    cancellation.cancel();
+    let (_, reusable, _) = wait_for_guardian_review(
+        &review_session,
+        "current-turn",
+        tokio::time::Instant::now(),
+        Some(&cancellation),
+        &mut GuardianReviewAnalyticsResult::without_session(),
+    )
+    .await;
+    assert!(reusable);
 
     assert!(review_session.io.rx_event.try_recv().is_err());
 }

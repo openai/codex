@@ -16,6 +16,7 @@ workspace = true
 anyhow = { workspace = true }
 codex-analytics = { workspace = true }
 codex-extension-api = { workspace = true }
+codex-features = { workspace = true }
 codex-protocol = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
