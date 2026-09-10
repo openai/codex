@@ -3,6 +3,7 @@
 #[path = "agents_overview_composer.rs"]
 mod composer;
 
+use super::agents_overview_view::AgentsOverviewFocus;
 use super::agents_overview_view::AgentsOverviewGroup;
 use super::agents_overview_view::AgentsOverviewRow;
 use super::agents_overview_view::AgentsOverviewView;
@@ -59,7 +60,11 @@ impl Drop for AgentsOverviewState {
 }
 
 impl App {
-    pub(super) fn open_agents_overview(&mut self, app_server: &AppServerSession) {
+    pub(super) fn open_agents_overview(
+        &mut self,
+        app_server: &AppServerSession,
+        focus: AgentsOverviewFocus,
+    ) {
         if matches!(self.app_server_target, AppServerTarget::Embedded) {
             let workload_identity_selected = codex_login::is_workload_identity_selected();
             self.chat_widget.show_selection_view(SelectionViewParams {
@@ -109,11 +114,19 @@ impl App {
             return;
         }
 
-        self.agents_overview
-            .view_state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .focus_composer();
+        {
+            let mut state = self
+                .agents_overview
+                .view_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // Launch into composition; returning from a task starts in browsing mode.
+            // Populated refreshes preserve any subsequent, explicit focus change.
+            match focus {
+                AgentsOverviewFocus::Composer => state.focus_composer(),
+                AgentsOverviewFocus::List => state.focus = AgentsOverviewFocus::List,
+            }
+        }
         let threads = self
             .agents_overview
             .threads
@@ -285,6 +298,17 @@ impl App {
         }
 
         self.sync_agents_overview_composer();
+        // Wait for discovery and retained metadata before treating the list as empty.
+        if self.agents_overview.initialized
+            && rows.is_empty()
+            && self.agents_overview.threads.iter().all(|(id, thread)| {
+                thread.is_some() || self.agents_overview.hidden_threads.contains(id)
+            })
+            && let Ok(mut state) = self.agents_overview.view_state.lock()
+            && state.focus == AgentsOverviewFocus::List
+        {
+            state.focus_composer();
+        }
 
         AgentsOverviewView::new(
             rows,

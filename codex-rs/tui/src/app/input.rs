@@ -3,6 +3,7 @@
 //! This module owns global key bindings that sit above ChatWidget, including transcript overlay
 //! entry, Ctrl-L clear, external editor launch, and agent navigation shortcuts.
 
+use super::agents_overview_view::AgentsOverviewFocus;
 use super::*;
 use crate::app_backtrack::SIDE_EDIT_PREVIOUS_UNAVAILABLE_MESSAGE;
 use crate::keymap::bindings_for_action;
@@ -525,7 +526,7 @@ impl App {
         }
 
         if self.keymap.app.open_agents.is_pressed(key_event) {
-            self.open_agents_overview(app_server);
+            self.open_agents_overview(app_server, AgentsOverviewFocus::List);
             return true;
         }
 

@@ -3,6 +3,7 @@
 //! This module contains the exhaustive `AppEvent` dispatcher and exit-mode handling. Large domain
 //! actions are delegated to focused app submodules so the central match remains the routing layer.
 
+use super::agents_overview_view::AgentsOverviewFocus;
 use super::rate_limit_refresh::RateLimitReadStatus;
 use super::rate_limit_refresh::RateLimitRefreshOutcome;
 use super::resize_reflow::trailing_run_start;
@@ -2710,7 +2711,7 @@ impl App {
                 }
             }
             AppEvent::OpenAgentsOverview => {
-                self.open_agents_overview(app_server);
+                self.open_agents_overview(app_server, AgentsOverviewFocus::List);
             }
             AppEvent::AgentsOverviewThreadsLoaded { request_id, result } => {
                 self.apply_agents_overview_thread_refresh(app_server, request_id, result);
@@ -2721,7 +2722,7 @@ impl App {
                     .await?
                 {
                     AppRunControl::Continue if self.primary_thread_id.is_none() => {
-                        self.open_agents_overview(app_server);
+                        self.open_agents_overview(app_server, AgentsOverviewFocus::List);
                     }
                     AppRunControl::Continue => {}
                     AppRunControl::Exit(reason) => return Ok(AppRunControl::Exit(reason)),
@@ -3511,7 +3512,7 @@ impl App {
                     /*initial_user_message*/ None,
                 );
                 self.replace_chat_widget(ChatWidget::new_with_app_event(init));
-                self.open_agents_overview(app_server);
+                self.open_agents_overview(app_server, AgentsOverviewFocus::List);
                 AppRunControl::Continue
             }
             Err(err) => {

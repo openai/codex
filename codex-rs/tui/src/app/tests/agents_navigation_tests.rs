@@ -35,6 +35,10 @@ async fn agents_navigation_requires_local_daemon() -> Result<()> {
             assert_matches!(event, AppEvent::OpenAgentsOverview);
             app.handle_event(&mut tui, &mut app_server, event).await?;
             assert!(!app.chat_widget.no_modal_or_popup_active());
+            assert!(matches!(
+                app.agents_overview.view_state.lock().unwrap().focus,
+                crate::app::agents_overview_view::AgentsOverviewFocus::List
+            ));
         } else {
             assert!(events.try_recv().is_err());
             assert!(app.chat_widget.no_modal_or_popup_active());

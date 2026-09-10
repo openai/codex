@@ -2781,7 +2781,10 @@ async fn agents_overview_seeds_loaded_threads_when_recent_listing_is_unavailable
             if attempt == 0 {
                 app.refresh_agents_overview_threads(&app_server);
             } else {
-                app.open_agents_overview(&app_server);
+                app.open_agents_overview(
+                    &app_server,
+                    crate::app::agents_overview_view::AgentsOverviewFocus::List,
+                );
             }
             let Some(AppEvent::AgentsOverviewThreadsLoaded { request_id, result }) =
                 tokio::time::timeout(Duration::from_secs(10), rx.recv()).await?

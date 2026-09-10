@@ -315,7 +315,7 @@ async fn lifecycle_removes_background_and_current_tasks_without_losing_the_dashb
         };
         let mut tui = crate::tui::test_support::make_test_tui()?;
         tui.pause_events();
-        app.open_agents_overview(&app_server);
+        app.open_agents_overview(&app_server, AgentsOverviewFocus::List);
         if action == AgentsOverviewAction::Archive {
             let rollout = app_server
                 .thread_read(id, /*include_turns*/ false)
@@ -360,7 +360,7 @@ async fn lifecycle_removes_background_and_current_tasks_without_losing_the_dashb
             .await?;
             app.enqueue_primary_thread_session(resumed.session, resumed.turns)
                 .await?;
-            app.open_agents_overview(&app_server);
+            app.open_agents_overview(&app_server, AgentsOverviewFocus::List);
         }
         let background = ThreadId::from_string(
             &app_test_support::create_fake_rollout(
@@ -434,7 +434,6 @@ async fn lifecycle_removes_background_and_current_tasks_without_losing_the_dashb
             render_bottom_popup(&app.chat_widget, /*width*/ 80)
         );
         app.chat_widget.handle_key_event(KeyCode::Enter.into());
-        app.chat_widget.handle_key_event(KeyCode::Esc.into());
         app_server
             .request_handle()
             .request_typed::<TurnStartResponse>(ClientRequest::TurnStart {

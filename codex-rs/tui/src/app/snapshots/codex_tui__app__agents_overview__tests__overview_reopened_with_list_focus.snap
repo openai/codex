@@ -1,0 +1,29 @@
+---
+source: tui/src/app/agents_overview_tests.rs
+assertion_line: 314
+expression: "render_bottom_popup(&app.chat_widget,\n96).replace(&format!(\"{project}  2\"),\n&group).replace(&project, \"/tmp/project\").replace(\"fwd del\", \"del\")"
+---
+  Agent command center
+  0 need input   0 working   2 ready
+  ────────────────────────────────────────────────────────────────────────────────────────────
+  /tmp/project  2                                     │ Task details
+    ○ First task  Ready                               │
+  › ○ Second task  Ready                              │ Second task
+                                                      │ ○ Ready
+                                                      │
+                                                      │ Project
+                                                      │ /tmp/project
+                                                      │
+                                                      │ Prompt
+                                                      │ Second task
+                                                      │
+                                                      │
+                                                      │
+                                                      │
+                                                      │
+  New task
+
+› Unsent draft
+
+  ↑↓ navigate ctrl+o resume → open ctrl+n new task ctrl+f search ctrl+s group ctrl+r rename
+  ctrl+x stop ctrl+w hide ctrl+e archive del delete esc back

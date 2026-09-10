@@ -258,6 +258,98 @@ async fn overview_right_preserves_editors_and_offline_state() {
 }
 
 #[tokio::test]
+async fn overview_open_preserves_draft_and_uses_requested_focus() -> Result<()> {
+    for vim in [false, true] {
+        let mut app = make_test_app().await;
+        app.config.disable_paste_burst = true;
+        if vim {
+            app.chat_widget.toggle_vim_mode_and_notify();
+        }
+        let server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+        app.app_server_target = AppServerTarget::LocalDaemon {
+            endpoint: crate::RemoteAppServerEndpoint::UnixSocket {
+                socket_path: test_path_buf("/tmp/unused.sock").abs(),
+            },
+        };
+        for (id, title) in [(1, "First task"), (2, "Second task")] {
+            let id = ThreadId::from_u128(id);
+            app.agents_overview.threads.insert(
+                id,
+                Some(overview_thread(
+                    id,
+                    /*parent_thread_id*/ None,
+                    title,
+                    ThreadStatus::Idle,
+                )),
+            );
+        }
+        app.open_agents_overview(&server, AgentsOverviewFocus::Composer);
+        assert!(matches!(
+            app.agents_overview.view_state.lock().unwrap().focus,
+            AgentsOverviewFocus::Composer
+        ));
+        app.chat_widget.handle_paste("Unsent draft".into());
+        let draft = overview_draft(&app);
+
+        app.open_agents_overview(&server, AgentsOverviewFocus::List);
+        app.repaint_agents_overview();
+        let down = if vim {
+            KeyCode::Char('j')
+        } else {
+            KeyCode::Down
+        };
+        app.chat_widget.handle_key_event(down.into());
+        assert_eq!(
+            app.chat_widget
+                .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID),
+            Some(1)
+        );
+        assert_eq!(overview_draft(&app), draft);
+        if !vim {
+            let project = test_path_display("/tmp/project");
+            let group = format!(
+                "/tmp/project  2{}",
+                " ".repeat(project.len().saturating_sub("/tmp/project".len()))
+            );
+            insta::assert_snapshot!(
+                "overview_reopened_with_list_focus",
+                render_bottom_popup(&app.chat_widget, /*width*/ 96)
+                    .replace(&format!("{project}  2"), &group)
+                    .replace(&project, "/tmp/project")
+                    .replace("fwd del", "del")
+            );
+        }
+
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+        app.repaint_agents_overview();
+        app.chat_widget.handle_key_event(KeyCode::Left.into());
+        assert_eq!(overview_draft(&app), (draft.0, draft.1 - 1));
+
+        app.agents_overview.threads.clear();
+        app.open_agents_overview(&server, AgentsOverviewFocus::List);
+        assert!(matches!(
+            app.agents_overview.view_state.lock().unwrap().focus,
+            AgentsOverviewFocus::List
+        ));
+        app.agents_overview.initialized = true;
+        let pending = ThreadId::new();
+        app.agents_overview.threads.insert(pending, None);
+        app.repaint_agents_overview();
+        assert!(matches!(
+            app.agents_overview.view_state.lock().unwrap().focus,
+            AgentsOverviewFocus::List
+        ));
+        app.agents_overview.threads.clear();
+        app.repaint_agents_overview();
+        app.chat_widget.handle_key_event(KeyCode::Char('x').into());
+        assert_eq!(overview_draft(&app), ("Unsent drafxt".into(), 12));
+        server.shutdown().await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn overview_composer_preserves_editing_and_routes_focus() {
     let mut app = make_test_app().await;
     app.config.disable_paste_burst = true;
@@ -708,7 +800,7 @@ async fn shared_overview_seeds_once_and_retains_locally_resumed_history() -> Res
     let created = app_server.start_thread(&config).await?.session.thread_id;
     // Closing the view must not cancel a metadata refresh or forget unloaded entries.
     app.primary_thread_id = Some(ids[0]);
-    app.open_agents_overview(&app_server);
+    app.open_agents_overview(&app_server, AgentsOverviewFocus::List);
     let visible: HashSet<_> = app
         .agents_overview
         .visible_thread_ids
@@ -716,8 +808,6 @@ async fn shared_overview_seeds_once_and_retains_locally_resumed_history() -> Res
         .copied()
         .collect();
     assert_eq!(visible, expected);
-    app.chat_widget
-        .handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     app.chat_widget
         .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     finish_overview_refresh(&mut app, &app_server, &mut event_rx).await;
@@ -749,7 +839,7 @@ async fn shared_overview_seeds_once_and_retains_locally_resumed_history() -> Res
         .await?;
     app.enqueue_primary_thread_session(resumed.session, resumed.turns)
         .await?;
-    app.open_agents_overview(&app_server);
+    app.open_agents_overview(&app_server, AgentsOverviewFocus::List);
     finish_overview_refresh(&mut app, &app_server, &mut event_rx).await;
     expected.insert(ids[1]);
     let visible: HashSet<_> = app
@@ -1379,7 +1469,7 @@ async fn embedded_sessions_offer_to_start_a_background_server_without_migrating(
         .await
         .expect("embedded app server");
 
-    app.open_agents_overview(&app_server);
+    app.open_agents_overview(&app_server, AgentsOverviewFocus::List);
 
     insta::with_settings!({snapshot_path => "../snapshots"}, {
         insta::assert_snapshot!(

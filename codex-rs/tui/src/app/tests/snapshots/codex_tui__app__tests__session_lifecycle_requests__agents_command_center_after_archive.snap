@@ -1,5 +1,6 @@
 ---
 source: tui/src/app/tests/session_lifecycle_requests.rs
+assertion_line: 906
 expression: "render_bottom_popup(&app.chat_widget, 100)"
 ---
   Agent command center
