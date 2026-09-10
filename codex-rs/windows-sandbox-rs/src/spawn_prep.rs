@@ -80,7 +80,7 @@ pub(crate) struct LegacyAclSids<'a> {
     pub(crate) write_root_sids: &'a [RootCapabilitySid],
 }
 
-fn prepare_spawn_context_common(
+pub(crate) fn prepare_spawn_context_common(
     permission_profile: &PermissionProfile,
     workspace_roots: &[AbsolutePathBuf],
     codex_home: &Path,

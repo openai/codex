@@ -3,7 +3,9 @@ use crate::logging::debug_log;
 use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
 use crate::setup::OFFLINE_USERNAME;
 use crate::setup::ONLINE_USERNAME;
+use crate::setup::OfflineProxySettings;
 use crate::setup::SandboxNetworkIdentity;
+use crate::setup::SandboxSetupRequest;
 use crate::setup::SandboxUserRecord;
 use crate::setup::SandboxUsersFile;
 use crate::setup::SetupMarker;
@@ -182,55 +184,63 @@ pub fn require_logon_sandbox_creds(
     proxy_enforced: bool,
     proxy_settings_mode: crate::WindowsSandboxProxySettingsMode,
 ) -> Result<SandboxCreds> {
-    require_logon_sandbox_creds_with_setup(
-        permissions,
-        command_cwd,
-        env_map,
-        codex_home,
-        read_roots_override,
-        read_roots_include_platform_defaults,
-        write_roots_override,
-        deny_read_paths_override,
-        deny_write_paths_override,
-        proxy_enforced,
-        proxy_settings_mode,
-        run_elevated_setup_with_proxy_settings,
-        run_setup_refresh_with_overrides_and_proxy_settings,
-        local_user_flags,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn require_logon_sandbox_creds_with_setup(
-    permissions: &ResolvedWindowsSandboxPermissions,
-    command_cwd: &Path,
-    env_map: &HashMap<String, String>,
-    codex_home: &Path,
-    read_roots_override: Option<&[PathBuf]>,
-    read_roots_include_platform_defaults: bool,
-    write_roots_override: Option<&[PathBuf]>,
-    deny_read_paths_override: &[PathBuf],
-    deny_write_paths_override: &[PathBuf],
-    proxy_enforced: bool,
-    proxy_settings_mode: crate::WindowsSandboxProxySettingsMode,
-    run_full_setup: impl FnOnce(
-        crate::setup::SandboxSetupRequest<'_>,
-        &crate::setup::OfflineProxySettings,
-    ) -> Result<()>,
-    run_refresh_setup: impl FnOnce(
-        crate::setup::SandboxSetupRequest<'_>,
-        crate::setup::SetupRootOverrides,
-        &crate::setup::OfflineProxySettings,
-    ) -> Result<()>,
-    read_local_user_flags: impl Fn(&str) -> Result<Option<u32>>,
-) -> Result<SandboxCreds> {
-    let sandbox_dir = crate::setup::sandbox_dir(codex_home);
     let needed_read = read_roots_override
         .map(<[PathBuf]>::to_vec)
         .unwrap_or_else(|| gather_read_roots(command_cwd, permissions, env_map, codex_home));
     let needed_write = write_roots_override
         .map(<[PathBuf]>::to_vec)
         .unwrap_or_else(|| gather_write_roots_for_permissions(permissions, command_cwd, env_map));
+    // Do not grant the capability token write access to CODEX_HOME/.sandbox; the setup helper
+    // grants the sandbox group access separately through lock_sandbox_dir.
+    let request = SandboxSetupRequest {
+        permissions,
+        command_cwd,
+        env_map,
+        codex_home,
+        proxy_enforced,
+    };
+    let (creds, offline_proxy_settings) = require_sandbox_account(&request, proxy_settings_mode)?;
+    run_setup_refresh_with_overrides_and_proxy_settings(
+        request,
+        crate::setup::SetupRootOverrides {
+            read_roots: Some(needed_read),
+            read_roots_include_platform_defaults,
+            write_roots: Some(needed_write),
+            deny_read_paths: Some(deny_read_paths_override.to_vec()),
+            deny_write_paths: Some(deny_write_paths_override.to_vec()),
+        },
+        &offline_proxy_settings,
+    )?;
+    Ok(creds)
+}
+
+/// Ensures the selected account is ready; launchers must refresh filesystem ACLs separately.
+pub(crate) fn require_sandbox_account(
+    request: &SandboxSetupRequest<'_>,
+    proxy_settings_mode: crate::WindowsSandboxProxySettingsMode,
+) -> Result<(SandboxCreds, OfflineProxySettings)> {
+    require_sandbox_account_with_setup(
+        request,
+        proxy_settings_mode,
+        run_elevated_setup_with_proxy_settings,
+        local_user_flags,
+    )
+}
+
+fn require_sandbox_account_with_setup(
+    request: &SandboxSetupRequest<'_>,
+    proxy_settings_mode: crate::WindowsSandboxProxySettingsMode,
+    run_full_setup: impl FnOnce(SandboxSetupRequest<'_>, &OfflineProxySettings) -> Result<()>,
+    read_local_user_flags: impl Fn(&str) -> Result<Option<u32>>,
+) -> Result<(SandboxCreds, OfflineProxySettings)> {
+    let &SandboxSetupRequest {
+        permissions,
+        command_cwd,
+        env_map,
+        codex_home,
+        proxy_enforced,
+    } = request;
+    let sandbox_dir = crate::setup::sandbox_dir(codex_home);
     let network_identity = SandboxNetworkIdentity::from_permissions(permissions, proxy_enforced);
     let marker = load_marker(codex_home)?;
     let desired_offline_proxy_settings = desired_offline_proxy_settings(
@@ -239,9 +249,6 @@ fn require_logon_sandbox_creds_with_setup(
         env_map,
         network_identity,
     );
-    // NOTE: Do not add CODEX_HOME/.sandbox to `needed_write`; it must remain non-writable by the
-    // restricted capability token. The setup helper's `lock_sandbox_dir` is responsible for
-    // granting the sandbox group access to this directory without granting the capability SID.
     let mut setup_reason: Option<String> = None;
 
     let mut identity = match marker {
@@ -305,33 +312,18 @@ fn require_logon_sandbox_creds_with_setup(
         )?;
         identity = select_identity(network_identity, codex_home)?;
     }
-    // Always refresh ACLs (non-elevated) for current roots via the setup binary.
-    run_refresh_setup(
-        crate::setup::SandboxSetupRequest {
-            permissions,
-            command_cwd,
-            env_map,
-            codex_home,
-            proxy_enforced,
-        },
-        crate::setup::SetupRootOverrides {
-            read_roots: Some(needed_read),
-            read_roots_include_platform_defaults,
-            write_roots: Some(needed_write),
-            deny_read_paths: Some(deny_read_paths_override.to_vec()),
-            deny_write_paths: Some(deny_write_paths_override.to_vec()),
-        },
-        &desired_offline_proxy_settings,
-    )?;
     let identity = identity.ok_or_else(|| {
         anyhow!(
             "Windows sandbox setup is missing or out of date; rerun the sandbox setup with elevation"
         )
     })?;
-    Ok(SandboxCreds {
-        username: identity.username,
-        password: identity.password,
-    })
+    Ok((
+        SandboxCreds {
+            username: identity.username,
+            password: identity.password,
+        },
+        desired_offline_proxy_settings,
+    ))
 }
 
 fn desired_offline_proxy_settings(

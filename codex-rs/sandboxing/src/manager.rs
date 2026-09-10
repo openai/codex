@@ -655,7 +655,8 @@ fn wrap_windows_sandbox_exec_request_for_direct_spawn(
             deny_read_paths_override,
             deny_write_paths_override,
             codex_home,
-        );
+        )
+        .map_err(|err| SandboxTransformError::WindowsSandboxPreparation(err.to_string()))?;
 
     request.command = Vec::with_capacity(1 + wrapper_args.len());
     request.command.push(source.to_string_lossy().into_owned());

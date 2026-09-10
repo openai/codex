@@ -18,6 +18,7 @@ use super::NETWORK_PROXY_RESTRICTING_SID_FLAG;
 use super::PERMISSION_PROFILE_FLAG;
 use super::PRESERVE_PROXY_SETTINGS_FLAG;
 use super::PRIVATE_DESKTOP_FLAG;
+use super::PRIVATE_DESKTOP_NAME_FLAG;
 use super::PROXY_ENFORCED_FLAG;
 use super::READ_ROOTS_INCLUDE_PLATFORM_DEFAULTS_FLAG;
 use super::READ_ROOTS_JSON_FLAG;
@@ -61,7 +62,7 @@ fn windows_wrapper_args_round_trip() {
         &env,
         &permission_profile,
         WindowsSandboxLevel::Elevated,
-        /*windows_sandbox_private_desktop*/ true,
+        /*windows_sandbox_private_desktop*/ false,
         /*proxy_enforced*/ true,
         /*network_proxy_restricting_sid*/ Some("S-1-5-21-100-200-300-400"),
         crate::WindowsSandboxProxySettingsMode::Preserve,
@@ -71,7 +72,8 @@ fn windows_wrapper_args_round_trip() {
         deny_read_paths_override.as_slice(),
         deny_write_paths_override.as_slice(),
         Path::new(r"C:\Users\me\.codex"),
-    );
+    )
+    .expect("build wrapper args");
 
     assert_eq!(args[0], CODEX_WINDOWS_SANDBOX_ARG1);
     assert!(args.contains(&CODEX_HOME_FLAG.to_string()));
@@ -80,7 +82,6 @@ fn windows_wrapper_args_round_trip() {
     assert!(args.contains(&PERMISSION_PROFILE_FLAG.to_string()));
     assert!(args.contains(&ENV_JSON_FLAG.to_string()));
     assert!(args.contains(&SANDBOX_LEVEL_FLAG.to_string()));
-    assert!(args.contains(&PRIVATE_DESKTOP_FLAG.to_string()));
     assert!(args.contains(&PROXY_ENFORCED_FLAG.to_string()));
     assert!(args.contains(&NETWORK_PROXY_RESTRICTING_SID_FLAG.to_string()));
     assert!(args.contains(&PRESERVE_PROXY_SETTINGS_FLAG.to_string()));
@@ -102,7 +103,8 @@ fn windows_wrapper_args_round_trip() {
     assert_eq!(parsed.env_map, env);
     assert_eq!(parsed.permission_profile, permission_profile);
     assert_eq!(parsed.windows_sandbox_level, WindowsSandboxLevel::Elevated);
-    assert_eq!(parsed.windows_sandbox_private_desktop, true);
+    assert_eq!(parsed.windows_sandbox_private_desktop, false);
+    assert_eq!(parsed.private_desktop_name, None);
     assert_eq!(parsed.proxy_enforced, true);
     assert_eq!(
         parsed.network_proxy_restricting_sid.as_deref(),
@@ -117,4 +119,15 @@ fn windows_wrapper_args_round_trip() {
     assert_eq!(parsed.write_roots_override, Some(write_roots_override));
     assert_eq!(parsed.deny_read_paths_override, deny_read_paths_override);
     assert_eq!(parsed.deny_write_paths_override, deny_write_paths_override);
+
+    let mut private_args = args[1..].to_vec();
+    private_args.insert(/*index*/ 0, PRIVATE_DESKTOP_FLAG.to_string());
+    assert!(parse_windows_sandbox_wrapper_args(private_args.clone()).is_err());
+    let name = "CodexSandboxDesktop-0123456789abcdef";
+    private_args.splice(
+        1..1,
+        [PRIVATE_DESKTOP_NAME_FLAG.to_string(), name.to_string()],
+    );
+    let parsed = parse_windows_sandbox_wrapper_args(private_args).expect("parse named desktop");
+    assert_eq!(parsed.private_desktop_name.as_deref(), Some(name));
 }

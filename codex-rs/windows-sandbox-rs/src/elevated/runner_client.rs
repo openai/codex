@@ -323,9 +323,13 @@ pub(crate) fn spawn_runner_transport(
     mut spawn_request: SpawnRequest,
     desktop_policy: Option<&DesktopPolicy>,
 ) -> Result<RunnerTransport> {
-    spawn_request.private_desktop_name = desktop_policy
-        .map(|policy| shared_private_desktop_for_user(&sandbox_creds.username, policy, log_dir))
-        .transpose()?;
+    if let Some(policy) = desktop_policy {
+        spawn_request.private_desktop_name = Some(shared_private_desktop_for_user(
+            &sandbox_creds.username,
+            policy,
+            log_dir,
+        )?);
+    }
     let (pipe_in_name, pipe_out_name) = pipe_pair();
     let h_pipe_in =
         create_named_pipe(&pipe_in_name, PIPE_ACCESS_OUTBOUND, &sandbox_creds.username)?;

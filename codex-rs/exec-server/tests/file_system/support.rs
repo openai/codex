@@ -76,10 +76,10 @@ pub(crate) async fn create_file_system_context(
 
 #[cfg(windows)]
 pub(crate) fn is_unsupported_restricted_token_host<T>(result: &std::io::Result<T>) -> bool {
-    result.as_ref().err().is_some_and(|err| {
-        err.to_string()
-            .contains("windows sandbox failed: CreateRestrictedToken failed: 87")
-    })
+    result
+        .as_ref()
+        .err()
+        .is_some_and(|err| err.to_string().contains("CreateRestrictedToken failed: 87"))
 }
 
 pub(crate) fn absolute_path(path: std::path::PathBuf) -> AbsolutePathBuf {

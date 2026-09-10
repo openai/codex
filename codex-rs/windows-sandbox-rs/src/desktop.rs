@@ -160,6 +160,24 @@ impl LaunchDesktop {
         if !use_private_desktop {
             return Self::prepare(/*use_private_desktop*/ false, logs_base_dir);
         }
+        Self::open_private(&Self::shared_legacy_name(
+            permissions,
+            cwd,
+            env,
+            security,
+            additional_deny_write_paths,
+            logs_base_dir,
+        )?)
+    }
+
+    pub(crate) fn shared_legacy_name(
+        permissions: &ResolvedWindowsSandboxPermissions,
+        cwd: &Path,
+        env: &HashMap<String, String>,
+        security: &LegacySessionSecurity,
+        additional_deny_write_paths: &[PathBuf],
+        logs_base_dir: Option<&Path>,
+    ) -> Result<String> {
         let sandbox_sid = unsafe { get_user_sid_bytes(security.h_token)? };
         let sandbox_sid = string_from_sid_bytes(&sandbox_sid).map_err(anyhow::Error::msg)?;
         let paths = compute_allow_paths_for_permissions(permissions, cwd, env);
@@ -193,7 +211,7 @@ impl LaunchDesktop {
                 entry.insert(PrivateDesktop::create(logs_base_dir)?)
             }
         };
-        Self::open_private(&desktop.name)
+        Ok(desktop.name.clone())
     }
 
     pub fn prepare(use_private_desktop: bool, logs_base_dir: Option<&Path>) -> Result<Self> {
