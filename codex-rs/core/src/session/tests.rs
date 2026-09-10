@@ -6718,6 +6718,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         ),
         executed_tool_calls: executed_tool_calls.clone(),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(
+            thread_id,
             Arc::new(codex_code_mode::DisabledCodeModeSessionProvider),
             &config.code_mode,
             executed_tool_calls,
@@ -8891,6 +8892,7 @@ where
         ),
         executed_tool_calls: executed_tool_calls.clone(),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(
+            thread_id,
             Arc::new(codex_code_mode::DisabledCodeModeSessionProvider),
             &config.code_mode,
             executed_tool_calls,

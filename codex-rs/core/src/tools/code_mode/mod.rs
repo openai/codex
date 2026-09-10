@@ -17,6 +17,7 @@ use codex_code_mode::CodeModeSession;
 use codex_code_mode::CodeModeSessionProvider;
 use codex_code_mode::CodeModeToolKind;
 use codex_code_mode::RuntimeResponse;
+use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use futures::future::join_all;
 use serde_json::Value as JsonValue;
@@ -31,6 +32,7 @@ use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::tools::ExecutedToolCalls;
+use crate::tools::call_trace;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolPayload;
@@ -78,11 +80,12 @@ pub(crate) struct CodeModeService {
 
 impl CodeModeService {
     pub(crate) fn new(
+        thread_id: ThreadId,
         session_provider: Arc<dyn CodeModeSessionProvider>,
         config: &CodeModeConfig,
         executed_tool_calls: ExecutedToolCalls,
     ) -> Self {
-        let dispatch_broker = Arc::new(CodeModeDispatchBroker::new(executed_tool_calls));
+        let dispatch_broker = Arc::new(CodeModeDispatchBroker::new(thread_id, executed_tool_calls));
         let availability = session_provider.availability();
         Self {
             session: OnceCell::new(),
@@ -343,6 +346,7 @@ fn submit_nested_tool(
     exec: ExecContext,
     tool_runtime: ToolCallRuntime,
     invocation: CodeModeNestedToolCall,
+    call_id: String,
     cancellation_token: CancellationToken,
 ) -> Result<
     impl std::future::Future<Output = Result<JsonValue, FunctionCallError>> + Send + 'static,
@@ -355,20 +359,43 @@ fn submit_nested_tool(
         tool_kind,
         input,
     } = invocation;
-    if is_exec_tool_name(&tool_name) {
-        return Err(FunctionCallError::RespondToModel(format!(
-            "{PUBLIC_TOOL_NAME} cannot invoke itself"
-        )));
-    }
-
-    let payload = match build_nested_tool_payload(tool_kind, &tool_name, input) {
+    let thread_id = exec.session.thread_id;
+    let turn_id = exec.turn.sub_id.clone();
+    let tool_name = tool_name.with_default_namespace();
+    // A cell can outlive a turn; the broker records arrival before a dispatching turn is known.
+    tracing::event!(
+        name: "codex.code_mode.nested_tool_dispatched",
+        target: "codex_otel.trace_safe",
+        tracing::Level::INFO,
+        event.name = "codex.code_mode.nested_tool_dispatched",
+        conversation.id = %thread_id,
+        turn_id = turn_id.as_str(),
+        cell.id = telemetry::trace_id(cell_id.as_str()),
+        runtime_tool_call_id = telemetry::trace_id(&runtime_tool_call_id),
+        call_id = call_id.as_str(),
+    );
+    let payload = if is_exec_tool_name(&tool_name) {
+        Err(format!("{PUBLIC_TOOL_NAME} cannot invoke itself"))
+    } else {
+        build_nested_tool_payload(tool_kind, &tool_name, input)
+    };
+    let payload = match payload {
         Ok(payload) => payload,
-        Err(error) => return Err(FunctionCallError::RespondToModel(error)),
+        Err(error) => {
+            call_trace::result_ready(
+                thread_id,
+                &turn_id,
+                &tool_name,
+                &call_id,
+                call_trace::Source::CodeMode,
+            );
+            return Err(FunctionCallError::RespondToModel(error));
+        }
     };
 
     let call = ToolCall {
-        tool_name: tool_name.with_default_namespace(),
-        call_id: format!("{PUBLIC_TOOL_NAME}-{}", uuid::Uuid::new_v4()),
+        tool_name,
+        call_id,
         payload,
         encrypted_function_args: None,
     };

@@ -14,6 +14,7 @@ use super::PUBLIC_TOOL_NAME;
 use super::handle_runtime_response;
 use super::is_exec_tool_name;
 use super::telemetry::CodeModeToolCallGuard;
+use super::telemetry::trace_id;
 
 type CodeModeNestedTool = (Arc<ToolSpec>, Option<Arc<dyn CoreToolRuntime>>);
 
@@ -80,6 +81,7 @@ impl CodeModeExecuteHandler {
             .await
             .map_err(FunctionCallError::RespondToModel)?;
         let cell_id = started_cell.cell_id.clone();
+        tracing::Span::current().record("cell.id", trace_id(cell_id.as_str()));
         telemetry.cell_id = Some(cell_id.to_string());
         exec.session
             .services
@@ -170,10 +172,25 @@ impl ToolExecutor<ToolInvocation> for CodeModeExecuteHandler {
 }
 
 impl CodeModeExecuteHandler {
+    // Default to interrupted if this future is dropped; telemetry::CodeModeToolCallGuard::finish
+    // overwrites this handler's captured span on explicit success or failure.
+    #[tracing::instrument(
+        name = "code_mode.handler.execute",
+        level = "info",
+        skip_all,
+        fields(
+            conversation.id = %invocation.session.thread_id,
+            turn_id = invocation.turn.sub_id.as_str(),
+            call_id = trace_id(&invocation.call_id),
+            cell.id = tracing::field::Empty,
+            outcome = "interrupted",
+        )
+    )]
     async fn handle_call(
         &self,
         invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
+        let handler_span = tracing::Span::current();
         let originating_item_id = invocation.originating_item_id().await;
         let ToolInvocation {
             session,
@@ -192,6 +209,7 @@ impl CodeModeExecuteHandler {
             turn.turn_metadata_state.clone(),
             call_id.clone(),
             PUBLIC_TOOL_NAME,
+            handler_span,
         );
         let result = match payload {
             ToolPayload::Custom { input } if is_exec_tool_name(&tool_name) => self

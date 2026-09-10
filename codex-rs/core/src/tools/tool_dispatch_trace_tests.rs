@@ -282,6 +282,7 @@ async fn missing_code_mode_wait_traces_only_the_wait_tool_call() -> anyhow::Resu
     let temp = TempDir::new()?;
     let (mut session, turn) = make_session_and_context().await;
     session.services.code_mode_service = CodeModeService::new(
+        session.thread_id,
         Arc::new(MissingCellCodeModeSessionProvider),
         &turn.config.code_mode,
         session.services.executed_tool_calls.clone(),

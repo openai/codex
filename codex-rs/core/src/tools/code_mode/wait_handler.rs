@@ -17,6 +17,7 @@ use super::ExecContext;
 use super::WAIT_TOOL_NAME;
 use super::handle_runtime_response;
 use super::telemetry::CodeModeToolCallGuard;
+use super::telemetry::trace_id;
 use super::wait_spec::create_wait_tool;
 
 pub struct CodeModeWaitHandler;
@@ -63,10 +64,25 @@ impl ToolExecutor<ToolInvocation> for CodeModeWaitHandler {
 }
 
 impl CodeModeWaitHandler {
+    // Default to interrupted if this future is dropped; telemetry::CodeModeToolCallGuard::finish
+    // overwrites this handler's captured span on explicit success or failure, including early errors.
+    #[tracing::instrument(
+        name = "code_mode.handler.wait",
+        level = "info",
+        skip_all,
+        fields(
+            conversation.id = %invocation.session.thread_id,
+            turn_id = invocation.turn.sub_id.as_str(),
+            call_id = trace_id(&invocation.call_id),
+            cell.id = tracing::field::Empty,
+            outcome = "interrupted",
+        )
+    )]
     async fn handle_call(
         &self,
         invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
+        let handler_span = tracing::Span::current();
         let ToolInvocation {
             session,
             turn,
@@ -84,6 +100,7 @@ impl CodeModeWaitHandler {
             turn.turn_metadata_state.clone(),
             call_id.clone(),
             WAIT_TOOL_NAME,
+            handler_span,
         );
         let result = match payload {
             ToolPayload::Function { arguments }
@@ -123,6 +140,7 @@ impl CodeModeWaitHandler {
                         | codex_code_mode::RuntimeResponse::Terminated { cell_id, .. }
                         | codex_code_mode::RuntimeResponse::Result { cell_id, .. } => cell_id,
                     };
+                    tracing::Span::current().record("cell.id", trace_id(runtime_cell_id.as_str()));
                     telemetry.cell_id = Some(runtime_cell_id.to_string());
                     exec.session
                         .services

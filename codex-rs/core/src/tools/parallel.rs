@@ -17,6 +17,7 @@ use tracing::trace_span;
 use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
+use crate::tools::call_trace;
 use crate::tools::context::AbortedToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolPayload;
@@ -88,7 +89,6 @@ impl ToolCallRuntime {
                 )),
             }
         }
-        .in_current_span()
     }
 
     #[instrument(level = "trace", skip_all)]
@@ -125,6 +125,15 @@ impl ToolCallRuntime {
         let terminal_outcome_reached = Arc::new(AtomicBool::new(false));
         let dispatch_terminal_outcome_reached = Arc::clone(&terminal_outcome_reached);
         let dispatch_call = call.clone();
+        let thread_id = session.thread_id;
+        let trace_source = match &source {
+            ToolCallSource::Direct | ToolCallSource::DirectPlaintextMessage => {
+                call_trace::Source::Direct
+            }
+            ToolCallSource::CodeMode { .. } => call_trace::Source::CodeMode,
+        };
+        let dispatch_tool_name = call.tool_name.clone();
+        let dispatch_call_id = call.call_id.clone();
 
         // Code-mode callbacks can resume outside the turn's local span ancestry.
         let dispatch_span = trace_span!(
@@ -137,15 +146,15 @@ impl ToolCallRuntime {
         );
         let abort_dispatch_span = dispatch_span.clone();
 
-        let mut dispatch_handle: AbortOnDropHandle<Result<AnyToolResult, FunctionCallError>> =
-            AbortOnDropHandle::new(tokio::spawn(async move {
+        let mut dispatch_handle = AbortOnDropHandle::new(tokio::spawn(
+            async move {
                 if let Some(tool_runtime) = tool_runtime
                     && let Some(readiness) = tool_runtime.wait_until_ready(&session)
                 {
                     readiness.await;
                 }
 
-                let _guard = if supports_parallel {
+                let guard = if supports_parallel {
                     Either::Left(lock.read().await)
                 } else {
                     Either::Right(lock.write().await)
@@ -156,7 +165,7 @@ impl ToolCallRuntime {
                     let _ = execution_started_at.set(Instant::now());
                 }
 
-                router
+                let result = router
                     .dispatch_tool_call_with_terminal_outcome(
                         session,
                         step_context,
@@ -167,8 +176,25 @@ impl ToolCallRuntime {
                         dispatch_terminal_outcome_reached,
                     )
                     .instrument(dispatch_span.clone())
-                    .await
-            }));
+                    .await;
+                drop(guard);
+                // The sampling loop collects results in order only after its stream ends.
+                // Record readiness here, before either caller encodes or collects the result.
+                // A fatal error still propagates to the caller instead of producing a tool
+                // result; unlike a normal tool failure, it has no readiness event.
+                if !matches!(&result, Err(FunctionCallError::Fatal(_))) {
+                    call_trace::result_ready(
+                        thread_id,
+                        &turn.sub_id,
+                        &dispatch_tool_name,
+                        &dispatch_call_id,
+                        trace_source,
+                    );
+                }
+                result
+            }
+            .in_current_span(),
+        ));
 
         async move {
             let _tool_call_timing_guard = tool_call_timing_guard;
@@ -187,6 +213,13 @@ impl ToolCallRuntime {
                             Err(err) => return Err(Self::tool_task_join_error(err)),
                         }
                         let response = Self::aborted_response(&call, secs);
+                        call_trace::result_ready(
+                            thread_id,
+                            &abort_turn.sub_id,
+                            &call.tool_name,
+                            &call.call_id,
+                            trace_source,
+                        );
                         notify_tool_aborted(
                             abort_session.as_ref(),
                             abort_turn.as_ref(),

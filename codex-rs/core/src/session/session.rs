@@ -1577,6 +1577,7 @@ impl Session {
                 ),
                 executed_tool_calls: executed_tool_calls.clone(),
                 code_mode_service: crate::tools::code_mode::CodeModeService::new(
+                    thread_id,
                     Arc::clone(&code_mode_session_provider),
                     &config.code_mode,
                     executed_tool_calls,
