@@ -312,11 +312,11 @@ item, retaining tool authority. No preceding tool call or call ID is required.
 Tool names and namespaces identify the source; they are not proof of its
 identity or permission to act.
 
-When a message joins an active turn, both handles can stream or collect the
-result independently. A joining handle receives previously completed items and
-the latest usage, followed by live notifications. Consumed transient events such
-as token deltas are discarded. Both handles collect the complete result, and
-closing one stream leaves the other active.
+When a message joins an active turn, both handles can stream or collect their
+results independently. The joining handle receives events from when its request
+is sent. Earlier items and usage are not replayed, so its result can be partial.
+Use `thread.read(include_turns=True)` for saved history. Closing one stream leaves
+the other active.
 
 The async calls use the same object:
 

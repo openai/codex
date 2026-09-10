@@ -7,7 +7,7 @@ exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for 
 exclude-newer-span = "P7D"
 
 [options.exclude-newer-package]
-openai-codex-cli-bin = "2026-09-09T06:06:45Z"
+openai-codex-cli-bin = "2026-09-10T19:42:00Z"
 
 [[package]]
 name = "annotated-types"
@@ -307,7 +307,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "openai-codex-cli-bin", specifier = "==0.153.4" },
+    { name = "openai-codex-cli-bin", specifier = "==0.154.0" },
     { name = "packaging", specifier = ">=26.2" },
     { name = "pydantic", specifier = ">=2.12" },
 ]
@@ -327,17 +327,17 @@ test = [
 
 [[package]]
 name = "openai-codex-cli-bin"
-version = "0.153.4"
+version = "0.154.0"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4f/16/b28109968c0912956a52f41eb022605c6eaba2d4793b5e9f4b9479c954e2/openai_codex_cli_bin-0.153.4-py3-none-macosx_10_9_x86_64.whl", hash = "sha256:637bdf17d6387e9ae12e1094af6aa22dabc2ba55c100ee0310178e79427b2e69", size = 121719355, upload-time = "2026-09-09T06:06:11.682Z" },
-    { url = "https://files.pythonhosted.org/packages/68/69/7dd4cb9135ac893985c92ecc03dc3df8408917d469fb3df6650af2fde328/openai_codex_cli_bin-0.153.4-py3-none-macosx_11_0_arm64.whl", hash = "sha256:08c80523fd3674e7d6f36bccc69557f9bac257cbd7ad937309dad0457e1a7845", size = 111925786, upload-time = "2026-09-09T06:06:16.767Z" },
-    { url = "https://files.pythonhosted.org/packages/16/e7/57e5dce0b13c0643cd20f308d9e727a44d542bca38f958f038204f959687/openai_codex_cli_bin-0.153.4-py3-none-manylinux_2_17_aarch64.whl", hash = "sha256:f92f0aff384258f5bac3519cd9ad2639be08239004452d0e4b00725e5fe62bba", size = 117599105, upload-time = "2026-09-09T06:06:22.08Z" },
-    { url = "https://files.pythonhosted.org/packages/5a/b3/938bfc0cfdaa06881d904b1c9a3151c1252e278d00fe1afcbb954cee65c4/openai_codex_cli_bin-0.153.4-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:584ecdbd81b01b3002ecbdddfa009dc8d7bfdbed9c208a0fa8c131a2e337bba6", size = 127000985, upload-time = "2026-09-09T06:06:26.535Z" },
-    { url = "https://files.pythonhosted.org/packages/59/e8/9743befc32fa292d3682075c15e056044652dae1bab9581a9e9ee0cd352b/openai_codex_cli_bin-0.153.4-py3-none-musllinux_1_1_aarch64.whl", hash = "sha256:fef1cc54d7408da08f9bfa6179c7fad4231591c29f76eb339d0a59e540b3e718", size = 117599103, upload-time = "2026-09-09T06:06:30.967Z" },
-    { url = "https://files.pythonhosted.org/packages/06/d2/ded14722031d8dda9c796ab8d39f8a29cbae27d28bf2b1a0b12c2e429c6f/openai_codex_cli_bin-0.153.4-py3-none-musllinux_1_1_x86_64.whl", hash = "sha256:0f97697f39fd9fd32fbf9caa29df8ff0a6cfe33755f4f007bc97ee4cb88a7743", size = 127000983, upload-time = "2026-09-09T06:06:35.565Z" },
-    { url = "https://files.pythonhosted.org/packages/a9/b4/afec4ffe8a3e3f2b5fa7ef6d892b830f63ee8aaa5c222b23652329bc3e4e/openai_codex_cli_bin-0.153.4-py3-none-win_amd64.whl", hash = "sha256:9b52da6531617a363a165c246aded59a1a61e82fac623ab97e095cc37a5038c5", size = 136934929, upload-time = "2026-09-09T06:06:40.046Z" },
-    { url = "https://files.pythonhosted.org/packages/8c/d3/e8de747460d8d2934dce84867ac8227d4d2d4b31f111e881076f97525a72/openai_codex_cli_bin-0.153.4-py3-none-win_arm64.whl", hash = "sha256:23240c7041a8ef5f22297c3fead21da0143dcec2a186d9b64f386f52b396da47", size = 126478600, upload-time = "2026-09-09T06:06:44.431Z" },
+    { url = "https://files.pythonhosted.org/packages/d9/c5/4bd3ca28d82d54a5aae89d7106a81062f66bc113e24aa684a03855603586/openai_codex_cli_bin-0.154.0-py3-none-macosx_10_9_x86_64.whl", hash = "sha256:ce74d702b77f0e18df24cc47f5f5c14d88ce84a5df59ea07c0169bc92d0a98e2", size = 122467910, upload-time = "2026-09-10T19:40:22.967Z" },
+    { url = "https://files.pythonhosted.org/packages/96/56/ee6e0ae89813d68ca12c19ab4cb4ddce30281b6d3f4dc46370f03b493f58/openai_codex_cli_bin-0.154.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:4f32974a4379e58f5d2677c4d5097aeaeef7e249c04ca8d66b569503999ba53b", size = 112690061, upload-time = "2026-09-10T19:40:29.003Z" },
+    { url = "https://files.pythonhosted.org/packages/ac/48/11169686bed9637bd2b05675e0c62309d46b45a85065c515deca3aa47e3a/openai_codex_cli_bin-0.154.0-py3-none-manylinux_2_17_aarch64.whl", hash = "sha256:18c1235f7a3ece9c20ed7b02cba5501e0aec0b4027fed4c3805a703d7d745493", size = 118446658, upload-time = "2026-09-10T19:40:35.269Z" },
+    { url = "https://files.pythonhosted.org/packages/0a/31/6558f90be93a8aa090a84e3cb683ac9f2fd1ff7c56cfd1878adcf74a3b49/openai_codex_cli_bin-0.154.0-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:1c1812526b7b1cc497de30392ce018125b017e96010824b4ca598514f44ce5be", size = 127394645, upload-time = "2026-09-10T19:40:42.838Z" },
+    { url = "https://files.pythonhosted.org/packages/ca/a3/d823ea1d0c3f627047768ae8d9ae961d7e525197bcd78973121818e95dac/openai_codex_cli_bin-0.154.0-py3-none-musllinux_1_1_aarch64.whl", hash = "sha256:e850d84a2945f90ceb7fd609468d08fd654a00323f351db6bb2b204b7813ca0c", size = 118446656, upload-time = "2026-09-10T19:40:52.023Z" },
+    { url = "https://files.pythonhosted.org/packages/18/a8/744f5d2f5e96626a194482e1310346ded6a574ead2c7c287e36518d06095/openai_codex_cli_bin-0.154.0-py3-none-musllinux_1_1_x86_64.whl", hash = "sha256:88f330201b527ee0d740d14aaea336f71e2513ba087bc9429373dc01fcd09f0d", size = 127394643, upload-time = "2026-09-10T19:40:59.099Z" },
+    { url = "https://files.pythonhosted.org/packages/a4/e9/6759b73fa101e64bf86363982d810745952057316efe376118678a68a88d/openai_codex_cli_bin-0.154.0-py3-none-win_amd64.whl", hash = "sha256:11ba8fbef6f3bafaed39b745a2b0b5648bf00c8d168e241b314d86000d577fcb", size = 137545885, upload-time = "2026-09-10T19:41:06.777Z" },
+    { url = "https://files.pythonhosted.org/packages/de/e9/695a272bfdf151ddd17c837ca5b167dfb2d87996dda4aba537be779817ca/openai_codex_cli_bin-0.154.0-py3-none-win_arm64.whl", hash = "sha256:f043e8fe1323246583ee35bf3c4c021cc9bfd21d2715f12fb8a743c8ebf57667", size = 127145338, upload-time = "2026-09-10T19:41:14.947Z" },
 ]
 
 [[package]]
