@@ -306,8 +306,11 @@ async fn run_compact_task_inner_impl(
             }
             Err(e) if matches!(e.details(), CodexErrorDetails::SessionBudgetExceeded) => {
                 sess.track_turn_codex_error(turn_context.as_ref(), &e);
-                let event = EventMsg::Error(e.to_error_event(/*message_prefix*/ None));
-                sess.send_event(&turn_context, event).await;
+                // Pre-turn failures are reported after preserving the incoming prompt.
+                if !matches!(compaction_metadata.phase(), CompactionPhase::PreTurn) {
+                    let event = EventMsg::Error(e.to_error_event(/*message_prefix*/ None));
+                    sess.send_event(&turn_context, event).await;
+                }
                 return Err(e);
             }
             Err(e) if matches!(e.details(), CodexErrorDetails::ContextWindowExceeded) => {
@@ -322,8 +325,10 @@ async fn run_compact_task_inner_impl(
                 }
                 sess.set_total_tokens_full(turn_context.as_ref()).await;
                 sess.track_turn_codex_error(turn_context.as_ref(), &e);
-                let event = EventMsg::Error(e.to_error_event(/*message_prefix*/ None));
-                sess.send_event(&turn_context, event).await;
+                if !matches!(compaction_metadata.phase(), CompactionPhase::PreTurn) {
+                    let event = EventMsg::Error(e.to_error_event(/*message_prefix*/ None));
+                    sess.send_event(&turn_context, event).await;
+                }
                 return Err(e);
             }
             Err(e) => {
@@ -340,8 +345,10 @@ async fn run_compact_task_inner_impl(
                     continue;
                 } else {
                     sess.track_turn_codex_error(turn_context.as_ref(), &e);
-                    let event = EventMsg::Error(e.to_error_event(/*message_prefix*/ None));
-                    sess.send_event(&turn_context, event).await;
+                    if !matches!(compaction_metadata.phase(), CompactionPhase::PreTurn) {
+                        let event = EventMsg::Error(e.to_error_event(/*message_prefix*/ None));
+                        sess.send_event(&turn_context, event).await;
+                    }
                     return Err(e);
                 }
             }

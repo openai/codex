@@ -208,10 +208,13 @@ async fn run_remote_compact_task_inner(
         Err(err) if matches!(err.details(), CodexErrorDetails::TurnAborted) => Err(err),
         Err(err) => {
             sess.track_turn_codex_error(turn_context, &err);
-            let event = EventMsg::Error(
-                err.to_error_event(Some("Error running remote compact task".to_string())),
-            );
-            sess.send_event(turn_context, event).await;
+            // Pre-turn failures are reported by run_turn after preserving the incoming prompt.
+            if !matches!(phase, CompactionPhase::PreTurn) {
+                let event = EventMsg::Error(
+                    err.to_error_event(Some("Error running remote compact task".to_string())),
+                );
+                sess.send_event(turn_context, event).await;
+            }
             Err(err)
         }
     }

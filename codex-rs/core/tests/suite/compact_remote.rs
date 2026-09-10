@@ -436,15 +436,22 @@ async fn remote_compact_v2_records_usage_before_output_validation() -> Result<()
     skip_if_no_network!(Ok(()));
 
     let harness = TestCodexHarness::with_auto_env_builder(
-        test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config.model_auto_compact_token_limit = Some(200);
+            }),
     )
     .await?;
     let codex = &harness.test().codex;
     let rollout_path = codex.rollout_path().context("rollout path")?;
-    responses::mount_sse_sequence(
+    let responses_mock = responses::mount_sse_sequence(
         harness.server(),
         vec![
-            sse(vec![responses::ev_completed("before-compact")]),
+            sse(vec![responses::ev_completed_with_tokens(
+                "before-compact",
+                /*total_tokens*/ 500,
+            )]),
             sse(vec![
                 json!({
                     "type": "response.output_item.done",
@@ -467,9 +474,42 @@ async fn remote_compact_v2_records_usage_before_output_validation() -> Result<()
     .await;
 
     harness.test().submit_turn("before compact").await?;
-    codex.submit(Op::Compact).await?;
-    wait_for_event(codex, |event| matches!(event, EventMsg::Error(_))).await;
+    codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "turn that triggers auto compact".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let mut preserved_prompts = Vec::new();
+    wait_for_event(codex, |event| {
+        if let EventMsg::UserMessage(message) = event {
+            preserved_prompts.push(message.message.clone());
+        }
+        matches!(event, EventMsg::Error(_))
+    })
+    .await;
+    assert_eq!(preserved_prompts, vec!["turn that triggers auto compact"]);
     wait_for_event(codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    assert_eq!(responses_mock.requests().len(), 2);
+
+    codex.flush_rollout().await?;
+    let history = codex.load_history(/*include_archived*/ false).await?;
+    assert_eq!(
+        history
+            .items
+            .iter()
+            .filter(|item| matches!(
+                item,
+                RolloutItem::ResponseItem(envelope)
+                    if is_retained_user_message(
+                        &envelope.item,
+                        "turn that triggers auto compact",
+                    )
+            ))
+            .count(),
+        1,
+        "the accepted prompt should be saved exactly once after compaction fails"
+    );
     codex.shutdown_and_wait().await?;
 
     let record = fs::read_to_string(&rollout_path)?
