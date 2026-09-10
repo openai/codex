@@ -272,6 +272,84 @@ fn relative_paths_resolve_against_their_own_layer_base() {
 }
 
 #[test]
+fn provider_auth_fragments_merge_without_losing_source_paths_or_explicit_values() {
+    let low_dir = tempdir().expect("low-priority requirements directory");
+    let high_dir = tempdir().expect("high-priority requirements directory");
+    let absolute_cwd = toml::Value::String(low_dir.path().display().to_string()).to_string();
+    for (cwd_override, expected_cwd) in [
+        (String::new(), low_dir.path().join("auth")),
+        (
+            "cwd = 'other-auth'".to_string(),
+            high_dir.path().join("other-auth"),
+        ),
+        (
+            format!("cwd = {absolute_cwd}"),
+            low_dir.path().to_path_buf(),
+        ),
+    ] {
+        let composed = compose(vec![
+            layer(
+                "low",
+                "Command",
+                r#"
+[model_providers.gateway]
+name = "Gateway"
+[model_providers.gateway.auth]
+command = "get-token"
+args = ["--token"]
+cwd = "auth"
+timeout_ms = 7000
+refresh_interval_ms = 12345
+"#,
+            )
+            .with_base_dir(AbsolutePathBuf::from_absolute_path(low_dir.path()).unwrap()),
+            layer(
+                "high",
+                "Timeout",
+                &format!("[model_providers.gateway.auth]\ntimeout_ms = 10000\n{cwd_override}"),
+            )
+            .with_base_dir(AbsolutePathBuf::from_absolute_path(high_dir.path()).unwrap()),
+        ])
+        .expect("merge partial auth before parsing")
+        .expect("requirements present");
+        let expected_cwd = toml::Value::String(expected_cwd.display().to_string());
+        assert_eq!(
+            composed,
+            expected_requirements(format!(
+                r#"
+[model_providers.gateway]
+name = "Gateway"
+[model_providers.gateway.auth]
+command = "get-token"
+args = ["--token"]
+cwd = {expected_cwd}
+timeout_ms = 10000
+refresh_interval_ms = 12345
+"#,
+            ))
+        );
+    }
+}
+
+#[test]
+fn provider_auth_missing_command_is_rejected_after_composition() {
+    let err = compose(vec![
+        layer("low", "Name", "[model_providers.gateway]\nname = 'Gateway'"),
+        layer(
+            "high",
+            "Timeout",
+            "[model_providers.gateway.auth]\ntimeout_ms = 10000",
+        ),
+    ])
+    .expect_err("merged auth still needs a command");
+    assert!(matches!(
+        err,
+        RequirementsCompositionError::ComposedParse { message }
+            if message.contains("missing field `command`")
+    ));
+}
+
+#[test]
 fn composition_strategy_applies_to_non_cloud_layers() {
     let mdm_source = RequirementSource::MdmManagedPreferences {
         domain: "com.openai.codex".to_string(),

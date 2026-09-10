@@ -223,6 +223,26 @@ fn default_aws_auth_refresh_timeout_ms() -> NonZeroU64 {
 }
 
 impl ModelProviderInfo {
+    /// Checks that a configured Bedrock entry only customizes supported fields.
+    /// Call this on the override before merging it with the built-in provider.
+    pub fn validate_bedrock_override(&self) -> Result<(), String> {
+        let unsupported_fields = Self {
+            base_url: None,
+            auth: None,
+            aws: None,
+            http_headers: None,
+            ..self.clone()
+        };
+        if unsupported_fields != Self::default() {
+            return Err("only supports changing \
+`base_url`, `auth`, `http_headers`, `aws.profile`, `aws.region`, `aws.credential_export`, \
+and `aws.auth_refresh`; \
+other non-default provider fields are not supported"
+                .to_string());
+        }
+        Ok(())
+    }
+
     pub fn validate(&self) -> std::result::Result<(), String> {
         if let Some(aws) = self.aws.as_ref() {
             if self.supports_websockets {
@@ -615,19 +635,13 @@ pub fn merge_configured_model_providers(
             key.as_str(),
             AMAZON_BEDROCK_PROVIDER_ID | AMAZON_BEDROCK_RUNTIME_PROVIDER_ID
         ) {
+            provider
+                .validate_bedrock_override()
+                .map_err(|message| format!("model_providers.{key} {message}"))?;
             let base_url_override = provider.base_url.take();
             let auth_override = provider.auth.take();
             let aws_override = provider.aws.take();
             let http_headers_override = provider.http_headers.take();
-            if provider != ModelProviderInfo::default() {
-                return Err(format!(
-                    "model_providers.{key} only supports changing \
-`base_url`, `auth`, `http_headers`, `aws.profile`, `aws.region`, `aws.credential_export`, \
-and `aws.auth_refresh`; \
-other non-default provider fields are not supported"
-                ));
-            }
-
             if let Some(built_in_provider) = model_providers.get_mut(&key) {
                 built_in_provider.base_url = base_url_override;
                 built_in_provider.auth = auth_override;

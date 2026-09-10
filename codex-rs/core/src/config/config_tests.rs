@@ -1217,9 +1217,9 @@ command = "print-token"
     assert_eq!(config.model_provider, expected_provider);
 }
 
-#[tokio::test]
-async fn load_config_rejects_unsupported_amazon_bedrock_overrides() {
-    let cfg = toml::from_str::<ConfigToml>(
+#[test]
+fn config_toml_rejects_unsupported_amazon_bedrock_overrides() {
+    let err = toml::from_str::<ConfigToml>(
         r#"
 model_provider = "amazon-bedrock"
 
@@ -1229,17 +1229,7 @@ requires_openai_auth = true
 supports_websockets = true
 "#,
     )
-    .expect("Amazon Bedrock unsupported overrides should deserialize");
-
-    let err = Config::load_from_base_config_with_overrides(
-        cfg,
-        ConfigOverrides::default(),
-        tempdir().expect("tempdir").abs(),
-    )
-    .await
-    .unwrap_err();
-
-    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    .expect_err("Amazon Bedrock unsupported overrides should fail validation");
     assert!(err.to_string().contains(
         "model_providers.amazon-bedrock only supports changing `base_url`, `auth`, `http_headers`, `aws.profile`, `aws.region`, `aws.credential_export`, and `aws.auth_refresh`; other non-default provider fields are not supported"
     ));
@@ -9997,6 +9987,8 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
     let fixture = create_test_fixture()?;
 
     let requirements_toml = codex_config::ConfigRequirementsToml {
+        model_provider: None,
+        model_providers: None,
         allowed_login_methods: None,
         allowed_chatgpt_workspaces: None,
         cli_auth_credentials_store: None,

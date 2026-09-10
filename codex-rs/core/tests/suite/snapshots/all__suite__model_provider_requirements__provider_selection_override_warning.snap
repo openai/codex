@@ -1,0 +1,7 @@
+---
+source: core/tests/suite/model_provider_requirements_tests.rs
+expression: warnings
+---
+[
+    "Configured value for `model_provider` is overridden by the required value \"gateway\" from enterprise-managed requirements Base requirements (req_1).",
+]

@@ -245,6 +245,10 @@ impl ConfigLayerEntry {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ConfigLayerStack {
+    /// Cached TOML projection derived only from `requirements_toml`.
+    /// Construction validates provider definitions and reports serialization errors,
+    /// so `effective_config()` can replace complete entries without a fallible conversion.
+    model_provider_requirements: Option<TomlValue>,
     /// Layers are listed from lowest precedence (base) to highest (top), so
     /// later entries in the Vec override earlier ones.
     layers: Vec<ConfigLayerEntry>,
@@ -276,7 +280,11 @@ impl ConfigLayerStack {
     ) -> std::io::Result<Self> {
         validate_enabled_config_layers(&layers)?;
         verify_layer_ordering(&layers)?;
+        let model_provider_requirements = Some(crate::model_provider_requirements::to_config(
+            &requirements_toml,
+        )?);
         Ok(Self {
+            model_provider_requirements,
             layers,
             requirements,
             requirements_toml,
@@ -406,6 +414,7 @@ impl ConfigLayerStack {
         }
         Ok(Self {
             layers,
+            model_provider_requirements: self.model_provider_requirements.clone(),
             requirements: self.requirements.clone(),
             requirements_toml: self.requirements_toml.clone(),
             ignore_user_and_project_exec_policy_rules: self
@@ -440,6 +449,7 @@ impl ConfigLayerStack {
         }
         Self {
             layers,
+            model_provider_requirements: self.model_provider_requirements.clone(),
             requirements: self.requirements.clone(),
             requirements_toml: self.requirements_toml.clone(),
             ignore_user_and_project_exec_policy_rules: self
@@ -450,20 +460,37 @@ impl ConfigLayerStack {
 
     /// Returns the merged config-layer view.
     ///
-    /// This only merges ordinary config layers. Requirements are composed and
-    /// tracked separately.
+    /// Required provider definitions replace local entries before deserialization.
+    /// Selection and other requirements are applied when constructing the final config.
     pub fn effective_config(&self) -> TomlValue {
         let mut merged = TomlValue::Table(toml::map::Map::new());
         for layer in self.layers_low_to_high() {
             merge_toml_values(&mut merged, &layer.config);
         }
+        if let Some(requirements) = &self.model_provider_requirements {
+            crate::model_provider_requirements::apply(&mut merged, requirements);
+        }
         merged
+    }
+
+    /// Required provider selection used when building the effective configuration.
+    pub fn required_model_provider(&self) -> Option<&str> {
+        self.requirements_toml.model_provider.as_deref()
     }
 
     /// Returns field origins for the merged config-layer view.
     ///
     /// Requirement sources are tracked separately and are not included here.
     pub fn origins(&self) -> HashMap<String, ConfigLayerMetadata> {
+        self.origins_with_path_filter(|_| true)
+    }
+
+    /// Filters origins using their original TOML key segments before formatting
+    /// them for the public API, where dots in quoted keys are ambiguous.
+    pub fn origins_with_path_filter(
+        &self,
+        include: impl Fn(&[String]) -> bool,
+    ) -> HashMap<String, ConfigLayerMetadata> {
         let mut origins = HashMap::new();
         let mut path = Vec::new();
         let mut provider_paths = vec!["features.network_proxy.credentials.".to_string()];
@@ -477,7 +504,13 @@ impl ConfigLayerStack {
                         .map(|name| format!("profiles.{name}.features.network_proxy.credentials.")),
                 );
             }
-            record_origins(&config, &layer.metadata(), &mut path, &mut origins);
+            record_origins(
+                &config,
+                &layer.metadata(),
+                &mut path,
+                &mut origins,
+                &include,
+            );
         }
 
         if let Some(layer) = self.layers_low_to_high().next_back() {
@@ -488,6 +521,7 @@ impl ConfigLayerStack {
                 &layer.metadata(),
                 &mut path,
                 &mut effective_origins,
+                &include,
             );
             origins.retain(|path, _| {
                 !provider_paths.iter().any(|prefix| path.starts_with(prefix))

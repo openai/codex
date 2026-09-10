@@ -388,6 +388,13 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
         .and_then(|windows| windows.sandbox_private_desktop);
 
     ConfigRequirements {
+        model_provider: requirements.model_provider,
+        model_providers: requirements.model_providers.map(|providers| {
+            providers
+                .into_iter()
+                .map(|(id, provider)| (id, serde_json::json!(provider)))
+                .collect()
+        }),
         application: requirements.application.map(|application| {
             codex_app_server_protocol::ApplicationRequirements {
                 network: application.network.map(|network| {

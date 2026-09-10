@@ -559,6 +559,21 @@
             "null"
           ]
         },
+        "modelProvider": {
+          "description": "Exact provider selection required by managed policy.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "modelProviders": {
+          "additionalProperties": true,
+          "description": "Complete required provider definitions, using config.toml field names.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "models": {
           "anyOf": [
             {

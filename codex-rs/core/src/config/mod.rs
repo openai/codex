@@ -3219,6 +3219,8 @@ impl Config {
             sqlite_home: _,
             log_dir: _,
             model_catalog_json: _,
+            model_provider: _,
+            model_providers: _,
             check_for_update_on_startup: _,
             allow_login_shell: _,
             feedback: _,
@@ -3744,7 +3746,8 @@ impl Config {
             merge_configured_model_providers(built_in_model_providers(openai_base_url), cfg.model_providers)
                 .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidData, message))?;
 
-        let model_provider_id = model_provider
+        let model_provider_id = config_layer_stack.required_model_provider().map(str::to_string)
+            .or(model_provider)
             .or(cfg.model_provider)
             .unwrap_or_else(|| "openai".to_string());
         let model_provider = model_providers

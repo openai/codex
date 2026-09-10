@@ -408,6 +408,10 @@ pub struct ConfigReadResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ConfigRequirements {
+    /// Exact provider selection required by managed policy.
+    pub model_provider: Option<String>,
+    /// Complete required provider definitions, using config.toml field names.
+    pub model_providers: Option<HashMap<String, JsonValue>>,
     pub cli_auth_credentials_store: Option<CliAuthCredentialsStoreMode>,
     pub chatgpt_base_url: Option<String>,
     pub additional_developer_instructions: Option<String>,

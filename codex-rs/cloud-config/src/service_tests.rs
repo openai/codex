@@ -554,6 +554,55 @@ async fn get_bundle_rejects_invalid_remote_bundle_before_cache_write() {
 }
 
 #[tokio::test]
+async fn invalid_cloud_provider_does_not_replace_cached_bundle() {
+    let codex_home = tempdir().expect("tempdir");
+    let cache = create_test_cache(codex_home.path());
+    let previous = test_bundle();
+    cache
+        .save(
+            Some("user-12345".to_string()),
+            Some("account-12345".to_string()),
+            previous.clone(),
+        )
+        .await
+        .expect("cache valid bundle");
+
+    for contents in [
+        "[model_providers.openai]\nname = 'Reserved'",
+        "[model_providers.gateway]\nname = '   '",
+        "[model_providers.gateway]\nbase_url = 'https://gateway.example/v1'",
+        "[model_providers.amazon-bedrock]\nname = 'Managed Bedrock'",
+        "[model_providers.amazon-bedrock-runtime]\nname = 'Managed Bedrock Runtime'",
+        "[model_providers.amazon-bedrock]\nrequest_max_retries = 3",
+        "[model_providers.gateway]\nname = 'Gateway'\n[model_providers.gateway.auth]\ntimeout_ms = 10000",
+    ] {
+        let mut invalid = test_bundle();
+        invalid.requirements_toml.enterprise_managed[0].contents = contents.to_string();
+        let auth_manager = auth_manager_with_plan("business").await;
+        let auth = auth_manager.auth().await.expect("business auth");
+        let service = CloudConfigBundleService::new(
+            auth_manager,
+            Arc::new(StaticBundleClient::new(invalid.clone())),
+            codex_home.path().to_path_buf(),
+            CLOUD_CONFIG_BUNDLE_TIMEOUT,
+        );
+        let error = service
+            .validate_and_cache_remote_bundle(&auth, "refresh", /*attempt*/ 1, invalid)
+            .await
+            .expect_err("invalid provider must fail before cache write");
+        assert_eq!(error.code(), CloudConfigBundleLoadErrorCode::InvalidBundle);
+        assert_eq!(
+            cache
+                .load(Some("user-12345"), Some("account-12345"))
+                .await
+                .expect("retain previous cache")
+                .bundle,
+            previous
+        );
+    }
+}
+
+#[tokio::test]
 async fn get_bundle_ignores_invalid_cache_and_refetches() {
     let codex_home = tempdir().expect("tempdir");
     let cache = create_test_cache(codex_home.path());

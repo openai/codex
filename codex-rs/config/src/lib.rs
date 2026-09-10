@@ -23,6 +23,7 @@ mod mcp_edit;
 mod mcp_requirements;
 mod mcp_types;
 mod merge;
+mod model_provider_requirements;
 mod overrides;
 pub mod permissions_toml;
 mod plugin_edit;

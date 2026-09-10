@@ -11309,6 +11309,20 @@ class ConfigRequirements(BaseModel):
     in_app_browser: Annotated[InAppBrowserRequirements | None, Field(alias="inAppBrowser")] = None
     log_dir: Annotated[str | None, Field(alias="logDir")] = None
     model_catalog_json: Annotated[str | None, Field(alias="modelCatalogJson")] = None
+    model_provider: Annotated[
+        str | None,
+        Field(
+            alias="modelProvider",
+            description="Exact provider selection required by managed policy.",
+        ),
+    ] = None
+    model_providers: Annotated[
+        dict[str, Any] | None,
+        Field(
+            alias="modelProviders",
+            description="Complete required provider definitions, using config.toml field names.",
+        ),
+    ] = None
     models: ModelsRequirements | None = None
     sqlite_home: Annotated[str | None, Field(alias="sqliteHome")] = None
     windows_sandbox_private_desktop: Annotated[

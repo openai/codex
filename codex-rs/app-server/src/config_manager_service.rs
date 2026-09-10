@@ -148,16 +148,14 @@ impl ConfigManager {
         let config: ApiConfig = serde_json::from_value(json_value)
             .map_err(|err| ConfigManagerError::json("failed to deserialize configuration", err))?;
 
-        let mut origins = layers.origins();
-        origins.retain(|path, metadata| {
-            if matches!(&metadata.name, ConfigLayerSource::PackagedDefaults { .. }) {
-                return false;
-            }
-            let segments = path.split('.').map(str::to_string).collect::<Vec<_>>();
+        let mut origins = layers.origins_with_path_filter(|segments| {
             layers
                 .requirements_toml()
-                .exact_requirement_for_config_path(&segments)
+                .exact_requirement_for_config_path(segments)
                 .is_none()
+        });
+        origins.retain(|_, metadata| {
+            !matches!(&metadata.name, ConfigLayerSource::PackagedDefaults { .. })
         });
 
         Ok(ConfigReadResponse {

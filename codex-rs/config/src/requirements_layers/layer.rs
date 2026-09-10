@@ -95,8 +95,33 @@ impl ComposableRequirementsLayer {
                 }
             }
 
+            // Provider fragments can be incomplete until all requirements layers
+            // are merged. Resolve explicit paths while their source base is still
+            // available, without deserializing complete auth command objects.
+            if let Some(providers) = regular_toml
+                .get_mut("model_providers")
+                .and_then(TomlValue::as_table_mut)
+            {
+                for (id, provider) in providers.iter_mut() {
+                    if let Some(cwd) = provider
+                        .get_mut("auth")
+                        .and_then(|auth| auth.get_mut("cwd"))
+                    {
+                        let resolved: AbsolutePathBuf =
+                            cwd.clone().try_into().map_err(|err: toml::de::Error| {
+                                RequirementsCompositionError::Parse {
+                                    layer_source: source.clone(),
+                                    message: format!("model_providers.{id}.auth.cwd: {err}"),
+                                }
+                            })?;
+                        *cwd = toml_value_from_serializable(resolved)?;
+                    }
+                }
+            }
+            let mut layer_requirements_toml = regular_toml.clone();
+            remove_top_level_field(&mut layer_requirements_toml, "model_providers");
             let requirements = parse_layer_requirements(
-                &RequirementsLayerToml::Value(regular_toml.clone()),
+                &RequirementsLayerToml::Value(layer_requirements_toml),
                 &source,
             )?;
             (regular_toml, requirements)
