@@ -202,6 +202,7 @@ async fn run_codex_thread_interactive_respects_pre_cancelled_spawn() {
             parent_environments,
             cancel_token,
             SubAgentSource::Review,
+            codex_extension_api::SessionIsolation::Inherit,
             /*initial_history*/ None,
             crate::session::GitEnrichmentPolicy::Fresh,
             codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
@@ -217,7 +218,7 @@ async fn run_codex_thread_interactive_respects_pre_cancelled_spawn() {
 }
 
 #[tokio::test]
-async fn guardian_delegates_do_not_inherit_parent_extensions() {
+async fn delegate_isolation_does_not_depend_on_attribution() {
     let (mut parent_session, parent_ctx, _rx_events) =
         crate::session::tests::make_session_and_context_with_rx().await;
     let thread_starts = Arc::new(AtomicUsize::new(0));
@@ -229,13 +230,25 @@ async fn guardian_delegates_do_not_inherit_parent_extensions() {
         .services
         .extensions = Arc::new(extensions.build());
 
-    for (subagent_source, expected_thread_starts, expected_thread_source) in [
+    for (subagent_source, isolation, expected_thread_starts, expected_thread_source) in [
         (
             SubAgentSource::Other(crate::guardian::GUARDIAN_REVIEWER_NAME.to_string()),
+            codex_extension_api::SessionIsolation::Isolated,
             0,
             ThreadSource::GuardianReview,
         ),
-        (SubAgentSource::Review, 1, ThreadSource::Subagent),
+        (
+            SubAgentSource::Review,
+            codex_extension_api::SessionIsolation::Isolated,
+            0,
+            ThreadSource::Subagent,
+        ),
+        (
+            SubAgentSource::Review,
+            codex_extension_api::SessionIsolation::Inherit,
+            1,
+            ThreadSource::Subagent,
+        ),
     ] {
         let mut config = parent_ctx.config.as_ref().clone();
         config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
@@ -248,6 +261,7 @@ async fn guardian_delegates_do_not_inherit_parent_extensions() {
             parent_ctx.environments.clone(),
             CancellationToken::new(),
             subagent_source,
+            isolation,
             /*initial_history*/ None,
             crate::session::GitEnrichmentPolicy::Fresh,
             codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
@@ -291,6 +305,7 @@ async fn run_codex_thread_interactive_rejects_approval_policy_that_can_prompt() 
         parent_environments,
         CancellationToken::new(),
         SubAgentSource::Review,
+        codex_extension_api::SessionIsolation::Inherit,
         /*initial_history*/ None,
         crate::session::GitEnrichmentPolicy::Fresh,
         codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,

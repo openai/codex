@@ -1932,13 +1932,26 @@ impl ThreadManagerState {
             environments,
             inherited_environments: captured_environments,
             user_instructions: supplied_user_instructions,
-            thread_extension_init,
+            mut thread_extension_init,
             client_mcp_extensions,
             reserved_thread_id,
             disabled_plugin_ids,
         } = options;
         let inherited_environments = captured_environments.or(inherited_environments);
         let session_source = session_source.unwrap_or_else(|| self.session_source.clone());
+        // Older callers and saved reviewers identify isolation through their source.
+        // New internal callers supply an explicit runtime policy before startup.
+        let isolation = thread_extension_init
+            .get::<codex_extension_api::SessionIsolation>()
+            .map(|policy| *policy)
+            .unwrap_or_else(|| {
+                if crate::guardian::is_basic_session_source(&session_source) {
+                    codex_extension_api::SessionIsolation::Isolated
+                } else {
+                    codex_extension_api::SessionIsolation::Inherit
+                }
+            });
+        thread_extension_init.insert(isolation);
         let environments = environments.unwrap_or_else(|| {
             default_thread_environment_selections(
                 self.environment_manager.as_ref(),
@@ -1989,7 +2002,7 @@ impl ThreadManagerState {
             extensions,
             mcp_manager,
             multi_agent_version,
-        ) = if crate::guardian::is_basic_session_source(&session_source) {
+        ) = if isolation == codex_extension_api::SessionIsolation::Isolated {
             (
                 LoadedUserInstructions::default(),
                 None,

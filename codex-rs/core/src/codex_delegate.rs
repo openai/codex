@@ -56,6 +56,7 @@ pub(crate) async fn run_codex_thread_interactive(
     parent_environments: TurnEnvironmentSnapshot,
     cancel_token: CancellationToken,
     subagent_source: SubAgentSource,
+    isolation: codex_extension_api::SessionIsolation,
     initial_history: Option<InitialHistory>,
     git_enrichment_policy: GitEnrichmentPolicy,
     windows_sandbox_proxy_settings_mode: codex_sandboxing::WindowsSandboxProxySettingsMode,
@@ -79,7 +80,7 @@ pub(crate) async fn run_codex_thread_interactive(
     };
     let session_source = SessionSource::SubAgent(subagent_source.clone());
     let is_guardian_reviewer = crate::guardian::is_basic_session_source(&session_source);
-    let extensions = if is_guardian_reviewer {
+    let extensions = if isolation == codex_extension_api::SessionIsolation::Isolated {
         codex_extension_api::empty_extension_registry()
     } else {
         Arc::clone(&parent_session.services.extensions)
@@ -87,6 +88,7 @@ pub(crate) async fn run_codex_thread_interactive(
     // Inline delegates never register with ThreadManager or receive on_thread_ready.
     // Bind their standalone spawn path before inherited extensions run.
     let mut thread_extension_init = codex_extension_api::ExtensionDataInit::default();
+    thread_extension_init.insert(isolation);
     thread_extension_init.insert(crate::guardian::GuardianReviewSessionHost::default());
     let (session, io) = Session::spawn(SessionSpawnArgs {
         config,
@@ -213,6 +215,7 @@ pub(crate) async fn run_codex_thread_one_shot(
         parent_environments,
         child_cancel.clone(),
         subagent_source,
+        codex_extension_api::SessionIsolation::Inherit,
         initial_history,
         GitEnrichmentPolicy::Fresh,
         codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,

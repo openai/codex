@@ -128,6 +128,7 @@ impl ReviewerSessionFactory for PreparedSession {
                     self.context.environments().clone(),
                     cancellation.clone(),
                     SubAgentSource::Other(GUARDIAN_REVIEWER_NAME.to_owned()),
+                    codex_extension_api::SessionIsolation::Isolated,
                     initial_history,
                     GitEnrichmentPolicy::Skip,
                     codex_sandboxing::WindowsSandboxProxySettingsMode::Preserve,

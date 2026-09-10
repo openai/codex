@@ -124,6 +124,12 @@ async fn managed_reviewers_reuse_fork_and_resume_after_parent_shutdown(
     // The seed review finished; pause the parent before it requests concurrent approvals.
     timeout(TIMEOUT, server.wait_for_request_count(/*count*/ 3)).await?;
     let seed: Value = serde_json::from_slice(&server.requests().await[1])?;
+    assert!(
+        !seed["tools"]
+            .to_string()
+            .contains(&format!("mcp__{TEST_SERVER_NAME}")),
+        "reviewers must not inherit the parent's configured MCP tools"
+    );
     let reviewer_id = seed["client_metadata"]["thread_id"]
         .as_str()
         .expect("reviewer ID")
