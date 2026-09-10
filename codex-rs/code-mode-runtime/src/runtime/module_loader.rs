@@ -76,6 +76,8 @@ pub(super) fn resolve_tool_response(
     }
     .ok_or_else(|| format!("unknown tool call `{id}`"))?;
 
+    // Release delivery handles before the cell ends; live promises retain their results.
+    v8::scope!(let scope, scope);
     let tc = std::pin::pin!(v8::TryCatch::new(scope));
     let mut tc = tc.init();
     let resolver = v8::Local::new(&tc, &resolver);
@@ -233,3 +235,7 @@ fn resolve_module<'s>(
     }
     None
 }
+
+#[cfg(test)]
+#[path = "module_loader_tests.rs"]
+mod tests;
