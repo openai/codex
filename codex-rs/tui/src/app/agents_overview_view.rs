@@ -132,6 +132,7 @@ pub(super) struct AgentsOverviewViewState {
     pub(super) composer: Option<ChatComposer>,
     pub(super) key_chord_hint: Option<Vec<(String, String)>>,
     pub(super) focus: AgentsOverviewFocus,
+    pub(super) refresh_failed: bool,
     pub(super) connection_notice: Option<&'static str>,
     pub(super) server_version_notice: Option<String>,
     search: String,
@@ -320,7 +321,6 @@ impl AgentsOverviewView {
                 state.search.clear();
                 state.searching = false;
             }
-            self.state().completion = Some(ViewCompletion::Accepted);
         }
     }
 

@@ -71,6 +71,12 @@ impl App {
                     .join(", ")
             )
         });
+        let mut text = prompt.text.clone();
+        if let Some(hint) = &hint {
+            text.push_str("\n\n");
+            text.push_str(hint);
+        }
+        self.agents_overview.unsent_prompt = Some(text);
         self.chat_widget
             .add_info_message(format!("Unsent task: {}", prompt.text), hint);
     }

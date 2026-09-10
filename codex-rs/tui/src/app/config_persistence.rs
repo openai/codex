@@ -1075,7 +1075,7 @@ impl App {
                         profile.turn_override == RuntimePermissionProfileTurnOverride::LegacySandbox
                     });
         if explicitly_selected {
-            self.chat_widget.add_error_message(
+            self.add_agents_overview_error(
                 "Permission overrides are not supported when resuming a remote task.".into(),
             );
             return true;

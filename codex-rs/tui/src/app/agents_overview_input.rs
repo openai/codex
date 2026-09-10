@@ -39,9 +39,11 @@ impl AgentsOverviewView {
         {
             match paste_image_to_temp_png() {
                 Ok((path, _)) => composer.attach_image(path),
-                Err(error) => self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                    crate::history_cell::new_error_event(format!("Failed to paste image: {error}")),
-                ))),
+                Err(error) => self
+                    .app_event_tx
+                    .send(AppEvent::AgentsOverviewError(format!(
+                        "Failed to paste image: {error}"
+                    ))),
             }
             return;
         }

@@ -224,6 +224,8 @@ impl Renderable for AgentsOverviewView {
         let attention = format!("{needs_you} need input");
         if let Some(notice) = self.state().connection_notice {
             Line::from(notice.cyan()).render(inset(summary), buf);
+        } else if self.state().refresh_failed {
+            Line::from("Error loading tasks".red()).render(inset(summary), buf);
         } else {
             Line::from(format!("{attention}   {working} working   {ready} ready").dim())
                 .render(inset(summary), buf);

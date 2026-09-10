@@ -35,6 +35,8 @@ impl App {
             && !matches!(
                 &event,
                 AppEvent::InsertHistoryCell(_)
+                    | AppEvent::AgentsOverviewError(_)
+                    | AppEvent::ViewAgentsOverviewUnsentPrompt(_)
                     | AppEvent::ResetTranscriptForThreadSwitch
                     | AppEvent::ManagedWorktreeCreated(_)
                     | AppEvent::AppendMessageHistoryEntry { .. }
@@ -2713,6 +2715,18 @@ impl App {
             AppEvent::OpenAgentsOverview => {
                 self.open_agents_overview(app_server, AgentsOverviewFocus::List);
             }
+            AppEvent::AgentsOverviewError(message) => {
+                self.add_agents_overview_error(message);
+            }
+            AppEvent::ViewAgentsOverviewUnsentPrompt(text) => {
+                let _ = tui.enter_alt_screen();
+                self.overlay = Some(Overlay::new_static_with_lines(
+                    text.lines().map(|line| Line::from(line.to_string())).collect(),
+                    "Unsent task".to_string(),
+                    self.keymap.pager.clone(),
+                ));
+                tui.frame_requester().schedule_frame();
+            }
             AppEvent::AgentsOverviewThreadsLoaded { request_id, result } => {
                 self.apply_agents_overview_thread_refresh(app_server, request_id, result);
             }
@@ -2721,7 +2735,9 @@ impl App {
                     .select_agents_overview_thread(tui, app_server, thread_id)
                     .await?
                 {
-                    AppRunControl::Continue if self.primary_thread_id.is_none() => {
+                    AppRunControl::Continue
+                        if self.primary_thread_id.is_none()
+                            && self.chat_widget.selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID).is_none() => {
                         self.open_agents_overview(app_server, AgentsOverviewFocus::List);
                     }
                     AppRunControl::Continue => {}
@@ -2740,8 +2756,7 @@ impl App {
                             state.input = name;
                             state.renaming = true;
                         }
-                        self.chat_widget
-                            .add_error_message(format!("Failed to rename task: {error}"));
+                        self.add_agents_overview_error(format!("Failed to rename task: {error}"));
                     }
                 }
             }

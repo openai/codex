@@ -1,0 +1,13 @@
+---
+source: tui/src/app/agents_overview_tests.rs
+assertion_line: 2326
+expression: rendered
+---
+  Unable to complete action
+  Failed to send task message: turn/start failed: thread not found: 00000000-0000-0000-0000-
+  000000000001 (code -32600)
+
+› 1. Return to command center
+  2. View unsent task          Your newer draft has been kept in the composer.
+
+  Press enter to confirm or esc to go back

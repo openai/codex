@@ -274,6 +274,10 @@ pub(crate) enum AppEvent {
     CloseMisalignmentReview,
     /// Open the daemon-wide overview of recent and locally retained root sessions.
     OpenAgentsOverview,
+    /// Present a failed command-center action above the retained dashboard.
+    AgentsOverviewError(String),
+    /// Show a failed draft without replacing newer composer input.
+    ViewAgentsOverviewUnsentPrompt(String),
     /// Update the daemon-wide overview after a background thread listing finishes.
     AgentsOverviewThreadsLoaded {
         request_id: Uuid,

@@ -3,6 +3,9 @@
 #[path = "agents_overview_composer.rs"]
 mod composer;
 
+#[path = "agents_overview_errors.rs"]
+mod errors;
+
 use super::agents_overview_view::AgentsOverviewFocus;
 use super::agents_overview_view::AgentsOverviewGroup;
 use super::agents_overview_view::AgentsOverviewRow;
@@ -38,6 +41,7 @@ pub(super) struct AgentsOverviewState {
     pub(super) last_messages: HashMap<ThreadId, String>,
     pub(super) activity: HashMap<ThreadId, super::agents_overview_details::AgentsOverviewActivity>,
     pub(super) initialized: bool,
+    pub(super) unsent_prompt: Option<String>,
     pub(super) request_id: Option<Uuid>,
     pub(super) refresh_pending: bool,
     pub(super) refresh_thread_ids: HashSet<ThreadId>,
@@ -151,6 +155,13 @@ impl App {
         }
         self.agents_overview.request_id = None;
         self.agents_overview.refresh_task = None;
+        self.agents_overview
+            .view_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .refresh_failed = !result
+            .as_ref()
+            .is_ok_and(|refresh| refresh.recent_seed_complete);
         match result {
             Ok(refresh) => {
                 self.agents_overview.initialized = refresh.recent_seed_complete;
@@ -174,14 +185,6 @@ impl App {
             }
             Err(error) => {
                 tracing::warn!(%error, "failed to refresh shared agents");
-                if self
-                    .chat_widget
-                    .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
-                    .is_some()
-                {
-                    self.chat_widget
-                        .add_error_message(format!("Failed to load shared agents: {error}"));
-                }
             }
         }
         for notifications in
@@ -333,6 +336,10 @@ impl App {
         if self.current_displayed_thread_id() == Some(root_thread_id)
             && !self.thread_unavailable(root_thread_id)
         {
+            if let Ok(mut state) = self.agents_overview.view_state.lock() {
+                state.completion = Some(crate::bottom_pane::ViewCompletion::Accepted);
+            }
+            self.chat_widget.pre_draw_tick();
             return Ok(AppRunControl::Continue);
         }
         if self.primary_thread_id != Some(root_thread_id) {
@@ -387,7 +394,7 @@ impl App {
             {
                 Ok(thread) => thread,
                 Err(error) => {
-                    self.chat_widget.add_error_message(format!(
+                    self.add_agents_overview_error(format!(
                         "Agent session {root_thread_id} is unavailable: {error}"
                     ));
                     return Ok(AppRunControl::Continue);
@@ -424,8 +431,9 @@ impl App {
                 {
                     Ok(config) => config,
                     Err(error) => {
-                        self.chat_widget
-                            .add_error_message(format!("Failed to load task settings: {error}"));
+                        self.add_agents_overview_error(format!(
+                            "Failed to load task settings: {error}"
+                        ));
                         return Ok(AppRunControl::Continue);
                     }
                 }
@@ -454,7 +462,7 @@ impl App {
                                     && !profile.matches_config(&resume_config)
                             })
                     {
-                        self.chat_widget.add_error_message(
+                        self.add_agents_overview_error(
                             "Cannot resume task without preserving the selected permissions."
                                 .to_string(),
                         );
@@ -479,8 +487,13 @@ impl App {
             {
                 Ok(resumed) => resumed,
                 Err(error) => {
-                    self.chat_widget
-                        .add_error_message(format!("Failed to attach to task: {error}"));
+                    let message = if crate::app_server_session::is_active_writer_error(&error) {
+                        tracing::warn!("failed to attach to task managed by another server");
+                        "Task is open elsewhere. Another app server is managing this task, so it can’t be attached here.".to_string()
+                    } else {
+                        format!("Failed to attach to task: {error}")
+                    };
+                    self.add_agents_overview_error(message);
                     return Ok(AppRunControl::Continue);
                 }
             };
@@ -543,8 +556,7 @@ impl App {
                 )
                 .await
             {
-                self.chat_widget
-                    .add_error_message(format!("Failed to attach to task: {error}"));
+                self.add_agents_overview_error(format!("Failed to attach to task: {error}"));
                 return Ok(AppRunControl::Continue);
             }
             let mut destination_config = self.chat_widget.config_ref().clone();
@@ -666,9 +678,9 @@ impl App {
                 Ok(config) => config,
                 Err(error) => {
                     self.restore_agents_overview_prompt(prompt);
-                    return self
-                        .chat_widget
-                        .add_error_message(format!("Failed to load project settings: {error}"));
+                    return self.add_agents_overview_error(format!(
+                        "Failed to load project settings: {error}"
+                    ));
                 }
             },
             None => self.fresh_session_config(),
@@ -680,9 +692,9 @@ impl App {
                     != self.config.permissions.profile_workspace_roots())
         {
             self.restore_agents_overview_prompt(prompt);
-            return self
-                .chat_widget
-                .add_error_message("Permission profile has different settings.".to_string());
+            return self.add_agents_overview_error(
+                "Permission profile has different settings.".to_string(),
+            );
         }
         self.apply_runtime_policy_overrides(&mut config, RuntimePolicyOverrideScope::All);
         let defaults_cwd = match app_server.thread_params_mode() {
@@ -732,7 +744,7 @@ impl App {
             Ok(None) => {}
             Err(error) => {
                 self.restore_agents_overview_prompt(prompt);
-                return self.chat_widget.add_error_message(format!(
+                return self.add_agents_overview_error(format!(
                     "Failed to load background task settings: {error}"
                 ));
             }
@@ -775,7 +787,7 @@ impl App {
                 "Model {model} does not support image inputs. Remove images or switch models."
             );
             self.restore_agents_overview_prompt(prompt);
-            self.chat_widget.add_error_message(message);
+            self.add_agents_overview_error(message);
             return;
         }
         let images = prompt
@@ -792,8 +804,7 @@ impl App {
             Ok(images) => images,
             Err(error) => {
                 self.restore_agents_overview_prompt(prompt);
-                self.chat_widget
-                    .add_error_message(format!("Failed to prepare image: {error}"));
+                self.add_agents_overview_error(format!("Failed to prepare image: {error}"));
                 return;
             }
         };
@@ -812,8 +823,7 @@ impl App {
                 Ok(images) => images,
                 Err(error) => {
                     self.restore_agents_overview_prompt(prompt);
-                    self.chat_widget
-                        .add_error_message(format!("Failed to prepare image: {error}"));
+                    self.add_agents_overview_error(format!("Failed to prepare image: {error}"));
                     return;
                 }
             }
@@ -845,8 +855,7 @@ impl App {
             }
             Err(error) => {
                 self.restore_agents_overview_prompt(prompt);
-                self.chat_widget
-                    .add_error_message(format!("Failed to start background task: {error}"));
+                self.add_agents_overview_error(format!("Failed to start background task: {error}"));
             }
         }
     }
@@ -882,8 +891,7 @@ impl App {
             .await;
         if let Err(error) = result {
             self.restore_agents_overview_prompt(prompt);
-            self.chat_widget
-                .add_error_message(format!("Failed to send task message: {error}"));
+            self.add_agents_overview_error(format!("Failed to send task message: {error}"));
         }
     }
 
@@ -923,8 +931,9 @@ impl App {
             {
                 Ok(turn_id) => turn_id,
                 Err(error) => {
-                    self.chat_widget
-                        .add_error_message(format!("Failed to stop background task: {error}"));
+                    self.add_agents_overview_error(format!(
+                        "Failed to stop background task: {error}"
+                    ));
                     self.refresh_agents_overview_threads(app_server);
                     return;
                 }
@@ -934,8 +943,7 @@ impl App {
             return;
         };
         if let Err(error) = app_server.turn_interrupt(thread_id, turn_id).await {
-            self.chat_widget
-                .add_error_message(format!("Failed to stop background task: {error}"));
+            self.add_agents_overview_error(format!("Failed to stop background task: {error}"));
             self.refresh_agents_overview_threads(app_server);
         }
     }
