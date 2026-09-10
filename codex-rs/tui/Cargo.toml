@@ -135,6 +135,13 @@ tokio-util = { workspace = true, features = ["time"] }
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSAccessibility", "NSWorkspace"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Keep the same executor features as the credential store, which also uses zbus.
+zbus = "4.4.0"
+
 [target.'cfg(windows)'.dependencies]
 which = { workspace = true }
 windows-sys = { version = "0.52", features = [
@@ -145,6 +152,7 @@ windows-sys = { version = "0.52", features = [
     "Win32_System_IO",
     "Win32_System_Pipes",
     "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 winsplit = "0.1"
 

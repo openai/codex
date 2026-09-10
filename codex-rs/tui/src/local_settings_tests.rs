@@ -6,6 +6,104 @@ use codex_config::types::SessionPickerViewMode;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
+async fn system_reduced_motion_renders_astra_composer_without_sparkles() -> anyhow::Result<()> {
+    use crate::app_event_sender::AppEventSender;
+    use crate::bottom_pane::BottomPane;
+    use crate::bottom_pane::BottomPaneParams;
+    use crate::motion::MotionMode;
+    use crate::render::renderable::Renderable;
+    use crate::tui::FrameRequester;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+
+    let home = tempfile::tempdir()?;
+    let config = ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .loader_overrides(LoaderOverrides {
+            ignore_project_config: true,
+            ..LoaderOverrides::without_managed_config_for_tests()
+        })
+        .build()
+        .await?;
+    let settings = LocalSettings::with_system_motion(&config, MotionMode::Reduced);
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut pane = BottomPane::new(BottomPaneParams {
+        app_event_tx: AppEventSender::new(tx),
+        frame_requester: FrameRequester::test_dummy(),
+        has_input_focus: true,
+        enhanced_keys_supported: false,
+        placeholder_text: "Ask Codex to do anything".into(),
+        disable_paste_burst: true,
+        animations_enabled: settings.tui.animations,
+        skills: None,
+    });
+    pane.set_astra_sparkle("astra", &settings.tui);
+    pane.set_composer_text("Explore the night sky".into(), Vec::new(), Vec::new());
+    crate::terminal_palette::with_test_default_colors(
+        crate::terminal_probe::DefaultColors {
+            fg: (230, 216, 255),
+            bg: (36, 27, 53),
+        },
+        || {
+            for width in [40, 80] {
+                let area = Rect::new(
+                    /*x*/ 0,
+                    /*y*/ 0,
+                    width,
+                    pane.desired_height(width),
+                );
+                let mut buffer = Buffer::empty(area);
+                pane.render(area, &mut buffer);
+                let rows = buffer
+                    .content
+                    .chunks(usize::from(width))
+                    .map(|row| {
+                        row.iter()
+                            .map(ratatui::buffer::Cell::symbol)
+                            .collect::<String>()
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                insta::assert_snapshot!(format!("system_reduced_motion_astra_{width}"), rows);
+            }
+        },
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn system_motion_suppresses_animations_without_changing_saved_preferences()
+-> anyhow::Result<()> {
+    use crate::motion::MotionMode;
+
+    for configured in [true, false] {
+        let home = tempfile::tempdir()?;
+        let config_text = format!("[tui]\nanimations = {configured}\nwhimsy = true\n");
+        std::fs::write(home.path().join("config.toml"), &config_text)?;
+        let config = ConfigBuilder::default()
+            .codex_home(home.path().to_path_buf())
+            .loader_overrides(LoaderOverrides {
+                ignore_project_config: true,
+                ..LoaderOverrides::without_managed_config_for_tests()
+            })
+            .build()
+            .await?;
+        let animated = LocalSettings::with_system_motion(&config, MotionMode::Animated);
+        let reduced = LocalSettings::with_system_motion(&config, MotionMode::Reduced);
+        let mut expected = animated.clone();
+        expected.tui.animations = false;
+        assert_eq!(reduced, expected);
+        assert_eq!(animated.tui.animations, configured);
+        assert_eq!(config.animations, configured);
+        assert_eq!(
+            std::fs::read_to_string(home.path().join("config.toml"))?,
+            config_text
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn local_load_preserves_defaults_and_resolved_overrides() -> anyhow::Result<()> {
     for config_text in [
         "",

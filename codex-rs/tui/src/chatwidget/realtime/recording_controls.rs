@@ -268,7 +268,7 @@ impl ChatWidget {
                 .map(|(_, speaker)| *speaker)
                 .collect(),
             activity,
-            animations: self.config.animations,
+            animations: self.local_settings.tui.animations,
         }));
     }
 }

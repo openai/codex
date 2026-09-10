@@ -4768,6 +4768,7 @@ dependencies = [
  "itertools 0.14.0",
  "lazy_static",
  "libc",
+ "objc2-app-kit",
  "pathdiff",
  "pretty_assertions",
  "pulldown-cmark",
@@ -4808,6 +4809,7 @@ dependencies = [
  "windows-sys 0.52.0",
  "winsplit",
  "wiremock",
+ "zbus",
 ]
 
 [[package]]

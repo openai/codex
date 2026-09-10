@@ -194,7 +194,7 @@ async fn transcript_deltas_track_the_current_speaker() {
 #[tokio::test]
 async fn voice_transcripts_stream_in_the_conversation_instead_of_the_footer() {
     let (mut chat, _sender, mut events, _ops) = make_chatwidget_manual_with_sender().await;
-    chat.config.animations = false;
+    chat.local_settings.tui.animations = false;
     activate_voice(&mut chat);
     chat.update_realtime_footer();
 
@@ -427,7 +427,7 @@ async fn direct_reset_preserves_both_partial_speakers_for_replay() {
 async fn stopping_voice_preserves_the_live_transcript_once() {
     for command in ["/voice", "/voice stop"] {
         let (mut chat, _sender, mut events, _ops) = make_chatwidget_manual_with_sender().await;
-        chat.config.animations = true;
+        chat.local_settings.tui.animations = true;
         activate_voice(&mut chat);
         chat.on_realtime_transcript_done("user".to_string(), "Earlier question".to_string());
         chat.on_realtime_transcript_done("assistant".to_string(), "Earlier answer".to_string());
@@ -526,7 +526,7 @@ async fn transcript_completion_waits_for_normal_agent_stream_consolidation() {
 #[tokio::test]
 async fn transcript_handoff_moves_deferred_repeats_and_partial_once() {
     let (mut chat, _sender, mut events, _ops) = make_chatwidget_manual_with_sender().await;
-    chat.config.animations = false;
+    chat.local_settings.tui.animations = false;
     activate_voice(&mut chat);
     chat.on_agent_message_delta("ordinary stream".to_string());
     for _ in 0..super::super::MAX_PENDING_TRANSCRIPT_CELLS {
@@ -699,7 +699,7 @@ async fn completed_transcript_preserves_the_other_speakers_caption() {
 #[tokio::test]
 async fn live_voice_split_flap_animates_without_changing_final_history() {
     let (mut chat, _sender, mut events, _ops) = make_chatwidget_manual_with_sender().await;
-    chat.config.animations = true;
+    chat.local_settings.tui.animations = true;
     activate_voice(&mut chat);
 
     chat.on_realtime_transcript_delta("assistant".to_string(), "gate 73".to_string());
@@ -749,7 +749,7 @@ async fn spoken_user_transcript_preserves_red_chevron_and_canonical_history() {
             .add_modifier
             .contains(ratatui::style::Modifier::BOLD)
     );
-    chat.config.animations = false;
+    chat.local_settings.tui.animations = false;
     chat.on_realtime_transcript_delta("user".to_string(), " world".to_string());
     assert!(
         chat.realtime_conversation

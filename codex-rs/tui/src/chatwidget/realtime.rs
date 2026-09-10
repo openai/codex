@@ -1193,7 +1193,7 @@ impl ChatWidget {
                 .wrapping_add(/*rhs*/ 1);
             self.realtime_conversation.transcript_input_generation =
                 Some(self.realtime_conversation.input_generation);
-            if interrupted && self.config.animations {
+            if interrupted && self.local_settings.tui.animations {
                 self.realtime_conversation.interruption_acknowledged_until =
                     Some(Instant::now() + INTERRUPTION_ACKNOWLEDGMENT);
             }
@@ -1273,7 +1273,7 @@ impl ChatWidget {
             &self.realtime_conversation.transcript,
             previous,
             discarded_prefix_bytes,
-            MotionMode::from_animations_enabled(self.config.animations),
+            MotionMode::from_animations_enabled(self.local_settings.tui.animations),
             self.frame_requester.clone(),
         );
         self.realtime_conversation.live_transcript_cell = Some(Box::new(live_cell));
