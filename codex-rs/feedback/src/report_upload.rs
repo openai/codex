@@ -20,7 +20,6 @@ use crate::FeedbackAttachment;
 use crate::FeedbackSnapshot;
 use crate::MAX_DECODED_UPLOAD_BYTES;
 use crate::MAX_EVENT_BYTES;
-use crate::MAX_UPLOAD_BYTES;
 use crate::SENTRY_DSN;
 use crate::upload;
 
@@ -63,7 +62,7 @@ impl FeedbackTransport {
 
     /// Make one attempt. Callers own retry decisions and must retain the same bytes.
     pub async fn send(&self, envelope: Vec<u8>) -> FeedbackDelivery {
-        let response = upload::gzip_envelope_request(
+        let response = upload::envelope_request(
             &self.client_pool,
             &self.dsn,
             envelope.into(),
@@ -146,9 +145,9 @@ pub fn prepare_report_attachment(
 
 fn prepare_envelope(envelope: Envelope, max_decoded_bytes: usize) -> Result<Vec<u8>> {
     let (bytes, decoded_bytes) =
-        upload::gzip_envelope(&envelope).context("failed to serialize feedback envelope")?;
+        upload::encode_envelope(&envelope).context("failed to serialize feedback envelope")?;
     anyhow::ensure!(
-        bytes.len() <= MAX_UPLOAD_BYTES && decoded_bytes <= max_decoded_bytes,
+        decoded_bytes <= max_decoded_bytes,
         "feedback envelope exceeds the size limit"
     );
     Ok(bytes)

@@ -59,7 +59,8 @@ fn unloaded_compressed_rollout_is_included_as_jsonl_attachment() {
             &paths,
             /*logs_override*/ None,
         )
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
     assert_eq!(
         attachments
             .iter()
@@ -174,7 +175,7 @@ fn queued_attachments_follow_both_representation_transitions() {
 }
 
 #[test]
-fn compressed_attachment_bounds_decoded_bytes_and_preserves_jsonl_truncation() {
+fn compressed_attachment_bounds_decoded_bytes() {
     let fixture = Fixture::new();
     let path = fixture.attachment();
     assert!(path.read_attachment(/*max_bytes*/ 35).unwrap().is_none());
@@ -182,26 +183,6 @@ fn compressed_attachment_bounds_decoded_bytes_and_preserves_jsonl_truncation() {
         path.read_attachment(JSONL.len()).unwrap().unwrap().buffer,
         JSONL
     );
-    // The valid first frame provides the needed prefix. Decoding the entire file would fail.
-    fs::write(
-        &fixture.compressed,
-        [COMPRESSED, b"invalid trailing frame"].concat(),
-    )
-    .unwrap();
-    let mut attachment = path
-        .read_attachment_with_mode(/*max_bytes*/ 35, AttachmentReadMode::Prefix)
-        .unwrap()
-        .unwrap();
-    assert_eq!(attachment.buffer, JSONL[..36]);
-    crate::attachment_truncation::truncate_attachment(
-        &mut attachment.filename,
-        &mut attachment.buffer,
-        /*target_bytes*/ 35,
-    )
-    .unwrap();
-    assert_eq!(attachment.buffer, b"{\"message\":\"old diagnostic\"}\n");
-    assert!(attachment.filename.starts_with("truncated-rollout-"));
-    assert!(attachment.filename.ends_with(".jsonl"));
     assert!(!fixture.plain.exists());
 }
 

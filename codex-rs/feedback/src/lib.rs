@@ -30,7 +30,6 @@ use tracing_subscriber::filter::Targets;
 use tracing_subscriber::fmt::writer::MakeWriter;
 use tracing_subscriber::registry::LookupSpan;
 
-mod attachment_truncation;
 pub(crate) mod feedback_diagnostics;
 mod guardian;
 mod report_upload;
@@ -60,12 +59,12 @@ const UPLOAD_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 300);
 // Raw collection budgets used by the report API, not the interactive upload.
 pub const MAX_ATTACHMENT_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_ATTACHMENTS_BYTES: usize = 126 * 1024 * 1024;
-// Check complete envelopes against Sentry's published limits, including framing:
+// Bound decoded envelopes, including framing. Do not shorten attachments to fit:
+// they may already be compressed, and callers need an error for incomplete delivery.
+// This bounds the decoded request including framing, not guaranteed attachment storage.
 // https://develop.sentry.dev/sdk/foundations/envelopes/#size-limits
-// https://docs.sentry.io/platforms/javascript/enriching-events/attachments/
 const MAX_DECODED_UPLOAD_BYTES: usize = 200 * 1024 * 1024;
 const MAX_EVENT_BYTES: usize = 1024 * 1024;
-const MAX_UPLOAD_BYTES: usize = 40_000_000;
 const FEEDBACK_TAGS_TARGET: &str = "feedback_tags";
 const MAX_FEEDBACK_TAGS: usize = 64;
 
@@ -390,11 +389,6 @@ pub struct FeedbackAttachmentPath {
     pub attachment_filename_override: Option<String>,
 }
 
-enum AttachmentReadMode {
-    Whole,
-    Prefix,
-}
-
 #[cfg(test)]
 #[path = "rollout_attachment_tests.rs"]
 mod rollout_attachment_tests;
@@ -402,14 +396,6 @@ mod rollout_attachment_tests;
 impl FeedbackAttachmentPath {
     /// Read a whole regular file within the caller's size limit.
     pub fn read_attachment(&self, max_bytes: usize) -> io::Result<Option<FeedbackAttachment>> {
-        self.read_attachment_with_mode(max_bytes, AttachmentReadMode::Whole)
-    }
-
-    fn read_attachment_with_mode(
-        &self,
-        max_bytes: usize,
-        mode: AttachmentReadMode,
-    ) -> io::Result<Option<FeedbackAttachment>> {
         let rollout_path = codex_rollout::rollout_id_from_path(&self.path)
             .map(|_| codex_rollout::plain_rollout_path(&self.path));
         let buffer = if rollout_path.is_some() {
@@ -421,20 +407,17 @@ impl FeedbackAttachmentPath {
             buffer
         } else {
             let metadata = fs::metadata(&self.path)?;
-            if !metadata.is_file()
-                || (metadata.len() > max_bytes as u64 && matches!(mode, AttachmentReadMode::Whole))
-            {
+            if !metadata.is_file() || metadata.len() > max_bytes as u64 {
                 return Ok(None);
             }
             let mut buffer = Vec::new();
-            // Keep one extra byte so the encoder can detect and label a truncated prefix,
-            // including when the file grows after the metadata check.
+            // Detect files that grow past the limit after the metadata check.
             fs::File::open(&self.path)?
                 .take(max_bytes as u64 + 1)
                 .read_to_end(&mut buffer)?;
             buffer
         };
-        if buffer.len() > max_bytes && matches!(mode, AttachmentReadMode::Whole) {
+        if buffer.len() > max_bytes {
             return Ok(None);
         }
         let filename = self
@@ -578,7 +561,10 @@ impl FeedbackSnapshot {
         self.feedback_diagnostics.attachment_text()
     }
 
-    /// Upload feedback to Sentry with optional attachments.
+    /// Submit feedback to Sentry with whole attachments within a shared deadline.
+    /// Success means HTTP acceptance, not durable attachment storage. Callers must
+    /// retain their source files; errors can occur after part of a report is accepted.
+    /// https://github.com/getsentry/relay/blob/master/relay-server/src/endpoints/common.rs
     pub async fn upload_feedback(
         &self,
         options: FeedbackUploadOptions<'_>,
@@ -618,7 +604,7 @@ impl FeedbackSnapshot {
         let mut envelope = Envelope::new();
         envelope.add_item(EnvelopeItem::Event(event));
         let (event_body, event_bytes) =
-            upload::gzip_envelope(&envelope).context("failed to serialize feedback event")?;
+            upload::encode_envelope(&envelope).context("failed to serialize feedback event")?;
         anyhow::ensure!(
             event_bytes <= MAX_EVENT_BYTES,
             "feedback event exceeds the size limit"
@@ -631,7 +617,7 @@ impl FeedbackSnapshot {
         );
         // Accept the report before reading diagnostics; all envelopes share one deadline.
         let mut rate_limited = false;
-        let status = upload::send_gzip_envelope(
+        let status = upload::send_envelope(
             &client_pool,
             &dsn,
             event_body,
@@ -669,8 +655,8 @@ impl FeedbackSnapshot {
             }
             let mut status = None;
             let result: Result<()> = async {
-                let body = upload::gzip_attachment_envelope(&headers, attachment)?;
-                let response_status = upload::send_gzip_envelope(
+                let body = upload::encode_attachment_envelope(&headers, attachment?)?;
+                let response_status = upload::send_envelope(
                     &client_pool,
                     &dsn,
                     body,
@@ -761,12 +747,12 @@ impl FeedbackSnapshot {
         extra_attachments: &'a [FeedbackAttachment],
         extra_attachment_paths: &'a [FeedbackAttachmentPath],
         logs_override: Option<Vec<u8>>,
-    ) -> impl Iterator<Item = sentry::protocol::Attachment> + 'a {
+    ) -> impl Iterator<Item = Result<sentry::protocol::Attachment>> + 'a {
         use sentry::protocol::Attachment;
 
         // Priority: logs, generated attachments (doctor report), connectivity diagnostics,
-        // then files in caller order. Read and compress each file independently;
-        // raw sizes across separate requests do not determine whether their gzip bodies fit.
+        // then files in caller order. Measure each file’s envelope independently;
+        // the size limit applies per request, not to the sum of all files.
         let logs = include_logs.then(|| self.log_attachment(logs_override));
         let diagnostics = self
             .feedback_diagnostics_attachment_text(include_logs)
@@ -787,30 +773,19 @@ impl FeedbackSnapshot {
                     }),
             )
             .chain(diagnostics)
-            .chain(extra_attachment_paths.iter().filter_map(|attachment_path| {
-                match attachment_path
-                    .read_attachment_with_mode(MAX_DECODED_UPLOAD_BYTES, AttachmentReadMode::Prefix)
-                {
-                    Ok(Some(attachment)) => Some(attachment),
-                    Ok(None) => {
-                        tracing::warn!("feedback attachment is not a regular file; skipping");
-                        None
-                    }
-                    Err(err) => {
-                        tracing::warn!(
-                            path = %attachment_path.path.display(),
-                            error = %err,
-                            "failed to read log attachment; skipping"
-                        );
-                        None
-                    }
-                }
+            .map(Ok)
+            .chain(extra_attachment_paths.iter().map(|attachment_path| {
+                attachment_path
+                    .read_attachment(MAX_DECODED_UPLOAD_BYTES)?
+                    .context("feedback attachment is not a regular file or exceeds the size limit")
             }))
-            .map(|attachment| Attachment {
-                buffer: attachment.buffer,
-                filename: attachment.filename,
-                content_type: attachment.content_type,
-                ty: None,
+            .map(|attachment| {
+                attachment.map(|attachment| Attachment {
+                    buffer: attachment.buffer,
+                    filename: attachment.filename,
+                    content_type: attachment.content_type,
+                    ty: None,
+                })
             })
     }
 }
@@ -910,7 +885,9 @@ mod tests {
     use super::*;
     use crate::FeedbackDiagnostic;
     use codex_http_client::OutboundProxyPolicy;
+    use flate2::Compression;
     use flate2::read::GzDecoder;
+    use flate2::write::GzEncoder;
     use http::StatusCode;
     use pretty_assertions::assert_eq;
     use tracing_subscriber::layer::SubscriberExt;
@@ -1148,7 +1125,10 @@ mod tests {
             .expect_err("legacy uploads report incomplete diagnostics");
         assert!(started.elapsed() >= Duration::from_secs(2));
         let requests = server.received_requests().await.unwrap();
-        assert_eq!(requests[1].body, requests[2].body, "retry exact gzip bytes");
+        assert_eq!(
+            requests[1].body, requests[2].body,
+            "retry exact request bytes"
+        );
         // Exhausting one diagnostic must not delay later.txt or replay earlier files.
         assert!(
             requests[3..6]
@@ -1163,22 +1143,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn feedback_upload_delivers_whole_files_or_marked_prefixes() {
+    async fn feedback_upload_delivers_large_files_intact() {
         let suffix = ThreadId::new();
         let first_path = std::env::temp_dir().join(format!("feedback-first-{suffix}.jsonl"));
         let second_path = std::env::temp_dir().join(format!("feedback-second-{suffix}.jsonl"));
-        let binary_path = std::env::temp_dir().join(format!("feedback-binary-{suffix}.bin"));
+        let binary_path = std::env::temp_dir().join(format!("feedback-archive-{suffix}.jsonl.gz"));
         let pending_path = second_path.with_extension("pending");
         let block = "{\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_message\",\"message\":\"diagnostic fixture 🍵\"}}\n"
             .repeat(1024);
-        let block_counts = [65, 205].map(|mib| mib * 1024 * 1024 / block.len() + 1);
+        let block_counts = [65, 80].map(|mib| mib * 1024 * 1024 / block.len() + 1);
         for (path, blocks) in [&first_path, &pending_path].into_iter().zip(block_counts) {
             let mut file = fs::File::create(path).unwrap();
             for _ in 0..blocks {
                 file.write_all(block.as_bytes()).unwrap();
             }
         }
-        // Repeats beyond gzip's 32 KiB window keep this fixture above the wire limit.
+        // Repeats beyond gzip's window keep the archive above the former 38.1 MiB cap.
         let record_block = (0..4096)
             .flat_map(|_| sentry::types::Uuid::new_v4().into_bytes())
             .map(|byte| {
@@ -1186,9 +1166,7 @@ mod tests {
                     [usize::from(byte % 64)]
             })
             .collect::<Vec<_>>();
-        let mut file = fs::File::create(&binary_path).unwrap();
-        // The first record fits compressed, but exceeds the encoder's initial
-        // half-file target. It must survive when this same file is sent as JSONL.
+        let mut file = GzEncoder::new(fs::File::create(&binary_path).unwrap(), Compression::fast());
         for mib in [32, 30] {
             file.write_all(b"{\"message\":\"").unwrap();
             for _ in 0..mib * 1024 * 1024 / record_block.len() {
@@ -1196,14 +1174,14 @@ mod tests {
             }
             file.write_all(b"\"}\n").unwrap();
         }
-        drop(file);
+        file.finish().unwrap();
+        assert!(fs::metadata(&binary_path).unwrap().len() > 40_000_000);
 
         let server = MockServer::start().await;
         let attempt = AtomicUsize::default();
         let ready_path = second_path.clone();
         Mock::given(method("POST"))
             .and(path("/api/42/envelope/"))
-            .and(header("Content-Encoding", "gzip"))
             .respond_with(move |_: &wiremock::Request| {
                 if attempt.fetch_add(/*val*/ 1, Ordering::SeqCst) == 1 {
                     // The next file becomes readable only after the first file arrives.
@@ -1211,7 +1189,7 @@ mod tests {
                 }
                 ResponseTemplate::new(StatusCode::OK)
             })
-            .expect(/*r*/ 5)
+            .expect(/*r*/ 4)
             .mount(&server)
             .await;
 
@@ -1237,12 +1215,6 @@ mod tests {
                             path: binary_path.clone(),
                             attachment_filename_override: None,
                         },
-                        FeedbackAttachmentPath {
-                            path: binary_path.clone(),
-                            attachment_filename_override: Some(format!(
-                                "feedback-records-{suffix}.jsonl"
-                            )),
-                        },
                     ],
                     session_source: Some(SessionSource::Cli),
                     logs_override: None,
@@ -1254,31 +1226,24 @@ mod tests {
             .await
             .unwrap();
         let requests = server.received_requests().await.unwrap();
-        assert_eq!(requests.len(), 5);
+        assert_eq!(requests.len(), 4);
         let mut event = String::new();
         GzDecoder::new(requests[0].body.as_slice())
             .read_to_string(&mut event)
             .unwrap();
         for (request, (filename, source_path)) in requests[1..].iter().zip([
             (format!("feedback-first-{suffix}.jsonl"), &first_path),
-            (
-                format!("truncated-feedback-second-{suffix}.jsonl"),
-                &second_path,
-            ),
-            (
-                format!("truncated-feedback-binary-{suffix}.bin"),
-                &binary_path,
-            ),
-            (
-                format!("truncated-feedback-records-{suffix}.jsonl"),
-                &binary_path,
-            ),
+            (format!("feedback-second-{suffix}.jsonl"), &second_path),
+            (format!("feedback-archive-{suffix}.jsonl.gz"), &binary_path),
         ]) {
-            assert!(request.body.len() <= MAX_UPLOAD_BYTES);
             let mut decoded = Vec::new();
-            GzDecoder::new(request.body.as_slice())
-                .read_to_end(&mut decoded)
-                .unwrap();
+            if request.headers.contains_key("Content-Encoding") {
+                GzDecoder::new(request.body.as_slice())
+                    .read_to_end(&mut decoded)
+                    .unwrap();
+            } else {
+                decoded.extend_from_slice(&request.body);
+            }
             assert!(decoded.len() <= MAX_DECODED_UPLOAD_BYTES);
             let mut parts = decoded.splitn(3, |byte| *byte == b'\n');
             assert_eq!(
@@ -1290,14 +1255,13 @@ mod tests {
             let payload = parts.next().unwrap().strip_suffix(b"\n").unwrap();
             let mut source = fs::File::open(source_path).unwrap();
             let original_bytes = source.metadata().unwrap().len() as usize;
-            if filename.starts_with("truncated-") {
-                assert!(!payload.is_empty() && payload.len() < original_bytes);
-            } else {
-                assert_eq!(payload.len(), original_bytes);
-            }
+            assert_eq!(payload.len(), original_bytes);
             if filename.ends_with(".jsonl") {
                 let text = std::str::from_utf8(payload).unwrap();
                 assert!(text.ends_with('\n'));
+            } else {
+                let mut archive = GzDecoder::new(payload);
+                io::copy(&mut archive, &mut io::sink()).expect("received archive must be intact");
             }
             let mut expected = [0; 64 * 1024];
             for chunk in payload.chunks(expected.len()) {
@@ -1308,6 +1272,58 @@ mod tests {
         fs::remove_file(first_path).unwrap();
         fs::remove_file(second_path).unwrap();
         fs::remove_file(binary_path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn feedback_upload_reports_unreadable_or_oversized_attachments() {
+        let oversized_path =
+            std::env::temp_dir().join(format!("feedback-oversized-{}", ThreadId::new()));
+        fs::File::create(&oversized_path)
+            .unwrap()
+            .set_len(MAX_DECODED_UPLOAD_BYTES as u64 + 1)
+            .unwrap();
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(StatusCode::OK))
+            .expect(/*r*/ 2)
+            .mount(&server)
+            .await;
+
+        for path in [
+            oversized_path.clone(),
+            oversized_path.with_extension("missing"),
+        ] {
+            let result = CodexFeedback::new()
+                .snapshot(/*session_id*/ None)
+                .upload_feedback_with_dsn(
+                    FeedbackUploadOptions {
+                        classification: "bug",
+                        reason: None,
+                        tags: None,
+                        include_logs: false,
+                        extra_attachments: &[],
+                        extra_attachment_paths: &[FeedbackAttachmentPath {
+                            path,
+                            attachment_filename_override: None,
+                        }],
+                        session_source: Some(SessionSource::Cli),
+                        logs_override: None,
+                    },
+                    &HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+                    &format!("http://public@{}/42", server.address()),
+                    Instant::now() + UPLOAD_TIMEOUT,
+                )
+                .await;
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                "feedback report was accepted, but some attachments failed to upload"
+            );
+        }
+        assert_eq!(
+            fs::metadata(&oversized_path).unwrap().len(),
+            MAX_DECODED_UPLOAD_BYTES as u64 + 1
+        );
+        fs::remove_file(oversized_path).unwrap();
     }
 
     #[tokio::test]
@@ -1472,7 +1488,8 @@ mod tests {
                 &[extra_attachment_path],
                 Some(vec![1]),
             )
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
 
         assert_eq!(
             attachments_with_diagnostics
@@ -1508,7 +1525,8 @@ mod tests {
             .snapshot(/*session_id*/ None)
             .with_feedback_diagnostics(FeedbackDiagnostics::default())
             .feedback_attachments(/*include_logs*/ true, &[], &[], Some(vec![1]))
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
 
         assert_eq!(
             attachments_without_diagnostics
@@ -1550,7 +1568,8 @@ mod tests {
                 ],
                 /*logs_override*/ None,
             )
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
 
         fs::remove_file(gzip_path).expect("gzip attachment should be removed");
         fs::remove_file(unknown_path).expect("unknown attachment should be removed");
