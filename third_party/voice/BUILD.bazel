@@ -133,7 +133,7 @@ alias(
     visibility = ["//visibility:public"],
 )
 
-# Windows voice jobs opt into the pkgconf already declared with their build tools.
+# Explicitly select the installed pkgconf and pinned CMake in Windows voice CI.
 native_tool_toolchain(
     name = "windows_pkg_config_tool",
     env = {"PKG_CONFIG": "$(execpath :pkg_config)"},
@@ -149,7 +149,6 @@ toolchain(
     visibility = ["//visibility:public"],
 )
 
-# The native Windows build already uses this pinned CMake, including on ARM64.
 toolchain(
     name = "windows_cmake_toolchain",
     exec_compatible_with = ["@platforms//os:windows"],

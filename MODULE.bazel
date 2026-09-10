@@ -165,7 +165,6 @@ single_version_override(
     patches = [
         "//patches:rules_foreign_cc_make_cppflags.patch",
         "//patches:rules_foreign_cc_make_xcompile.patch",
-        "//patches:rules_foreign_cc_make_msvc_stdint.patch",
     ],
     version = "0.15.1",
 )
@@ -209,7 +208,6 @@ rules_rust.patch(
         "//patches:rules_rust_windows_process_wrapper_skip_temp_outputs.patch",
         # Group build-script argument files to avoid Windows command-line limits.
         "//patches:rules_rust_group_build_script_arg_files.patch",
-        "//patches:rules_rust_windows_execroot_separators.patch",
     ],
     strip = 1,
 )

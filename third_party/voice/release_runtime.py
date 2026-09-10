@@ -15,8 +15,6 @@ def stage(source: Path, destination: Path, target: str) -> None:
         "x86_64-apple-darwin",
         "aarch64-unknown-linux-gnu",
         "x86_64-unknown-linux-gnu",
-        "aarch64-pc-windows-msvc",
-        "x86_64-pc-windows-msvc",
     }:
         raise ValueError("unsupported public release voice runtime target")
     source = source.resolve(strict=True)
