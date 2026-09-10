@@ -127,17 +127,6 @@ async fn logout_invalidates_pending_login_across_processes() -> Result<()> {
     Ok(())
 }
 
-async fn complete_login(issuer: &str) -> Result<EnterpriseOAuthCredentials> {
-    let handle = login(issuer, /*callback_url*/ None).await?;
-    callback(
-        &handle.authorization_url(),
-        issuer,
-        /*provider_error*/ false,
-    )
-    .await?;
-    handle.wait().await
-}
-
 fn stored(issuer: &str) -> Result<Option<StoredOAuthTokens>> {
     crate::stored_oauth_credentials(
         CREDENTIAL_NAME,

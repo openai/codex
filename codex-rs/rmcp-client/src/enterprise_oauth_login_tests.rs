@@ -16,6 +16,7 @@ use keyring::credential::CredentialApi;
 use keyring::credential::CredentialBuilderApi;
 use keyring::credential::CredentialPersistence;
 use keyring::mock::MockCredential;
+use oauth2::TokenResponse;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use sha2::Digest;
@@ -73,6 +74,17 @@ async fn login(issuer: &str, callback_url: Option<&str>) -> Result<EnterpriseOAu
         redirect_mode: StreamableHttpRedirectMode::Legacy,
     })
     .await
+}
+
+async fn complete_login(issuer: &str) -> Result<EnterpriseOAuthCredentials> {
+    let handle = login(issuer, /*callback_url*/ None).await?;
+    callback(
+        &handle.authorization_url(),
+        issuer,
+        /*provider_error*/ false,
+    )
+    .await?;
+    handle.wait().await
 }
 
 async fn metadata(server: &MockServer, issuer: &str) {
@@ -160,15 +172,30 @@ async fn enterprise_callback_errors_and_sdk_logs_exclude_credentials() -> Result
 
 #[test]
 fn enterprise_callback_requires_loopback() -> Result<()> {
-    for (callback, expected) in [
-        (None, "127.0.0.1"),
-        (Some("http://localhost/callback"), "127.0.0.1"),
-        (Some("http://127.0.0.2/callback"), "127.0.0.2"),
-        (Some("http://[::1]/callback"), "::1"),
+    let issuer = "https://idp.example";
+    let client_id = Some("enterprise-client");
+    for (callback, port, expected_ip, expected_port) in [
+        (None, None, "127.0.0.1", None),
+        (None, Some(8080), "127.0.0.1", Some(8080)),
+        (Some("http://localhost/callback"), None, "127.0.0.1", None),
+        (Some("http://127.0.0.2/callback"), None, "127.0.0.2", None),
+        (Some("http://[::1]/callback"), None, "::1", None),
+        (
+            Some("http://localhost:8080/callback"),
+            None,
+            "127.0.0.1",
+            Some(8080),
+        ),
+        (
+            Some("http://localhost:8080/callback"),
+            Some(8080),
+            "127.0.0.1",
+            Some(8080),
+        ),
     ] {
         assert_eq!(
-            enterprise_callback_bind_ip(callback)?,
-            expected.parse::<IpAddr>()?
+            enterprise_callback_settings(issuer, client_id, callback, port)?,
+            (expected_ip.parse::<IpAddr>()?, expected_port),
         );
     }
     for callback in [
@@ -177,8 +204,25 @@ fn enterprise_callback_requires_loopback() -> Result<()> {
         "https://127.0.0.1/callback",
         "http://remote.example/callback",
     ] {
-        assert!(enterprise_callback_bind_ip(Some(callback)).is_err());
+        assert!(
+            enterprise_callback_settings(
+                issuer,
+                client_id,
+                Some(callback),
+                /*callback_port*/ None
+            )
+            .is_err()
+        );
     }
+    assert!(
+        enterprise_callback_settings(
+            issuer,
+            client_id,
+            Some("http://localhost:8080/callback"),
+            Some(9090),
+        )
+        .is_err()
+    );
     Ok(())
 }
 
@@ -317,14 +361,7 @@ async fn enterprise_public_api_storage_and_privacy() -> Result<()> {
 
     // Cancellation while blocked on the actual credential lock cannot leave a
     // detached persistence worker that writes after the other process releases it.
-    let canceled = login(&issuer, /*callback_url*/ None).await?;
-    callback(
-        &canceled.authorization_url(),
-        &issuer,
-        /*provider_error*/ false,
-    )
-    .await?;
-    let canceled = canceled.wait().await?;
+    let canceled = complete_login(&issuer).await?;
     let guard = EnterpriseOAuthCredentialGuard::acquire(
         CREDENTIAL_NAME,
         &issuer,
@@ -345,23 +382,8 @@ async fn enterprise_public_api_storage_and_privacy() -> Result<()> {
     );
 
     // Rejected old attempts neither write nor delete a newer grant.
-    let old = login(&issuer, /*callback_url*/ None).await?;
-    callback(
-        &old.authorization_url(),
-        &issuer,
-        /*provider_error*/ false,
-    )
-    .await?;
-    let old = old.wait().await?;
-    let winner = login(&issuer, /*callback_url*/ None).await?;
-    callback(
-        &winner.authorization_url(),
-        &issuer,
-        /*provider_error*/ false,
-    )
-    .await?;
-    winner
-        .wait()
+    let old = complete_login(&issuer).await?;
+    complete_login(&issuer)
         .await?
         .commit_if(|| async { Some(()) })
         .await?;
@@ -377,15 +399,7 @@ async fn enterprise_public_api_storage_and_privacy() -> Result<()> {
 
     // Inject raw account identifiers into the actual keyring adapter's error chain.
     keyring.fail.store(true, Ordering::SeqCst);
-    let failed = login(&issuer, /*callback_url*/ None).await?;
-    callback(
-        &failed.authorization_url(),
-        &issuer,
-        /*provider_error*/ false,
-    )
-    .await?;
-    let save_error = failed
-        .wait()
+    let save_error = complete_login(&issuer)
         .await?
         .commit_if(|| async { Some(()) })
         .await

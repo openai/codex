@@ -15,7 +15,6 @@ use codex_exec_server::HttpClient;
 use http::Method;
 use http::header::CONTENT_LENGTH;
 use http::header::CONTENT_TYPE;
-use oauth2::TokenResponse;
 use rmcp::transport::AuthorizationManager;
 use rmcp::transport::auth::AuthorizationMetadata;
 use rmcp::transport::auth::OAuthHttpClient;
@@ -247,11 +246,19 @@ pub(crate) fn enterprise_callback_settings(
     if client_id.is_none_or(|client_id| client_id.trim().is_empty()) {
         bail!("enterprise IdP login requires its registered client ID");
     }
-    let ip = enterprise_callback_bind_ip(callback_url)?;
-    let registered_port = callback_url
-        .map(Url::parse)
-        .transpose()?
-        .and_then(|url| url.port());
+    let (ip, registered_port) = if let Some(callback_url) = callback_url {
+        validate_ema_oauth_endpoint(callback_url, "enterprise IdP callback URL")?;
+        let callback = Url::parse(callback_url)?;
+        let ip = match (callback.scheme(), callback.host()) {
+            ("http", Some(Host::Domain("localhost"))) => Ipv4Addr::LOCALHOST.into(),
+            ("http", Some(Host::Ipv4(ip))) if ip.is_loopback() => ip.into(),
+            ("http", Some(Host::Ipv6(ip))) if ip.is_loopback() => ip.into(),
+            _ => bail!("enterprise IdP callback URL must use an HTTP loopback address"),
+        };
+        (ip, callback.port())
+    } else {
+        (Ipv4Addr::LOCALHOST.into(), None)
+    };
     if callback_port
         .zip(registered_port)
         .is_some_and(|(configured, registered)| configured != registered)
@@ -261,32 +268,13 @@ pub(crate) fn enterprise_callback_settings(
     Ok((ip, callback_port.or(registered_port)))
 }
 
-fn enterprise_callback_bind_ip(callback_url: Option<&str>) -> Result<IpAddr> {
-    let Some(callback_url) = callback_url else {
-        return Ok(Ipv4Addr::LOCALHOST.into());
-    };
-    validate_ema_oauth_endpoint(callback_url, "enterprise IdP callback URL")?;
-    let callback = Url::parse(callback_url)?;
-    if callback.scheme() == "http" {
-        match callback.host() {
-            Some(Host::Domain("localhost")) => return Ok(Ipv4Addr::LOCALHOST.into()),
-            Some(Host::Ipv4(ip)) if ip.is_loopback() => return Ok(ip.into()),
-            Some(Host::Ipv6(ip)) if ip.is_loopback() => return Ok(ip.into()),
-            _ => {}
-        }
-    }
-    bail!("enterprise IdP callback URL must use an HTTP loopback address")
-}
-
 fn validate_enterprise_credentials(stored: &StoredOAuthTokens) -> Result<()> {
-    let credentials = &stored.token_response.0;
-    if credentials
-        .refresh_token()
-        .is_none_or(|refresh_token| refresh_token.secret().trim().is_empty())
-    {
+    if !stored.has_refresh_token() {
         bail!("enterprise IdP login did not return a refresh token");
     }
-    let assertion = credentials
+    let assertion = stored
+        .token_response
+        .0
         .extra_fields()
         .0
         .get("id_token")
@@ -330,15 +318,9 @@ pub(crate) fn enterprise_authorization_url(auth_url: &str) -> Result<String> {
     Ok(url.to_string())
 }
 
-pub(crate) fn without_oauth_resource(encoded: &[u8]) -> String {
-    url::form_urlencoded::Serializer::new(String::new())
-        .extend_pairs(url::form_urlencoded::parse(encoded).filter(|(key, _)| key != "resource"))
-        .finish()
-}
-
 /// rmcp supplies a resource indicator for MCP OAuth, but the independent OIDC
 /// login must not request the IdP issuer as a protected-resource audience.
-pub(crate) struct EnterpriseOAuthHttpClient(pub(crate) Arc<dyn OAuthHttpClient>);
+struct EnterpriseOAuthHttpClient(Arc<dyn OAuthHttpClient>);
 
 impl OAuthHttpClient for EnterpriseOAuthHttpClient {
     fn execute(&self, mut request: OAuthHttpRequest) -> OAuthHttpClientFuture<'_> {
@@ -357,8 +339,13 @@ impl OAuthHttpClient for EnterpriseOAuthHttpClient {
             && url::form_urlencoded::parse(request.request.body())
                 .any(|(key, value)| key == "grant_type" && value == "authorization_code")
         {
-            let body = without_oauth_resource(request.request.body()).into_bytes();
-            *request.request.body_mut() = body;
+            let body = url::form_urlencoded::Serializer::new(String::new())
+                .extend_pairs(
+                    url::form_urlencoded::parse(request.request.body())
+                        .filter(|(key, _)| key != "resource"),
+                )
+                .finish();
+            *request.request.body_mut() = body.into_bytes();
             request.request.headers_mut().remove(CONTENT_LENGTH);
         }
         self.0.execute(request)
