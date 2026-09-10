@@ -74,6 +74,91 @@ pub(crate) struct OAuthHttpClientAdapter {
 }
 
 impl OAuthHttpClientAdapter {
+    /// Recover only a candidate-local 503 without turning failed discovery into
+    /// missing metadata (which would enable RMCP's legacy endpoint fallback).
+    async fn execute_with_metadata_fallback(
+        &self,
+        request: HttpRequest,
+        redirect_policy: OAuthHttpRedirectPolicy,
+        timeout: Option<Duration>,
+    ) -> Result<HttpResponse, OAuthHttpClientError> {
+        let issuer_path = request
+            .uri()
+            .path()
+            .strip_prefix("/.well-known/oauth-authorization-server")
+            .filter(|suffix| suffix.is_empty() || suffix.starts_with('/'));
+        let Some(issuer_path) = issuer_path.filter(|_| {
+            request.method() == Method::GET
+                && matches!(redirect_policy, OAuthHttpRedirectPolicy::Stop)
+        }) else {
+            return self
+                .execute_request(request, redirect_policy, timeout)
+                .await;
+        };
+        let mut candidates = vec![format!("/.well-known/openid-configuration{issuer_path}")];
+        if !issuer_path.is_empty() {
+            candidates.push(format!("{issuer_path}/.well-known/openid-configuration"));
+        }
+        let mut candidate_url =
+            Url::parse(&request.uri().to_string()).map_err(oauth_http_client_error)?;
+        candidate_url.set_query(None);
+        candidate_url.set_fragment(None);
+        let operation = async {
+            let original = self
+                .execute_request(request.clone(), redirect_policy, timeout)
+                .await?;
+            if original.status() != StatusCode::SERVICE_UNAVAILABLE {
+                return Ok(original);
+            }
+            // These are the same issuer's OIDC candidates, in RMCP's discovery
+            // order. Reuse the adapter's header, origin and body-size checks.
+            // Do not follow redirects here: RMCP owns discovery redirect policy.
+            for path in candidates {
+                candidate_url.set_path(&path);
+                let mut candidate = request.clone();
+                *candidate.uri_mut() = candidate_url
+                    .as_str()
+                    .parse()
+                    .map_err(oauth_http_client_error)?;
+                let response = self
+                    .execute_request(candidate, OAuthHttpRedirectPolicy::Stop, timeout)
+                    .await?;
+                match response.status() {
+                    StatusCode::OK => {
+                        if serde_json::from_slice::<AuthorizationMetadata>(response.body()).is_ok()
+                        {
+                            // RMCP still validates the exact expected issuer
+                            // before using these endpoints or saved credentials.
+                            return Ok(response);
+                        }
+                    }
+                    StatusCode::NOT_FOUND
+                    | StatusCode::METHOD_NOT_ALLOWED
+                    | StatusCode::SERVICE_UNAVAILABLE => {}
+                    StatusCode::REQUEST_TIMEOUT
+                    | StatusCode::TOO_EARLY
+                    | StatusCode::TOO_MANY_REQUESTS => return Ok(response),
+                    status if status.is_server_error() => return Ok(response),
+                    _ => return Ok(original),
+                }
+            }
+            Ok(original)
+        };
+        // Additional candidates share the original request's time budget.
+        let timeout = match self.timeout {
+            OAuthDiscoveryTimeout::Requested => timeout,
+            OAuthDiscoveryTimeout::Capped(cap) => {
+                Some(timeout.map_or(cap, |timeout| timeout.min(cap)))
+            }
+        };
+        match timeout {
+            Some(timeout) => tokio::time::timeout(timeout, operation)
+                .await
+                .map_err(|_| oauth_http_client_error(OAuthHttpClientAdapterError::TimedOut))?,
+            None => operation.await,
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn new(
         http_client: Arc<dyn HttpClient>,
@@ -330,8 +415,11 @@ fn oauth_redirect_policy(
 impl OAuthHttpClient for OAuthHttpClientAdapter {
     fn execute(&self, request: OAuthHttpRequest) -> OAuthHttpClientFuture<'_> {
         Box::pin(async move {
-            let operation =
-                self.execute_request(request.request, request.redirect_policy, request.timeout);
+            let operation = self.execute_with_metadata_fallback(
+                request.request,
+                request.redirect_policy,
+                request.timeout,
+            );
             match PROACTIVE_REFRESH_TIMEOUT.try_with(|duration| *duration) {
                 Ok(duration) => tokio::time::timeout(duration, operation)
                     .await
