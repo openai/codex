@@ -24,26 +24,25 @@ use codex_exec_server::RouteAwareHttpClient;
 use codex_login::AuthManager;
 use codex_mcp::McpOAuthLoginSupport;
 use codex_mcp::McpRuntimeContext;
-use codex_mcp::ResolvedMcpOAuthScopes;
 use codex_mcp::apply_http_headers_helper;
 use codex_mcp::compute_auth_statuses;
 use codex_mcp::discover_supported_scopes;
 use codex_mcp::oauth_login_support;
 use codex_mcp::resolve_oauth_callback;
 use codex_mcp::resolve_oauth_scopes;
-use codex_mcp::should_retry_without_scopes;
 use codex_protocol::protocol::McpAuthStatus;
 use codex_rmcp_client::McpOAuthCallbackMode;
 use codex_rmcp_client::McpOAuthClientRegistration;
 use codex_rmcp_client::OAuthDiscoveryTimeout;
 use codex_rmcp_client::StreamableHttpRedirectMode;
 use codex_rmcp_client::delete_oauth_tokens;
-use codex_rmcp_client::perform_oauth_login;
 use codex_rmcp_client::resolve_mcp_oauth_callback_url;
 use codex_utils_cli::CliConfigOverrides;
 use codex_utils_cli::format_env_display;
 
 use crate::cloud_config;
+use crate::mcp_login::McpLoginMode;
+use crate::mcp_login::perform_oauth_login_retry_without_scopes;
 use crate::plugin_cmd::load_cli_auth_manager;
 
 /// Subcommands:
@@ -197,6 +196,10 @@ pub struct LoginArgs {
     /// Name of the MCP server to authenticate with oauth.
     pub name: String,
 
+    /// Print the authorization URL and accept the callback URL without opening a browser.
+    #[arg(long)]
+    pub no_browser: bool,
+
     /// Comma-separated list of OAuth scopes to request.
     #[arg(long, value_delimiter = ',', value_name = "SCOPE,SCOPE")]
     pub scopes: Vec<String>,
@@ -253,69 +256,6 @@ impl McpCli {
         }
 
         Ok(())
-    }
-}
-
-/// Preserve compatibility with servers that still expect the legacy empty-scope
-/// OAuth request. If a discovered-scope request is rejected by the provider,
-/// retry the login flow once without scopes.
-#[allow(clippy::too_many_arguments)]
-async fn perform_oauth_login_retry_without_scopes(
-    name: &str,
-    url: &str,
-    store_mode: codex_config::types::OAuthCredentialsStoreMode,
-    keyring_backend_kind: codex_config::types::AuthKeyringBackendKind,
-    http_headers: Option<HashMap<String, String>>,
-    env_http_headers: Option<HashMap<String, String>>,
-    resolved_scopes: &ResolvedMcpOAuthScopes,
-    oauth_client_id: Option<&str>,
-    client_registration: McpOAuthClientRegistration,
-    oauth_resource: Option<&str>,
-    callback_port: Option<u16>,
-    callback_url: Option<&str>,
-    global_callback_url: Option<&str>,
-    http_client: Arc<dyn HttpClient>,
-) -> Result<()> {
-    match perform_oauth_login(
-        name,
-        url,
-        store_mode,
-        keyring_backend_kind,
-        http_headers.clone(),
-        env_http_headers.clone(),
-        &resolved_scopes.scopes,
-        oauth_client_id,
-        client_registration,
-        oauth_resource,
-        callback_port,
-        callback_url,
-        global_callback_url,
-        Arc::clone(&http_client),
-    )
-    .await
-    {
-        Ok(()) => Ok(()),
-        Err(err) if should_retry_without_scopes(resolved_scopes, &err) => {
-            println!("OAuth provider rejected discovered scopes. Retrying without scopes…");
-            perform_oauth_login(
-                name,
-                url,
-                store_mode,
-                keyring_backend_kind,
-                http_headers,
-                env_http_headers,
-                &[],
-                oauth_client_id,
-                client_registration,
-                oauth_resource,
-                callback_port,
-                callback_url,
-                global_callback_url,
-                http_client,
-            )
-            .await
-        }
-        Err(err) => Err(err),
     }
 }
 
@@ -512,6 +452,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
                     .or(config.mcp_oauth_callback_url.as_deref()),
                 config.mcp_oauth_callback_url.as_deref(),
                 http_client,
+                McpLoginMode::Browser,
             )
             .await?;
             println!("Successfully logged in.");
@@ -572,6 +513,7 @@ async fn run_login(config: &Config, login_args: LoginArgs) -> Result<()> {
 
     let LoginArgs {
         name,
+        no_browser,
         scopes,
         oauth_client_registration,
     } = login_args;
@@ -633,6 +575,11 @@ async fn run_login(config: &Config, login_args: LoginArgs) -> Result<()> {
         callback_url.as_deref(),
         config.mcp_oauth_callback_url.as_deref(),
         http_client,
+        if no_browser {
+            McpLoginMode::PasteCallback
+        } else {
+            McpLoginMode::Browser
+        },
     )
     .await?;
     println!("Successfully logged in to MCP server '{name}'.");
