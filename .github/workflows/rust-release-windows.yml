@@ -190,14 +190,20 @@ jobs:
       - name: Download pinned Windows build inputs
         shell: pwsh
         env:
-          GH_TOKEN: ${{ secrets.VOICE_BUILD_INPUTS_TOKEN || github.token }}
-          INPUTS_REPOSITORY: ${{ vars.VOICE_BUILD_INPUTS_REPOSITORY || github.repository }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          $pin = (Get-Content -Raw .github/scripts/voice-cygwin-snapshot.json | ConvertFrom-Json).archive
+          $manifest = Get-Content -Raw .github/scripts/voice-cygwin-snapshot.json | ConvertFrom-Json
+          $pin = $manifest.archive
+          $source = $manifest.sourceArchive
           $directory = Join-Path $env:RUNNER_TEMP "voice-cygwin-snapshot"
           New-Item -ItemType Directory -Path $directory | Out-Null
-          gh release download $pin.tag --repo $env:INPUTS_REPOSITORY --pattern $pin.name --dir $directory
-          if ($LASTEXITCODE -ne 0) { throw "Cannot obtain the pinned Cygwin snapshot from the configured release repository" }
+          gh release download $pin.tag --repo "${{ github.repository }}" --pattern $pin.name --pattern $source.name --dir $directory
+          if ($LASTEXITCODE -ne 0) { throw "Cannot obtain the public Cygwin inputs and source" }
+          $sourceFile = Join-Path $directory $source.name
+          if ((Get-Item $sourceFile).Length -ne $source.bytes -or
+              (Get-FileHash $sourceFile -Algorithm SHA256).Hash.ToLowerInvariant() -ne $source.sha256) {
+            throw "Public Cygwin source archive mismatch"
+          }
           "VOICE_CYGWIN_ARCHIVE=$(Join-Path $directory $pin.name)" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Verify and install pinned public build tools
         shell: pwsh

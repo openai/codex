@@ -32,6 +32,11 @@
       "sha512": "7c466da6446bbef67762ff4038dd4986018ed09432bd6ee6ca9e33150874dbb9d61c7e4b06bd925f932a55fda345401224689bbaddc135d7300651f67ec8160b"
     }
   ],
+  "sourceArchive": {
+    "name": "cygwin-build-sources.tar",
+    "bytes": 368824320,
+    "sha256": "13a42ea4e6465f77c32f91e4162f41bcfeab7c0eca47701bb6a8b9aca1eb99f4"
+  },
   "packages": [
     {"name": "_autorebase", "version": "001091-1", "file": "noarch/release/_autorebase/_autorebase-001091-1.tar.zst", "bytes": 4696, "sha512": "a9416ce992ca57f3a6208f46517520d21dfac61988ac84cbb5b17b76e053a0845c15368ccb8ca9c483d8935f9e3db81568433c0d08d0265ec5e6916ea30f2831"},
     {"name": "alternatives", "version": "1.31-1", "file": "x86_64/release/alternatives/alternatives-1.31-1.tar.xz", "bytes": 123748, "sha512": "94adf3376e7fcaf937594be718f54a99f2a2b66367eb2bb294b6fd4a933a9515954a9e9f309ed74cc62fbb353adb053d8500bbaf42994e4355f7180664afa62c"},
