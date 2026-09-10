@@ -31,6 +31,9 @@ use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ThreadAttachmentAddParams;
+use codex_app_server_protocol::ThreadAttachmentListParams;
+use codex_app_server_protocol::ThreadAttachmentRemoveParams;
 use codex_app_server_protocol::ThreadDeleteParams;
 use codex_app_server_protocol::ThreadDeleteResponse;
 use codex_app_server_protocol::ThreadHistoryMode;
@@ -184,6 +187,58 @@ async fn thread_start_defaults_to_legacy_without_history_list_support() -> Resul
     let ThreadStartResponse { thread, .. } = mcp.start_thread(ThreadStartParams::default()).await?;
 
     assert_eq!(thread.history_mode, ThreadHistoryMode::Legacy);
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_attachment_operations_without_sqlite_return_method_not_found() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let store_id = Uuid::new_v4().to_string();
+    create_config_toml_with_thread_store(codex_home.path(), "http://127.0.0.1:1", &store_id)?;
+    let _in_memory_store = InMemoryThreadStoreId { store_id };
+    let client = start_in_process_server(codex_home.path()).await?;
+
+    for request in [
+        ClientRequest::ThreadAttachmentAdd {
+            request_id: RequestId::Integer(1),
+            params: ThreadAttachmentAddParams {
+                thread_id: "not-a-thread-id".to_string(),
+                attachment_type: " ".to_string(),
+                identity_key: " ".to_string(),
+                payload: serde_json::json!({}),
+            },
+        },
+        ClientRequest::ThreadAttachmentList {
+            request_id: RequestId::Integer(2),
+            params: ThreadAttachmentListParams {
+                thread_id: uuid::Uuid::now_v7().to_string(),
+                cursor: None,
+                limit: None,
+            },
+        },
+        ClientRequest::ThreadAttachmentRemove {
+            request_id: RequestId::Integer(3),
+            params: ThreadAttachmentRemoveParams {
+                thread_id: "not-a-thread-id".to_string(),
+                attachment_type: " ".to_string(),
+                identity_key: " ".to_string(),
+            },
+        },
+    ] {
+        let method = request.method_name();
+        let error = client
+            .request(request)
+            .await?
+            .expect_err("attachment management is unsupported by this store");
+        assert_eq!(error.code, -32601);
+        assert_eq!(
+            error.message,
+            format!("{method} is not supported by the configured thread store")
+        );
+    }
+
+    client.shutdown().await?;
+    assert_no_local_persistence_artifacts(codex_home.path())?;
     Ok(())
 }
 

@@ -135,6 +135,8 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadArchivedNotification;
+use codex_app_server_protocol::ThreadAttachmentOperation;
+use codex_app_server_protocol::ThreadAttachmentUpdatedNotification;
 use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadSettings;
@@ -1976,7 +1978,8 @@ async fn archived_untracked_threads_do_not_appear_in_agent_picker() -> Result<()
         app.chat_widget.config_ref(),
     ))
     .await?;
-    let primary_thread_id = ThreadId::new();
+    let primary_thread_id =
+        ThreadId::from_string("00000000-0000-0000-0000-000000000123").expect("valid thread id");
     app.enqueue_primary_thread_session(
         test_thread_session(primary_thread_id, test_path_buf("/tmp/project")),
         Vec::new(),
@@ -1996,8 +1999,32 @@ async fn archived_untracked_threads_do_not_appear_in_agent_picker() -> Result<()
 
     assert!(!app.thread_event_channels.contains_key(&archived_thread_id));
 
+    let attachment_thread_id = ThreadId::new();
+    app.handle_app_server_event(
+        &app_server,
+        codex_app_server_client::AppServerEvent::ServerNotification(Box::new(
+            ServerNotification::ThreadAttachmentUpdated(ThreadAttachmentUpdatedNotification {
+                thread_id: attachment_thread_id.to_string(),
+                attachment_type: "pull_request".to_string(),
+                identity_key: r#"["github.com","openai","codex",123]"#.to_string(),
+                attachment_id: "attachment-1".to_string(),
+                operation: ThreadAttachmentOperation::Deleted,
+            }),
+        )),
+    )
+    .await;
+
+    assert!(
+        !app.thread_event_channels
+            .contains_key(&attachment_thread_id)
+    );
+
     Box::pin(app.open_agent_picker(&mut app_server)).await;
 
+    assert_app_snapshot!(
+        "untracked_thread_notifications_agent_picker",
+        render_bottom_popup(&app.chat_widget, /*width*/ 80)
+    );
     assert_eq!(
         app.agent_navigation.ordered_thread_ids(),
         vec![primary_thread_id]

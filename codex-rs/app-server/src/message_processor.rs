@@ -1384,6 +1384,19 @@ impl MessageProcessor {
             ClientRequest::ThreadMetadataUpdate { params, .. } => {
                 self.thread_processor.thread_metadata_update(params).await
             }
+            ClientRequest::ThreadAttachmentAdd { params, .. } => {
+                self.thread_processor
+                    .thread_attachment_add(request_id.clone(), params)
+                    .await
+            }
+            ClientRequest::ThreadAttachmentList { params, .. } => {
+                self.thread_processor.thread_attachment_list(params).await
+            }
+            ClientRequest::ThreadAttachmentRemove { params, .. } => {
+                self.thread_processor
+                    .thread_attachment_remove(request_id.clone(), params)
+                    .await
+            }
             ClientRequest::ThreadSectionMove { params, .. } => {
                 self.thread_processor.thread_section_move(params).await
             }

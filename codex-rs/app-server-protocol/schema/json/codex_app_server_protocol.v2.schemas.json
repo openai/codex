@@ -2029,6 +2029,78 @@
             },
             "method": {
               "enum": [
+                "thread/attachment/add"
+              ],
+              "title": "Thread/attachment/addRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadAttachmentAddParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/attachment/addRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/attachment/list"
+              ],
+              "title": "Thread/attachment/listRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadAttachmentListParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/attachment/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/attachment/remove"
+              ],
+              "title": "Thread/attachment/removeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadAttachmentRemoveParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/attachment/removeRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/section/move"
               ],
               "title": "Thread/section/moveRequestMethod",
@@ -15823,6 +15895,26 @@
           "properties": {
             "method": {
               "enum": [
+                "thread/attachment/updated"
+              ],
+              "title": "Thread/attachment/updatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadAttachmentUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/attachment/updatedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "thread/goal/updated"
               ],
               "title": "Thread/goal/updatedNotificationMethod",
@@ -18265,6 +18357,200 @@
         "threadId"
       ],
       "title": "ThreadArchivedNotification",
+      "type": "object"
+    },
+    "ThreadAttachment": {
+      "description": "An independently persisted attachment associated with a thread.",
+      "properties": {
+        "attachmentType": {
+          "type": "string"
+        },
+        "createdAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "id": {
+          "type": "string"
+        },
+        "identityKey": {
+          "type": "string"
+        },
+        "payload": true
+      },
+      "required": [
+        "attachmentType",
+        "createdAt",
+        "id",
+        "identityKey",
+        "payload"
+      ],
+      "type": "object"
+    },
+    "ThreadAttachmentAddOutcome": {
+      "description": "Result of attempting to associate an attachment with a thread.",
+      "enum": [
+        "created",
+        "existing"
+      ],
+      "type": "string"
+    },
+    "ThreadAttachmentAddParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Parameters for creating or locating an attachment on its owning thread.",
+      "properties": {
+        "attachmentType": {
+          "type": "string"
+        },
+        "identityKey": {
+          "type": "string"
+        },
+        "payload": true,
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "attachmentType",
+        "identityKey",
+        "payload",
+        "threadId"
+      ],
+      "title": "ThreadAttachmentAddParams",
+      "type": "object"
+    },
+    "ThreadAttachmentAddResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "The created or existing attachment.",
+      "properties": {
+        "attachment": {
+          "$ref": "#/definitions/ThreadAttachment"
+        },
+        "outcome": {
+          "$ref": "#/definitions/ThreadAttachmentAddOutcome"
+        }
+      },
+      "required": [
+        "attachment",
+        "outcome"
+      ],
+      "title": "ThreadAttachmentAddResponse",
+      "type": "object"
+    },
+    "ThreadAttachmentListParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Parameters for listing attachments from one thread.",
+      "properties": {
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "title": "ThreadAttachmentListParams",
+      "type": "object"
+    },
+    "ThreadAttachmentListResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "One page of attachments associated with the requested thread.",
+      "properties": {
+        "data": {
+          "items": {
+            "$ref": "#/definitions/ThreadAttachment"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "title": "ThreadAttachmentListResponse",
+      "type": "object"
+    },
+    "ThreadAttachmentOperation": {
+      "description": "The persisted attachment change represented by a notification.",
+      "enum": [
+        "created",
+        "deleted"
+      ],
+      "type": "string"
+    },
+    "ThreadAttachmentRemoveParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Parameters for deleting an attachment by its stable thread-local identity.",
+      "properties": {
+        "attachmentType": {
+          "type": "string"
+        },
+        "identityKey": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "attachmentType",
+        "identityKey",
+        "threadId"
+      ],
+      "title": "ThreadAttachmentRemoveParams",
+      "type": "object"
+    },
+    "ThreadAttachmentRemoveResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Successful deletion does not return additional attachment data.",
+      "title": "ThreadAttachmentRemoveResponse",
+      "type": "object"
+    },
+    "ThreadAttachmentUpdatedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Notification published after a thread attachment is created or deleted.",
+      "properties": {
+        "attachmentId": {
+          "type": "string"
+        },
+        "attachmentType": {
+          "type": "string"
+        },
+        "identityKey": {
+          "type": "string"
+        },
+        "operation": {
+          "$ref": "#/definitions/ThreadAttachmentOperation"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "attachmentId",
+        "attachmentType",
+        "identityKey",
+        "operation",
+        "threadId"
+      ],
+      "title": "ThreadAttachmentUpdatedNotification",
       "type": "object"
     },
     "ThreadClosedNotification": {

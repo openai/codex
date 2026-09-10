@@ -1166,7 +1166,9 @@ impl App {
         }
         if matches!(
             notification,
-            ServerNotification::ThreadSettingsUpdated(_) | ServerNotification::ThreadArchived(_)
+            ServerNotification::ThreadSettingsUpdated(_)
+                | ServerNotification::ThreadArchived(_)
+                | ServerNotification::ThreadAttachmentUpdated(_)
         ) && self.primary_thread_id.is_some()
             && self.primary_thread_id != Some(thread_id)
             && !self.thread_event_channels.contains_key(&thread_id)

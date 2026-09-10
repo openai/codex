@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Parameters for deleting an attachment by its stable thread-local identity.",
+  "properties": {
+    "attachmentType": {
+      "type": "string"
+    },
+    "identityKey": {
+      "type": "string"
+    },
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "attachmentType",
+    "identityKey",
+    "threadId"
+  ],
+  "title": "ThreadAttachmentRemoveParams",
+  "type": "object"
+}

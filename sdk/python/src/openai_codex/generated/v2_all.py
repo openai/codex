@@ -5034,6 +5034,89 @@ class ThreadArchivedNotification(BaseModel):
     thread_id: Annotated[str, Field(alias="threadId")]
 
 
+class ThreadAttachment(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    attachment_type: Annotated[str, Field(alias="attachmentType")]
+    created_at: Annotated[int, Field(alias="createdAt")]
+    id: str
+    identity_key: Annotated[str, Field(alias="identityKey")]
+    payload: Any
+
+
+class ThreadAttachmentAddOutcome(Enum):
+    created = "created"
+    existing = "existing"
+
+
+class ThreadAttachmentAddParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    attachment_type: Annotated[str, Field(alias="attachmentType")]
+    identity_key: Annotated[str, Field(alias="identityKey")]
+    payload: Any
+    thread_id: Annotated[str, Field(alias="threadId")]
+
+
+class ThreadAttachmentAddResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    attachment: ThreadAttachment
+    outcome: ThreadAttachmentAddOutcome
+
+
+class ThreadAttachmentListParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    cursor: str | None = None
+    limit: Annotated[int | None, Field(ge=0)] = None
+    thread_id: Annotated[str, Field(alias="threadId")]
+
+
+class ThreadAttachmentListResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    data: list[ThreadAttachment]
+    next_cursor: Annotated[str | None, Field(alias="nextCursor")] = None
+
+
+class ThreadAttachmentOperation(Enum):
+    created = "created"
+    deleted = "deleted"
+
+
+class ThreadAttachmentRemoveParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    attachment_type: Annotated[str, Field(alias="attachmentType")]
+    identity_key: Annotated[str, Field(alias="identityKey")]
+    thread_id: Annotated[str, Field(alias="threadId")]
+
+
+class ThreadAttachmentRemoveResponse(BaseModel):
+    pass
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+
+
+class ThreadAttachmentUpdatedNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    attachment_id: Annotated[str, Field(alias="attachmentId")]
+    attachment_type: Annotated[str, Field(alias="attachmentType")]
+    identity_key: Annotated[str, Field(alias="identityKey")]
+    operation: ThreadAttachmentOperation
+    thread_id: Annotated[str, Field(alias="threadId")]
+
+
 class ThreadClosedNotification(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -6636,6 +6719,39 @@ class ThreadMetadataUpdateRequest(BaseModel):
         Literal["thread/metadata/update"], Field(title="Thread/metadata/updateRequestMethod")
     ]
     params: ThreadMetadataUpdateParams
+
+
+class ThreadAttachmentAddRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["thread/attachment/add"], Field(title="Thread/attachment/addRequestMethod")
+    ]
+    params: ThreadAttachmentAddParams
+
+
+class ThreadAttachmentListRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["thread/attachment/list"], Field(title="Thread/attachment/listRequestMethod")
+    ]
+    params: ThreadAttachmentListParams
+
+
+class ThreadAttachmentRemoveRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["thread/attachment/remove"], Field(title="Thread/attachment/removeRequestMethod")
+    ]
+    params: ThreadAttachmentRemoveParams
 
 
 class ThreadSectionMoveRequest(BaseModel):
@@ -8774,6 +8890,24 @@ class ThreadNameUpdatedServerNotification(BaseModel):
         Literal["thread/name/updated"], Field(title="Thread/name/updatedNotificationMethod")
     ]
     params: ThreadNameUpdatedNotification
+
+
+class ThreadAttachmentUpdatedServerNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    emitted_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="emittedAtMs",
+            description="Unix timestamp (in milliseconds) when app-server emitted this notification.",
+        ),
+    ] = None
+    method: Annotated[
+        Literal["thread/attachment/updated"],
+        Field(title="Thread/attachment/updatedNotificationMethod"),
+    ]
+    params: ThreadAttachmentUpdatedNotification
 
 
 class ThreadGoalClearedServerNotification(BaseModel):
@@ -11957,6 +12091,9 @@ class ClientRequest(
         | ThreadGoalGetRequest
         | ThreadGoalClearRequest
         | ThreadMetadataUpdateRequest
+        | ThreadAttachmentAddRequest
+        | ThreadAttachmentListRequest
+        | ThreadAttachmentRemoveRequest
         | ThreadSectionMoveRequest
         | ThreadUnarchiveRequest
         | ThreadCompactStartRequest
@@ -12062,6 +12199,9 @@ class ClientRequest(
         | ThreadGoalGetRequest
         | ThreadGoalClearRequest
         | ThreadMetadataUpdateRequest
+        | ThreadAttachmentAddRequest
+        | ThreadAttachmentListRequest
+        | ThreadAttachmentRemoveRequest
         | ThreadSectionMoveRequest
         | ThreadUnarchiveRequest
         | ThreadCompactStartRequest
@@ -12336,6 +12476,7 @@ class ServerNotification(
         | ThreadRevertedServerNotification
         | SkillsChangedServerNotification
         | ThreadNameUpdatedServerNotification
+        | ThreadAttachmentUpdatedServerNotification
         | ThreadGoalUpdatedServerNotification
         | ThreadGoalClearedServerNotification
         | ThreadQueueChangedServerNotification
@@ -12423,6 +12564,7 @@ class ServerNotification(
         | ThreadRevertedServerNotification
         | SkillsChangedServerNotification
         | ThreadNameUpdatedServerNotification
+        | ThreadAttachmentUpdatedServerNotification
         | ThreadGoalUpdatedServerNotification
         | ThreadGoalClearedServerNotification
         | ThreadQueueChangedServerNotification
