@@ -18,6 +18,7 @@ pub(super) fn cleanup_firewall_rules() -> Result<()> {
     let mut errors = Vec::new();
     for name in [
         "codex_sandbox_offline_block_outbound",
+        "codex_sandbox_offline_block_inbound",
         "codex_sandbox_offline_block_loopback_tcp",
         "codex_sandbox_offline_block_loopback_udp",
         "codex_sandbox_offline_allow_loopback_proxy",

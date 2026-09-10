@@ -438,6 +438,78 @@ async fn windows_elevated_does_not_create_missing_workspace_metadata() -> anyhow
             path.display()
         );
     }
+
+    let firewall_output = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            r#"
+$ErrorActionPreference = 'Stop'
+$sid = (Get-LocalUser -Name 'CodexSandboxOffline').SID.Value
+$rules = foreach ($name in @('codex_sandbox_offline_block_inbound', 'codex_sandbox_offline_block_outbound')) {
+    $rule = @(Get-NetFirewallRule -PolicyStore ActiveStore -DisplayName $name)
+    if ($rule.Count -ne 1) { throw "Expected exactly one effective rule for $name" }
+    $address = $rule | Get-NetFirewallAddressFilter
+    $security = $rule | Get-NetFirewallSecurityFilter
+    $port = $rule | Get-NetFirewallPortFilter
+    [pscustomobject]@{
+        name = $name
+        direction = [string]$rule[0].Direction
+        action = [string]$rule[0].Action
+        enabled = [string]$rule[0].Enabled
+        profile = [string]$rule[0].Profile
+        protocol = [string]$port.Protocol
+        localAddresses = @($address.LocalAddress)
+        remoteAddresses = @($address.RemoteAddress | Sort-Object)
+        localPorts = @($port.LocalPort)
+        remotePorts = @($port.RemotePort)
+        localUser = [string]$security.LocalUser
+    }
+}
+[pscustomobject]@{ offlineSid = $sid; rules = @($rules) } | ConvertTo-Json -Depth 4 -Compress
+"#,
+        ])
+        .output()
+        .context("read offline sandbox firewall rules")?;
+    assert!(
+        firewall_output.status.success(),
+        "read offline sandbox firewall rules: {}",
+        String::from_utf8_lossy(&firewall_output.stderr)
+    );
+    let firewall_rules: serde_json::Value = serde_json::from_slice(&firewall_output.stdout)
+        .context("parse offline sandbox firewall rules")?;
+    let offline_sid = firewall_rules["offlineSid"]
+        .as_str()
+        .context("offline sandbox firewall rules should include their user SID")?;
+    let local_user = format!("O:LSD:(A;;CC;;;{offline_sid})");
+    let expected_rules: Vec<_> = [
+        ("codex_sandbox_offline_block_inbound", "Inbound"),
+        ("codex_sandbox_offline_block_outbound", "Outbound"),
+    ]
+    .into_iter()
+    .map(|(name, direction)| {
+        serde_json::json!({
+            "name": name,
+            "direction": direction,
+            "action": "Block",
+            "enabled": "True",
+            "profile": "Any",
+            "protocol": "Any",
+            "localAddresses": ["Any"],
+            "remoteAddresses": [
+                "::",
+                "::2-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+                "0.0.0.0-126.255.255.255",
+                "128.0.0.0-255.255.255.255",
+            ],
+            "localPorts": ["Any"],
+            "remotePorts": ["Any"],
+            "localUser": local_user,
+        })
+    })
+    .collect();
+    assert_eq!(firewall_rules["rules"], serde_json::json!(expected_rules));
     Ok(())
 }
 

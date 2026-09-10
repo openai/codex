@@ -750,14 +750,14 @@ fn configure_offline_sandbox_network(
             format!("ensure offline proxy allowlist failed: {err}"),
         )));
     }
-    let firewall_result = firewall::ensure_offline_outbound_block(offline_sid_str, log);
+    let firewall_result = firewall::ensure_offline_network_blocks(offline_sid_str, log);
     if let Err(err) = firewall_result {
         if extract_setup_failure(&err).is_some() {
             return Err(err);
         }
         return Err(anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
-            format!("ensure offline outbound block failed: {err}"),
+            format!("ensure offline network blocks failed: {err}"),
         )));
     }
     Ok(())
