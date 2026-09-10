@@ -490,7 +490,7 @@ async fn sandboxed_shell_classification_respects_review_scope() -> Result<()> {
         arguments: r#"{"cmd":"pwd"}"#.to_owned(),
     };
     let additional_permissions = ToolPayload::Function {
-        arguments: r#"{"cmd":"pwd","sandbox_permissions":"with_additional_permissions"}"#
+        arguments: r#"{"cmd":"pwd","sandbox_permissions":"with_additional_permissions","additional_permissions":{"network":{"enabled":true}}}"#
             .to_owned(),
     };
     let unsandboxed = ToolPayload::Function {
@@ -539,6 +539,13 @@ async fn sandboxed_shell_classification_respects_review_scope() -> Result<()> {
 
     let fixture = GuardianFailureFixture::new().await?;
     let thread_store = fixture.test.codex.thread_extension_data();
+    let mut score = thread_store
+        .get::<SecurityRiskScore>()
+        .expect("fixture should publish a score")
+        .as_ref()
+        .clone();
+    score.scores.insert("action_risk".to_owned(), 0.0);
+    thread_store.insert(score);
     let score_progress = thread_store
         .get::<GuardianV2ScoreProgress>()
         .expect("Guardian v2 should track score progress per thread");
@@ -547,30 +554,42 @@ async fn sandboxed_shell_classification_respects_review_scope() -> Result<()> {
         .load(Ordering::Acquire);
     let turn_store = ExtensionData::new("turn-1");
     let tool_name = ToolName::plain("exec_command");
-    let payload = ToolPayload::Function {
-        arguments: r#"{"cmd":"pwd"}"#.to_owned(),
-    };
+    for (call_id, payload, expected_decision) in [
+        ("call-2", sandboxed, Some(ReviewDecision::Approved)),
+        ("call-3", additional_permissions, None),
+    ] {
+        fixture.registry.tool_lifecycle_contributors()[0]
+            .on_tool_start(ToolStartInput {
+                session_store: &fixture.session_store,
+                thread_store,
+                turn_store: &turn_store,
+                turn_id: "turn-1",
+                root_turn_id: None,
+                call_id,
+                originating_item_id: None,
+                tool_name: &tool_name,
+                mcp_tool: None,
+                payload: &payload,
+                conversation_history: Arc::new(TestConversationHistory(Vec::new())),
+                source: ToolCallSource::Direct,
+            })
+            .await;
 
-    fixture.registry.tool_lifecycle_contributors()[0]
-        .on_tool_start(ToolStartInput {
-            session_store: &fixture.session_store,
-            thread_store,
-            turn_store: &turn_store,
-            turn_id: "turn-1",
-            root_turn_id: None,
-            call_id: "call-2",
-            originating_item_id: None,
-            tool_name: &tool_name,
-            mcp_tool: None,
-            payload: &payload,
-            conversation_history: Arc::new(TestConversationHistory(Vec::new())),
-            source: ToolCallSource::Direct,
-        })
-        .await;
+        assert_eq!(
+            cached_approval(
+                &fixture.registry,
+                thread_store,
+                r#"{"tool":"exec_command","cmd":"pwd"}"#,
+                /*metrics*/ None,
+            )
+            .await,
+            expected_decision,
+        );
+    }
 
     assert_eq!(
         score_progress.latest_tool_call.load(Ordering::Acquire),
-        latest_scored_tool_call + 1
+        latest_scored_tool_call + 2
     );
     assert_eq!(
         score_progress
@@ -578,6 +597,7 @@ async fn sandboxed_shell_classification_respects_review_scope() -> Result<()> {
             .load(Ordering::Acquire),
         latest_scored_tool_call
     );
+    fixture.assert_fails_closed("scoring_failure").await?;
     Ok(())
 }
 

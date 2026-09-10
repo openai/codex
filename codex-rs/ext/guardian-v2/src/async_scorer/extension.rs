@@ -32,6 +32,7 @@ use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ToolFinishInput;
 use codex_extension_api::ToolLifecycleContributor;
 use codex_extension_api::ToolLifecycleFuture;
+use codex_extension_api::ToolPayload;
 use codex_extension_api::ToolStartInput;
 use codex_features::Feature;
 use codex_guardian_context::ContextTarget;
@@ -277,6 +278,20 @@ impl GuardianV2Extension {
                         .fetch_add(/*val*/ 1, Ordering::Relaxed)
                         .saturating_add(/*rhs*/ 1);
                     score_progress.wrapper_lag.record(&input, index);
+                    // Unscored permission widening must not reuse an earlier approval score.
+                    if input.tool_name.is_default_namespace()
+                        && input.tool_name.name == "exec_command"
+                        && let ToolPayload::Function { arguments } = input.payload
+                        && let Ok(arguments) = serde_json::from_str::<serde_json::Value>(arguments)
+                        && arguments
+                            .get("sandbox_permissions")
+                            .and_then(serde_json::Value::as_str)
+                            == Some("with_additional_permissions")
+                    {
+                        score_progress
+                            .latest_failed_tool_call
+                            .fetch_max(index, Ordering::Release);
+                    }
                 }
                 UnscoredAction::InvalidateScore => {
                     let index = score_progress
