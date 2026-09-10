@@ -3563,13 +3563,20 @@ dependencies = [
  "codex-analytics",
  "codex-extension-api",
  "codex-features",
+ "codex-feedback",
+ "codex-mcp",
+ "codex-otel",
  "codex-protocol",
+ "opentelemetry",
+ "opentelemetry_sdk",
  "pretty_assertions",
  "rand 0.9.3",
  "serde",
  "serde_json",
+ "test-case",
  "tokio",
  "tokio-util",
+ "tracing",
 ]
 
 [[package]]

@@ -7,7 +7,6 @@ mod coverage;
 mod decision;
 mod feedback;
 mod input_budget;
-mod metrics;
 mod prompt;
 pub(crate) use input_budget::PendingReviewContext;
 pub(crate) use input_budget::check_pending as check_pending_guardian_input;
@@ -62,7 +61,6 @@ pub(crate) use runtime::ReviewAction;
 
 pub(crate) use codex_guardian_reviewer::REVIEW_TIMEOUT as GUARDIAN_REVIEW_TIMEOUT;
 pub(crate) const GUARDIAN_REVIEWER_NAME: &str = "guardian";
-pub(crate) use codex_guardian_reviewer::AUTO_REVIEW_DENIAL_WINDOW_SIZE;
 pub(crate) const AUTO_REVIEW_DENIED_ACTION_APPROVAL_DEVELOPER_PREFIX: &str =
     codex_guardian_context::MANUAL_APPROVAL_DEVELOPER_PREFIX;
 const GUARDIAN_MAX_TOOL_ENTRY_TOKENS: usize = codex_guardian_context::ContextProfile::synchronous()
@@ -170,10 +168,6 @@ impl From<&Arc<TurnContext>> for GuardianReviewContext {
 
 #[cfg(test)]
 use codex_guardian_reviewer::guardian_output_schema;
-
-pub(crate) use codex_guardian_reviewer::GuardianRejectionCircuitBreaker;
-pub(crate) use codex_guardian_reviewer::GuardianRejectionCircuitBreakerAction;
-pub(crate) use codex_guardian_reviewer::GuardianRejectionCircuitBreakerPolicy;
 
 pub(crate) use approval_request::format_guardian_action_pretty;
 #[cfg(test)]

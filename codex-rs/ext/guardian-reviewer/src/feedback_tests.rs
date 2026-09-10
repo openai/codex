@@ -8,21 +8,26 @@ fn oversized_context_keeps_the_action_and_decision() -> anyhow::Result<()> {
     let reviewer_thread_id = ThreadId::new();
     let decision = r#"{"outcome":"deny","rationale":"Missing approval."}"#;
     let action = r#"{"command":"git push"}"#;
-    ReviewFeedbackRecord {
+    let outcome = GuardianReviewSessionOutcome::Completed(Ok(Some(decision.to_owned())));
+    let feedback = FailedReviewFeedback::for_outcome(
+        &outcome,
+        ReviewFeedbackSettings {
+            enabled: true,
+            ephemeral: false,
+        },
+    )
+    .expect("denials retain feedback");
+    feedback.store(ReviewFeedbackContext {
         reviewed_thread_id: thread_id,
         reviewed_turn_id: "parent-turn",
         target_item_id: Some("push-call"),
         reviewer_thread_id,
         model: "review-model",
-        status: "denied",
-        decision: Some(decision),
         action,
         action_truncated: false,
         instructions: Some(&"x".repeat(MAX_RECORD_BYTES)),
         history: Vec::new(),
-        context_omitted: false,
-    }
-    .store();
+    });
     let contents = codex_feedback::guardian_review_failures(&[thread_id])
         .attachment
         .expect("failed-review record")

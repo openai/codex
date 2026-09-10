@@ -306,11 +306,11 @@ impl Session {
         let cancellation_token = CancellationToken::new();
         let done = Arc::new(Notify::new());
 
-        self.services
-            .guardian_rejection_circuit_breaker
-            .lock()
-            .await
-            .clear_turn(&turn_context.sub_id);
+        codex_guardian_reviewer::ReviewDenials::clear_turn(
+            &self.services.thread_extension_data,
+            &turn_context.sub_id,
+        )
+        .await;
 
         let (pending_items, _) = self.input_queue.drain_mailbox_input_items().await;
         let turn_state = {
@@ -835,11 +835,11 @@ impl Session {
             })
         };
         self.send_event(turn_context.as_ref(), event).await;
-        self.services
-            .guardian_rejection_circuit_breaker
-            .lock()
-            .await
-            .clear_turn(&turn_context.sub_id);
+        codex_guardian_reviewer::ReviewDenials::clear_turn(
+            &self.services.thread_extension_data,
+            &turn_context.sub_id,
+        )
+        .await;
 
         let cleared_active_turn = {
             let mut active = self.active_turn.lock().await;
@@ -991,11 +991,11 @@ impl Session {
             duration_ms,
         });
         self.send_event(task.turn_context.as_ref(), event).await;
-        self.services
-            .guardian_rejection_circuit_breaker
-            .lock()
-            .await
-            .clear_turn(&task.turn_context.sub_id);
+        codex_guardian_reviewer::ReviewDenials::clear_turn(
+            &self.services.thread_extension_data,
+            &task.turn_context.sub_id,
+        )
+        .await;
         // Regular items were flushed before this terminal event was appended; buffering
         // thread writers may not flush it without another explicit barrier.
         if let Err(err) = self.flush_rollout().await {

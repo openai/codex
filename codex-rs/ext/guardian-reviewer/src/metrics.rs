@@ -1,3 +1,5 @@
+//! Emits Guardian metrics with bounded tags and the existing telemetry schema.
+
 use std::time::Duration;
 
 use codex_analytics::GuardianApprovalRequestSource;

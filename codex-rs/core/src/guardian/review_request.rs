@@ -4,21 +4,12 @@
 use super::*;
 use crate::codex_thread::GuardianAuthorizationVersion;
 use codex_guardian_reviewer::ReviewHost;
-use codex_protocol::approvals::GuardianAssessmentAction;
 use codex_protocol::approvals::GuardianReviewReason;
 
 pub(in crate::guardian) struct PreparedApproval {
     request: GuardianApprovalRequest,
     turn: Arc<TurnContext>,
-    review_reason: GuardianReviewReason,
-    assessment_turn_id: String,
-    target_item_id: Option<String>,
-    plugin_id: Option<String>,
-    script_path: Option<String>,
-    action_summary: GuardianAssessmentAction,
-    reviewed_action: GuardianReviewedAction,
-    review_tracking: GuardianReviewTrackContext,
-    started_at_ms: i64,
+    report: codex_guardian_reviewer::ReviewReport,
     root_authorization_version: Option<GuardianAuthorizationVersion>,
     user_message_revision: u64,
     review_evidence: Option<(
@@ -98,80 +89,46 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
             .as_ref()
             .map(PluginCommandAttribution::serialized_fields)
             .unzip();
-        let action_summary = guardian_assessment_action(&request);
-        let reviewed_action = guardian_reviewed_action(&request);
-        let review_tracking = GuardianReviewTrackContext::new(
-            session.thread_id.to_string(),
-            assessment_turn_id.clone(),
-            review_id.clone(),
-            target_item_id.clone(),
-            approval_request_source,
-            reviewed_action.clone(),
-            GUARDIAN_REVIEW_TIMEOUT.as_millis() as u64,
-        );
-        let started_at_ms = review_tracking.started_at_ms.try_into().unwrap_or_default();
+        let report =
+            codex_guardian_reviewer::ReviewReport::new(codex_guardian_reviewer::ReviewMetadata {
+                thread_id: session.thread_id.to_string(),
+                turn_id: assessment_turn_id,
+                review_id,
+                target_item_id,
+                plugin_id,
+                script_path,
+                approval_request_source,
+                reviewed_action: guardian_reviewed_action(&request),
+                action: guardian_assessment_action(&request),
+                review_reason,
+            });
         session
             .send_event(
                 turn.as_ref(),
-                EventMsg::GuardianAssessment(GuardianAssessmentEvent {
-                    review_reason: Some(review_reason),
-                    id: review_id.clone(),
-                    target_item_id: target_item_id.clone(),
-                    plugin_id: plugin_id.clone(),
-                    script_path: script_path.clone(),
-                    turn_id: assessment_turn_id.clone(),
-                    started_at_ms,
-                    completed_at_ms: None,
-                    status: GuardianAssessmentStatus::InProgress,
-                    risk_level: None,
-                    user_authorization: None,
-                    rationale: None,
-                    decision_source: None,
-                    action: action_summary.clone(),
-                }),
+                EventMsg::GuardianAssessment(report.started_event()),
             )
             .await;
-
         if external_cancel
             .as_ref()
             .is_some_and(CancellationToken::is_cancelled)
         {
             let completed_at_ms = now_unix_timestamp_ms();
-            track_guardian_review(
-                session.as_ref(),
-                &review_tracking,
-                approval_request_source,
-                &reviewed_action,
-                GuardianReviewAnalyticsResult {
-                    decision: GuardianReviewDecision::Aborted,
-                    terminal_status: GuardianReviewTerminalStatus::Aborted,
-                    failure_reason: Some(GuardianReviewFailureReason::Cancelled),
-                    ..GuardianReviewAnalyticsResult::without_session()
-                },
+            let completed = report.complete(
+                GuardianReviewOutcome::Error(GuardianReviewError::Cancelled),
+                turn.model_info(),
+                GuardianReviewAnalyticsResult::without_session(),
+                completed_at_ms,
+            );
+            report.track(
+                &session.services.session_telemetry,
+                &session.services.analytics_events_client,
+                completed.analytics,
                 completed_at_ms.try_into().unwrap_or_default(),
             );
             session
-                .send_event(
-                    turn.as_ref(),
-                    EventMsg::GuardianAssessment(GuardianAssessmentEvent {
-                        review_reason: Some(review_reason),
-                        id: review_id,
-                        target_item_id,
-                        plugin_id: plugin_id.clone(),
-                        script_path: script_path.clone(),
-                        turn_id: assessment_turn_id.clone(),
-                        started_at_ms,
-                        completed_at_ms: Some(completed_at_ms),
-                        status: GuardianAssessmentStatus::Aborted,
-                        risk_level: None,
-                        user_authorization: None,
-                        rationale: None,
-                        decision_source: Some(GuardianAssessmentDecisionSource::Agent),
-                        action: action_summary,
-                    }),
-                )
+                .send_event(turn.as_ref(), EventMsg::GuardianAssessment(completed.event))
                 .await;
-            record_guardian_non_denial(&session, &assessment_turn_id).await;
+            record_guardian_non_denial(&session, report.turn_id()).await;
             return Err(ReviewDecision::Abort);
         }
 
@@ -205,15 +162,7 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
         Ok(PreparedApproval {
             request,
             turn,
-            review_reason,
-            assessment_turn_id,
-            target_item_id,
-            plugin_id,
-            script_path,
-            action_summary,
-            reviewed_action,
-            review_tracking,
-            started_at_ms,
+            report,
             root_authorization_version,
             user_message_revision,
             review_evidence,
@@ -246,23 +195,12 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
         let PreparedApproval {
             request: _,
             turn,
-            review_reason,
-            assessment_turn_id,
-            target_item_id,
-            plugin_id,
-            script_path,
-            action_summary,
-            reviewed_action,
-            review_tracking,
-            started_at_ms,
+            report,
             root_authorization_version,
             user_message_revision,
             review_evidence,
         } = prepared;
         let session = Arc::clone(&self.session);
-        let review_id = self.review_id.clone();
-        let approval_request_source = self.options.approval_request_source;
-        let terminal_action = action_summary.clone();
         if session.guardian_context_mode == GuardianContextMode::ThreadOwned
             && matches!(&outcome, GuardianReviewOutcome::Completed(assessment) if assessment.outcome == GuardianAssessmentOutcome::Allow)
             && (root_authorization_version
@@ -284,32 +222,15 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
         }
 
         let completed_at_ms = now_unix_timestamp_ms();
-        let completed = codex_guardian_reviewer::complete_review(
+        let completed = report.complete(
             outcome,
             turn.model_info(),
-            GuardianAssessmentEvent {
-                review_reason: Some(review_reason),
-                id: review_id,
-                target_item_id,
-                plugin_id,
-                script_path,
-                turn_id: assessment_turn_id.clone(),
-                started_at_ms,
-                completed_at_ms: Some(completed_at_ms),
-                status: GuardianAssessmentStatus::InProgress,
-                risk_level: None,
-                user_authorization: None,
-                rationale: None,
-                decision_source: Some(GuardianAssessmentDecisionSource::Agent),
-                action: terminal_action,
-            },
             analytics_result,
+            completed_at_ms,
         );
-        track_guardian_review(
-            session.as_ref(),
-            &review_tracking,
-            approval_request_source,
-            &reviewed_action,
+        report.track(
+            &session.services.session_telemetry,
+            &session.services.analytics_events_client,
             completed.analytics,
             completed_at_ms.try_into().unwrap_or_default(),
         );
@@ -336,9 +257,9 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
             .send_event(turn.as_ref(), EventMsg::GuardianAssessment(completed.event))
             .await;
         if completed.assessment_outcome == Some(GuardianAssessmentOutcome::Deny) {
-            record_guardian_denial(&session, &turn, &assessment_turn_id).await;
+            record_guardian_denial(&session, &turn, report.turn_id()).await;
         } else {
-            record_guardian_non_denial(&session, &assessment_turn_id).await;
+            record_guardian_non_denial(&session, report.turn_id()).await;
         }
         completed.decision
     }

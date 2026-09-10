@@ -1,4 +1,4 @@
-//! Supplies host review preparation, telemetry and runtime configuration.
+//! Supplies host review preparation, interruption and runtime configuration.
 //! Guardian's extension owns the synchronous review loop and pool.
 
 #[path = "review_request.rs"]
@@ -7,11 +7,6 @@ mod request;
 use crate::context::GuardianContextMode;
 use codex_analytics::GuardianApprovalRequestSource;
 use codex_analytics::GuardianReviewAnalyticsResult;
-use codex_analytics::GuardianReviewDecision;
-use codex_analytics::GuardianReviewFailureReason;
-use codex_analytics::GuardianReviewTerminalStatus;
-use codex_analytics::GuardianReviewTrackContext;
-use codex_analytics::GuardianReviewedAction;
 use codex_core_plugins::PluginCommandAttribution;
 use codex_extension_api::ThreadIdleCause;
 use codex_features::Feature;
@@ -22,9 +17,6 @@ use codex_guardian_reviewer::GuardianReviewSessionLimits;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::GuardianAssessmentDecisionSource;
-use codex_protocol::protocol::GuardianAssessmentEvent;
-use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SessionSource;
@@ -42,21 +34,18 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::turn_timing::now_unix_timestamp_ms;
 
-use super::AUTO_REVIEW_DENIAL_WINDOW_SIZE;
 use super::ApprovalRequestReasons;
+#[cfg(test)]
 use super::GUARDIAN_REVIEW_TIMEOUT;
 use super::GUARDIAN_REVIEWER_NAME;
 use super::GuardianApprovalRequest;
 use super::GuardianAssessmentOutcome;
-use super::GuardianRejectionCircuitBreakerAction;
-use super::GuardianRejectionCircuitBreakerPolicy;
 use super::GuardianReviewContext;
 use super::approval_request::format_guardian_action_pretty;
 use super::approval_request::guardian_assessment_action;
 use super::approval_request::guardian_request_target_item_id;
 use super::approval_request::guardian_request_turn_id;
 use super::approval_request::guardian_reviewed_action;
-use super::metrics::emit_guardian_review_metrics;
 use super::review_session::GuardianReviewSessionParams;
 use super::review_session::build_guardian_review_session_config;
 use codex_guardian_reviewer::guardian_output_schema;
@@ -147,48 +136,17 @@ pub(crate) fn is_basic_session_source(session_source: &SessionSource) -> bool {
     }
 }
 
-fn track_guardian_review(
-    session: &Session,
-    tracking: &GuardianReviewTrackContext,
-    approval_request_source: GuardianApprovalRequestSource,
-    reviewed_action: &GuardianReviewedAction,
-    result: GuardianReviewAnalyticsResult,
-    completed_at_ms: u64,
-) {
-    emit_guardian_review_metrics(
-        &session.services.session_telemetry,
-        &result,
-        approval_request_source,
-        reviewed_action,
-        completed_at_ms.saturating_sub(tracking.started_at_ms),
-    );
-    session
-        .services
-        .analytics_events_client
-        .track_guardian_review(tracking, result, completed_at_ms);
-}
-
 pub(super) async fn record_guardian_non_denial(session: &Arc<Session>, turn_id: &str) {
-    session
-        .services
-        .guardian_rejection_circuit_breaker
-        .lock()
-        .await
-        .record_non_denial(turn_id);
+    codex_guardian_reviewer::ReviewDenials::for_thread(&session.services.thread_extension_data)
+        .record_non_denial(turn_id)
+        .await;
 }
 
 async fn record_guardian_denial(session: &Arc<Session>, turn: &Arc<TurnContext>, turn_id: &str) {
-    let policy = GuardianRejectionCircuitBreakerPolicy::from(turn.model_info().as_ref());
-    let action = session
-        .services
-        .guardian_rejection_circuit_breaker
-        .lock()
-        .await
-        .record_denial(turn_id, policy);
-    let GuardianRejectionCircuitBreakerAction::InterruptTurn {
-        consecutive_denials,
-        recent_denials,
-    } = action
+    let Some(message) =
+        codex_guardian_reviewer::ReviewDenials::for_thread(&session.services.thread_extension_data)
+            .record_denial(turn_id, turn.model_info())
+            .await
     else {
         return;
     };
@@ -200,11 +158,7 @@ async fn record_guardian_denial(session: &Arc<Session>, turn: &Arc<TurnContext>,
     session
         .send_event(
             turn.as_ref(),
-            EventMsg::GuardianWarning(WarningEvent {
-                message: format!(
-                    "Automatic approval review rejected too many approval requests for this turn ({consecutive_denials} consecutive, {recent_denials} in the last {AUTO_REVIEW_DENIAL_WINDOW_SIZE} reviews); interrupting the turn."
-                ),
-            }),
+            EventMsg::GuardianWarning(WarningEvent { message }),
         )
         .await;
 

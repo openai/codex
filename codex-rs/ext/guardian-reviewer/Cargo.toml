@@ -17,12 +17,19 @@ anyhow = { workspace = true }
 codex-analytics = { workspace = true }
 codex-extension-api = { workspace = true }
 codex-features = { workspace = true }
+codex-feedback = { workspace = true }
+codex-mcp = { workspace = true }
+codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true, features = ["experimental_metrics_custom_reader", "metrics"] }
+test-case = "3.3.1"
 pretty_assertions = { workspace = true }
