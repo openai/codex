@@ -40,16 +40,39 @@ See the Codex keymap documentation for supported actions and examples."
 
 #[test]
 fn new_agents_defaults_preserve_existing_custom_bindings() {
-    for context in ["agents", "list"] {
-        let existing = if context == "agents" {
-            "stop"
-        } else {
-            "move_down"
-        };
-        let keymap: TuiKeymap =
-            serde_json::from_value(json!({context: {existing: "ctrl-w"}})).unwrap();
-        let runtime =
-            RuntimeKeymap::from_config(&keymap).expect("existing configuration remains valid");
-        assert!(runtime.agents.hide.is_empty());
+    for (action, alias) in [
+        ("archive", "ctrl-e"),
+        ("delete", "delete"),
+        ("hide", "ctrl-w"),
+    ] {
+        for (context, existing, suffix) in [
+            ("agents", "stop", ""),
+            ("list", "move_down", ""),
+            ("global", "copy", ""),
+            ("agents", "stop", " f12"),
+            ("list", "move_down", " f12"),
+        ] {
+            // Ctrl+E is reserved by the resume picker for list-context chords.
+            if context == "list" && alias == "ctrl-e" && !suffix.is_empty() {
+                continue;
+            }
+            let keymap: TuiKeymap = serde_json::from_value(
+                json!({context: {existing: format!("{alias}{suffix}")}, "approval": {"open_fullscreen": "f12"},
+                    "editor": {"move_line_start": [], "move_line_end": [], "delete_backward_word": [], "delete_forward": []}}),
+            )
+            .unwrap();
+            let runtime =
+                RuntimeKeymap::from_config(&keymap).expect("existing configuration remains valid");
+            let bindings = match action {
+                "archive" => &runtime.agents.archive,
+                "delete" => &runtime.agents.delete,
+                "hide" => &runtime.agents.hide,
+                _ => unreachable!(),
+            };
+            assert!(
+                bindings.is_empty(),
+                "{action} shadows {context}.{existing} = {alias}{suffix}"
+            );
+        }
     }
 }

@@ -3993,6 +3993,8 @@
           ],
           "default": {
             "agents": {
+              "archive": null,
+              "delete": null,
               "hide": null,
               "new_task": null,
               "rename": null,
@@ -4304,6 +4306,22 @@
       "additionalProperties": false,
       "description": "Shortcuts specific to the shared agents overview.",
       "properties": {
+        "archive": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Archive the selected task and its child agents after confirmation."
+        },
+        "delete": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Permanently delete the selected task and its child agents after confirmation."
+        },
         "hide": {
           "allOf": [
             {
@@ -4817,6 +4835,8 @@
             }
           ],
           "default": {
+            "archive": null,
+            "delete": null,
             "hide": null,
             "new_task": null,
             "rename": null,

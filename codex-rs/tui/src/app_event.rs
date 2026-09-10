@@ -67,6 +67,13 @@ use codex_realtime_webrtc::StartedRealtimeWebrtcSession;
 
 use crate::history_cell::HistoryCell;
 
+/// Confirmed server lifecycle operations available from the agents dashboard.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AgentsOverviewAction {
+    Archive,
+    Delete,
+}
+
 /// Whether a managed checkout starts fresh or preserves the current conversation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ManagedWorktreeMode {
@@ -313,6 +320,16 @@ pub(crate) enum AppEvent {
     /// Hide a dashboard row locally without stopping its task.
     HideAgentsOverviewThread {
         thread_id: ThreadId,
+    },
+    /// Confirm a server lifecycle action for the selected dashboard task.
+    ConfirmAgentsOverviewAction {
+        thread_id: ThreadId,
+        action: AgentsOverviewAction,
+    },
+    /// Execute a confirmed dashboard lifecycle action.
+    RunAgentsOverviewAction {
+        thread_id: ThreadId,
+        action: AgentsOverviewAction,
     },
     /// Start the shared app-server daemon without moving the current embedded session.
     #[cfg(any(unix, windows))]

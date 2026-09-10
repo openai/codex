@@ -2037,8 +2037,10 @@ async fn empty_command_center_can_open_resume_picker() {
         event_rx.try_recv(),
         Ok(AppEvent::OpenResumePicker)
     ));
+    // Crossterm labels forward Delete as "fwd del" on macOS and "del" elsewhere.
+    let rendered = render_bottom_popup(&app.chat_widget, /*width*/ 48).replace("fwd del", "del");
     insta::with_settings!({snapshot_path => "../snapshots"}, {
-        insta::assert_snapshot!("agents_overview_empty_narrow", render_bottom_popup(&app.chat_widget, /*width*/ 48));
+        insta::assert_snapshot!("agents_overview_empty_narrow", rendered);
     });
 }
 

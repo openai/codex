@@ -1017,6 +1017,26 @@ mod tests {
             .join("\n");
 
         assert_snapshot!("keymap_picker_first_actions", snapshot);
+        let agents = all_tab
+            .items
+            .iter()
+            .filter(|item| {
+                item.search_value
+                    .as_deref()
+                    .unwrap_or_default()
+                    .starts_with("Agents ")
+            })
+            .map(|item| {
+                format!(
+                    "{} | {} | {}",
+                    item.name,
+                    item.description.as_deref().unwrap_or_default(),
+                    item.search_value.as_deref().unwrap_or_default()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_snapshot!("keymap_picker_agents_actions", agents);
     }
 
     #[test]

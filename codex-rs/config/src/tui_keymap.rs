@@ -443,6 +443,10 @@ pub struct TuiAgentsKeymap {
     pub rename: Option<KeybindingsSpec>,
     /// Stop the selected running task.
     pub stop: Option<KeybindingsSpec>,
+    /// Archive the selected task and its child agents after confirmation.
+    pub archive: Option<KeybindingsSpec>,
+    /// Permanently delete the selected task and its child agents after confirmation.
+    pub delete: Option<KeybindingsSpec>,
     /// Hide the selected task until explicitly resumed or the TUI restarts.
     pub hide: Option<KeybindingsSpec>,
     /// Toggle grouping tasks by status or project.

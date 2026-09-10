@@ -1,0 +1,8 @@
+---
+source: tui/src/app/agents_overview_action_progress_tests.rs
+assertion_line: 62
+expression: terminal.backend()
+---
+"Archiving task…                     "
+"Please wait. Task switching is      "
+"unavailable until this finishes.    "

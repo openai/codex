@@ -398,6 +398,8 @@ define_runtime_action_bindings! {
         new_task,
         rename,
         stop,
+        archive,
+        delete,
         hide,
         toggle_grouping,
     ],

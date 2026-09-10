@@ -1,5 +1,6 @@
 ---
 source: tui/src/app/agents_overview_tests.rs
+assertion_line: 2041
 expression: "render_bottom_popup(&app.chat_widget, 48)"
 ---
   Agent command center
@@ -25,4 +26,4 @@ expression: "render_bottom_popup(&app.chat_widget, 48)"
   ↑↓ navigate ctrl+o resume → open
   ctrl+n new task ctrl+f search ctrl+s group
   ctrl+r rename ctrl+x stop ctrl+w hide
-  esc back
+  ctrl+e archive del delete esc back

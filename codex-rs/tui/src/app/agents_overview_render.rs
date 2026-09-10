@@ -25,6 +25,8 @@ impl AgentsOverviewView {
                     &self.agents_keymap.new_task,
                     &self.agents_keymap.rename,
                     &self.agents_keymap.stop,
+                    &self.agents_keymap.archive,
+                    &self.agents_keymap.delete,
                     &self.agents_keymap.hide,
                     &self.agents_keymap.toggle_grouping,
                 ]
@@ -56,7 +58,11 @@ impl AgentsOverviewView {
                 let key = hint.display_label().replace(" + ", "+");
                 hints.push(
                     vec![
-                        if enabled { key.bold() } else { key.dim() },
+                        if enabled {
+                            key.bold()
+                        } else {
+                            key.bold().dim()
+                        },
                         format!(" {label}").dim(),
                     ]
                     .into(),
@@ -105,12 +111,17 @@ impl AgentsOverviewView {
             self.selected_row()
                 .is_some_and(|row| matches!(row.thread.status, ThreadStatus::Active { .. })),
         );
-        add_hint(
-            self.agents_keymap
-                .primary_hint("hide", &self.agents_keymap.hide),
-            "hide",
-            self.selected_row().is_some(),
-        );
+        for (action, bindings) in [
+            ("hide", &self.agents_keymap.hide),
+            ("archive", &self.agents_keymap.archive),
+            ("delete", &self.agents_keymap.delete),
+        ] {
+            add_hint(
+                self.agents_keymap.primary_hint(action, bindings),
+                action,
+                self.selected_row().is_some(),
+            );
+        }
         add_hint(list_hint(ListAction::Cancel), "back", true);
         let separator = if hints.iter().map(Line::width).sum::<usize>()
             + hints.len().saturating_sub(1) * 2

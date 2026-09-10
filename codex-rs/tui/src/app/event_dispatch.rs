@@ -2807,6 +2807,12 @@ impl App {
                 self.agents_overview.hidden_threads.insert(thread_id);
                 self.repaint_agents_overview();
             }
+            AppEvent::ConfirmAgentsOverviewAction { thread_id, action } => {
+                self.confirm_agents_overview_action(thread_id, action);
+            }
+            AppEvent::RunAgentsOverviewAction { thread_id, action } => {
+                self.run_agents_overview_action(tui, app_server, thread_id, action).await?;
+            }
             AppEvent::StopAgentsOverviewThread { thread_id } => {
                 self.stop_agents_overview_thread(app_server, thread_id)
                     .await;

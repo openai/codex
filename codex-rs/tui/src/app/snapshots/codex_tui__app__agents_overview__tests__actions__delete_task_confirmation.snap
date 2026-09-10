@@ -1,0 +1,12 @@
+---
+source: tui/src/app/agents_overview_actions_tests.rs
+expression: "render_bottom_popup(&app.chat_widget, 72)"
+---
+  Permanently delete “Current task”?
+  This stops any running work in this task and its child agents, then
+  permanently deletes their history. This cannot be undone.
+
+› 1. Cancel
+  2. Permanently delete task and child agents
+
+  Press enter to confirm or esc to go back
