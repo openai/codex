@@ -845,6 +845,29 @@ fn highlight_flags(text: &str, options: HumanOutputOptions) -> String {
 }
 
 pub(super) fn redact_detail(detail: &str) -> String {
+    // Preserve the authored diagnosis, but do not trust configured names to be
+    // non-secret: users sometimes paste credentials into env-var name fields.
+    if let Some((server, value)) = detail.split_once(": ") {
+        for prefix in ["env var ", "bearer token env var ", "header env var "] {
+            if let Some(variable) = value
+                .strip_prefix(prefix)
+                .and_then(|value| value.strip_suffix(" is not set"))
+            {
+                let server = redact_urls(redact_identifier(server));
+                let variable = if variable
+                    .starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+                    && variable
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                {
+                    redact_identifier(variable)
+                } else {
+                    "<redacted>"
+                };
+                return format!("{server}: {prefix}{variable} is not set");
+            }
+        }
+    }
     let lower = detail.to_ascii_lowercase();
     let label = lower.split(':').next().unwrap_or_default();
     if label.contains("env var") {
@@ -871,6 +894,39 @@ pub(super) fn redact_detail(detail: &str) -> String {
         format!("{name}: <redacted>")
     } else {
         redact_urls(detail)
+    }
+}
+
+fn redact_identifier(identifier: &str) -> &str {
+    let credential_prefix = [
+        "sk-",
+        "sk_",
+        "ghp_",
+        "gho_",
+        "ghu_",
+        "ghs_",
+        "ghr_",
+        "github_pat_",
+        "xoxb-",
+        "xoxp-",
+    ]
+    .iter()
+    .any(|prefix| identifier.starts_with(prefix));
+    let aws_access_key = identifier.len() == 20
+        && (identifier.starts_with("AKIA") || identifier.starts_with("ASIA"))
+        && identifier
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit());
+    if !identifier.is_empty()
+        && !credential_prefix
+        && !aws_access_key
+        && identifier.bytes().all(|b| {
+            b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b':' | b'@' | b'/')
+        })
+    {
+        identifier
+    } else {
+        "<redacted>"
     }
 }
 
@@ -1749,6 +1805,73 @@ Run codex doctor without --summary for detailed diagnostics.
         assert_eq!(
             redact_detail("auth env vars present: OPENAI_API_KEY, CODEX_API_KEY"),
             "auth env vars present: OPENAI_API_KEY, CODEX_API_KEY"
+        );
+    }
+
+    #[test]
+    fn redact_detail_preserves_missing_env_diagnostics() {
+        for prefix in ["env var", "bearer token env var", "header env var"] {
+            for (variable, expected) in [
+                ("DOCS_TOKEN", "DOCS_TOKEN"),
+                ("docs_token", "docs_token"),
+                ("", "<redacted>"),
+                ("TOKEN: SYNTHETIC_CREDENTIAL", "<redacted>"),
+                ("sk-proj-SYNTHETIC_CREDENTIAL", "<redacted>"),
+                ("ghp_SYNTHETIC_CREDENTIAL", "<redacted>"),
+                ("github_pat_SYNTHETIC_CREDENTIAL", "<redacted>"),
+                ("AKIAABCDEFGHIJKLMNOP", "<redacted>"),
+                ("ASIAABCDEFGHIJKLMNOP", "<redacted>"),
+                ("eyJhbGciOiJIUzI1NiJ9.synthetic.signature", "<redacted>"),
+            ] {
+                assert_eq!(
+                    redact_detail(&format!("demo-server: {prefix} {variable} is not set")),
+                    format!("demo-server: {prefix} {expected} is not set")
+                );
+            }
+        }
+        assert_eq!(
+            redact_detail(
+                "demo: command not found (helper --token SYNTHETIC_CREDENTIAL is not set)"
+            ),
+            "demo: <redacted>"
+        );
+        assert_eq!(
+            redact_detail("ghp_SYNTHETIC_CREDENTIAL: env var DOCS_TOKEN is not set"),
+            "<redacted>: env var DOCS_TOKEN is not set"
+        );
+        assert_eq!(
+            redact_detail("https://user:pass@example.com: env var DOCS_TOKEN is not set"),
+            "https://example.com: env var DOCS_TOKEN is not set"
+        );
+    }
+
+    #[test]
+    fn missing_env_diagnostics_in_json_and_text() {
+        let check = DoctorCheck::new("mcp.config", "mcp", CheckStatus::Warning, "missing inputs")
+            .detail("demo: bearer token env var DOCS_TOKEN is not set")
+            .detail("DEMO: header env var DOCS_SECRET is not set")
+            .detail("stdio: env var DOCS_TOKEN is not set")
+            .detail("npm:@modelcontextprotocol/server-sequential.thinking: env var DOCS_TOKEN is not set")
+            .detail("typo: bearer token env var sk-proj-SYNTHETIC_CREDENTIAL is not set");
+        let json = serde_json::to_value(super::super::redacted_json_check(&check)).unwrap();
+        assert_eq!(
+            json["details"],
+            serde_json::json!({
+                "demo": "bearer token env var DOCS_TOKEN is not set",
+                "DEMO": "header env var DOCS_SECRET is not set",
+                "stdio": "env var DOCS_TOKEN is not set",
+                "npm:@modelcontextprotocol/server-sequential.thinking": "env var DOCS_TOKEN is not set",
+                "typo": "bearer token env var <redacted> is not set",
+            })
+        );
+        let report = DoctorReport {
+            overall_status: CheckStatus::Warning,
+            checks: vec![check],
+            ..sample_report()
+        };
+        insta::assert_snapshot!(
+            "missing_env_diagnostics",
+            render_human_report(&report, detailed_all_no_color_unicode_options())
         );
     }
 

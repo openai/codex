@@ -1,0 +1,23 @@
+---
+source: cli/src/doctor/output.rs
+expression: "render_human_report(&report, detailed_all_no_color_unicode_options())"
+---
+Codex Doctor v0.0.0
+
+Notes
+   ⚠ mcp          missing inputs
+─────────────────────────────────────────────────────────────
+
+Configuration
+  ⚠ mcp          missing inputs
+      demo                     bearer token env var DOCS_TOKEN is not set
+      DEMO                     header env var DOCS_SECRET is not set
+      stdio                    env var DOCS_TOKEN is not set
+      npm:@modelcontextprotocol/server-sequential.thinking env var DOCS_TOKEN is not set
+      typo                     bearer token env var <redacted> is not set
+
+─────────────────────────────────────────────────────────────
+0 ok · 1 notes · 1 warn · 0 fail degraded
+
+--summary compact output           --all expand truncated lists
+--json redacted report
