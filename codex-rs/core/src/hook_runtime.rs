@@ -346,6 +346,14 @@ fn executor_hook_sources_for_step(step_context: &StepContext) -> Vec<ExecutorPlu
                             .enabled
                     })
             })
+            .into_iter()
+            .filter(|source| {
+                !step_context
+                    .turn
+                    .disabled_plugin_ids
+                    .contains(&source.plugin_id.as_key())
+            })
+            .collect()
         })
         .unwrap_or_default()
 }

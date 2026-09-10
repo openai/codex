@@ -1039,18 +1039,8 @@ impl Session {
             .services
             .plugins_manager
             .plugins_for_config(&plugins_input)
-            .await;
-        // Cache changes from another process do not notify this session's hook runtime.
-        if !self.hooks().matches_plugin_hooks(
-            plugin_outcome.iter_effective_plugin_hook_sources(),
-            plugin_outcome.iter_effective_plugin_hook_warnings(),
-        ) {
-            // Keep the refresh state out of the enclosing turn-construction future.
-            Box::pin(self.refresh_hooks(Arc::clone(
-                &session_configuration.original_config_do_not_use,
-            )))
-            .await;
-        }
+            .await
+            .without_plugins(&session_configuration.disabled_plugin_ids);
         let trusted_plugin_roots = TrustedPluginRoots::from_plugin_load_outcome(
             &plugin_outcome,
             per_turn_config.codex_home.as_path(),

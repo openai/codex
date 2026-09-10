@@ -59,28 +59,43 @@ impl PluginConnectorSource {
     }
 }
 
-/// Immutable connector declarations and their plugin provenance.
+impl From<&PluginCapabilitySummary> for PluginConnectorSource {
+    fn from(summary: &PluginCapabilitySummary) -> Self {
+        Self::from_connector_ids(
+            summary.config_name.clone(),
+            summary.display_name.clone(),
+            summary.app_connector_ids.clone(),
+        )
+    }
+}
+
+/// Immutable connector selection and provenance after applying disabled plugins.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ConnectorSnapshot {
-    sources: Vec<PluginConnectorSource>,
     connector_ids: Vec<AppConnectorId>,
     plugin_display_names_by_connector_id: HashMap<String, Vec<String>>,
+    disabled_connector_ids: HashSet<String>,
 }
 
 impl ConnectorSnapshot {
-    /// Builds a connector snapshot from package-scoped declarations.
-    pub fn from_plugin_sources(sources: impl IntoIterator<Item = PluginConnectorSource>) -> Self {
-        let sources = sources
-            .into_iter()
-            .filter(|source| !source.connector_ids().is_empty())
-            .collect::<Vec<_>>();
+    /// Builds the final selection from all plugin sources, preserving contribution order.
+    /// Pass host and selected sources together so any enabled shared owner keeps a connector.
+    pub fn from_plugin_sources(
+        sources: impl IntoIterator<Item = PluginConnectorSource>,
+        disabled_plugin_ids: &[String],
+    ) -> Self {
         let mut connector_ids = Vec::new();
         let mut seen_connector_ids = HashSet::new();
         let mut plugin_display_names_by_connector_id: HashMap<String, Vec<String>> = HashMap::new();
+        let mut disabled_connector_ids = HashSet::new();
 
-        for source in &sources {
+        for source in sources {
+            if disabled_plugin_ids.contains(&source.plugin_id) {
+                disabled_connector_ids.extend(source.connector_ids.into_iter().map(|id| id.0));
+                continue;
+            }
             for connector_id in source.connector_ids() {
-                if seen_connector_ids.insert(connector_id.clone()) {
+                if seen_connector_ids.insert(connector_id.0.clone()) {
                     connector_ids.push(connector_id.clone());
                 }
                 plugin_display_names_by_connector_id
@@ -93,28 +108,28 @@ impl ConnectorSnapshot {
             plugin_names.sort_unstable();
             plugin_names.dedup();
         }
+        disabled_connector_ids.retain(|id| !seen_connector_ids.contains(id));
 
         Self {
-            sources,
             connector_ids,
             plugin_display_names_by_connector_id,
+            disabled_connector_ids,
         }
     }
 
     /// Adapts the current host plugin summaries to the connector-owned snapshot.
     pub fn from_plugin_capability_summaries(summaries: &[PluginCapabilitySummary]) -> Self {
-        Self::from_plugin_sources(summaries.iter().map(|summary| {
-            PluginConnectorSource::from_connector_ids(
-                summary.config_name.clone(),
-                summary.display_name.clone(),
-                summary.app_connector_ids.clone(),
-            )
-        }))
+        Self::from_plugin_sources(summaries.iter().map(PluginConnectorSource::from), &[])
     }
 
     /// Returns the connector IDs in source contribution order.
     pub fn connector_ids(&self) -> &[AppConnectorId] {
         &self.connector_ids
+    }
+
+    /// Connector tools excluded because no enabled plugin still contributes them.
+    pub fn disabled_connector_ids(&self) -> &HashSet<String> {
+        &self.disabled_connector_ids
     }
 
     /// Returns the package display names associated with one connector.
@@ -123,11 +138,6 @@ impl ConnectorSnapshot {
             .get(connector_id)
             .map(Vec::as_slice)
             .unwrap_or_default()
-    }
-
-    /// Combines two snapshots while preserving source order and provenance.
-    pub fn merged_with(&self, other: &Self) -> Self {
-        Self::from_plugin_sources(self.sources.iter().chain(&other.sources).cloned())
     }
 }
 

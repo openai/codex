@@ -108,7 +108,7 @@ impl McpConnectionSet {
             disabled_servers: Vec::new(),
             required_servers: Vec::new(),
             optional_startup_deadline: OnceLock::new(),
-            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            tool_plugin_context: Arc::new(ToolPluginContext::default()),
             prefix_mcp_tool_names,
             non_prefixed_mcp_tool_servers: Vec::new(),
             elicitation_requests: ElicitationRequestManager::new(
@@ -501,7 +501,7 @@ async fn prepared_call_timeout_includes_trusted_access_lookup() {
     config
         .server_permission_profiles
         .insert("docs".to_string(), PermissionProfile::default());
-    manager.tool_plugin_provenance = Arc::new(crate::tool_plugin_provenance(&config));
+    manager.tool_plugin_context = Arc::new(crate::tool_plugin_context(&config));
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     manager.trusted_access = Some(TrustedAccessContext::new(
         auth.clone(),
@@ -2816,7 +2816,7 @@ async fn capture_binding_skips_pending_optional_servers_after_configured_shared_
     ));
     plugin_config.mcp_server_catalog = catalog.build();
     plugin_config.optional_mcp_startup_grace = Duration::from_millis(250);
-    manager.tool_plugin_provenance = Arc::new(crate::tool_plugin_provenance(&plugin_config));
+    manager.tool_plugin_context = Arc::new(crate::tool_plugin_context(&plugin_config));
     for server_name in ["pending-one", "pending-two", "pending-selected"] {
         manager.insert_test_client(
             server_name.to_string(),
@@ -2840,7 +2840,7 @@ async fn capture_binding_skips_pending_optional_servers_after_configured_shared_
         &permission_profile,
         /*prefix_mcp_tool_names*/ true,
     );
-    required_manager.tool_plugin_provenance = Arc::clone(&manager.tool_plugin_provenance);
+    required_manager.tool_plugin_context = Arc::clone(&manager.tool_plugin_context);
     required_manager.insert_test_client(
         "pending-selected",
         manager.test_client("pending-selected").clone(),

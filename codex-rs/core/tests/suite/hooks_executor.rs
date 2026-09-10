@@ -62,6 +62,58 @@ use wiremock::matchers::path;
 use super::rmcp_client::remote_aware_environment_id;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn thread_plugin_selection_disables_executor_hooks_without_disabling_their_server()
+-> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let fixture = executor_hook_fixture(
+        ["disabled", "enabled", "disabled-again"]
+            .map(completed_turn_response)
+            .to_vec(),
+    )
+    .await?;
+    fixture.attach().await?;
+    for (disabled_plugin_ids, expected_calls) in [
+        (vec!["computer-use@openai-bundled".to_string()], 0),
+        (Vec::new(), 1),
+        (vec!["computer-use@openai-bundled".to_string()], 1),
+    ] {
+        let enabled = disabled_plugin_ids.is_empty();
+        submit_thread_settings(
+            &fixture.test.codex,
+            ThreadSettingsOverrides {
+                disabled_plugin_ids: Some(disabled_plugin_ids),
+                ..Default::default()
+            },
+        )
+        .await?;
+        fixture.test.submit_text_turn("finish this turn").await?;
+        if enabled {
+            fixture.wait_for_hook_call().await?;
+        }
+        assert_eq!(fixture.calls().await?.len(), expected_calls);
+    }
+    fixture
+        .test
+        .codex
+        .call_mcp_tool(
+            "node_repl",
+            "js",
+            Some(json!({"code": "1 + 1"})),
+            /*meta*/ None,
+        )
+        .await?;
+    assert_eq!(
+        fixture
+            .calls()
+            .await?
+            .last()
+            .context("standalone tool call")?["params"]["name"],
+        "js"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn executor_stop_hook_runs_after_attachment() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

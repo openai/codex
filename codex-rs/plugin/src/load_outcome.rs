@@ -95,7 +95,7 @@ pub fn prompt_safe_plugin_description(description: Option<&str>) -> Option<Strin
 
 /// Runtime view of loaded plugins and their derived capability summaries.
 ///
-/// Callers must apply any runtime capability policies before constructing this outcome.
+/// Runtime exclusions retain loaded metadata while removing derived capabilities.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PluginLoadOutcome<M> {
     plugins: Vec<LoadedPlugin<M>>,
@@ -118,6 +118,19 @@ impl<M: Clone> PluginLoadOutcome<M> {
             plugins,
             capability_summaries,
         }
+    }
+
+    /// Marks matching canonical plugin IDs inactive while retaining their loaded metadata.
+    pub fn without_plugins(mut self, disabled_plugin_ids: &[String]) -> Self {
+        if disabled_plugin_ids.is_empty() {
+            return self;
+        }
+        for plugin in &mut self.plugins {
+            if disabled_plugin_ids.contains(&plugin.config_name) {
+                plugin.enabled = false;
+            }
+        }
+        Self::from_plugins(self.plugins)
     }
 
     pub fn effective_plugin_skill_roots(&self) -> Vec<PluginSkillRoot> {

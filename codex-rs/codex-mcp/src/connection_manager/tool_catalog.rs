@@ -149,7 +149,7 @@ impl McpConnectionSet {
                 .startup_complete
                 .load(Ordering::Acquire);
             let server_tools = view
-                .listed_tools(&self.tool_plugin_provenance)
+                .listed_tools(&self.tool_plugin_context)
                 .instrument(trace_span!(
                     "list_tools_for_server",
                     server_name = %server_name,
@@ -304,11 +304,11 @@ impl McpConnectionSet {
             };
             let server_tools = filter_tools(server_tools, &view.tool_filter);
             let server_tools = if server_name == CODEX_APPS_MCP_SERVER_NAME {
-                prepare_codex_apps_tools_for_model(server_tools, &self.tool_plugin_provenance)
+                prepare_codex_apps_tools_for_model(server_tools, &self.tool_plugin_context)
             } else {
                 crate::rmcp_client::prepare_regular_mcp_tools_for_model(
                     server_tools,
-                    &self.tool_plugin_provenance,
+                    &self.tool_plugin_context,
                 )
             };
             let server_tools = server_tools
@@ -427,6 +427,9 @@ impl McpConnectionSet {
             .filter(|tool| {
                 server_has_permission
                     && view.tool_filter.allows(&tool.tool.name)
+                    && self
+                        .tool_plugin_context
+                        .allows_connector_id(tool.connector_id.as_deref())
                     && tool_is_model_visible(tool)
             })
             .map(|tool| tool.tool.name.to_string())
@@ -452,7 +455,7 @@ impl McpConnectionSet {
         let (_, tools) = self.refresh_codex_apps_tool_catalog().await?;
         let tools = prepare_codex_apps_tools_for_model(
             filter_tools(tools, &view.tool_filter),
-            &self.tool_plugin_provenance,
+            &self.tool_plugin_context,
         )
         .into_iter()
         .map(|tool| Self::with_server_metadata(tool, &view.metadata));

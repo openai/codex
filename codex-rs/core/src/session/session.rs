@@ -996,6 +996,7 @@ impl Session {
         let thread_extension_data_for_mcp = &thread_extension_data;
         let mcp_originator = session_configuration.originator.clone();
         let mcp_session_source = session_configuration.session_source.clone();
+        let mcp_disabled_plugin_ids = session_configuration.disabled_plugin_ids.clone();
         let mcp_runtime_cwd = environment_selections
             .first()
             .and_then(|environment| environment.cwd.to_abs_path().ok())
@@ -1025,6 +1026,7 @@ impl Session {
                     McpThreadIdentity {
                         session_source: &mcp_session_source,
                         originator: &mcp_originator,
+                        disabled_plugin_ids: &mcp_disabled_plugin_ids,
                         environments: McpEnvironmentScope::Initial(environment_selections),
                     },
                     /*ready_selected_capability_roots*/ &[],
@@ -1340,6 +1342,7 @@ impl Session {
                 ),
             );
             state.base_instructions_provenance = base_instructions_provenance.clone();
+            state.active_disabled_plugin_ids = session_configuration.disabled_plugin_ids.clone();
             let managed_network_requirements_configured = config
                 .config_layer_stack
                 .requirements_toml()
@@ -1419,6 +1422,7 @@ impl Session {
                 &config,
                 plugins_manager.as_ref(),
                 resolved_environments.single_local_environment(),
+                &session_configuration.disabled_plugin_ids,
             )
             .await;
             let (hooks, async_hook_results) = Hooks::new(
@@ -1672,6 +1676,7 @@ impl Session {
                         McpThreadIdentity {
                             session_source: &session_configuration.session_source,
                             originator: &session_configuration.originator,
+                            disabled_plugin_ids: &session_configuration.disabled_plugin_ids,
                             environments: McpEnvironmentScope::Live(
                                 &sess.services.turn_environments,
                             ),

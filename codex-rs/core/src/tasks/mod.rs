@@ -285,6 +285,7 @@ impl Session {
         input: Vec<TurnInput>,
         task: T,
     ) {
+        self.activate_plugin_selection(&turn_context).await;
         // Inherited or recovered roots are applied before task start. Otherwise this
         // task owns its turn, including background work. Later mail cannot change it.
         turn_context

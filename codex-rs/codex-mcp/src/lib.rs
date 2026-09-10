@@ -48,7 +48,7 @@ pub use catalog::ResolvedMcpServer;
 pub use mcp::CODEX_APPS_MCP_SERVER_NAME;
 pub use mcp::DEFAULT_OPTIONAL_MCP_STARTUP_GRACE;
 pub use mcp::McpConfig;
-pub use mcp::ToolPluginProvenance;
+pub use mcp::ToolPluginContext;
 pub use server::EffectiveMcpServer;
 
 pub use auth_elicitation::CodexAppsAuthElicitation;
@@ -68,7 +68,7 @@ pub use mcp::effective_mcp_servers;
 pub use mcp::effective_mcp_servers_from_configured;
 pub use mcp::host_owned_codex_apps_enabled;
 pub use mcp::hosted_plugin_runtime_mcp_server_config;
-pub use mcp::tool_plugin_provenance;
+pub use mcp::tool_plugin_context;
 pub use plugin_config::PluginMcpConfigParseOutcome;
 pub use plugin_config::PluginMcpServerParseError;
 pub use plugin_config::parse_agent_plugin_mcp_config;

@@ -253,7 +253,7 @@ fn mcp_prompt_auto_approval_rejects_auto_mode_in_default_permission_mode() {
 }
 
 #[test]
-fn tool_plugin_provenance_collects_app_and_mcp_sources() {
+fn tool_plugin_context_collects_app_and_mcp_sources() {
     let mut config = test_mcp_config(PathBuf::new());
     let mut catalog = ResolvedMcpCatalog::builder();
     catalog.register(McpServerRegistration::from_plugin(
@@ -289,11 +289,12 @@ fn tool_plugin_provenance_collects_app_and_mcp_sources() {
                 ..PluginCapabilitySummary::default()
             },
         ]);
-    let provenance = tool_plugin_provenance(&config);
+    let provenance = tool_plugin_context(&config);
 
     assert_eq!(
         provenance,
-        ToolPluginProvenance {
+        ToolPluginContext {
+            disabled_connector_ids: HashSet::new(),
             plugin_display_names_by_connector_id: HashMap::from([
                 (
                     "connector_example".to_string(),
@@ -351,11 +352,12 @@ fn selected_mcp_attribution_does_not_join_an_unrelated_local_summary() {
             },
         ]);
 
-    let provenance = tool_plugin_provenance(&config);
+    let provenance = tool_plugin_context(&config);
 
     assert_eq!(
         provenance,
-        ToolPluginProvenance {
+        ToolPluginContext {
+            disabled_connector_ids: HashSet::new(),
             plugin_display_names_by_connector_id: HashMap::new(),
             plugin_display_names_by_mcp_server_name: HashMap::from([(
                 "github".to_string(),

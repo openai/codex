@@ -910,6 +910,7 @@ fn custom_servers_support_session_and_persistent_approval() {
     };
     let expected = McpToolApprovalKey {
         server: "custom_server".to_string(),
+        plugin_id: None,
         connector_id: None,
         link_id: None,
         tool_name: "run_action".to_string(),
@@ -925,8 +926,24 @@ fn custom_servers_support_session_and_persistent_approval() {
             /*metadata*/ None,
             AppToolApproval::Auto
         ),
-        Some(expected)
+        Some(expected.clone())
     );
+    let mut metadata = approval_metadata(
+        /*connector_id*/ None, /*connector_name*/ None,
+        /*connector_description*/ None, /*tool_title*/ None,
+        /*tool_description*/ None,
+    );
+    for plugin_id in ["alpha@test", "beta@test"] {
+        metadata.plugin_id = Some(plugin_id.to_string());
+        let plugin_key = McpToolApprovalKey {
+            plugin_id: Some(plugin_id.to_string()),
+            ..expected.clone()
+        };
+        assert_eq!(
+            session_mcp_tool_approval_key(&invocation, Some(&metadata), AppToolApproval::Auto),
+            Some(plugin_key)
+        );
+    }
 }
 
 #[test]
@@ -946,6 +963,7 @@ fn codex_apps_connectors_support_persistent_approval() {
     metadata.link_id = Some("link_a".to_string());
     let expected = McpToolApprovalKey {
         server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        plugin_id: None,
         connector_id: Some("calendar".to_string()),
         link_id: Some("link_a".to_string()),
         tool_name: "calendar/list_events".to_string(),
@@ -2341,6 +2359,7 @@ async fn maybe_persist_mcp_tool_approval_reloads_session_config() {
     std::fs::create_dir_all(&codex_home).expect("create codex home");
     let key = McpToolApprovalKey {
         server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        plugin_id: None,
         connector_id: Some("calendar".to_string()),
         link_id: None,
         tool_name: "calendar/list_events".to_string(),
@@ -2392,6 +2411,7 @@ async fn maybe_persist_mcp_tool_approval_reloads_session_config_for_custom_serve
     turn_context.config = Arc::new(config);
     let key = McpToolApprovalKey {
         server: "docs".to_string(),
+        plugin_id: None,
         connector_id: None,
         link_id: None,
         tool_name: "search".to_string(),
@@ -2426,29 +2446,12 @@ async fn maybe_persist_mcp_tool_approval_reloads_session_config_for_custom_serve
 
 #[tokio::test]
 async fn maybe_persist_mcp_tool_approval_writes_plugin_mcp_policy() {
-    let (session, mut turn_context) = make_session_and_context().await;
+    let (session, turn_context) = make_session_and_context().await;
     let codex_home = session.codex_home().await;
-    write_sample_plugin_mcp(codex_home.as_path());
-    std::fs::write(
-        codex_home.join(CONFIG_TOML_FILE),
-        r#"
-[features]
-plugins = true
-
-[plugins."sample@test"]
-enabled = true
-"#,
-    )
-    .expect("seed config");
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.to_path_buf())
-        .build()
-        .await
-        .expect("load config");
-    turn_context.config = Arc::new(config);
-    session.services.plugins_manager.clear_cache();
+    std::fs::create_dir_all(&codex_home).expect("create codex home");
     let key = McpToolApprovalKey {
         server: "sample".to_string(),
+        plugin_id: Some("sample@test".to_string()),
         connector_id: None,
         link_id: None,
         tool_name: "search".to_string(),
@@ -2506,6 +2509,7 @@ async fn maybe_persist_mcp_tool_approval_writes_project_config_for_project_serve
     turn_context.config = Arc::new(config);
     let key = McpToolApprovalKey {
         server: "docs".to_string(),
+        plugin_id: None,
         connector_id: None,
         link_id: None,
         tool_name: "search".to_string(),

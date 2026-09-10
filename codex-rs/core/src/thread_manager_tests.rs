@@ -1458,13 +1458,21 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
                 server.environment_id = environment_id.clone();
                 server.enabled = false;
                 let plugin_id = selected_root.id;
-                vec![codex_extension_api::McpServerContribution::SelectedPlugin {
-                    name: plugin_id.clone(),
-                    plugin_display_name: plugin_id.clone(),
-                    plugin_id,
-                    selection_order: 0,
-                    config: Box::new(server),
-                }]
+                vec![
+                    codex_extension_api::McpServerContribution::SelectedPluginPackage {
+                        selected_root_id: plugin_id.clone(),
+                        plugin_id: plugin_id.clone(),
+                        plugin_display_name: plugin_id.clone(),
+                        connector_ids: vec![],
+                    },
+                    codex_extension_api::McpServerContribution::SelectedPlugin {
+                        name: plugin_id.clone(),
+                        plugin_display_name: plugin_id.clone(),
+                        plugin_id,
+                        selection_order: 0,
+                        config: Box::new(server),
+                    },
+                ]
             })
         }
     }
@@ -1477,6 +1485,10 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
         .features
         .enable(Feature::Apps)
         .expect("test config should allow apps");
+    config
+        .features
+        .enable(Feature::Plugins)
+        .expect("enable plugins");
     std::fs::create_dir_all(&config.codex_home).expect("create codex home");
 
     let lifecycle_observed = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -1550,6 +1562,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             McpThreadIdentity {
                 session_source: &SessionSource::Exec,
                 originator: &first_originator,
+                disabled_plugin_ids: &[],
                 environments: McpEnvironmentScope::Live(&first_session.services.turn_environments),
             },
             /*ready_selected_capability_roots*/ &[],
@@ -1568,6 +1581,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             McpThreadIdentity {
                 session_source: &second_session_source,
                 originator: &second_originator,
+                disabled_plugin_ids: &[],
                 environments: McpEnvironmentScope::Live(&second_session.services.turn_environments),
             },
             /*ready_selected_capability_roots*/ &[],
@@ -1628,6 +1642,39 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             .get("originator"),
         Some(&"codex_work_desktop".to_string())
     );
+    for disabled_plugin_ids in [vec!["selected-a".to_string()], vec![]] {
+        let projection = first_session
+            .services
+            .mcp_manager
+            .runtime_config_for_step(
+                &config,
+                &first_session.services.mcp_thread_init,
+                &first_session.services.thread_extension_data,
+                McpThreadIdentity {
+                    session_source: &SessionSource::Exec,
+                    originator: &first_originator,
+                    disabled_plugin_ids: &disabled_plugin_ids,
+                    environments: McpEnvironmentScope::Live(
+                        &first_session.services.turn_environments,
+                    ),
+                },
+                /*ready_selected_capability_roots*/ &[],
+                /*executor_capability_discovery*/ None,
+            )
+            .await;
+        assert_eq!(
+            projection.selected_plugins.disabled_plugin_roots,
+            disabled_plugin_ids
+        );
+        assert_eq!(
+            selected_servers(&projection.config).contains_key("selected-a"),
+            disabled_plugin_ids.is_empty()
+        );
+        assert_eq!(
+            projection.selected_plugins.plugins.len(),
+            usize::from(disabled_plugin_ids.is_empty())
+        );
+    }
 }
 
 #[tokio::test]

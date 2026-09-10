@@ -34,6 +34,7 @@ use codex_skills_extension::SkillsExtensionConfig;
 use codex_skills_extension::install;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::apps_test_server::SEARCH_CALENDAR_CREATE_TOOL;
+use core_test_support::apps_test_server::recorded_apps_tool_calls;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
@@ -51,6 +52,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_remote;
 use core_test_support::skip_if_target_windows;
 use core_test_support::stdio_server_bin;
+use core_test_support::submit_thread_settings;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
@@ -493,6 +495,152 @@ async fn persisted_remote_plugin_command_attribution_flows_through_turn_context(
         })
     );
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn thread_disabled_plugins_filter_skills_and_tools_without_changing_shared_plugins()
+-> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let apps = AppsTestServer::mount_with_connector_name(&server, "Google Calendar").await?;
+    let home = Arc::new(TempDir::new()?);
+    let skill_path = dunce::canonicalize(write_plugin_skill_plugin(home.as_ref()))?;
+    std::fs::write(
+        &skill_path,
+        "---\ndescription: inspect sample data\n---\nTHREAD_PLUGIN_SKILL_BODY\n",
+    )?;
+    write_plugin_mcp_plugin(home.as_ref(), &stdio_server_bin()?);
+    write_plugin_app_plugin_with_name(home.as_ref(), "sample_app");
+    let mut builder = test_codex()
+        .with_home(home)
+        .with_extensions(skills_extensions())
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            config.features.enable(Feature::Apps).unwrap();
+            config.chatgpt_base_url = apps.chatgpt_base_url;
+        });
+    let test = builder.build_with_remote_and_local_env(&server).await?;
+    let manager = test.thread_manager.plugins_manager();
+    let plugins_input = test.config.plugins_config_input();
+    let shared_plugins = manager.plugins_for_config(&plugins_input).await;
+    let tool_calls = [
+        (
+            "sample",
+            "echo",
+            Some(serde_json::json!({"message": "plugin check"})),
+        ),
+        (CODEX_APPS_MCP_SERVER_NAME, "calendar_list_events", None),
+    ];
+
+    for (phase, enabled, injection_count) in [(0, true, 1), (1, false, 1), (2, true, 2)] {
+        if !enabled {
+            submit_thread_settings(
+                &test.codex,
+                ThreadSettingsOverrides {
+                    disabled_plugin_ids: Some(vec![SAMPLE_PLUGIN_CONFIG_NAME.to_string()]),
+                    ..Default::default()
+                },
+            )
+            .await?;
+            // Saving pending settings must not change the admitted runtime.
+            for (server_name, tool, arguments) in &tool_calls {
+                test.codex
+                    .call_mcp_tool(server_name, tool, arguments.clone(), /*meta*/ None)
+                    .await?;
+            }
+        }
+        let app_call_id = format!("plugin-app-{phase}");
+        let mcp_call_id = format!("plugin-mcp-{phase}");
+        let mock = mount_sse_sequence(
+            &server,
+            vec![
+                sse(vec![
+                    ev_response_created("search"),
+                    ev_tool_search_call(
+                        &app_call_id,
+                        &serde_json::json!({"query": "create calendar event"}),
+                    ),
+                    ev_tool_search_call(&mcp_call_id, &serde_json::json!({"query": "echo"})),
+                    ev_completed("search"),
+                ]),
+                sse(vec![ev_response_created("done"), ev_completed("done")]),
+            ],
+        )
+        .await;
+        test.codex
+            .start_or_steer_turn(
+                TurnInputRequest::user_input(vec![
+                    UserInput::Skill {
+                        name: "sample:sample-search".into(),
+                        path: skill_path.clone(),
+                    },
+                    UserInput::Mention {
+                        name: "sample".into(),
+                        path: format!("plugin://{SAMPLE_PLUGIN_CONFIG_NAME}"),
+                    },
+                ])
+                .with_thread_settings(ThreadSettingsOverrides {
+                    disabled_plugin_ids: enabled.then(Vec::new),
+                    ..Default::default()
+                }),
+            )
+            .await?;
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
+        let requests = mock.requests();
+        // Previously injected instructions remain in history; disabled turns must add none.
+        for (role, marker) in [
+            ("user", "THREAD_PLUGIN_SKILL_BODY"),
+            ("developer", "Skills from this plugin"),
+        ] {
+            assert_eq!(
+                requests[0]
+                    .message_input_texts(role)
+                    .iter()
+                    .filter(|text| text.contains(marker))
+                    .count(),
+                injection_count
+            );
+        }
+        for (call_id, namespace, tool) in [
+            (
+                &app_call_id,
+                SAMPLE_PLUGIN_APP_NAMESPACE,
+                SEARCH_CALENDAR_CREATE_TOOL,
+            ),
+            (&mcp_call_id, SAMPLE_PLUGIN_MCP_NAMESPACE, "echo"),
+        ] {
+            assert_eq!(
+                namespace_child_tool(&requests[1].tool_search_output(call_id), namespace, tool)
+                    .is_some(),
+                enabled
+            );
+        }
+        let calls_before = recorded_apps_tool_calls(&server).await.len();
+        // Direct Apps RPC calls keep their existing behavior outside model tool filtering.
+        for (server_name, tool, arguments) in &tool_calls {
+            let result = test
+                .codex
+                .call_mcp_tool(server_name, tool, arguments.clone(), /*meta*/ None)
+                .await;
+            assert_eq!(
+                result.is_ok(),
+                enabled || *server_name == CODEX_APPS_MCP_SERVER_NAME,
+                "unexpected {server_name}/{tool} result: {result:?}"
+            );
+        }
+        assert_eq!(
+            recorded_apps_tool_calls(&server).await.len() - calls_before,
+            1
+        );
+        assert_eq!(
+            manager.plugins_for_config(&plugins_input).await,
+            shared_plugins
+        );
+    }
     Ok(())
 }
 
