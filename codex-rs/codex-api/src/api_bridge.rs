@@ -159,6 +159,19 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
                             });
                         } else if err.error.error_type.as_deref() == Some("usage_not_included") {
                             return CodexErr::UsageNotIncluded;
+                        } else if err.error.error_type.as_deref() == Some("insufficient_quota")
+                            || matches!(
+                                err.error.code.as_deref(),
+                                Some(
+                                    "insufficient_quota"
+                                        | "credit_balance_exhausted"
+                                        | "organization_spend_limit_exceeded"
+                                        | "project_spend_limit_exceeded"
+                                        | "organization_usage_limit_exceeded"
+                                )
+                            )
+                        {
+                            return CodexErr::QuotaExceeded;
                         }
                     }
 
@@ -263,6 +276,7 @@ struct UsageErrorResponse {
 
 #[derive(Debug, Deserialize)]
 struct UsageErrorBody {
+    code: Option<String>,
     #[serde(rename = "type")]
     error_type: Option<String>,
     plan_type: Option<PlanType>,

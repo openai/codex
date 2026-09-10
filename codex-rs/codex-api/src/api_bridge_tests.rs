@@ -323,6 +323,36 @@ fn map_api_error_keeps_unknown_400_errors_generic() {
 }
 
 #[test]
+fn map_api_error_distinguishes_http_quota_errors_from_rate_limits() {
+    for error in [
+        serde_json::json!({"type": "insufficient_quota"}),
+        serde_json::json!({"code": "insufficient_quota"}),
+        serde_json::json!({"code": "credit_balance_exhausted"}),
+        serde_json::json!({"code": "organization_spend_limit_exceeded"}),
+        serde_json::json!({"code": "project_spend_limit_exceeded"}),
+        serde_json::json!({"code": "organization_usage_limit_exceeded"}),
+        serde_json::json!({"type": "rate_limit_error", "code": "rate_limit_exceeded"}),
+        serde_json::json!({"type": "rate_limit_error", "code": "slow_down"}),
+    ] {
+        let expected = if error["type"] == "rate_limit_error" {
+            CodexErrorInfo::ResponseTooManyFailedAttempts {
+                http_status_code: Some(429),
+            }
+        } else {
+            CodexErrorInfo::UsageLimitExceeded
+        };
+        let err = map_api_error(ApiError::Transport(TransportError::Http {
+            status: http::StatusCode::TOO_MANY_REQUESTS,
+            url: None,
+            headers: None,
+            body: Some(serde_json::json!({"error": error}).to_string()),
+        }));
+
+        assert_eq!(err.to_codex_protocol_error(), expected, "{error}");
+    }
+}
+
+#[test]
 fn map_api_error_maps_usage_limit_limit_name_header() {
     let mut headers = HeaderMap::new();
     headers.insert(
