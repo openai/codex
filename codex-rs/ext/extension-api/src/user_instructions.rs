@@ -23,7 +23,8 @@ pub struct Instructions {
 pub struct LoadedUserInstructions {
     /// Loaded instructions, or `None` when the provider has no applicable text.
     pub instructions: Option<Instructions>,
-    /// Recoverable loading problems that should be surfaced during startup.
+    /// Recoverable loading problems that should be surfaced to the host.
+    /// Providers own suppression of recurring warnings; Core forwards each returned warning.
     pub warnings: Vec<String>,
 }
 
@@ -31,11 +32,13 @@ pub struct LoadedUserInstructions {
 pub type LoadUserInstructionsFuture<'a> =
     Pin<Box<dyn Future<Output = LoadedUserInstructions> + Send + 'a>>;
 
-/// Loads the user instructions that apply when a root thread runtime starts.
+/// Loads global user instructions shared across root threads.
 ///
+/// Core reads this provider at startup and when capturing model-request context.
+/// Implementations own fetching and caching, so repeated reads should be cheap.
 /// Implementations should return any recoverable loading problems as warnings
 /// while still returning usable fallback instructions when available.
 pub trait UserInstructionsProvider: Send + Sync {
-    /// Loads the snapshot to use for a newly created root runtime.
+    /// Loads the current global snapshot for a root runtime.
     fn load_user_instructions(&self) -> LoadUserInstructionsFuture<'_>;
 }

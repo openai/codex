@@ -1233,7 +1233,7 @@ async fn spawn_internal_session_preserves_parent_lineage_without_forking_history
         .session
         .set_multi_agent_version_if_unset(MultiAgentVersion::V2);
     assert_eq!(
-        parent.thread.session.user_instructions().await,
+        parent.thread.session.inherited_instructions().await.user,
         Some(parent_instructions)
     );
     assert_eq!(
@@ -1317,7 +1317,15 @@ async fn spawn_internal_session_preserves_parent_lineage_without_forking_history
         Some(parent.thread_id)
     );
     assert_eq!(reviewer.session_configured.forked_from_id, None);
-    assert!(reviewer.thread.session.user_instructions().await.is_none());
+    assert!(
+        reviewer
+            .thread
+            .session
+            .inherited_instructions()
+            .await
+            .user
+            .is_none()
+    );
     assert!(
         reviewer
             .thread

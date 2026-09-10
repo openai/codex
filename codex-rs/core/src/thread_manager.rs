@@ -1,5 +1,6 @@
 use crate::CodexAppsToolsCache;
 use crate::agent::AgentControl;
+use crate::agents_md_manager::SessionInstructions;
 use crate::attestation::AttestationProvider;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
@@ -1652,53 +1653,37 @@ impl ThreadManagerState {
         resolve_multi_agent_version(initial_history, inherited_multi_agent_version)
     }
 
-    /// Resolves the provider snapshot for a newly spawned runtime.
+    /// Selects instruction sources for a newly spawned runtime without loading providers.
     ///
-    /// Loads a fresh provider snapshot for:
-    /// - fresh root threads;
-    /// - cold resumes;
-    /// - root forks.
-    ///
-    /// Uses an existing snapshot for:
-    /// - subagents, which inherit from their parent without invoking the
-    ///   provider;
-    /// - running resumes and compaction paths, which retain the live session.
-    ///
-    /// Provider warnings only apply to fresh loads. If a parent runtime is no
-    /// longer available, its child starts without provider instructions rather
-    /// than loading independently.
-    async fn user_instructions_for_spawn(
+    /// Fresh roots, cold resumes, and root forks retain the global provider. The
+    /// session's AgentsMdManager loads it at startup and subsequent context captures.
+    /// Subagents inherit their live parent's applied snapshot without its provider;
+    /// if that parent is unavailable, they start without inherited instructions.
+    /// Warm resumes retain the existing session and do not call this function.
+    async fn instructions_for_spawn(
         &self,
         session_source: &SessionSource,
         parent_thread_id: Option<ThreadId>,
         forked_from_thread_id: Option<ThreadId>,
-    ) -> LoadedUserInstructions {
-        let is_root_agent = !session_source.is_non_root_agent();
-        if is_root_agent {
-            return self
-                .user_instructions_provider
-                .load_user_instructions()
-                .await;
+    ) -> SessionInstructions {
+        if !session_source.is_non_root_agent() {
+            return SessionInstructions {
+                user_provider: Some(Arc::clone(&self.user_instructions_provider)),
+                ..Default::default()
+            };
         }
-
         let inherited_thread_id = match session_source {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id, ..
             }) => Some(*parent_thread_id),
             _ => parent_thread_id.or(forked_from_thread_id),
         };
-        let instructions = match inherited_thread_id {
-            // The spawn path retains only thread IDs, so look up the live
-            // runtime again here to inherit its user instructions.
+        match inherited_thread_id {
             Some(thread_id) => match self.get_thread(thread_id).await {
-                Ok(thread) => thread.session.user_instructions().await,
-                Err(_) => None,
+                Ok(thread) => thread.session.inherited_instructions().await,
+                Err(_) => SessionInstructions::default(),
             },
-            None => None,
-        };
-        LoadedUserInstructions {
-            instructions,
-            warnings: Vec::new(),
+            None => SessionInstructions::default(),
         }
     }
 
@@ -1920,7 +1905,7 @@ impl ThreadManagerState {
             user_shell_override,
         } = request;
         let StartThreadOptions {
-            config,
+            mut config,
             allow_provider_model_fallback,
             initial_history,
             history_mode,
@@ -1996,41 +1981,41 @@ impl ThreadManagerState {
                 threads.remove(&resumed.conversation_id);
             }
         }
-        let (
-            user_instructions,
-            inherited_exec_policy,
-            extensions,
-            mcp_manager,
-            multi_agent_version,
-        ) = if isolation == codex_extension_api::SessionIsolation::Isolated {
-            (
-                LoadedUserInstructions::default(),
-                None,
-                empty_extension_registry(),
-                Arc::new(McpManager::new(Arc::clone(&self.plugins_manager))),
-                Some(MultiAgentVersion::Disabled),
-            )
-        } else {
-            (
-                self.user_instructions_for_spawn(
-                    &session_source,
-                    parent_thread_id,
-                    forked_from_thread_id,
+        let (instructions, inherited_exec_policy, extensions, mcp_manager, multi_agent_version) =
+            if isolation == codex_extension_api::SessionIsolation::Isolated {
+                (
+                    SessionInstructions::default(),
+                    None,
+                    empty_extension_registry(),
+                    Arc::new(McpManager::new(Arc::clone(&self.plugins_manager))),
+                    Some(MultiAgentVersion::Disabled),
                 )
-                .await,
-                inherited_exec_policy,
-                Arc::clone(&self.extensions),
-                Arc::clone(&self.mcp_manager),
-                self.initial_multi_agent_version_for_spawn(
-                    &initial_history,
-                    Some(&session_source),
-                    parent_thread_id,
-                    forked_from_thread_id,
+            } else {
+                (
+                    self.instructions_for_spawn(
+                        &session_source,
+                        parent_thread_id,
+                        forked_from_thread_id,
+                    )
+                    .await,
+                    inherited_exec_policy,
+                    Arc::clone(&self.extensions),
+                    Arc::clone(&self.mcp_manager),
+                    self.initial_multi_agent_version_for_spawn(
+                        &initial_history,
+                        Some(&session_source),
+                        parent_thread_id,
+                        forked_from_thread_id,
+                    )
+                    .await,
                 )
-                .await,
-            )
-        };
-        let user_instructions = supplied_user_instructions.unwrap_or(user_instructions);
+            };
+        let mut instructions = instructions;
+        if let Some(supplied) = supplied_user_instructions {
+            instructions.user = supplied.instructions;
+            instructions.user_provider = None;
+            config.startup_warnings.extend(supplied.warnings);
+        }
         let parent_rollout_thread_trace = self
             .parent_rollout_thread_trace_for_source(&session_source, &initial_history)
             .await;
@@ -2064,7 +2049,7 @@ impl ThreadManagerState {
         let (session, io) = Session::spawn(SessionSpawnArgs {
             config,
             allow_provider_model_fallback,
-            user_instructions,
+            instructions,
             installation_id: self.installation_id.clone(),
             auth_manager,
             models_manager: Arc::clone(&self.models_manager),

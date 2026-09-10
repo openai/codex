@@ -1,18 +1,36 @@
+//! Resolves global and repository instructions into one validated snapshot.
+//! Refreshes are serialized; the state lock is never held while calling providers.
+
 use crate::agents_md::LoadedAgentsMd;
 use crate::agents_md::load_project_instructions;
 use crate::config::Config;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use codex_extension_api::Instructions;
+use codex_extension_api::UserInstructionsProvider;
 use codex_protocol::config_types::TrustLevel;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::TurnEnvironmentSelection;
-use std::io;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio::sync::Semaphore;
 
-/// Owns the inputs and cached result of AGENTS.md discovery for a session.
+/// Owns instruction sources, refresh serialization, and the applied snapshot.
 pub(crate) struct AgentsMdManager {
-    user_instructions: Option<Instructions>,
-    cache: Mutex<AgentsMdCache>,
+    refresh_lock: Semaphore,
+    state: Mutex<AgentsMdState>,
+}
+
+/// Root runtimes retain providers; subagents inherit only their applied snapshots.
+#[derive(Clone, Default)]
+pub(crate) struct SessionInstructions {
+    pub(crate) user: Option<Instructions>,
+    pub(crate) user_provider: Option<Arc<dyn UserInstructionsProvider>>,
+}
+
+struct AgentsMdState {
+    instructions: SessionInstructions,
+    cache: AgentsMdCache,
 }
 
 #[derive(Default)]
@@ -23,53 +41,105 @@ struct AgentsMdCache {
 }
 
 impl AgentsMdManager {
-    pub(crate) fn new(user_instructions: Option<Instructions>) -> Self {
+    pub(crate) fn new(mut instructions: SessionInstructions) -> Self {
+        instructions.user = normalize_instructions(instructions.user);
         Self {
-            user_instructions: user_instructions
-                .filter(|instructions| !instructions.text.trim().is_empty()),
-            cache: Mutex::new(AgentsMdCache::default()),
+            refresh_lock: Semaphore::new(/*permits*/ 1),
+            state: Mutex::new(AgentsMdState {
+                instructions,
+                cache: AgentsMdCache::default(),
+            }),
         }
     }
 
+    /// Resolves and validates one coherent snapshot for startup or a request boundary.
+    /// Providers own fetching and caching. Warnings survive validation failures;
+    /// only validated snapshots replace the applied host instructions.
     #[tracing::instrument(name = "agents_md.refresh", skip_all)]
     pub(crate) async fn refresh(
         &self,
         config: &Config,
         environments: &TurnEnvironmentSnapshot,
-    ) -> io::Result<()> {
+    ) -> (CodexResult<Option<Arc<LoadedAgentsMd>>>, Vec<String>) {
+        // Serialize overlapping captures without blocking reads of the applied snapshot.
+        let Ok(_refresh_guard) = self.refresh_lock.acquire().await else {
+            return (
+                Err(CodexErr::Fatal(
+                    "instruction refresh semaphore closed".to_string(),
+                )),
+                Vec::new(),
+            );
+        };
         let selections = environments
             .turn_environments()
             .map(|environment| environment.selection.clone())
             .collect::<Vec<_>>();
         let active_project_trust_level = config.active_project.trust_level;
-        {
-            let mut cache = self.cache.lock().await;
-            if cache.selections.as_ref() == Some(&selections)
-                && cache.active_project_trust_level == active_project_trust_level
-            {
-                return Ok(());
+        let (mut instructions, cached, refresh_repository) = {
+            let mut state = self.state.lock().await;
+            let refresh_repository = state.cache.selections.as_ref() != Some(&selections)
+                || state.cache.active_project_trust_level != active_project_trust_level;
+            if refresh_repository {
+                // Tightened read permissions must not leave inaccessible instructions visible,
+                // even if discovery fails or the caller cancels the refresh.
+                state.cache = AgentsMdCache::default();
             }
-            cache.selections = None;
-            cache.active_project_trust_level = None;
-            cache.loaded = None;
+            (
+                state.instructions.clone(),
+                state.cache.loaded.clone(),
+                refresh_repository,
+            )
+        };
+        let mut warnings = Vec::new();
+        if let Some(provider) = &instructions.user_provider {
+            let loaded = provider.load_user_instructions().await;
+            instructions.user = normalize_instructions(loaded.instructions);
+            warnings.extend(loaded.warnings);
         }
 
-        let loaded =
-            load_project_instructions(config, self.user_instructions.clone(), environments)
-                .await?
-                .map(Arc::new);
-        let mut cache = self.cache.lock().await;
-        cache.selections = Some(selections);
-        cache.active_project_trust_level = active_project_trust_level;
-        cache.loaded = loaded;
-        Ok(())
+        let result = async {
+            if !refresh_repository {
+                let state = self.state.lock().await;
+                if state.instructions.user == instructions.user {
+                    return Ok(cached);
+                }
+            }
+
+            let loaded = if refresh_repository {
+                load_project_instructions(config, /*user_instructions*/ None, environments)
+                    .await?
+                    .unwrap_or_default()
+            } else {
+                cached.as_deref().cloned().unwrap_or_default()
+            }
+            .with_user_instructions(instructions.user.clone())
+            .map(Arc::new);
+            let mut state = self.state.lock().await;
+            state.instructions = instructions;
+            state.cache = AgentsMdCache {
+                selections: Some(selections),
+                active_project_trust_level,
+                loaded: loaded.clone(),
+            };
+            Ok(loaded)
+        }
+        .await;
+        (result, warnings)
     }
 
     pub(crate) async fn get_loaded(&self) -> Option<Arc<LoadedAgentsMd>> {
-        self.cache.lock().await.loaded.clone()
+        self.state.lock().await.cache.loaded.clone()
     }
 
-    pub(crate) fn user_instructions(&self) -> Option<Instructions> {
-        self.user_instructions.clone()
+    pub(crate) async fn inherited_instructions(&self) -> SessionInstructions {
+        let state = self.state.lock().await;
+        SessionInstructions {
+            user: state.instructions.user.clone(),
+            ..Default::default()
+        }
     }
+}
+
+fn normalize_instructions(instructions: Option<Instructions>) -> Option<Instructions> {
+    instructions.filter(|instructions| !instructions.text.trim().is_empty())
 }

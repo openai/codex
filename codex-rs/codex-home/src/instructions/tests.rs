@@ -110,6 +110,7 @@ async fn directory_override_falls_back_to_default() {
 #[tokio::test]
 async fn recoverable_override_read_error_warns_and_falls_back_to_default() {
     let home = TempDir::new().expect("temp dir");
+    let provider = provider(&home);
     let override_path = home.path().join(LOCAL_AGENTS_MD_FILENAME);
     create_symlink_loop(&override_path);
     fs::write(home.path().join(DEFAULT_AGENTS_MD_FILENAME), "default").expect("write default");
@@ -120,8 +121,67 @@ async fn recoverable_override_read_error_warns_and_falls_back_to_default() {
     );
 
     assert_eq!(
-        provider(&home).load_user_instructions().await,
+        provider.load_user_instructions().await,
+        expected(
+            &home,
+            DEFAULT_AGENTS_MD_FILENAME,
+            "default",
+            vec![warning.clone()]
+        )
+    );
+    assert_eq!(
+        provider.clone().load_user_instructions().await,
+        expected(&home, DEFAULT_AGENTS_MD_FILENAME, "default", Vec::new())
+    );
+
+    fs::remove_file(&override_path).expect("remove broken symlink");
+    assert_eq!(
+        provider.load_user_instructions().await,
+        expected(&home, DEFAULT_AGENTS_MD_FILENAME, "default", Vec::new())
+    );
+    create_symlink_loop(&override_path);
+    assert_eq!(
+        provider.load_user_instructions().await,
         expected(&home, DEFAULT_AGENTS_MD_FILENAME, "default", vec![warning])
+    );
+}
+
+#[tokio::test]
+async fn failed_refresh_retains_last_success_until_recovery_or_removal() {
+    let home = TempDir::new().expect("temp dir");
+    let provider = provider(&home);
+    let path = home.path().join(DEFAULT_AGENTS_MD_FILENAME);
+    fs::write(&path, "initial").expect("write initial instructions");
+    let initial = provider.load_user_instructions().await;
+
+    fs::remove_file(&path).expect("remove initial file");
+    create_symlink_loop(&path);
+    let failed = provider.load_user_instructions().await;
+    assert_eq!(failed.instructions, initial.instructions);
+    assert_eq!(failed.warnings.len(), 1);
+    assert_eq!(provider.load_user_instructions().await, initial);
+
+    fs::remove_file(&path).expect("remove broken symlink");
+    fs::write(&path, "recovered").expect("restore instructions");
+    assert_eq!(
+        provider.load_user_instructions().await,
+        expected(&home, DEFAULT_AGENTS_MD_FILENAME, "recovered", Vec::new()),
+    );
+
+    fs::write(&path, " \n").expect("clear instructions");
+    assert_eq!(
+        provider.load_user_instructions().await,
+        LoadedUserInstructions::default(),
+    );
+    fs::remove_file(&path).expect("remove cleared instructions");
+    create_symlink_loop(&path);
+    let failed_after_clear = provider.load_user_instructions().await;
+    assert_eq!(failed_after_clear.instructions, None);
+    assert_eq!(failed_after_clear.warnings.len(), 1);
+    fs::remove_file(&path).expect("remove broken symlink");
+    assert_eq!(
+        provider.load_user_instructions().await,
+        LoadedUserInstructions::default(),
     );
 }
 

@@ -1,4 +1,7 @@
+use std::collections::HashSet;
 use std::io;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 use codex_extension_api::Instructions;
 use codex_extension_api::LoadUserInstructionsFuture;
@@ -13,12 +16,25 @@ const LOCAL_AGENTS_MD_FILENAME: &str = "AGENTS.override.md";
 #[derive(Clone, Debug)]
 pub struct CodexHomeUserInstructionsProvider {
     codex_home: AbsolutePathBuf,
+    // Cached instructions and warning history are shared across provider clones.
+    state: Arc<Mutex<InstructionsState>>,
+}
+
+#[derive(Debug, Default)]
+struct InstructionsState {
+    // Failed refreshes retain the last good value; confirmed absence still clears it.
+    last_successful_instructions: Option<Instructions>,
+    // Report ongoing failures once, then again if they return after recovery.
+    active_warnings: HashSet<String>,
 }
 
 impl CodexHomeUserInstructionsProvider {
     /// Creates a provider rooted at the supplied absolute Codex home directory.
     pub fn new(codex_home: AbsolutePathBuf) -> Self {
-        Self { codex_home }
+        Self {
+            codex_home,
+            state: Arc::new(Mutex::new(InstructionsState::default())),
+        }
     }
 
     async fn load_from_codex_home(&self) -> LoadedUserInstructions {
@@ -69,7 +85,26 @@ impl CodexHomeUserInstructionsProvider {
 
 impl UserInstructionsProvider for CodexHomeUserInstructionsProvider {
     fn load_user_instructions(&self) -> LoadUserInstructionsFuture<'_> {
-        Box::pin(self.load_from_codex_home())
+        Box::pin(async move {
+            let mut loaded = self.load_from_codex_home().await;
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if loaded.instructions.is_some() || loaded.warnings.is_empty() {
+                state
+                    .last_successful_instructions
+                    .clone_from(&loaded.instructions);
+            } else {
+                loaded.instructions = state.last_successful_instructions.clone();
+            }
+            let previous_warnings = std::mem::take(&mut state.active_warnings);
+            loaded.warnings.retain(|warning| {
+                state.active_warnings.insert(warning.clone())
+                    && !previous_warnings.contains(warning)
+            });
+            loaded
+        })
     }
 }
 

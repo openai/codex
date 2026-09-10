@@ -316,6 +316,15 @@ impl LoadedAgentsMd {
         }
     }
 
+    pub(crate) fn with_user_instructions(
+        mut self,
+        user_instructions: Option<Instructions>,
+    ) -> Option<Self> {
+        self.user_instructions =
+            user_instructions.filter(|instructions| !instructions.text.trim().is_empty());
+        (!self.is_empty()).then_some(self)
+    }
+
     /// Creates source-less user instructions for tests.
     ///
     /// This cannot be gated with `#[cfg(test)]` because integration tests

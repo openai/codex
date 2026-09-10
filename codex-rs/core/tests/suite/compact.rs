@@ -5127,7 +5127,7 @@ async fn snapshot_request_shape_manual_compact_without_previous_user_messages() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn manual_compaction_keeps_the_creation_time_global_instructions() -> Result<()> {
+async fn manual_compaction_refreshes_global_instructions_for_next_turn() -> Result<()> {
     // Set up an initial turn, a manual compaction response, and a post-compaction turn.
     let server = responses::start_mock_server().await;
     let response_mock = responses::mount_sse_sequence(
@@ -5188,25 +5188,25 @@ async fn manual_compaction_keeps_the_creation_time_global_instructions() -> Resu
     .await;
     test.submit_turn("after compact").await?;
 
-    // Assert ordinary and compact turns keep the old rendering even though the reported source
-    // path now contains new text.
+    // Compaction summarizes the existing history; the next turn injects the refreshed instructions.
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 3);
-    let expected_fragment = expected_instruction_fragment(OLD_GLOBAL_INSTRUCTIONS);
-    assert_single_instruction_fragment(&requests[0], &expected_fragment);
-    assert_single_instruction_fragment(&requests[1], &expected_fragment);
-    assert_single_instruction_fragment(&requests[2], &expected_fragment);
+    let old_fragment = expected_instruction_fragment(OLD_GLOBAL_INSTRUCTIONS);
+    let new_fragment = expected_instruction_fragment(NEW_GLOBAL_INSTRUCTIONS);
+    assert_single_instruction_fragment(&requests[0], &old_fragment);
+    assert_single_instruction_fragment(&requests[1], &old_fragment);
+    assert_single_instruction_fragment(&requests[2], &new_fragment);
     assert_eq!(
         test.codex.instruction_sources().await,
         vec![PathUri::from_abs_path(&source)],
-        "thread retains the creation-time global source after compaction"
+        "refreshing same-path instructions preserves their source"
     );
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn mid_turn_compaction_keeps_the_creation_time_global_instructions() -> Result<()> {
+async fn mid_turn_compaction_uses_refreshed_global_instructions() -> Result<()> {
     // Set up a turn that crosses the auto-compaction limit and a post-compaction response.
     let server = responses::start_mock_server().await;
     let response_mock = responses::mount_sse_sequence(
@@ -5261,24 +5261,24 @@ async fn mid_turn_compaction_keeps_the_creation_time_global_instructions() -> Re
     assert_ne!(source, new_source);
     test.submit_turn("trigger mid-turn compaction").await?;
 
-    // Assert the initial, compact, and resumed requests all keep the old snapshot and source.
+    // The next request boundary selects the override; compaction and continuation retain it.
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 3);
-    let expected_fragment = expected_instruction_fragment(OLD_GLOBAL_INSTRUCTIONS);
+    let expected_fragment = expected_instruction_fragment(NEW_GLOBAL_INSTRUCTIONS);
     assert_single_instruction_fragment(&requests[0], &expected_fragment);
     assert_single_instruction_fragment(&requests[1], &expected_fragment);
     assert_single_instruction_fragment(&requests[2], &expected_fragment);
     assert_eq!(
         test.codex.instruction_sources().await,
-        vec![PathUri::from_abs_path(&source)],
-        "thread retains the creation-time global source after mid-turn compaction"
+        vec![PathUri::from_abs_path(&new_source)],
+        "thread reports the refreshed global override after mid-turn compaction"
     );
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_v2_compaction_keeps_creation_time_instructions_after_same_path_mutation()
+async fn remote_v2_compaction_refreshes_instructions_and_preserves_them_on_cold_resume()
 -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -5330,14 +5330,14 @@ async fn remote_v2_compaction_keeps_creation_time_instructions_after_same_path_m
     test.submit_turn("after remote v2 compaction").await?;
     test.codex.flush_rollout().await?;
 
-    // Assert the compact request, installed replacement history, and follow-up all keep the
-    // creation-time item despite the file-backed source now containing new text.
+    // Compaction summarizes the existing history; the follow-up injects the refreshed instructions.
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 3);
     let old_fragment = expected_instruction_fragment(OLD_GLOBAL_INSTRUCTIONS);
+    let new_fragment = expected_instruction_fragment(NEW_GLOBAL_INSTRUCTIONS);
     assert_single_instruction_fragment(&requests[0], &old_fragment);
     assert_single_instruction_fragment(&requests[1], &old_fragment);
-    assert_single_instruction_fragment(&requests[2], &old_fragment);
+    assert_single_instruction_fragment(&requests[2], &new_fragment);
     assert_eq!(
         requests[1].input().last(),
         Some(&json!({"type": "compaction_trigger"})),
@@ -5379,17 +5379,10 @@ async fn remote_v2_compaction_keeps_creation_time_instructions_after_same_path_m
         .submit_turn("after remote v2 compaction cold resume")
         .await?;
 
-    // Cold resume replays the persisted old context, then appends the newly loaded instructions as
-    // an explicit replacement.
+    // Cold resume replays the refreshed context without appending unchanged instructions again.
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 4);
-    let replacement_fragment = expected_instruction_fragment(&format!(
-        "These AGENTS.md instructions replace all previously provided AGENTS.md instructions.\n\n{NEW_GLOBAL_INSTRUCTIONS}"
-    ));
-    assert_eq!(
-        instruction_fragments(&requests[3]),
-        vec![old_fragment.clone(), replacement_fragment]
-    );
+    assert_single_instruction_fragment(&requests[3], &new_fragment);
     let resumed_input = requests[3].input();
     assert_eq!(
         resumed_input.get(..replacement_history.len()),

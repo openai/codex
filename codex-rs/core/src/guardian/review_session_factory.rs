@@ -32,7 +32,7 @@ impl PreparedSession {
         let parent_compaction = context_policy.parent_compaction(history, compaction_model_hash)?;
         let mut key = GuardianReviewSessionReuseKey::from_spawn_config(
             &config,
-            parent.user_instructions().await,
+            parent.inherited_instructions().await,
             history.history_version(),
             parent.guardian_context_mode,
         )
@@ -133,6 +133,11 @@ impl ReviewerSessionFactory for PreparedSession {
                 ))
                 .await?
             }
+        };
+        let inherited = session.inherited_instructions().await;
+        let context = GuardianReviewSessionReuseKey {
+            user_instructions: inherited.user,
+            ..context
         };
         Ok(GuardianReviewSession {
             session,

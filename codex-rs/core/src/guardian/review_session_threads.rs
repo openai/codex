@@ -76,7 +76,7 @@ impl ManagedReviewerThreads {
             environments: Some(context.environments().to_selections()),
             inherited_environments: Some(context.environments().clone()),
             user_instructions: Some(LoadedUserInstructions {
-                instructions: parent.user_instructions().await,
+                instructions: parent.inherited_instructions().await.user,
                 warnings: Vec::new(),
             }),
             client_mcp_extensions: parent.services.client_mcp_extensions.clone(),

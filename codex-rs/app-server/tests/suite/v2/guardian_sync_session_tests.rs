@@ -57,6 +57,84 @@ enum ReviewEnding {
     Interrupt,
 }
 
+#[tokio::test]
+async fn managed_reviewer_refreshes_global_instructions_before_reuse() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let checks = ["initial", "unchanged", "updated", "still-updated"];
+    let mut responses = Vec::new();
+    for check in checks {
+        for body in [
+            tool_response(TEST_SERVER_NAME, TEST_TOOL_NAME, &[check]),
+            assistant_response(ALLOW)?,
+            assistant_response("Done.")?,
+        ] {
+            responses.push(vec![StreamingSseChunk { gate: None, body }]);
+        }
+    }
+    let (server, _completions) = start_streaming_sse_server(responses).await;
+    let (mcp_url, mcp_server) = start_mcp_server(/*sensitive_action*/ None).await?;
+    let codex_home = TempDir::new()?;
+    let instructions_path = codex_home.path().join("AGENTS.md");
+    sync_config(server.uri())
+        .with_extra_config(&format!(
+            "[mcp_servers.{TEST_SERVER_NAME}]\nurl = \"{mcp_url}/mcp\"\ndefault_tools_approval_mode = \"prompt\""
+        ))
+        .write(codex_home.path())?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(TIMEOUT)
+        .await?;
+    let old_instructions = "Keep this project private.";
+    let new_instructions = "Ask before sharing this project's source code.";
+    std::fs::write(&instructions_path, old_instructions)?;
+    let parent = app.start_thread(ThreadStartParams::default()).await?.thread;
+    let mut reviewer_ids = Vec::new();
+    for (index, instructions) in [
+        old_instructions,
+        old_instructions,
+        new_instructions,
+        new_instructions,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        std::fs::write(&instructions_path, instructions)?;
+        let request_id = app
+            .send_turn_start_request(TurnStartParams {
+                thread_id: parent.id.clone(),
+                input: vec![UserInput::Text {
+                    text: format!("Run the {} check.", checks[index]),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            })
+            .await?;
+        let _: TurnStartResponse = timeout(TIMEOUT, app.read_response(request_id)).await??;
+        let completed: TurnCompletedNotification =
+            timeout(TIMEOUT, app.read_notification("turn/completed")).await??;
+        assert_eq!(completed.thread_id, parent.id);
+        assert_eq!(completed.turn.status, TurnStatus::Completed);
+
+        let requests = server.requests().await;
+        assert_eq!(requests.len(), (index + 1) * 3);
+        let review: Value = serde_json::from_slice(&requests[index * 3 + 1])?;
+        assert!(review["input"].to_string().contains(instructions));
+        reviewer_ids.push(
+            review["client_metadata"]["thread_id"]
+                .as_str()
+                .expect("reviewer ID")
+                .to_owned(),
+        );
+    }
+    assert_eq!(reviewer_ids[0], reviewer_ids[1]);
+    assert_ne!(reviewer_ids[1], reviewer_ids[2]);
+    assert_eq!(reviewer_ids[2], reviewer_ids[3]);
+
+    app.shutdown_gracefully().await?;
+    mcp_server.abort();
+    Ok(())
+}
+
 #[test_case(ReviewEnding::Complete; "completed reviews")]
 #[test_case(ReviewEnding::Interrupt; "cancelled concurrent reviews")]
 #[tokio::test]
