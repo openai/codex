@@ -2888,6 +2888,32 @@ deny_read = ["secrets/**"]
 }
 
 #[tokio::test]
+async fn load_config_rejects_nul_in_required_deny_read_glob() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let err = ConfigBuilder::default()
+        .codex_home(tmp.path().to_path_buf())
+        .fallback_cwd(Some(tmp.path().to_path_buf()))
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"
+[permissions.filesystem]
+deny_read = ["secrets/**\u0000"]
+"#,
+            ),
+        )
+        .build()
+        .await
+        .expect_err("an unsupported required denial must fail configuration loading");
+
+    assert!(
+        err.to_string().contains("unsupported configuration path"),
+        "{err}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn strict_config_rejects_unknown_cloud_config_key() {
     let tmp = tempdir().expect("tempdir");
     let codex_home = tmp.path().join("home");

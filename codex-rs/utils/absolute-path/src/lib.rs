@@ -27,9 +27,7 @@ impl AbsolutePathBuf {
     fn maybe_expand_home_directory(path: &Path) -> PathBuf {
         if let Some(path_str) = path.to_str()
             && let Some(rest) = path_str.strip_prefix('~')
-            && let Some(home) = ABSOLUTE_PATH_HOME
-                .with(|cell| cell.borrow().clone())
-                .or_else(home_dir)
+            && let Some(home) = AbsolutePathBufGuard::home_directory()
         {
             if rest.is_empty() {
                 return home;
@@ -338,6 +336,23 @@ thread_local! {
 pub struct AbsolutePathBufGuard;
 
 impl AbsolutePathBufGuard {
+    /// Reads the native deserialization base and validates the guard requirement
+    /// before home expansion or namespace normalization. Does not look up cwd.
+    pub fn deserialization_base(path: &Path) -> Result<Option<PathBuf>, &'static str> {
+        let base = ABSOLUTE_PATH_BASE.with(|cell| cell.borrow().clone());
+        if base.is_none() && !path.is_absolute() {
+            return Err("AbsolutePathBuf deserialized without a base path");
+        }
+        Ok(base)
+    }
+
+    /// Reads the effective native home, including the thread-local override.
+    pub fn home_directory() -> Option<PathBuf> {
+        ABSOLUTE_PATH_HOME
+            .with(|cell| cell.borrow().clone())
+            .or_else(home_dir)
+    }
+
     pub fn new(base_path: &Path) -> Self {
         ABSOLUTE_PATH_BASE.with(|cell| {
             *cell.borrow_mut() = Some(base_path.to_path_buf());
@@ -379,15 +394,13 @@ impl<'de> Deserialize<'de> for AbsolutePathBuf {
         D: Deserializer<'de>,
     {
         let path = PathBuf::deserialize(deserializer)?;
-        ABSOLUTE_PATH_BASE.with(|cell| match cell.borrow().as_deref() {
+        match AbsolutePathBufGuard::deserialization_base(&path)
+            .map_err(SerdeError::custom)?
+            .as_deref()
+        {
             Some(base) => Ok(Self::resolve_path_against_base(path, base)),
-            None if path.is_absolute() => {
-                Self::from_absolute_path(path).map_err(SerdeError::custom)
-            }
-            None => Err(SerdeError::custom(
-                "AbsolutePathBuf deserialized without a base path",
-            )),
-        })
+            None => Self::from_absolute_path(path).map_err(SerdeError::custom),
+        }
     }
 }
 

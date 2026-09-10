@@ -2550,39 +2550,6 @@ fn resolve_permission_config_syntax(
     })
 }
 
-fn apply_managed_filesystem_constraints(
-    file_system_sandbox_policy: &mut FileSystemSandboxPolicy,
-    filesystem_constraints: &codex_config::FilesystemConstraints,
-) {
-    for deny_read in &filesystem_constraints.deny_read {
-        let deny_entry = if deny_read.contains_glob() {
-            codex_protocol::permissions::FileSystemSandboxEntry {
-                path: codex_protocol::permissions::FileSystemPath::GlobPattern {
-                    pattern: deny_read.as_str().to_string(),
-                },
-                access: codex_protocol::permissions::FileSystemAccessMode::Deny,
-                missing_path_behavior: None,
-            }
-        } else {
-            let Ok(path) = AbsolutePathBuf::try_from(deny_read.as_str()) else {
-                continue;
-            };
-            codex_protocol::permissions::FileSystemSandboxEntry {
-                path: path.into(),
-                access: codex_protocol::permissions::FileSystemAccessMode::Deny,
-                missing_path_behavior: None,
-            }
-        };
-        if !file_system_sandbox_policy
-            .entries
-            .iter()
-            .any(|existing| existing == &deny_entry)
-        {
-            file_system_sandbox_policy.entries.push(deny_entry);
-        }
-    }
-}
-
 /// Optional overrides for user configuration (e.g., from CLI flags).
 #[derive(Default, Debug, Clone)]
 pub struct ConfigOverrides {
@@ -4090,11 +4057,12 @@ impl Config {
         let managed_deny_read_policy = filesystem_requirements
             .as_ref()
             .filter(|Sourced { value, .. }| !value.deny_read.is_empty())
-            .map(|Sourced { value, .. }| {
+            .map(|Sourced { value, .. }| -> std::io::Result<_> {
                 let mut policy = FileSystemSandboxPolicy::restricted(Vec::new());
-                apply_managed_filesystem_constraints(&mut policy, value);
-                Arc::new(policy)
-            });
+                value.apply_to_policy(&mut policy, codex_utils_path_uri::PathConvention::native())?;
+                Ok(Arc::new(policy))
+            })
+            .transpose()?;
         if let Some(managed_deny_read_policy) = managed_deny_read_policy.as_ref() {
             effective_file_system_sandbox_policy
                 .preserve_deny_read_restrictions_from(managed_deny_read_policy);

@@ -24,6 +24,7 @@ use url::Url;
 
 mod absolute_path_normalization;
 mod api_path_string;
+mod config_path;
 mod native_path_bytes;
 
 use absolute_path_normalization::path_uri_from_segments;
@@ -891,11 +892,19 @@ fn parse_unnormalized_windows_path(path: &str) -> Option<PathUri> {
         let mut components = path[2..].split(is_windows_separator_char);
         let host = components.next().filter(|host| !host.is_empty())?;
         let share = components.next().filter(|share| !share.is_empty())?;
+        if matches!(host, "." | "..") || matches!(share, "." | "..") {
+            return Some(windows_opaque_path_uri(path));
+        }
         return path_uri_from_segments(
             PathConvention::Windows,
             Some(host),
             std::iter::once(share).chain(components),
         )
+        .filter(|uri| {
+            uri.0
+                .host_str()
+                .is_some_and(|parsed| parsed.eq_ignore_ascii_case(host))
+        })
         .or_else(|| Some(windows_opaque_path_uri(path)));
     }
 
@@ -993,6 +1002,16 @@ impl PathConvention {
     #[cfg(unix)]
     pub const fn native() -> Self {
         Self::Posix
+    }
+
+    /// Returns the suffix of `~` paths using this grammar's separators.
+    /// Named-user paths such as `~someone/private` are not home-relative.
+    pub fn home_relative_suffix(self, path: &str) -> Option<&str> {
+        let suffix = path.strip_prefix('~')?;
+        (suffix.is_empty()
+            || suffix.starts_with('/')
+            || self == Self::Windows && suffix.starts_with('\\'))
+        .then_some(suffix)
     }
 
     /// Splits absolute or relative native path text into lexical segments.

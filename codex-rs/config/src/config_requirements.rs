@@ -12,8 +12,6 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 use serde::de::Error as _;
-use serde::de::value::Error as ValueDeserializerError;
-use serde::de::value::StrDeserializer;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
@@ -711,25 +709,45 @@ impl FilesystemDenyReadPattern {
     }
 
     pub fn from_input(input: &str) -> Result<Self, String> {
+        codex_utils_path_uri::PathUri::validate_config_path_text(
+            input,
+            crate::path_context::convention(),
+        )
+        .map_err(|error| error.to_string())?;
         if !input.chars().any(is_glob_metacharacter) {
             let path = deserialize_absolute_path(input)?;
-            return Ok(Self(path.to_string_lossy().into_owned()));
+            return Ok(Self(path));
         }
 
         let (directory_prefix, suffix) = split_glob_pattern(input);
+        if crate::path_context::convention() == codex_utils_path_uri::PathConvention::Windows
+            && matches!(input.as_bytes(), [b'/' | b'\\', b'/' | b'\\', ..])
+            && !matches!(
+                directory_prefix.as_bytes(),
+                [b'/' | b'\\', b'/' | b'\\', ..]
+            )
+        {
+            return Err(
+                "filesystem denial glob requires a literal UNC server and share".to_string(),
+            );
+        }
         let normalized_prefix = if directory_prefix.is_empty() {
             deserialize_absolute_path(".")?
         } else {
             deserialize_absolute_path(directory_prefix)?
         };
-        let normalized_prefix = normalized_prefix.to_string_lossy();
         let normalized = if suffix.is_empty() {
-            normalized_prefix.into_owned()
+            normalized_prefix
         } else if normalized_prefix == "/" {
             format!("/{suffix}")
         } else {
             format!("{normalized_prefix}/{suffix}")
         };
+        codex_utils_path_uri::PathUri::validate_config_path_text(
+            &normalized,
+            crate::path_context::convention(),
+        )
+        .map_err(|error| error.to_string())?;
         Ok(Self(normalized))
     }
 }
@@ -750,9 +768,8 @@ impl<'de> Deserialize<'de> for FilesystemDenyReadPattern {
     }
 }
 
-fn deserialize_absolute_path(input: &str) -> Result<AbsolutePathBuf, String> {
-    AbsolutePathBuf::deserialize(StrDeserializer::<ValueDeserializerError>::new(input))
-        .map_err(|err| err.to_string())
+fn deserialize_absolute_path(input: &str) -> Result<String, String> {
+    crate::path_context::resolve(input)
 }
 
 fn split_glob_pattern(input: &str) -> (&str, &str) {
@@ -768,7 +785,8 @@ fn split_glob_pattern(input: &str) -> (&str, &str) {
     match separator_index {
         Some(0) => ("/", &input[1..]),
         Some(index)
-            if cfg!(windows)
+            if crate::path_context::convention()
+                == codex_utils_path_uri::PathConvention::Windows
                 && index == 2
                 && input.as_bytes().get(1) == Some(&b':')
                 && input.as_bytes().get(2).is_some() =>
@@ -781,7 +799,7 @@ fn split_glob_pattern(input: &str) -> (&str, &str) {
 }
 
 fn is_path_separator(ch: char) -> bool {
-    if cfg!(windows) {
+    if crate::path_context::convention() == codex_utils_path_uri::PathConvention::Windows {
         ch == '/' || ch == '\\'
     } else {
         ch == '/'

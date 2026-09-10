@@ -111,10 +111,7 @@ impl LegacyAppPathString {
         })?;
         let is_windows = convention == PathConvention::Windows;
         let path = self.as_str();
-        let home_relative = path
-            .strip_prefix("~/")
-            .or_else(|| (path == "~").then_some(""))
-            .or_else(|| is_windows.then(|| path.strip_prefix(r"~\")).flatten());
+        let home_relative = convention.home_relative_suffix(path);
         if let Some(suffix) = home_relative {
             let home =
                 user_home_dir.ok_or_else(|| LegacyAppPathStringError::MissingHomeDirectory {
@@ -412,6 +409,11 @@ pub enum LegacyAppPathStringError {
     InvalidNativePath {
         path: String,
         convention: Option<PathConvention>,
+    },
+    #[error("unsupported configuration path {path:?} using {convention} path syntax")]
+    UnsupportedConfigPath {
+        path: String,
+        convention: PathConvention,
     },
     #[error("path URI `{cwd}` has no path convention")]
     MissingBaseConvention { cwd: String },
