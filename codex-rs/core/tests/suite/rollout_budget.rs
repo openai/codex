@@ -1,12 +1,14 @@
 use anyhow::Result;
 use codex_core::TurnInputRequest;
 use codex_core::config::RolloutBudgetConfig;
+use codex_extension_api::ExtensionRegistryBuilder;
 use codex_features::Feature;
 use codex_model_provider_info::built_in_model_providers;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
+use core_test_support::ThreadIdle;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -22,6 +24,7 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::sync::Arc;
 use std::time::Duration;
 use test_case::test_case;
 use tokio::time::timeout;
@@ -482,7 +485,10 @@ async fn restates_the_current_remainder_after_rollback() -> Result<()> {
         ],
     )
     .await;
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.thread_lifecycle_contributor(Arc::new(ThreadIdle));
     let test = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
         .with_config(|config| {
             config.rollout_budget = Some(RolloutBudgetConfig {
                 reminder_at_remaining_tokens: vec![50],
@@ -493,10 +499,14 @@ async fn restates_the_current_remainder_after_rollback() -> Result<()> {
         .await?;
 
     test.submit_turn("rolled-back turn").await?;
+    ThreadIdle::wait(&test.codex).await;
     test.codex
         .submit(Op::ThreadRollback { num_turns: 1 })
         .await?;
     wait_for_event(&test.codex, |event| {
+        if let EventMsg::Error(error) = event {
+            panic!("rollback failed: {error:?}");
+        }
         matches!(event, EventMsg::ThreadRolledBack(_))
     })
     .await;

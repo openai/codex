@@ -329,6 +329,40 @@ pub async fn submit_thread_settings(
     }
 }
 
+/// For sequential tests, register this contributor and wait once after every completed turn.
+/// Notifications are thread-scoped so a child or sibling cannot satisfy the wait.
+pub struct ThreadIdle;
+
+#[derive(Default)]
+struct ThreadIdleNotification(tokio::sync::Notify);
+
+impl codex_extension_api::ThreadLifecycleContributor<Config> for ThreadIdle {
+    fn on_thread_idle<'a>(
+        &'a self,
+        input: codex_extension_api::ThreadIdleInput<'a>,
+    ) -> codex_extension_api::ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            input
+                .thread_store
+                .get_or_init(ThreadIdleNotification::default)
+                .0
+                .notify_one();
+        })
+    }
+}
+
+impl ThreadIdle {
+    pub async fn wait(thread: &CodexThread) {
+        // TurnComplete is sent before active-turn cleanup. Rollback requires the later idle signal.
+        let idle = thread
+            .thread_extension_data()
+            .get_or_init(ThreadIdleNotification::default);
+        tokio::time::timeout(std::time::Duration::from_secs(10), idle.0.notified())
+            .await
+            .expect("thread should become idle after turn completion");
+    }
+}
+
 pub async fn wait_for_event_match<T, F>(codex: &CodexThread, matcher: F) -> T
 where
     F: Fn(&codex_protocol::protocol::EventMsg) -> Option<T>,

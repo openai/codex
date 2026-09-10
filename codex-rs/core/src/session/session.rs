@@ -1438,13 +1438,17 @@ impl Session {
                 });
             }
 
-            let analytics_events_client = analytics_events_client.unwrap_or_else(|| {
-                AnalyticsEventsClient::new(
-                    Arc::clone(&auth_manager),
-                    config.chatgpt_base_url.trim_end_matches('/').to_string(),
-                    config.analytics_enabled,
-                )
-            });
+            let analytics_events_client = if config.analytics_enabled == Some(false) {
+                AnalyticsEventsClient::disabled()
+            } else {
+                analytics_events_client.unwrap_or_else(|| {
+                    AnalyticsEventsClient::new(
+                        Arc::clone(&auth_manager),
+                        config.chatgpt_base_url.trim_end_matches('/').to_string(),
+                        config.analytics_enabled,
+                    )
+                })
+            };
             for item in initial_history.get_rollout_items() {
                 match item {
                     RolloutItem::Compacted(compacted) => {

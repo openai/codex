@@ -218,6 +218,86 @@ async fn run_codex_thread_interactive_respects_pre_cancelled_spawn() {
 }
 
 #[tokio::test]
+async fn delegate_start_analytics_honors_child_opt_out_with_enabled_parent() {
+    use codex_analytics::AnalyticsEventsClient;
+    use codex_login::CodexAuth;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::path;
+
+    let server = MockServer::start().await;
+    Mock::given(path("/codex/analytics-events/events"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    let client = AnalyticsEventsClient::new(
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
+        server.uri(),
+        /*analytics_enabled*/ Some(true),
+    );
+    let (mut parent_session, parent_ctx, _rx_events) =
+        crate::session::tests::make_session_and_context_with_rx().await;
+    Arc::get_mut(&mut parent_session)
+        .expect("parent session should be uniquely owned")
+        .services
+        .analytics_events_client = client.clone();
+    parent_session
+        .set_app_server_client_info(
+            Some("codex-test".to_string()),
+            Some("1.0.0".to_string()),
+            /*mcp_elicitations_auto_deny*/ false,
+        )
+        .await
+        .expect("set parent client metadata");
+
+    let mut expected_events = Vec::new();
+    for analytics_enabled in [false, true] {
+        let mut config = parent_ctx.config.as_ref().clone();
+        config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
+        config.analytics_enabled = Some(analytics_enabled);
+        let (session, io) = run_codex_thread_interactive(
+            config,
+            Arc::clone(&parent_session.services.auth_manager),
+            Arc::clone(&parent_session.services.models_manager),
+            Arc::clone(&parent_session),
+            Arc::clone(&parent_ctx),
+            parent_ctx.environments.clone(),
+            CancellationToken::new(),
+            SubAgentSource::Review,
+            codex_extension_api::SessionIsolation::Inherit,
+            /*initial_history*/ None,
+            crate::session::GitEnrichmentPolicy::Fresh,
+            codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
+        )
+        .await
+        .expect("delegate session should start");
+        if analytics_enabled {
+            expected_events.push(serde_json::json!([
+                "codex_thread_initialized",
+                session.thread_id().to_string(),
+            ]));
+        }
+        io.shutdown_and_wait()
+            .await
+            .expect("delegate session should shut down");
+    }
+    client.flush().await;
+    let events = server
+        .received_requests()
+        .await
+        .expect("analytics requests")
+        .into_iter()
+        .flat_map(|request| {
+            let payload: Value = serde_json::from_slice(&request.body).expect("analytics payload");
+            payload["events"].as_array().expect("events array").clone()
+        })
+        .map(|event| serde_json::json!([event["event_type"], event["event_params"]["thread_id"]]))
+        .collect::<Vec<_>>();
+    assert_eq!(events, expected_events);
+}
+
+#[tokio::test]
 async fn delegate_isolation_does_not_depend_on_attribution() {
     let (mut parent_session, parent_ctx, _rx_events) =
         crate::session::tests::make_session_and_context_with_rx().await;

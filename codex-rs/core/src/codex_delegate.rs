@@ -145,7 +145,7 @@ pub(crate) async fn run_codex_thread_interactive(
     let thread_config = session.thread_config_snapshot().await;
     let client_metadata = parent_session.app_server_client_metadata().await;
     emit_subagent_session_started(
-        &parent_session.services.analytics_events_client,
+        &session.services.analytics_events_client,
         client_metadata,
         session.session_id(),
         session.thread_id(),
