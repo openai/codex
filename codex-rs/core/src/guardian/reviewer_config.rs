@@ -21,6 +21,8 @@ pub fn build_guardian_review_session_config(
     live_network_config: Option<codex_network_proxy::NetworkProxyConfig>,
     active_model: &str,
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
+    reasoning_summary: codex_protocol::config_types::ReasoningSummary,
+    personality: Option<codex_protocol::config_types::Personality>,
     model_messages: Option<&ModelMessages>,
 ) -> anyhow::Result<Config> {
     let mut guardian_config = parent_config.clone();
@@ -31,6 +33,8 @@ pub fn build_guardian_review_session_config(
     );
     guardian_config.model = Some(overrides.model);
     guardian_config.model_reasoning_effort = overrides.reasoning_effort;
+    guardian_config.model_reasoning_summary = Some(reasoning_summary);
+    guardian_config.personality = personality;
     guardian_config.model_provider.request_max_retries = Some(overrides.request_max_retries);
     guardian_config.model_provider.stream_max_retries = Some(overrides.stream_max_retries);
     guardian_config.include_skill_instructions = overrides.include_skill_instructions;

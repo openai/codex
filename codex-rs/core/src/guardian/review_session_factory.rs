@@ -37,9 +37,7 @@ impl PreparedSession {
             parent.guardian_context_mode,
         )
         .with_environments(context.environments())
-        .with_node_repl_policy_eligibility(
-            context.turn().model_info().computer_use_review_required(),
-        )
+        .with_node_repl_policy_eligibility(context.model_info.computer_use_review_required())
         .with_node_repl_policy(node_repl_policy);
         key.root_authorization_version = root_authorization_version;
         let host = parent
@@ -230,11 +228,12 @@ pub(crate) fn prewarm_guardian_review_session(
 ) -> BoxFuture<'static, anyhow::Result<()>> {
     // Keep the Session -> Guardian -> Session startup future on the heap.
     Box::pin(async move {
-        let config = guardian_review_session_config(&parent, &turn).await?;
+        let context = GuardianReviewContext::from(turn);
+        let config = guardian_review_session_config(&parent, &context).await?;
         let history = parent.clone_history().await;
         let factory = PreparedSession::prepare(
             Arc::clone(&parent),
-            GuardianReviewContext::from(turn),
+            context,
             config.spawn_config,
             &history,
             &config.node_repl_policy,

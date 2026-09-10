@@ -213,8 +213,9 @@ pub(super) struct GuardianReviewSessionConfig {
 
 pub(super) async fn guardian_review_session_config(
     session: &Session,
-    turn: &TurnContext,
+    context: &GuardianReviewContext,
 ) -> anyhow::Result<GuardianReviewSessionConfig> {
+    let turn = context.turn();
     let network_proxy = session.services.network_proxy.load_full();
     let live_network_config = match network_proxy.as_ref() {
         Some(network_proxy) => Some(network_proxy.proxy().current_cfg().await?),
@@ -237,28 +238,39 @@ pub(super) async fn guardian_review_session_config(
         model_overridden: guardian_review_model_overridden,
         model_override: guardian_review_model_override,
     } = codex_guardian_reviewer::select_review_model(
-        turn.model_info(),
-        turn.reasoning_effort(),
+        &context.model_info,
+        context.reasoning_effort.as_ref(),
         default_review_model_id,
         &available_models,
     );
 
-    let guardian_model_info = session
-        .services
-        .models_manager
-        .get_model_info(
-            guardian_model.as_str(),
-            &turn.config.to_models_manager_config(),
-        )
-        .await;
+    // Resolve a separate reviewer against the current catalog on every attempt.
+    // Parent fallback must retain the action's metadata even after a catalog refresh.
+    let guardian_model_info =
+        if !guardian_catalog_contains_auto_review && !guardian_review_model_overridden {
+            Arc::clone(&context.model_info)
+        } else {
+            Arc::new(
+                session
+                    .services
+                    .models_manager
+                    .get_model_info(
+                        guardian_model.as_str(),
+                        &turn.config.to_models_manager_config(),
+                    )
+                    .await,
+            )
+        };
     let mut spawn_config = build_guardian_review_session_config(
         turn.config.as_ref(),
         live_network_config,
         guardian_model.as_str(),
         guardian_reasoning_effort.clone(),
+        context.reasoning_summary,
+        context.personality,
         guardian_model_info.model_messages.as_ref(),
     )?;
-    if turn.model_info().computer_use_review_required() {
+    if context.model_info.computer_use_review_required() {
         spawn_config
             .features
             .enable(Feature::RetainClientDeveloperMessages)
@@ -268,7 +280,7 @@ pub(super) async fn guardian_review_session_config(
                 )
             })?;
     }
-    if guardian_model != turn.model_info().slug {
+    if guardian_model != context.model_info.slug {
         spawn_config.model_context_window = None;
         spawn_config.model_auto_compact_token_limit = None;
     }
@@ -310,9 +322,7 @@ async fn run_guardian_review_session_before_deadline(
     external_cancel: Option<CancellationToken>,
     deadline: Instant,
 ) -> (GuardianReviewOutcome, GuardianReviewAnalyticsResult) {
-    let turn = context.turn();
-    let session_config = match guardian_review_session_config(session.as_ref(), turn.as_ref()).await
-    {
+    let session_config = match guardian_review_session_config(session.as_ref(), &context).await {
         Ok(session_config) => session_config,
         Err(err) => {
             return (
@@ -340,8 +350,8 @@ async fn run_guardian_review_session_before_deadline(
                 guardian_catalog_contains_auto_review: session_config.catalog_contains_auto_review,
                 guardian_review_model_overridden: session_config.model_overridden,
                 guardian_review_model_override: session_config.model_override,
-                reasoning_summary: turn.reasoning_summary(),
-                personality: turn.personality(),
+                reasoning_summary: context.reasoning_summary,
+                personality: context.personality,
                 external_cancel,
                 deadline,
             },

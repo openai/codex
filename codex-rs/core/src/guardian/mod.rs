@@ -23,6 +23,7 @@ mod runtime;
 use std::sync::Arc;
 
 use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -81,13 +82,10 @@ pub(crate) struct GuardianReviewContext {
     pub(crate) parent_response_id: Option<String>,
     turn: Arc<TurnContext>,
     environments: TurnEnvironmentSnapshot,
-    // Model and reasoning inputs are carried for the follow-up Guardian and V2 migrations.
-    #[expect(dead_code)]
     pub(crate) model_info: Arc<ModelInfo>,
-    #[expect(dead_code)]
     pub(crate) reasoning_effort: Option<ReasoningEffort>,
-    #[expect(dead_code)]
     pub(crate) reasoning_summary: ReasoningSummary,
+    pub(crate) personality: Option<Personality>,
     pub(crate) approval_policy: AskForApproval,
     pub(crate) approvals_reviewer: ApprovalsReviewer,
 }
@@ -106,6 +104,7 @@ impl GuardianReviewContext {
             model_info: Arc::clone(&settings.model_info),
             reasoning_effort: settings.reasoning_effort().cloned(),
             reasoning_summary: settings.reasoning_summary,
+            personality: settings.personality(),
             approval_policy: settings.approval_policy(),
             approvals_reviewer: settings.approvals_reviewer(),
             turn,
@@ -134,6 +133,7 @@ impl From<&Arc<StepContext>> for GuardianReviewContext {
             model_info: Arc::clone(&step.settings.model_info),
             reasoning_effort: step.settings.reasoning_effort().cloned(),
             reasoning_summary: step.settings.reasoning_summary,
+            personality: step.settings.personality(),
             approval_policy: step.settings.approval_policy(),
             approvals_reviewer: step.settings.approvals_reviewer(),
         }
@@ -151,6 +151,7 @@ impl From<Arc<TurnContext>> for GuardianReviewContext {
             model_info: Arc::clone(turn.model_info()),
             reasoning_effort: turn.reasoning_effort().cloned(),
             reasoning_summary: turn.reasoning_summary(),
+            personality: turn.personality(),
             approval_policy: turn.approval_policy(),
             approvals_reviewer: turn.config.approvals_reviewer,
             turn,

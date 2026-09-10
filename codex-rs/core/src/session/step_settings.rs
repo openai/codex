@@ -113,7 +113,7 @@ impl ResolvedStepSettings {
         &self.selected.collaboration_mode
     }
 
-    pub(super) fn personality(&self) -> Option<Personality> {
+    pub(crate) fn personality(&self) -> Option<Personality> {
         self.selected.personality
     }
 
