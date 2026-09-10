@@ -7,7 +7,6 @@ use crate::config::NetworkProxySpec;
 use crate::config::PermissionProfileSnapshot;
 use crate::config::test_config;
 use crate::environment_selection::TurnEnvironmentState;
-use crate::guardian::approval_request::format_guardian_action_compact;
 use crate::guardian::approval_request::guardian_request_target_item_id;
 use crate::guardian::prompt::BUNDLED_GUARDIAN_POLICY;
 use crate::guardian::prompt::BUNDLED_GUARDIAN_POLICY_TEMPLATE;
@@ -1128,46 +1127,6 @@ fn guardian_truncate_text_keeps_prefix_suffix_and_xml_marker() {
     assert!(truncated.contains("<truncated omitted_approx_tokens=\""));
     assert!(truncated.ends_with("suffix"));
     assert!(was_truncated);
-}
-
-#[test]
-fn guardian_action_formatters_reject_large_aggregate_payloads() {
-    let file: PathUri = test_path_buf("/tmp/file").abs().into();
-    let action = GuardianApprovalRequest::ApplyPatch {
-        id: "patch-1".to_string(),
-        cwd: test_path_buf("/tmp").abs().into(),
-        files: vec![file; 20_000],
-        patch: String::new(),
-    };
-
-    for error in [
-        format_guardian_action_pretty(&action).map(|_| ()),
-        format_guardian_action_compact(&action).map(|_| ()),
-    ] {
-        assert_eq!(
-            error
-                .expect_err("aggregate action should exceed the review limit")
-                .to_string(),
-            "Guardian action exceeds the 200000-byte review limit"
-        );
-    }
-}
-
-#[test]
-fn format_guardian_action_pretty_reports_no_truncation_for_small_payload() -> serde_json::Result<()>
-{
-    let action = GuardianApprovalRequest::ApplyPatch {
-        id: "patch-1".to_string(),
-        cwd: test_path_buf("/tmp").abs().into(),
-        files: Vec::new(),
-        patch: "line\n".to_string(),
-    };
-
-    let rendered = format_guardian_action_pretty(&action)?;
-
-    assert!(rendered.text.contains("\"tool\": \"apply_patch\""));
-    assert!(!rendered.truncated);
-    Ok(())
 }
 
 #[test]

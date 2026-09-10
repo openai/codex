@@ -52,7 +52,13 @@ pub(crate) async fn check_pending(session: &Session, turn: &TurnContext) -> Code
                 },
                 GuardianBudgetOmission.render(),
             )
-            .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
+            .map_err(|_error| {
+                session
+                    .services
+                    .thread_extension_data
+                    .insert(super::request_budget::ExhaustedReviewBudget::Detected);
+                CodexErr::ContextWindowExceeded
+            })?;
     }
     Ok(())
 }
@@ -144,7 +150,7 @@ pub(crate) async fn finalize(
             session
                 .services
                 .thread_extension_data
-                .insert(super::request_budget::ExhaustedReviewBudget);
+                .insert(super::request_budget::ExhaustedReviewBudget::Detected);
             match error {
                 codex_guardian_context::SectionError::EvidenceLimitExceeded { .. } => {
                     CodexErr::ContextWindowExceeded

@@ -39,7 +39,6 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
-#[cfg(test)]
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -610,7 +609,6 @@ async fn run_review_on_session(
             );
         }
     };
-    let reviewed_action_truncated = prompt_items.reviewed_action_truncated;
     let transcript_cursor = prompt_items.transcript_cursor;
     let node_repl_evidence_admission = (prompt_items.node_repl_evidence_sequence
         > last_admitted_node_repl_response_sequence)
@@ -691,7 +689,6 @@ async fn run_review_on_session(
             response_sequence,
         });
     }
-    analytics_result.reviewed_action_truncated = reviewed_action_truncated;
 
     let outcome = wait_for_guardian_review(
         review_session,
@@ -719,14 +716,29 @@ async fn run_review_on_session(
         state.prior_review_count = state.prior_review_count.saturating_add(1);
         state.last_reviewed_transcript_cursor = Some(transcript_cursor);
     }
-    let keep_review_session = outcome.1
-        && review_session
-            .session
-            .services
-            .thread_extension_data
-            .remove::<super::request_budget::ExhaustedReviewBudget>()
-            .is_none();
-    (outcome.0, keep_review_session, analytics_result)
+    let budget_exhausted = review_session
+        .session
+        .services
+        .thread_extension_data
+        .remove::<super::request_budget::ExhaustedReviewBudget>();
+    let result = match outcome.0 {
+        GuardianReviewSessionOutcome::SessionFailed {
+            error_info: Some(CodexErrorInfo::ContextWindowExceeded),
+            ..
+        } if matches!(
+            budget_exhausted.as_deref(),
+            Some(super::request_budget::ExhaustedReviewBudget::Detected)
+        ) =>
+        {
+            GuardianReviewSessionOutcome::InputBudgetExceeded
+        }
+        result => result,
+    };
+    (
+        result,
+        outcome.1 && budget_exhausted.is_none(),
+        analytics_result,
+    )
 }
 
 async fn ensure_guardian_followup_reminder(review_session: &GuardianReviewSession) {

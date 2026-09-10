@@ -63,12 +63,13 @@ pub enum ApprovalDecision {
 }
 
 /// Runs an extension-owned synchronous review already bound to an action by the host.
-/// Implementations must not resolve approval routing or reuse an async score.
+/// Implementations must not reuse an async score. `None` requests the host user
+/// flow when automatic review exhausts its input budget and host policy permits it.
 pub trait SynchronousApprovalReviewer: Send + Sync {
     fn review(
         &self,
         reason: codex_protocol::approvals::GuardianReviewReason,
-    ) -> crate::ExtensionFuture<'_, codex_protocol::protocol::ReviewDecision>;
+    ) -> crate::ExtensionFuture<'_, Option<codex_protocol::protocol::ReviewDecision>>;
 }
 
 /// Inputs to Guardian's policy choice. Conversation and scores stay thread-owned.

@@ -1,6 +1,6 @@
 //! Planned-action prompt framing shared by the two production reviewers.
-//! Hosts retain their action serialization and truncation policies; this module
-//! only renders already-bounded JSON and reasons, preserving content-item boundaries.
+//! Hosts serialize complete actions; whole-request admission bounds the input.
+//! This module frames JSON and reasons before composition splits long text for transport.
 
 use crate::ContextSection;
 use crate::SectionContributor;
@@ -8,7 +8,7 @@ use crate::SectionError;
 use crate::SectionInput;
 use crate::SectionScope;
 
-/// Host-prepared action evidence. JSON and optional reason must already be bounded.
+/// Host-prepared action evidence. JSON stays complete through request admission.
 #[derive(Clone, PartialEq)]
 pub struct PlannedAction {
     pub json: String,

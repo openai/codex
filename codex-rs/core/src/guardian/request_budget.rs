@@ -19,7 +19,11 @@ pub(super) const INPUT_TOKEN_MARGIN: usize = 256;
 
 // Keep a failed reviewer out of reuse unless compaction and a fresh budget
 // check succeed. Also distinguishes local budget failures from backend errors.
-pub(crate) struct ExhaustedReviewBudget;
+pub(crate) enum ExhaustedReviewBudget {
+    Detected,
+    // A compaction service failure must not be mistaken for local exhaustion.
+    Compacting,
+}
 
 pub(crate) fn observe(telemetry: &SessionTelemetry, request: &ResponsesApiRequest) -> usize {
     let total = estimate_request_tokens(request);
@@ -74,7 +78,7 @@ pub(crate) fn check_prompt(
         session
             .services
             .thread_extension_data
-            .insert(ExhaustedReviewBudget);
+            .insert(ExhaustedReviewBudget::Detected);
         return Err(CodexErr::ContextWindowExceeded);
     }
     session

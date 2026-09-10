@@ -865,11 +865,9 @@ impl UnifiedExecProcessManager {
             .map_err(|_| unreviewable_input_error())?;
             // Bound the entire serialized action plus its reason, including JSON
             // escaping. Reject, never execute an unreviewed tail.
-            let oversized = reviewed.text.len().saturating_add(approval_reason.len())
-                > MAX_STDIN_APPROVAL_BYTES;
-            let size_check_result = if reviewed.truncated {
-                "formatter_truncated"
-            } else if oversized {
+            let oversized =
+                reviewed.len().saturating_add(approval_reason.len()) > MAX_STDIN_APPROVAL_BYTES;
+            let size_check_result = if oversized {
                 "over_limit"
             } else {
                 "within_limit"
@@ -884,7 +882,7 @@ impl UnifiedExecProcessManager {
                 /*inc*/ 1,
                 &[("result", size_check_result), ("input_kind", input_kind)],
             );
-            if reviewed.truncated || oversized {
+            if oversized {
                 return Err(unreviewable_input_error());
             }
             let approval_context = ApprovalContext {

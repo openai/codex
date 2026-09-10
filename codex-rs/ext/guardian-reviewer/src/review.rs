@@ -17,6 +17,7 @@ use crate::GuardianReviewSessionLimits;
 /// Runtime operations bound to one immutable approval action and its issuing context.
 /// Preparation captures trusted evidence. Completion must invalidate stale approvals
 /// and may only satisfy the review gate, never expand the action's execution authority.
+/// Completion may return `None` for user approval only when host policy permits it.
 pub trait ReviewHost: Send + Sync {
     type Prepared: Send + Sync;
 
@@ -36,7 +37,7 @@ pub trait ReviewHost: Send + Sync {
         prepared: Self::Prepared,
         outcome: GuardianReviewOutcome,
         analytics: GuardianReviewAnalyticsResult,
-    ) -> impl Future<Output = ReviewDecision> + Send;
+    ) -> impl Future<Output = Option<ReviewDecision>> + Send;
 }
 
 /// One review bound by the host before Guardian's approval policy chooses to run it.
@@ -51,12 +52,12 @@ impl<H: ReviewHost> SynchronousReview<H> {
 }
 
 impl<H: ReviewHost> SynchronousApprovalReviewer for SynchronousReview<H> {
-    fn review(&self, reason: GuardianReviewReason) -> ExtensionFuture<'_, ReviewDecision> {
+    fn review(&self, reason: GuardianReviewReason) -> ExtensionFuture<'_, Option<ReviewDecision>> {
         Box::pin(async move {
             let deadline = Instant::now() + crate::REVIEW_TIMEOUT;
             let prepared = match self.host.prepare(reason, deadline).await {
                 Ok(prepared) => prepared,
-                Err(decision) => return decision,
+                Err(decision) => return Some(decision),
             };
             let (outcome, analytics) = Box::pin(crate::run_with_retry(
                 GuardianReviewSessionLimits {

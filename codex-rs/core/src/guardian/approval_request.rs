@@ -12,12 +12,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathUri;
 use serde::Serialize;
-use serde::ser::Error as _;
 use serde_json::Value;
-
-use super::GUARDIAN_MAX_ACTION_BYTES;
-use super::GUARDIAN_MAX_ACTION_STRING_TOKENS;
-use super::prompt::guardian_truncate_text;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum GuardianApprovalRequest {
@@ -247,49 +242,6 @@ fn guardian_command_source_tool_name(source: GuardianCommandSource) -> &'static 
         GuardianCommandSource::Shell => "shell",
         GuardianCommandSource::UnifiedExec => "exec_command",
     }
-}
-
-fn truncate_guardian_action_value(value: Value) -> (Value, bool) {
-    match value {
-        Value::String(text) => {
-            let (text, truncated) =
-                guardian_truncate_text(&text, GUARDIAN_MAX_ACTION_STRING_TOKENS);
-            (Value::String(text), truncated)
-        }
-        Value::Array(values) => {
-            let mut truncated = false;
-            let values = values
-                .into_iter()
-                .map(|value| {
-                    let (value, value_truncated) = truncate_guardian_action_value(value);
-                    truncated |= value_truncated;
-                    value
-                })
-                .collect::<Vec<_>>();
-            (Value::Array(values), truncated)
-        }
-        Value::Object(values) => {
-            let mut entries = values.into_iter().collect::<Vec<_>>();
-            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
-            let mut truncated = false;
-            let values = entries
-                .into_iter()
-                .map(|(key, value)| {
-                    let (value, value_truncated) = truncate_guardian_action_value(value);
-                    truncated |= value_truncated;
-                    (key, value)
-                })
-                .collect();
-            (Value::Object(values), truncated)
-        }
-        other => (other, false),
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct FormattedGuardianAction {
-    pub(crate) text: String,
-    pub(crate) truncated: bool,
 }
 
 pub(crate) fn guardian_approval_request_to_json(
@@ -584,26 +536,10 @@ pub(crate) fn guardian_request_turn_id<'a>(
 
 pub(crate) fn format_guardian_action_pretty(
     action: &GuardianApprovalRequest,
-) -> serde_json::Result<FormattedGuardianAction> {
-    let value = guardian_action_for_review(action)?;
-    let (value, truncated) = truncate_guardian_action_value(value);
-    let text = enforce_guardian_action_byte_limit(serde_json::to_string_pretty(&value)?)?;
-    Ok(FormattedGuardianAction { text, truncated })
-}
-
-fn enforce_guardian_action_byte_limit(text: String) -> serde_json::Result<String> {
-    if text.len() > GUARDIAN_MAX_ACTION_BYTES {
-        return Err(serde_json::Error::custom(format!(
-            "Guardian action exceeds the {GUARDIAN_MAX_ACTION_BYTES}-byte review limit"
-        )));
-    }
-    Ok(text)
-}
-
-pub(crate) fn format_guardian_action_compact(
-    action: &GuardianApprovalRequest,
 ) -> serde_json::Result<String> {
-    enforce_guardian_action_byte_limit(serde_json::to_string(&guardian_action_for_review(action)?)?)
+    let mut value = guardian_action_for_review(action)?;
+    value.sort_all_objects();
+    serde_json::to_string_pretty(&value)
 }
 
 fn guardian_action_for_review(action: &GuardianApprovalRequest) -> serde_json::Result<Value> {

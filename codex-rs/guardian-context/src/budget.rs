@@ -168,7 +168,21 @@ pub fn estimate_input_tokens(item: &ResponseItem) -> usize {
 }
 
 pub(super) fn content_tokens(item: &ContentItem) -> usize {
-    let bytes = ByteCount::measure(|counter| serde_json::to_writer(counter, item));
+    let mut bytes = ByteCount::measure(|counter| serde_json::to_writer(counter, item));
+    if let ContentItem::InputText { text } = item {
+        let extra_parts = crate::composition::bounded_text_parts(text)
+            .count()
+            .saturating_sub(1);
+        let framing = ByteCount::measure(|counter| {
+            serde_json::to_writer(
+                counter,
+                &ContentItem::InputText {
+                    text: String::new(),
+                },
+            )
+        });
+        bytes = bytes.saturating_add(extra_parts.saturating_mul(framing.saturating_add(1)));
+    }
     adjusted_tokens(bytes, std::slice::from_ref(item))
 }
 

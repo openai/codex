@@ -74,6 +74,7 @@ impl<'a> FailedReviewFeedback<'a> {
             GuardianReviewSessionOutcome::Completed(Ok(None)) => ("missing_decision", None),
             GuardianReviewSessionOutcome::Completed(Err(_))
             | GuardianReviewSessionOutcome::PromptBuildFailed(_)
+            | GuardianReviewSessionOutcome::InputBudgetExceeded
             | GuardianReviewSessionOutcome::SessionFailed { .. } => ("failed", None),
             GuardianReviewSessionOutcome::TimedOut => ("timed_out", None),
             GuardianReviewSessionOutcome::Aborted => ("aborted", None),

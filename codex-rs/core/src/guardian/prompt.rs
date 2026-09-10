@@ -42,7 +42,6 @@ pub(crate) struct GuardianPromptItems {
     pub(crate) context: ComposedContext,
     pub(crate) transcript_cursor: GuardianTranscriptCursor,
     pub(crate) node_repl_evidence_sequence: u64,
-    pub(crate) reviewed_action_truncated: bool,
 }
 
 /// Points to the end of the transcript that the guardian has already reviewed.
@@ -120,7 +119,7 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
         .fragments;
     let planned_action_json = format_guardian_action_pretty(&request)?;
     let planned_action = PlannedAction {
-        json: planned_action_json.text,
+        json: planned_action_json,
         tool_descriptions: if let GuardianApprovalRequest::McpToolCall {
             tool_description,
             connector_description,
@@ -234,7 +233,6 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
         context,
         transcript_cursor,
         node_repl_evidence_sequence,
-        reviewed_action_truncated: planned_action_json.truncated,
     })
 }
 

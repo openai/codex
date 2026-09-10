@@ -2,10 +2,12 @@
 //! Profiles retain the host-selected transcript slice; composition owns
 //! framing, message boundaries and section placement, without retaining history.
 //! Each content item keeps its selection policy until transport conversion.
+//! Long text splits losslessly only after admission, preserving whole-entry selection.
 
 use codex_context_fragments::ContextualUserFragment;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::TruncationPolicy;
 use codex_protocol::user_input::UserInput;
 
 use crate::ActionPresentation;
@@ -272,10 +274,13 @@ impl ComposedContext {
             };
             for item in content {
                 inputs.push(match item.content {
-                    ContentItem::InputText { text } => UserInput::Text {
-                        text,
-                        text_elements: Vec::new(),
-                    },
+                    ContentItem::InputText { text } => {
+                        inputs.extend(bounded_text_parts(&text).map(|part| UserInput::Text {
+                            text: part.to_owned(),
+                            text_elements: Vec::new(),
+                        }));
+                        continue;
+                    }
                     ContentItem::InputImage { image_url, detail } => {
                         UserInput::Image { image_url, detail }
                     }
@@ -297,7 +302,18 @@ impl ComposedContext {
         for section in self.sections {
             match section.delivery {
                 SectionDelivery::UserContent(content) => {
-                    user_content.extend(content.into_iter().map(|item| item.content))
+                    for item in content {
+                        match item.content {
+                            ContentItem::InputText { text } => {
+                                user_content.extend(bounded_text_parts(&text).map(|part| {
+                                    ContentItem::InputText {
+                                        text: part.to_owned(),
+                                    }
+                                }));
+                            }
+                            content => user_content.push(content),
+                        }
+                    }
                 }
                 SectionDelivery::Message(message) => {
                     if !user_content.is_empty() {
@@ -312,6 +328,20 @@ impl ComposedContext {
         }
         messages
     }
+}
+
+/// Bounds individual text parts without changing source text or entry identity.
+/// Budget estimates include the extra wire framing before transport conversion.
+pub(super) fn bounded_text_parts(text: &str) -> impl Iterator<Item = &str> {
+    let mut remaining = Some(text);
+    std::iter::from_fn(move || {
+        let text = remaining.take()?;
+        let end = text.floor_char_boundary(TruncationPolicy::Tokens(9_000).byte_budget());
+        if end < text.len() {
+            remaining = Some(&text[end..]);
+        }
+        Some(&text[..end])
+    })
 }
 
 pub(super) fn user_message(content: Vec<ContentItem>) -> ResponseItem {

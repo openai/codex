@@ -79,9 +79,6 @@ pub(crate) async fn decide_approval(
             .as_ref()
             .is_some_and(CancellationToken::is_cancelled)
         || reasons.retry.is_some()
-        || request.request.as_ref().is_ok_and(|request| {
-            super::approval_request::format_guardian_action_compact(request).is_err()
-        })
         || matches!(&request.request, Ok(GuardianApprovalRequest::ExecCommand { sandbox_permissions, .. })
             if sandbox_permissions.requires_escalated_permissions());
     let full_access = context.environments().has_full_access(
@@ -115,7 +112,10 @@ pub(crate) async fn decide_approval(
         review_id: review_id.clone(),
         request: request.clone(),
         reasons,
-        options,
+        options: GuardianReviewOptions {
+            require_guardian,
+            ..options
+        },
     });
     let input = ApprovalDecisionInput {
         approval_id: &review_id,
@@ -179,9 +179,7 @@ pub(crate) async fn decide_approval(
             record_guardian_non_denial(&session, turn_id).await;
             Some(ReviewDecision::Approved)
         }
-        Some(ApprovalDecision::Allow) => {
-            Some(runtime.review(GuardianReviewReason::FreshRequired).await)
-        }
+        Some(ApprovalDecision::Allow) => runtime.review(GuardianReviewReason::FreshRequired).await,
         Some(ApprovalDecision::AskUser) if !require_guardian => None,
         None if !require_guardian
             && !super::review::routes_approval_policy_to_guardian(
@@ -192,7 +190,7 @@ pub(crate) async fn decide_approval(
             None
         }
         None | Some(ApprovalDecision::AskUser) => {
-            Some(runtime.review(GuardianReviewReason::Policy).await)
+            runtime.review(GuardianReviewReason::Policy).await
         }
     }
 }

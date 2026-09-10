@@ -92,6 +92,9 @@ mod policy;
 #[path = "guardian_code_mode_tests.rs"]
 mod code_mode;
 
+#[path = "guardian_action_budget_tests.rs"]
+mod action_budget;
+
 const TIMEOUT: Duration = Duration::from_secs(30);
 const MODEL: &str = "mock-model";
 const REQUIRED_MODEL: &str = "protected-model";

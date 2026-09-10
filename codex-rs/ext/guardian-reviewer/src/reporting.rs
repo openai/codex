@@ -92,13 +92,14 @@ impl ReviewReport {
         &self,
         outcome: GuardianReviewOutcome,
         model: &ModelInfo,
+        require_guardian: bool,
         analytics: GuardianReviewAnalyticsResult,
         completed_at_ms: i64,
     ) -> ReviewCompletion {
         let mut event = self.started.clone();
         event.completed_at_ms = Some(completed_at_ms);
         event.decision_source = Some(GuardianAssessmentDecisionSource::Agent);
-        crate::complete_review(outcome, model, event, analytics)
+        crate::complete_review(outcome, model, require_guardian, event, analytics)
     }
 
     pub fn track(

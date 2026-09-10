@@ -116,6 +116,7 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
             let completed = report.complete(
                 GuardianReviewOutcome::Error(GuardianReviewError::Cancelled),
                 turn.model_info(),
+                self.options.require_guardian,
                 GuardianReviewAnalyticsResult::without_session(),
                 completed_at_ms,
             );
@@ -150,7 +151,7 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
             format_guardian_action_pretty(&request).ok().map(|action| {
                 (
                     evidence,
-                    action.text,
+                    action,
                     authorization_version,
                     root_authorization_version,
                 )
@@ -191,7 +192,7 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
         prepared: PreparedApproval,
         mut outcome: GuardianReviewOutcome,
         analytics_result: GuardianReviewAnalyticsResult,
-    ) -> ReviewDecision {
+    ) -> Option<ReviewDecision> {
         let PreparedApproval {
             request: _,
             turn,
@@ -225,6 +226,7 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
         let completed = report.complete(
             outcome,
             turn.model_info(),
+            self.options.require_guardian,
             analytics_result,
             completed_at_ms,
         );

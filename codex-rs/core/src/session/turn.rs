@@ -333,6 +333,9 @@ pub(crate) async fn run_turn(
         }
         // Incoming evidence can overflow even below the normal history
         // threshold. Keep it pending while compacting, then select once more.
+        sess.services
+            .thread_extension_data
+            .insert(crate::guardian::ExhaustedReviewBudget::Compacting);
         run_auto_compact(
             &sess,
             Arc::clone(&first_step_context),
@@ -704,6 +707,9 @@ pub(crate) async fn run_turn(
                 // token-budget resets must fail closed and retire the reviewer.
                 // Retry once per model step, so ineffective compaction cannot loop.
                 guardian_budget_compacted = true;
+                sess.services
+                    .thread_extension_data
+                    .insert(crate::guardian::ExhaustedReviewBudget::Compacting);
                 run_auto_compact(
                     &sess,
                     Arc::clone(&step_context),

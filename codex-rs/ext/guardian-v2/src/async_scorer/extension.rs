@@ -1,6 +1,7 @@
 use super::transcript::ContextInput;
 use codex_core::context::ContextualUserFragment;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::Weak;
@@ -28,6 +29,7 @@ use codex_extension_api::SkillInvocationContributor;
 use codex_extension_api::SkillInvocationInput;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadStartInput;
+use codex_extension_api::ToolFinishInput;
 use codex_extension_api::ToolLifecycleContributor;
 use codex_extension_api::ToolLifecycleFuture;
 use codex_extension_api::ToolStartInput;
@@ -46,8 +48,8 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::has_full_access;
 use codex_protocol::security_risk::SecurityRiskScore;
 
+use super::action::ActionRenderError;
 use super::action::GuardianAction;
-use super::action::RenderedAction;
 use super::authorization::ScoreAuthorization;
 use super::config::GuardianV2Config;
 use super::coverage::UnscoredAction;
@@ -82,6 +84,9 @@ pub(super) struct GuardianV2ScoreProgress {
     pub(super) js_executions: AtomicUsize,
     pub(super) latest_scored_tool_call: AtomicUsize,
     pub(super) latest_failed_tool_call: AtomicUsize,
+    // Keep overflow attached to each active call even after a newer score succeeds.
+    // The host's finish callback removes entries on completion, failure, or cancellation.
+    pub(super) oversized_tool_calls: Mutex<BTreeSet<String>>,
     // Serialize successful score publication with its authorization metadata.
     pub(super) authorization: Mutex<Option<ScoreAuthorization>>,
     metrics: Option<Arc<dyn ExtensionMetrics>>,
@@ -209,6 +214,18 @@ impl SkillInvocationContributor for GuardianV2Extension {
 impl ToolLifecycleContributor for GuardianV2Extension {
     fn on_tool_start<'a>(&'a self, input: ToolStartInput<'a>) -> ToolLifecycleFuture<'a> {
         Box::pin(self.score_tool(input))
+    }
+
+    fn on_tool_finish<'a>(&'a self, input: ToolFinishInput<'a>) -> ToolLifecycleFuture<'a> {
+        Box::pin(async move {
+            if let Some(progress) = input.thread_store.get::<GuardianV2ScoreProgress>() {
+                progress
+                    .oversized_tool_calls
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .remove(input.call_id);
+            }
+        })
     }
 }
 
@@ -427,6 +444,45 @@ impl GuardianV2Extension {
             tool_name: input.tool_name.clone(),
             payload: input.payload.clone(),
         };
+        let planned_action = match action.render(guardian_config.max_action_tokens) {
+            Ok(text) => text,
+            Err(ActionRenderError::TooLarge { .. }) => {
+                score_progress
+                    .oversized_tool_calls
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .insert(input.call_id.to_owned());
+                score_progress
+                    .latest_failed_tool_call
+                    .fetch_max(tool_call_index, Ordering::Release);
+                Self::record_fail_closed_score(input.thread_store, sampled_at);
+                record_classification(
+                    metrics.as_deref(),
+                    classification_started_at.elapsed(),
+                    "failure",
+                    Some("input_too_large"),
+                );
+                return;
+            }
+            Err(error) => {
+                score_progress
+                    .latest_failed_tool_call
+                    .fetch_max(tool_call_index, Ordering::Release);
+                Self::record_fail_closed_score(input.thread_store, sampled_at);
+                record_classification(
+                    metrics.as_deref(),
+                    classification_started_at.elapsed(),
+                    "failure",
+                    Some("action_serialization_error"),
+                );
+                event_sink.emit_warning(ExtensionWarning {
+                    thread_id,
+                    turn_id: Some(turn_id),
+                    message: format!("Guardian V2 action serialization failed: {error}"),
+                });
+                return;
+            }
+        };
         let review_model_override = parent_model
             .as_ref()
             .and_then(|model| model.auto_review_model_override.clone());
@@ -488,30 +544,6 @@ impl GuardianV2Extension {
                 root: root_authorization_version,
                 model: parent_model.clone(),
                 ..score_authorization
-            };
-            let planned_action = match action.render(guardian_config.max_action_tokens) {
-                Ok(RenderedAction {
-                    text,
-                    original_bytes,
-                }) => {
-                    truncations.record("action", original_bytes, text.len());
-                    text
-                }
-                Err(error) => {
-                    Self::record_fail_closed_score(thread.thread_extension_data(), sampled_at);
-                    record_classification(
-                        metrics.as_deref(),
-                        classification_started_at.elapsed(),
-                        "failure",
-                        Some("action_serialization_error"),
-                    );
-                    event_sink.emit_warning(ExtensionWarning {
-                        thread_id,
-                        turn_id: Some(turn_id),
-                        message: format!("Guardian V2 action serialization failed: {error}"),
-                    });
-                    return;
-                }
             };
             let action_section = PlannedAction {
                 json: planned_action.clone(),
