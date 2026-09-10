@@ -1,0 +1,6 @@
+---
+source: tui/src/chatwidget/realtime_settings_tests.rs
+assertion_line: 46
+expression: lines
+---
+• Voice set to juniper. Applies to your next voice conversation.

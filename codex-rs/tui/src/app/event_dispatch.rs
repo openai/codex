@@ -2405,6 +2405,12 @@ impl App {
                 }
                 self.chat_widget.on_plugin_mentions_loaded(plugins);
             }
+            AppEvent::OpenRealtimeSettings => {
+                self.open_realtime_settings(app_server).await;
+            }
+            AppEvent::PersistRealtimeVoiceSelection { voice } => {
+                self.persist_realtime_voice(app_server, voice).await;
+            }
             AppEvent::PersistPersonalitySelection { personality } => {
                 match crate::config_update::write_config_batch(
                     app_server.request_handle(),

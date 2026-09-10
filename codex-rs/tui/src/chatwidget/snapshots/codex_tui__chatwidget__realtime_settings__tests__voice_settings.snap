@@ -1,0 +1,18 @@
+---
+source: tui/src/chatwidget/realtime_settings_tests.rs
+assertion_line: 17
+expression: "render_bottom_popup(&chat, 80)"
+---
+  Select voice
+  Applies to your next voice conversation.
+
+  1. juniper
+› 2. maple (current)
+  3. spruce
+  4. ember
+  5. vale
+  6. breeze
+  7. arbor
+  8. sol
+
+  Press enter to confirm or esc to go back

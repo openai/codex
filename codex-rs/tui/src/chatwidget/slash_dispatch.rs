@@ -755,9 +755,10 @@ impl ChatWidget {
                 }
             }
             SlashCommand::Voice => match trimmed.to_ascii_lowercase().as_str() {
+                "settings" => self.app_event_tx.send(AppEvent::OpenRealtimeSettings),
                 "mute" => self.toggle_realtime_microphone(),
                 "stop" => self.stop_realtime_conversation(),
-                _ => self.add_error_message("Usage: /voice [mute|stop]".to_string()),
+                _ => self.add_error_message("Usage: /voice [settings|mute|stop]".to_string()),
             },
             SlashCommand::Ide => {
                 self.handle_ide_command_args(trimmed);

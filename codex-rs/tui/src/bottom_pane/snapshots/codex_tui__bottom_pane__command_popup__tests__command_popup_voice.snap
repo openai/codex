@@ -5,11 +5,11 @@ expression: "format!(\"{buf:?}\")"
 Buffer {
     area: Rect { x: 0, y: 0, width: 72, height: 1 },
     content: [
-        "  /voice  start or stop a live voice conversation                       ",
+        "  /voice  start or stop voice; use /voice settings to choose a voice    ",
     ],
     styles: [
         x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 2, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD,
-        x: 49, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 68, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
     ]
 }

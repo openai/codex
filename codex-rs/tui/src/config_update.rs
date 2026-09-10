@@ -1,10 +1,11 @@
-//! App-server-backed config update helpers for the TUI.
+//! App-server-backed config read and update helpers for the TUI.
 //!
 //! This module centralizes the small typed update helpers the TUI uses
 //! when a config mutation must be owned by the app server rather than written
 //! to the local `config.toml` directly.
 
 use codex_app_server_client::AppServerRequestHandle;
+use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigEdit;
@@ -331,3 +332,28 @@ pub(crate) async fn write_skill_enabled(
 #[cfg(test)]
 #[path = "config_update_tests.rs"]
 mod tests;
+
+/// Read effective server settings, retaining compatibility with servers without config/read.
+pub(crate) async fn read_effective_config_if_supported(
+    request_handle: AppServerRequestHandle,
+    cwd: &Path,
+) -> Result<Option<codex_app_server_protocol::Config>> {
+    match read_effective_config(request_handle, cwd.display().to_string()).await {
+        Ok(response) => Ok(Some(response.config)),
+        Err(err)
+            if matches!(
+                err.downcast_ref::<TypedRequestError>(),
+                Some(TypedRequestError::Server { source, .. })
+                    if source.code == -32601
+                        || source.code == -32600
+                            && source.message.contains("config/read")
+                            && (source.message.contains("unknown variant")
+                                || source.message.contains("unknown method"))
+            ) =>
+        {
+            // Callers retain their legacy behavior when the server lacks config/read.
+            Ok(None)
+        }
+        Err(err) => Err(err),
+    }
+}

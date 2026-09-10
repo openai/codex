@@ -1,0 +1,18 @@
+---
+source: tui/src/app/tests/realtime_requests.rs
+assertion_line: 1638
+expression: "crate::chatwidget::tests::helpers::render_bottom_popup(&app.chat_widget, 80)"
+---
+  Select voice
+  Applies to your next voice conversation.
+
+  1. juniper
+  2. maple
+  3. spruce
+  4. ember
+  5. vale
+  6. breeze
+  7. arbor
+› 8. sol (current)
+
+  Press enter to confirm or esc to go back

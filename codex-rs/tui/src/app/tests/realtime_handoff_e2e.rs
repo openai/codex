@@ -128,7 +128,12 @@ async fn delegated_core_events_keep_private_output_hidden_and_deliver_final_spee
     while ops.try_recv().is_ok() {}
     let mut tui = crate::tui::test_support::make_test_tui()?;
     app_server
-        .thread_realtime_start(thread_id, "v=offer\r\n".to_string(), /*model*/ None)
+        .thread_realtime_start(
+            thread_id,
+            "v=offer\r\n".to_string(),
+            /*model*/ None,
+            /*voice*/ None,
+        )
         .await?;
     // The sideband fixture sends its delegation after the first outbound request.
     app_server

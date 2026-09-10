@@ -1,0 +1,6 @@
+---
+source: tui/src/app/tests/realtime_requests.rs
+assertion_line: 1679
+expression: message
+---
+■ Voice preference was saved but not applied: Overridden by session flags

@@ -237,6 +237,7 @@ mod platform_actions;
 mod plugin_mentions;
 mod rate_limit_refresh;
 mod realtime_delivery;
+mod realtime_settings;
 mod reasoning_replay;
 mod recap;
 mod reconnect;

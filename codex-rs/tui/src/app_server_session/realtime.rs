@@ -12,6 +12,7 @@ use codex_app_server_protocol::ThreadRealtimeStopResponse;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::RealtimeOutputModality;
+use codex_protocol::protocol::RealtimeVoice;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 
@@ -21,6 +22,7 @@ impl AppServerSession {
         thread_id: ThreadId,
         offer_sdp: String,
         model: Option<String>,
+        voice: Option<RealtimeVoice>,
     ) -> Result<()> {
         let request_id = self.next_request_id();
         let _: ThreadRealtimeStartResponse = self
@@ -46,7 +48,7 @@ impl AppServerSession {
                     realtime_session_id: None,
                     transport: Some(ThreadRealtimeStartTransport::Webrtc { sdp: offer_sdp }),
                     version: Some(RealtimeConversationVersion::V3),
-                    voice: None,
+                    voice,
                 },
             })
             .await

@@ -5,37 +5,6 @@
 use super::*;
 use codex_config::ConfigLayerSource;
 
-pub(super) async fn read_new_session_defaults(
-    app_server: &AppServerSession,
-    cwd: &Path,
-) -> Result<Option<codex_app_server_protocol::Config>> {
-    // config/read resolves relative paths on the server. With no remote launch override,
-    // "." uses the same server process directory as thread/start's omitted cwd.
-    match crate::config_update::read_effective_config(
-        app_server.request_handle(),
-        cwd.display().to_string(),
-    )
-    .await
-    {
-        Ok(response) => Ok(Some(response.config)),
-        Err(err)
-            if matches!(
-                err.downcast_ref::<TypedRequestError>(),
-                Some(TypedRequestError::Server { source, .. })
-                    if source.code == -32601
-                        || source.code == -32600
-                            && source.message.contains("config/read")
-                            && (source.message.contains("unknown variant")
-                                || source.message.contains("unknown method"))
-            ) =>
-        {
-            // Older servers can still start threads using the existing local defaults.
-            Ok(None)
-        }
-        Err(err) => Err(err),
-    }
-}
-
 pub(super) fn has_launch_setting(
     config: &Config,
     cli_kv_overrides: &[(String, TomlValue)],
@@ -82,7 +51,11 @@ impl App {
                 app_server.remote_cwd_override().unwrap_or(Path::new("."))
             }
         };
-        let defaults = read_new_session_defaults(app_server, defaults_cwd).await?;
+        let defaults = crate::config_update::read_effective_config_if_supported(
+            app_server.request_handle(),
+            defaults_cwd,
+        )
+        .await?;
         // Stage local preferences and permission carryover without changing the active task.
         let mut config = match self.rebuild_config_for_cwd(cwd).await {
             Ok(config) => config,

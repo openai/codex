@@ -669,7 +669,12 @@ impl App {
                 .unwrap_or(Path::new(".")),
         };
         let mut server_model_cleared = false;
-        match super::new_session::read_new_session_defaults(app_server, defaults_cwd).await {
+        match crate::config_update::read_effective_config_if_supported(
+            app_server.request_handle(),
+            defaults_cwd,
+        )
+        .await
+        {
             Ok(Some(defaults)) => {
                 server_model_cleared = defaults.model.is_none();
                 let use_server_provider = matches!(

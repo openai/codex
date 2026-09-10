@@ -53,7 +53,11 @@ pub(super) async fn prepare_fresh_startup_config(
             app_server.remote_cwd_override().unwrap_or(Path::new("."))
         }
     };
-    let defaults = super::new_session::read_new_session_defaults(app_server, defaults_cwd).await?;
+    let defaults = crate::config_update::read_effective_config_if_supported(
+        app_server.request_handle(),
+        defaults_cwd,
+    )
+    .await?;
     if let Some(defaults) = defaults.as_ref() {
         super::new_session::overlay_new_session_defaults(
             config,

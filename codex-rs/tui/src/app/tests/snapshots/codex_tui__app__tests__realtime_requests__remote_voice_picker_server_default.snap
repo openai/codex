@@ -1,0 +1,13 @@
+---
+source: tui/src/app/tests/realtime_requests.rs
+assertion_line: 1721
+expression: popup
+---
+  Select voice
+  Applies to your next voice conversation.
+
+› 1. maple (current)
+  2. cove
+  3. juniper
+
+  Press enter to confirm or esc to go back

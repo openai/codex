@@ -1,0 +1,12 @@
+---
+source: tui/src/chatwidget/realtime_settings_tests.rs
+assertion_line: 67
+expression: "render_bottom_popup(&chat, 80)"
+---
+  Select voice
+  Applies to your next voice conversation.
+
+› 1. cove (current)
+  2. maple
+
+  Press enter to confirm or esc to go back
