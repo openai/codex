@@ -97,6 +97,7 @@ use std::collections::BTreeMap;
 use tracing::Span;
 
 use crate::connectors::AppInfo;
+use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::rollout::recorder::RolloutRecorder;
 use crate::state::ActiveTurn;
 use crate::state::TaskKind;
@@ -6490,6 +6491,23 @@ pub(crate) async fn build_world_state_from_turn_context(
         .build_world_state_for_step(&step_context)
         .await
         .expect("world state should build")
+}
+
+#[tokio::test]
+async fn responses_metadata_uses_selected_harness_analytics_client() {
+    let (mut session, mut turn_context) = make_session_and_context().await;
+    for enabled in [true, false] {
+        session.services.analytics_events_client = AnalyticsEventsClient::new(
+            Arc::clone(&session.services.auth_manager),
+            turn_context.config.chatgpt_base_url.clone(),
+            Some(enabled),
+        );
+        Arc::make_mut(&mut turn_context.config).analytics_enabled = Some(!enabled);
+        let metadata = session
+            .responses_metadata(&turn_context, CodexResponsesRequestKind::Turn)
+            .await;
+        assert_eq!(metadata.analytics_enabled, Some(enabled));
+    }
 }
 
 // todo: use online model info

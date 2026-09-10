@@ -460,7 +460,11 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
         responses::ev_completed("resp-1"),
     ]);
 
-    let test = test_codex().build(&server).await.expect("build test codex");
+    let test = test_codex()
+        .with_config(|config| config.analytics_enabled = Some(true))
+        .build(&server)
+        .await
+        .expect("build test codex");
     let cwd = test.cwd_path();
 
     let first_request = responses::mount_sse_once(&server, response_body.clone()).await;
@@ -508,6 +512,13 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
             .expect("request body should include x-codex-turn-metadata"),
     )
     .expect("body x-codex-turn-metadata should be valid JSON");
+    assert_eq!(
+        (
+            initial_parsed["analytics_enabled"].as_bool(),
+            body_metadata["analytics_enabled"].as_bool(),
+        ),
+        (Some(true), Some(true)),
+    );
     assert_eq!(
         body_metadata
             .get("sandbox_mode")

@@ -1,5 +1,6 @@
 use super::*;
 
+use crate::responses_metadata::ANALYTICS_ENABLED_KEY;
 use crate::responses_metadata::AUTO_REVIEW_ENABLED_KEY;
 use crate::responses_metadata::CONTEXT_WINDOW_ID_KEY;
 use crate::responses_metadata::CodexResponsesRequestKind;
@@ -730,6 +731,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
     );
     state.set_responses_api_metadata(BTreeMap::from([
         ("codex_security_surface".to_string(), "sdk".to_string()),
+        (ANALYTICS_ENABLED_KEY.to_string(), "false".to_string()),
         ("source".to_string(), " Configured_Source ".to_string()),
         (
             WINDOW_NUMBER_KEY.to_string(),
@@ -749,6 +751,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
             "client-supplied".to_string(),
         ),
         ("fiber_run_id".to_string(), "fiber-123".to_string()),
+        (ANALYTICS_ENABLED_KEY.to_string(), "true".to_string()),
         ("origin".to_string(), "東京".to_string()),
         ("workspace_kind".to_string(), "projectless".to_string()),
         ("source".to_string(), "client-source".to_string()),
@@ -838,6 +841,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
     let json: Value = serde_json::from_str(&header).expect("json");
 
     assert_eq!(json["fiber_run_id"].as_str(), Some("fiber-123"));
+    assert!(json.get(ANALYTICS_ENABLED_KEY).is_none());
     assert_eq!(json["origin"].as_str(), Some("東京"));
     assert_eq!(json["workspace_kind"].as_str(), Some("projectless"));
     assert_eq!(json["codex_security_surface"].as_str(), Some("sdk"));
@@ -955,6 +959,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
     assert!(meta.get(ROOT_TURN_ID_KEY).is_none());
     assert!(meta.get(WINDOW_ID_KEY).is_none());
     assert!(meta.get("codex_security_surface").is_none());
+    assert!(meta.get(ANALYTICS_ENABLED_KEY).is_none());
     assert_eq!(state.workspace_kind().as_deref(), Some("projectless"));
     assert_eq!(
         (state.turn_trigger(), state.codex_turn_source()),
@@ -1108,8 +1113,12 @@ fn responses_api_metadata_rejects_reserved_keys() {
 }
 
 #[test]
-fn responses_api_metadata_accepts_previously_valid_rollout_position_keys() {
-    for legacy_key in [WINDOW_NUMBER_KEY, FORKED_FROM_ORDINAL_EXCLUSIVE_KEY] {
+fn responses_api_metadata_accepts_previously_valid_reserved_keys() {
+    for legacy_key in [
+        WINDOW_NUMBER_KEY,
+        FORKED_FROM_ORDINAL_EXCLUSIVE_KEY,
+        ANALYTICS_ENABLED_KEY,
+    ] {
         assert_eq!(
             validate_extra_metadata(
                 BTreeMap::from([(legacy_key.to_string(), "legacy-value".to_string())]).iter()
