@@ -1,0 +1,18 @@
+---
+source: cli/src/doctor.rs
+expression: "render_human_report(&DoctorReport\n{\n    schema_version: 1, generated_at: \"0s since unix epoch\".to_string(),\n    overall_status: check.status, codex_version: \"0.0.0\".to_string(), checks:\n    vec![check],\n}, HumanOutputOptions\n{ show_details: false, show_all: false, ascii: true, color_enabled: false, })"
+---
+Codex Doctor v0.0.0
+
+Notes
+   [XX] terminal     3 issues - TERMINFO unreadable - terminal capabilities are unknown; TERM=dumb - colors and cursor control are disabled in this non-interactive run
+-------------------------------------------------------------
+
+Environment
+  [XX] terminal     3 issues - TERMINFO unreadable - terminal capabilities are unknown; TERM=dumb - colors and cursor control are disabled in this non-interactive run
+
+-------------------------------------------------------------
+0 ok | 1 notes | 0 warn | 1 fail failed
+
+Run codex doctor without --summary for detailed diagnostics.
+--all expand truncated lists       --json redacted report

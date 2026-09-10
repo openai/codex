@@ -178,6 +178,25 @@ fn startup_and_doctor_do_not_execute_path_helpers() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn non_interactive_dumb_terminal_preserves_other_doctor_failures() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let output = fixture
+        .command()?
+        .args(["doctor", "--json"])
+        // Explicit identity takes precedence over inherited terminal-specific variables.
+        .env("TERM_PROGRAM", "dumb")
+        .env_remove("TERMINFO")
+        .env_remove("TERMINFO_DIRS")
+        .output()?;
+    // The fixture's provider is unreachable, regardless of terminal capabilities.
+    assert_eq!(output.status.code(), Some(1));
+    let report: Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(report["checks"]["terminal.env"]["status"], "warning");
+    assert_eq!(report["overallStatus"], "fail");
+    Ok(())
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn interactive_tmux_startup_does_not_execute_workspace_helpers() -> Result<()> {

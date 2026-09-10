@@ -1,0 +1,25 @@
+---
+source: cli/src/doctor.rs
+expression: "render_human_report(&report, HumanOutputOptions\n{ show_details: true, show_all: true, ascii: true, color_enabled: false, })"
+---
+Codex Doctor v0.0.0
+
+Notes
+   [!!] terminal     TERM=dumb - colors and cursor control are disabled in this non-interactive run
+-------------------------------------------------------------
+
+Environment
+  [!!] terminal     TERM=dumb - colors and cursor control are disabled in this non-interactive run
+      terminal                 dumb
+      TERM                     dumb
+      stdin is terminal        false
+      stdout is terminal       false
+      stderr is terminal       false
+      terminal size            120x40
+      color output             disabled (TERM=dumb)
+
+-------------------------------------------------------------
+0 ok | 1 notes | 1 warn | 0 fail degraded
+
+--summary compact output           --all expand truncated lists
+--json redacted report
