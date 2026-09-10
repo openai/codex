@@ -1283,7 +1283,7 @@ impl AnalyticsReducer {
             invocations,
         } = input;
         for invocation in invocations {
-            let (skill_id, repo_url, skill_scope) = match invocation.location {
+            let (skill_id, skill_scope) = match invocation.location {
                 SkillInvocationLocation::Host { path, scope } => {
                     let skill_scope = match scope {
                         SkillScope::User => "user",
@@ -1305,7 +1305,7 @@ impl AnalyticsReducer {
                         path.as_path(),
                         invocation.skill_name.as_str(),
                     );
-                    (skill_id, repo_url, Some(skill_scope.to_string()))
+                    (skill_id, Some(skill_scope.to_string()))
                 }
                 SkillInvocationLocation::Resource {
                     id,
@@ -1328,7 +1328,7 @@ impl AnalyticsReducer {
                             SkillScope::Admin => "admin",
                         })
                         .map(str::to_owned);
-                    (skill_id, None, skill_scope)
+                    (skill_id, skill_scope)
                 }
             };
             out.push(TrackEventRequest::SkillInvocation(
@@ -1342,7 +1342,6 @@ impl AnalyticsReducer {
                         invoke_type: Some(invocation.invocation_type),
                         model_slug: Some(tracking.model_slug.clone()),
                         product_client_id: Some(tracking.product_client_id.clone()),
-                        repo_url: repo_url.map(String::from),
                         skill_scope,
                         plugin_id: invocation.plugin_id,
                         remote_plugin_id: invocation.remote_plugin_id,
