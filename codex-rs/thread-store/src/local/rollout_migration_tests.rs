@@ -223,6 +223,7 @@ fn item_completed(turn_id: &str, item_id: &str) -> RolloutItem {
 fn started(turn_id: &str) -> RolloutItem {
     RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
         turn_id: turn_id.to_string(),
+        root_turn_id: None,
         trace_id: None,
         started_at: Some(1_735_905_600),
         model_context_window: None,

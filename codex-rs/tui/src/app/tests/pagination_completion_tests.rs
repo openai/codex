@@ -53,6 +53,7 @@ async fn older_pagination_completion_footers_follow_answers_without_overlap_dupl
         let finished = completed_at.timestamp() + index as i64 * 60;
         let mut events = vec![EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: turn_id.clone(),
+            root_turn_id: None,
             trace_id: None,
             started_at: Some(finished - 125),
             model_context_window: None,

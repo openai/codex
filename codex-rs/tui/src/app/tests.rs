@@ -7982,6 +7982,7 @@ async fn prompt_edit_forks_before_selected_prompt_and_preserves_source() -> Resu
         for item in [
             RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: turn_id.to_string(),
+                root_turn_id: None,
                 trace_id: None,
                 started_at: None,
                 model_context_window: None,

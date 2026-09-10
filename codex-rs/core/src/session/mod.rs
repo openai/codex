@@ -144,6 +144,7 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::protocol::WorldStateItem;
 use codex_protocol::request_permissions::PermissionGrantScope;
@@ -2182,6 +2183,24 @@ impl Session {
         self.services
             .thread_extension_data
             .get_or_init(GuardianReviewSessionManager::default)
+    }
+
+    pub(crate) async fn emit_turn_started(&self, turn_context: &TurnContext) {
+        let event = TurnStartedEvent {
+            turn_id: turn_context.sub_id.clone(),
+            root_turn_id: Some(
+                turn_context
+                    .turn_metadata_state
+                    .root_turn_id()
+                    .unwrap_or_else(|| turn_context.sub_id.clone()),
+            ),
+            trace_id: turn_context.trace_id.clone(),
+            started_at: turn_context.turn_timing_state.started_at_unix_secs().await,
+            model_context_window: turn_context.model_context_window(),
+            collaboration_mode_kind: turn_context.mode(),
+        };
+        self.send_event(turn_context, EventMsg::TurnStarted(event))
+            .await;
     }
 
     /// Persist the event to rollout and send it to clients.

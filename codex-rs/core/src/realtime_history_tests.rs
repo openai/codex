@@ -29,6 +29,7 @@ fn started_state() -> RealtimeHistoryState {
     state.observe(&EventMsg::TurnStarted(
         codex_protocol::protocol::TurnStartedEvent {
             turn_id: "turn-1".to_string(),
+            root_turn_id: None,
             trace_id: None,
             started_at: None,
             model_context_window: None,
@@ -128,6 +129,7 @@ fn interrupted_turn_is_not_associated_with_a_new_voice_session(
     state.observe(&EventMsg::TurnStarted(
         codex_protocol::protocol::TurnStartedEvent {
             turn_id: "turn-1".to_string(),
+            root_turn_id: None,
             trace_id: None,
             started_at: None,
             model_context_window: None,

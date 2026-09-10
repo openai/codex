@@ -205,6 +205,62 @@ async fn v2_nested_spawn_checks_shared_active_execution_capacity() -> Result<()>
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn child_turn_start_preserves_root_attribution() -> Result<()> {
+    let server = start_mock_server().await;
+    mount_root_collaboration_call(
+        &server,
+        FIRST_PROMPT,
+        "first-call",
+        "spawn_agent",
+        json!({
+            "message": FIRST_TASK, "task_name": "first", "fork_turns": "none",
+        }),
+    )
+    .await;
+    let worker = mount_completed_worker(&server, FIRST_TASK, "first-call").await;
+    let test = test_codex()
+        .with_model("gpt-5.6-sol")
+        .with_config(|config| {
+            config.features.enable(Feature::Collab).unwrap();
+            config.features.enable(Feature::MultiAgentV2).unwrap();
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    test.submit_turn(FIRST_PROMPT).await?;
+    let thread_ids = test.thread_manager.list_thread_ids().await;
+    assert_eq!(thread_ids.len(), 2);
+    let mut starts = Vec::new();
+    for thread_id in thread_ids {
+        let thread = test.thread_manager.get_thread(thread_id).await?;
+        if thread_id != test.session_configured.thread_id {
+            wait_for_event(&thread, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+        }
+        thread.flush_rollout().await?;
+        let history = thread.load_history(/*include_archived*/ false).await?;
+        for item in history.items {
+            if let codex_history::RolloutItem::EventMsg(EventMsg::TurnStarted(event)) = item {
+                starts.push((thread_id, event));
+            }
+        }
+    }
+    worker.single_request();
+    assert_eq!(starts.len(), 2);
+    assert_ne!(starts[0].1.turn_id, starts[1].1.turn_id);
+    let root_turn_id = &starts
+        .iter()
+        .find(|(id, _)| *id == test.session_configured.thread_id)
+        .expect("root turn")
+        .1
+        .turn_id;
+    assert!(
+        starts
+            .iter()
+            .all(|(_, event)| { event.root_turn_id.as_ref() == Some(root_turn_id) })
+    );
+    Ok(())
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ResidencyReload {
     Sender,

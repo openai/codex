@@ -1824,6 +1824,7 @@ async fn older_pagination_reconciles_review_prompts_across_page_boundaries() -> 
     ]);
     let events = std::iter::once(EventMsg::TurnStarted(TurnStartedEvent {
         turn_id: "cross-page-review-turn".to_string(),
+        root_turn_id: None,
         trace_id: None,
         started_at: None,
         model_context_window: None,
@@ -1986,6 +1987,7 @@ async fn transcript_home_loads_every_older_history_page() -> Result<()> {
         .collect::<Result<Vec<_>, _>>()?;
     let events = std::iter::once(EventMsg::TurnStarted(TurnStartedEvent {
         turn_id: "multi-page-turn".to_string(),
+        root_turn_id: None,
         trace_id: None,
         started_at: None,
         model_context_window: None,
@@ -2394,6 +2396,7 @@ async fn underfilled_scrollback_fetches_older_pages_without_opening_the_transcri
         .collect::<Result<Vec<_>, _>>()?;
     let events = std::iter::once(EventMsg::TurnStarted(TurnStartedEvent {
         turn_id: "scrollback-pagination-turn".to_string(),
+        root_turn_id: None,
         trace_id: None,
         started_at: None,
         model_context_window: None,
