@@ -62,6 +62,7 @@ impl ToolOrchestrator {
         let network_approval = match begin_network_approval(
             &tool_ctx.session,
             &tool_ctx.step_context.turn,
+            &tool_ctx.step_context.environments,
             attempt.enforce_managed_network,
             network_approval_spec,
         )

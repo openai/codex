@@ -94,13 +94,14 @@ impl GuardianReviewContext {
     pub(crate) fn from_resolved_settings(
         turn: Arc<TurnContext>,
         settings: &ResolvedStepSettings,
+        environments: &TurnEnvironmentSnapshot,
     ) -> Self {
         Self {
             parent_response_id: turn
                 .extension_data
                 .get::<codex_api::ResponseId>()
                 .map(|id| id.0.clone()),
-            environments: turn.environments.clone(),
+            environments: environments.clone(),
             model_info: Arc::clone(&settings.model_info),
             reasoning_effort: settings.reasoning_effort().cloned(),
             reasoning_summary: settings.reasoning_summary,

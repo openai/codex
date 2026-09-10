@@ -34,7 +34,6 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::AutoReviewMessages;
 use codex_protocol::openai_models::MODEL_SPECIALTY_CYBER;
 use codex_protocol::openai_models::ModelTokenBudgetConfig;
-use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -92,6 +91,7 @@ use wiremock::http::Method;
 use wiremock::matchers::method;
 use wiremock::matchers::path_regex;
 
+use super::network_approval::guardian_parent_catalog;
 use super::rmcp_client::remote_aware_environment_id;
 use super::rmcp_client::remote_aware_stdio_server_bin;
 
@@ -949,44 +949,6 @@ async fn guardian_node_repl_policy_follows_production_approval_path(
     }
 
     Ok(())
-}
-
-fn guardian_parent_catalog() -> ModelsResponse {
-    let template = codex_models_manager::bundled_models_response()
-        .expect("bundled model catalog")
-        .models
-        .into_iter()
-        .find(|model| model.slug == "gpt-5.4")
-        .expect("gpt-5.4 in bundled catalog");
-    // Keep safety settings compatible so active publication can switch A to B.
-    ModelsResponse {
-        models: ["guardian-parent-a", "guardian-parent-b"]
-            .into_iter()
-            .map(|slug| {
-                let mut model = template.clone();
-                model.slug = slug.to_string();
-                model.visibility = ModelVisibility::List;
-                model.auto_review_model_override = None;
-                model.supported_reasoning_levels.retain(|level| {
-                    level.effort != codex_protocol::openai_models::ReasoningEffort::Low
-                });
-                model
-                    .model_messages
-                    .as_mut()
-                    .expect("model messages")
-                    .auto_review = Some(AutoReviewMessages {
-                    policy: Some("captured policy".to_string()),
-                    policy_template: Some(
-                        "captured template: {{ tenant_policy_config }}".to_string(),
-                    ),
-                    node_repl_policy: None,
-                    rejection_instructions: None,
-                    timeout_instructions: None,
-                });
-                model
-            })
-            .collect(),
-    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
