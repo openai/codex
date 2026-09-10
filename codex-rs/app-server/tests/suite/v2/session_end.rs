@@ -21,6 +21,7 @@ use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use tempfile::TempDir;
+use test_case::test_case;
 use tokio::time::timeout;
 
 const READ_TIMEOUT: Duration = Duration::from_secs(20);
@@ -94,8 +95,18 @@ async fn run_removal_session_end_test(operation: &str) -> Result<()> {
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+enum Shutdown {
+    Eof,
+    Sigterm,
+}
+
+#[test_case(Shutdown::Eof; "eof")]
+#[test_case(Shutdown::Sigterm; "sigterm")]
 #[tokio::test]
-async fn app_server_shutdown_runs_session_end_for_all_loaded_threads() -> Result<()> {
+async fn app_server_shutdown_runs_session_end_for_all_loaded_threads(
+    shutdown: Shutdown,
+) -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     let log_path = write_config_and_hook(codex_home.path(), &server.uri())?;
@@ -106,15 +117,27 @@ async fn app_server_shutdown_runs_session_end_for_all_loaded_threads() -> Result
     let first = start_thread(&mut app_server).await?;
     let second = start_thread(&mut app_server).await?;
 
-    let status = timeout(READ_TIMEOUT, app_server.shutdown_gracefully()).await??;
+    let status = match shutdown {
+        Shutdown::Eof => timeout(READ_TIMEOUT, app_server.shutdown_gracefully()).await??,
+        Shutdown::Sigterm => {
+            app_server.send_sigterm()?;
+            timeout(READ_TIMEOUT, app_server.wait_for_exit()).await??
+        }
+    };
     assert!(status.success(), "app-server did not exit successfully");
 
     let mut actual = read_hook_log(&log_path)?
         .into_iter()
         .map(|payload| {
             (
-                payload["session_id"].as_str().unwrap().to_string(),
-                payload["reason"].as_str().unwrap().to_string(),
+                payload["session_id"]
+                    .as_str()
+                    .expect("session end session ID")
+                    .to_string(),
+                payload["reason"]
+                    .as_str()
+                    .expect("session end reason")
+                    .to_string(),
             )
         })
         .collect::<Vec<_>>();

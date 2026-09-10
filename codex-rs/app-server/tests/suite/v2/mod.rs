@@ -18,6 +18,9 @@ mod config_requirements_application;
 mod config_requirements_browser_use;
 mod config_requirements_in_app_browser;
 mod config_rpc;
+#[cfg(unix)]
+#[path = "connection_handling_stdio_tests.rs"]
+mod connection_handling_stdio;
 mod connection_handling_websocket;
 #[cfg(unix)]
 mod connection_handling_websocket_unix;

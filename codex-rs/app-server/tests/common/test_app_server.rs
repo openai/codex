@@ -192,6 +192,21 @@ impl TestAppServer {
         self.process.wait().await
     }
 
+    #[cfg(unix)]
+    pub fn send_sigterm(&self) -> anyhow::Result<()> {
+        let pid = self.process.id().context("app-server has no pid")?;
+        let status = std::process::Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .status()?;
+        ensure!(status.success(), "failed to signal app-server: {status}");
+        Ok(())
+    }
+
+    /// Waits for output without consuming it, for transport backpressure tests.
+    pub async fn peek_stdout(&mut self) -> std::io::Result<&[u8]> {
+        self.stdout.fill_buf().await
+    }
+
     /// Closes stdio and waits for app-server's graceful thread teardown to finish.
     pub async fn shutdown_gracefully(&mut self) -> std::io::Result<ExitStatus> {
         drop(self.stdin.take());
