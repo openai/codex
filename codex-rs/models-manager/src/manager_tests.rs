@@ -27,6 +27,9 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use tempfile::tempdir;
 
+#[path = "api_key_discovery_tests.rs"]
+mod api_key_discovery_tests;
+
 #[path = "cache_identity_tests.rs"]
 mod cache_identity_tests;
 
@@ -268,6 +271,10 @@ impl ExternalAuth for TestUnresolvedExternalApiKeyAuth {
 }
 
 impl ModelsEndpointClient for TestModelsEndpoint {
+    fn supports_api_key_models(&self) -> bool {
+        true
+    }
+
     fn identity(&self) -> Option<String> {
         Some("test-provider".to_string())
     }
@@ -557,6 +564,7 @@ async fn injected_cache_ttl_refresh_preserves_cached_payload() {
             "test-api-key",
         ))),
     );
+    manager.set_api_key_model_discovery_enabled(/*enabled*/ true);
 
     manager
         .raw_model_catalog(
@@ -1025,7 +1033,7 @@ async fn refresh_available_models_merges_hidden_only_chatgpt_remote_with_bundled
 }
 
 #[tokio::test]
-async fn refresh_available_models_keeps_merging_for_api_auth() {
+async fn refresh_available_models_keeps_merging_for_custom_api_auth() {
     let remote_models = vec![remote_model(
         "api-auth-visible-remote",
         "API Auth Visible",
@@ -1227,7 +1235,7 @@ async fn refresh_available_models_drops_removed_remote_models() {
 }
 
 #[tokio::test]
-async fn refresh_available_models_skips_network_without_chatgpt_auth() {
+async fn refresh_available_models_skips_network_without_auth() {
     let dynamic_slug = "dynamic-model-only-for-test-noauth";
     let codex_home = tempdir().expect("temp dir");
     let endpoint = TestModelsEndpoint::without_refresh(vec![vec![remote_model(
@@ -1244,13 +1252,13 @@ async fn refresh_available_models_skips_network_without_chatgpt_auth() {
     manager
         .refresh_available_models(RefreshStrategy::Online, &DEFAULT_HTTP_CLIENT_FACTORY)
         .await
-        .expect("refresh should no-op without chatgpt auth");
+        .expect("refresh should no-op without auth");
     let cached_remote = manager.get_remote_models().await;
     assert!(
         !cached_remote
             .iter()
             .any(|candidate| candidate.slug == dynamic_slug),
-        "remote refresh should be skipped without chatgpt auth"
+        "remote refresh should be skipped without auth"
     );
     assert_eq!(
         endpoint.fetch_count(),
@@ -1307,6 +1315,10 @@ impl TestAuthAwareModelsEndpoint {
 }
 
 impl ModelsEndpointClient for TestAuthAwareModelsEndpoint {
+    fn supports_api_key_models(&self) -> bool {
+        true
+    }
+
     fn identity(&self) -> Option<String> {
         self.auth_manager
             .as_ref()
@@ -1332,7 +1344,7 @@ impl ModelsEndpointClient for TestAuthAwareModelsEndpoint {
 }
 
 #[tokio::test]
-async fn refresh_available_models_skips_network_when_external_api_key_overrides_chatgpt_auth() {
+async fn refresh_available_models_fetches_when_external_api_key_overrides_chatgpt_auth() {
     let dynamic_slug = "dynamic-model-only-for-test-external-api-key";
     let codex_home = tempdir().expect("temp dir");
     let auth_manager =
@@ -1354,24 +1366,23 @@ async fn refresh_available_models_skips_network_when_external_api_key_overrides_
         endpoint.clone(),
         Some(auth_manager),
     );
+    manager.set_api_key_model_discovery_enabled(/*enabled*/ true);
 
     manager
         .refresh_available_models(RefreshStrategy::Online, &DEFAULT_HTTP_CLIENT_FACTORY)
         .await
-        .expect("refresh should no-op with API key auth");
+        .expect("refresh should fetch with API key auth");
     let cached_remote = manager.get_remote_models().await;
 
-    assert!(
-        !cached_remote
-            .iter()
-            .any(|candidate| candidate.slug == dynamic_slug),
-        "remote refresh should be skipped when external API key auth is active"
-    );
     assert_eq!(
-        endpoint.fetch_count(),
-        0,
-        "endpoint should avoid model fetches when external API key auth is active"
+        cached_remote,
+        vec![remote_model(
+            dynamic_slug,
+            "External API Key",
+            /*priority*/ 1
+        )]
     );
+    assert_eq!(endpoint.fetch_count(), 1);
 }
 
 #[tokio::test]
@@ -1397,6 +1408,7 @@ async fn refresh_available_models_uses_cached_chatgpt_when_external_api_key_is_u
         endpoint.clone(),
         Some(auth_manager),
     );
+    manager.set_api_key_model_discovery_enabled(/*enabled*/ true);
 
     manager
         .refresh_available_models(RefreshStrategy::Online, &DEFAULT_HTTP_CLIENT_FACTORY)

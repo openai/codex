@@ -72,11 +72,28 @@ async fn auth_and_provider_switches_do_not_reuse_chatgpt_catalog() -> Result<()>
             .models,
         bundled
     );
+    assert_eq!(models_mock.requests().len(), 1);
     drop(chatgpt);
+    server.reset().await;
 
+    let mut api_model = model.clone();
+    api_model.default_service_tier = None;
+    let api_models_mock = responses::mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![api_model],
+        },
+    )
+    .await;
     let api = test_codex()
         .with_home(home.clone())
         .with_auth(CodexAuth::from_api_key("api-key"))
+        .with_config(|config| {
+            config
+                .features
+                .enable(codex_features::Feature::ApiKeyModelDiscovery)
+                .expect("enable API-key model discovery");
+        })
         .with_model("gpt-5.5")
         .build_with_auto_env(&server)
         .await?;
@@ -108,7 +125,7 @@ async fn auth_and_provider_switches_do_not_reuse_chatgpt_catalog() -> Result<()>
         explicit.single_request().body_json()["service_tier"],
         "priority"
     );
-    assert_eq!(models_mock.requests().len(), 1);
+    assert_eq!(api_models_mock.requests().len(), 1);
     drop(api);
 
     let other_server = wiremock::MockServer::start().await;

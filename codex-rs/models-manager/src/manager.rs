@@ -19,6 +19,8 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::sync::TryLockError;
@@ -46,6 +48,11 @@ pub trait ModelsEndpointClient: fmt::Debug + Send + Sync {
 
     /// Returns whether the currently resolved auth can use Codex backend-only models.
     fn uses_codex_backend(&self) -> ModelsEndpointFuture<'_, bool>;
+
+    /// Returns whether this provider supports an authoritative catalog with OpenAI API keys.
+    fn supports_api_key_models(&self) -> bool {
+        false
+    }
 
     /// Fetches the latest remote model catalog and optional ETag.
     fn list_models<'a>(
@@ -98,6 +105,10 @@ type SharedModelsEndpointClient = Arc<dyn ModelsEndpointClient>;
 
 /// Coordinates model discovery plus cached metadata on disk.
 pub trait ModelsManager: fmt::Debug + Send + Sync {
+    /// Supply startup API-key discovery policy; live changes require a new session.
+    /// Static catalogs ignore this setting.
+    fn set_api_key_model_discovery_enabled(&self, _enabled: bool) {}
+
     /// List all available models, refreshing according to the specified strategy.
     ///
     /// Returns model presets sorted by priority and filtered by auth mode and visibility.
@@ -235,6 +246,7 @@ pub struct OpenAiModelsManager {
     remote_models: RwLock<ModelsCacheEntry>,
     cache: Option<Arc<dyn ModelsCache>>,
     endpoint_client: SharedModelsEndpointClient,
+    api_key_model_discovery_enabled: AtomicBool,
     auth_manager: Option<Arc<AuthManager>>,
 }
 
@@ -298,6 +310,7 @@ impl OpenAiModelsManager {
                 models: remote_models,
             }),
             cache,
+            api_key_model_discovery_enabled: AtomicBool::new(false),
             endpoint_client,
             auth_manager,
         }
@@ -315,6 +328,11 @@ impl StaticModelsManager {
 }
 
 impl ModelsManager for OpenAiModelsManager {
+    fn set_api_key_model_discovery_enabled(&self, enabled: bool) {
+        self.api_key_model_discovery_enabled
+            .store(enabled, Ordering::SeqCst);
+    }
+
     fn raw_model_catalog(
         &self,
         refresh_strategy: RefreshStrategy,
@@ -419,6 +437,12 @@ impl OpenAiModelsManager {
         refresh_strategy: RefreshStrategy,
         http_client_factory: &HttpClientFactory,
     ) -> CoreResult<()> {
+        // Gate cache loading as well as requests; disabled sessions use bundled API-key models.
+        if self.supports_api_key_discovery()
+            && !self.api_key_model_discovery_enabled.load(Ordering::SeqCst)
+        {
+            return Ok(());
+        }
         if !self.should_refresh_models().await {
             if matches!(
                 refresh_strategy,
@@ -475,8 +499,19 @@ impl OpenAiModelsManager {
         Ok(())
     }
 
+    fn supports_api_key_discovery(&self) -> bool {
+        self.endpoint_client.supports_api_key_models()
+            && !self.endpoint_client.has_command_auth()
+            && self
+                .auth_manager
+                .as_ref()
+                .is_some_and(|auth_manager| auth_manager.auth_mode() == Some(AuthMode::ApiKey))
+    }
+
     async fn should_refresh_models(&self) -> bool {
-        self.endpoint_client.uses_codex_backend().await || self.endpoint_client.has_command_auth()
+        self.endpoint_client.uses_codex_backend().await
+            || self.endpoint_client.has_command_auth()
+            || self.supports_api_key_discovery()
     }
 
     /// Publish only while the request identity still matches, including after async storage.
@@ -485,16 +520,17 @@ impl OpenAiModelsManager {
         if entry.identity != self.endpoint_client.identity() {
             return false;
         }
-        // Visible ChatGPT catalogs are authoritative; other catalogs augment bundled metadata.
+        // Visible ChatGPT and OpenAI API-key catalogs are authoritative.
         let remote_only = entry
             .models
             .iter()
             .any(|model| model.visibility == ModelVisibility::List)
-            && self.auth_manager.as_ref().is_some_and(|auth_manager| {
-                auth_manager
-                    .auth_mode()
-                    .is_some_and(AuthMode::has_chatgpt_account)
-            });
+            && (self.supports_api_key_discovery()
+                || self.auth_manager.as_ref().is_some_and(|auth_manager| {
+                    auth_manager
+                        .auth_mode()
+                        .is_some_and(AuthMode::has_chatgpt_account)
+                }));
         if !remote_only {
             let mut models = load_remote_models_from_file().unwrap_or_default();
             for model in entry.models {

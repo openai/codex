@@ -631,6 +631,9 @@
           "default": null,
           "description": "Optional feature toggles scoped to this profile.",
           "properties": {
+            "api_key_model_discovery": {
+              "type": "boolean"
+            },
             "apply_patch_freeform": {
               "type": "boolean"
             },
@@ -6123,6 +6126,9 @@
       "default": null,
       "description": "Centralized feature flags (new). Prefer this over individual toggles.",
       "properties": {
+        "api_key_model_discovery": {
+          "type": "boolean"
+        },
         "apply_patch_freeform": {
           "type": "boolean"
         },

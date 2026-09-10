@@ -7,6 +7,8 @@ use app_test_support::TestAppServer;
 use app_test_support::write_chatgpt_auth;
 use app_test_support::write_models_cache;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::ExperimentalFeatureEnablementSetParams;
+use codex_app_server_protocol::ExperimentalFeatureEnablementSetResponse;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::Model;
 use codex_app_server_protocol::ModelListParams;
@@ -16,19 +18,128 @@ use codex_app_server_protocol::ModelUpgradeInfo;
 use codex_app_server_protocol::ReasoningEffortOption;
 use codex_app_server_protocol::RequestId;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_login::AuthKeyringBackendKind;
+use codex_login::login_with_api_key;
 use codex_protocol::openai_models::MODEL_SPECIALTY_CYBER;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelsResponse;
-use core_test_support::responses::mount_models_once;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
+use test_case::test_case;
 use tokio::time::timeout;
+use wiremock::Mock;
 use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::header;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
+
+#[test_case(None, false; "default off")]
+#[test_case(None, true; "app rollout")]
+#[test_case(Some(false), true; "user opt out")]
+#[test_case(Some(true), false; "user opt in")]
+#[tokio::test]
+async fn api_key_model_discovery_startup_enablement_respects_user_config(
+    user_enablement: Option<bool>,
+    app_enablement: bool,
+) -> Result<()> {
+    let server = MockServer::start().await;
+    let mut remote_model = codex_models_manager::bundled_models_response()?
+        .models
+        .remove(0);
+    remote_model.slug = "rollout-model".into();
+    remote_model.visibility = codex_protocol::openai_models::ModelVisibility::List;
+    remote_model.supported_in_api = true;
+    Mock::given(method("GET"))
+        .and(path("/v1/models"))
+        .respond_with(
+            ResponseTemplate::new(/*s*/ 200).set_body_json(ModelsResponse {
+                models: vec![remote_model.clone()],
+            }),
+        )
+        .mount(&server)
+        .await;
+    let codex_home = TempDir::new()?;
+    let server_uri = server.uri();
+    let feature_config = user_enablement
+        .map(|enabled| format!("[features]\napi_key_model_discovery = {enabled}\n"))
+        .unwrap_or_default();
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        format!("openai_base_url = \"{server_uri}/v1\"\n{feature_config}"),
+    )?;
+    login_with_api_key(
+        codex_home.path(),
+        "test-key",
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .with_env_overrides(&[("OPENAI_API_KEY", None), ("CODEX_API_KEY", None)])
+        .build_initialized()
+        .await?;
+    let mut bundled = codex_models_manager::bundled_models_response()?.models;
+    bundled.sort_by_key(|model| model.priority);
+    let mut bundled = ModelPreset::filter_by_auth(
+        bundled.into_iter().map(Into::into).collect(),
+        /*chatgpt_mode*/ false,
+    );
+    ModelPreset::mark_default_by_picker_visibility(&mut bundled);
+    let mut remote = vec![ModelPreset::from(remote_model)];
+    ModelPreset::mark_default_by_picker_visibility(&mut remote);
+    let _: ExperimentalFeatureEnablementSetResponse = mcp
+        .request(
+            |request_id| ClientRequest::ExperimentalFeatureEnablementSet {
+                request_id,
+                params: ExperimentalFeatureEnablementSetParams {
+                    enablement: [("api_key_model_discovery".to_string(), app_enablement)].into(),
+                },
+            },
+        )
+        .await?;
+    let response: ModelListResponse = mcp
+        .request(|request_id| ClientRequest::ModelList {
+            request_id,
+            params: ModelListParams {
+                limit: Some(100),
+                include_hidden: Some(true),
+                cursor: None,
+            },
+        })
+        .await?;
+    let enabled = user_enablement.unwrap_or(app_enablement);
+    let expected = if enabled { &remote } else { &bundled };
+    assert_eq!(
+        response,
+        ModelListResponse {
+            data: expected
+                .iter()
+                .map(|preset| Model {
+                    // These catalogs retain personality metadata; the cache fixture does not.
+                    supports_personality: preset.supports_personality,
+                    ..model_from_preset(preset)
+                })
+                .collect(),
+            next_cursor: None,
+        }
+    );
+    if !enabled {
+        assert!(
+            server
+                .received_requests()
+                .await
+                .expect("request recording is enabled")
+                .is_empty()
+        );
+    }
+    Ok(())
+}
 
 fn model_from_preset(preset: &ModelPreset) -> Model {
     Model {
@@ -156,16 +267,21 @@ async fn list_models_includes_hidden_models() -> Result<()> {
     Ok(())
 }
 
+#[test_case("chatgpt-access-token", None; "chatgpt")]
+#[test_case("test-api-key", Some("test-api-key"); "api key")]
 #[tokio::test]
-async fn list_models_uses_chatgpt_remote_catalog_as_source_of_truth() -> Result<()> {
+async fn list_models_uses_remote_catalog_as_source_of_truth(
+    bearer_token: &str,
+    api_key: Option<&str>,
+) -> Result<()> {
     let server = MockServer::start().await;
     let remote_models = [json!("2030-01-01T00:00:00Z"), serde_json::Value::Null]
         .into_iter()
         .enumerate()
         .map(|(priority, retirement_at)| {
             serde_json::from_value::<ModelInfo>(json!({
-                "slug": format!("chatgpt-remote-only-{priority}"),
-                "display_name": "ChatGPT Remote Only",
+                "slug": format!("remote-only-{priority}"),
+                "display_name": "Remote Only",
                 "description": "Remote-only model for app-server model/list coverage",
                 "model_specialty": MODEL_SPECIALTY_CYBER,
                 "default_reasoning_level": "max",
@@ -196,13 +312,18 @@ async fn list_models_uses_chatgpt_remote_catalog_as_source_of_truth() -> Result<
             }))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let models_mock = mount_models_once(
-        &server,
-        ModelsResponse {
-            models: remote_models.clone(),
-        },
-    )
-    .await;
+    // The startup refresh worker and model/list can both fetch before the cache is populated.
+    let _models_mock = Mock::given(method("GET"))
+        .and(path("/v1/models"))
+        .and(header("authorization", format!("Bearer {bearer_token}")))
+        .respond_with(
+            ResponseTemplate::new(/*s*/ 200).set_body_json(ModelsResponse {
+                models: remote_models.clone(),
+            }),
+        )
+        .expect(1..)
+        .mount_as_scoped(&server)
+        .await;
 
     let codex_home = TempDir::new()?;
     let server_uri = server.uri();
@@ -214,19 +335,30 @@ model = "mock-model"
 approval_policy = "never"
 sandbox_mode = "read-only"
 openai_base_url = "{server_uri}/v1"
+[features]
+api_key_model_discovery = true
 "#
         ),
     )?;
-    write_chatgpt_auth(
-        codex_home.path(),
-        ChatGptAuthFixture::new("chatgpt-access-token").plan_type("pro"),
-        AuthCredentialsStoreMode::File,
-    )?;
+    if let Some(api_key) = api_key {
+        login_with_api_key(
+            codex_home.path(),
+            api_key,
+            AuthCredentialsStoreMode::File,
+            AuthKeyringBackendKind::default(),
+        )?;
+    } else {
+        write_chatgpt_auth(
+            codex_home.path(),
+            ChatGptAuthFixture::new(bearer_token).plan_type("pro"),
+            AuthCredentialsStoreMode::File,
+        )?;
+    }
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .with_env_overrides(&[("OPENAI_API_KEY", None), ("CODEX_API_KEY", None)])
         .build_initialized()
         .await?;
     let request_id = mcp
@@ -275,11 +407,6 @@ openai_base_url = "{server_uri}/v1"
 
     assert_eq!(items, expected_items);
     assert!(next_cursor.is_none());
-    assert_eq!(
-        models_mock.requests().len(),
-        1,
-        "expected a single /models request"
-    );
     Ok(())
 }
 

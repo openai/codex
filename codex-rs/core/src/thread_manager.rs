@@ -383,10 +383,14 @@ pub fn build_models_manager(
     auth_manager: Arc<AuthManager>,
 ) -> SharedModelsManager {
     let provider = create_model_provider(config.model_provider.clone(), Some(auth_manager));
-    provider.models_manager(
+    let manager = provider.models_manager(
         config.codex_home.to_path_buf(),
         config.model_catalog.clone(),
-    )
+    );
+    manager.set_api_key_model_discovery_enabled(
+        config.features.enabled(Feature::ApiKeyModelDiscovery),
+    );
+    manager
 }
 
 pub fn thread_store_from_config(

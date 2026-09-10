@@ -5,6 +5,7 @@ use codex_client::run_with_retry;
 use codex_http_client::Request;
 use codex_http_client::TransportError;
 use codex_login::CodexAuth;
+use codex_models_manager::bundled_models_response;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -1628,6 +1629,9 @@ async fn websocket_overload_with_nested_retry_after_is_terminal() -> Result<()> 
     .await;
     let test = test_codex()
         .with_config(|config| {
+            // Capture inference retries without unrelated startup model-discovery retries.
+            config.model_catalog =
+                Some(bundled_models_response().expect("bundled models.json should parse"));
             config.model_provider.request_max_retries = Some(2);
             config.model_provider.stream_max_retries = Some(2);
         })
@@ -1709,6 +1713,9 @@ async fn websocket_overload_without_retry_after_is_terminal() -> Result<()> {
     .await;
     let test = test_codex()
         .with_config(|config| {
+            // Capture inference retries without unrelated startup model-discovery retries.
+            config.model_catalog =
+                Some(bundled_models_response().expect("bundled models.json should parse"));
             config.model_provider.request_max_retries = Some(2);
             config.model_provider.stream_max_retries = Some(2);
         })

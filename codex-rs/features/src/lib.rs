@@ -91,6 +91,8 @@ impl Stage {
 /// Unique features toggled via configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Feature {
+    /// Discover model catalogs for OpenAI API-key authentication.
+    ApiKeyModelDiscovery,
     /// Enable the interactive transcript composer and turn-selection UI.
     TranscriptV2,
     // Stable.
@@ -1217,6 +1219,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::RemoteModels,
         key: "remote_models",
         stage: Stage::Removed,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ApiKeyModelDiscovery,
+        key: "api_key_model_discovery",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {

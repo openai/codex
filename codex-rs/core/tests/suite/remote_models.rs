@@ -1,6 +1,7 @@
 #![cfg(not(target_os = "windows"))]
 use anyhow::Result;
 use codex_core::TurnInputRequest;
+use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
@@ -852,8 +853,10 @@ async fn remote_models_truncation_policy_with_tool_output_override() -> Result<(
     Ok(())
 }
 
+#[test_case(CodexAuth::create_dummy_chatgpt_auth_for_testing(); "chatgpt")]
+#[test_case(CodexAuth::from_api_key("test-api-key"); "api key")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_models_apply_legacy_instructions() -> Result<()> {
+async fn remote_models_apply_legacy_instructions(auth: CodexAuth) -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
 
@@ -959,12 +962,14 @@ async fn remote_models_apply_legacy_instructions() -> Result<()> {
     )
     .await;
 
-    let mut builder = test_codex()
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config(|config| {
-            config.update_plan_enabled = true;
-            config.model = Some("gpt-5.2".to_string());
-        });
+    let mut builder = test_codex().with_auth(auth).with_config(|config| {
+        config
+            .features
+            .enable(Feature::ApiKeyModelDiscovery)
+            .expect("enable API-key model discovery");
+        config.update_plan_enabled = true;
+        config.model = Some("gpt-5.2".to_string());
+    });
     let TestCodex {
         codex,
         cwd,

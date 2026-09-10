@@ -63,6 +63,7 @@ const BACKGROUND_PAGINATED_ROLLOUT_MIGRATION_FEATURE: &str =
     "background_paginated_rollout_migration";
 
 const SUPPORTED_EXPERIMENTAL_FEATURE_ENABLEMENT: &[&str] = &[
+    "api_key_model_discovery",
     "auth_elicitation",
     BACKGROUND_PAGINATED_ROLLOUT_MIGRATION_FEATURE,
     "codex_apps_mcp_2026_07_28",
@@ -315,6 +316,11 @@ impl ConfigRequestProcessor {
             .map_err(|_| internal_error("failed to update feature enablement"))?;
 
         let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
+        self.thread_manager
+            .get_models_manager()
+            .set_api_key_model_discovery_enabled(
+                config.features.enabled(Feature::ApiKeyModelDiscovery),
+            );
         if should_start_background_rollout_migration && config.features.enabled(feature) {
             self.thread_manager.start_background_rollout_migration();
         }
