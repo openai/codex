@@ -7,6 +7,11 @@ use codex_protocol::models::PermissionProfile;
 use std::path::PathBuf;
 
 /// Typed inputs for the native policy adapter.
+pub mod transport;
+use serde::Deserialize;
+use serde::Serialize;
+
+#[derive(Serialize, Deserialize)]
 pub struct MxcCommand {
     pub permissions: PermissionProfile,
     pub sandbox_policy_cwd: PathBuf,
