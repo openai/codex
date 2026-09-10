@@ -14,6 +14,7 @@ use codex_extension_api::ThreadStartInput;
 use codex_features::Feature;
 use codex_history::RolloutItem;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::CodexAppsResourceListParams;
 use codex_mcp::McpResourceClient;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
@@ -656,6 +657,160 @@ async fn timeout_refresh_replaces_pending_startup_and_reuses_ready_connection() 
         ),
         (2, 1)
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_apps_resource_filter_sends_mime_type_on_each_page() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let apps_server = AppsTestServer::mount_searchable(&server).await?;
+    let first_resource = json!({
+        "uri": "plugin://first",
+        "name": "first",
+        "mimeType": "mcp/plugin",
+    });
+    let second_resource = json!({
+        "uri": "plugin://second",
+        "name": "second",
+        "mimeType": "mcp/plugin",
+    });
+    let first_response_resource = first_resource.clone();
+    let second_response_resource = second_resource.clone();
+    Mock::given(method("POST"))
+        .and(path_regex("^/api/codex/ps/mcp/?$"))
+        .and(body_partial_json(json!({ "method": "resources/list" })))
+        .respond_with(move |request: &Request| {
+            let body: Value = serde_json::from_slice(&request.body).expect("valid MCP request");
+            let result = match body["params"]["cursor"].as_str() {
+                None => json!({
+                    "resources": [first_response_resource],
+                    "nextCursor": "next-page",
+                }),
+                Some("next-page") => json!({ "resources": [second_response_resource] }),
+                Some(cursor) => panic!("unexpected cursor: {cursor}"),
+            };
+            ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0",
+                "id": body["id"],
+                "result": result,
+            }))
+        })
+        .with_priority(1)
+        .mount(&server)
+        .await;
+
+    let captured_client = Arc::new(Mutex::new(None));
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    extensions.thread_lifecycle_contributor(Arc::new(McpResourceClientCapture {
+        client: Arc::clone(&captured_client),
+    }));
+    let test = search_capable_apps_builder(apps_server.chatgpt_base_url)
+        .with_extensions(Arc::new(extensions.build()))
+        .build_with_auto_env(&server)
+        .await?;
+    wait_for_mcp_server(&test.codex, CODEX_APPS_MCP_SERVER_NAME).await?;
+    let client = captured_client
+        .lock()
+        .expect("capture lock should not be poisoned")
+        .clone()
+        .expect("thread start should capture the MCP resource client");
+    let expected_pages = [
+        codex_mcp::McpResourcePage {
+            resources: vec![serde_json::from_value(first_resource)?],
+            next_cursor: Some("next-page".to_string()),
+        },
+        codex_mcp::McpResourcePage {
+            resources: vec![serde_json::from_value(second_resource)?],
+            next_cursor: None,
+        },
+    ];
+
+    for (cursor, expected_page) in [
+        (None, &expected_pages[0]),
+        (Some("next-page".to_string()), &expected_pages[1]),
+    ] {
+        let page = client
+            .list_codex_apps_resources(CodexAppsResourceListParams {
+                cursor,
+                mime_type: "mcp/plugin".to_string(),
+            })
+            .await?;
+        assert_eq!(page, *expected_page);
+    }
+
+    let requests = server.received_requests().await.expect("recorded requests");
+    let params = requests
+        .iter()
+        .filter_map(|request| serde_json::from_slice::<Value>(&request.body).ok())
+        .filter(|body| body["method"] == "resources/list")
+        .map(|body| {
+            let mut params = body["params"].as_object().cloned().unwrap_or_default();
+            // The transport adds progress metadata independently of the filter.
+            params.remove("_meta");
+            Value::Object(params)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        params,
+        vec![
+            json!({ "mimeType": "mcp/plugin" }),
+            json!({ "cursor": "next-page", "mimeType": "mcp/plugin" }),
+        ]
+    );
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_apps_resource_filter_rejects_extension_name_collision() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let apps_server = AppsTestServer::mount_searchable(&server).await?;
+    let captured_client = Arc::new(Mutex::new(None));
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    extensions.mcp_server_contributor(Arc::new(AppsMcpServerContributor {
+        id: "test-extension",
+        url: format!("{}/api/codex/ps/mcp", apps_server.chatgpt_base_url),
+        root_resolved: None,
+    }));
+    extensions.thread_lifecycle_contributor(Arc::new(McpResourceClientCapture {
+        client: Arc::clone(&captured_client),
+    }));
+    let test = search_capable_apps_builder(apps_server.chatgpt_base_url)
+        .with_extensions(Arc::new(extensions.build()))
+        .build_with_auto_env(&server)
+        .await?;
+    wait_for_mcp_server(&test.codex, CODEX_APPS_MCP_SERVER_NAME).await?;
+    let client = captured_client
+        .lock()
+        .expect("capture lock should not be poisoned")
+        .clone()
+        .expect("thread start should capture the MCP resource client");
+    assert!(client.has_server(CODEX_APPS_MCP_SERVER_NAME).await);
+
+    let error = client
+        .list_codex_apps_resources(CodexAppsResourceListParams {
+            cursor: None,
+            mime_type: "mcp/plugin".to_string(),
+        })
+        .await
+        .expect_err("an extension named codex_apps must not inherit the Apps resource filter");
+    assert_eq!(
+        error.to_string(),
+        "MCP server 'codex_apps' is not registered by the hosted runtime"
+    );
+    let requests = server.received_requests().await.expect("recorded requests");
+    assert!(
+        !requests.iter().any(|request| {
+            serde_json::from_slice::<Value>(&request.body)
+                .is_ok_and(|body| body["method"] == "resources/list")
+        }),
+        "an extension named codex_apps must not receive filtered resource requests"
+    );
+    test.codex.shutdown_and_wait().await?;
     Ok(())
 }
 
