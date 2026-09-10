@@ -25,7 +25,7 @@ pub enum ContextPresentation<'a> {
     Async,
 }
 
-/// Host-selected, already bounded transcript entries and omission notice.
+/// Host-selected transcript entries and omission notice, before request admission.
 pub struct RenderedTranscript {
     pub items: Vec<Budgeted<String>>,
     pub omission_note: Option<String>,

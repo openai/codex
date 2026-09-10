@@ -1,6 +1,7 @@
 //! Contributor integration tests use the normal catalog-backed lifecycle setup.
 
 use super::*;
+use crate::async_scorer::authorization::ScoreAuthorization;
 use pretty_assertions::assert_eq;
 
 #[derive(Clone, Copy)]
@@ -63,6 +64,7 @@ async fn catalog_budget_fixture(base_url: String, window: i64) -> Result<Guardia
 enum BudgetEvidence {
     Checkpoint,
     Image,
+    UserInstructions,
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -77,11 +79,18 @@ async fn contributor_preserves_optional_evidence_or_defers_to_sync() -> Result<(
     assert_catalog_budget(BudgetEvidence::Image).await
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn contributor_preserves_complete_user_instructions_or_defers_to_sync() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    assert_catalog_budget(BudgetEvidence::UserInstructions).await
+}
+
 async fn assert_catalog_budget(evidence: BudgetEvidence) -> Result<()> {
     let windows = match evidence {
         BudgetEvidence::Checkpoint => [18_000, 32_000],
         // In the smaller window the text fits, but the 10K image reservation cannot.
         BudgetEvidence::Image => [14_000, 40_000],
+        BudgetEvidence::UserInstructions => [18_000, 50_000],
     };
     for (window, outcome) in windows
         .into_iter()
@@ -97,8 +106,18 @@ async fn assert_catalog_budget(evidence: BudgetEvidence) -> Result<()> {
             ]),
         )
         .await;
-        let instruction = "Inspect README.md; do not change files.";
-        let mut user = user_instruction(instruction);
+        let instruction = if matches!(evidence, BudgetEvidence::UserInstructions) {
+            let padding = "é🙂 ".repeat(/*n*/ 3_500);
+            format!("{padding}You may edit files only in the scratch directory.{padding}")
+        } else {
+            "Inspect README.md; do not change files.".to_owned()
+        };
+        let restriction = "Revoke permission to edit files. Only read README.md.";
+        let approval = format!(
+            "{}\nApproved action: read_file README.md",
+            codex_guardian_context::MANUAL_APPROVAL_DEVELOPER_PREFIX
+        );
+        let mut user = user_instruction(&instruction);
         let (checkpoint, commentary) = match evidence {
             BudgetEvidence::Checkpoint => (
                 Some(ResponseItem::ContextCompaction {
@@ -125,9 +144,22 @@ async fn assert_catalog_budget(evidence: BudgetEvidence) -> Result<()> {
                 });
                 (None, vec!["optional old commentary ".repeat(/*n*/ 500)])
             }
+            BudgetEvidence::UserInstructions => (None, Vec::new()),
         };
         let mut history = checkpoint.iter().cloned().collect::<Vec<_>>();
         history.push(user);
+        if matches!(evidence, BudgetEvidence::UserInstructions) {
+            history.push(ResponseItem::Message {
+                id: None,
+                role: "developer".to_owned(),
+                content: vec![ContentItem::InputText {
+                    text: approval.clone(),
+                }],
+                phase: None,
+                internal_chat_message_metadata_passthrough: None,
+            });
+            history.push(user_instruction(restriction));
+        }
         history.extend(commentary.into_iter().map(|text| ResponseItem::Message {
             id: None,
             role: "assistant".to_owned(),
@@ -146,9 +178,32 @@ async fn assert_catalog_budget(evidence: BudgetEvidence) -> Result<()> {
                 current: TestConversationHistory(history),
                 compaction_model_hash: Some("budget-checkpoint".to_owned()),
             }),
-            BudgetEvidence::Image => fixture.test.codex.conversation_history_snapshot().await,
+            BudgetEvidence::Image | BudgetEvidence::UserInstructions => {
+                fixture.test.codex.conversation_history_snapshot().await
+            }
         };
         let thread_store = fixture.test.codex.thread_extension_data();
+        if matches!(evidence, BudgetEvidence::UserInstructions) {
+            thread_store.insert(SecurityRiskScore {
+                scores: BTreeMap::from([("action_risk".to_owned(), 0.25)]),
+                call_id: None,
+                action: None,
+                sampled_at: None,
+            });
+            let progress = thread_store.get::<GuardianV2ScoreProgress>().unwrap();
+            let authorization = ScoreAuthorization::current(&fixture.test.codex).await;
+            *progress.authorization.lock().unwrap() = Some(authorization);
+            assert_eq!(
+                cached_approval(
+                    &fixture.registry,
+                    thread_store,
+                    "review action",
+                    /*metrics*/ None
+                )
+                .await,
+                Some(ReviewDecision::Approved)
+            );
+        }
         let turn_store = ExtensionData::new("turn-1");
         let tool_name = ToolName::plain("read_file");
         let payload = ToolPayload::Function {
@@ -192,16 +247,22 @@ async fn assert_catalog_budget(evidence: BudgetEvidence) -> Result<()> {
             }
         })
         .await?;
-        let request = response.single_request().body_json();
+        let request = response.single_request();
+        let text = request.message_input_texts("user").concat();
+        let request = request.body_json();
         let input = request["input"].to_string();
         if let Some(checkpoint) = checkpoint {
             assert_eq!(request["input"][2], serde_json::to_value(checkpoint)?);
             assert!(input.contains("commentary 0:"));
-        } else {
+        } else if matches!(evidence, BudgetEvidence::Image) {
             assert!(input.contains("input_image"));
             assert!(input.contains("optional old commentary"));
+        } else {
+            assert!(text.contains(&format!(
+                "[1] user: {instruction}\n[2] developer: {approval}\n[3] user: {restriction}\n"
+            )));
         }
-        assert!(input.contains(instruction));
+        assert!(text.contains(&instruction));
         assert!(input.contains("read_file"));
         assert_eq!(
             cached_approval(

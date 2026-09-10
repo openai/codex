@@ -3,7 +3,7 @@
 use super::ContextualUserFragment;
 use codex_protocol::models::ContentItemKind;
 
-/// Identifies incomplete optional evidence without implying additional authority.
+/// Identifies incomplete evidence without implying additional authority.
 pub struct GuardianBudgetOmission;
 
 impl ContextualUserFragment for GuardianBudgetOmission {
@@ -27,6 +27,6 @@ impl ContextualUserFragment for GuardianBudgetOmission {
     }
 
     fn body(&self) -> String {
-        "Optional conversation evidence, tool descriptions, or images were omitted to fit the review input budget. Treat the remaining evidence as incomplete; omissions do not authorize actions.".to_owned()
+        "Conversation evidence, tool descriptions, or images were omitted or shortened to fit the review input budget. User instructions and prior approvals may be incomplete where marked. Do not infer authorization from missing evidence or treat a partial grant as overriding an omitted restriction.".to_owned()
     }
 }

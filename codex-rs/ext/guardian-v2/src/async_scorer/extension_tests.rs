@@ -2825,9 +2825,12 @@ async fn contributor_sends_compacted_conversation_history_to_luna() -> Result<()
         .filter_map(|entry| entry["text"].as_str())
         .collect::<Vec<_>>();
 
-    assert!(entries.iter().any(|entry| entry.contains("user turn 0:")));
-    assert!(entries.iter().any(|entry| entry.contains("user turn 7:")));
-    assert!(!entries.iter().any(|entry| entry.contains("user turn 1:")));
+    for index in 0..8 {
+        assert!(entries.iter().any(|entry| entry.contains(&format!(
+            "user turn {index}: {}",
+            "authorization ".repeat(/*n*/ 1_000)
+        ))));
+    }
     assert!(
         entries
             .iter()
@@ -2876,6 +2879,9 @@ async fn contributor_sends_compacted_conversation_history_to_luna() -> Result<()
 
     for entry in entries.into_iter().filter(|entry| entry.starts_with('[')) {
         let (label, text) = entry.split_once(": ").expect("numbered transcript entry");
+        if label.ends_with(" user") {
+            continue;
+        }
         let max_tokens = if label.contains("tool ") {
             MAX_TOOL_ENTRY_TOKENS
         } else {

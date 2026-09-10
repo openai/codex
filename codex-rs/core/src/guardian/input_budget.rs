@@ -5,6 +5,7 @@
 
 use codex_features::Feature;
 use codex_guardian_context::ComposedContext;
+use codex_guardian_context::HistoryTruncation;
 use codex_guardian_context::RequestBudget;
 use codex_guardian_context::effective_input_token_limit;
 use codex_protocol::config_types::ReasoningSummary;
@@ -51,6 +52,7 @@ pub(crate) async fn check_pending(session: &Session, turn: &TurnContext) -> Code
                     existing_context_tokens: minimum_prefix,
                 },
                 GuardianBudgetOmission.render(),
+                HistoryTruncation::Allow,
             )
             .map_err(|_error| {
                 session
@@ -67,6 +69,7 @@ pub(crate) async fn finalize(
     session: &Session,
     step: &StepContext,
     input: &mut [TurnInput],
+    history_truncation: HistoryTruncation,
 ) -> CodexResult<()> {
     let Some(pending) = session
         .services
@@ -145,7 +148,7 @@ pub(crate) async fn finalize(
         ),
     };
     let context = context
-        .enforce_budget(budget, GuardianBudgetOmission.render())
+        .enforce_budget(budget, GuardianBudgetOmission.render(), history_truncation)
         .map_err(|error| {
             session
                 .services

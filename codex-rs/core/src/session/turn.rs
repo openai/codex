@@ -321,8 +321,13 @@ pub(crate) async fn run_turn(
         return Ok(None);
     }
     if crate::guardian::is_basic_session_source(&turn_context.session_source)
-        && let Err(error) =
-            crate::guardian::finalize_guardian_input(&sess, &first_step_context, &mut input).await
+        && let Err(error) = crate::guardian::finalize_guardian_input(
+            &sess,
+            &first_step_context,
+            &mut input,
+            codex_guardian_context::HistoryTruncation::Preserve,
+        )
+        .await
     {
         // Token-budget compaction resets history, which can discard the evidence
         // referenced by a pending delta review. Leave budget failures unreusable.
@@ -349,7 +354,13 @@ pub(crate) async fn run_turn(
         world_state = sess
             .record_context_updates_and_set_reference_context_item(first_step_context.as_ref())
             .await?;
-        crate::guardian::finalize_guardian_input(&sess, &first_step_context, &mut input).await?;
+        crate::guardian::finalize_guardian_input(
+            &sess,
+            &first_step_context,
+            &mut input,
+            codex_guardian_context::HistoryTruncation::Allow,
+        )
+        .await?;
     }
     let mut can_drain_pending_input = input.is_empty();
     if run_hooks_and_record_inputs(

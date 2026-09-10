@@ -66,8 +66,10 @@ impl<'a> TranscriptWindow<'a> {
         let kind = self.entries[index].kind;
         let tokens = self.entries[index].tokens;
 
-        if kind == TranscriptEntryKind::User
-            || self.max_entries == 0
+        if matches!(
+            kind,
+            TranscriptEntryKind::User | TranscriptEntryKind::ManualApproval
+        ) || self.max_entries == 0
             || !self.make_room_for_token_budget(kind, tokens)
             || !self.make_room_for_entry_limit(kind)
         {
@@ -91,7 +93,9 @@ impl<'a> TranscriptWindow<'a> {
                 self.message_token_budget
             }
             TranscriptEntryKind::Tool => self.tool_token_budget,
-            TranscriptEntryKind::User => unreachable!("user entries were selected separately"),
+            TranscriptEntryKind::User | TranscriptEntryKind::ManualApproval => {
+                unreachable!("user entries were selected separately")
+            }
         };
         let protected_tokens = if kind == TranscriptEntryKind::Message {
             self.protected_messages.tokens
@@ -111,7 +115,9 @@ impl<'a> TranscriptWindow<'a> {
             ],
             TranscriptEntryKind::Message => &[TranscriptEntryKind::Message],
             TranscriptEntryKind::Tool => &[TranscriptEntryKind::Tool],
-            TranscriptEntryKind::User => unreachable!("user entries were selected separately"),
+            TranscriptEntryKind::User | TranscriptEntryKind::ManualApproval => {
+                unreachable!("user entries were selected separately")
+            }
         };
         let entries = self.entries;
 
@@ -201,7 +207,9 @@ impl<'a> TranscriptWindow<'a> {
                 .tokens
                 .saturating_add(self.ordinary_messages.tokens),
             TranscriptEntryKind::Tool => self.tools.tokens,
-            TranscriptEntryKind::User => unreachable!("user entries were selected separately"),
+            TranscriptEntryKind::User | TranscriptEntryKind::ManualApproval => {
+                unreachable!("user entries were selected separately")
+            }
         };
 
         retained_tokens.saturating_add(tokens) <= token_budget
@@ -212,7 +220,9 @@ impl<'a> TranscriptWindow<'a> {
             TranscriptEntryKind::ProtectedMessage => &self.protected_messages,
             TranscriptEntryKind::Message => &self.ordinary_messages,
             TranscriptEntryKind::Tool => &self.tools,
-            TranscriptEntryKind::User => unreachable!("user entries were selected separately"),
+            TranscriptEntryKind::User | TranscriptEntryKind::ManualApproval => {
+                unreachable!("user entries were selected separately")
+            }
         }
     }
 
@@ -221,7 +231,9 @@ impl<'a> TranscriptWindow<'a> {
             TranscriptEntryKind::ProtectedMessage => &mut self.protected_messages,
             TranscriptEntryKind::Message => &mut self.ordinary_messages,
             TranscriptEntryKind::Tool => &mut self.tools,
-            TranscriptEntryKind::User => unreachable!("user entries were selected separately"),
+            TranscriptEntryKind::User | TranscriptEntryKind::ManualApproval => {
+                unreachable!("user entries were selected separately")
+            }
         }
     }
 }

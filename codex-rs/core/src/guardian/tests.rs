@@ -1778,10 +1778,11 @@ fn build_guardian_transcript_preserves_recent_tool_context_when_user_history_is_
     let entries = collect_guardian_transcript_entries(&items, GUARDIAN_MAX_TOOL_ENTRY_TOKENS);
     let (transcript, omission) = render_guardian_transcript_entries(&entries);
 
-    assert!(
-        transcript
-            .iter()
-            .any(|entry| entry.starts_with("[1] user: "))
+    assert_eq!(
+        transcript[..8],
+        (1..=8)
+            .map(|index| format!("[{index}] user: {repeated}"))
+            .collect::<Vec<_>>()
     );
     assert!(transcript.iter().any(|entry| {
         entry.contains("tool shell call:")
@@ -1794,10 +1795,7 @@ fn build_guardian_transcript_preserves_recent_tool_context_when_user_history_is_
             .any(|entry| entry
                 .contains("tool shell result: sandbox blocked outbound network access"))
     );
-    assert_eq!(
-        omission,
-        Some("Some conversation entries were omitted.".to_string())
-    );
+    assert_eq!(omission, None);
 }
 
 enum GuardianTestCatalog {

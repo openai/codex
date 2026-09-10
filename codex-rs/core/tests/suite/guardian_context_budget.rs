@@ -9,6 +9,8 @@ use codex_core::config::CurrentTimeReminderConfig;
 use codex_core::config::RolloutBudgetConfig;
 use codex_features::Feature;
 use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::AutoReviewMessages;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -29,6 +31,168 @@ use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use test_case::test_case;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[test_case(160_000, &[0, 0]; "complete_instructions_fit")]
+#[test_case(28_000, &[0, 1]; "oversized_history_compacts_then_truncates")]
+#[test_case(16_000, &[1]; "first_review_can_shorten_oversized_instructions")]
+async fn review_preserves_user_instructions_until_request_budgeting(
+    window: i64,
+    compactions_per_turn: &[usize],
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_wine_exec!(
+        Ok(()),
+        "Guardian approval actions require host-native paths"
+    );
+    let server = responses::start_mock_server().await;
+    let test = test_codex()
+        .with_model_info_override("gpt-5.6-luna", move |model| {
+            model.context_window = Some(window);
+        })
+        .with_model_info_override("gpt-5.5", |model| {
+            model.auto_review_model_override = Some("gpt-5.6-luna".to_owned());
+        })
+        .with_config(|config| {
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let command = json!({
+        "cmd": "echo complete-instructions",
+        "sandbox_permissions": "require_escalated",
+        "justification": "Run the requested command."
+    })
+    .to_string();
+    let events = compactions_per_turn
+        .iter()
+        .enumerate()
+        .flat_map(|(turn, compactions)| {
+            let mut events = vec![
+                sse(vec![
+                    ev_function_call(&format!("exec-{turn}"), "exec_command", &command),
+                    ev_completed(&format!("parent-{turn}")),
+                ]),
+                sse(vec![
+                    ev_assistant_message(
+                        "decision",
+                        r#"{"risk_level":"low","user_authorization":"high","outcome":"allow"}"#,
+                    ),
+                    ev_completed(&format!("review-{turn}")),
+                ]),
+                sse(vec![
+                    ev_assistant_message("done", "done"),
+                    ev_completed(&format!("done-{turn}")),
+                ]),
+            ];
+            for _ in 0..*compactions {
+                events.insert(
+                    /*index*/ 1,
+                    sse(vec![
+                        json!({
+                            "type": "response.output_item.done",
+                            "item": {"type": "compaction", "encrypted_content": "Earlier reviewer context."},
+                        }),
+                        ev_completed("review-compaction"),
+                    ]),
+                );
+            }
+            events
+        })
+        .collect();
+    let responses = responses::mount_sse_sequence(&server, events).await;
+    let padding = "é🙂 ".repeat(/*n*/ 3_500);
+    let initial = format!(
+        "{padding}Run the requested echo command. You may edit scratch files only.{padding}"
+    );
+    test.submit_text_turn(&initial).await?;
+    // This whole message exceeds the old transcript allowance. A following
+    // restriction must still reach the reviewer, with the original source order.
+    let followup = format!("{padding}{padding}Keep all files private.{padding}{padding}");
+    let approval = format!(
+        "{}\nApproved action: {command}",
+        codex_guardian_context::MANUAL_APPROVAL_DEVELOPER_PREFIX
+    );
+    let restriction = "Revoke permission to edit files. Only run the echo command.";
+    // V2 retains the first review's user input. The smallest window exercises
+    // first-review truncation only; the larger windows cover follow-up delivery.
+    if compactions_per_turn.len() == 2 {
+        test.codex
+            .inject_response_items(vec![
+                responses::user_message_item(&followup),
+                ResponseItem::Message {
+                    id: None,
+                    role: "developer".to_owned(),
+                    content: vec![ContentItem::InputText {
+                        text: approval.clone(),
+                    }],
+                    phase: None,
+                    internal_chat_message_metadata_passthrough: None,
+                },
+            ])
+            .await?;
+        test.submit_text_turn(restriction).await?;
+    }
+    let (compact_requests, requests): (Vec<_>, Vec<_>) = responses
+        .requests()
+        .into_iter()
+        .partition(|request| !request.inputs_of_type("compaction_trigger").is_empty());
+    let reviews = requests
+        .iter()
+        .filter(|request| request.body_json()["client_metadata"]["x-openai-subagent"] == "guardian")
+        .collect::<Vec<_>>();
+    assert_eq!(reviews.len(), compactions_per_turn.len());
+    let initial_inputs = reviews[0].message_input_text_groups("user");
+    let initial_context = initial_inputs.last().expect("first review input").concat();
+    if compactions_per_turn[0] == 0 {
+        assert!(initial_context.contains(&initial));
+    } else {
+        assert!(initial_context.contains("<truncated omitted_approx_tokens="));
+    }
+    assert_eq!(
+        compact_requests.len(),
+        compactions_per_turn.iter().sum::<usize>()
+    );
+    if let Some(review) = reviews.get(1) {
+        let delta_inputs = review.message_input_text_groups("user");
+        let delta = delta_inputs.last().expect("delta review input");
+        let delta_context = delta.concat();
+        if window == 160_000 {
+            assert!(delta_context.contains(&followup));
+        } else {
+            assert!(delta_context.contains("<truncated omitted_approx_tokens="));
+            assert!(
+                delta_context.contains(
+                    "User instructions and prior approvals may be incomplete where marked."
+                )
+            );
+        }
+        let approval_start = delta_context
+            .find(&approval)
+            .expect("complete prior approval");
+        let restriction_start = delta_context.find(restriction).expect("later restriction");
+        assert!(approval_start + approval.len() < restriction_start);
+        assert!(
+            !delta_context.contains(&initial),
+            "old entries are not resent"
+        );
+        assert_eq!(
+            reviews[0].body_json()["client_metadata"]["thread_id"],
+            review.body_json()["client_metadata"]["thread_id"]
+        );
+    }
+    assert!(
+        requests
+            .last()
+            .expect("parent resumes after review")
+            .function_call_output(&format!("exec-{}", reviews.len() - 1))
+            .to_string()
+            .contains("complete-instructions")
+    );
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
 
 #[derive(Clone, Copy)]
 enum ReviewerResponse {

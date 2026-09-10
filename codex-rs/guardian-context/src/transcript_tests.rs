@@ -41,7 +41,10 @@ fn entry(kind: ConversationTranscriptEntryKind, text: &str) -> ConversationTrans
 
 #[test]
 fn registered_transcript_preserves_shared_roles_and_node_repl_tool_attribution() {
-    let approved_action = format!("{MANUAL_APPROVAL_DEVELOPER_PREFIX}\nApproved action: {{}}");
+    let approved_action = format!(
+        "{MANUAL_APPROVAL_DEVELOPER_PREFIX}\nApproved action: {}",
+        "exact action ".repeat(/*n*/ 1_000)
+    );
     let history = vec![
         ResponseItem::Message {
             id: None,
@@ -340,7 +343,7 @@ fn reused_registry_applies_current_history_sources_and_entry_limits() {
             transcript_items(&sections[0]),
             vec![ConversationTranscriptEntry {
                 kind: ConversationTranscriptEntryKind::User,
-                text: truncate_text(&text, message_tokens),
+                text: text.clone(),
                 original_bytes: text.len(),
             }]
         );
@@ -377,7 +380,7 @@ fn reused_registry_applies_current_history_sources_and_entry_limits() {
             .expect("transcript collection should succeed");
         let mut expected = vec![ConversationTranscriptEntry {
             kind: ConversationTranscriptEntryKind::User,
-            text: truncate_text(&text, /*max_tokens*/ 60),
+            text: text.clone(),
             original_bytes: text.len(),
         }];
         if include_tool_calls {

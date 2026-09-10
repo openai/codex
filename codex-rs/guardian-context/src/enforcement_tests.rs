@@ -13,6 +13,86 @@ fn text(value: &str) -> ContentItem {
 }
 
 #[test]
+fn recovery_shortens_older_history_only_after_optional_evidence() {
+    let older = format!("[1] user: {}original suffix", "é🙂\"\n".repeat(/*n*/ 6_000));
+    let commentary = text(&"optional commentary ".repeat(/*n*/ 1_000));
+    let approval = text("[3] developer: user approved this action");
+    let restriction = text("[4] user: only modify scratch files");
+    let action = text("complete action");
+    let notice = SectionOutput {
+        id: "budget_omission",
+        delivery: SectionDelivery::UserContent(vec![Budgeted::required(text(
+            "evidence omitted or shortened",
+        ))]),
+    };
+    let context = ComposedContext {
+        sections: vec![SectionOutput {
+            id: "conversation_transcript",
+            delivery: SectionDelivery::UserContent(vec![
+                Budgeted::historical(text(&older)),
+                Budgeted::optional(commentary.clone(), BudgetPriority::Commentary),
+                Budgeted::historical(approval.clone()),
+                Budgeted::historical(restriction.clone()),
+                Budgeted::required(action.clone()),
+            ]),
+        }],
+        truncations: Vec::new(),
+    };
+    for reduction in [0, 4_000] {
+        let available = context.estimated_tokens() - content_tokens(&commentary)
+            + section_tokens(&notice)
+            - reduction;
+        let budget = RequestBudget {
+            max_input_tokens: available + 2_000,
+            existing_context_tokens: 2_000,
+        };
+        if reduction > 0 {
+            assert!(
+                context
+                    .clone()
+                    .enforce_budget(
+                        budget,
+                        "evidence omitted or shortened".to_owned(),
+                        HistoryTruncation::Preserve
+                    )
+                    .is_err()
+            );
+        }
+        let selected = context
+            .clone()
+            .enforce_budget(
+                budget,
+                "evidence omitted or shortened".to_owned(),
+                HistoryTruncation::Allow,
+            )
+            .unwrap();
+        assert!(selected.estimated_tokens() <= available);
+        let SectionDelivery::UserContent(content) = &selected.sections[0].delivery else {
+            panic!("expected user evidence")
+        };
+        let ContentItem::InputText { text: retained } = &content[0].content else {
+            panic!("expected historical text")
+        };
+        if reduction == 0 {
+            assert_eq!(retained, &older);
+        } else {
+            assert!(retained.starts_with("[1] user: "));
+            assert!(retained.ends_with("original suffix"));
+            assert!(retained.contains("<truncated omitted_approx_tokens="));
+        }
+        assert_eq!(
+            content,
+            &vec![
+                Budgeted::historical(text(retained)),
+                Budgeted::historical(approval.clone()),
+                Budgeted::historical(restriction.clone()),
+                Budgeted::required(action.clone()),
+            ]
+        );
+    }
+}
+
+#[test]
 fn planned_action_budget_omits_descriptions_without_changing_arguments() {
     let action = crate::PlannedAction {
         json: r#"{"tool":"write_record","arguments":{"description":"required payload"}}"#
@@ -46,6 +126,7 @@ fn planned_action_budget_omits_descriptions_without_changing_arguments() {
                 existing_context_tokens: 0,
             },
             "evidence omitted".to_owned(),
+            HistoryTruncation::Preserve,
         )
         .unwrap();
     // The sync preamble is also required and remains ahead of the action.
@@ -115,6 +196,7 @@ fn budget_reserves_existing_context_and_preserves_required_messages() {
                 existing_context_tokens: 2_000,
             },
             "evidence omitted".to_owned(),
+            HistoryTruncation::Preserve,
         )
         .unwrap();
     assert!(context.estimated_tokens() <= available);
@@ -137,6 +219,7 @@ fn budget_reserves_existing_context_and_preserves_required_messages() {
                 existing_context_tokens: 0,
             },
             "evidence omitted".to_owned(),
+            HistoryTruncation::Preserve,
         )
         .unwrap();
     assert_eq!(
@@ -177,6 +260,7 @@ fn image_omission_preserves_text_and_later_eviction_policy() {
                 existing_context_tokens: 0,
             },
             "evidence omitted".to_owned(),
+            HistoryTruncation::Preserve,
         )
         .unwrap();
     assert_eq!(
@@ -197,6 +281,7 @@ fn image_omission_preserves_text_and_later_eviction_policy() {
                 existing_context_tokens: 0,
             },
             "evidence omitted".to_owned(),
+            HistoryTruncation::Preserve,
         )
         .unwrap();
     assert_eq!(
@@ -210,6 +295,7 @@ fn image_omission_preserves_text_and_later_eviction_policy() {
                 existing_context_tokens: 0,
             },
             "evidence omitted".to_owned(),
+            HistoryTruncation::Preserve,
         )
         .unwrap();
     assert_eq!(
@@ -261,6 +347,7 @@ fn image_omission_preserves_text_and_later_eviction_policy() {
                 existing_context_tokens: 0,
             },
             "evidence omitted".to_owned(),
+            HistoryTruncation::Preserve,
         )
         .unwrap();
         assert_eq!(

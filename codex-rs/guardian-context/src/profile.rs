@@ -1,6 +1,8 @@
 //! Resolved Guardian evidence profiles and pure transcript retention.
 //! Sync keeps recent entries; async protects approvals/final answers and evicts
 //! in cacheable chunks. Hosts still own history snapshots and delivery cursors.
+//! User messages and manual approvals stay complete until whole-request admission.
+//! They may be shortened with explicit markers only during budget recovery.
 
 use codex_protocol::protocol::TruncationPolicy;
 
@@ -16,8 +18,6 @@ use crate::Retention;
 use crate::TranscriptEntryLimits;
 use crate::TranscriptRetentionConfig;
 use crate::TruncationObservation;
-use crate::UserMessageCost;
-use crate::select_user_messages;
 
 use self::window::TranscriptWindow;
 mod window;
@@ -37,6 +37,7 @@ pub struct ContextProfile {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TranscriptEntryKind {
     User,
+    ManualApproval,
     ProtectedMessage,
     Message,
     Tool,
@@ -115,8 +116,10 @@ impl ContextProfile {
             .map(|(index, entry)| {
                 let kind = match &entry.kind {
                     ConversationTranscriptEntryKind::User => TranscriptEntryKind::User,
-                    ConversationTranscriptEntryKind::Developer
-                    | ConversationTranscriptEntryKind::ProtectedAssistant => {
+                    ConversationTranscriptEntryKind::Developer => {
+                        TranscriptEntryKind::ManualApproval
+                    }
+                    ConversationTranscriptEntryKind::ProtectedAssistant => {
                         TranscriptEntryKind::ProtectedMessage
                     }
                     ConversationTranscriptEntryKind::Assistant
@@ -143,30 +146,27 @@ impl ContextProfile {
                 }
             })
             .collect::<Vec<_>>();
-        let user_messages = entries
-            .iter()
-            .enumerate()
-            .filter_map(|(index, entry)| {
-                (entry.kind == TranscriptEntryKind::User).then_some(UserMessageCost {
-                    index,
-                    tokens: entry.tokens,
-                })
-            })
-            .collect::<Vec<_>>();
-        let selection =
-            select_user_messages(&user_messages, self.retention.max_message_transcript_tokens);
         let mut included = vec![false; entries.len()];
-        for index in selection.indices {
-            included[index] = true;
+        let mut authorization_tokens = 0usize;
+        for (index, entry) in entries.iter().enumerate() {
+            if matches!(
+                entry.kind,
+                TranscriptEntryKind::User | TranscriptEntryKind::ManualApproval
+            ) {
+                included[index] = true;
+                authorization_tokens = authorization_tokens.saturating_add(entry.tokens);
+            }
         }
         match self.target {
             ContextTarget::Sync => {
-                let mut message_tokens = selection.tokens;
+                let mut message_tokens = authorization_tokens;
                 let mut tool_tokens = 0usize;
                 let mut retained_non_user_entries = 0;
                 for (index, entry) in entries.iter().enumerate().rev() {
-                    if entry.kind == TranscriptEntryKind::User
-                        || retained_non_user_entries >= self.retention.max_recent_non_user_entries
+                    if matches!(
+                        entry.kind,
+                        TranscriptEntryKind::User | TranscriptEntryKind::ManualApproval
+                    ) || retained_non_user_entries >= self.retention.max_recent_non_user_entries
                     {
                         continue;
                     }
@@ -189,7 +189,7 @@ impl ContextProfile {
                 let available = self
                     .retention
                     .max_message_transcript_tokens
-                    .saturating_sub(selection.tokens);
+                    .saturating_sub(authorization_tokens);
                 let mut window = TranscriptWindow::new(&entries, &self.retention, available);
                 for index in 0..entries.len() {
                     window.insert(index);
@@ -209,9 +209,9 @@ impl ContextProfile {
             .filter_map(|(index, entry)| {
                 let component = match entry.kind {
                     TranscriptEntryKind::User => "transcript_user",
-                    TranscriptEntryKind::ProtectedMessage | TranscriptEntryKind::Message => {
-                        "transcript_message"
-                    }
+                    TranscriptEntryKind::ManualApproval
+                    | TranscriptEntryKind::ProtectedMessage
+                    | TranscriptEntryKind::Message => "transcript_message",
                     TranscriptEntryKind::Tool => "transcript_tool",
                 };
                 let retained_bytes = if included[index] {
@@ -228,9 +228,10 @@ impl ContextProfile {
                 }
                 if included[index] {
                     Some(match entry.kind {
-                        TranscriptEntryKind::User | TranscriptEntryKind::ProtectedMessage => {
-                            Budgeted::required(entry.text)
+                        TranscriptEntryKind::User | TranscriptEntryKind::ManualApproval => {
+                            Budgeted::historical(entry.text)
                         }
+                        TranscriptEntryKind::ProtectedMessage => Budgeted::required(entry.text),
                         TranscriptEntryKind::Message => {
                             Budgeted::optional(entry.text, BudgetPriority::Commentary)
                         }

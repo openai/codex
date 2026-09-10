@@ -222,7 +222,7 @@ fn transcript_keeps_conversation_and_configured_sources() {
 }
 
 #[test]
-fn transcript_truncates_oversized_entries_without_splitting_characters() {
+fn transcript_truncates_oversized_assistant_entries_without_splitting_characters() {
     let prefix = "start é";
     let suffix = "é end";
     let oversized_message = format!(
@@ -231,24 +231,8 @@ fn transcript_truncates_oversized_entries_without_splitting_characters() {
     );
     let original_bytes = oversized_message.len();
     let items = vec![
-        ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: oversized_message,
-            }],
-            phase: None,
-            internal_chat_message_metadata_passthrough: None,
-        },
-        ResponseItem::Message {
-            id: None,
-            role: "assistant".to_string(),
-            content: vec![ContentItem::OutputText {
-                text: "latest response".to_string(),
-            }],
-            phase: None,
-            internal_chat_message_metadata_passthrough: None,
-        },
+        assistant_message(oversized_message, MessagePhase::FinalAnswer),
+        assistant_message("latest response", MessagePhase::FinalAnswer),
     ];
 
     let mut rendered = TranscriptConfig::default()
@@ -268,14 +252,14 @@ fn transcript_truncates_oversized_entries_without_splitting_characters() {
     let transcript = rendered.transcript_entries();
 
     assert_eq!(transcript.len(), 2);
-    let user_entry = &transcript[0];
-    assert!(user_entry.starts_with(&format!("[1] user: {prefix}")));
-    assert!(user_entry.contains("<truncated omitted_approx_tokens=\""));
-    assert!(user_entry.ends_with(&format!("{suffix}\n")));
+    let entry = &transcript[0];
+    assert!(entry.starts_with(&format!("[1] assistant: {prefix}")));
+    assert!(entry.contains("<truncated omitted_approx_tokens=\""));
+    assert!(entry.ends_with(&format!("{suffix}\n")));
     assert!(
-        user_entry.len()
+        entry.len()
             <= TruncationPolicy::Tokens(MAX_MESSAGE_ENTRY_TOKENS).byte_budget()
-                + "[1] user: \n".len()
+                + "[1] assistant: \n".len()
     );
     assert_eq!(transcript[1], "[2] assistant: latest response\n");
     assert_eq!(
@@ -288,78 +272,10 @@ fn transcript_truncates_oversized_entries_without_splitting_characters() {
             ))
             .collect::<Vec<_>>(),
         vec![(
-            "transcript_user",
+            "transcript_message",
             original_bytes,
-            user_entry.len() - "[1] user: \n".len()
+            entry.len() - "[1] assistant: \n".len()
         )]
-    );
-}
-
-#[test]
-fn transcript_preserves_first_and_latest_user_messages_and_recent_history() {
-    let oversized_user_message = "authorization ".repeat(1_000);
-    let mut items = (0..8)
-        .map(|index| ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: format!("user turn {index}: {oversized_user_message}"),
-            }],
-            phase: None,
-            internal_chat_message_metadata_passthrough: None,
-        })
-        .collect::<Vec<_>>();
-    items.push(ResponseItem::Message {
-        id: None,
-        role: "assistant".to_string(),
-        content: vec![ContentItem::OutputText {
-            text: "Most recent assistant context.".to_string(),
-        }],
-        phase: None,
-        internal_chat_message_metadata_passthrough: None,
-    });
-
-    let transcript = TranscriptConfig::default()
-        .build_context(ContextInput {
-            target: ContextTarget::Async,
-            history: &TestConversationHistory(&items),
-            root_conversation: &[],
-            trusted_user_answers: &[],
-            planned_action: None,
-            previous_reviews: None,
-            trusted_tool: None,
-            trusted_skill_paths: &[],
-            node_repl_images: None,
-        })
-        .expect("collect transcript")
-        .transcript_entries();
-
-    assert!(transcript[0].starts_with("[1] user: user turn 0:"));
-    assert!(
-        transcript
-            .iter()
-            .any(|entry| entry.starts_with("[8] user: user turn 7:"))
-    );
-    assert!(
-        !transcript
-            .iter()
-            .any(|entry| entry.contains("user turn 1:"))
-    );
-    assert!(
-        transcript
-            .iter()
-            .any(|entry| entry.contains("user turn 6:"))
-    );
-    assert_eq!(
-        transcript.last().map(String::as_str),
-        Some("[9] assistant: Most recent assistant context.\n")
-    );
-    assert!(
-        transcript
-            .iter()
-            .map(|entry| TruncationPolicy::Bytes(entry.len()).token_budget())
-            .sum::<usize>()
-            <= MAX_MESSAGE_TRANSCRIPT_TOKENS
     );
 }
 
@@ -1190,62 +1106,52 @@ fn transcript_preserves_outputs_with_call_ids_or_explicit_names() {
 
 #[test]
 fn configured_reasoning_counts_against_message_budget() {
-    let mut items = (0..8)
-        .map(|index| ResponseItem::Message {
+    for (repeats, include_reasoning) in [(200, true), (1_000, false)] {
+        let mut expected = Vec::new();
+        let mut items = (0..8)
+            .map(|index| {
+                let text = format!("user turn {index}: {}", "authorization ".repeat(repeats));
+                expected.push(format!("[{}] user: {text}\n", index + 1));
+                ResponseItem::Message {
+                    id: None,
+                    role: "user".to_string(),
+                    content: vec![ContentItem::InputText { text }],
+                    phase: None,
+                    internal_chat_message_metadata_passthrough: None,
+                }
+            })
+            .collect::<Vec<_>>();
+        items.push(ResponseItem::Reasoning {
             id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: format!("user turn {index}: {}", "authorization ".repeat(1_000)),
+            summary: vec![ReasoningItemReasoningSummary::SummaryText {
+                text: "Recent reasoning evidence.".to_string(),
             }],
-            phase: None,
+            content: None,
+            encrypted_content: None,
             internal_chat_message_metadata_passthrough: None,
+        });
+        if include_reasoning {
+            expected.push("[9] reasoning: Recent reasoning evidence.\n".to_owned());
+        }
+        let transcript = TranscriptConfig {
+            sources: vec![TranscriptSource::Reasoning],
+            ..TranscriptConfig::default()
+        }
+        .build_context(ContextInput {
+            target: ContextTarget::Async,
+            history: &TestConversationHistory(&items),
+            root_conversation: &[],
+            trusted_user_answers: &[],
+            planned_action: None,
+            previous_reviews: None,
+            trusted_tool: None,
+            trusted_skill_paths: &[],
+            node_repl_images: None,
         })
-        .collect::<Vec<_>>();
-    items.push(ResponseItem::Reasoning {
-        id: None,
-        summary: vec![ReasoningItemReasoningSummary::SummaryText {
-            text: "Recent reasoning evidence.".to_string(),
-        }],
-        content: None,
-        encrypted_content: None,
-        internal_chat_message_metadata_passthrough: None,
-    });
-
-    let transcript = TranscriptConfig {
-        sources: vec![TranscriptSource::Reasoning],
-        ..TranscriptConfig::default()
+        .expect("collect transcript")
+        .transcript_entries();
+        assert_eq!(transcript, expected);
     }
-    .build_context(ContextInput {
-        target: ContextTarget::Async,
-        history: &TestConversationHistory(&items),
-        root_conversation: &[],
-        trusted_user_answers: &[],
-        planned_action: None,
-        previous_reviews: None,
-        trusted_tool: None,
-        trusted_skill_paths: &[],
-        node_repl_images: None,
-    })
-    .expect("collect transcript")
-    .transcript_entries();
-
-    assert!(transcript[0].contains("user turn 0:"));
-    assert!(
-        transcript
-            .iter()
-            .any(|entry| entry.contains("user turn 7:"))
-    );
-    assert_eq!(
-        transcript.last().map(String::as_str),
-        Some("[9] reasoning: Recent reasoning evidence.\n")
-    );
-    assert!(
-        transcript
-            .iter()
-            .map(|entry| TruncationPolicy::Bytes(entry.len()).token_budget())
-            .sum::<usize>()
-            <= MAX_MESSAGE_TRANSCRIPT_TOKENS
-    );
 }
 
 #[test]
