@@ -654,6 +654,15 @@ class CodexClient:
         params: V2TurnStartParams | JsonObject | None = None,
     ) -> TurnStartResponse:
         """Start a turn and register its notification queue as early as possible."""
+        return self._start_turn(thread_id, input_items, params, for_handle=False)[0]
+
+    def _start_turn(
+        self,
+        thread_id: str,
+        input_items: list[JsonObject] | JsonObject | str,
+        params: V2TurnStartParams | JsonObject | None,
+        for_handle: bool,
+    ) -> tuple[TurnStartResponse, _TurnSubscription | None]:
         with self._thread_start_lock(thread_id):
             if self._router.has_goal(thread_id):
                 raise InvalidRequestError(
@@ -665,10 +674,12 @@ class CodexClient:
                 "threadId": thread_id,
                 "input": self._normalize_input_items(input_items),
             }
-            with self._router.pending_turn(thread_id):
+            with self._router.pending_turn(thread_id) as cursors:
                 started = self.request("turn/start", payload, response_model=TurnStartResponse)
-                self._router.prepare_turn(started.turn.id, thread_id)
-                return started
+                subscription = self._router.prepare_turn(
+                    started.turn.id, thread_id, cursors, for_handle=for_handle
+                )
+                return started, subscription
 
     @contextmanager
     def _thread_start_lock(self, thread_id: str) -> Iterator[None]:

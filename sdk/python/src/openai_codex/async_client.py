@@ -296,19 +296,31 @@ class AsyncCodexClient:
         params: V2TurnStartParams | JsonObject | None = None,
     ) -> TurnStartResponse:
         """Start a turn, releasing an unclaimed result if the caller is cancelled."""
+        return (await self._start_turn(thread_id, input_items, params, for_handle=False))[0]
+
+    async def _start_turn(
+        self,
+        thread_id: str,
+        input_items: list[JsonObject] | JsonObject | str,
+        params: V2TurnStartParams | JsonObject | None,
+        for_handle: bool,
+    ) -> tuple[TurnStartResponse, _TurnSubscription | None]:
         operation = _TURN_START_EXECUTOR.submit(
-            copy_context().run, self._sync.turn_start, thread_id, input_items, params
+            copy_context().run, self._sync._start_turn, thread_id, input_items, params, for_handle
         )
         try:
             return await asyncio.wrap_future(operation)
         except asyncio.CancelledError:
 
-            def discard_cancelled_result(completed: Future[TurnStartResponse]) -> None:
+            def discard_cancelled_result(
+                completed: Future[tuple[TurnStartResponse, _TurnSubscription | None]],
+            ) -> None:
                 try:
-                    started = completed.result()
+                    _, subscription = completed.result()
                 except BaseException:
                     return
-                self._sync._subscribe_turn_notifications(started.turn.id).close()
+                if subscription is not None:
+                    subscription.close()
 
             operation.add_done_callback(discard_cancelled_result)
             raise

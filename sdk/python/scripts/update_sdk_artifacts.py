@@ -1294,8 +1294,8 @@ def _render_thread_block(turn_fields: list[PublicFieldSpec], *, is_async: bool =
         *_approval_mode_model_arg_lines(),
         *_model_arg_lines(turn_fields),
         "        )",
-        f"        turn = {await_prefix}{client}.turn_start(self.id, wire_input, params=params)",
-        f"        return {handle_type}({handle_owner}, self.id, turn.turn.id)",
+        f"        turn, subscription = {await_prefix}{client}._start_turn(self.id, wire_input, params=params, for_handle=True)",
+        f"        return {handle_type}({handle_owner}, self.id, turn.turn.id, _subscription=subscription)",
     ]
     return "\n".join(lines)
 

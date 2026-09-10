@@ -82,7 +82,10 @@ def test_external_message_joins_active_turn_with_tool_authority(tmp_path) -> Non
                 harness.responses.wait_for_requests(1)
                 joined = thread.turn(ExternalMessage(tool_name="notifications", content=content))
                 result = consumers.submit(joined.run).result(timeout=15)
-                assert original_result.result(timeout=15) == result
+                first = original_result.result(timeout=15)
+                assert first.final_response == result.final_response
+                assert first.items[0].root.type == "userMessage"
+                assert all(item.root.type != "userMessage" for item in result.items)
                 assert codex._client._router._turn_states == {}
         requests = harness.responses.requests()
 
@@ -151,7 +154,7 @@ def test_async_external_message_allows_both_handles_to_consume(tmp_path) -> None
                 first, second = await asyncio.wait_for(
                     asyncio.gather(original_result, joined.run()), timeout=15
                 )
-                assert first == second
+                assert (first.final_response, first.usage) == (second.final_response, second.usage)
                 assert first.final_response == "Update processed"
                 assert first.usage is not None
                 assert codex._client._sync._router._turn_states == {}

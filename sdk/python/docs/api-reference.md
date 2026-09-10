@@ -233,6 +233,9 @@ passed to `run(...)` or `turn(...)` applies to that turn and subsequent turns.
 
 ## TurnHandle / AsyncTurnHandle
 
+A `thread.turn(...)` handle receives events from when the call sends its request.
+Other handles start when they join; use `thread.read(include_turns=True)` for earlier history.
+
 ### TurnHandle
 
 - `steer(input: str | Input) -> TurnSteerResponse`

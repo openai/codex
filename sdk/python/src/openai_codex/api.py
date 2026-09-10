@@ -649,8 +649,10 @@ class Thread:
             summary=summary,
             service_tier_for_turn=turn_service_tier,
         )
-        turn = self._client.turn_start(self.id, wire_input, params=params)
-        return TurnHandle(self._client, self.id, turn.turn.id)
+        turn, subscription = self._client._start_turn(
+            self.id, wire_input, params=params, for_handle=True
+        )
+        return TurnHandle(self._client, self.id, turn.turn.id, _subscription=subscription)
 
     # END GENERATED: Thread.flat_methods
 
@@ -754,8 +756,10 @@ class AsyncThread:
             summary=summary,
             service_tier_for_turn=turn_service_tier,
         )
-        turn = await self._codex._client.turn_start(self.id, wire_input, params=params)
-        return AsyncTurnHandle(self._codex, self.id, turn.turn.id)
+        turn, subscription = await self._codex._client._start_turn(
+            self.id, wire_input, params=params, for_handle=True
+        )
+        return AsyncTurnHandle(self._codex, self.id, turn.turn.id, _subscription=subscription)
 
     # END GENERATED: AsyncThread.flat_methods
 
@@ -781,6 +785,15 @@ class TurnHandle:
     thread_id: str
     id: str
     _subscription: _TurnSubscription = field(init=False, repr=False, compare=False)
+
+    def __init__(
+        self, _client: CodexClient, thread_id: str, id: str, *, _subscription=None
+    ) -> None:
+        self._client, self.thread_id, self.id = _client, thread_id, id
+        if _subscription is None:
+            self.__post_init__()
+        else:
+            self._subscription = _subscription
 
     def __post_init__(self) -> None:
         self._subscription = self._client._subscribe_turn_notifications(self.id)
@@ -829,6 +842,13 @@ class AsyncTurnHandle:
     thread_id: str
     id: str
     _subscription: _TurnSubscription = field(init=False, repr=False, compare=False)
+
+    def __init__(self, _codex: AsyncCodex, thread_id: str, id: str, *, _subscription=None) -> None:
+        self._codex, self.thread_id, self.id = _codex, thread_id, id
+        if _subscription is None:
+            self.__post_init__()
+        else:
+            self._subscription = _subscription
 
     def __post_init__(self) -> None:
         self._subscription = self._codex._client._subscribe_turn_notifications(self.id)

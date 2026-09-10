@@ -617,9 +617,10 @@ def test_client_reader_routes_interleaved_turn_notifications_by_turn_id() -> Non
     )
 
 
-def test_turn_notification_router_buffers_events_before_registration() -> None:
-    """Early turn events should be replayed once their TurnHandle registers."""
+def test_turn_notification_router_starts_at_explicit_registration() -> None:
+    """Explicit registration receives events from when the caller attaches."""
     client = CodexClient()
+    client.register_turn_notifications("turn-1")
     client._router.route_notification(
         client._coerce_notification(
             "item/agentMessage/delta",
@@ -632,7 +633,6 @@ def test_turn_notification_router_buffers_events_before_registration() -> None:
         )
     )
 
-    client.register_turn_notifications("turn-1")
     event = client.next_turn_notification("turn-1")
 
     assert isinstance(event.payload, AgentMessageDeltaNotification)

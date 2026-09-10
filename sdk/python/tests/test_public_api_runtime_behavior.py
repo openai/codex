@@ -191,10 +191,10 @@ def test_turn_inputs_and_options_reach_the_client(api_type, method, content) -> 
                 }
             ),
         )
+        subscription = SimpleNamespace(next=Mock(return_value=completed), close=Mock())
         client = SimpleNamespace(
-            turn_start=rpc(return_value=SimpleNamespace(turn=SimpleNamespace(id="turn-1"))),
-            _subscribe_turn_notifications=Mock(
-                return_value=SimpleNamespace(next=Mock(return_value=completed), close=Mock())
+            _start_turn=rpc(
+                return_value=(SimpleNamespace(turn=SimpleNamespace(id="turn-1")), subscription)
             ),
         )
         codex = api_type.__new__(api_type)
@@ -229,7 +229,7 @@ def test_turn_inputs_and_options_reach_the_client(api_type, method, content) -> 
                 "toolOutput": {"name": "notifications", "namespace": "slack", "output": content},
             }
         )
-        assert _params_dict(client.turn_start.call_args.kwargs["params"]) == {
+        assert _params_dict(client._start_turn.call_args.kwargs["params"]) == {
             "threadId": "thread-1",
             "input": expected_input,
             "serviceTier": "priority",
@@ -249,7 +249,7 @@ def test_external_messages_cannot_be_mixed_with_user_input_or_sent_as_user_steer
         async_api = api_type is AsyncCodex
         rpc = AsyncMock if async_api else Mock
         client = SimpleNamespace(
-            turn_start=rpc(), turn_steer=rpc(), _subscribe_turn_notifications=Mock()
+            _start_turn=rpc(), turn_steer=rpc(), _subscribe_turn_notifications=Mock()
         )
         codex = api_type.__new__(api_type)
         codex._client = client
@@ -277,7 +277,7 @@ def test_external_messages_cannot_be_mixed_with_user_input_or_sent_as_user_steer
             result = thread.turn(ExternalMessage(tool_name="  ", content="Untrusted update"))
             if async_api:
                 await result
-        client.turn_start.assert_not_called()
+        client._start_turn.assert_not_called()
         client.turn_steer.assert_not_called()
 
     asyncio.run(scenario())

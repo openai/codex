@@ -11,11 +11,7 @@ from typing import Iterator
 from ._goal import _GoalOperationState
 from .errors import CodexError, TransportClosedError, map_jsonrpc_error
 from .generated.notification_registry import notification_turn_id
-from .generated.v2_all import (
-    AccountLoginCompletedNotification,
-    ItemCompletedNotification,
-    ThreadTokenUsageUpdatedNotification,
-)
+from .generated.v2_all import AccountLoginCompletedNotification
 from .models import JsonValue, Notification, UnknownNotification
 
 ResponseQueueItem = JsonValue | BaseException
@@ -30,29 +26,18 @@ class _TurnState:
     first_event: int = 0
     next_event: int = 0
     subscribers: dict[object, int] = field(default_factory=dict)
-    subscribed: bool = False
-    completed_items: dict[str, Notification] = field(default_factory=dict)
-    usage: Notification | None = None
-    terminal: NotificationQueueItem | None = None
-    unclaimed: int = 0
     completed: bool = False
 
 
 class _TurnSubscription:
-    """One consumer's result snapshot and cursor over shared unread events."""
+    """One consumer's cursor over shared unread events."""
 
-    def __init__(self, router: MessageRouter, state: _TurnState) -> None:
+    def __init__(self, router: MessageRouter, state: _TurnState, cursor: int) -> None:
         self._router = router
         self._state = state
-        self._cursor = state.first_event
+        self._cursor = cursor
         self._token = object()
         state.subscribers[self._token] = self._cursor
-        state.subscribed = True
-        self._replay: deque[NotificationQueueItem] = deque(state.completed_items.values())
-        if state.usage is not None:
-            self._replay.append(state.usage)
-        if state.terminal is not None:
-            self._replay.append(state.terminal)
         self._closed = False
         self._release = weakref.finalize(
             self, router._release_turn, weakref.ref(router), state, self._token
@@ -60,17 +45,16 @@ class _TurnSubscription:
 
     def next(self) -> Notification:
         with self._router._turn_condition:
-            while not self._replay and self._cursor == self._state.next_event and not self._closed:
+            while self._cursor == self._state.next_event and not self._closed:
+                if self._state.completed:
+                    raise TransportClosedError("Turn is no longer streaming")
                 self._router._turn_condition.wait()
             if self._closed:
                 raise TransportClosedError("Turn subscription closed")
-            if self._replay:
-                item = self._replay.popleft()
-            else:
-                item = self._state.events[self._cursor]
-                self._cursor += 1
-                self._state.subscribers[self._token] = self._cursor
-                self._router._prune_turn_events(self._state)
+            item = self._state.events[self._cursor]
+            self._cursor += 1
+            self._state.subscribers[self._token] = self._cursor
+            self._router._prune_turn_events(self._state)
         if isinstance(item, BaseException):
             raise item
         return item
@@ -78,7 +62,6 @@ class _TurnSubscription:
     def close(self) -> None:
         with self._router._turn_condition:
             self._closed = True
-            self._replay.clear()
             self._router._turn_condition.notify_all()
         self._release()
 
@@ -101,8 +84,8 @@ class MessageRouter:
         self._pending_login_notifications: dict[str, deque[Notification]] = {}
         self._turn_condition = threading.Condition(self._lock)
         self._turn_states: dict[str, _TurnState] = {}
-        self._turn_notifications: dict[str, _TurnSubscription | None] = {}
-        self._pending_turn_requests: dict[str, int] = {}
+        self._turn_notifications: dict[str, _TurnSubscription] = {}
+        self._pending_turn_requests: dict[str, BaseException | None] = {}
         self._goal_operations: dict[str, _GoalOperationState] = {}
         self._global_notifications: queue.Queue[NotificationQueueItem] = queue.Queue()
 
@@ -159,41 +142,43 @@ class MessageRouter:
         return item
 
     @contextmanager
-    def pending_turn(self, thread_id: str) -> Iterator[None]:
-        """Retain early completion while a turn/start response is in flight."""
+    def pending_turn(self, thread_id: str) -> Iterator[dict[str, int]]:
+        """Buffer events from the point a turn/start request is sent."""
         with self._lock:
-            self._pending_turn_requests[thread_id] = (
-                self._pending_turn_requests.get(thread_id, 0) + 1
-            )
+            cursors = {turn_id: state.next_event for turn_id, state in self._turn_states.items()}
+            self._pending_turn_requests[thread_id] = None
         try:
-            yield
+            yield cursors
         finally:
             with self._lock:
-                self._pending_turn_requests[thread_id] -= 1
-                if self._pending_turn_requests[thread_id] == 0:
-                    del self._pending_turn_requests[thread_id]
+                del self._pending_turn_requests[thread_id]
                 for state in list(self._turn_states.values()):
-                    if state.thread_id == thread_id:
+                    if state.thread_id in (None, thread_id):
                         self._prune_turn_events(state)
-                        self._discard_finished_turn(state)
 
-    def prepare_turn(self, turn_id: str, thread_id: str) -> None:
-        """Reserve the returned turn for a handle or a low-level consumer."""
+    def prepare_turn(
+        self, turn_id: str, thread_id: str, cursors: dict[str, int], *, for_handle: bool
+    ) -> _TurnSubscription | None:
+        """Attach the requesting handle or the single low-level consumer."""
         with self._lock:
             state = self._turn_states.setdefault(turn_id, _TurnState(turn_id, thread_id))
             state.thread_id = thread_id
-            state.unclaimed += 1
-            self._turn_notifications.setdefault(turn_id, None)
-
-    def _subscribe_turn_locked(self, turn_id: str) -> _TurnSubscription:
-        state = self._turn_states.setdefault(turn_id, _TurnState(turn_id))
-        state.unclaimed = max(0, state.unclaimed - 1)
-        return _TurnSubscription(self, state)
+            if not for_handle and turn_id in self._turn_notifications:
+                return None
+            if not state.completed and (err := self._pending_turn_requests[thread_id]) is not None:
+                state.events[state.next_event] = err
+                state.next_event += 1
+                state.completed = True
+            subscription = _TurnSubscription(self, state, cursors.get(turn_id, 0))
+            if not for_handle:
+                self._turn_notifications[turn_id] = subscription
+            return subscription
 
     def subscribe_turn(self, turn_id: str) -> _TurnSubscription:
-        """Attach a consumer with completed items, latest usage, and unread events."""
+        """Attach a consumer starting at the next event for this turn."""
         with self._lock:
-            return self._subscribe_turn_locked(turn_id)
+            state = self._turn_states.setdefault(turn_id, _TurnState(turn_id))
+            return _TurnSubscription(self, state, state.next_event)
 
     @staticmethod
     def _release_turn(
@@ -202,74 +187,42 @@ class MessageRouter:
         router = router_ref()
         if router is not None:
             with router._lock:
+                default = router._turn_notifications.get(state.id)
+                if default is not None and default._token is token:
+                    del router._turn_notifications[state.id]
                 state.subscribers.pop(token, None)
                 router._prune_turn_events(state)
-                router._discard_finished_turn(state)
 
     def _prune_turn_events(self, state: _TurnState) -> None:
-        if (
-            not state.subscribed
-            or state.unclaimed
-            or self._pending_turn_requests.get(state.thread_id, 0)
+        if state.thread_id in self._pending_turn_requests or (
+            state.thread_id is None and self._pending_turn_requests
         ):
             return
         consumed = min(state.subscribers.values(), default=state.next_event)
         while state.first_event < consumed:
-            event = state.events.pop(state.first_event)
+            del state.events[state.first_event]
             state.first_event += 1
-            # Late joins need the completed result, not every consumed token delta
-            # or intermediate usage update. Keep one snapshot entry per item.
-            if isinstance(event, BaseException) or event.method == "turn/completed":
-                state.terminal = event
-            elif isinstance(event.payload, ItemCompletedNotification):
-                item = event.payload.item
-                state.completed_items[getattr(item, "root", item).id] = event
-            elif isinstance(event.payload, ThreadTokenUsageUpdatedNotification):
-                state.usage = event
-
-    def _discard_finished_turn(self, state: _TurnState) -> None:
-        if (
-            state.completed
-            and not state.subscribers
-            and not state.unclaimed
-            and not self._pending_turn_requests.get(state.thread_id, 0)
-        ):
-            self._turn_states.pop(state.id, None)
-            if self._turn_notifications.get(state.id) is None:
-                self._turn_notifications.pop(state.id, None)
-            state.events.clear()
-            state.completed_items.clear()
-            state.usage = None
-            state.terminal = None
+        if not state.subscribers and self._turn_states.get(state.id) is state:
+            del self._turn_states[state.id]
 
     def register_turn(self, turn_id: str) -> None:
         """Register the default consumer used by the low-level client API."""
         with self._lock:
-            if self._turn_notifications.get(turn_id) is None:
-                self._turn_notifications[turn_id] = self._subscribe_turn_locked(turn_id)
+            if turn_id not in self._turn_notifications:
+                self._turn_notifications[turn_id] = self.subscribe_turn(turn_id)
 
     def unregister_turn(self, turn_id: str) -> None:
         """Close only the low-level consumer, leaving other handles subscribed."""
         with self._lock:
-            if turn_id not in self._turn_notifications:
-                return
-            subscription = self._turn_notifications.pop(turn_id)
-            if subscription is None and (state := self._turn_states.get(turn_id)) is not None:
-                state.unclaimed = max(0, state.unclaimed - 1)
-                self._prune_turn_events(state)
-                self._discard_finished_turn(state)
-        if subscription is not None:
-            subscription.close()
+            if subscription := self._turn_notifications.get(turn_id):
+                subscription.close()
 
     def next_turn_notification(self, turn_id: str) -> Notification:
         """Block until the next event for the default low-level consumer."""
         with self._lock:
-            if turn_id not in self._turn_notifications:
-                raise RuntimeError(f"turn {turn_id!r} is not registered for streaming")
-            subscription = self._turn_notifications[turn_id]
+            subscription = self._turn_notifications.get(turn_id)
             if subscription is None:
-                subscription = self._subscribe_turn_locked(turn_id)
-                self._turn_notifications[turn_id] = subscription
+                raise RuntimeError(f"turn {turn_id!r} is not registered for streaming")
         return subscription.next()
 
     def register_goal(self, thread_id: str) -> _GoalOperationState:
@@ -363,10 +316,9 @@ class MessageRouter:
             state.thread_id = thread_id or state.thread_id
             state.events[state.next_event] = notification
             state.next_event += 1
-            self._prune_turn_events(state)
             if notification.method == "turn/completed":
                 state.completed = True
-                self._discard_finished_turn(state)
+            self._prune_turn_events(state)
             self._turn_condition.notify_all()
 
     def fail_all(self, exc: BaseException) -> None:
@@ -378,12 +330,13 @@ class MessageRouter:
             login_queues = list(self._login_notifications.values())
             self._login_notifications.clear()
             self._pending_login_notifications.clear()
+            for thread_id in self._pending_turn_requests:
+                self._pending_turn_requests[thread_id] = exc
             for state in list(self._turn_states.values()):
                 state.events[state.next_event] = exc
                 state.next_event += 1
-                self._prune_turn_events(state)
                 state.completed = True
-                self._discard_finished_turn(state)
+                self._prune_turn_events(state)
             self._turn_condition.notify_all()
             goal_operations = list(self._goal_operations.values())
             self._goal_operations.clear()
