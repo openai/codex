@@ -340,6 +340,10 @@ impl TurnMetadataState {
         let _ = self.turn_trigger.set(turn_trigger);
     }
 
+    pub(crate) fn current_turn_trigger(&self) -> Option<String> {
+        self.turn_trigger.get().cloned()
+    }
+
     pub(crate) fn root_turn_id(&self) -> Option<String> {
         self.root_turn_id.get().cloned()
     }

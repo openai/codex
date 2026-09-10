@@ -478,6 +478,9 @@ impl Session {
                 },
             )
             .await;
+        if let Some(trigger) = start_options.turn_trigger {
+            turn_context.turn_metadata_state.set_turn_trigger(trigger);
+        }
         if let Some(id) = start_options.parent_turn_id {
             if let Some(initiating_agent_path) = input.iter().find_map(|item| {
                 let TurnInput::InterAgentCommunication(communication) = item else {
