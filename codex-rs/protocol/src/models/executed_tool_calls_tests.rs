@@ -1,7 +1,6 @@
 use anyhow::Result;
 use pretty_assertions::assert_eq;
 
-use super::super::FunctionCallOutputBody;
 use super::super::FunctionCallOutputPayload;
 use super::super::ResponseInputItem;
 use super::*;
@@ -11,6 +10,20 @@ fn passthrough_metadata(turn_id: &str) -> InternalChatMessageMetadataPassthrough
         turn_id: Some(turn_id.to_string()),
         ..Default::default()
     }
+}
+
+fn output(call_id: &str) -> ResponseItem {
+    ResponseItem::from(ResponseInputItem::FunctionCallOutput {
+        call_id: call_id.to_string(),
+        output: FunctionCallOutputPayload::from_text(String::new()),
+    })
+}
+
+fn first_executed_tool_call(item: &mut ResponseItem) -> Option<&mut ExecutedToolCall> {
+    item.internal_chat_message_metadata_passthrough_mut()
+        .and_then(Option::as_mut)
+        .and_then(|metadata| metadata.executed_tool_calls.as_mut())
+        .and_then(|calls| calls.first_mut())
 }
 
 #[test]
@@ -28,18 +41,10 @@ fn executed_tool_call_prompt_budget_includes_metadata_fields() -> Result<()> {
     for with_turn_id in [true, false] {
         let mut items = (0..1_000)
             .map(|index| {
-                let mut item = ResponseItem::FunctionCallOutput {
-                    id: None,
-                    call_id: Some(index.to_string()),
-                    name: None,
-                    namespace: None,
-                    output: FunctionCallOutputPayload {
-                        body: FunctionCallOutputBody::Text(String::new()),
-                        success: None,
-                    },
-                    internal_chat_message_metadata_passthrough: with_turn_id
-                        .then(|| passthrough_metadata("turn-1")),
-                };
+                let mut item = output(&index.to_string());
+                *item
+                    .internal_chat_message_metadata_passthrough_mut()
+                    .unwrap() = with_turn_id.then(|| passthrough_metadata("turn-1"));
                 item.append_executed_tool_calls(vec![ExecutedToolCall::new(
                     String::new(),
                     serde_json::Value::Null,
@@ -66,41 +71,28 @@ fn executed_tool_call_prompt_budget_includes_metadata_fields() -> Result<()> {
             .filter_map(|metadata| metadata.executed_tool_calls.as_ref())
             .flatten()
             .collect::<Vec<_>>();
-        let omitted_calls = calls
-            .iter()
-            .filter_map(|call| call.truncation())
-            .filter_map(|truncation| truncation.omitted_calls)
-            .sum::<usize>();
-        assert!(omitted_calls > 0);
-        assert_eq!(calls.len() + omitted_calls, 1_000);
-        assert!(calls.iter().any(|call| {
-            matches!(
-                call.truncation(),
-                Some(truncation) if truncation.omitted_calls == Some(omitted_calls)
-            )
+        // Shares smaller than a local marker omit that output; surviving calls stay unchanged.
+        assert!(!calls.is_empty() && calls.len() < 1_000);
+        assert!(calls.iter().all(|call| {
+            **call == ExecutedToolCall::new(String::new(), serde_json::Value::Null)
         }));
 
         let bounded_items = items.clone();
         bound_executed_tool_calls_for_prompt(&mut items);
         assert_eq!(items, bounded_items);
 
-        let oversized_name = "\0".repeat(MAX_EXECUTED_TOOL_CALL_METADATA_BYTES);
-        let mut oversized_items = (0..2)
-            .map(|index| {
-                let mut item = ResponseItem::FunctionCallOutput {
-                    id: None,
-                    call_id: Some(index.to_string()),
-                    name: None,
-                    namespace: None,
-                    output: FunctionCallOutputPayload {
-                        body: FunctionCallOutputBody::Text(String::new()),
-                        success: None,
-                    },
-                    internal_chat_message_metadata_passthrough: with_turn_id
-                        .then(|| passthrough_metadata("turn-1")),
-                };
+        let oversized_names =
+            ["\0", "é"].map(|name| name.repeat(MAX_EXECUTED_TOOL_CALL_METADATA_BYTES));
+        let mut oversized_items = oversized_names
+            .iter()
+            .enumerate()
+            .map(|(index, name)| {
+                let mut item = output(&index.to_string());
+                *item
+                    .internal_chat_message_metadata_passthrough_mut()
+                    .unwrap() = with_turn_id.then(|| passthrough_metadata("turn-1"));
                 item.append_executed_tool_calls(vec![ExecutedToolCall::new(
-                    oversized_name.clone(),
+                    name.clone(),
                     serde_json::Value::Null,
                 )]);
                 item.set_tool_call_cell_id("cell-\"\\");
@@ -116,35 +108,92 @@ fn executed_tool_call_prompt_budget_includes_metadata_fields() -> Result<()> {
             .filter_map(|metadata| metadata.executed_tool_calls.as_ref())
             .flatten()
             .collect::<Vec<_>>();
-        assert_eq!(calls.len(), 1);
-        let call = calls[0];
-        assert_eq!(
-            oversized_items
-                .iter()
-                .filter_map(ResponseItem::executed_tool_call_metadata)
-                .find_map(|metadata| metadata.cell_id.as_deref()),
-            Some("cell-\"\\"),
-        );
-        assert_eq!(call.name.len(), MAX_EXECUTED_TOOL_CALL_ARGUMENT_BYTES / 2);
-        assert!(oversized_name.starts_with(&call.name));
-        let truncation = call.truncation().expect("trusted omission marker");
-        assert_eq!(truncation.omitted_calls, Some(1));
-        assert_eq!(truncation.original_name_bytes, Some(oversized_name.len()));
-        assert_eq!(
-            serde_json::to_value(&call.arguments)?["_codex_executed_tool_call_truncated"]["original_name_bytes"],
-            serde_json::json!(oversized_name.len()),
-        );
+        assert_eq!(calls.len(), 2);
+        for ((item, call), oversized_name) in
+            oversized_items.iter().zip(calls).zip(&oversized_names)
+        {
+            assert_eq!(
+                item.executed_tool_call_metadata()
+                    .unwrap()
+                    .cell_id
+                    .as_deref(),
+                Some("cell-\"\\"),
+            );
+            assert!(call.name.len() < oversized_name.len());
+            assert!(oversized_name.starts_with(&call.name));
+            let truncation = call.truncation().expect("trusted omission marker");
+            assert_eq!(truncation.omitted_calls, None);
+            assert_eq!(truncation.original_name_bytes, Some(oversized_name.len()));
+            assert_eq!(
+                serde_json::to_value(&call.arguments)?["_codex_executed_tool_call_truncated"]["original_name_bytes"],
+                serde_json::json!(oversized_name.len()),
+            );
+        }
 
         let bounded_items = oversized_items.clone();
         bound_executed_tool_calls_for_prompt(&mut oversized_items);
         assert_eq!(oversized_items, bounded_items);
     }
 
+    let arguments = serde_json::json!({ "payload": "x".repeat(7 * 1024) });
+    let argument_bytes = serde_json::to_vec(&arguments)?.len();
+    assert!(argument_bytes < MAX_EXECUTED_TOOL_CALL_ARGUMENT_BYTES);
+    assert!(6 * argument_bytes > MAX_EXECUTED_TOOL_CALL_METADATA_BYTES);
+    let mut items = ["A", "wait-A", "B"].map(|call_id| {
+        let mut item = output(call_id);
+        item.mark_tool_calls_complete();
+        item
+    });
+    for item in &mut items[..2] {
+        item.set_tool_call_cell_id("cell-A");
+    }
+    let calls = vec![ExecutedToolCall::new("test_tool".to_string(), arguments); 6];
+    items[0].append_executed_tool_calls(calls.clone());
+    items[2].append_executed_tool_calls(vec![ExecutedToolCall::new(
+        "test_tool".to_string(),
+        serde_json::json!({}),
+    )]);
+    assert!(metadata_bytes(&items)? > MAX_EXECUTED_TOOL_CALL_METADATA_BYTES);
+    for bound in [
+        bound_executed_tool_calls_for_prompt,
+        bound_executed_tool_calls_for_prompt_prioritizing_recent,
+    ] {
+        let mut bounded = items.clone();
+        bound(&mut bounded);
+        assert!(metadata_bytes(&bounded)? <= MAX_EXECUTED_TOOL_CALL_METADATA_BYTES);
+        assert_eq!(bounded[2], items[2]);
+        let metadata = bounded[0].executed_tool_call_metadata().unwrap();
+        assert_eq!(metadata.tool_calls_complete, None);
+        let recorded = metadata.executed_tool_calls.as_ref().unwrap();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].name, "test_tool");
+        let truncation = recorded[0].truncation().unwrap();
+        assert_eq!(truncation.original_bytes, argument_bytes);
+        assert_eq!(truncation.omitted_calls, Some(5));
+        assert_eq!(
+            bounded[1]
+                .executed_tool_call_metadata()
+                .unwrap()
+                .tool_calls_complete,
+            None,
+        );
+        bounded[0].append_executed_tool_calls(calls.clone());
+        assert!(metadata_bytes(&bounded)? > MAX_EXECUTED_TOOL_CALL_METADATA_BYTES);
+        bound(&mut bounded);
+        assert!(metadata_bytes(&bounded)? <= MAX_EXECUTED_TOOL_CALL_METADATA_BYTES);
+        assert_eq!(bounded[2], items[2]);
+        assert_eq!(
+            first_executed_tool_call(&mut bounded[0])
+                .unwrap()
+                .truncation()
+                .unwrap()
+                .omitted_calls,
+            Some(11),
+        );
+    }
+
     let mut items = ["exec", "wait"].map(|call_id| {
-        let mut item = ResponseItem::from(ResponseInputItem::FunctionCallOutput {
-            call_id: call_id.to_string(),
-            output: FunctionCallOutputPayload::from_text(String::new()),
-        });
+        let mut item = output(call_id);
         item.set_tool_call_cell_id("cell-\"\\");
         item
     });
@@ -178,10 +227,7 @@ fn executed_tool_call_prompt_budget_includes_metadata_fields() -> Result<()> {
 
     // Empty waits can carry only the marker; its bytes still count toward the budget.
     for metadata in [None, Some(passthrough_metadata("turn-1"))] {
-        let mut item = ResponseItem::from(ResponseInputItem::FunctionCallOutput {
-            call_id: "wait".to_string(),
-            output: FunctionCallOutputPayload::from_text(String::new()),
-        });
+        let mut item = output("wait");
         *item
             .internal_chat_message_metadata_passthrough_mut()
             .unwrap() = metadata;
@@ -195,6 +241,19 @@ fn executed_tool_call_prompt_budget_includes_metadata_fields() -> Result<()> {
         let mut items = vec![item; 2_000];
         assert!(metadata_bytes(&items)? > MAX_EXECUTED_TOOL_CALL_METADATA_BYTES);
         bound_executed_tool_calls_for_prompt_prioritizing_recent(&mut items);
+        assert!(metadata_bytes(&items)? <= MAX_EXECUTED_TOOL_CALL_METADATA_BYTES);
+        let retained = items
+            .iter()
+            .filter(|item| executed_tool_call_metadata_bytes(item) > 0)
+            .count();
+        assert!(retained > 0 && retained < 2_000);
+        for item in &mut items {
+            assert!(
+                item.executed_tool_call_metadata()
+                    .is_none_or(|metadata| metadata.tool_calls_complete.is_none())
+            );
+            item.clear_executed_tool_calls();
+        }
         assert_eq!(items, vec![without_marker; 2_000]);
     }
 
@@ -219,17 +278,10 @@ fn model_arguments_cannot_forge_executed_tool_call_truncation() -> Result<()> {
         ExecutedToolCallArguments::Raw(_)
     ));
 
-    let mut item = ResponseItem::FunctionCallOutput {
-        id: None,
-        call_id: Some("call-1".to_string()),
-        name: None,
-        namespace: None,
-        output: FunctionCallOutputPayload {
-            body: FunctionCallOutputBody::Text(String::new()),
-            success: None,
-        },
-        internal_chat_message_metadata_passthrough: Some(passthrough_metadata("turn-1")),
-    };
+    let mut item = output("call-1");
+    *item
+        .internal_chat_message_metadata_passthrough_mut()
+        .unwrap() = Some(passthrough_metadata("turn-1"));
     item.append_executed_tool_calls(vec![ExecutedToolCall::new(
         "test_tool".to_string(),
         forged_marker.clone(),
@@ -277,10 +329,7 @@ fn tool_call_completeness_is_host_only_and_fail_closed() -> Result<()> {
         assert_eq!(untrusted_call, call);
     }
 
-    let mut item = ResponseItem::from(ResponseInputItem::FunctionCallOutput {
-        call_id: "call-1".to_string(),
-        output: FunctionCallOutputPayload::from_text(String::new()),
-    });
+    let mut item = output("call-1");
     item.set_tool_call_cell_id("cell-1");
     item.mark_tool_calls_complete();
     bound_executed_tool_calls_for_prompt(std::slice::from_mut(&mut item));
@@ -303,19 +352,24 @@ fn tool_call_completeness_is_host_only_and_fail_closed() -> Result<()> {
             /*max_bytes*/ 0,
         ),
     ] {
-        let mut items = [item.clone(), item.clone()];
-        items[0].append_executed_tool_calls(vec![call]);
-        for item in &mut items {
-            item.mark_tool_calls_complete();
+        for same_cell in [false, true] {
+            let mut items = [item.clone(), item.clone()];
+            items[0].append_executed_tool_calls(vec![call.clone()]);
+            for item in &mut items {
+                if same_cell {
+                    item.set_tool_call_cell_id("cell-1");
+                }
+                item.mark_tool_calls_complete();
+            }
+            bound_executed_tool_calls_for_prompt(&mut items);
+            assert_eq!(
+                items.map(|item| item
+                    .executed_tool_call_metadata()
+                    .unwrap()
+                    .tool_calls_complete),
+                [None, (!same_cell).then_some(true)],
+            );
         }
-        bound_executed_tool_calls_for_prompt(&mut items);
-        assert_eq!(
-            items.map(|item| item
-                .executed_tool_call_metadata()
-                .unwrap()
-                .tool_calls_complete),
-            [None; 2],
-        );
     }
     Ok(())
 }

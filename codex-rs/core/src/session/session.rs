@@ -1478,7 +1478,10 @@ impl Session {
                 }).await;
             }
 
-            let executed_tool_calls = crate::state::ExecutedToolCalls::new(&config.features);
+            let executed_tool_calls = crate::state::ExecutedToolCalls::new(
+                &config.features,
+                &initial_history,
+            );
             let services = SessionServices {
                 // Start with an empty connection set. The initialized set is
                 // published after SessionConfigured so MCP events follow it.

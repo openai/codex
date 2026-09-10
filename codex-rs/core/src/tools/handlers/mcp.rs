@@ -709,8 +709,10 @@ mod tests {
             .features
             .enable(Feature::ExecutedToolCallMetadata)
             .expect("test feature must be configurable");
-        let recorder =
-            crate::tools::executed_tool_calls::ExecutedToolCalls::new(&turn.config.features);
+        let recorder = crate::tools::executed_tool_calls::ExecutedToolCalls::new(
+            &turn.config.features,
+            &codex_history::InitialHistory::New,
+        );
         session.services.executed_tool_calls = recorder.clone();
         let turn = Arc::new(turn);
         let handler = McpHandler::new(tool_info("filesystem", "filesystem", "read_file"))
