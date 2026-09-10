@@ -133,6 +133,31 @@ alias(
     visibility = ["//visibility:public"],
 )
 
+# Windows voice jobs opt into the pkgconf already declared with their build tools.
+native_tool_toolchain(
+    name = "windows_pkg_config_tool",
+    env = {"PKG_CONFIG": "$(execpath :pkg_config)"},
+    path = "$(execpath :pkg_config)",
+    target = ":pkg_config",
+)
+
+toolchain(
+    name = "windows_pkg_config_toolchain",
+    exec_compatible_with = ["@platforms//os:windows"],
+    toolchain = ":windows_pkg_config_tool",
+    toolchain_type = "@rules_foreign_cc//toolchains:pkgconfig_toolchain",
+    visibility = ["//visibility:public"],
+)
+
+# The native Windows build already uses this pinned CMake, including on ARM64.
+toolchain(
+    name = "windows_cmake_toolchain",
+    exec_compatible_with = ["@platforms//os:windows"],
+    toolchain = "@cmake-3.31.8-windows-x86_64//:cmake_tool",
+    toolchain_type = "@rules_foreign_cc//toolchains:cmake_toolchain",
+    visibility = ["//visibility:public"],
+)
+
 filegroup(
     name = "archives",
     srcs = [

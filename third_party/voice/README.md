@@ -249,7 +249,19 @@ runtime inspection and SDK export. These targets are MSVC-only. They require
 native Windows execution of the matching architecture; they are not cross builds.
 The generic Rust-consumer aliases are connected separately, after these inputs.
 
-Provide the complete installed Cygwin/pkgconf repository explicitly. The default
+Provide the complete installed Cygwin/pkgconf repository explicitly. For a public
+Windows build, `.github/scripts/setup-voice-windows.ps1 -Target
+x86_64-pc-windows-msvc -SnapshotArchive <path>` (under `public/` in
+codex-internal) verifies the pinned archive and every input size and SHA-512
+digest, then runs the offline installer against its signed metadata. ARM64 uses
+`aarch64-pc-windows-msvc` and the same Cygwin x64 tools under emulation. The
+installed tool tree stays in the CI temporary directory and is never added to
+a Codex package. The upstream mirror's signed metadata changes over time, so
+the archived snapshot must be supplied separately. Private CI validates this
+public bootstrap against its existing pinned archive; a public release job
+requires an approved way to access the same archive.
+
+The default
 `windows_installed_tools` label setting is empty and fails if a Windows action
 needs it. This keeps ordinary public dependency queries independent of private
 provisioning; it does not silently omit tools from a requested Windows build.
@@ -258,11 +270,14 @@ The module does not download that installed tree or accept compiler licenses.
 After provisioning, a native PowerShell invocation is:
 
 ```powershell
+$hostArch = $env:PROCESSOR_ARCHITEW6432
+if (-not $hostArch) { $hostArch = $env:PROCESSOR_ARCHITECTURE }
 bazel build //third_party/voice:native_link_windows_x86_64 `
   --platforms=//:local_windows_msvc `
   --inject_repository="voice_windows_tools=$env:VOICE_WINDOWS_BAZEL_REPOSITORY" `
   --//third_party/voice:windows_installed_tools=@voice_windows_tools//:tools `
-  --action_env="SystemRoot=$env:SystemRoot" --host_action_env="SystemRoot=$env:SystemRoot"
+  --action_env="SystemRoot=$env:SystemRoot" --host_action_env="SystemRoot=$env:SystemRoot" `
+  --action_env="PROCESSOR_ARCHITECTURE=$hostArch" --host_action_env="PROCESSOR_ARCHITECTURE=$hostArch"
 ```
 
 Use `native_link_windows_aarch64` on native ARM64 Windows. Existing MSVC license

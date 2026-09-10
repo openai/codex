@@ -15,7 +15,7 @@ Usage: build-codex-package-archive.sh \
   [--zsh-manifest <path>] \
   [--codex-command-runner-bin <path>] \
   [--codex-windows-sandbox-setup-bin <path>] \
-  [--voice-signed-dir <path> --release-version <release-version>] \
+  [--voice-release-dir <path> --release-version <release-version>] \
   [--target-suffixed-entrypoint]
 EOF
 }
@@ -30,7 +30,7 @@ bwrap_bin_provided="false"
 code_mode_host_bin_provided="false"
 command_runner_bin_provided="false"
 sandbox_setup_bin_provided="false"
-voice_signed_dir=""
+voice_release_dir=""
 release_version=""
 
 while [[ $# -gt 0 ]]; do
@@ -93,8 +93,8 @@ while [[ $# -gt 0 ]]; do
       target_suffixed_entrypoint="true"
       shift
       ;;
-    --voice-signed-dir)
-      voice_signed_dir="${2:?--voice-signed-dir requires a value}"
+    --voice-release-dir)
+      voice_release_dir="${2:?--voice-release-dir requires a value}"
       shift 2
       ;;
     --release-version)
@@ -117,8 +117,8 @@ if [[ -z "$target" || -z "$bundle" || -z "$entrypoint_dir" || -z "$archive_dir" 
   usage >&2
   exit 1
 fi
-if [[ ( -n "$voice_signed_dir" || -n "$release_version" ) && ( -z "$voice_signed_dir" || -z "$release_version" || "$bundle" != "primary" || "$target" != *-apple-darwin ) ]]; then
-  echo "Signed voice resources require a primary macOS release package version" >&2
+if [[ ( -n "$voice_release_dir" || -n "$release_version" ) && ( -z "$voice_release_dir" || -z "$release_version" || "$bundle" != "primary" || ( "$target" != *-apple-darwin && "$target" != *-unknown-linux-musl && "$target" != *-pc-windows-msvc ) ) ]]; then
+  echo "Voice resources require a primary supported release package version" >&2
   exit 1
 fi
 
@@ -204,7 +204,7 @@ python_args=(
   --cargo-profile release
   --package-dir "$package_dir"
 )
-if [[ -z "$voice_signed_dir" ]]; then
+if [[ -z "$voice_release_dir" ]]; then
   python_args+=(--archive-output "$gzip_archive_path" --archive-output "$zstd_archive_path")
 fi
 if ((${#resource_args[@]} > 0)); then
@@ -214,14 +214,19 @@ python_args+=(--force)
 
 "$python_bin" "${python_args[@]}"
 
-if [[ -n "$voice_signed_dir" ]]; then
+if [[ -n "$voice_release_dir" ]]; then
+  voice_target="$target"
+  if [[ "$target" == *-unknown-linux-musl ]]; then
+    voice_target="${target%-musl}-gnu"
+  fi
   voice_package="${RUNNER_TEMP:-/tmp}/${archive_stem}-voice-${target}"
   rm -rf "$voice_package"
+  voice_helper="${voice_release_dir%/}/codex-voice-host${exe_suffix}"
   "$python_bin" "${repo_root}/third_party/voice/assemble_package.py" \
     --package "$package_dir" \
-    --helper "${voice_signed_dir%/}/codex-voice-host" \
-    --runtime "${voice_signed_dir%/}/runtime" \
-    --voice-target "$target" \
+    --helper "$voice_helper" \
+    --runtime "${voice_release_dir%/}/runtime" \
+    --voice-target "$voice_target" \
     --build-commit "$(git -C "$repo_root" rev-parse HEAD)" \
     --release-version "$release_version" \
     --output "$voice_package"

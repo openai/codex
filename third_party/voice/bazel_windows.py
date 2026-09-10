@@ -64,9 +64,13 @@ def main():
         environment, _ = build_environment(
             document, inputs["target"], {"python": Path(sys.executable)}
         )
-        # Keep executor scratch directories, never its developer tool search path.
+        # Keep host identity and scratch directories, never developer tool search paths.
         environment.update(
-            {name: os.environ[name] for name in ("TMP", "TEMP") if name in os.environ}
+            {
+                name: os.environ[name]
+                for name in ("TMP", "TEMP", "PROCESSOR_ARCHITECTURE")
+                if name in os.environ
+            }
         )
         home = temporary / "home"
         home.mkdir()

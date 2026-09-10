@@ -1,0 +1,13 @@
+diff --git a/foreign_cc/built_tools/make_build.bzl b/foreign_cc/built_tools/make_build.bzl
+--- a/foreign_cc/built_tools/make_build.bzl
++++ b/foreign_cc/built_tools/make_build.bzl
+@@ -35,6 +35,9 @@
+             build_str += " gcc"
+             dist_dir = "GccRel"
+         else:
++            # Modern MSVC provides stdint.h, including the intmax_t types that
++            # Make's legacy Windows config otherwise replaces with macros.
++            build_str = 'export CL="$${CL:-}$$ /DHAVE_STDINT_H=1"\n' + build_str
+             dist_dir = "WinRel"
+ 
+         script = [

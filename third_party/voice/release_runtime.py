@@ -1,4 +1,4 @@
-"""Stage verified macOS voice libraries and seal their post-signing release receipt."""
+"""Stage verified voice libraries and seal their public-release receipt."""
 
 import argparse
 import json
@@ -10,8 +10,15 @@ from runtime import digest
 
 
 def stage(source: Path, destination: Path, target: str) -> None:
-    if target not in {"aarch64-apple-darwin", "x86_64-apple-darwin"}:
-        raise ValueError("public voice runtime requires a macOS target")
+    if target not in {
+        "aarch64-apple-darwin",
+        "x86_64-apple-darwin",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-unknown-linux-gnu",
+        "aarch64-pc-windows-msvc",
+        "x86_64-pc-windows-msvc",
+    }:
+        raise ValueError("unsupported public release voice runtime target")
     source = source.resolve(strict=True)
     files = runtime_files(source, target)
     destination.mkdir()
