@@ -2258,3 +2258,6 @@ async fn command_center_handles_resume_failure_and_success() -> Result<()> {
     server.shutdown().await?;
     Ok(())
 }
+
+#[path = "agents_overview_actions_tests.rs"]
+mod actions;

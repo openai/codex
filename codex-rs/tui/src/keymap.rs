@@ -411,6 +411,7 @@ pub(crate) struct AgentsKeymap {
     pub(crate) new_task: Vec<KeyBinding>,
     pub(crate) rename: Vec<KeyBinding>,
     pub(crate) stop: Vec<KeyBinding>,
+    pub(crate) hide: Vec<KeyBinding>,
     pub(crate) toggle_grouping: Vec<KeyBinding>,
     chord_hints: Arc<RuntimeChordKeymap>,
 }
@@ -1289,9 +1290,23 @@ impl RuntimeKeymap {
             new_task: resolve_local!(keymap, defaults, agents, new_task),
             rename: resolve_local!(keymap, defaults, agents, rename),
             stop: resolve_local!(keymap, defaults, agents, stop),
+            hide: resolve_local!(keymap, defaults, agents, hide),
             toggle_grouping: resolve_local!(keymap, defaults, agents, toggle_grouping),
             chord_hints: Arc::clone(&chords),
         };
+
+        // The new default yields to existing user bindings in the dashboard.
+        if keymap.agents.hide.is_none()
+            && (configured_context_alias_is_used(&keymap.agents, "ctrl-w")
+                || configured_context_alias_is_used(&keymap.list, "ctrl-w")
+                || configured_context_alias_is_used(&keymap.global, "ctrl-w")
+                || chords.bindings.iter().any(|chord| {
+                    chord.action.context.overlaps(KeymapContext::Agents)
+                        && agents.hide.contains(&chord.chord.prefix)
+                }))
+        {
+            agents.hide.clear();
+        }
 
         let approval = ApprovalKeymap {
             open_fullscreen: resolve_local!(keymap, defaults, approval, open_fullscreen),
@@ -1425,6 +1440,7 @@ impl RuntimeKeymap {
             (keymap.agents.new_task.as_ref(), &mut agents.new_task),
             (keymap.agents.rename.as_ref(), &mut agents.rename),
             (keymap.agents.stop.as_ref(), &mut agents.stop),
+            (keymap.agents.hide.as_ref(), &mut agents.hide),
             (
                 keymap.agents.toggle_grouping.as_ref(),
                 &mut agents.toggle_grouping,
@@ -1789,6 +1805,7 @@ impl RuntimeKeymap {
                 new_task: default_bindings![ctrl(KeyCode::Char('n'))],
                 rename: default_bindings![ctrl(KeyCode::Char('r'))],
                 stop: default_bindings![ctrl(KeyCode::Char('x'))],
+                hide: default_bindings![ctrl(KeyCode::Char('w'))],
                 toggle_grouping: default_bindings![ctrl(KeyCode::Char('s'))],
                 chord_hints: Arc::default(),
             },

@@ -37,3 +37,19 @@ See the Codex keymap documentation for supported actions and examples."
         config.remove(context);
     }
 }
+
+#[test]
+fn new_agents_defaults_preserve_existing_custom_bindings() {
+    for context in ["agents", "list"] {
+        let existing = if context == "agents" {
+            "stop"
+        } else {
+            "move_down"
+        };
+        let keymap: TuiKeymap =
+            serde_json::from_value(json!({context: {existing: "ctrl-w"}})).unwrap();
+        let runtime =
+            RuntimeKeymap::from_config(&keymap).expect("existing configuration remains valid");
+        assert!(runtime.agents.hide.is_empty());
+    }
+}

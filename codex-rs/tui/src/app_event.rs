@@ -310,6 +310,10 @@ pub(crate) enum AppEvent {
     StopAgentsOverviewThread {
         thread_id: ThreadId,
     },
+    /// Hide a dashboard row locally without stopping its task.
+    HideAgentsOverviewThread {
+        thread_id: ThreadId,
+    },
     /// Start the shared app-server daemon without moving the current embedded session.
     #[cfg(any(unix, windows))]
     StartAgentsDaemon,

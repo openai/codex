@@ -3993,6 +3993,7 @@
           ],
           "default": {
             "agents": {
+              "hide": null,
               "new_task": null,
               "rename": null,
               "resume": null,
@@ -4303,6 +4304,14 @@
       "additionalProperties": false,
       "description": "Shortcuts specific to the shared agents overview.",
       "properties": {
+        "hide": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Hide the selected task until explicitly resumed or the TUI restarts."
+        },
         "new_task": {
           "allOf": [
             {
@@ -4808,6 +4817,7 @@
             }
           ],
           "default": {
+            "hide": null,
             "new_task": null,
             "rename": null,
             "resume": null,
