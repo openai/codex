@@ -367,3 +367,25 @@ async fn removing_active_cell_invalidates_layout_before_reusing_its_identity() {
     render_frame(&widget, /*width*/ 80);
     assert_eq!(desired_height_calls.load(Ordering::Relaxed), 2);
 }
+
+#[tokio::test]
+async fn external_writer_notice_offers_command_center_on_shared_servers() {
+    let endpoint = crate::resolve_remote_addr("ws://127.0.0.1:4500").unwrap();
+    for target in [
+        crate::AppServerTarget::LocalDaemon {
+            endpoint: endpoint.clone(),
+        },
+        crate::AppServerTarget::Remote { endpoint },
+    ] {
+        let (mut widget, _sender, _events, _operations) =
+            make_chatwidget_manual_with_sender().await;
+        widget.remote_connection = crate::status::remote_connection::remote_connection_status_value(
+            &target, /*server_version*/ None,
+        );
+        widget.show_external_writer_thread();
+        for width in [60, 100] {
+            let rendered = crate::chatwidget::tests::render_bottom_popup(&widget, width);
+            insta::assert_snapshot!(format!("external_writer_command_center_{width}"), rendered);
+        }
+    }
+}

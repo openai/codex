@@ -13,6 +13,7 @@ use ratatui::widgets::Block;
 use std::cell::Cell;
 
 struct ExternalWriterNotice {
+    command_center_available: bool,
     transcript_hint: Option<crate::key_hint::ShortcutHint>,
 }
 
@@ -87,19 +88,18 @@ impl ExternalWriterNotice {
     }
 
     fn footer_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut items = vec![
-            ("r".to_string(), "retry".to_string()),
-            (
-                format!(
-                    "{}/{}/{}",
-                    crate::key_hint::plain(KeyCode::Esc).display_label(),
-                    crate::key_hint::ctrl(KeyCode::Char('c')).display_label(),
-                    crate::key_hint::plain(KeyCode::Char('q')).display_label(),
-                )
-                .replace(" + ", "+"),
-                "exit".to_string(),
-            ),
+        let mut items = vec![("r".to_string(), "retry".to_string())];
+        let escape = crate::key_hint::plain(KeyCode::Esc).display_label();
+        let mut quit_keys = vec![
+            crate::key_hint::ctrl(KeyCode::Char('c')).display_label(),
+            crate::key_hint::plain(KeyCode::Char('q')).display_label(),
         ];
+        if self.command_center_available {
+            items.push((escape, "command center".to_string()));
+        } else {
+            quit_keys.insert(/*index*/ 0, escape);
+        }
+        items.push((quit_keys.join("/").replace(" + ", "+"), "exit".to_string()));
         if let Some(hint) = self.transcript_hint {
             items.push((
                 hint.display_label().replace(" + ", "+"),
@@ -193,6 +193,7 @@ impl ChatWidget {
         }
         let bottom = if self.external_writer_view && !self.bottom_pane.has_active_view() {
             RenderableItem::Owned(Box::new(ExternalWriterNotice {
+                command_center_available: self.remote_connection.is_some(),
                 transcript_hint: self.bottom_pane.transcript_shortcut_hint(),
             }))
         } else {

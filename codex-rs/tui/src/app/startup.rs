@@ -7,6 +7,7 @@ use super::agents_overview_view::AgentsOverviewFocus;
 use super::reconnect::ReconnectState;
 use super::*;
 use crate::session_start::SessionStartAction;
+use crate::session_start::SessionStartOutcome;
 use crate::session_start::cancel_session_start;
 use crate::session_start::complete_session_start;
 use crate::unarchive_prompt::run_unarchive_prompt;
@@ -375,7 +376,7 @@ impl App {
             &session_selection,
             SessionSelection::StartFresh | SessionSelection::Exit
         );
-        let start_in_agents_overview =
+        let mut start_in_agents_overview =
             matches!(&session_selection, SessionSelection::AgentsOverview);
         let mut read_only_thread = false;
         let (mut chat_widget, initial_started_thread) = match session_selection {
@@ -502,14 +503,15 @@ impl App {
                 };
                 let resumed = if read_only_thread {
                     match resumed {
-                        Ok(resumed) => resumed,
+                        Ok(resumed) => Some(resumed),
                         Err(err) => return shutdown_on_startup_error(app_server, err).await,
                     }
                 } else {
                     let action = SessionStartAction::Resume(model_settings);
-                    let Some(resumed) = complete_session_start(
+                    let resumed = complete_session_start(
                         &mut app_server,
                         &config,
+                        &app_server_target,
                         &target_session,
                         action,
                         resumed,
@@ -518,11 +520,14 @@ impl App {
                             run_unarchive_prompt(tui, target_session.thread_id, action).await
                         },
                     )
-                    .await?
-                    else {
-                        return Ok(cancel_session_start(app_server).await);
-                    };
-                    resumed
+                    .await?;
+                    match resumed {
+                        SessionStartOutcome::Started(started) => Some(*started),
+                        SessionStartOutcome::CommandCenter => None,
+                        SessionStartOutcome::Exit => {
+                            return Ok(cancel_session_start(app_server).await);
+                        }
+                    }
                 };
                 let init = crate::chatwidget::ChatWidgetInit {
                     local_settings: local_settings.clone(),
@@ -535,7 +540,8 @@ impl App {
                         initial_images.clone(),
                         // CLI prompt args are plain strings, so they don't provide element ranges.
                         Vec::new(),
-                    ),
+                    )
+                    .filter(|_| resumed.is_some()),
                     enhanced_keys_supported,
                     has_chatgpt_account,
                     requires_openai_auth,
@@ -552,7 +558,7 @@ impl App {
                         .clone(),
                     session_telemetry: session_telemetry.clone(),
                 };
-                (ChatWidget::new_with_app_event(init), Some(resumed))
+                (ChatWidget::new_with_app_event(init), resumed)
             }
             SessionSelection::Fork(target_session) => {
                 let explicit_permission_override =
@@ -598,9 +604,10 @@ impl App {
                     Err(err) => return shutdown_on_startup_error(app_server, err).await,
                 };
                 let action = SessionStartAction::Fork(permission_mode);
-                let Some(forked) = complete_session_start(
+                let forked = complete_session_start(
                     &mut app_server,
                     &config,
+                    &app_server_target,
                     &target_session,
                     action,
                     forked,
@@ -609,17 +616,23 @@ impl App {
                         run_unarchive_prompt(tui, target_session.thread_id, action).await
                     },
                 )
-                .await?
-                else {
-                    return Ok(cancel_session_start(app_server).await);
+                .await?;
+                let forked = match forked {
+                    SessionStartOutcome::Started(started) => Some(*started),
+                    SessionStartOutcome::CommandCenter => None,
+                    SessionStartOutcome::Exit => {
+                        return Ok(cancel_session_start(app_server).await);
+                    }
                 };
-                if let Some(worktree) = managed_worktree.as_ref()
-                    && let Err(err) = worktree.bind(forked.session.thread_id)
-                {
-                    return shutdown_on_startup_error(app_server, err).await;
-                }
-                if config.model_reasoning_effort.is_none() {
-                    config.model_reasoning_effort = forked.session.reasoning_effort.clone();
+                if let Some(forked) = &forked {
+                    if let Some(worktree) = managed_worktree.as_ref()
+                        && let Err(err) = worktree.bind(forked.session.thread_id)
+                    {
+                        return shutdown_on_startup_error(app_server, err).await;
+                    }
+                    if config.model_reasoning_effort.is_none() {
+                        config.model_reasoning_effort = forked.session.reasoning_effort.clone();
+                    }
                 }
                 let init = crate::chatwidget::ChatWidgetInit {
                     local_settings: local_settings.clone(),
@@ -632,7 +645,8 @@ impl App {
                         initial_images.clone(),
                         // CLI prompt args are plain strings, so they don't provide element ranges.
                         Vec::new(),
-                    ),
+                    )
+                    .filter(|_| forked.is_some()),
                     enhanced_keys_supported,
                     has_chatgpt_account,
                     requires_openai_auth,
@@ -649,9 +663,15 @@ impl App {
                         .clone(),
                     session_telemetry: session_telemetry.clone(),
                 };
-                (ChatWidget::new_with_app_event(init), Some(forked))
+                (ChatWidget::new_with_app_event(init), forked)
             }
         };
+        let startup_session_cancelled = initial_started_thread.is_none()
+            && !pending_startup_thread_start
+            && !start_in_agents_overview;
+        if startup_session_cancelled {
+            start_in_agents_overview = true;
+        }
         chat_widget.note_rendered_width(tui.terminal.last_known_screen_size.width);
         chat_widget.remote_connection = remote_connection;
         chat_widget.set_local_worktree_operations(!crate::uses_remote_workspace_or_environment(
@@ -896,7 +916,9 @@ See the Codex keymap documentation for supported actions and examples."
         {
             return shutdown_on_startup_error(app_server, err).await;
         }
-        let mut pending_startup_draft = Some(startup_draft.into_draft());
+        // Input for the cancelled resume/fork must not appear in a later selected session.
+        let mut pending_startup_draft =
+            (!startup_session_cancelled).then(|| startup_draft.into_draft());
         if app_event_rx.is_empty() && !app.has_queued_startup_protected_request() {
             app.chat_widget
                 .restore_startup_draft_when_ready(&mut pending_startup_draft);

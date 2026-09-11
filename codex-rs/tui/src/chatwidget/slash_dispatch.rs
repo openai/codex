@@ -227,7 +227,12 @@ impl ChatWidget {
                             ..Default::default()
                         },
                         SelectionItem {
-                            name: "Yes, delete and exit".to_string(),
+                            name: if self.remote_connection.is_some() {
+                                "Yes, delete and return to command center"
+                            } else {
+                                "Yes, delete and exit"
+                            }
+                            .to_string(),
                             description: Some("Permanently delete this session now".to_string()),
                             actions: vec![Box::new(|tx| {
                                 tx.send(AppEvent::DeleteCurrentThread);

@@ -14,9 +14,18 @@ async fn start_session(
     target: &SessionTarget,
     action: SessionStartAction,
     confirm: impl AsyncFnOnce() -> Result<UnarchiveChoice>,
-) -> Result<Option<AppServerStartedThread>> {
+) -> Result<SessionStartOutcome> {
     let initial_result = action.start(app_server, config, target).await;
-    complete_session_start(app_server, config, target, action, initial_result, confirm).await
+    complete_session_start(
+        app_server,
+        config,
+        &crate::AppServerTarget::Embedded,
+        target,
+        action,
+        initial_result,
+        confirm,
+    )
+    .await
 }
 
 #[tokio::test]
@@ -55,26 +64,61 @@ async fn archived_session_requires_confirmation_before_resume_or_fork() -> Resul
         let mut app_server = crate::start_embedded_app_server_for_picker(&config).await?;
         let prompts = Cell::new(0);
 
-        let cancelled = start_session(&mut app_server, &config, &target, action, async || {
-            prompts.set(prompts.get() + 1);
-            Ok(UnarchiveChoice::Cancel)
-        })
-        .await?;
-        assert!(cancelled.is_none());
-        assert_eq!(
-            (prompts.get(), archived_path.exists(), active_path.exists()),
-            (1, true, false)
-        );
+        let endpoint = crate::resolve_remote_addr("ws://127.0.0.1:4500")?;
+        for server_target in [
+            crate::AppServerTarget::LocalDaemon {
+                endpoint: endpoint.clone(),
+            },
+            crate::AppServerTarget::Remote { endpoint },
+            crate::AppServerTarget::Embedded,
+        ] {
+            for choice in [UnarchiveChoice::Cancel, UnarchiveChoice::Quit] {
+                let initial = action.start(&mut app_server, &config, &target).await;
+                let outcome = complete_session_start(
+                    &mut app_server,
+                    &config,
+                    &server_target,
+                    &target,
+                    action,
+                    initial,
+                    async || {
+                        prompts.set(prompts.get() + 1);
+                        Ok(choice)
+                    },
+                )
+                .await?;
+                assert_eq!(
+                    matches!(outcome, SessionStartOutcome::CommandCenter),
+                    choice == UnarchiveChoice::Cancel
+                        && !matches!(server_target, crate::AppServerTarget::Embedded),
+                );
+                assert_eq!(
+                    (archived_path.exists(), active_path.exists()),
+                    (true, false)
+                );
+                assert!(
+                    app_server
+                        .thread_loaded_list(Default::default())
+                        .await?
+                        .data
+                        .is_empty()
+                );
+            }
+        }
 
-        let started = start_session(&mut app_server, &config, &target, action, async || {
-            prompts.set(prompts.get() + 1);
-            Ok(UnarchiveChoice::Unarchive)
-        })
-        .await?
-        .expect("confirmed session should start");
+        assert_eq!(prompts.get(), 6);
+        let SessionStartOutcome::Started(started) =
+            start_session(&mut app_server, &config, &target, action, async || {
+                prompts.set(prompts.get() + 1);
+                Ok(UnarchiveChoice::Unarchive)
+            })
+            .await?
+        else {
+            panic!("confirmed session should start")
+        };
         assert_eq!(
             (prompts.get(), archived_path.exists(), active_path.exists()),
-            (2, false, true)
+            (7, false, true)
         );
         match action {
             SessionStartAction::Resume(_) => {
@@ -92,7 +136,7 @@ async fn archived_session_requires_confirmation_before_resume_or_fork() -> Resul
             }
         }
 
-        let resumed = start_session(
+        let SessionStartOutcome::Started(resumed) = start_session(
             &mut app_server,
             &config,
             &target,
@@ -100,7 +144,9 @@ async fn archived_session_requires_confirmation_before_resume_or_fork() -> Resul
             async || panic!("active sessions must not prompt"),
         )
         .await?
-        .expect("active session should start");
+        else {
+            panic!("active session should start")
+        };
         assert_eq!(resumed.session.thread_id, target.thread_id);
 
         let missing = SessionTarget {
