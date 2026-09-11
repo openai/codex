@@ -1,6 +1,41 @@
 use super::*;
 
 #[tokio::test]
+async fn overview_thread_colors_match_footer_and_respect_color_suppression() {
+    let mut app = make_test_app().await;
+    let id = ThreadId::from_u128(/*value*/ 42);
+    let mut snapshot = Vec::new();
+    for enabled in [true, false] {
+        app.local_settings.tui.status_line_use_colors = enabled;
+        let mut thread = overview_thread(
+            id,
+            /*parent_thread_id*/ None,
+            "Original prompt",
+            ThreadStatus::Idle,
+        );
+        thread.name = Some("Named task".into());
+        let view = app.agents_overview_view(vec![thread], Some(id));
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal
+            .draw(|frame| view.render(frame.area(), frame.buffer_mut()))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        for row in buffer.content.chunks(100) {
+            let text: String = row.iter().map(ratatui::buffer::Cell::symbol).collect();
+            if let Some(x) = text.find("Named task") {
+                let x = text[..x].chars().count();
+                snapshot.push(format!(
+                    "{} | title style: {:?}",
+                    text.trim_end(),
+                    row[x].style()
+                ));
+            }
+        }
+    }
+    insta::assert_snapshot!(snapshot.join("\n"));
+}
+
+#[tokio::test]
 async fn older_server_notice_is_visible_in_agents_overview() {
     let mut app = make_test_app().await;
     app.update_server_version_overview_notice("0.153.0", Some("0.152.1"));
@@ -1425,6 +1460,7 @@ async fn shared_overview_shows_only_root_sessions() {
         view.rows.clone(),
         Some(first_root),
         /*worktrees_enabled*/ false,
+        /*use_theme_colors*/ true,
         crate::app_event_sender::AppEventSender::new(event_tx),
         app.keymap.clone(),
         Arc::clone(&app.agents_overview.view_state),
@@ -1666,6 +1702,7 @@ async fn filtered_dashboard_actions_use_configured_shortcuts() {
         .rows,
         Some(first),
         /*worktrees_enabled*/ false,
+        /*use_theme_colors*/ true,
         crate::app_event_sender::AppEventSender::new(event_tx),
         app.keymap.clone(),
         Arc::clone(&app.agents_overview.view_state),

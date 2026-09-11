@@ -214,6 +214,7 @@ mod terminal_title;
 mod terminal_visualization_instructions;
 mod text_formatting;
 mod theme_picker;
+mod thread_color;
 mod thread_transcript;
 mod token_usage;
 mod tooltips;
@@ -1326,6 +1327,16 @@ async fn run_ratatui_app(
                 )),
             })
         };
+
+    // Startup pickers need the current theme before selection can reload config.
+    // Leave the one-time override initialization below to use the final config.
+    if (cli.resume_picker || cli.fork_picker)
+        && let Some(name) = config.tui_theme.as_deref()
+        && let Some(theme) =
+            crate::render::highlight::resolve_theme_by_name(name, Some(config.codex_home.as_path()))
+    {
+        crate::render::highlight::set_syntax_theme(theme);
+    }
 
     let use_fork = cli.fork_picker || cli.fork_last || cli.fork_session_id.is_some();
     let mut session_selection = if cli.agents_overview {

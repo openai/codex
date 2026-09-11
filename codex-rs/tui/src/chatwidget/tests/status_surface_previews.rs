@@ -12,6 +12,35 @@ fn line_text(line: Line<'static>) -> String {
         .collect()
 }
 
+#[tokio::test]
+async fn thread_color_preview_matches_footer_while_auto_naming() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let id = ThreadId::from_u128(/*value*/ 42);
+    chat.thread_id = Some(id);
+    chat.local_settings.tui.animations = false;
+    chat.thread_name = Some("Named task".into());
+    let items = [StatusLineItem::ThreadName, StatusLineItem::ThreadTitle];
+    let mut snapshot = Vec::new();
+    for pending in [false, true] {
+        chat.set_thread_title_generation_pending(pending);
+        let preview = chat.status_surface_preview_data();
+        for use_colors in [true, false] {
+            let line = preview.status_line_for_items(items, use_colors).unwrap();
+            let footer = crate::bottom_pane::status_line_from_segments(
+                items
+                    .into_iter()
+                    .map(|item| (item, chat.status_line_value_for_item(item).unwrap())),
+                use_colors,
+                Some(id),
+            )
+            .unwrap();
+            assert_eq!(line, footer);
+            snapshot.push(format!("pending={pending} colors={use_colors}: {line:?}"));
+        }
+    }
+    insta::assert_snapshot!(snapshot.join("\n"));
+}
+
 fn status_preview_line_option(chat: &mut ChatWidget, items: &[StatusLineItem]) -> Option<String> {
     let preview_data = chat.status_surface_preview_data();
     preview_data

@@ -1,0 +1,12 @@
+---
+source: tui/src/resume_picker_color_tests.rs
+expression: "snapshot.join(\"\\n\")"
+---
+Comfortable colors=true selected=true: Line::from_iter([Span::from("❯ ").yellow().bold(), Span::from("Named task").fg(Color::Rgb(242, 205, 205)), Span::from("                    ").yellow()]).yellow()
+Comfortable colors=true selected=false: Line::from_iter([Span::from("  "), Span::from("Named task").fg(Color::Rgb(242, 205, 205))])
+Comfortable colors=false selected=true: Line::from_iter([Span::from("❯ ").yellow().bold(), Span::from("Named task").yellow(), Span::from("                    ").yellow()]).yellow()
+Comfortable colors=false selected=false: Line::from_iter([Span::from("  "), Span::from("Named task")])
+Dense colors=true selected=true: Line::from_iter([Span::from("❯ ").yellow().bold(), Span::from("-           ").dim(), Span::from("Named task        ").fg(Color::Rgb(242, 205, 205))]).yellow()
+Dense colors=true selected=false: Line::from_iter([Span::from("  "), Span::from("-           ").dim(), Span::from("Named task        ").fg(Color::Rgb(242, 205, 205))])
+Dense colors=false selected=true: Line::from_iter([Span::from("❯ ").yellow().bold(), Span::from("-           ").dim(), Span::from("Named task        ").yellow()]).yellow()
+Dense colors=false selected=false: Line::from_iter([Span::from("  "), Span::from("-           ").dim(), Span::from("Named task        ")])

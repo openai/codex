@@ -321,6 +321,7 @@ impl App {
                     &self.app_server_target,
                     self.environment_manager.as_ref(),
                 ),
+            self.local_settings.tui.status_line_use_colors,
             self.app_event_tx.clone(),
             self.keymap.clone(),
             Arc::clone(&self.agents_overview.view_state),

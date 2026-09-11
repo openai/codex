@@ -218,6 +218,7 @@ impl ChatWidget {
         self.set_status_line(status_line_from_segments(
             segments,
             self.local_settings.tui.status_line_use_colors,
+            self.thread_id,
         ));
         let hyperlink_url = selections
             .status_line_items

@@ -179,6 +179,7 @@ impl AgentsOverviewViewState {
 }
 
 pub(super) struct AgentsOverviewView {
+    use_theme_colors: bool,
     pub(super) rows: Vec<AgentsOverviewRow>,
     project_groups: Vec<AgentsOverviewProjectGroup>,
     selected: usize,
@@ -195,6 +196,7 @@ impl AgentsOverviewView {
         rows: Vec<AgentsOverviewRow>,
         selected_thread_id: Option<ThreadId>,
         worktrees_enabled: bool,
+        use_theme_colors: bool,
         app_event_tx: AppEventSender,
         keymap: RuntimeKeymap,
         state: Arc<Mutex<AgentsOverviewViewState>>,
@@ -220,6 +222,7 @@ impl AgentsOverviewView {
             .map(|row| AgentsOverviewProjectGroup::for_thread(&row.thread, worktrees_enabled))
             .collect();
         let mut view = Self {
+            use_theme_colors,
             rows,
             project_groups,
             selected,
@@ -240,6 +243,14 @@ impl AgentsOverviewView {
 
     pub(super) fn thread_ids(&self) -> Vec<ThreadId> {
         self.rows.iter().map(|row| row.thread_id).collect()
+    }
+
+    fn title_style(&self, thread_id: ThreadId) -> Style {
+        if self.use_theme_colors {
+            Style::default().fg(crate::thread_color::thread_color(thread_id))
+        } else {
+            Style::default()
+        }
     }
 
     fn state(&self) -> MutexGuard<'_, AgentsOverviewViewState> {
@@ -439,7 +450,7 @@ impl AgentsOverviewView {
                 " ".into(),
                 dot,
                 " ".into(),
-                display_title(&row.thread).into(),
+                Span::styled(display_title(&row.thread), self.title_style(row.thread_id)),
                 current.dim(),
             ];
             if project_grouping {
@@ -460,7 +471,10 @@ impl AgentsOverviewView {
             Line::from("Task details".bold()),
             Line::default(),
             crate::line_truncation::truncate_line_with_ellipsis_if_overflow(
-                display_title(&row.thread).to_owned().bold().into(),
+                Line::from(Span::styled(
+                    display_title(&row.thread).to_owned(),
+                    self.title_style(row.thread_id).bold(),
+                )),
                 width,
             ),
             Line::from(vec![dot, " ".into(), status.into()]),
