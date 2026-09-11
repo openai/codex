@@ -47,6 +47,9 @@ if [[ $# -eq 0 ]]; then
 fi
 
 bazel_startup_args=()
+if [[ -n "${BAZEL_HOST_JVM_ARG:-}" ]]; then
+  bazel_startup_args+=("--host_jvm_args=${BAZEL_HOST_JVM_ARG}")
+fi
 if [[ -n "${BAZEL_OUTPUT_USER_ROOT:-}" ]]; then
   bazel_startup_args+=("--output_user_root=${BAZEL_OUTPUT_USER_ROOT}")
 fi

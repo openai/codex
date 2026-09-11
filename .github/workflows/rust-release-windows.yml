@@ -221,7 +221,7 @@ jobs:
           ARCH: ${{ matrix.arch }}
           VOICE_ARCH: ${{ matrix.arch }}
           # Avoid the observed Java 25 C1 crash in this method on Windows ARM64.
-          JAVA_TOOL_OPTIONS: ${{ matrix.arch == 'aarch64' && '-XX:CompileCommand=exclude,net.starlark.java.eval.BuiltinFunction::getPositionalOnlyArgumentVector' || '' }}
+          BAZEL_HOST_JVM_ARG: ${{ matrix.arch == 'aarch64' && '-XX:CompileCommand=exclude,net.starlark.java.eval.BuiltinFunction::getPositionalOnlyArgumentVector' || '' }}
           BUILDBUDDY_API_KEY: ""
         run: |
           (cd codex-rs && cargo update --workspace)
