@@ -5,24 +5,27 @@
 use super::*;
 use codex_config::ConfigLayerSource;
 
-pub(super) fn has_launch_setting(
+pub(crate) fn has_launch_setting(
     config: &Config,
     cli_kv_overrides: &[(String, TomlValue)],
     key: &str,
 ) -> bool {
     // A remote server cannot resolve this invocation's explicitly selected local profile.
+    // Only count the profile when it supplies the effective value; project settings can shadow it.
     cli_kv_overrides.iter().any(|(path, _)| path == key)
-        || config.config_layer_stack.layers_high_to_low().any(|layer| {
-            layer.disabled_reason.is_none()
-                && matches!(
+        || config
+            .config_layer_stack
+            .layers_high_to_low()
+            .find(|layer| layer.config.get(key).is_some())
+            .is_some_and(|layer| {
+                matches!(
                     layer.name,
                     ConfigLayerSource::User {
                         profile: Some(_),
                         ..
                     }
                 )
-                && layer.config.get(key).is_some()
-        })
+            })
 }
 
 pub(super) fn overlay_new_session_defaults(

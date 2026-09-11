@@ -11,8 +11,16 @@ async fn replacement_uses_server_defaults_and_preserves_explicit_launch_settings
         (Some("medium"), "effort", "server-model", "low"),
         (None, "profile_model", "profile-model", "high"),
         (None, "profile_effort", "server-model", "low"),
-        (Some(""), "profile", "managed-model", "low"),
-        (Some("medium"), "profile", "managed-model", "medium"),
+        (Some("medium"), "profile_model", "profile-model", "high"),
+        (Some("medium"), "profile_effort", "server-model", "low"),
+        (Some(""), "profile", "profile-model", "low"),
+        (Some("medium"), "profile", "profile-model", "low"),
+        (
+            Some("medium"),
+            "profile_unrelated",
+            "managed-model",
+            "medium",
+        ),
     ] {
         let (mut app, _events, _ops) = make_test_app_with_channels().await;
         let server_home = tempdir()?;
@@ -68,13 +76,14 @@ async fn replacement_uses_server_defaults_and_preserves_explicit_launch_settings
                 "model_reasoning_effort".to_string(),
                 TomlValue::String("low".to_string()),
             )),
-            profile @ ("profile" | "profile_model" | "profile_effort") => {
+            profile @ ("profile" | "profile_model" | "profile_effort" | "profile_unrelated") => {
                 let path = client_home.path().join("work.config.toml");
                 std::fs::write(
                     &path,
                     match profile {
                         "profile_model" => "model = \"profile-model\"\n",
                         "profile_effort" => "model_reasoning_effort = \"low\"\n",
+                        "profile_unrelated" => "model_verbosity = \"low\"\n",
                         _ => "model = \"profile-model\"\nmodel_reasoning_effort = \"low\"\n",
                     },
                 )?;

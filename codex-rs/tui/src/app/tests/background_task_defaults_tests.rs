@@ -416,6 +416,7 @@ async fn background_task_preserves_explicit_choices_and_managed_defaults() -> Re
         ("saved", "server-model", "high"),
         ("cli_effort", "server-model", "low"),
         ("profile_model", "profile-model", "high"),
+        ("profile_managed", "profile-model", "low"),
         ("managed", "managed-model", "medium"),
     ] {
         let client_home = tempdir()?;
@@ -428,7 +429,7 @@ async fn background_task_preserves_explicit_choices_and_managed_defaults() -> Re
             server_home.path().join("config.toml"),
             "model = \"server-model\"\nmodel_reasoning_effort = \"high\"\n",
         )?;
-        if choice == "managed" || choice.starts_with("cli_") {
+        if choice == "managed" || choice == "profile_managed" || choice.starts_with("cli_") {
             std::fs::write(
                 server_home.path().join("requirements.toml"),
                 "[models.new_thread]\nmodel = \"managed-model\"\nmodel_reasoning_effort = \"medium\"\n",
@@ -440,9 +441,16 @@ async fn background_task_preserves_explicit_choices_and_managed_defaults() -> Re
                 "model_reasoning_effort".into(),
                 TomlValue::String("low".into()),
             )),
-            "profile_model" => {
+            "profile_model" | "profile_managed" => {
                 let path = client_home.path().join("work.config.toml");
-                std::fs::write(&path, "model = \"profile-model\"\n")?;
+                std::fs::write(
+                    &path,
+                    if choice == "profile_managed" {
+                        "model = \"profile-model\"\nmodel_reasoning_effort = \"low\"\n"
+                    } else {
+                        "model = \"profile-model\"\n"
+                    },
+                )?;
                 app.loader_overrides.user_config_path = Some(path.abs());
                 app.loader_overrides.user_config_profile = Some("work".parse()?);
             }

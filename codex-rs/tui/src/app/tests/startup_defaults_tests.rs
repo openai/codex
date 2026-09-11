@@ -178,6 +178,8 @@ async fn fresh_startup_uses_server_defaults_with_explicit_and_managed_precedence
         ("cli_effort", true, "server-model", "low"),
         ("profile_model", false, "profile-model", "high"),
         ("profile_effort", false, "server-model", "low"),
+        ("profile_model", true, "profile-model", "high"),
+        ("profile_effort", true, "server-model", "low"),
         ("managed", true, "managed-model", "medium"),
     ] {
         let client_home = tempdir()?;
