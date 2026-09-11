@@ -25,6 +25,9 @@ def _windows_tools_impl(ctx):
     system_root = ctx.configuration.default_shell_env.get("SystemRoot")
     if not system_root:
         fail("Pass --action_env=SystemRoot=<actual Windows directory> as a fixed value")
+    host_architecture = ctx.configuration.default_shell_env.get("PROCESSOR_ARCHITECTURE")
+    if not host_architecture:
+        fail("Pass --action_env=PROCESSOR_ARCHITECTURE=<actual host architecture> as a fixed value")
     msvc = ctx.attr.msvc[DirectoryInfo]
     sdk = ctx.attr.sdk[DirectoryInfo]
     tools = {
@@ -68,7 +71,11 @@ def _windows_tools_impl(ctx):
         python = python,
         manifest = manifests[0],
         installed_files = installed,
-        environment = {"SystemRoot": system_root, "SYSTEMROOT": system_root},
+        environment = {
+            "SystemRoot": system_root,
+            "SYSTEMROOT": system_root,
+            "PROCESSOR_ARCHITECTURE": host_architecture,
+        },
         inputs = {
             "schemaVersion": 1,
             "target": ctx.attr.target,

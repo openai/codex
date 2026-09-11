@@ -276,6 +276,38 @@ class AssembleTests(unittest.TestCase):
                 )
                 self.assertEqual(manifest["appVersion"], version)
 
+    def test_linux_release_pairs_musl_app_with_gnu_voice_runtime(self):
+        self.commit = "b" * 40
+        target = "aarch64-unknown-linux-gnu"
+        runtime, _ = self.make_runtime(target)
+        staged = self.root / "staged"
+        stage(runtime, staged, target)
+        seal(staged, target)
+        for version in ("0.154.0-alpha.8", "0.154.0-beta.2", "0.154.0"):
+            with self.subTest(version=version):
+                self.metadata["version"] = version
+                (self.package / "codex-package.json").write_text(
+                    json.dumps(self.metadata)
+                )
+                output = self.root / f"linux-{version}"
+                assemble(
+                    self.package,
+                    self.helper,
+                    target,
+                    self.commit,
+                    output,
+                    runtime=staged,
+                    release_version=version,
+                )
+                voice = output / "codex-resources/voice"
+                manifest = json.loads((voice / "manifest.json").read_text())
+                self.assertEqual(manifest["appTarget"], "aarch64-unknown-linux-musl")
+                self.assertEqual(manifest["voiceTarget"], target)
+                self.assertEqual(
+                    manifest["sha256"]["codex-resources/voice/runtime.json"],
+                    digest(staged / "runtime.json"),
+                )
+
     def test_rejects_invalid_runtime_receipts_before_creating_package(self):
         runtime, original = self.make_runtime()
         changes = [

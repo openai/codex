@@ -471,3 +471,34 @@ async fn startup_retry_never_retries_twice_or_retries_other_errors_or_active_ses
         assert!(ops.try_recv().is_err(), "no retry may be queued");
     }
 }
+
+#[tokio::test]
+async fn failure_cleanup_does_not_attribute_stop_to_the_user() {
+    let (mut chat, _sender, mut events, _ops) = make_chatwidget_manual_with_sender().await;
+    // A local failure initiates backend cleanup; its acknowledgement is still "requested".
+    chat.realtime_conversation.phase = RealtimeConversationPhase::Stopping;
+    chat.realtime_conversation.failure_recorded = true;
+    chat.on_realtime_error(format!(
+        "Failed to connect voice mode: {}",
+        codex_realtime_webrtc::ConnectionError::AudioDevices
+    ));
+    chat.on_realtime_conversation_closed(Some("requested".into()));
+    assert_eq!(
+        chat.realtime_conversation.phase,
+        RealtimeConversationPhase::Inactive
+    );
+    let rendered = std::iter::from_fn(|| events.try_recv().ok())
+        .filter_map(|event| match event {
+            AppEvent::InsertHistoryCell(cell) => Some(
+                cell.display_lines(/*width*/ 80)
+                    .into_iter()
+                    .map(|line| line.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!("voice_device_failure_cleanup", rendered);
+}

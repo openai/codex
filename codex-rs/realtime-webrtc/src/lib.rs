@@ -1,5 +1,7 @@
 mod client;
 mod helper_exit;
+#[cfg(any(target_os = "linux", test))]
+mod linux_alsa;
 mod message_reader;
 mod protocol;
 mod session;

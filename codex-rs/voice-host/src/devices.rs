@@ -243,9 +243,12 @@ fn bounded_stream_config(
     if min > max {
         return Err(io::Error::other("unsupported audio callback size range"));
     }
-    // Aim for 10 ms without consuming the queue's service headroom.
-    // Do not fall back to the backend's potentially much larger default buffer.
-    let frames = (config.sample_rate / 100).clamp(min, max);
+    // ALSA allocates two periods. A 20 ms ring can be smaller than one PipeWire
+    // graph cycle (e.g. 2048 frames at 48 kHz), silently losing capture samples
+    // every cycle. Give Linux a bounded 100 ms ring instead, while retaining
+    // 10 ms callbacks elsewhere and rejecting incompatible device ranges below.
+    let periods_per_second = if cfg!(target_os = "linux") { 20 } else { 100 };
+    let frames = (config.sample_rate / periods_per_second).clamp(min, max);
     let callback_duration =
         Duration::from_secs_f64(f64::from(frames) / f64::from(config.sample_rate));
     // Backends may deliver smaller callbacks than requested. Packing makes queue

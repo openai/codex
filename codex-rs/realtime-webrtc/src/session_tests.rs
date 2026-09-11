@@ -198,3 +198,26 @@ async fn startup_completion_preserves_classified_failure() {
         assert_eq!(handle.take_error(), None);
     }
 }
+
+#[test]
+fn classified_errors_discard_sensitive_sources_but_preserve_retry_classification() {
+    let error = report_failure::<()>(
+        ConnectionError::AudioDevices,
+        Err(anyhow::anyhow!("synthetic-secret-sdp-device-path")),
+    )
+    .unwrap_err();
+    assert_eq!(
+        format!("{error:#}"),
+        ConnectionError::AudioDevices.to_string()
+    );
+    assert!(!format!("{error:?}").contains("synthetic-secret"));
+    let error = report_failure::<()>(
+        ConnectionError::Transport,
+        Err(ConnectionError::NegotiationTimedOut.into()),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<ConnectionError>(),
+        Some(&ConnectionError::NegotiationTimedOut)
+    );
+}

@@ -258,11 +258,14 @@ The module does not download that installed tree or accept compiler licenses.
 After provisioning, a native PowerShell invocation is:
 
 ```powershell
+$hostArch = $env:PROCESSOR_ARCHITEW6432
+if (-not $hostArch) { $hostArch = $env:PROCESSOR_ARCHITECTURE }
 bazel build //third_party/voice:native_link_windows_x86_64 `
   --platforms=//:local_windows_msvc `
   --inject_repository="voice_windows_tools=$env:VOICE_WINDOWS_BAZEL_REPOSITORY" `
   --//third_party/voice:windows_installed_tools=@voice_windows_tools//:tools `
-  --action_env="SystemRoot=$env:SystemRoot" --host_action_env="SystemRoot=$env:SystemRoot"
+  --action_env="SystemRoot=$env:SystemRoot" --host_action_env="SystemRoot=$env:SystemRoot" `
+  --action_env="PROCESSOR_ARCHITECTURE=$hostArch" --host_action_env="PROCESSOR_ARCHITECTURE=$hostArch"
 ```
 
 Use `native_link_windows_aarch64` on native ARM64 Windows. Existing MSVC license

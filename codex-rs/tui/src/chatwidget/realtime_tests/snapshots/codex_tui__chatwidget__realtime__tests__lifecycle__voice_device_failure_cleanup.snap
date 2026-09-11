@@ -1,0 +1,6 @@
+---
+source: tui/src/chatwidget/realtime_tests/lifecycle.rs
+assertion_line: 498
+expression: rendered
+---
+■ Failed to connect voice mode: voice audio devices could not open; check microphone and speaker setup

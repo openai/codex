@@ -16,6 +16,7 @@ use futures::future::Abortable;
 use tokio::sync::mpsc;
 
 use crate::AudioControls;
+use crate::ConnectionError;
 use crate::SessionDescription;
 use crate::VoiceHost;
 
@@ -134,30 +135,37 @@ impl RealtimeWebrtcSession {
             .spawn(move || {
                 let task = async {
                     let host = report_failure(
-                        "connect",
+                        ConnectionError::HelperStartup,
                         VoiceHost::connect(&package, &build_commit).await,
                     )?;
-                    let host =
-                        report_failure("initialize_runtime", host.initialize_runtime().await)?;
+                    let host = report_failure(
+                        ConnectionError::RuntimeInitialization,
+                        host.initialize_runtime().await,
+                    )?;
                     let (host, sdp) =
-                        report_failure("start_transport", host.start_transport().await)?;
+                        report_failure(ConnectionError::Transport, host.start_transport().await)?;
                     offer
-                        .send(sdp.into_sdp())
+                        .send(Ok(sdp.into_sdp()))
                         .map_err(|_| anyhow::anyhow!("voice startup cancelled"))?;
                     run(host, receiver, &state, &controls).await
                 };
                 let result = runtime.block_on(Abortable::new(Abortable::new(task, abort), stopped));
-                if !matches!(result, Err(_) | Ok(Err(_)) | Ok(Ok(Ok(())))) {
+                if let Ok(Ok(Err(error))) = result {
+                    let failure = error
+                        .downcast_ref::<ConnectionError>()
+                        .copied()
+                        .unwrap_or(ConnectionError::Failed);
+                    let _ = offer.try_send(Err(failure));
                     *state
                         .error
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner) =
-                        Some("Voice helper stopped unexpectedly.".into());
+                        Some(failure.to_string());
                 }
             })?;
         let offer_sdp = result
             .recv_timeout(STARTUP_WAIT)
-            .map_err(|_| anyhow::anyhow!("voice startup failed"))?;
+            .map_err(|_| anyhow::anyhow!("voice startup failed"))??;
         Ok(StartedRealtimeWebrtcSession { offer_sdp, handle })
     }
 }
@@ -267,35 +275,39 @@ async fn run(
             biased;
             command = commands.recv() => match command {
                 Some(Command::Answer(sdp, complete)) if !connected => {
-                    host = match host.apply_answer(sdp).await {
+                    let startup = async {
+                        let mut host = report_failure(ConnectionError::Transport, host.apply_answer(sdp).await)?;
+                        host = report_failure(ConnectionError::AudioDevices, host.open_devices().await)?;
+                        let applied = startup_controls(&mut commands, controls, |initial| {
+                            host.begin_audio_controls(initial)
+                        });
+                        let applied = report_failure(ConnectionError::AudioControls, applied)?;
+                        report_failure(ConnectionError::AudioControls, applied.await)?;
+                        Ok::<_, anyhow::Error>(host)
+                    }.await;
+                    host = match startup {
                         Ok(host) => host,
                         Err(error) => {
-                            let failure = error.downcast_ref::<crate::ConnectionError>()
-                                .copied().unwrap_or(crate::ConnectionError::Failed);
+                            let failure = error.downcast_ref::<ConnectionError>()
+                                .copied().unwrap_or(ConnectionError::Failed);
                             let _ = complete.send(Err(failure));
                             // This failure is delivered by the startup completion only.
                             return Ok(());
                         }
                     };
-                    host = report_failure("open_devices", host.open_devices().await)?;
-                    let applied = startup_controls(&mut commands, controls, |initial| {
-                        host.begin_audio_controls(initial)
-                    });
-                    let applied = report_failure("queue_startup_controls", applied)?;
-                    report_failure("apply_startup_controls", applied.await)?;
                     connected = true;
                     let _ = complete.send(Ok(()));
                 }
                 Some(Command::Controls(next)) => {
                     if connected {
-                        report_failure("set_audio_controls", host.set_audio_controls(next).await)?;
+                        report_failure(ConnectionError::AudioControls, host.set_audio_controls(next).await)?;
                     }
                 }
                 Some(Command::Answer(..)) => anyhow::bail!("voice answer already applied"),
-                None => return report_failure("close", host.close().await),
+                None => return report_failure(ConnectionError::Shutdown, host.close().await),
             },
             _ = poll.tick() => {
-                let audio = report_failure("inspect_audio", host.inspect_audio().await)?;
+                let audio = report_failure(ConnectionError::AudioSession, host.inspect_audio().await)?;
                 state.microphone.fetch_max(audio.microphone_peak, Ordering::Release);
                 state.speaker.fetch_max(audio.speaker_peak, Ordering::Release);
             }
@@ -304,8 +316,8 @@ async fn run(
 }
 
 // Keep diagnostics bounded and independent of untyped native, SDP, or device error text.
-fn report_failure<T>(stage: &'static str, result: Result<T>) -> Result<T> {
-    result.inspect_err(|error| {
+fn report_failure<T>(stage: ConnectionError, result: Result<T>) -> Result<T> {
+    result.map_err(|error| {
         let kind = if error.is::<tokio::time::error::Elapsed>() {
             "timeout"
         } else if let Some(error) = error.downcast_ref::<std::io::Error>() {
@@ -319,7 +331,13 @@ fn report_failure<T>(stage: &'static str, result: Result<T>) -> Result<T> {
         } else {
             "other"
         };
-        tracing::warn!(stage, kind, "voice session operation failed");
+        tracing::warn!(?stage, kind, "voice session operation failed");
+        let failure = error
+            .downcast_ref::<ConnectionError>()
+            .copied()
+            .unwrap_or(stage);
+        // Replace the original error instead of retaining a potentially sensitive source chain.
+        anyhow::Error::new(failure)
     })
 }
 

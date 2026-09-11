@@ -14,6 +14,7 @@ fn forwards_only_explicit_device_network_and_os_inputs() {
         ("DYLD_INSERT_LIBRARIES", "loader"),
         ("PATH", "project"),
         ("GST_PLUGIN_PATH", "plugins"),
+        ("ALSA_PLUGIN_DIR", "untrusted-alsa-plugins"),
         ("GST_REGISTRY", "untrusted-registry"),
         ("GST_REGISTRY_FORK", "yes"),
         ("OPENAI_API_KEY", "secret"),

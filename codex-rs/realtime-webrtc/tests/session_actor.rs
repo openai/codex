@@ -67,7 +67,10 @@ fn startup_controls_meters_and_helper_loss() -> Result<()> {
         error = handle.take_error();
         error.is_some()
     })?;
-    assert_eq!(error.as_deref(), Some("Voice helper stopped unexpectedly."));
+    assert_eq!(
+        error.as_deref(),
+        Some("voice audio session stopped unexpectedly")
+    );
     assert_eq!(handle.take_error(), None);
     Ok(())
 }
@@ -106,4 +109,48 @@ fn last_owner_drop_reaps_helper() -> Result<()> {
     let started = RealtimeWebrtcSession::start(registration)?;
     drop(started);
     common::wait_for_helper_reaped(&root)
+}
+
+#[test]
+fn device_failure_reaches_startup_completion_without_duplicate_error() -> Result<()> {
+    let Some(root) =
+        common::package("device_failure_reaches_startup_completion_without_duplicate_error")?
+    else {
+        return Ok(());
+    };
+    fs::write(root.join("fail-devices"), [])?;
+    fs::write(root.join("release"), [])?;
+    let (_abort, registration) = AbortHandle::new_pair();
+    let started = RealtimeWebrtcSession::start(registration)?;
+    assert_eq!(
+        started.handle.apply_answer_sdp("synthetic-answer".into()),
+        Err(codex_realtime_webrtc::ConnectionError::AudioDevices)
+    );
+    #[cfg(unix)]
+    common::wait_for_helper_reaped(&root)?;
+    assert_eq!(started.handle.take_error(), None);
+    Ok(())
+}
+
+#[test]
+fn runtime_failure_reaches_offer_caller_without_native_error_text() -> Result<()> {
+    let Some(root) =
+        common::package("runtime_failure_reaches_offer_caller_without_native_error_text")?
+    else {
+        return Ok(());
+    };
+    fs::write(root.join("fail-initialization"), [])?;
+    let (_abort, registration) = AbortHandle::new_pair();
+    let error = RealtimeWebrtcSession::start(registration).unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<codex_realtime_webrtc::ConnectionError>(),
+        Some(&codex_realtime_webrtc::ConnectionError::RuntimeInitialization)
+    );
+    assert_eq!(
+        format!("{error:#}"),
+        "voice audio runtime could not initialize"
+    );
+    #[cfg(unix)]
+    common::wait_for_helper_reaped(&root)?;
+    Ok(())
 }

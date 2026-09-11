@@ -72,17 +72,22 @@ fn startup_output_waits_for_service_and_later_overflow_discards_reference() {
 
 #[test]
 fn callback_configuration_fits_supported_range_and_actual_queue() {
-    for (rate, min, max, frames) in [
-        (96_000, 0, u32::MAX, 960),
-        (96_000, 1, 16, 16),
-        (384_000, 1, 64, 64),
-        (8_000, 7_680, 8_192, 7_680),
-        (384_000, 1, 16, 16),
-        (96_000, 1, 15, 15),
-        (48_000, 1, 128, 128),
-        (48_000, 2_048, 16_384, 2_048),
-        (384_000, 6_016, 16_384, 6_016),
+    for (rate, min, max, other_frames, linux_frames) in [
+        (96_000, 0, u32::MAX, 960, 4_800),
+        (96_000, 1, 16, 16, 16),
+        (384_000, 1, 64, 64, 64),
+        (8_000, 7_680, 8_192, 7_680, 7_680),
+        (384_000, 1, 16, 16, 16),
+        (96_000, 1, 15, 15, 15),
+        (48_000, 1, 128, 128, 128),
+        (48_000, 2_048, 16_384, 2_048, 2_400),
+        (384_000, 6_016, 16_384, 6_016, 8_192),
     ] {
+        let frames = if cfg!(target_os = "linux") {
+            linux_frames
+        } else {
+            other_frames
+        };
         let supported = cpal::SupportedStreamConfig::new(
             /*channels*/ 2,
             rate,
@@ -114,6 +119,77 @@ fn callback_configuration_fits_supported_range_and_actual_queue() {
             }
         }
     }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn pipewire_graph_cycles_support_capture_and_playback() {
+    let supported = cpal::SupportedStreamConfig::new(
+        /*channels*/ 2,
+        /*sample_rate*/ 48_000,
+        cpal::SupportedBufferSize::Range {
+            min: 1,
+            max: 16_384,
+        },
+        cpal::SampleFormat::F32,
+    );
+    let cpal::BufferSize::Fixed(period) = bounded_stream_config(&supported).unwrap().buffer_size
+    else {
+        panic!("callback size must be bounded");
+    };
+    let mut processor =
+        processing::Processor::new(/*input_rate*/ 48_000, /*output_rate*/ 48_000).unwrap();
+    let mut packer = FramePacker::default();
+    let buffers = Arc::new(Buffers::new(
+        /*input_rate*/ 48_000, /*output_rate*/ 48_000,
+    ));
+    let start = Instant::now();
+    let mut available = 0;
+    let mut packets = Vec::new();
+    // Model measured 2048-frame graph cycles and ALSA's two-period ring.
+    // Packing and encoding must sustain 20 ms packets despite this cadence.
+    for cycle in 1..=48 {
+        available = (available + 2_048).min(2 * period);
+        let now = start + Duration::from_secs_f64(f64::from(cycle * 2_048) / 48_000.0);
+        while available >= period {
+            let captured = now - Duration::from_secs_f64(f64::from(available) / 48_000.0);
+            packer.discard_capture_gap(captured, /*rate*/ 48_000.0);
+            for offset in (0..period as usize).step_by(BLOCK) {
+                let frame = Frame {
+                    samples: [0.25; BLOCK],
+                    len: BLOCK.min(period as usize - offset),
+                    at: captured + Duration::from_secs_f64(offset as f64 / 48_000.0),
+                    generation: 2,
+                };
+                assert!(packer.push(frame, /*rate*/ 48_000.0, &buffers.capture));
+            }
+            available -= period;
+            while let Some(frame) = buffers.capture.pop() {
+                packets.extend(processor.capture(&frame, || now).unwrap());
+            }
+        }
+    }
+    assert!(packets.len() >= 90, "capture starved Opus");
+
+    // Queue a full output callback without racing the producer.
+    Buffers::set_disabled(&buffers.speaker, /*disabled*/ false).unwrap();
+    buffers.serviced.store(true, Ordering::Release);
+    let port = PlaybackPort::new(buffers.clone(), /*rate*/ 48_000);
+    let writer = port.writer();
+    let bytes = 0.25_f32.to_le_bytes().repeat(period as usize);
+    for chunk in bytes.chunks(BLOCK * 4) {
+        assert_eq!(writer.write(chunk).unwrap(), chunk.len());
+    }
+    let mut output = vec![0.0_f32; period as usize];
+    render_output(
+        &mut output,
+        /*channels*/ 1,
+        /*rate*/ 48_000.0,
+        Instant::now(),
+        &buffers,
+        &mut OutputState::default(),
+    );
+    assert_eq!(output, vec![0.25; period as usize]);
 }
 
 #[test]
