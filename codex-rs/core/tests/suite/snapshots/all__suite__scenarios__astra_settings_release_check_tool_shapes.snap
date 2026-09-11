@@ -1,0 +1,211 @@
+---
+source: core/tests/suite/scenarios.rs
+expression: "context_snapshot::format_request_history_snapshot(\"Astra checks a Settings release using direct collaboration and Code Mode tools.\",\n&mock.requests(),\n&ContextSnapshotOptions::default().include_request_settings(),)"
+---
+Scenario: Astra checks a Settings release using direct collaboration and Code Mode tools.
+
+## Window 1
+Settings:
+  include: ["reasoning.encrypted_content"]
+  model: "gpt-6-astra"
+  parallel_tool_calls: false
+  prompt_cache_key: "<PROMPT_CACHE_KEY 1>"
+  reasoning: {"context":"all_turns","effort":"low"}
+  store: false
+  stream: true
+  text: {"verbosity":"low"}
+  tool_choice: "auto"
+-- request 1 (turn) --
+00:additional_tools/developer (3; hash=61ace4f77de8d87f):
+        - namespace/functions; hash=8c17932a39355f2d
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+          - function/request_user_input_async
+        - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
+          - function/sleep
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=43f195d9cc99ee15
+          - function/followup_task
+          - function/interrupt_agent
+          - function/list_agents
+          - function/send_message
+          - function/spawn_agent
+          - function/wait_agent
+01:message/developer:
+    You are Codex, an agent based on GPT-6. You and the user share one workspace, and your job is to collabo...them until their intended goal is completely handled. [hash=efa50f074efa5803]
+
+    # When to ask the user for permission
+
+    Use your best judgement given task context for when you really need user permission, like a competent co...ork without ending the turn to clarify with the user. [hash=ca7367e658b51388]
+
+    User authorization and preferences persist across turns. Do not request permission again when the user h... any guidelines provided in skills or external files. [hash=911f91c92c72882c]
+
+    You MUST complete the work that is already authorized and necessary to make the proposed action concrete... in the session or implied from the task instruction. [hash=821281c2d48149b3]
+
+    Do not use tools to send messages to others (e.g. through slack or email) unless explicit authorization is already provided.
+
+    The user gets very frustrated when you stop and ask for confirmation or permission, so make sure to expl... commentary and final, after any permission question. [hash=7e6ab67a40648d1d]
+
+    # Autonomy and persistence
+
+    <OMITTED 139 LINES; ~4454 TOKENS; hash=e00e6ed8fb28f55f>
+    An installed app's MCP tools are either provided to you already, or can be lazy-loaded through the `tool...re searchable by `tools_search` will be listed by it. [hash=4f9c0d35da3968a5]
+    Do not additionally call list_mcp_resources or list_mcp_resource_templates for apps.
+
+    # Plugins
+
+    A plugin is a local bundle of skills, MCP servers, and apps.
+
+    ## How to use plugins
+
+    - Skill naming: If a plugin contributes skills, those skill entries are prefixed with plugin_name: in the Skills list.
+    - MCP naming: Plugin-provided MCP tools keep standard MCP identifiers such as mcp__server__tool; use tool provenance to tell which plugin they come from.
+    - Trigger rules: If the user explicitly names a plugin, prefer capabilities associated with that plugin for that turn.
+    - Relationship to capabilities: Plugins are not invoked directly. Use their underlying skills, MCP tools, and app tools to help solve the task.
+    - Relevance: Determine what a plugin can help with from explicit user mention or from the plugin-associa..., MCP tools, and apps exposed elsewhere in this turn. [hash=620459a4e7b590f0]
+    - Missing/blocked: If the user requests a plugin that does not have relevant callable capabilities for t..., say so briefly and continue with the best fallback. [hash=746b0469a8f6cb3e]
+
+02:message/developer[2]:
+    [01] <permissions instructions>
+        Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `danger-full-access`...ll commands are permitted. Network access is enabled. [hash=c134061cebb94a1b]
+        Approval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.
+        </permissions instructions>
+    [02] <collaboration_mode># Collaboration Mode: Default
+
+        You are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.
+
+        Your active mode changes only when new developer instructions with a different `<collaboration_mode>...<...by themselves. Known mode names are Default and Plan. [hash=e75f6b12fc52d812]
+
+        ## request_user_input availability
+
+        Use the `request_user_input` tool only when it is listed in the available tools for this turn.
+
+        In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions.
+
+        Use the `request_user_input` tool only for optional questions where the answer would materially improve the quality of the work.
+
+        If `request_user_input` returns no answers, continue with best judgment instead of asking again or treating the turn as blocked.
+
+        Never use the `request_user_input` tool for permission requests or permission-related escalations.
+
+        If explicit user input is required for another reason before progress can safely continue, do not use th... as a textual assistant message.</collaboration_mode> [hash=8213052bde4a62b2]
+03:message/developer:
+    <multi_agent_role>You are `/root`, the primary agent in a team of agents collaborating to fulfill the user's goals.
+
+    At the start of your turn, you are the active agent.
+    You can spawn sub-agents to handle subtasks, and those sub-agents can spawn their own sub-agents.
+    All agents in the team, including the agents that you can assign tasks to, are equally intelligent and capable, and have access to the same set of tools.
+
+    You can use `spawn_agent` to create a new agent, `followup_task` to give an existing agent a new task an...message to a running agent without triggering a turn. [hash=7d40ff8b58977202]
+    `send_message` calls may be read by a human, so ensure they are legible. Always put proper spaces between words and/or numbers.
+    Child agents can also spawn their own sub-agents.
+    You can decide how much context you want to propagate to your sub-agents with the `fork_turns` parameter.
+
+    You will receive messages in the analysis channel in the form:
+    ```
+    Message Type: MESSAGE | FINAL_ANSWER
+    Task name: <recipient>
+    Sender: <author>
+    Payload:
+    <payload text>
+    ```
+    They may be addressed as to=/root
+
+    Note that collaboration tools cannot be called from inside `functions.exec`. Call `spawn_agent`, `send_m...ed with a `tools` namespace in the developer message. [hash=2798139748f66a39]
+
+    All agents share the same directory. In detail:
+    - All agents have access to the same container and filesystem as you.
+    - All agents use the same current working directory.
+    - As a result, edits made by one agent are immediately visible to all other agents.
+
+    When calling `wait_agent`, prefer longer waits (minutes) to avoid busy polling.
+
+    There are 4 available concurrency slots, meaning that up to 4 agents can be active at once, including you.
+
+    Full-history forks (`fork_turns` omitted or `"all"`) inherit the parent model and reasoning effort and d...ne"` or a positive integer string.</multi_agent_role> [hash=c7f52e90688299ce]
+04:message/developer:
+    <multi_agent_mode>Any earlier instruction enabling proactive multi-agent delegation no longer applies. D...elegation, or parallel agent work.</multi_agent_mode> [hash=2b6e037067b4390c]
+05:message/user:
+    <environment_context>
+      <cwd><CWD></cwd>
+      <shell><HOST_SHELL></shell>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+      <filesystem><workspace_roots><root><WORKSPACE_ROOT 1></root></workspace_roots><permission_profile type...e="unrestricted" /></permission_profile></filesystem> [hash=0592734c170299c1]
+    </environment_context>
+06:message/user:
+    Check the Settings release. Read release/diagnostics.log, inspect release/settings.png, confirm the loca...ell me whether another agent is working on this task. [hash=aa221f7aaa101eb2]
+-- request 2 (turn) --
+07:function_call/collaboration.list_agents:{}
+08:function_call_output:{"agents":[{"agent_name":"/root","agent_status":"running"}]}
+-- request 3 (turn) --
+09:custom_tool_call/exec:const [log, ping] = await Promise.all([
+      tools.exec_command({ cmd: "cat release/diagnostics.log", login: false, max_output_tokens: 4000 }),
+      tools.mcp__rmcp__echo({ message: "settings-release-check" }),
+    ]);
+    text(`diagnostics:\\n${log.output}`);
+    text(`MCP: ${ping.structuredContent?.echo ?? "missing"}`);
+10:custom_tool_call_output:Script completed
+    Wall time <DURATION> seconds
+    Output:
+     | diagnostics:
+    UI-42: expected Settings button label: Apply
+    diagnostic 001: rendering settings panel
+    diagnostic 002: rendering settings panel
+    diagnostic 003: rendering settings panel
+    diagnostic 004: rendering settings panel
+    diagnostic 005: rendering settings panel
+    diagnostic 006: rendering settings panel
+    diagnostic 007: rendering settings panel
+    diagnostic 008: rendering settings panel
+    diagnostic 009: rendering settings panel
+    diagnostic 010: rendering settings panel
+    diagnostic 011: rendering settings panel
+    diagnostic 012: rendering settings panel
+    diagnostic 013: rendering settings panel
+    diagnostic 014: rendering settings panel
+    <OMITTED 91 LINES; ~932 TOKENS; hash=5a53261a330e90ec>
+    diagnostic 106: rendering settings panel
+    diagnostic 107: rendering settings panel
+    diagnostic 108: rendering settings panel
+    diagnostic 109: rendering settings panel
+    diagnostic 110: rendering settings panel
+    diagnostic 111: rendering settings panel
+    diagnostic 112: rendering settings panel
+    diagnostic 113: rendering settings panel
+    diagnostic 114: rendering settings panel
+    diagnostic 115: rendering settings panel
+    diagnostic 116: rendering settings panel
+    diagnostic 117: rendering settings panel
+    diagnostic 118: rendering settings panel
+    diagnostic 119: rendering settings panel
+    diagnostic 120: rendering settings panel
+    UI-42: observed Settings button label: Save | MCP: ECHOING: settings-release-check
+-- request 4 (turn) --
+11:custom_tool_call/exec:image(await tools.view_image({ path: "release/settings.png", detail: "original" }));
+12:custom_tool_call_output:Script completed
+    Wall time <DURATION> seconds
+    Output:
+     | <input_image>
+-- request 5 (turn) --
+13:custom_tool_call/exec:text(await tools.apply_patch(`*** Begin Patch
+    *** Update File: release/status.md
+    @@
+    -Status: pending
+    +Status: blocked
+    +Reason: expected Apply; observed Save
+    +MCP: reachable
+    *** End Patch
+    `));
+14:custom_tool_call_output:Script completed
+    Wall time <DURATION> seconds
+    Output:
+     | {}
+-- request 6 (turn) --
+15:custom_tool_call/exec:text((await tools.exec_command({ cmd: "cat release/status.md", login: false })).output);
+16:custom_tool_call_output:Script completed
+    Wall time <DURATION> seconds
+    Output:
+     | Status: blocked
+    Reason: expected Apply; observed Save
+    MCP: reachable
