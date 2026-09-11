@@ -81,6 +81,11 @@ async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Re
                         json!({"account": {"type": "apiKey"}, "requiresOpenaiAuth": false})
                     }
                     "model/list" => json!({"data": [], "nextCursor": null}),
+                    "config/read" => {
+                        json!({"config": {"model": "gpt-5.6-terra", "model_provider": "openai", "projects": {
+                        server_cwd.to_string_lossy(): {"trust_level": "trusted"}
+                    }}, "origins": {}, "layers": []})
+                    }
                     "configRequirements/read" => json!({"requirements": null}),
                     "thread/start" | "thread/resume" => {
                         json!({"thread": thread, "model": "gpt-5.6-terra", "modelProvider": "openai",

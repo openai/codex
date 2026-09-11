@@ -1159,36 +1159,9 @@ async fn run_ratatui_app(
             }
         }
     }
-    let remote_project_trust =
-        if uses_remote_workspace && let Some(remote_cwd) = remote_cwd_override.as_deref() {
-            match startup_draft
-                .run_until(
-                    &mut tui,
-                    config_update::read_remote_project_trust(
-                        app_server_session.request_handle(),
-                        remote_cwd,
-                    ),
-                )
-                .await
-            {
-                Ok(Ok(remote_project_trust)) => remote_project_trust,
-                Ok(Err(err)) => {
-                    shutdown_startup_session(Some(app_server_session), &mut terminal_restore_guard)
-                        .await;
-                    return Err(err);
-                }
-                Err(err) => {
-                    shutdown_startup_session(Some(app_server_session), &mut terminal_restore_guard)
-                        .await;
-                    return Err(err.into());
-                }
-            }
-        } else {
-            None
-        };
     let mut app_server = Some(app_server_session);
-    let should_show_trust_screen_flag = remote_project_trust.is_some()
-        || (!uses_remote_workspace && should_show_trust_screen(&initial_config));
+    // Folder consent runs after the picker resolves the actual destination.
+    let should_show_trust_screen_flag = false;
     #[cfg(target_os = "windows")]
     let mut trust_decision_was_made = false;
     let startup_model_provider = initial_config.model_provider_id.clone();
@@ -1242,7 +1215,7 @@ async fn run_ratatui_app(
                 show_login_screen,
                 bedrock_setup_enabled,
                 show_trust_screen: should_show_trust_screen_flag,
-                remote_project_trust,
+                remote_project_trust: None,
                 login_status,
                 app_server_request_handle: app_server
                     .as_ref()
@@ -1662,6 +1635,137 @@ async fn run_ratatui_app(
     };
     startup_draft.apply_config(&config);
 
+    if config.model_provider_id != startup_model_provider {
+        startup_account = None;
+        if matches!(&app_server_target, AppServerTarget::Embedded) {
+            // App-server providers are fixed at startup, so onboarding cannot
+            // reuse a server initialized before it persisted another provider.
+            shutdown_app_server_if_present(app_server.take()).await;
+        }
+    }
+    let mut app_server = match app_server {
+        Some(app_server) => app_server,
+        None => match startup_draft
+            .run_until(
+                &mut tui,
+                start_app_server(
+                    &mut app_server_target,
+                    arg0_paths.clone(),
+                    config.clone(),
+                    cli_kv_overrides.clone(),
+                    loader_overrides.clone(),
+                    strict_config,
+                    cloud_config_bundle.clone(),
+                    feedback.clone(),
+                    log_db.clone(),
+                    &mut state_db,
+                    environment_manager.clone(),
+                ),
+            )
+            .await
+        {
+            Ok(Ok(app_server)) => {
+                // A picker can replace the server; account reads belong to their original session.
+                startup_account = None;
+                AppServerSession::new(app_server, app_server_target.thread_params_mode())
+                    .with_local_codex_home(&config.codex_home)
+                    .with_remote_cwd_override(remote_cwd_override.clone())
+            }
+            Ok(Err(err)) => {
+                terminal_restore_guard.restore_silently();
+                session_log::log_session_end();
+                return Err(err);
+            }
+            Err(err) => {
+                terminal_restore_guard.restore_silently();
+                session_log::log_session_end();
+                return Err(err.into());
+            }
+        },
+    };
+
+    // Remote startup keeps its existing explicit --cd trust check. Resolving other
+    // remote folders requires authoritative project-root information from the server.
+    if !uses_remote_workspace || remote_cwd_override.is_some() {
+        let resumed_thread = if matches!(app_server_target, AppServerTarget::LocalDaemon { .. })
+            && let resume_picker::SessionSelection::Resume(target) = &session_selection
+        {
+            Some(
+                startup_draft
+                    .run_until(
+                        &mut tui,
+                        app_server.thread_read(target.thread_id, /*include_turns*/ false),
+                    )
+                    .await??,
+            )
+        } else {
+            None
+        };
+        let trust_cwd = remote_cwd_override
+            .as_deref()
+            .unwrap_or(config.cwd.as_path());
+        let consent = onboarding::onboarding_screen::check_directory_trust(
+            &mut tui,
+            &app_server,
+            &config,
+            &app_server_target,
+            trust_cwd,
+            resumed_thread.as_ref(),
+            Some(&mut startup_draft),
+        )
+        .await?;
+        startup_account = None;
+        if consent.directory_trust_persisted && !uses_remote_workspace {
+            let previous_provider = config.model_provider_id.clone();
+            config = load_config_or_exit_with_fallback_cwd(
+                cli_kv_overrides.clone(),
+                overrides.clone(),
+                loader_overrides.clone(),
+                cloud_config_bundle.clone(),
+                strict_config,
+                Some(config.cwd.to_path_buf()),
+                managed_worktree.as_ref(),
+            )
+            .await;
+            if config.model_provider_id != previous_provider
+                && matches!(app_server_target, AppServerTarget::Embedded)
+            {
+                app_server.shutdown().await?;
+                let client = start_app_server(
+                    &mut app_server_target,
+                    arg0_paths.clone(),
+                    config.clone(),
+                    cli_kv_overrides.clone(),
+                    loader_overrides.clone(),
+                    strict_config,
+                    cloud_config_bundle.clone(),
+                    feedback.clone(),
+                    log_db.clone(),
+                    &mut state_db,
+                    environment_manager.clone(),
+                )
+                .await?;
+                app_server = AppServerSession::new(client, app_server_target.thread_params_mode())
+                    .with_local_codex_home(&config.codex_home);
+            }
+            #[cfg(target_os = "windows")]
+            {
+                trust_decision_was_made = true;
+            }
+        } else if consent.should_exit {
+            shutdown_startup_session(Some(app_server), &mut terminal_restore_guard).await;
+            return Ok(AppExitInfo {
+                token_usage: crate::token_usage::TokenUsage::default(),
+                thread_id: None,
+                resume_hint: None,
+                disconnect_info: None,
+                update_action: None,
+                exit_reason: ExitReason::UserRequested,
+            });
+        }
+    }
+    startup_draft.apply_config(&config);
+
     let local_settings = crate::local_settings::LocalSettings::from(&config);
     // Configure syntax highlighting theme from the final config — onboarding
     // and resume/fork can both reload config with a different tui_theme, so
@@ -1705,55 +1809,6 @@ async fn run_ratatui_app(
     let use_alt_screen =
         determine_alt_screen_mode(no_alt_screen, local_settings.tui.alternate_screen);
     tui.set_alt_screen_enabled(use_alt_screen);
-    if config.model_provider_id != startup_model_provider {
-        startup_account = None;
-        if matches!(&app_server_target, AppServerTarget::Embedded) {
-            // App-server providers are fixed at startup, so onboarding cannot
-            // reuse a server initialized before it persisted another provider.
-            shutdown_app_server_if_present(app_server.take()).await;
-        }
-    }
-    let mut app_server = match app_server {
-        Some(app_server) => app_server,
-        None => match startup_draft
-            .run_until(
-                &mut tui,
-                start_app_server(
-                    &mut app_server_target,
-                    arg0_paths,
-                    config.clone(),
-                    cli_kv_overrides.clone(),
-                    loader_overrides.clone(),
-                    strict_config,
-                    cloud_config_bundle.clone(),
-                    feedback.clone(),
-                    log_db.clone(),
-                    &mut state_db,
-                    environment_manager.clone(),
-                ),
-            )
-            .await
-        {
-            Ok(Ok(app_server)) => {
-                // A picker can replace the server; account reads belong to their original session.
-                startup_account = None;
-                AppServerSession::new(app_server, app_server_target.thread_params_mode())
-                    .with_local_codex_home(&config.codex_home)
-                    .with_remote_cwd_override(remote_cwd_override.clone())
-            }
-            Ok(Err(err)) => {
-                terminal_restore_guard.restore_silently();
-                session_log::log_session_end();
-                return Err(err);
-            }
-            Err(err) => {
-                terminal_restore_guard.restore_silently();
-                session_log::log_session_end();
-                return Err(err.into());
-            }
-        },
-    };
-
     // Persistent app-server resumes may attach to an already-running thread,
     // where resume config overrides are ignored.
     let is_persistent_resume = !matches!(&app_server_target, AppServerTarget::Embedded)

@@ -7715,6 +7715,20 @@ async fn in_app_resume_uses_configured_or_explicit_cwd() -> Result<()> {
             codex_home.join("config.toml"),
             format!("[tui]\nresume_cwd = \"{configured_mode}\"\n"),
         )?;
+        for cwd in [
+            &launch_cwd,
+            &active_cwd,
+            &session_cwd,
+            &explicit_cwd,
+            &runtime_cwd,
+        ] {
+            crate::legacy_core::config::set_project_trust_level(
+                &codex_home,
+                cwd,
+                codex_protocol::config_types::TrustLevel::Trusted,
+            )
+            .map_err(std::io::Error::other)?;
+        }
         let config = ConfigBuilder::default()
             .codex_home(codex_home.clone())
             .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
@@ -7843,6 +7857,12 @@ async fn remembered_current_cwd_stays_at_launch_across_in_app_resumes() -> Resul
     std::fs::create_dir_all(&active_cwd)?;
     std::fs::create_dir_all(&first_session_cwd)?;
     std::fs::create_dir_all(&second_session_cwd)?;
+    crate::legacy_core::config::set_project_trust_level(
+        &codex_home,
+        &launch_cwd,
+        codex_protocol::config_types::TrustLevel::Trusted,
+    )
+    .map_err(std::io::Error::other)?;
     let config = ConfigBuilder::default()
         .codex_home(codex_home.clone())
         .loader_overrides(LoaderOverrides::without_managed_config_for_tests())

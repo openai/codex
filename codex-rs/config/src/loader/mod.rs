@@ -1394,7 +1394,8 @@ pub fn project_trust_key(path: &Path) -> String {
         .unwrap_or_else(|| normalize_project_trust_lookup_key(path.to_string_lossy().to_string()))
 }
 
-fn normalized_project_trust_keys(path: &Path) -> Vec<String> {
+/// Returns canonical and original path spellings in trust-lookup precedence order.
+pub fn normalized_project_trust_keys(path: &Path) -> Vec<String> {
     let normalized_path = normalize_project_trust_lookup_key(path.to_string_lossy().to_string());
     let normalized_canonical_path = normalize_project_trust_lookup_key(
         normalize_path(path)
@@ -1494,7 +1495,9 @@ fn copy_shape_from_original(original: &TomlValue, resolved: &TomlValue) -> TomlV
     }
 }
 
-async fn find_project_root(
+/// Finds the nearest ancestor with a configured project marker, or returns `cwd`.
+/// Callers must use markers from configuration loaded before project layers.
+pub async fn find_project_root(
     fs: &dyn ExecutorFileSystem,
     cwd: &AbsolutePathBuf,
     project_root_markers: &[String],

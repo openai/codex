@@ -25,6 +25,7 @@ use crate::selection_list::selection_option_row;
 use super::onboarding_screen::StepState;
 pub(crate) struct TrustDirectoryWidget {
     pub restricted: bool,
+    pub existing_task: bool,
     pub cwd: PathBuf,
     pub trust_target: PathBuf,
     pub show_windows_create_sandbox_hint: bool,
@@ -69,10 +70,14 @@ impl WidgetRef for &TrustDirectoryWidget {
         }
 
         column.push(
-            Paragraph::new(if self.restricted {
-                "This folder is marked untrusted. Project-local config, hooks, and exec \
-                 policies stay disabled. Skills still load, and tool execution follows \
-                 your permission settings. Opening it will not change its trust setting."
+            Paragraph::new(if self.restricted && self.existing_task {
+                "This existing task may retain settings \
+                 and history, including project configuration or hooks loaded while it was trusted. \
+                 To use restricted settings, start a new task. The folder's trust setting will not change."
+            } else if self.restricted {
+                "Config, hooks, and exec policies from untrusted folders stay disabled. \
+                 Trusted project folders can still contribute settings. Skills still load, \
+                 and tools follow your permission settings. Opening will not change saved trust."
             } else {
                 "Trust this folder? Codex can read, edit, and run files here, subject to \
                  your permission settings. Folder settings can run code automatically, \
@@ -88,7 +93,9 @@ impl WidgetRef for &TrustDirectoryWidget {
 
         let options: Vec<(&str, TrustDirectorySelection)> = vec![
             (
-                if self.restricted {
+                if self.restricted && self.existing_task {
+                    "Open existing task"
+                } else if self.restricted {
                     "Open restricted"
                 } else {
                     "Trust and continue"
@@ -210,6 +217,7 @@ mod tests {
     fn widget(error: Option<String>) -> TrustDirectoryWidget {
         TrustDirectoryWidget {
             restricted: false,
+            existing_task: false,
             cwd: PathBuf::from("/workspace/project"),
             trust_target: PathBuf::from("/workspace/project"),
             show_windows_create_sandbox_hint: false,
@@ -224,6 +232,7 @@ mod tests {
     fn release_event_does_not_change_selection() {
         let mut widget = TrustDirectoryWidget {
             restricted: false,
+            existing_task: false,
             cwd: PathBuf::from("."),
             trust_target: PathBuf::from("."),
             show_windows_create_sandbox_hint: false,
@@ -285,6 +294,7 @@ mod tests {
     fn renders_snapshot_for_remote_git_subdirectory() {
         let widget = TrustDirectoryWidget {
             restricted: false,
+            existing_task: false,
             cwd: PathBuf::from("/srv/remote/project/nested"),
             trust_target: PathBuf::from("/srv/remote/project"),
             ..widget(/*error*/ None)
@@ -309,16 +319,23 @@ mod tests {
 
     #[test]
     fn renders_restricted_folder() {
-        let widget = TrustDirectoryWidget {
-            restricted: true,
-            ..widget(/*error*/ None)
-        };
-        let mut terminal =
-            Terminal::new(VT100Backend::new(/*width*/ 70, /*height*/ 18)).expect("terminal");
-        terminal
-            .draw(|f| (&widget).render_ref(f.area(), f.buffer_mut()))
-            .expect("draw");
-        insta::assert_snapshot!(terminal.backend());
+        for existing_task in [false, true] {
+            let widget = TrustDirectoryWidget {
+                restricted: true,
+                existing_task,
+                ..widget(/*error*/ None)
+            };
+            let mut terminal =
+                Terminal::new(VT100Backend::new(/*width*/ 70, /*height*/ 18)).expect("terminal");
+            terminal
+                .draw(|f| (&widget).render_ref(f.area(), f.buffer_mut()))
+                .expect("draw");
+            if existing_task {
+                insta::assert_snapshot!("existing_untrusted_task", terminal.backend());
+            } else {
+                insta::assert_snapshot!(terminal.backend());
+            }
+        }
     }
 
     #[test]

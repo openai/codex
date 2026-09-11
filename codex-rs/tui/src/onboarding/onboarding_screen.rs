@@ -3,7 +3,7 @@
 //! The onboarding flow is a small state machine over visible steps
 //! (welcome/auth/trust). This module decides which step receives key/paste
 //! events and enforces flow-level safety rules that cut across individual step
-//! widgets.
+//! widgets. Folder-entry consent reuses this same event loop for startup and in-app navigation.
 //!
 //! In particular, onboarding quit handling has a text-entry guard for API-key
 //! input: the printable `q` quit key is treated as text input while the user is
@@ -57,6 +57,10 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use uuid::Uuid;
 
+#[path = "directory_trust.rs"]
+mod directory_trust;
+pub(crate) use directory_trust::check_directory_trust;
+
 #[allow(clippy::large_enum_variant)]
 enum Step {
     Welcome(WelcomeWidget),
@@ -98,6 +102,7 @@ pub(crate) struct OnboardingScreenArgs {
     pub config: Config,
 }
 
+#[derive(Default)]
 pub(crate) struct OnboardingResult {
     pub directory_trust_persisted: bool,
     pub should_exit: bool,
@@ -166,7 +171,9 @@ impl OnboardingScreen {
         let highlighted = TrustDirectorySelection::Trust;
         if show_trust_screen {
             let (cwd, trust_target) = match remote_project_trust {
-                Some(RemoteProjectTrust { cwd, trust_target }) => (cwd, trust_target),
+                Some(RemoteProjectTrust {
+                    cwd, trust_target, ..
+                }) => (cwd, trust_target),
                 None => {
                     let trust_target =
                         resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &config.cwd)
@@ -178,6 +185,7 @@ impl OnboardingScreen {
             };
             steps.push(Step::TrustDirectory(TrustDirectoryWidget {
                 restricted: false,
+                existing_task: false,
                 cwd,
                 trust_target,
                 show_windows_create_sandbox_hint,
@@ -504,13 +512,21 @@ impl WidgetRef for Step {
 
 pub(crate) async fn run_onboarding_app(
     args: OnboardingScreenArgs,
+    app_server: Option<&mut AppServerSession>,
+    tui: &mut Tui,
+) -> Result<OnboardingResult> {
+    let request_handle = args.app_server_request_handle.clone();
+    let screen = OnboardingScreen::new(tui, args).await;
+    run_onboarding_screen(screen, request_handle, app_server, tui).await
+}
+
+async fn run_onboarding_screen(
+    mut onboarding_screen: OnboardingScreen,
+    app_server_request_handle: Option<AppServerRequestHandle>,
     mut app_server: Option<&mut AppServerSession>,
     tui: &mut Tui,
 ) -> Result<OnboardingResult> {
     use tokio_stream::StreamExt;
-
-    let app_server_request_handle = args.app_server_request_handle.clone();
-    let mut onboarding_screen = OnboardingScreen::new(tui, args).await;
     let mut directory_trust_persisted = false;
     // One-time guard to fully clear the screen after ChatGPT login success message is shown
     let mut did_full_clear_after_success = false;
@@ -786,6 +802,7 @@ mod tests {
             request_frame: FrameRequester::test_dummy(),
             steps: vec![Step::TrustDirectory(TrustDirectoryWidget {
                 restricted: false,
+                existing_task: false,
                 cwd: PathBuf::from("/workspace/project"),
                 trust_target: PathBuf::from("/workspace/project"),
                 show_windows_create_sandbox_hint: false,
@@ -851,6 +868,7 @@ mod tests {
                 request_frame: FrameRequester::test_dummy(),
                 steps: vec![Step::TrustDirectory(TrustDirectoryWidget {
                     restricted: true,
+                    existing_task: false,
                     cwd: PathBuf::from("/workspace/project"),
                     trust_target: PathBuf::from("/workspace/project"),
                     show_windows_create_sandbox_hint: false,
@@ -880,6 +898,7 @@ mod tests {
             request_frame: FrameRequester::test_dummy(),
             steps: vec![Step::TrustDirectory(TrustDirectoryWidget {
                 restricted: false,
+                existing_task: false,
                 cwd: PathBuf::from("/workspace/project"),
                 trust_target: PathBuf::from("/workspace/project"),
                 show_windows_create_sandbox_hint: false,

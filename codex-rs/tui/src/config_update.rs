@@ -18,13 +18,19 @@ use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SkillsConfigWriteParams;
 use codex_app_server_protocol::SkillsConfigWriteResponse;
+use codex_config::default_project_root_markers;
+use codex_config::loader::find_project_root;
+use codex_config::loader::normalized_project_trust_keys;
 use codex_config::loader::project_trust_key;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
+use codex_exec_server::LOCAL_FS;
 use codex_features::FEATURES;
+use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::TrustLevel;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::LegacyAppPathString;
+use codex_utils_path_uri::PathConvention;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use serde_json::Value as JsonValue;
@@ -33,8 +39,15 @@ use std::path::Path;
 use std::path::PathBuf;
 use uuid::Uuid;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProjectTrustHost {
+    Local,
+    Remote,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RemoteProjectTrust {
+    pub trust_level: Option<TrustLevel>,
     pub cwd: PathBuf,
     pub trust_target: PathBuf,
 }
@@ -202,6 +215,7 @@ pub(crate) async fn read_effective_config(
 pub(crate) async fn read_remote_project_trust(
     request_handle: AppServerRequestHandle,
     cwd: &Path,
+    host: ProjectTrustHost,
 ) -> Result<Option<RemoteProjectTrust>> {
     let cwd_string = cwd.to_string_lossy().into_owned();
     let cwd = match LegacyAppPathString::from_string(cwd_string.clone()).to_inferred_path_uri() {
@@ -253,44 +267,115 @@ pub(crate) async fn read_remote_project_trust(
     let disabled_reason = disabled_project
         .and_then(|layer| layer.get("disabledReason"))
         .and_then(JsonValue::as_str);
-    let trust_target = disabled_reason
-        .and_then(|reason| reason.split_once(", add "))
-        .and_then(|(_, reason)| reason.rsplit_once(" as a trusted project in "))
-        .map(|(trust_target, _)| trust_target)
+    let projects = response["config"]["projects"].as_object();
+    let windows_path = cwd_uri.infer_path_convention() == Some(PathConvention::Windows);
+    let cwd_key = if windows_path {
+        cwd.to_ascii_lowercase()
+    } else {
+        cwd.clone()
+    };
+    let project_entry = |key: &str| {
+        let projects = projects?;
+        projects
+            .get_key_value(key)
+            .filter(|(_, project)| project["trust_level"].as_str().is_some())
+            .or_else(|| {
+                projects
+                    .iter()
+                    .filter(|(path, project)| {
+                        windows_path
+                            && path.eq_ignore_ascii_case(key)
+                            && project["trust_level"].as_str().is_some()
+                    })
+                    .min_by_key(|(path, _)| *path)
+            })
+    };
+    let local_roots = if host == ProjectTrustHost::Local && project_layers.is_empty() {
+        let cwd = AbsolutePathBuf::from_absolute_path(&cwd)?;
+        let markers = serde_json::from_value::<Option<Vec<String>>>(
+            response["config"]["project_root_markers"].clone(),
+        )?
+        .unwrap_or_else(default_project_root_markers);
+        let project_root = find_project_root(LOCAL_FS.as_ref(), &cwd, &markers).await?;
+        let git_root = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &cwd).await;
+        Some((
+            normalized_project_trust_keys(project_root.as_path()),
+            git_root.map(|root| normalized_project_trust_keys(root.as_path())),
+        ))
+    } else {
+        None
+    };
+    let cwd_keys = if host == ProjectTrustHost::Local {
+        normalized_project_trust_keys(Path::new(&cwd))
+    } else {
+        vec![cwd_key]
+    };
+    let saved_trust_target = |keys: &[String]| {
+        keys.iter()
+            .find_map(|key| project_entry(key).map(|(path, _)| path.as_str()))
+    };
+    let cwd_trust_target = saved_trust_target(&cwd_keys);
+    let trust_target = cwd_trust_target
         .or_else(|| {
-            disabled_project
-                .and_then(|layer| layer["name"]["dotCodexFolder"].as_str())
-                .and_then(|path| {
-                    path.strip_suffix("/.codex")
-                        .or_else(|| path.strip_suffix("\\.codex"))
+            disabled_reason
+                .and_then(|reason| reason.split_once(", add "))
+                .and_then(|(_, reason)| reason.rsplit_once(" as a trusted project in "))
+                .map(|(trust_target, _)| trust_target)
+                .or_else(|| {
+                    disabled_project
+                        .and_then(|layer| layer["name"]["dotCodexFolder"].as_str())
+                        .and_then(|path| {
+                            path.strip_suffix("/.codex")
+                                .or_else(|| path.strip_suffix("\\.codex"))
+                        })
                 })
         })
+        .or_else(|| {
+            let (project_root, git_root) = local_roots.as_ref()?;
+            saved_trust_target(project_root)
+                .or_else(|| git_root.as_deref().and_then(saved_trust_target))
+                .or_else(|| {
+                    git_root
+                        .as_ref()
+                        .and_then(|keys| keys.first())
+                        .map(String::as_str)
+                })
+                .or_else(|| project_root.first().map(String::as_str))
+        })
         .unwrap_or(&cwd);
-    let projects = response["config"]["projects"].as_object();
-    let has_trust_decision = projects
-        .and_then(|projects| projects.get(trust_target))
+    let trust_level = project_entry(trust_target)
+        .map(|(_, project)| project)
         .and_then(|project| project.get("trust_level"))
         .and_then(JsonValue::as_str)
-        .is_some_and(|level| matches!(level, "trusted" | "untrusted"));
-    let explicitly_untrusted = disabled_reason.is_some_and(|reason| {
-        projects.into_iter().flatten().any(|(path, project)| {
-            project.get("trust_level").and_then(JsonValue::as_str) == Some("untrusted")
-                && reason
-                    .strip_prefix(path)
-                    .is_some_and(|suffix| suffix.starts_with(" is marked as untrusted"))
-        })
-    });
-    if has_trust_decision
-        || explicitly_untrusted
-        || (disabled_project.is_none()
-            && project_layers
-                .iter()
-                .any(|layer| layer.get("disabledReason").is_none()))
+        .and_then(|level| match level {
+            "trusted" => Some(TrustLevel::Trusted),
+            "untrusted" => Some(TrustLevel::Untrusted),
+            _ => None,
+        });
+    let explicitly_untrusted = cwd_trust_target.is_none()
+        && disabled_reason.is_some_and(|reason| {
+            projects.into_iter().flatten().any(|(path, project)| {
+                project.get("trust_level").and_then(JsonValue::as_str) == Some("untrusted")
+                    && reason
+                        .strip_prefix(path)
+                        .is_some_and(|suffix| suffix.starts_with(" is marked as untrusted"))
+            })
+        });
+    if !explicitly_untrusted
+        && (trust_level == Some(TrustLevel::Trusted)
+            || (trust_level.is_none()
+                && disabled_project.is_none()
+                && project_layers
+                    .iter()
+                    .any(|layer| layer.get("disabledReason").is_none())))
     {
         return Ok(None);
     }
 
-    if project_layers.is_empty()
+    if host == ProjectTrustHost::Remote
+        && trust_level.is_none()
+        && !explicitly_untrusted
+        && project_layers.is_empty()
         && projects.into_iter().flatten().any(|(path, project)| {
             project.get("trust_level").and_then(JsonValue::as_str) == Some("untrusted")
                 && LegacyAppPathString::from_string(path.clone())
@@ -304,6 +389,11 @@ pub(crate) async fn read_remote_project_trust(
     }
 
     Ok(Some(RemoteProjectTrust {
+        trust_level: if explicitly_untrusted {
+            Some(TrustLevel::Untrusted)
+        } else {
+            trust_level
+        },
         cwd: PathBuf::from(&cwd),
         trust_target: PathBuf::from(trust_target),
     }))

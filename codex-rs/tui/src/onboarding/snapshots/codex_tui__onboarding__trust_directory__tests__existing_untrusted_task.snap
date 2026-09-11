@@ -1,0 +1,16 @@
+---
+source: tui/src/onboarding/trust_directory.rs
+assertion_line: 355
+expression: terminal.backend()
+---
+> You are in /workspace/project
+
+  This existing task may retain settings and history, including
+  project configuration or hooks loaded while it was trusted. To use
+  restricted settings, start a new task. The folder's trust setting
+  will not change.
+
+› 1. Open existing task                                               
+  2. Quit
+
+  Press enter to continue; esc to quit

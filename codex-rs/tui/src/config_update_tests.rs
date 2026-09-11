@@ -64,12 +64,16 @@ async fn remote_project_trust_guards_thread_start_and_preserves_repository_decis
         .await?;
     let app_server =
         AppServerClient::InProcess(crate::tests::start_test_embedded_app_server(config).await?);
+    let read_trust = async |cwd: &Path, host| {
+        read_remote_project_trust(app_server.request_handle(), cwd, host).await
+    };
     let relative_cwd = pathdiff::diff_paths(&project_cwd, std::env::current_dir()?)
         .ok_or_else(|| color_eyre::eyre::eyre!("failed to calculate relative project path"))?;
 
     assert_eq!(
-        read_remote_project_trust(app_server.request_handle(), &relative_cwd).await?,
+        read_trust(&relative_cwd, ProjectTrustHost::Remote).await?,
         Some(RemoteProjectTrust {
+            trust_level: None,
             cwd: project_cwd.clone(),
             trust_target: PathBuf::from(project_trust_key(&project_root)),
         })
@@ -98,7 +102,7 @@ async fn remote_project_trust_guards_thread_start_and_preserves_repository_decis
         })
         .await?;
     assert_eq!(
-        read_remote_project_trust(app_server.request_handle(), &project_cwd).await?,
+        read_trust(&project_cwd, ProjectTrustHost::Remote).await?,
         None
     );
 
@@ -106,8 +110,12 @@ async fn remote_project_trust_guards_thread_start_and_preserves_repository_decis
     untrusted_project.value = serde_json::json!("untrusted");
     write_config_batch(app_server.request_handle(), vec![untrusted_project]).await?;
     assert_eq!(
-        read_remote_project_trust(app_server.request_handle(), &project_cwd).await?,
-        None
+        read_trust(&project_cwd, ProjectTrustHost::Remote).await?,
+        Some(RemoteProjectTrust {
+            trust_level: Some(TrustLevel::Untrusted),
+            cwd: project_cwd.clone(),
+            trust_target: project_cwd.clone(),
+        })
     );
 
     let response: JsonValue = app_server
@@ -143,14 +151,128 @@ async fn remote_project_trust_guards_thread_start_and_preserves_repository_decis
     "
     );
 
+    std::fs::create_dir(project_root.join(".codex"))?;
+    std::fs::write(
+        project_root.join(".codex/config.toml"),
+        "model_reasoning_effort = \"low\"\n",
+    )?;
+    for (parent, child) in [("untrusted", "trusted"), ("trusted", "untrusted")] {
+        write_config_batch(
+            app_server.request_handle(),
+            vec![replace_config_value(
+                "projects",
+                serde_json::json!({
+                    project_trust_key(&project_root): {"trust_level": parent},
+                    project_trust_key(&project_cwd): {"trust_level": child}
+                }),
+            )],
+        )
+        .await?;
+        let consent = read_trust(&project_cwd, ProjectTrustHost::Local).await?;
+        assert_eq!(
+            consent.map(|project| project.trust_level),
+            (child == "untrusted").then_some(Some(TrustLevel::Untrusted))
+        );
+    }
+    std::fs::remove_dir_all(project_root.join(".codex"))?;
+    let untrusted_projects = replace_config_value(
+        "projects",
+        serde_json::json!({
+            project_trust_key(&project_root): {"trust_level": "untrusted"}
+        }),
+    );
+    write_config_batch(
+        app_server.request_handle(),
+        vec![untrusted_projects.clone()],
+    )
+    .await?;
+
     std::fs::remove_file(project_cwd.join(".codex/config.toml"))?;
     std::fs::remove_dir(project_cwd.join(".codex"))?;
     let canonical_project_cwd = PathBuf::from(project_trust_key(&project_root)).join("nested");
-    let error = read_remote_project_trust(app_server.request_handle(), &canonical_project_cwd)
+    let error = read_trust(&canonical_project_cwd, ProjectTrustHost::Remote)
         .await
         .expect_err("an untrusted repository must not be overridden by its subdirectory");
     assert!(error.to_string().contains("explicitly untrusted project"));
 
+    assert_eq!(
+        read_trust(&canonical_project_cwd, ProjectTrustHost::Local).await?,
+        Some(RemoteProjectTrust {
+            trust_level: Some(TrustLevel::Untrusted),
+            cwd: canonical_project_cwd.clone(),
+            trust_target: PathBuf::from(project_trust_key(&project_root)),
+        })
+    );
+    write_trusted_project(app_server.request_handle(), &project_root).await?;
+    assert_eq!(
+        read_trust(&canonical_project_cwd, ProjectTrustHost::Local).await?,
+        None
+    );
+
+    let key = project_trust_key(&project_root);
+    #[cfg(windows)]
+    let (legacy_key, lookup_cwd) = (key.to_ascii_uppercase(), canonical_project_cwd.clone());
+    #[cfg(unix)]
+    let (legacy_key, lookup_cwd) = {
+        let alias = temp_dir.path().join("project-alias");
+        std::os::unix::fs::symlink(&project_root, &alias)?;
+        (alias.to_string_lossy().into_owned(), alias.join("nested"))
+    };
+    for (trust_level, canonical_key) in [
+        ("trusted", true),
+        ("untrusted", true),
+        ("trusted", false),
+        ("untrusted", false),
+    ] {
+        // Canonical decisions win over legacy symlink or case aliases.
+        let mut projects = serde_json::json!({&legacy_key: {"trust_level": trust_level}});
+        projects[&key] = serde_json::json!({});
+        if canonical_key {
+            projects[&legacy_key]["trust_level"] = serde_json::json!(if trust_level == "trusted" {
+                "untrusted"
+            } else {
+                "trusted"
+            });
+            projects[&key] = serde_json::json!({"trust_level": trust_level});
+        }
+        write_config_batch(
+            app_server.request_handle(),
+            vec![replace_config_value("projects", projects)],
+        )
+        .await?;
+        let consent = read_trust(&lookup_cwd, ProjectTrustHost::Local).await?;
+        assert_eq!(
+            consent.map(|project| project.trust_level),
+            (trust_level == "untrusted").then_some(Some(TrustLevel::Untrusted)),
+        );
+    }
+    std::fs::remove_dir_all(project_root.join(".git"))?;
+    write_config_batch(app_server.request_handle(), vec![untrusted_projects]).await?;
+    for marked_root in [false, true] {
+        if marked_root {
+            std::fs::write(project_root.join(".project-root"), "")?;
+            write_config_batch(
+                app_server.request_handle(),
+                vec![replace_config_value(
+                    "project_root_markers",
+                    serde_json::json!([".project-root"]),
+                )],
+            )
+            .await?;
+        }
+        assert_eq!(
+            read_trust(&canonical_project_cwd, ProjectTrustHost::Local).await?,
+            Some(RemoteProjectTrust {
+                trust_level: marked_root.then_some(TrustLevel::Untrusted),
+                cwd: canonical_project_cwd.clone(),
+                trust_target: if marked_root {
+                    PathBuf::from(project_trust_key(&project_root))
+                } else {
+                    canonical_project_cwd.clone()
+                },
+            })
+        );
+    }
     app_server.shutdown().await?;
     Ok(())
 }
