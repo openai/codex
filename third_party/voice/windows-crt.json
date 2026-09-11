@@ -1,0 +1,18 @@
+{
+  "version": "14.50.35719",
+  "license": "https://visualstudio.microsoft.com/license-terms/vs2026-ga-visualcpp-v14-redist-runtime/",
+  "developerLicense": "https://visualstudio.microsoft.com/license-terms/vs2026-ga-community/",
+  "redistribution": "https://learn.microsoft.com/en-us/visualstudio/releases/2026/redistribution",
+  "x86_64-pc-windows-msvc": {
+    "url": "https://download.visualstudio.microsoft.com/download/pr/a424e95b-20f6-4af6-844f-9d9a806080a7/a4ab48822362df6e478eb4ed33bf825a07a6faacd6879c1e3d59929cd38b984b/Microsoft.VC.14.50.18.0.CRT.Redist.X64.base.vsix",
+    "sha256": "a4ab48822362df6e478eb4ed33bf825a07a6faacd6879c1e3d59929cd38b984b",
+    "member": "Contents/VC/Redist/MSVC/14.50.35710/x64/Microsoft.VC145.CRT/vcruntime140.dll",
+    "dllSha256": "184146852727a9db4eea06178716bec3cdbb1015c911f6b0f915b184ad7775b2"
+  },
+  "aarch64-pc-windows-msvc": {
+    "url": "https://download.visualstudio.microsoft.com/download/pr/a424e95b-20f6-4af6-844f-9d9a806080a7/3544badcbcf09e77c6ec32ed866aae59471a39d8a84611d9ae016861ff60a42f/Microsoft.VC.14.50.18.0.CRT.Redist.ARM64.base.vsix",
+    "sha256": "3544badcbcf09e77c6ec32ed866aae59471a39d8a84611d9ae016861ff60a42f",
+    "member": "Contents/VC/Redist/MSVC/14.50.35710/arm64/Microsoft.VC145.CRT/vcruntime140.dll",
+    "dllSha256": "6d987d8cb2a47cff9c29c1fcbb853e7ef273c545f7d822728f7d2d448ca18758"
+  }
+}

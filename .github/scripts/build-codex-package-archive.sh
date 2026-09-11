@@ -117,8 +117,8 @@ if [[ -z "$target" || -z "$bundle" || -z "$entrypoint_dir" || -z "$archive_dir" 
   usage >&2
   exit 1
 fi
-if [[ ( -n "$voice_release_dir" || -n "$release_version" ) && ( -z "$voice_release_dir" || -z "$release_version" || "$bundle" != "primary" || ( "$target" != *-apple-darwin && "$target" != *-unknown-linux-musl ) ) ]]; then
-  echo "Voice resources require a primary macOS or Linux release package version" >&2
+if [[ ( -n "$voice_release_dir" || -n "$release_version" ) && ( -z "$voice_release_dir" || -z "$release_version" || "$bundle" != "primary" || ( "$target" != *-apple-darwin && "$target" != *-unknown-linux-musl && "$target" != *-pc-windows-msvc ) ) ]]; then
+  echo "Voice resources require a primary supported release package version" >&2
   exit 1
 fi
 
@@ -221,9 +221,10 @@ if [[ -n "$voice_release_dir" ]]; then
   fi
   voice_package="${RUNNER_TEMP:-/tmp}/${archive_stem}-voice-${target}"
   rm -rf "$voice_package"
+  voice_helper="${voice_release_dir%/}/codex-voice-host${exe_suffix}"
   "$python_bin" "${repo_root}/third_party/voice/assemble_package.py" \
     --package "$package_dir" \
-    --helper "${voice_release_dir%/}/codex-voice-host" \
+    --helper "$voice_helper" \
     --runtime "${voice_release_dir%/}/runtime" \
     --voice-target "$voice_target" \
     --build-commit "$(git -C "$repo_root" rev-parse HEAD)" \
