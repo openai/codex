@@ -151,6 +151,15 @@ impl Processor {
         Ok(())
     }
 
+    pub(super) fn set_render_rate(&mut self, rate: u32) -> Result<()> {
+        // Capture keeps its own rate and history across speaker-only changes.
+        if self.render.rate != rate {
+            self.render = Converter::new(rate)?;
+        }
+        self.reset_render();
+        Ok(())
+    }
+
     pub(super) fn reset_render(&mut self) {
         // Speaker changes discard old references without resetting capture or APM state.
         self.render.resampler.reset();

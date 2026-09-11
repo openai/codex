@@ -47,8 +47,7 @@ pub(super) struct Devices {
     _input: cpal::Stream,
     output: Option<cpal::Stream>,
     output_device: cpal::Device,
-    output_config: cpal::SupportedStreamConfig,
-    output_stream_config: cpal::StreamConfig,
+    input_frames: u32,
     playback: PlaybackPort,
     playout: Option<playout::Playout>,
     worker: capture_worker::CaptureWorker,
@@ -91,14 +90,6 @@ impl Devices {
         let output_config = output
             .default_output_config()
             .map_err(|_| io::Error::other("speaker configuration unavailable"))?;
-        for config in [&input_config, &output_config] {
-            if config.channels() == 0
-                || config.channels() > 32
-                || !(8_000..=384_000).contains(&config.sample_rate())
-            {
-                return Err(io::Error::other("unsupported audio device configuration"));
-            }
-        }
         let input_stream_config = bounded_stream_config(&input_config)?;
         let output_stream_config = bounded_stream_config(&output_config)?;
         let buffers = Arc::new(Buffers::new(
@@ -144,8 +135,7 @@ impl Devices {
             _input: input,
             output: Some(output_stream),
             output_device: output,
-            output_config,
-            output_stream_config,
+            input_frames,
             playback,
             playout: None,
             worker: capture_worker::CaptureWorker {
@@ -181,16 +171,35 @@ impl Devices {
             buffers.last_dac_ns.store(/*val*/ 0, Ordering::Release);
             drop(producer);
             while buffers.rendered.pop().is_some() {}
-            self.worker.processor.reset_render();
+            // Opening a Bluetooth microphone can change the speaker's format.
+            // Requery after stopping the old stream rather than restoring its
+            // pre-microphone rate, which the device may no longer support.
+            let output_config = self
+                .output_device
+                .default_output_config()
+                .map_err(|_| io::Error::other("speaker configuration unavailable"))?;
+            let output_stream_config = bounded_stream_config(&output_config)?;
+            let cpal::BufferSize::Fixed(output_frames) = output_stream_config.buffer_size else {
+                return Err(io::Error::other("audio callback size unavailable"));
+            };
+            self.worker
+                .processor
+                .set_render_rate(output_config.sample_rate())
+                .map_err(io::Error::other)?;
+            self.worker
+                .processor
+                .validate_callback_timing(self.input_frames, output_frames)
+                .map_err(io::Error::other)?;
+            self.playback = PlaybackPort::new(buffers.clone(), output_config.sample_rate());
             if !controls.speaker_suppressed {
                 self.playout =
                     Some(playout::Playout::new(self.playback.writer()).map_err(io::Error::other)?);
             }
             let output = stream!(
-                self.output_config.sample_format(),
+                output_config.sample_format(),
                 build_output,
                 &self.output_device,
-                &self.output_stream_config,
+                &output_stream_config,
                 buffers
             )
             .map_err(|_| io::Error::other("failed to reset speaker"))?;
@@ -234,6 +243,12 @@ impl Drop for Devices {
 fn bounded_stream_config(
     supported: &cpal::SupportedStreamConfig,
 ) -> io::Result<cpal::StreamConfig> {
+    if supported.channels() == 0
+        || supported.channels() > 32
+        || !(8_000..=384_000).contains(&supported.sample_rate())
+    {
+        return Err(io::Error::other("unsupported audio device configuration"));
+    }
     let cpal::SupportedBufferSize::Range { min, max } = *supported.buffer_size() else {
         return Err(io::Error::other("audio callback size range unavailable"));
     };

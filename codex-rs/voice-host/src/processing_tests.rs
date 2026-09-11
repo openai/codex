@@ -156,38 +156,40 @@ fn unmute_reset_rejects_delayed_pre_unmute_audio_and_partial_history() {
 }
 
 #[test]
-fn speaker_reset_discards_partial_echo_reference_but_keeps_capture_history() {
-    let mut processor = Processor::new(/*input_rate*/ 48_000, /*output_rate*/ 48_000).unwrap();
-    let mut fresh = Processor::new(/*input_rate*/ 48_000, /*output_rate*/ 48_000).unwrap();
-    let start = Instant::now();
-    let mut frame = Frame {
-        samples: [0.75; 256],
-        len: 256,
-        at: start,
-        generation: 2,
-    };
-    processor.render.push(&frame).unwrap();
-    processor.render.output.push_back(0.75);
-    processor.capture.input.extend([0.25; 256]);
-    processor.pending.extend([0.25; 480]);
-    processor.render_delay = 123;
-    processor.reset_render();
-    assert_eq!(processor.capture.input, VecDeque::from(vec![0.25; 256]));
-    assert_eq!(processor.pending, vec![0.25; 480]);
-    assert_eq!(processor.render_delay, 0);
-
-    frame.samples.fill(0.0);
-    let mut actual = Vec::new();
-    let mut expected = Vec::new();
-    for index in 0..5 {
-        frame.at = start + Duration::from_secs_f64(index as f64 * 256.0 / 48_000.0);
+fn speaker_rate_change_discards_old_reference_but_keeps_capture_history() {
+    for rate in [48_000, 24_000, 44_100] {
+        let mut processor = Processor::new(/*input_rate*/ 48_000, /*output_rate*/ 48_000).unwrap();
+        let mut fresh = Processor::new(/*input_rate*/ 48_000, rate).unwrap();
+        let start = Instant::now();
+        let mut frame = Frame {
+            samples: [0.75; 256],
+            len: 256,
+            at: start,
+            generation: 2,
+        };
         processor.render.push(&frame).unwrap();
-        fresh.render.push(&frame).unwrap();
-        actual.extend(std::iter::from_fn(|| processor.render.next()));
-        expected.extend(std::iter::from_fn(|| fresh.render.next()));
+        processor.render.output.push_back(0.75);
+        processor.capture.input.extend([0.25; 256]);
+        processor.pending.extend([0.25; 480]);
+        processor.render_delay = 123;
+        processor.set_render_rate(rate).unwrap();
+        assert_eq!(processor.capture.input, VecDeque::from(vec![0.25; 256]));
+        assert_eq!(processor.pending, vec![0.25; 480]);
+        assert_eq!(processor.render_delay, 0);
+
+        frame.samples.fill(0.0);
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for index in 0..5 {
+            frame.at = start + Duration::from_secs_f64(index as f64 * 256.0 / f64::from(rate));
+            processor.render.push(&frame).unwrap();
+            fresh.render.push(&frame).unwrap();
+            actual.extend(std::iter::from_fn(|| processor.render.next()));
+            expected.extend(std::iter::from_fn(|| fresh.render.next()));
+        }
+        assert!(!actual.is_empty());
+        assert_eq!(actual, expected);
     }
-    assert!(!actual.is_empty());
-    assert_eq!(actual, expected);
 }
 
 #[test]
