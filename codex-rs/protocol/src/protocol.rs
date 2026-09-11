@@ -743,12 +743,6 @@ pub enum Op {
     /// model.
     SetThreadMemoryMode { mode: ThreadMemoryMode },
 
-    /// Request Codex to drop the last N user turns from in-memory context.
-    ///
-    /// This does not attempt to revert local filesystem changes. Clients are
-    /// responsible for undoing any edits on disk.
-    ThreadRollback { num_turns: u32 },
-
     /// Request a code review from the agent.
     Review { review_request: ReviewRequest },
 
@@ -962,7 +956,6 @@ impl Op {
             Self::ReloadUserConfig => "reload_user_config",
             Self::Compact => "compact",
             Self::SetThreadMemoryMode { .. } => "set_thread_memory_mode",
-            Self::ThreadRollback { .. } => "thread_rollback",
             Self::Review { .. } => "review",
             Self::ApproveGuardianDeniedAction { .. } => "approve_guardian_denied_action",
             Self::Shutdown => "shutdown",
@@ -1405,7 +1398,8 @@ pub enum EventMsg {
     /// Conversation history was compacted (either automatically or manually).
     ContextCompacted(ContextCompactedEvent),
 
-    /// Conversation history was rolled back by dropping the last N user turns.
+    /// Legacy persisted marker for dropping the last N user turns.
+    /// Retained for replay of existing rollouts; live rollback operations are unsupported.
     ThreadRolledBack(ThreadRolledBackEvent),
 
     /// Agent has started a turn.
@@ -1888,6 +1882,7 @@ pub enum CodexErrorInfo {
     ActiveTurnNotSteerable {
         turn_kind: NonSteerableTurnKind,
     },
+    // Retained to deserialize errors recorded in legacy rollouts.
     ThreadRollbackFailed,
     Other,
 }

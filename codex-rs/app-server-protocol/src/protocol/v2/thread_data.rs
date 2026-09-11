@@ -286,7 +286,7 @@ pub struct Thread {
     /// Saved Daybreak choice, independent of turn execution. Null if unset.
     #[experimental("thread.daybreakEnabled")]
     pub daybreak_enabled: Option<bool>,
-    /// Only populated on `thread/resume`, `thread/rollback`, `thread/fork`, and `thread/read`
+    /// Only populated on `thread/resume`, `thread/fork`, and `thread/read`
     /// (when `includeTurns` is true) responses.
     /// For all other responses and notifications returning a Thread,
     /// the turns field will be an empty list.

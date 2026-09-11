@@ -153,7 +153,7 @@ pub struct AppendThreadItemsParams {
     pub items: Vec<RolloutItem>,
 }
 
-/// Parameters for loading persisted history for resume, fork, rollback, and memory jobs.
+/// Parameters for loading persisted history for resume, fork, and memory jobs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LoadThreadHistoryParams {
     /// Thread id to load.

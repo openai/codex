@@ -19,30 +19,21 @@ use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_history::CodexHarnessMetadata;
 use codex_history::RolloutItem;
-use codex_protocol::config_types::CollaborationMode;
-use codex_protocol::config_types::ModeKind;
-use codex_protocol::config_types::Settings;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 use core_test_support::ThreadIdle;
-use core_test_support::context_snapshot;
-use core_test_support::context_snapshot::ContextSnapshotOptions;
-use core_test_support::context_snapshot::ContextSnapshotRenderMode;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
-use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
-use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
@@ -54,7 +45,6 @@ use tempfile::TempDir;
 use wiremock::MockServer;
 
 const AFTER_SECOND_RESUME: &str = "AFTER_SECOND_RESUME";
-const AFTER_ROLLBACK: &str = "AFTER_ROLLBACK";
 const CHECKPOINT_METADATA_KEY: &str = "replacement_history_metadata";
 
 fn network_disabled() -> bool {
@@ -503,233 +493,6 @@ async fn compact_resume_after_second_compaction_preserves_history() -> Result<()
             assert_eq!(chunk, seeded_user_prefix);
         }
     }
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-/// Scenario: rolling back behind a pre-turn compaction should replay
-/// append-only history from the rollout file and keep earlier compacted
-/// history visible.
-async fn snapshot_rollback_past_compaction_replays_append_only_history() -> Result<()> {
-    if network_disabled() {
-        println!("Skipping test because network is disabled in this sandbox");
-        return Ok(());
-    }
-
-    const EDITED_AFTER_COMPACT: &str = "EDITED_AFTER_COMPACT";
-    const SECOND_REPLY: &str = "SECOND_REPLY";
-
-    let server = MockServer::start().await;
-    let sse1 = sse(vec![
-        ev_assistant_message("m1", FIRST_REPLY),
-        ev_completed("r1"),
-    ]);
-    let sse2 = sse(vec![
-        ev_assistant_message("m2", SUMMARY_TEXT),
-        ev_completed("r2"),
-    ]);
-    let sse3 = sse(vec![
-        ev_assistant_message("m3", SECOND_REPLY),
-        ev_completed("r3"),
-    ]);
-    let sse4 = sse(vec![ev_completed("r4")]);
-
-    let request_log = mount_sse_sequence(&server, vec![sse1, sse2, sse3, sse4]).await;
-
-    let (_home, _config, _manager, base) = start_test_conversation(&server, /*model*/ None).await;
-
-    user_turn(&base, "hello world").await;
-    compact_conversation(&base).await;
-    user_turn(&base, EDITED_AFTER_COMPACT).await;
-
-    base.submit(Op::ThreadRollback { num_turns: 1 })
-        .await
-        .expect("submit thread rollback");
-    let rollback_event = wait_for_event(&base, |ev| {
-        if let EventMsg::Error(error) = ev {
-            panic!("rollback failed: {error:?}");
-        }
-        matches!(ev, EventMsg::ThreadRolledBack(_))
-    })
-    .await;
-    let EventMsg::ThreadRolledBack(rollback_event) = rollback_event else {
-        panic!("expected thread rolled back event");
-    };
-    assert_eq!(rollback_event.num_turns, 1);
-
-    user_turn(&base, AFTER_ROLLBACK).await;
-
-    let requests = request_log.requests();
-    assert_eq!(requests.len(), 4);
-    assert!(requests[1].body_contains_text(SUMMARIZATION_PROMPT));
-    assert!(requests[2].body_contains_text("hello world"));
-    assert!(requests[2].body_contains_text(SUMMARY_TEXT));
-    assert!(requests[2].body_contains_text(EDITED_AFTER_COMPACT));
-    let after_rollback_user_texts = requests[3].message_input_texts("user");
-    let after_rollback_last = after_rollback_user_texts
-        .last()
-        .expect("post-rollback request missing user messages");
-    assert_eq!(after_rollback_last, AFTER_ROLLBACK);
-    assert!(
-        requests[3].body_contains_text("hello world"),
-        "the first turn should remain visible after rollback behind compaction",
-    );
-    assert!(
-        !requests[3].body_contains_text(EDITED_AFTER_COMPACT),
-        "the edited post-compaction turn should be removed by rollback",
-    );
-    assert!(
-        requests[3].body_contains_text(SUMMARY_TEXT),
-        "compaction summary should remain for the preserved first turn",
-    );
-
-    insta::assert_snapshot!(
-        "rollback_past_compaction_shapes",
-        context_snapshot::format_labeled_requests_snapshot(
-            "rollback past compaction replay after rollback",
-            &[
-                ("compaction request", &requests[1]),
-                ("before rollback", &requests[2]),
-                ("after rollback", &requests[3]),
-            ],
-            &ContextSnapshotOptions::default()
-                .strip_capability_instructions()
-                .render_mode(ContextSnapshotRenderMode::KindWithTextPrefix { max_chars: 64 }),
-        )
-    );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-/// Scenario: rolling back a turn that introduced persistent pre-thread settings
-/// diffs should trim those context updates so the next request includes them
-/// only once.
-async fn snapshot_rollback_followup_turn_trims_context_updates() -> Result<()> {
-    if network_disabled() {
-        println!("Skipping test because network is disabled in this sandbox");
-        return Ok(());
-    }
-
-    const MODEL: &str = "gpt-5.4";
-    const TURN_ONE_USER: &str = "turn 1 user";
-    const TURN_TWO_USER: &str = "turn 2 user";
-    const FOLLOWUP_USER: &str = "follow-up user";
-    const ROLLED_BACK_DEV_INSTRUCTIONS: &str = "ROLLED_BACK_DEV_INSTRUCTIONS";
-    const PRETURN_CONTEXT_DIFF_CWD: &str = "PRETURN_CONTEXT_DIFF_CWD";
-
-    let server = MockServer::start().await;
-    let request_log = mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_assistant_message("m1", "turn 1 assistant"),
-                ev_completed("r1"),
-            ]),
-            sse(vec![
-                ev_assistant_message("m2", "turn 2 assistant"),
-                ev_completed("r2"),
-            ]),
-            sse(vec![ev_response_created("r3"), ev_completed("r3")]),
-        ],
-    )
-    .await;
-
-    let (_home, config, _manager, conversation) =
-        start_test_conversation(&server, Some(MODEL)).await;
-
-    user_turn(&conversation, TURN_ONE_USER).await;
-
-    let override_cwd = config.cwd.join(PRETURN_CONTEXT_DIFF_CWD);
-    std::fs::create_dir_all(&override_cwd)?;
-    core_test_support::submit_thread_settings(
-        &conversation,
-        ThreadSettingsOverrides {
-            environments: Some(local_selections(override_cwd.clone())),
-            collaboration_mode: Some(CollaborationMode {
-                mode: ModeKind::Default,
-                settings: Settings {
-                    model: MODEL.to_string(),
-                    reasoning_effort: None,
-                    developer_instructions: Some(ROLLED_BACK_DEV_INSTRUCTIONS.to_string()),
-                },
-            }),
-            ..Default::default()
-        },
-    )
-    .await?;
-
-    user_turn(&conversation, TURN_TWO_USER).await;
-
-    conversation
-        .submit(Op::ThreadRollback { num_turns: 1 })
-        .await?;
-    let rollback_event = wait_for_event(&conversation, |ev| {
-        if let EventMsg::Error(error) = ev {
-            panic!("rollback failed: {error:?}");
-        }
-        matches!(ev, EventMsg::ThreadRolledBack(_))
-    })
-    .await;
-    let EventMsg::ThreadRolledBack(rollback_event) = rollback_event else {
-        panic!("expected thread rolled back event");
-    };
-    assert_eq!(rollback_event.num_turns, 1);
-
-    user_turn(&conversation, FOLLOWUP_USER).await;
-
-    let requests = request_log.requests();
-    assert_eq!(requests.len(), 3);
-
-    let before_rollback_developer_count = requests[1]
-        .message_input_texts("developer")
-        .iter()
-        .filter(|text| text.contains(ROLLED_BACK_DEV_INSTRUCTIONS))
-        .count();
-    assert_eq!(before_rollback_developer_count, 1);
-    assert_eq!(
-        requests[1]
-            .message_input_texts("user")
-            .iter()
-            .filter(|text| text.contains(PRETURN_CONTEXT_DIFF_CWD))
-            .count(),
-        1
-    );
-
-    let after_rollback_developer_count = requests[2]
-        .message_input_texts("developer")
-        .iter()
-        .filter(|text| text.contains(ROLLED_BACK_DEV_INSTRUCTIONS))
-        .count();
-    assert_eq!(after_rollback_developer_count, 1);
-
-    let after_rollback_user_texts = requests[2].message_input_texts("user");
-    assert_eq!(
-        after_rollback_user_texts
-            .iter()
-            .filter(|text| text.contains(PRETURN_CONTEXT_DIFF_CWD))
-            .count(),
-        1
-    );
-    assert_eq!(
-        after_rollback_user_texts.last().map(String::as_str),
-        Some(FOLLOWUP_USER)
-    );
-
-    insta::assert_snapshot!(
-        "rollback_followup_turn_trims_context_updates",
-        context_snapshot::format_labeled_requests_snapshot(
-            "rollback trims pre-turn override context updates before the follow-up request",
-            &[
-                ("rolled-back turn request", &requests[1]),
-                ("follow-up request after rollback", &requests[2]),
-            ],
-            &ContextSnapshotOptions::default()
-                .strip_capability_instructions()
-                .render_mode(ContextSnapshotRenderMode::KindWithTextPrefix { max_chars: 96 }),
-        )
-    );
-
     Ok(())
 }
 

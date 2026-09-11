@@ -204,3 +204,14 @@ in both `full` and `toolsAndAuthOnly` detail modes, including thread-scoped read
 This is the server's advertised MCP capabilities object, including its `extensions`
 map. It is null when the connection has not initialized successfully; capabilities
 are never inferred from tools or copied from a shared catalog cache.
+
+# Thread rollback
+
+`thread/rollback` has been removed from the API, including its request and response
+types. Requests use the generic unknown-method rejection path. Use `thread/revert`
+for paginated threads instead.
+
+Existing rollouts may contain historical `ThreadRolledBack` events. Their replay
+and migration remain supported so resuming, reading, and forking those threads
+preserves the surviving history. This disk compatibility does not require restoring
+support for new `thread/rollback` requests.

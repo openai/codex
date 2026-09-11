@@ -1,14 +1,12 @@
 use anyhow::Result;
 use codex_core::TurnInputRequest;
 use codex_core::config::RolloutBudgetConfig;
-use codex_extension_api::ExtensionRegistryBuilder;
 use codex_features::Feature;
 use codex_model_provider_info::built_in_model_providers;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
-use core_test_support::ThreadIdle;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -24,7 +22,6 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::json;
-use std::sync::Arc;
 use std::time::Duration;
 use test_case::test_case;
 use tokio::time::timeout;
@@ -464,59 +461,6 @@ async fn restates_the_current_remainder_after_compaction() -> Result<()> {
     assert!(
         summary_position < reminder_position,
         "the current remainder should follow the compaction summary"
-    );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn restates_the_current_remainder_after_rollback() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    let responses = mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_response_created("resp-1"),
-                ev_completed_with_tokens("resp-1", /*total_tokens*/ 30),
-            ]),
-            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
-        ],
-    )
-    .await;
-    let mut extensions = ExtensionRegistryBuilder::new();
-    extensions.thread_lifecycle_contributor(Arc::new(ThreadIdle));
-    let test = test_codex()
-        .with_extensions(Arc::new(extensions.build()))
-        .with_config(|config| {
-            config.rollout_budget = Some(RolloutBudgetConfig {
-                reminder_at_remaining_tokens: vec![50],
-                ..rollout_budget()
-            });
-        })
-        .build(&server)
-        .await?;
-
-    test.submit_turn("rolled-back turn").await?;
-    ThreadIdle::wait(&test.codex).await;
-    test.codex
-        .submit(Op::ThreadRollback { num_turns: 1 })
-        .await?;
-    wait_for_event(&test.codex, |event| {
-        if let EventMsg::Error(error) = event {
-            panic!("rollback failed: {error:?}");
-        }
-        matches!(event, EventMsg::ThreadRolledBack(_))
-    })
-    .await;
-    test.submit_turn("turn after rollback").await?;
-
-    let requests = responses.requests();
-    assert_eq!(
-        rollout_budget_texts(&requests[1]),
-        vec![rollout_budget_message(/*remaining_tokens*/ 70)],
-        "rollback should rearm the current budget reminder without refunding usage"
     );
 
     Ok(())

@@ -522,7 +522,7 @@ impl ContextManager {
     /// Instruction turns are history messages that should behave like a new prompt boundary:
     /// ordinary user messages and structured assistant inter-agent instructions.
     ///
-    /// This mirrors thread-rollback semantics:
+    /// Used only to replay historical rollback markers when reconstructing a saved rollout:
     /// - `num_turns == 0` is a no-op
     /// - if there are no user turns, this is a no-op
     /// - if `num_turns` exceeds the number of user turns, all user turns are dropped while

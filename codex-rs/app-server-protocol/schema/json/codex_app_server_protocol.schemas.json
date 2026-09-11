@@ -691,30 +691,6 @@
             },
             "method": {
               "enum": [
-                "thread/rollback"
-              ],
-              "title": "Thread/rollbackRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/ThreadRollbackParams"
-            }
-          },
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "title": "Thread/rollbackRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/v2/RequestId"
-            },
-            "method": {
-              "enum": [
                 "thread/revert"
               ],
               "title": "Thread/revertRequestMethod",
@@ -20602,7 +20578,7 @@
             "description": "Optional analytics source classification for this thread."
           },
           "turns": {
-            "description": "Only populated on `thread/resume`, `thread/rollback`, `thread/fork`, and `thread/read` (when `includeTurns` is true) responses. For all other responses and notifications returning a Thread, the turns field will be an empty list.",
+            "description": "Only populated on `thread/resume`, `thread/fork`, and `thread/read` (when `includeTurns` is true) responses. For all other responses and notifications returning a Thread, the turns field will be an empty list.",
             "items": {
               "$ref": "#/definitions/v2/Turn"
             },
@@ -23501,45 +23477,6 @@
           "threadId"
         ],
         "title": "ThreadRevertedNotification",
-        "type": "object"
-      },
-      "ThreadRollbackParams": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "DEPRECATED: `thread/rollback` will be removed soon.",
-        "properties": {
-          "numTurns": {
-            "description": "The number of turns to drop from the end of the thread. Must be >= 1.\n\nThis only modifies the thread's history and does not revert local file changes that have been made by the agent. Clients are responsible for reverting these changes.",
-            "format": "uint32",
-            "minimum": 0.0,
-            "type": "integer"
-          },
-          "threadId": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "numTurns",
-          "threadId"
-        ],
-        "title": "ThreadRollbackParams",
-        "type": "object"
-      },
-      "ThreadRollbackResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "thread": {
-            "allOf": [
-              {
-                "$ref": "#/definitions/v2/Thread"
-              }
-            ],
-            "description": "The updated thread after applying the rollback, with `turns` populated.\n\nThe ThreadItems stored in each Turn are lossy since we explicitly do not persist all agent interactions, such as command executions. This is the same behavior as `thread/resume`."
-          }
-        },
-        "required": [
-          "thread"
-        ],
-        "title": "ThreadRollbackResponse",
         "type": "object"
       },
       "ThreadSearchResult": {

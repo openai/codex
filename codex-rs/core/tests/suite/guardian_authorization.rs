@@ -217,8 +217,7 @@ async fn guardian_revalidates_owning_session_before_allow(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn guardian_authorization_revision_survives_compaction_not_user_input_or_rollback()
--> Result<()> {
+async fn guardian_authorization_revision_survives_compaction_not_user_input() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -285,14 +284,5 @@ async fn guardian_authorization_revision_survives_compaction_not_user_input_or_r
     .await;
     assert_eq!(test.codex.guardian_authorization_version().await, expected);
 
-    test.codex.ensure_rollout_materialized().await;
-    test.codex
-        .submit(Op::ThreadRollback { num_turns: 1 })
-        .await?;
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::ThreadRolledBack(_))
-    })
-    .await;
-    assert_ne!(test.codex.guardian_authorization_version().await, expected);
     Ok(())
 }

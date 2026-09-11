@@ -31,8 +31,7 @@ use codex_utils_output_truncation::TruncationPolicy;
 use tokio_util::task::AbortOnDropHandle;
 
 /// Runtime request effort, initially unset and established by prewarm or sampling.
-/// Rollback clears it after startup prewarm is consumed; successful compaction allows
-/// a fresh baseline without an override.
+/// Successful compaction allows a fresh baseline without an override.
 pub(crate) enum ReasoningEffortPin {
     Unset,
     Compacted,

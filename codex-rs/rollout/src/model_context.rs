@@ -95,7 +95,7 @@ impl ModelContextScan {
                 self.active_segment.saw_compaction = true;
             }
             RolloutItem::EventMsg(EventMsg::ThreadRolledBack(_)) => {
-                // Paginated threads reject rollback. Keep old rollouts correct rather than
+                // Rollback markers only occur in legacy history. Keep old rollouts correct rather than
                 // duplicating rollback survival semantics in this bounded selector.
                 self.must_scan_to_start = true;
             }

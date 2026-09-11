@@ -7,10 +7,6 @@ use codex_core::SuspendTurnOutcome;
 use codex_core::TurnInputRequest;
 use codex_core::TurnInputSubmission;
 use codex_core::config::Config;
-use codex_extension_api::ExtensionFuture;
-use codex_extension_api::ExtensionRegistryBuilder;
-use codex_extension_api::ThreadIdleInput;
-use codex_extension_api::ThreadLifecycleContributor;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_protocol::models::ResponseItem;
@@ -32,8 +28,6 @@ use serde_json::Value;
 use std::sync::Arc;
 use std::time::Duration;
 use test_case::test_case;
-use tokio::sync::Notify;
-use tokio::time::timeout;
 use wiremock::ResponseTemplate;
 
 fn override_builder() -> TestCodexBuilder {
@@ -378,8 +372,6 @@ enum PrewarmStartup {
     New,
     Resume,
     Fork,
-    ResumeThenRollback,
-    ForkThenRollback,
 }
 
 #[test_case(true, PrewarmStartup::New; "new thread feature enabled")]
@@ -388,8 +380,6 @@ enum PrewarmStartup {
 #[test_case(false, PrewarmStartup::Resume; "resumed thread feature disabled")]
 #[test_case(true, PrewarmStartup::Fork; "forked thread feature enabled")]
 #[test_case(false, PrewarmStartup::Fork; "forked thread feature disabled")]
-#[test_case(true, PrewarmStartup::ResumeThenRollback; "resumed thread rollback before first turn")]
-#[test_case(true, PrewarmStartup::ForkThenRollback; "forked thread rollback before first turn")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn reasoning_effort_override_websocket_prewarm_preserves_baseline(
     feature_enabled: bool,
@@ -443,10 +433,7 @@ async fn reasoning_effort_override_websocket_prewarm_preserves_baseline(
                 .map(String::as_str),
             Some("previous turn"),
         );
-        if matches!(
-            startup,
-            PrewarmStartup::Fork | PrewarmStartup::ForkThenRollback
-        ) {
+        if matches!(startup, PrewarmStartup::Fork) {
             previous.codex.shutdown_and_wait().await?;
             let mut config = previous.config.clone();
             configure_prewarm(&mut config);
@@ -475,23 +462,6 @@ async fn reasoning_effort_override_websocket_prewarm_preserves_baseline(
     .await?;
     assert_eq!(warmup.body_json()["generate"], false);
     assert_eq!(warmup.body_json()["reasoning"]["effort"], "medium");
-    if matches!(
-        startup,
-        PrewarmStartup::ResumeThenRollback | PrewarmStartup::ForkThenRollback
-    ) {
-        // Observing the warmup request guarantees that Medium is pinned before rollback.
-        test.codex
-            .submit(Op::ThreadRollback { num_turns: 1 })
-            .await?;
-        let rollback = wait_for_event(&test.codex, |event| {
-            matches!(event, EventMsg::ThreadRolledBack(_) | EventMsg::Error(_))
-        })
-        .await;
-        assert!(
-            matches!(rollback, EventMsg::ThreadRolledBack(_)),
-            "rollback failed: {rollback:?}",
-        );
-    }
     submit_thread_settings(
         &test.codex,
         ThreadSettingsOverrides {
@@ -761,124 +731,6 @@ async fn reasoning_effort_override_disabled_on_resume_retires_update_at_compacti
             .input()
             .iter()
             .any(|item| item["type"] == "compaction")
-    );
-    Ok(())
-}
-
-#[test_case(1, ReasoningEffort::High; "later turn keep changed selection")]
-#[test_case(1, ReasoningEffort::Medium; "later turn match restored settings")]
-#[test_case(2, ReasoningEffort::High; "through first turn")]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn reasoning_effort_override_rollback_reestablishes_selected_effort(
-    num_turns: u32,
-    effort: ReasoningEffort,
-) -> anyhow::Result<()> {
-    skip_if_no_network!(Ok(()));
-    #[derive(Default)]
-    struct ThreadIdle {
-        ready: Notify,
-    }
-
-    impl ThreadLifecycleContributor<Config> for ThreadIdle {
-        fn on_thread_idle<'a>(&'a self, _input: ThreadIdleInput<'a>) -> ExtensionFuture<'a, ()> {
-            Box::pin(async move {
-                self.ready.notify_one();
-            })
-        }
-    }
-
-    let idle = Arc::new(ThreadIdle::default());
-    let mut extensions = ExtensionRegistryBuilder::new();
-    extensions.thread_lifecycle_contributor(idle.clone());
-    let server = responses::start_mock_server().await;
-    let first = responses::mount_sse_once(
-        &server,
-        responses::sse(vec![responses::ev_completed("first")]),
-    )
-    .await;
-    let removed = responses::mount_sse_once(
-        &server,
-        responses::sse(vec![responses::ev_completed("removed")]),
-    )
-    .await;
-    let replacement = responses::mount_sse_once(
-        &server,
-        responses::sse(vec![responses::ev_completed("replacement")]),
-    )
-    .await;
-    let test = override_builder()
-        .with_extensions(Arc::new(extensions.build()))
-        .build_with_auto_env(&server)
-        .await?;
-    test.submit_text_turn("first turn").await?;
-    timeout(Duration::from_secs(/*secs*/ 10), idle.ready.notified()).await?;
-    submit_thread_settings(
-        &test.codex,
-        ThreadSettingsOverrides {
-            effort: Some(Some(ReasoningEffort::High)),
-            ..Default::default()
-        },
-    )
-    .await?;
-    test.submit_text_turn("removed turn").await?;
-    // Completion can be delivered before the active slot is cleared. Wait for
-    // actual idle so this test exercises effort replay, not rollback admission.
-    timeout(Duration::from_secs(/*secs*/ 10), idle.ready.notified()).await?;
-    test.codex.submit(Op::ThreadRollback { num_turns }).await?;
-    let rollback = wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::ThreadRolledBack(_) | EventMsg::Error(_))
-    })
-    .await;
-    let EventMsg::ThreadRolledBack(rollback) = rollback else {
-        panic!("rollback failed: {rollback:?}");
-    };
-    assert_eq!(rollback.num_turns, num_turns);
-    submit_thread_settings(
-        &test.codex,
-        ThreadSettingsOverrides {
-            effort: Some(Some(effort.clone())),
-            ..Default::default()
-        },
-    )
-    .await?;
-    test.submit_text_turn("replacement turn").await?;
-    timeout(Duration::from_secs(/*secs*/ 10), idle.ready.notified()).await?;
-
-    assert_eq!(
-        effort_updates(&first.single_request()),
-        [effort_update(ReasoningEffort::Medium)]
-    );
-    assert_eq!(
-        effort_updates(&removed.single_request()),
-        [
-            effort_update(ReasoningEffort::Medium),
-            effort_update(ReasoningEffort::High)
-        ]
-    );
-    let request = replacement.single_request();
-    assert_eq!(request.body_json()["reasoning"]["effort"], effort.as_str());
-    let mut expected = if num_turns == 1 {
-        vec![effort_update(ReasoningEffort::Medium)]
-    } else {
-        Vec::new()
-    };
-    expected.push(effort_update(effort.clone()));
-    assert_eq!(effort_updates(&request), expected);
-    let input = request.input();
-    assert!(
-        !input
-            .iter()
-            .any(|item| item["content"][0]["text"] == "removed turn")
-    );
-    let tail = responses::strip_response_item_ids_from_json(responses::strip_metadata_from_json(
-        Value::Array(input[input.len() - 2..].to_vec()),
-    ));
-    assert_eq!(
-        tail,
-        serde_json::json!([
-            message("user", "replacement turn"),
-            effort_update(effort.clone()),
-        ])
     );
     Ok(())
 }

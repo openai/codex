@@ -30,9 +30,6 @@ use std::ops::ControlFlow;
 
 pub(super) const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
 pub(super) const THREAD_LIST_MAX_LIMIT: usize = 100;
-const CODEX_TUI_CLIENT_NAME: &str = "codex-tui";
-const THREAD_ROLLBACK_DEPRECATION_SUMMARY: &str =
-    "thread/rollback is deprecated and will be removed soon";
 const PAGINATED_FULL_HISTORY_DEPRECATION_SUMMARY: &str = "Full-history hydration is deprecated for paginated threads; use `excludeTurns: true`, then page with `thread/turns/list` and `thread/items/list`.";
 const PAGINATED_THREAD_READ_DEPRECATION_SUMMARY: &str = "Full-history hydration is deprecated for paginated threads; omit `includeTurns` or set it to `false`, then page with `thread/turns/list` and `thread/items/list`.";
 
@@ -808,24 +805,6 @@ impl ThreadRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
-    pub(crate) async fn thread_rollback(
-        &self,
-        request_id: &ConnectionRequestId,
-        params: ThreadRollbackParams,
-        app_server_client_name: Option<&str>,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        if app_server_client_name != Some(CODEX_TUI_CLIENT_NAME) {
-            self.send_deprecation_notice(
-                request_id.connection_id,
-                THREAD_ROLLBACK_DEPRECATION_SUMMARY,
-            )
-            .await;
-        }
-        self.thread_rollback_inner(request_id, params)
-            .await
-            .map(|()| None)
-    }
-
     async fn send_deprecation_notice(&self, connection_id: ConnectionId, summary: &str) {
         self.outgoing
             .send_server_notification_to_connections(
@@ -1102,8 +1081,6 @@ impl ThreadRequestProcessor {
             outgoing: Arc::clone(&self.outgoing),
             pending_thread_unloads: Arc::clone(&self.pending_thread_unloads),
             thread_watch_manager: self.thread_watch_manager.clone(),
-            thread_list_state_permit: self.thread_list_state_permit.clone(),
-            fallback_model_provider: self.config.model_provider_id.clone(),
             codex_home: self.config.codex_home.to_path_buf(),
             thread_unload_delay: self.config.thread_unload_delay,
             skills_watcher: Arc::clone(&self.skills_watcher),
@@ -1234,8 +1211,6 @@ impl ThreadRequestProcessor {
             outgoing: Arc::clone(&self.outgoing),
             pending_thread_unloads: Arc::clone(&self.pending_thread_unloads),
             thread_watch_manager: self.thread_watch_manager.clone(),
-            thread_list_state_permit: self.thread_list_state_permit.clone(),
-            fallback_model_provider: self.config.model_provider_id.clone(),
             codex_home: self.config.codex_home.to_path_buf(),
             thread_unload_delay: self.config.thread_unload_delay,
             skills_watcher: Arc::clone(&self.skills_watcher),
@@ -2118,14 +2093,6 @@ impl ThreadRequestProcessor {
         Ok((ThreadUnarchiveResponse { thread }, thread_id))
     }
 
-    async fn thread_rollback_inner(
-        &self,
-        request_id: &ConnectionRequestId,
-        params: ThreadRollbackParams,
-    ) -> Result<(), JSONRPCErrorError> {
-        self.thread_rollback_start(request_id, params).await
-    }
-
     async fn thread_revert_response(
         &self,
         request_id: &ConnectionRequestId,
@@ -2351,71 +2318,6 @@ impl ThreadRequestProcessor {
             turns_backwards_cursor,
             items_backwards_cursor,
         })
-    }
-
-    async fn thread_rollback_start(
-        &self,
-        request_id: &ConnectionRequestId,
-        params: ThreadRollbackParams,
-    ) -> Result<(), JSONRPCErrorError> {
-        let ThreadRollbackParams {
-            thread_id,
-            num_turns,
-        } = params;
-
-        if num_turns == 0 {
-            return Err(invalid_request("numTurns must be >= 1"));
-        }
-
-        let (thread_id, thread) = self.load_thread(&thread_id).await?;
-        ensure_direct_input_allowed(thread.as_ref()).await?;
-        if matches!(
-            thread.config_snapshot().await.history_mode,
-            ThreadHistoryMode::Paginated
-        ) {
-            return Err(invalid_request(
-                "paginated threads do not support thread/rollback",
-            ));
-        }
-
-        let request = request_id.clone();
-        let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
-
-        let rollback_already_in_progress = {
-            let thread_state = self.thread_state_manager.thread_state(thread_id).await;
-            let mut thread_state = thread_state.lock().await;
-            if thread_state.pending_rollbacks.is_some() {
-                true
-            } else {
-                thread_state.pending_rollbacks = Some((request, completion_tx));
-                false
-            }
-        };
-        if rollback_already_in_progress {
-            return Err(invalid_request(
-                "rollback already in progress for this thread",
-            ));
-        }
-
-        if let Err(err) = self
-            .submit_core_op(
-                request_id,
-                thread.as_ref(),
-                Op::ThreadRollback { num_turns },
-            )
-            .await
-        {
-            // No ThreadRollback event will arrive if an error occurs.
-            // Clean up and reply immediately.
-            let thread_state = self.thread_state_manager.thread_state(thread_id).await;
-            thread_state.lock().await.pending_rollbacks = None;
-
-            return Err(internal_error(format!("failed to start rollback: {err}")));
-        }
-        // The listener drops the sender after queuing the response, including errors.
-        // Keep the RPC's drain admission alive until then, without holding thread state.
-        let _ = completion_rx.await;
-        Ok(())
     }
 
     async fn thread_compact_start_inner(

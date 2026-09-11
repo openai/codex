@@ -5833,21 +5833,6 @@ class ThreadRevertedNotification(BaseModel):
     thread_id: Annotated[str, Field(alias="threadId")]
 
 
-class ThreadRollbackParams(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    num_turns: Annotated[
-        int,
-        Field(
-            alias="numTurns",
-            description="The number of turns to drop from the end of the thread. Must be >= 1.\n\nThis only modifies the thread's history and does not revert local file changes that have been made by the agent. Clients are responsible for reverting these changes.",
-            ge=0,
-        ),
-    ]
-    thread_id: Annotated[str, Field(alias="threadId")]
-
-
 class ThreadSearchSortKey(Enum):
     created_at = "created_at"
     updated_at = "updated_at"
@@ -6813,15 +6798,6 @@ class ThreadApproveGuardianDeniedActionRequest(BaseModel):
         Field(title="Thread/approveGuardianDeniedActionRequestMethod"),
     ]
     params: ThreadApproveGuardianDeniedActionParams
-
-
-class ThreadRollbackRequest(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    id: RequestId
-    method: Annotated[Literal["thread/rollback"], Field(title="Thread/rollbackRequestMethod")]
-    params: ThreadRollbackParams
 
 
 class ThreadRevertRequest(BaseModel):
@@ -11767,7 +11743,7 @@ class Thread(BaseModel):
     turns: Annotated[
         list[Turn],
         Field(
-            description="Only populated on `thread/resume`, `thread/rollback`, `thread/fork`, and `thread/read` (when `includeTurns` is true) responses. For all other responses and notifications returning a Thread, the turns field will be an empty list."
+            description="Only populated on `thread/resume`, `thread/fork`, and `thread/read` (when `includeTurns` is true) responses. For all other responses and notifications returning a Thread, the turns field will be an empty list."
         ),
     ]
     updated_at: Annotated[
@@ -11932,18 +11908,6 @@ class ThreadRevertResponse(BaseModel):
             description='Opaque cursor for hydrating paginated turns backwards.\n\nPass this as `cursor` to `thread/turns/list` with `sortDirection: "desc"`. The first page includes the turn identified by the cursor.',
         ),
     ] = None
-
-
-class ThreadRollbackResponse(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    thread: Annotated[
-        Thread,
-        Field(
-            description="The updated thread after applying the rollback, with `turns` populated.\n\nThe ThreadItems stored in each Turn are lossy since we explicitly do not persist all agent interactions, such as command executions. This is the same behavior as `thread/resume`."
-        ),
-    ]
 
 
 class ThreadSearchResult(BaseModel):
@@ -12169,7 +12133,6 @@ class ClientRequest(
         | ThreadCompactStartRequest
         | ThreadShellCommandRequest
         | ThreadApproveGuardianDeniedActionRequest
-        | ThreadRollbackRequest
         | ThreadRevertRequest
         | ThreadListRequest
         | ThreadSectionListRequest
@@ -12277,7 +12240,6 @@ class ClientRequest(
         | ThreadCompactStartRequest
         | ThreadShellCommandRequest
         | ThreadApproveGuardianDeniedActionRequest
-        | ThreadRollbackRequest
         | ThreadRevertRequest
         | ThreadListRequest
         | ThreadSectionListRequest

@@ -96,7 +96,7 @@ gitInfo: GitInfo | null, /**
  * Optional user-facing thread title.
  */
 name: string | null, /**
- * Only populated on `thread/resume`, `thread/rollback`, `thread/fork`, and `thread/read`
+ * Only populated on `thread/resume`, `thread/fork`, and `thread/read`
  * (when `includeTurns` is true) responses.
  * For all other responses and notifications returning a Thread,
  * the turns field will be an empty list.

@@ -4594,7 +4594,6 @@ async fn direct_input_to_multi_agent_v2_subagent_is_rejected(
             "turn/settings/update",
             json!({"turnId": "any-child-turn", "model": "gpt-5.4"}),
         ),
-        ("thread/rollback", json!({"numTurns": 1})),
         ("thread/revert", json!({"beforeTurnId": "any-child-turn"})),
         (
             "review/start",

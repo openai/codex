@@ -17,15 +17,12 @@ use crate::session::turn_input;
 use crate::config::Config;
 use crate::context::ContextualUserFragment;
 use crate::context::GuardianApprovedAction;
-use crate::context::NodeReplReviewEvidence;
 use crate::review_prompts::resolve_review_request;
 use crate::session::spawn_review_thread;
-use crate::state::ReasoningEffortPin;
 use crate::tasks::CompactTask;
 use crate::tasks::UserShellCommandMode;
 use crate::tasks::UserShellCommandTask;
 use crate::tasks::execute_user_shell_command;
-use codex_history::RolloutItem;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
@@ -39,7 +36,6 @@ use codex_protocol::protocol::RealtimeVoicesList;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ThreadMemoryMode;
-use codex_protocol::protocol::ThreadRolledBackEvent;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
@@ -250,129 +246,6 @@ pub async fn compact(sess: &Arc<Session>, sub_id: String) {
         .await;
 
     sess.spawn_task(turn_context, Vec::new(), CompactTask).await;
-}
-
-pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32) {
-    if num_turns == 0 {
-        sess.send_event_raw(Event {
-            id: sub_id,
-            msg: EventMsg::Error(ErrorEvent {
-                misalignment: None,
-                message: "num_turns must be >= 1".to_string(),
-                codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
-            }),
-        })
-        .await;
-        return;
-    }
-
-    let has_active_turn = { sess.active_turn.lock().await.is_some() };
-    if has_active_turn {
-        sess.send_event_raw(Event {
-            id: sub_id,
-            msg: EventMsg::Error(ErrorEvent {
-                misalignment: None,
-                message: "Cannot rollback while a turn is in progress.".to_string(),
-                codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
-            }),
-        })
-        .await;
-        return;
-    }
-
-    let turn_context = sess
-        .new_turn_with_default_settings(sub_id, Default::default())
-        .await;
-    let live_thread = match sess.live_thread_for_persistence("rollback thread") {
-        Ok(live_thread) => live_thread,
-        Err(_) => {
-            sess.send_event_raw(Event {
-                id: turn_context.sub_id.clone(),
-                msg: EventMsg::Error(ErrorEvent {
-                    misalignment: None,
-                    message: "thread rollback requires persisted thread history".to_string(),
-                    codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
-                }),
-            })
-            .await;
-            return;
-        }
-    };
-    if let Err(err) = live_thread.flush().await {
-        sess.send_event_raw(Event {
-            id: turn_context.sub_id.clone(),
-            msg: EventMsg::Error(ErrorEvent {
-                misalignment: None,
-                message: format!("failed to flush thread persistence for rollback replay: {err}"),
-                codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
-            }),
-        })
-        .await;
-        return;
-    }
-
-    let stored_history = match live_thread.load_history(/*include_archived*/ false).await {
-        Ok(history) => history,
-        Err(err) => {
-            sess.send_event_raw(Event {
-                id: turn_context.sub_id.clone(),
-                msg: EventMsg::Error(ErrorEvent {
-                    misalignment: None,
-                    message: format!("failed to load thread history for rollback replay: {err}"),
-                    codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
-                }),
-            })
-            .await;
-            return;
-        }
-    };
-
-    let rollback_event = ThreadRolledBackEvent { num_turns };
-    let rollback_msg = EventMsg::ThreadRolledBack(rollback_event.clone());
-    let replay_items = stored_history
-        .items
-        .into_iter()
-        .chain(std::iter::once(RolloutItem::EventMsg(rollback_msg.clone())))
-        .collect::<Vec<_>>();
-    sess.apply_rollout_reconstruction(turn_context.as_ref(), replay_items.as_slice())
-        .await;
-    {
-        let mut state = sess.state.lock().await;
-        // Keep the baseline while startup prewarm is retained for the first turn,
-        // including when its task has not established the pin yet.
-        if state.startup_prewarm.is_none() {
-            state.reasoning_effort_pin = ReasoningEffortPin::Unset;
-        }
-    }
-    sess.services
-        .thread_extension_data
-        .remove::<NodeReplReviewEvidence>();
-    sess.guardian_review_session().invalidate().await;
-    sess.services
-        .agent_control
-        .rollout_budget()
-        .rearm_reminder(sess.thread_id());
-    sess.recompute_token_usage(turn_context.as_ref()).await;
-
-    sess.persist_rollout_items(&[RolloutItem::EventMsg(rollback_msg.clone())])
-        .await;
-    if let Err(err) = sess.flush_rollout().await {
-        sess.send_event(
-            turn_context.as_ref(),
-            EventMsg::Warning(WarningEvent {
-                message: format!(
-                    "Rolled the thread back, but failed to save the rollback marker. Codex will continue retrying. Error: {err}"
-                ),
-            }),
-        )
-        .await;
-    }
-
-    sess.deliver_event_raw(Event {
-        id: turn_context.sub_id.clone(),
-        msg: rollback_msg,
-    })
-    .await;
 }
 
 pub(super) async fn persist_thread_memory_mode_update(
@@ -687,10 +560,6 @@ pub(super) async fn submission_loop(
                 }
                 Op::Compact => {
                     compact(&sess, sub.id.clone()).await;
-                    false
-                }
-                Op::ThreadRollback { num_turns } => {
-                    thread_rollback(&sess, sub.id.clone(), num_turns).await;
                     false
                 }
                 Op::SetThreadMemoryMode { mode } => {

@@ -1,7 +1,7 @@
 //! Cache-preserving effort updates and the request-effort baseline for a context window.
 //!
-//! Only trusted harness items establish overrides. Replay and rollback preserve startup
-//! prewarm's baseline while it is retained; later rollback invalidates the runtime pin.
+//! Only trusted harness items establish overrides. Replay preserves startup prewarm's
+//! baseline while it is retained.
 //! Successful compaction retires the overrides and allows a fresh request baseline.
 
 use super::session::Session;

@@ -1241,31 +1241,6 @@ pub struct ThreadBackgroundTerminalsTerminateResponse {
     pub terminated: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-/// DEPRECATED: `thread/rollback` will be removed soon.
-pub struct ThreadRollbackParams {
-    pub thread_id: String,
-    /// The number of turns to drop from the end of the thread. Must be >= 1.
-    ///
-    /// This only modifies the thread's history and does not revert local file changes
-    /// that have been made by the agent. Clients are responsible for reverting these changes.
-    pub num_turns: u32,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct ThreadRollbackResponse {
-    /// The updated thread after applying the rollback, with `turns` populated.
-    ///
-    /// The ThreadItems stored in each Turn are lossy since we explicitly do not
-    /// persist all agent interactions, such as command executions. This is the same
-    /// behavior as `thread/resume`.
-    pub thread: Thread,
-}
-
 /// Replace a paginated thread's durable history with the prefix before one turn.
 ///
 /// This only changes persisted conversation history. It does not revert local file changes.

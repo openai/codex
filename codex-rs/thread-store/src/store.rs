@@ -144,7 +144,7 @@ pub trait ThreadStore: Any + Send + Sync {
     /// already-durable thread data.
     fn discard_thread(&self, thread_id: ThreadId) -> ThreadStoreFuture<'_, ()>;
 
-    /// Loads persisted history for resume, fork, rollback, and memory jobs.
+    /// Loads persisted history for resume, fork, and memory jobs.
     fn load_history(
         &self,
         params: LoadThreadHistoryParams,

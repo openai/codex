@@ -607,8 +607,7 @@ pub(crate) struct App {
     pub(crate) backtrack: crate::app_backtrack::BacktrackState,
     /// When set, the next draw rebuilds terminal scrollback from the retained transcript cells.
     ///
-    /// This is used after a confirmed thread rollback to ensure scrollback reflects the trimmed
-    /// transcript cells.
+    /// This keeps scrollback consistent with the retained transcript after backtracking.
     pub(crate) backtrack_render_pending: bool,
     pub(crate) feedback: codex_feedback::CodexFeedback,
     feedback_audience: FeedbackAudience,

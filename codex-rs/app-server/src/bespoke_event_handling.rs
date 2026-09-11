@@ -1,11 +1,6 @@
-use crate::error_code::internal_error;
-use crate::error_code::invalid_request;
 use crate::notification_media::without_notification_media;
 use crate::outgoing_message::ClientRequestResult;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
-use crate::request_processors::apply_live_thread_settings;
-use crate::request_processors::populate_thread_turns_from_history;
-use crate::request_processors::thread_from_stored_thread;
 use crate::request_processors::thread_settings_from_config_snapshot;
 use crate::server_request_error::is_turn_transition_server_request_error;
 use crate::thread_state::ThreadState;
@@ -70,9 +65,7 @@ use codex_app_server_protocol::ThreadRealtimeSdpNotification;
 use codex_app_server_protocol::ThreadRealtimeStartedNotification;
 use codex_app_server_protocol::ThreadRealtimeTranscriptDeltaNotification;
 use codex_app_server_protocol::ThreadRealtimeTranscriptDoneNotification;
-use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
-use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
 use codex_app_server_protocol::ToolRequestUserInputOption;
@@ -102,7 +95,6 @@ use codex_protocol::items::CollabAgentTool as CoreCollabAgentTool;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::models::AdditionalPermissionProfile as CoreAdditionalPermissionProfile;
 use codex_protocol::plan_tool::UpdatePlanArgs;
-use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
@@ -120,7 +112,6 @@ use codex_protocol::request_permissions::RequestPermissionsResponse as CoreReque
 use codex_protocol::request_user_input::RequestUserInputAnswer as CoreRequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse as CoreRequestUserInputResponse;
 use codex_shell_command::parse_command::shlex_join;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
@@ -145,7 +136,6 @@ struct CommandExecutionCompletionItem {
     command_actions: Vec<V2ParsedCommand>,
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn apply_bespoke_event_handling(
     event: Event,
     conversation_id: ThreadId,
@@ -154,8 +144,6 @@ pub(crate) async fn apply_bespoke_event_handling(
     outgoing: ThreadScopedOutgoingMessageSender,
     thread_state: Arc<tokio::sync::Mutex<ThreadState>>,
     thread_watch_manager: ThreadWatchManager,
-    thread_list_state_permit: Arc<tokio::sync::Semaphore>,
-    fallback_model_provider: String,
 ) {
     let Event {
         id: event_turn_id,
@@ -1036,25 +1024,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .note_system_error(&conversation_id.to_string())
                 .await;
 
-            let message = ev.message.clone();
-            let codex_error_info = ev.codex_error_info.clone();
-            // If this error belongs to an in-flight `thread/rollback` request, fail that request
-            // (and clear pending state) so subsequent rollbacks are unblocked.
-            //
-            // Don't send a notification for this error.
-            if matches!(
-                codex_error_info,
-                Some(CoreCodexErrorInfo::ThreadRollbackFailed)
-            ) {
-                return handle_thread_rollback_failed(
-                    conversation_id,
-                    message,
-                    &thread_state,
-                    &outgoing,
-                )
-                .await;
-            };
-
             if !ev.affects_turn_status() {
                 return;
             }
@@ -1239,70 +1208,6 @@ pub(crate) async fn apply_bespoke_event_handling(
             )
             .await;
         }
-        EventMsg::ThreadRolledBack(_rollback_event) => {
-            let pending = {
-                let mut state = thread_state.lock().await;
-                state.pending_rollbacks.take()
-            };
-
-            if let Some((request_id, _completion_tx)) = pending {
-                let _thread_list_state_permit = match thread_list_state_permit.acquire().await {
-                    Ok(permit) => permit,
-                    Err(err) => {
-                        outgoing
-                            .send_error(
-                                request_id,
-                                internal_error(format!(
-                                    "failed to acquire thread list state permit: {err}"
-                                )),
-                            )
-                            .await;
-                        return;
-                    }
-                };
-                let config_snapshot = conversation.config_snapshot().await;
-                let stored_thread = match conversation
-                    .read_thread(
-                        /*include_archived*/ true, /*include_history*/ true,
-                    )
-                    .await
-                {
-                    Ok(stored_thread) => stored_thread,
-                    Err(err) => {
-                        outgoing
-                            .send_error(
-                                request_id.clone(),
-                                internal_error(format!(
-                                    "failed to read thread {conversation_id} after rollback: {err}"
-                                )),
-                            )
-                            .await;
-                        return;
-                    }
-                };
-                let loaded_status = thread_watch_manager
-                    .loaded_status_for_thread(&conversation_id.to_string())
-                    .await;
-                let mut response = match thread_rollback_response_from_stored_thread(
-                    stored_thread,
-                    conversation.session_configured().session_id.to_string(),
-                    fallback_model_provider.as_str(),
-                    config_snapshot.cwd(),
-                    loaded_status,
-                ) {
-                    Ok(response) => response,
-                    Err(err) => {
-                        outgoing
-                            .send_error(request_id.clone(), internal_error(err))
-                            .await;
-                        return;
-                    }
-                };
-
-                apply_live_thread_settings(&mut response.thread, &config_snapshot);
-                outgoing.send_response(request_id, response).await;
-            }
-        }
         EventMsg::ThreadGoalUpdated(thread_goal_event) => {
             let notification = ThreadGoalUpdatedNotification {
                 thread_id: thread_goal_event.thread_id.to_string(),
@@ -1315,7 +1220,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 ))
                 .await;
         }
-        EventMsg::ThreadQueueChanged(_) => {}
+        EventMsg::ThreadRolledBack(_) | EventMsg::ThreadQueueChanged(_) => {}
         EventMsg::ThreadSettingsApplied(_) => {
             let thread_settings =
                 thread_settings_from_config_snapshot(&conversation.config_snapshot().await);
@@ -1633,42 +1538,6 @@ async fn handle_turn_interrupted(
         outgoing,
     )
     .await;
-}
-
-async fn handle_thread_rollback_failed(
-    _conversation_id: ThreadId,
-    message: String,
-    thread_state: &Arc<Mutex<ThreadState>>,
-    outgoing: &ThreadScopedOutgoingMessageSender,
-) {
-    let pending_rollback = thread_state.lock().await.pending_rollbacks.take();
-
-    if let Some((request_id, _completion_tx)) = pending_rollback {
-        outgoing
-            .send_error(request_id, invalid_request(message))
-            .await;
-    }
-}
-
-fn thread_rollback_response_from_stored_thread(
-    stored_thread: codex_thread_store::StoredThread,
-    session_id: String,
-    fallback_model_provider: &str,
-    fallback_cwd: &AbsolutePathBuf,
-    loaded_status: ThreadStatus,
-) -> std::result::Result<ThreadRollbackResponse, String> {
-    let thread_id = stored_thread.thread_id;
-    let (mut thread, history) =
-        thread_from_stored_thread(stored_thread, fallback_model_provider, fallback_cwd);
-    thread.session_id = session_id;
-    let Some(history) = history else {
-        return Err(format!(
-            "thread {thread_id} did not include persisted history after rollback"
-        ));
-    };
-    populate_thread_turns_from_history(&mut thread, &history.items, /*active_turn*/ None);
-    thread.status = loaded_status;
-    Ok(ThreadRollbackResponse { thread })
 }
 
 async fn respond_to_pending_interrupts(
@@ -2219,11 +2088,11 @@ mod tests {
     use anyhow::Result;
     use anyhow::anyhow;
     use anyhow::bail;
-    use chrono::Utc;
     use codex_app_server_protocol::AutoReviewDecisionSource;
     use codex_app_server_protocol::GuardianApprovalReviewStatus;
     use codex_app_server_protocol::JSONRPCErrorError;
     use codex_app_server_protocol::ServerRequest;
+    use codex_app_server_protocol::ThreadStatus;
     use codex_app_server_protocol::TurnPlanStepStatus;
     use codex_login::CodexAuth;
     use codex_protocol::AgentPath;
@@ -2235,11 +2104,8 @@ mod tests {
     use codex_protocol::items::TurnItem as CoreTurnItem;
     use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
     use codex_protocol::models::NetworkPermissions as CoreNetworkPermissions;
-    use codex_protocol::models::PermissionProfile;
     use codex_protocol::plan_tool::PlanItemArg;
     use codex_protocol::plan_tool::StepStatus;
-    use codex_protocol::protocol::AgentMessageEvent;
-    use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::AuthRecoveryEvent;
     use codex_protocol::protocol::CreditsSnapshot;
     use codex_protocol::protocol::EventMsg;
@@ -2249,13 +2115,8 @@ mod tests {
     use codex_protocol::protocol::ItemStartedEvent;
     use codex_protocol::protocol::RateLimitSnapshot;
     use codex_protocol::protocol::RateLimitWindow;
-    use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::TokenUsage;
     use codex_protocol::protocol::TokenUsageInfo;
-    use codex_protocol::protocol::UserMessageEvent;
-    use codex_rollout::RolloutItem;
-    use codex_thread_store::StoredThread;
-    use codex_thread_store::StoredThreadHistory;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
@@ -2294,87 +2155,6 @@ mod tests {
             bail!("unexpected message: {message:?}");
         };
         Ok(envelope.notification)
-    }
-
-    #[test]
-    fn rollback_response_rebuilds_pathless_thread_from_stored_history() -> Result<()> {
-        let thread_id = ThreadId::from_string("00000000-0000-0000-0000-000000000789")?;
-        let created_at = Utc::now();
-        let history_items = vec![
-            RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
-                client_id: None,
-                message: "before rollback".to_string(),
-                images: None,
-                local_images: Vec::new(),
-                text_elements: Vec::new(),
-                ..Default::default()
-            })),
-            RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
-                message: "after rollback".to_string(),
-                phase: None,
-                memory_citation: None,
-                delivery: None,
-                questions: None,
-            })),
-        ];
-        let stored_thread = StoredThread {
-            originator: None,
-            thread_id,
-            extra_config: None,
-            rollout_path: None,
-            forked_from_id: None,
-            parent_thread_id: None,
-            preview: "fallback preview".to_string(),
-            name: Some("Rollback thread".to_string()),
-            model_provider: "openai".to_string(),
-            model: None,
-            reasoning_effort: None,
-            created_at,
-            updated_at: created_at,
-            recency_at: created_at,
-            archived_at: None,
-            section: None,
-            section_position: None,
-            section_entered_at: None,
-            project_id: None,
-            daybreak_enabled: None,
-            cwd: test_path_buf("/tmp").abs().into(),
-            cli_version: "0.0.0".to_string(),
-            source: SessionSource::Cli,
-            history_mode: Default::default(),
-            thread_source: None,
-            agent_nickname: None,
-            agent_role: None,
-            agent_path: None,
-            git_info: None,
-            approval_mode: AskForApproval::OnRequest,
-            permission_profile: PermissionProfile::read_only(),
-            token_usage: None,
-            first_user_message: Some("before rollback".to_string()),
-            history: Some(StoredThreadHistory {
-                thread_id,
-                items: history_items,
-            }),
-        };
-        let fallback_cwd = test_path_buf("/tmp").abs();
-
-        let response = thread_rollback_response_from_stored_thread(
-            stored_thread,
-            thread_id.to_string(),
-            "fallback-provider",
-            &fallback_cwd,
-            ThreadStatus::NotLoaded,
-        )
-        .expect("rollback response should rebuild from stored history");
-
-        assert_eq!(response.thread.id, thread_id.to_string());
-        assert_eq!(response.thread.path, None);
-        assert_eq!(response.thread.preview, "fallback preview");
-        assert_eq!(response.thread.name.as_deref(), Some("Rollback thread"));
-        assert_eq!(response.thread.status, ThreadStatus::NotLoaded);
-        assert_eq!(response.thread.turns.len(), 1);
-        assert_eq!(response.thread.turns[0].items.len(), 2);
-        Ok(())
     }
 
     fn turn_complete_event(turn_id: &str) -> TurnCompleteEvent {
@@ -2485,8 +2265,6 @@ mod tests {
                 self.outgoing.clone(),
                 self.thread_state.clone(),
                 self.thread_watch_manager.clone(),
-                Arc::new(tokio::sync::Semaphore::new(/*permits*/ 1)),
-                "test-provider".to_string(),
             )
             .await;
         }
@@ -3330,8 +3108,6 @@ mod tests {
             outgoing.clone(),
             Arc::clone(&thread_state),
             thread_watch_manager.clone(),
-            Arc::new(tokio::sync::Semaphore::new(/*permits*/ 1)),
-            "test-provider".to_string(),
         )
         .await;
 
@@ -3372,8 +3148,6 @@ mod tests {
                 outgoing.clone(),
                 Arc::clone(&thread_state),
                 thread_watch_manager.clone(),
-                Arc::new(tokio::sync::Semaphore::new(/*permits*/ 1)),
-                "test-provider".to_string(),
             )
             .await;
 
@@ -3453,8 +3227,6 @@ mod tests {
             outgoing,
             new_thread_state(),
             thread_watch_manager.clone(),
-            Arc::new(tokio::sync::Semaphore::new(/*permits*/ 1)),
-            "test-provider".to_string(),
         )
         .await;
 
@@ -3542,8 +3314,6 @@ mod tests {
             outgoing,
             new_thread_state(),
             ThreadWatchManager::new(),
-            Arc::new(tokio::sync::Semaphore::new(/*permits*/ 1)),
-            "test-provider".to_string(),
         )
         .await;
 

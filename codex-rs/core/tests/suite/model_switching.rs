@@ -3,12 +3,7 @@ use codex_config::types::Personality;
 use codex_core::CodexThread;
 use codex_core::ForkSnapshot;
 use codex_core::TurnInputRequest;
-use codex_core::config::Config;
 use codex_core::config::Constrained;
-use codex_extension_api::ExtensionFuture;
-use codex_extension_api::ExtensionRegistryBuilder;
-use codex_extension_api::ThreadIdleInput;
-use codex_extension_api::ThreadLifecycleContributor;
 use codex_features::Feature;
 use codex_history::RolloutItem;
 use codex_login::CodexAuth;
@@ -64,9 +59,7 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
 use test_case::test_case;
-use tokio::sync::Notify;
 use wiremock::MockServer;
 
 fn read_only_user_turn(test: &TestCodex, items: Vec<UserInput>, model: String) -> TurnInputRequest {
@@ -298,131 +291,6 @@ async fn first_turn_after_empty_prefix_fork_preserves_inherited_base_instruction
         model_switch_count,
         usize::from(custom_base_instructions.is_none() && turn_model != initial_model),
         "only inherited model-generated instructions should change models"
-    );
-
-    Ok(())
-}
-
-#[derive(Clone, Copy)]
-enum RollbackFollowup {
-    StartupModel,
-    SwitchedModel,
-    ColdResume,
-}
-
-#[derive(Default)]
-struct RollbackReady {
-    idle: Notify,
-}
-
-impl ThreadLifecycleContributor<Config> for RollbackReady {
-    fn on_thread_idle<'a>(&'a self, _input: ThreadIdleInput<'a>) -> ExtensionFuture<'a, ()> {
-        Box::pin(async move {
-            self.idle.notify_one();
-        })
-    }
-}
-
-impl RollbackReady {
-    async fn wait(&self) {
-        // TurnComplete is delivered before the active turn is cleared. Rollback requires
-        // the later thread-idle callback so it cannot race with turn cleanup.
-        tokio::time::timeout(Duration::from_secs(10), self.idle.notified())
-            .await
-            .expect("thread should become idle before rollback");
-    }
-}
-
-#[test_case(RollbackFollowup::StartupModel; "return to startup model")]
-#[test_case(RollbackFollowup::SwitchedModel; "retry switched model")]
-#[test_case(RollbackFollowup::ColdResume; "retry switched model after cold resume")]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn rollback_first_turn_model_change_removes_its_instructions(
-    followup: RollbackFollowup,
-) -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = MockServer::start().await;
-    let response_mock = mount_sse_sequence(
-        &server,
-        vec![sse_completed("resp-first"), sse_completed("resp-followup")],
-    )
-    .await;
-
-    let initial_model = "gpt-5.6-terra";
-    let switched_model = "gpt-5.5";
-    let rollback_ready = Arc::new(RollbackReady::default());
-    let mut extensions = ExtensionRegistryBuilder::new();
-    extensions.thread_lifecycle_contributor(rollback_ready.clone());
-    let mut builder = test_codex()
-        .with_model_info_override(initial_model, configure_model_switching_fixture)
-        .with_extensions(Arc::new(extensions.build()));
-    let test = builder.build_with_auto_env(&server).await?;
-
-    submit_model_turn(
-        &test.codex,
-        switched_model,
-        ThreadSettingsOverrides::default(),
-    )
-    .await?;
-
-    rollback_ready.wait().await;
-    test.codex
-        .submit(Op::ThreadRollback { num_turns: 1 })
-        .await?;
-    wait_for_event(&test.codex, |ev| {
-        if let EventMsg::Error(error) = ev {
-            panic!("rollback failed: {error:?}");
-        }
-        matches!(ev, EventMsg::ThreadRolledBack(_))
-    })
-    .await;
-
-    let test = match followup {
-        RollbackFollowup::ColdResume => {
-            let mut resume_builder = test_codex()
-                .with_model_info_override(initial_model, configure_model_switching_fixture)
-                .with_model(switched_model);
-            resume_builder.restart(&server, &test).await?
-        }
-        RollbackFollowup::StartupModel | RollbackFollowup::SwitchedModel => test,
-    };
-    let followup_model = match followup {
-        RollbackFollowup::StartupModel => initial_model,
-        RollbackFollowup::SwitchedModel | RollbackFollowup::ColdResume => switched_model,
-    };
-    submit_model_turn(
-        &test.codex,
-        followup_model,
-        ThreadSettingsOverrides::default(),
-    )
-    .await?;
-
-    let request = &response_mock.requests()[1];
-    assert_eq!(request.body_json()["model"], followup_model);
-    let misaligned_messages = request
-        .inputs_of_type("message")
-        .into_iter()
-        .filter(|message| {
-            message["internal_chat_message_metadata_passthrough"]["content_item_kinds"]
-                .as_array()
-                .is_some_and(|kinds| {
-                    message["content"]
-                        .as_array()
-                        .is_none_or(|content| content.len() != kinds.len())
-                })
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(misaligned_messages, Vec::<serde_json::Value>::new());
-    let model_switch_count = request
-        .message_input_texts("developer")
-        .iter()
-        .filter(|text| text.contains("<model_switch>"))
-        .count();
-    assert_eq!(
-        model_switch_count,
-        usize::from(followup_model == switched_model),
-        "rolled-back model instructions must not survive or be duplicated"
     );
 
     Ok(())
@@ -1355,113 +1223,6 @@ async fn model_change_from_generated_image_to_text_preserves_prior_generated_ima
             .iter()
             .all(|text| text != "image content omitted because you do not support image input"),
         "second request should not inject the image-omitted placeholder text"
-    );
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn thread_rollback_after_generated_image_drops_entire_image_turn_history() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = MockServer::start().await;
-    let image_model_slug = "test-image-model";
-    let image_model = test_model_info(
-        image_model_slug,
-        "Test Image Model",
-        "supports image input",
-        default_input_modalities(),
-    );
-    mount_models_once(
-        &server,
-        ModelsResponse {
-            models: vec![image_model],
-        },
-    )
-    .await;
-
-    let responses = mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_response_created("resp-1"),
-                ev_image_generation_call("ig_rollback", "completed", "lobster", "Zm9v"),
-                ev_completed_with_tokens("resp-1", /*total_tokens*/ 10),
-            ]),
-            sse_completed("resp-2"),
-        ],
-    )
-    .await;
-
-    let rollback_ready = Arc::new(RollbackReady::default());
-    let mut extensions = ExtensionRegistryBuilder::new();
-    extensions.thread_lifecycle_contributor(rollback_ready.clone());
-    let mut builder = test_codex()
-        .with_extensions(Arc::new(extensions.build()))
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config(move |config| {
-            config.model = Some(image_model_slug.to_string());
-        });
-    let test = builder.build(&server).await?;
-    let models_manager = test.thread_manager.get_models_manager();
-    let _ = models_manager
-        .list_models(
-            RefreshStrategy::OnlineIfUncached,
-            codex_core::test_support::default_http_client_factory(),
-        )
-        .await;
-
-    test.codex
-        .start_or_steer_turn(read_only_user_turn(
-            &test,
-            vec![UserInput::Text {
-                text: "generate a lobster".to_string(),
-                text_elements: Vec::new(),
-            }],
-            image_model_slug.to_string(),
-        ))
-        .await?;
-    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-
-    rollback_ready.wait().await;
-    test.codex
-        .submit(Op::ThreadRollback { num_turns: 1 })
-        .await?;
-    wait_for_event(&test.codex, |ev| {
-        if let EventMsg::Error(error) = ev {
-            panic!("rollback failed: {error:?}");
-        }
-        matches!(ev, EventMsg::ThreadRolledBack(_))
-    })
-    .await;
-
-    test.codex
-        .start_or_steer_turn(read_only_user_turn(
-            &test,
-            vec![UserInput::Text {
-                text: "after rollback".to_string(),
-                text_elements: Vec::new(),
-            }],
-            image_model_slug.to_string(),
-        ))
-        .await?;
-    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-
-    let requests = responses.requests();
-    assert_eq!(requests.len(), 2, "expected two model requests");
-
-    let second_request = requests.last().expect("expected second request");
-    assert!(
-        !second_request
-            .message_input_texts("user")
-            .iter()
-            .any(|text| text == "generate a lobster"),
-        "rollback should remove the rolled-back image-generation user turn"
-    );
-    assert!(
-        second_request
-            .inputs_of_type("image_generation_call")
-            .is_empty(),
-        "rollback should remove the generated image call with the rolled-back turn"
     );
     Ok(())
 }

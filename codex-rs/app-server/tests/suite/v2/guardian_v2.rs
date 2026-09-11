@@ -36,12 +36,9 @@ use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
-use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
-use codex_app_server_protocol::ThreadRollbackParams;
-use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnSettingsUpdateParams;
@@ -247,7 +244,6 @@ enum ThreadLifecycle {
     UserInputHookBlocked,
     Resume,
     Fork,
-    RootRollback,
     RootRestriction,
     RootRestrictionDuringClassification,
     RootTrustedSkill,
@@ -261,8 +257,7 @@ impl ThreadLifecycle {
     fn uses_root_worker(self) -> bool {
         matches!(
             self,
-            Self::RootRollback
-                | Self::RootRestriction
+            Self::RootRestriction
                 | Self::RootRestrictionDuringClassification
                 | Self::RootTrustedSkill
                 | Self::RootUserInputRestriction
@@ -914,7 +909,6 @@ async fn guardian_v2_routes_scoped_tool_approvals(
         | ThreadLifecycle::UserInputEmpty
         | ThreadLifecycle::UserInputHookFeedback
         | ThreadLifecycle::UserInputHookBlocked
-        | ThreadLifecycle::RootRollback
         | ThreadLifecycle::RootRestriction
         | ThreadLifecycle::RootRestrictionDuringClassification
         | ThreadLifecycle::RootTrustedSkill
@@ -963,7 +957,6 @@ async fn guardian_v2_routes_scoped_tool_approvals(
         | ThreadLifecycle::UserInputEmpty
         | ThreadLifecycle::UserInputHookFeedback
         | ThreadLifecycle::UserInputHookBlocked
-        | ThreadLifecycle::RootRollback
         | ThreadLifecycle::RootRestriction
         | ThreadLifecycle::RootRestrictionDuringClassification
         | ThreadLifecycle::RootTrustedSkill
@@ -975,8 +968,6 @@ async fn guardian_v2_routes_scoped_tool_approvals(
                 .start_thread(ThreadStartParams {
                     approval_policy: Some(AskForApproval::OnRequest),
                     approvals_reviewer: Some(requested_reviewer),
-                    history_mode: matches!(lifecycle, ThreadLifecycle::RootRollback)
-                        .then_some(ThreadHistoryMode::Legacy),
                     ..Default::default()
                 })
                 .await?;
@@ -1560,17 +1551,6 @@ async fn guardian_v2_routes_scoped_tool_approvals(
         && (lifecycle.uses_root_worker()
             || matches!(lifecycle, ThreadLifecycle::RootUserRestriction))
     {
-        if matches!(lifecycle, ThreadLifecycle::RootRollback) {
-            let rollback_id = app_server
-                .send_thread_rollback_request(ThreadRollbackParams {
-                    thread_id: thread_id.clone(),
-                    num_turns: 1,
-                })
-                .await?;
-            let _: ThreadRollbackResponse =
-                timeout(TIMEOUT, app_server.read_response(rollback_id)).await??;
-        }
-
         if lifecycle.has_root_user_input() {
             submit_user_input_response(
                 &mut app_server,
@@ -2548,7 +2528,6 @@ async fn forked_thread_ignores_persisted_guardian_score() -> Result<()> {
     .await
 }
 
-#[test_case(ThreadLifecycle::RootRollback; "worker_root_rollback")]
 #[test_case(ThreadLifecycle::RootRestriction; "worker_root_restriction")]
 #[test_case(ThreadLifecycle::RootUserRestriction; "root_user_restriction")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -753,11 +753,6 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadBackgroundTerminalsTerminateResponse,
     },
-    ThreadRollback => "thread/rollback" {
-        params: v2::ThreadRollbackParams,
-        serialization: thread_id(params.thread_id),
-        response: v2::ThreadRollbackResponse,
-    },
     ThreadRevert => "thread/revert" {
         params: v2::ThreadRevertParams,
         serialization: thread_id(params.thread_id),

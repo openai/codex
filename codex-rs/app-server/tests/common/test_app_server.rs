@@ -104,7 +104,6 @@ use codex_app_server_protocol::ThreadRealtimeListVoicesParams;
 use codex_app_server_protocol::ThreadRealtimeStartParams;
 use codex_app_server_protocol::ThreadRealtimeStopParams;
 use codex_app_server_protocol::ThreadResumeParams;
-use codex_app_server_protocol::ThreadRollbackParams;
 use codex_app_server_protocol::ThreadSearchOccurrencesParams;
 use codex_app_server_protocol::ThreadSearchParams;
 use codex_app_server_protocol::ThreadSectionMoveParams;
@@ -657,15 +656,6 @@ impl TestAppServer {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("thread/shellCommand", params).await
-    }
-
-    /// Send a `thread/rollback` JSON-RPC request.
-    pub async fn send_thread_rollback_request(
-        &mut self,
-        params: ThreadRollbackParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/rollback", params).await
     }
 
     /// Send a `thread/list` JSON-RPC request.
