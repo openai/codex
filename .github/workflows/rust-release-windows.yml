@@ -409,7 +409,7 @@ jobs:
           unsigned="${RUNNER_TEMP}/unsigned-voice/extracted"
           signed="${GITHUB_WORKSPACE}/signed-voice/${target}"
           mkdir -p "$unsigned" "$signed"
-          tar -xzf "${RUNNER_TEMP}/unsigned-voice/voice-unsigned-${target}.tar.gz" -C "$unsigned"
+          tar --force-local -xzf "${RUNNER_TEMP}/unsigned-voice/voice-unsigned-${target}.tar.gz" -C "$unsigned"
           python "${GITHUB_WORKSPACE}/third_party/voice/release_runtime.py" stage \
             --source "$unsigned/runtime" --target "$target" --output "$signed/runtime"
           cp "$unsigned/codex-voice-host.exe" "$signed/codex-voice-host.exe"
