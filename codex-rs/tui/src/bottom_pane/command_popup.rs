@@ -47,7 +47,6 @@ pub(crate) struct CommandPopupFlags {
     pub(crate) token_activity_command_enabled: bool,
     pub(crate) service_tier_commands_enabled: bool,
     pub(crate) goal_command_enabled: bool,
-    pub(crate) personality_command_enabled: bool,
     pub(crate) voice_command_enabled: bool,
     pub(crate) worktrees_enabled: bool,
     pub(crate) windows_degraded_sandbox_active: bool,
@@ -63,7 +62,6 @@ impl From<CommandPopupFlags> for BuiltinCommandFlags {
             token_activity_command_enabled: value.token_activity_command_enabled,
             service_tier_commands_enabled: value.service_tier_commands_enabled,
             goal_command_enabled: value.goal_command_enabled,
-            personality_command_enabled: value.personality_command_enabled,
             voice_command_enabled: value.voice_command_enabled,
             worktrees_enabled: value.worktrees_enabled,
             allow_elevate_sandbox: value.windows_degraded_sandbox_active,
@@ -563,7 +561,6 @@ mod tests {
                 token_activity_command_enabled: false,
                 service_tier_commands_enabled: false,
                 goal_command_enabled: false,
-                personality_command_enabled: true,
                 voice_command_enabled: false,
                 worktrees_enabled: true,
                 windows_degraded_sandbox_active: false,
@@ -579,69 +576,6 @@ mod tests {
                 panic!("expected plan command, got service tier {command:?}")
             }
             other => panic!("expected plan to be selected for exact match, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn personality_command_hidden_when_disabled() {
-        let mut popup = CommandPopup::new(
-            CommandPopupFlags {
-                collaboration_modes_enabled: true,
-                connectors_enabled: false,
-                plugins_command_enabled: false,
-                token_activity_command_enabled: false,
-                service_tier_commands_enabled: false,
-                goal_command_enabled: false,
-                personality_command_enabled: false,
-                voice_command_enabled: false,
-                worktrees_enabled: false,
-                windows_degraded_sandbox_active: false,
-                side_conversation_active: false,
-            },
-            Vec::new(),
-        );
-        popup.on_composer_text_change("/pers".to_string());
-
-        let cmds: Vec<String> = popup
-            .filtered_items()
-            .into_iter()
-            .map(|item| match item {
-                CommandItem::Builtin(cmd) => cmd.command().to_string(),
-                CommandItem::ServiceTier(command) => command.name,
-            })
-            .collect();
-        assert!(
-            !cmds.iter().any(|cmd| cmd == "personality"),
-            "expected '/personality' to be hidden when disabled, got {cmds:?}"
-        );
-    }
-
-    #[test]
-    fn personality_command_visible_when_enabled() {
-        let mut popup = CommandPopup::new(
-            CommandPopupFlags {
-                collaboration_modes_enabled: true,
-                connectors_enabled: false,
-                plugins_command_enabled: false,
-                token_activity_command_enabled: false,
-                service_tier_commands_enabled: false,
-                goal_command_enabled: false,
-                personality_command_enabled: true,
-                voice_command_enabled: false,
-                worktrees_enabled: true,
-                windows_degraded_sandbox_active: false,
-                side_conversation_active: false,
-            },
-            Vec::new(),
-        );
-        popup.on_composer_text_change("/personality".to_string());
-
-        match popup.selected_item() {
-            Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "personality"),
-            Some(CommandItem::ServiceTier(command)) => {
-                panic!("expected personality command, got service tier {command:?}")
-            }
-            other => panic!("expected personality to be selected for exact match, got {other:?}"),
         }
     }
 

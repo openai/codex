@@ -1752,54 +1752,6 @@ async fn collab_mode_applies_default_preset() {
 }
 
 #[tokio::test]
-async fn user_turn_includes_personality_from_config() {
-    for configured_personality in [
-        Personality::Friendly,
-        Personality::Pragmatic,
-        Personality::None,
-    ] {
-        let preset = crate::test_support::legacy_personality_model_preset();
-        let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some(&preset.model)).await;
-        Arc::make_mut(&mut chat.model_catalog).models = vec![preset];
-        chat.set_feature_enabled(Feature::Personality, /*enabled*/ true);
-        chat.thread_id = Some(ThreadId::new());
-        chat.set_personality(configured_personality);
-
-        chat.bottom_pane
-            .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
-        chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
-        let Op::UserTurn { personality, .. } = next_submit_op(&mut op_rx) else {
-            panic!("expected Op::UserTurn");
-        };
-        assert_eq!(personality, Some(configured_personality));
-    }
-}
-
-#[tokio::test]
-async fn user_turn_omits_personality_for_fixed_personality_models() {
-    for model in ["gpt-5.4", "gpt-5.5"] {
-        for configured_personality in [
-            Personality::Friendly,
-            Personality::Pragmatic,
-            Personality::None,
-        ] {
-            let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some(model)).await;
-            chat.set_feature_enabled(Feature::Personality, /*enabled*/ true);
-            chat.thread_id = Some(ThreadId::new());
-            chat.set_personality(configured_personality);
-
-            chat.bottom_pane
-                .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
-            chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
-            let Op::UserTurn { personality, .. } = next_submit_op(&mut op_rx) else {
-                panic!("expected Op::UserTurn");
-            };
-            assert_eq!(personality, None, "model: {model}");
-        }
-    }
-}
-
-#[tokio::test]
 async fn plan_update_renders_history_cell() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let update = UpdatePlanArgs {

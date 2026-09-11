@@ -315,10 +315,6 @@ impl ChatWidget {
                 self.open_model_popup();
                 self.defer_input_until_settings_applied();
             }
-            SlashCommand::Personality => {
-                self.open_personality_popup();
-                self.defer_input_until_settings_applied();
-            }
             SlashCommand::Plan => {
                 self.apply_plan_slash_command();
             }
@@ -1147,7 +1143,6 @@ impl ChatWidget {
             token_activity_command_enabled: self.has_codex_backend_auth,
             goal_command_enabled: self.config.features.enabled(Feature::Goals),
             service_tier_commands_enabled: self.fast_mode_enabled(),
-            personality_command_enabled: self.config.features.enabled(Feature::Personality),
             voice_command_enabled: self.realtime_conversation_available_for_thread,
             worktrees_enabled: self.config.features.enabled(Feature::Worktrees)
                 && self.local_worktree_operations,
@@ -1214,7 +1209,6 @@ impl ChatWidget {
             | SlashCommand::Compact
             | SlashCommand::Review
             | SlashCommand::Model
-            | SlashCommand::Personality
             | SlashCommand::Plan
             | SlashCommand::Goal
             | SlashCommand::Side

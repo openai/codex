@@ -568,7 +568,6 @@ pub(crate) struct ChatComposer {
     service_tier_commands: Vec<ServiceTierCommand>,
     mentions_v2_enabled: bool,
     goal_command_enabled: bool,
-    personality_command_enabled: bool,
     voice_command_enabled: bool,
     worktrees_enabled: bool,
     windows_degraded_sandbox_active: bool,
@@ -734,7 +733,6 @@ impl ChatComposer {
             service_tier_commands: Vec::new(),
             mentions_v2_enabled: false,
             goal_command_enabled: false,
-            personality_command_enabled: false,
             voice_command_enabled: false,
             worktrees_enabled: false,
             windows_degraded_sandbox_active: false,
@@ -1013,10 +1011,6 @@ impl ChatComposer {
 
     pub fn set_ide_context_active(&mut self, active: bool) {
         self.footer.ide_context_active = active;
-    }
-
-    pub fn set_personality_command_enabled(&mut self, enabled: bool) {
-        self.personality_command_enabled = enabled;
     }
 
     pub fn set_side_conversation_active(&mut self, active: bool) {
@@ -5179,39 +5173,6 @@ mod tests {
                 composer.footer.mode = FooterMode::ShortcutOverlay;
             },
         );
-    }
-
-    #[test]
-    fn parent_owned_thread_allows_bare_navigation_commands() {
-        for (command, expected) in [
-            ("/agents", SlashCommand::Agents),
-            ("/subagents", SlashCommand::MultiAgents),
-            ("/side", SlashCommand::Side),
-            ("/btw", SlashCommand::Btw),
-            ("/diff ", SlashCommand::Diff),
-        ] {
-            let (mut composer, _rx) = new_test_composer();
-            composer.set_parent_owned_thread();
-            composer.set_text_content(command.to_string(), Vec::new(), Vec::new());
-
-            assert_eq!(
-                composer.handle_submission(/*should_queue*/ false).0,
-                InputResult::Command(expected)
-            );
-        }
-    }
-
-    #[test]
-    fn parent_owned_thread_allows_safe_command_selected_from_prefix() {
-        let (mut composer, _rx) = new_test_composer();
-        composer.set_parent_owned_thread();
-        type_chars_humanlike(&mut composer, &['/', 'a', 'g']);
-
-        let result = composer
-            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-            .0;
-
-        assert_eq!(result, InputResult::Command(SlashCommand::Agents));
     }
 
     #[test]

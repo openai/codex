@@ -141,7 +141,6 @@ use codex_protocol::approvals::GuardianAssessmentStatus;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ModeKind;
-use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::Settings;
 #[cfg(any(target_os = "windows", test))]
 use codex_protocol::config_types::WindowsSandboxLevel;

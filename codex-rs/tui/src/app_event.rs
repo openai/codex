@@ -61,7 +61,6 @@ use codex_config::types::ApprovalsReviewer;
 use codex_features::Feature;
 use codex_plugin::PluginCapabilitySummary;
 use codex_protocol::config_types::CollaborationModeMask;
-use codex_protocol::config_types::Personality;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_realtime_webrtc::StartedRealtimeWebrtcSession;
 
@@ -1106,9 +1105,6 @@ pub(crate) enum AppEvent {
     /// Update the current model slug in the running app and widget.
     UpdateModel(String),
 
-    /// Update the current personality in the running app and widget.
-    UpdatePersonality(Personality),
-
     /// Result of creating a TUI-owned WebRTC offer for an active thread.
     RealtimeWebrtcOfferCreated {
         thread_id: ThreadId,
@@ -1148,11 +1144,6 @@ pub(crate) enum AppEvent {
     /// Save the voice for subsequent conversations through the app server.
     PersistRealtimeVoiceSelection {
         voice: codex_protocol::protocol::RealtimeVoice,
-    },
-
-    /// Persist the selected personality to the appropriate config.
-    PersistPersonalitySelection {
-        personality: Personality,
     },
 
     /// Persist the selected service tier to the appropriate config.

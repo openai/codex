@@ -144,22 +144,6 @@ impl App {
         self.send_thread_settings_update(app_server, params).await;
     }
 
-    pub(super) async fn sync_active_thread_personality_setting(
-        &mut self,
-        app_server: &mut AppServerSession,
-        personality: codex_protocol::config_types::Personality,
-    ) {
-        let Some(thread_id) = self.active_thread_id else {
-            return;
-        };
-        let params = ThreadSettingsUpdateParams {
-            thread_id: thread_id.to_string(),
-            personality: Some(personality),
-            ..ThreadSettingsUpdateParams::default()
-        };
-        self.send_thread_settings_update(app_server, params).await;
-    }
-
     pub(super) async fn sync_override_turn_context_settings(
         &mut self,
         app_server: &mut AppServerSession,

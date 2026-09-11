@@ -4,9 +4,6 @@ use std::sync::LazyLock;
 
 use codex_models_manager::bundled_models_response;
 use codex_protocol::openai_models::ModelPreset;
-use codex_protocol::openai_models::ReasoningEffort;
-use codex_protocol::openai_models::ReasoningEffortPreset;
-use codex_protocol::openai_models::default_input_modalities;
 pub(crate) use codex_utils_absolute_path::test_support::PathBufExt;
 pub(crate) use codex_utils_absolute_path::test_support::test_path_buf;
 use serde::Serialize;
@@ -20,34 +17,6 @@ pub(crate) static TEST_MODEL_PRESETS: LazyLock<Vec<ModelPreset>> = LazyLock::new
     ModelPreset::mark_default_by_picker_visibility(&mut presets);
     presets
 });
-
-/// A legacy catalog entry whose personality remains selectable, independent of bundled models.
-pub(crate) fn legacy_personality_model_preset() -> ModelPreset {
-    ModelPreset {
-        id: "legacy-personality-model".to_string(),
-        model: "legacy-personality-model".to_string(),
-        display_name: "Legacy personality model".to_string(),
-        description: "Test model with selectable personalities.".to_string(),
-        model_specialty: None,
-        default_reasoning_effort: ReasoningEffort::Medium,
-        supported_reasoning_efforts: vec![ReasoningEffortPreset {
-            effort: ReasoningEffort::Medium,
-            description: "medium".to_string(),
-        }],
-        supports_personality: true,
-        additional_speed_tiers: Vec::new(),
-        service_tiers: Vec::new(),
-        default_service_tier: None,
-        available_access_programs: None,
-        is_default: false,
-        upgrade: None,
-        show_in_picker: true,
-        multi_agent_version: None,
-        availability_nux: None,
-        supported_in_api: true,
-        input_modalities: default_input_modalities(),
-    }
-}
 
 pub(crate) fn test_path_display(path: &str) -> String {
     test_path_buf(path).display().to_string()

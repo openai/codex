@@ -1732,11 +1732,6 @@ impl App {
                         .await;
                 }
             }
-            AppEvent::UpdatePersonality(personality) => {
-                self.on_update_personality(personality);
-                self.sync_active_thread_personality_setting(app_server, personality)
-                    .await;
-            }
             AppEvent::RealtimeWebrtcOfferCreated {
                 thread_id,
                 attempt_id,
@@ -2366,32 +2361,6 @@ impl App {
             }
             AppEvent::PersistRealtimeVoiceSelection { voice } => {
                 self.persist_realtime_voice(app_server, voice).await;
-            }
-            AppEvent::PersistPersonalitySelection { personality } => {
-                match crate::config_update::write_config_batch(
-                    app_server.request_handle(),
-                    vec![crate::config_update::replace_config_value(
-                        "personality",
-                        serde_json::json!(personality.to_string()),
-                    )],
-                )
-                .await
-                {
-                    Ok(_) => {
-                        let label = Self::personality_label(personality);
-                        let message = format!("Personality set to {label}");
-                        self.chat_widget.add_info_message(message, /*hint*/ None);
-                    }
-                    Err(err) => {
-                        tracing::error!(
-                            error = %err,
-                            "failed to persist personality selection"
-                        );
-                        self.chat_widget.add_error_message(format!(
-                            "Failed to save default personality: {err}"
-                        ));
-                    }
-                }
             }
             AppEvent::PersistServiceTierSelection { service_tier } => {
                 self.refresh_status_line();

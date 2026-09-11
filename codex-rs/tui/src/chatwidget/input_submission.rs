@@ -382,11 +382,6 @@ impl ChatWidget {
             source,
             compare_key: Self::pending_steer_compare_key_from_items(&items),
         });
-        let personality = self
-            .config
-            .personality
-            .filter(|_| self.config.features.enabled(Feature::Personality))
-            .filter(|_| self.current_model_supports_personality());
         let service_tier = self.service_tier_update_for_core();
         let active_permission_profile = self.config.permissions.active_permission_profile();
         let op = AppCommand::user_turn(
@@ -401,7 +396,7 @@ impl ChatWidget {
             service_tier,
             /*final_output_json_schema*/ None,
             collaboration_mode,
-            personality,
+            /*personality*/ None,
         );
         let submitted_message = UserMessage {
             text,

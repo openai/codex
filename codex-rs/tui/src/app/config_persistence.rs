@@ -1083,11 +1083,6 @@ impl App {
         false
     }
 
-    pub(super) fn on_update_personality(&mut self, personality: Personality) {
-        self.config.personality = Some(personality);
-        self.chat_widget.set_personality(personality);
-    }
-
     pub(super) fn sync_tui_theme_selection(&mut self, name: String) {
         self.local_settings.tui.theme = Some(name.clone());
         self.chat_widget.set_tui_theme(Some(name));
@@ -1122,14 +1117,6 @@ impl App {
             Some(&self.local_settings.codex_home),
         ) {
             crate::render::highlight::set_syntax_theme(theme);
-        }
-    }
-
-    pub(super) fn personality_label(personality: Personality) -> &'static str {
-        match personality {
-            Personality::None => "None",
-            Personality::Friendly => "Friendly",
-            Personality::Pragmatic => "Pragmatic",
         }
     }
 
