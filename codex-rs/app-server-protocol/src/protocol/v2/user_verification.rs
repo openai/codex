@@ -109,11 +109,19 @@ pub struct UserVerificationStatusResponse {
 #[ts(export_to = "v2/")]
 pub struct UserVerificationEnrollParams {}
 
+/// Public metadata for a created or reused local credential. The caller completes
+/// backend registration; this response does not establish server enrollment.
+/// Older app-servers omit the metadata fields; callers must check both before registration.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct UserVerificationEnrollResponse {
     pub credential_id: String,
+    // TODO: Make both metadata fields required after the experimental/alpha rollout
+    // guarantees them on the oldest supported app-server version.
+    pub algorithm: Option<String>,
+    /// Unpadded base64url of the SubjectPublicKeyInfo DER encoding.
+    pub public_key: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq, JsonSchema, TS)]

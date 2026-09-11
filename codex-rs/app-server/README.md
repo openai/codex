@@ -65,7 +65,7 @@ ChatGPT account identity.
 | Method | Params | Result |
 | --- | --- | --- |
 | `userVerification/status` | `{}` | `{credentialId, unavailableReason, unavailableMessage}` |
-| `userVerification/enroll` | `{}` | `{credentialId}` |
+| `userVerification/enroll` | `{}` | `{credentialId, algorithm?, publicKey?}` |
 | `userVerification/delete` | `{}` | `{}` |
 | `userVerification/verify` | `{challenge, title, description}` | `{proof: {credentialId, signature}}` |
 | `userVerification/cancel` | `{requestId}` | `{}` |
@@ -74,9 +74,17 @@ Status reads local readiness without prompting or contacting a backend. A null
 `unavailableReason` means local checks passed, not that registration is valid.
 Unsupported platforms and missing account identity are reported in the status
 response's `unavailableReason` field.
-The initial enrollment creates or reuses the local key only. Backend
-registration and revocation are integration TODOs; local success is not server
-enrollment. Deletion currently removes that local key synchronously.
+Enrollment creates or reuses the local key and returns its public metadata. The
+`publicKey` is unpadded base64url SPKI-DER; `algorithm` is `ecdsaP256Sha256X962`.
+During the experimental rollout, `algorithm` and `publicKey` are optional for
+compatibility with older app-servers. Current servers populate both fields;
+callers must check that both are present and non-null before backend registration.
+The trusted UI host owns backend registration: obtain an enrollment challenge,
+sign it with `userVerification/verify`, check that the proof's `credentialId`
+matches this response, and submit the public metadata and proof to the backend.
+Local success is not server enrollment. The caller must preserve the authenticated
+account across this flow and reconcile uncertain registration before retrying.
+Deletion removes the local key; the caller owns backend revocation.
 Enrollment and deletion coordinate credential lifecycle; callers do not issue
 separate generate or rotate commands. Identity comes from the authenticated
 account; this API exposes no caller-selected scope.

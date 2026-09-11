@@ -3,6 +3,35 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 
 #[test]
+fn enrollment_response_accepts_older_servers_without_public_metadata() {
+    for response in [
+        json!({"credentialId": "credential"}),
+        json!({"credentialId": "credential", "algorithm": null, "publicKey": null}),
+    ] {
+        assert_eq!(
+            serde_json::from_value::<UserVerificationEnrollResponse>(response).unwrap(),
+            UserVerificationEnrollResponse {
+                credential_id: "credential".into(),
+                algorithm: None,
+                public_key: None,
+            }
+        );
+    }
+    let response = UserVerificationEnrollResponse {
+        credential_id: "credential".into(),
+        algorithm: Some("ecdsaP256Sha256X962".into()),
+        public_key: Some("public-key".into()),
+    };
+    assert_eq!(
+        serde_json::from_value::<UserVerificationEnrollResponse>(
+            serde_json::to_value(&response).unwrap()
+        )
+        .unwrap(),
+        response
+    );
+}
+
+#[test]
 fn local_readiness_retains_credential_during_biometric_unavailability() {
     let status = UserVerificationStatusResponse {
         credential_id: Some("credential".into()),

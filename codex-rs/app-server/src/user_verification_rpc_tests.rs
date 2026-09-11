@@ -12,6 +12,26 @@ use std::sync::atomic::Ordering;
 use tokio::time::timeout;
 
 #[tokio::test]
+async fn user_verification_rpc_enroll_returns_public_registration_metadata() -> Result<()> {
+    let mut h = Harness::new(ConnectionOrigin::Stdio, || true).await?;
+    h.initialize("test-local-ui", /*opt_in*/ true).await;
+    h.send(/*id*/ 1, "userVerification/enroll", json!({})).await;
+    let OutgoingMessage::Response(response) = h.response().await else {
+        panic!("local enrollment must return public metadata")
+    };
+    assert_eq!(
+        serde_json::to_value(response.result)?,
+        json!({
+            "credentialId": "credential",
+            "algorithm": "ecdsaP256Sha256X962",
+            "publicKey": "public-key"
+        })
+    );
+    h.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn user_verification_rpc_auth_revision_discards_native_proof() -> Result<()> {
     let mut h = Harness::new(ConnectionOrigin::Stdio, || true).await?;
     h.initialize("test-local-ui", /*opt_in*/ true).await;

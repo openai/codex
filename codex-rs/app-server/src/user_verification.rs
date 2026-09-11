@@ -181,10 +181,12 @@ async fn run(
                     }
                     NativeOperation::Enroll => {
                         let key = provider.ensure_key(&guard).map_err(native_error)?;
-                        // TODO: start enrollment, sign proof of possession, then finish registration.
-                        // This implementation establishes the local key only.
+                        // The trusted caller owns backend registration and can use verify
+                        // to sign the enrollment challenge with this local credential.
                         rpc::UserVerificationEnrollResponse {
                             credential_id: key.credential.credential_id,
+                            algorithm: Some(key.credential.algorithm),
+                            public_key: Some(key.credential.public_key),
                         }
                         .into()
                     }
