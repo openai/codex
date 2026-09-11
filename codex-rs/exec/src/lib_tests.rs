@@ -843,6 +843,7 @@ async fn session_configured_from_thread_response_preserves_parent_thread_id() {
 
 fn sample_thread_start_response() -> ThreadStartResponse {
     ThreadStartResponse {
+        disabled_plugin_ids: Vec::new(),
         thread: codex_app_server_protocol::Thread {
             originator: None,
             environments: None,

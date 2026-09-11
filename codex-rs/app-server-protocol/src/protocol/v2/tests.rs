@@ -271,6 +271,7 @@ fn thread_resume_params_accept_turns_page_bootstrap() {
 #[test]
 fn thread_resume_response_round_trips_initial_turns_page() {
     let response = ThreadResumeResponse {
+        disabled_plugin_ids: Vec::new(),
         thread: Thread {
             originator: Some("future_client".to_string()),
             environments: Some(vec![ThreadEnvironment {
@@ -4815,6 +4816,7 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
     );
 
     let without_override = TurnStartParams {
+        disabled_plugin_ids: None,
         thread_id: "thread_123".to_string(),
         client_user_message_id: None,
         input: vec![],

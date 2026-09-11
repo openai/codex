@@ -1336,6 +1336,7 @@ impl AppServerSession {
             .request_typed(ClientRequest::TurnStart {
                 request_id,
                 params: TurnStartParams {
+                    disabled_plugin_ids: None,
                     thread_id: thread_id.to_string(),
                     turn_trigger: None,
                     client_user_message_id: Some(client_user_message_id),
@@ -3877,6 +3878,7 @@ mod tests {
         let forked_from_id = ThreadId::new();
         let read_only_profile = PermissionProfile::read_only();
         let response = ThreadResumeResponse {
+            disabled_plugin_ids: Vec::new(),
             thread: codex_app_server_protocol::Thread {
                 originator: None,
                 environments: None,

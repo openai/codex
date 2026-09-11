@@ -183,6 +183,20 @@ Attachments record the resources currently associated with a thread, independent
 
 Attachment creation and deletion requests using the same thread ID are serialized across connections. The requesting client receives its response before the compact update is broadcast, and duplicate creates or absent deletes do not emit updates. Deleting the owning thread removes its attachments under the same lifecycle exclusion; queued attachment mutations then report that the thread was not found.
 
+# Thread plugin settings
+
+`thread/settings/update` and `turn/start` accept `disabledPluginIds`, a list of
+`PluginSummary.id` values from `plugin/list`, in the
+`<plugin-name>@<marketplace-name>` format. A supplied list replaces the selection;
+omission or `null` preserves it, and `[]` clears it. Saving this selection does
+not yet filter plugin capabilities.
+
+Read the selection from `threadSettings.disabledPluginIds` in
+`thread/settings/updated` notifications, or from `disabledPluginIds` in
+`thread/start`, `thread/resume`, and `thread/fork` responses. Selections persist
+across resume. Forks restore the selection from the history retained at the
+requested fork boundary.
+
 # MCP server capabilities
 
 `mcpServerStatus/list` returns `serverCapabilities` for each initialized MCP server

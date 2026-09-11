@@ -1453,18 +1453,6 @@ impl ThreadManager {
                 options.thread_instructions_provider.clone(),
             )
             .await;
-        // Capture the source's settings before truncating its model history.
-        options.disabled_plugin_ids = Some(options.disabled_plugin_ids.unwrap_or_else(|| {
-            source_thread_id
-                .and_then(|thread_id| {
-                    codex_history::latest_disabled_plugin_ids(
-                        history.get_rollout_items(),
-                        thread_id,
-                    )
-                })
-                .map(<[String]>::to_vec)
-                .unwrap_or_default()
-        }));
         let multi_agent_version = self
             .state
             .effective_multi_agent_version_for_spawn(

@@ -3232,6 +3232,7 @@ async fn turn_start_explicit_local_environment_updates_legacy_cwd_between_turns(
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
             params: TurnStartParams {
+                disabled_plugin_ids: None,
                 environments: None,
                 thread_id: thread.id.clone(),
                 client_user_message_id: None,
@@ -3280,6 +3281,7 @@ async fn turn_start_explicit_local_environment_updates_legacy_cwd_between_turns(
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
             params: TurnStartParams {
+                disabled_plugin_ids: None,
                 environments: Some(vec![TurnEnvironmentParams {
                     environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
                     cwd: second_cwd.abs().into(),

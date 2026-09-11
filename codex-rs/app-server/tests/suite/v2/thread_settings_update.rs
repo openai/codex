@@ -5,12 +5,21 @@ use app_test_support::TestAppServer;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::write_models_cache;
+use codex_app_server_protocol::ApprovalsReviewer;
+use codex_app_server_protocol::AskForApproval;
+use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::SandboxPolicy;
+use codex_app_server_protocol::ThreadForkParams;
+use codex_app_server_protocol::ThreadForkResponse;
+use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
+use codex_app_server_protocol::ThreadResumeParams;
+use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadSettingsUpdateParams;
 use codex_app_server_protocol::ThreadSettingsUpdateResponse;
 use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
@@ -35,9 +44,187 @@ use serde_json::Value;
 use serde_json::json;
 use std::time::Duration;
 use tempfile::TempDir;
+use test_case::test_case;
 use tokio::time::timeout;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[tokio::test]
+async fn disabled_plugin_ids_replace_preserve_and_clear_without_inference() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let started = start_thread(&mut mcp).await?;
+    assert_eq!(started.disabled_plugin_ids, Vec::<String>::new());
+
+    for (mut params, expected) in [
+        (
+            json!({"disabledPluginIds": ["slack@openai", "notion@openai"]}),
+            vec!["slack@openai", "notion@openai"],
+        ),
+        (
+            json!({"disabledPluginIds": ["slack@openai"]}),
+            vec!["slack@openai"],
+        ),
+        (json!({"model": "mock-model-2"}), vec!["slack@openai"]),
+        (
+            json!({"disabledPluginIds": null, "model": "mock-model-3"}),
+            vec!["slack@openai"],
+        ),
+        (json!({"disabledPluginIds": []}), vec![]),
+    ] {
+        params["threadId"] = json!(started.thread.id);
+        let request_id = mcp
+            .send_raw_request("thread/settings/update", Some(params))
+            .await?;
+        let _: ThreadSettingsUpdateResponse =
+            timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
+        let updated = read_thread_settings_updated(&mut mcp).await?;
+        assert_eq!(updated.thread_settings.disabled_plugin_ids, expected);
+    }
+    assert!(received_response_bodies(&server).await?.is_empty());
+    Ok(())
+}
+
+#[test_case(ThreadHistoryMode::Legacy, true; "cold legacy parent")]
+#[test_case(ThreadHistoryMode::Legacy, false; "loaded legacy parent")]
+#[test_case(ThreadHistoryMode::Paginated, true; "cold paginated parent")]
+#[test_case(ThreadHistoryMode::Paginated, false; "loaded paginated parent")]
+#[tokio::test]
+async fn disabled_plugin_ids_restore_from_fork_boundary(
+    history_mode: ThreadHistoryMode,
+    restart_before_fork: bool,
+) -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(vec![
+        create_final_assistant_message_sse_response("done")?,
+        create_final_assistant_message_sse_response("done again")?,
+    ])
+    .await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let started = mcp
+        .start_thread(ThreadStartParams {
+            history_mode: Some(history_mode),
+            ..Default::default()
+        })
+        .await?;
+    let thread_id = started.thread.id;
+    let initial_selection = vec!["slack@openai".to_string()];
+    let first_turn = mcp
+        .start_turn_and_wait_for_completion(TurnStartParams {
+            thread_id: thread_id.clone(),
+            disabled_plugin_ids: Some(initial_selection.clone()),
+            input: vec![V2UserInput::Text {
+                text: "materialize the thread".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    assert_eq!(
+        read_thread_settings_updated(&mut mcp)
+            .await?
+            .thread_settings
+            .disabled_plugin_ids,
+        initial_selection
+    );
+    let second_turn = mcp
+        .start_turn_and_wait_for_completion(TurnStartParams {
+            thread_id: thread_id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "continue beyond the fork cutoff".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    // Clearing after the second turn must not affect forks at an earlier boundary.
+    let current_selection = Vec::<String>::new();
+    send_thread_settings_update(
+        &mut mcp,
+        ThreadSettingsUpdateParams {
+            thread_id: thread_id.clone(),
+            disabled_plugin_ids: Some(current_selection.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    assert_eq!(
+        read_thread_settings_updated(&mut mcp)
+            .await?
+            .thread_settings
+            .disabled_plugin_ids,
+        current_selection
+    );
+    if restart_before_fork {
+        mcp.shutdown_gracefully().await?;
+        mcp = TestAppServer::builder()
+            .with_codex_home(codex_home.path())
+            .build_initialized()
+            .await?;
+    }
+    for (params, expected_selection) in [
+        (
+            ThreadForkParams {
+                thread_id: thread_id.clone(),
+                ..Default::default()
+            },
+            &current_selection,
+        ),
+        (
+            ThreadForkParams {
+                thread_id: thread_id.clone(),
+                last_turn_id: Some(first_turn.turn.id.clone()),
+                ..Default::default()
+            },
+            &initial_selection,
+        ),
+        (
+            ThreadForkParams {
+                thread_id: thread_id.clone(),
+                before_turn_id: Some(second_turn.turn.id),
+                ..Default::default()
+            },
+            &initial_selection,
+        ),
+        (
+            ThreadForkParams {
+                thread_id: thread_id.clone(),
+                last_turn_id: Some(first_turn.turn.id),
+                // Selection restoration must not depend on restoring permissions.
+                approval_policy: Some(AskForApproval::Never),
+                approvals_reviewer: Some(ApprovalsReviewer::User),
+                sandbox: Some(SandboxMode::DangerFullAccess),
+                ..Default::default()
+            },
+            &initial_selection,
+        ),
+    ] {
+        let forked: ThreadForkResponse = mcp
+            .request(|request_id| ClientRequest::ThreadFork { request_id, params })
+            .await?;
+        assert_eq!(&forked.disabled_plugin_ids, expected_selection);
+    }
+    let resumed: ThreadResumeResponse = mcp
+        .request(|request_id| ClientRequest::ThreadResume {
+            request_id,
+            params: ThreadResumeParams {
+                thread_id,
+                ..Default::default()
+            },
+        })
+        .await?;
+    assert_eq!(resumed.disabled_plugin_ids, current_selection);
+    Ok(())
+}
 
 #[tokio::test]
 async fn thread_settings_update_emits_notification_and_updates_future_turns() -> Result<()> {
@@ -416,6 +603,7 @@ async fn turn_start_settings_override_emits_thread_settings_updated() -> Result<
                 text_elements: Vec::new(),
             }],
             model: Some("mock-model-3".to_string()),
+            disabled_plugin_ids: Some(vec!["slack@openai".to_string()]),
             ..Default::default()
         })
         .await?;
@@ -426,6 +614,10 @@ async fn turn_start_settings_override_emits_thread_settings_updated() -> Result<
     let updated = read_thread_settings_updated(&mut mcp).await?;
     assert_eq!(updated.thread_id, thread.id);
     assert_eq!(updated.thread_settings.model, "mock-model-3");
+    assert_eq!(
+        updated.thread_settings.disabled_plugin_ids,
+        vec!["slack@openai"]
+    );
 
     timeout(
         DEFAULT_TIMEOUT,

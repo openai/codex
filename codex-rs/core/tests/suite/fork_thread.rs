@@ -13,12 +13,14 @@ use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSettingsAppliedEvent;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
+use core_test_support::submit_thread_settings;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use wiremock::Mock;
@@ -164,6 +166,79 @@ fn thread_settings_applied_item(
             thread_settings: snapshot,
         },
     ))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fork_thread_restores_history_selection_and_preserves_explicit_clear() -> anyhow::Result<()>
+{
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    let mut builder = test_codex();
+    let test = builder.build_with_auto_env(&server).await?;
+    let selected = vec!["slack@openai".to_string()];
+    submit_thread_settings(
+        &test.codex,
+        ThreadSettingsOverrides {
+            disabled_plugin_ids: Some(selected.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let history = InitialHistory::Resumed(ResumedHistory {
+        conversation_id: test.session_configured.thread_id,
+        history: Arc::new(vec![thread_settings_applied_item(
+            test.session_configured.thread_id,
+            test.codex.thread_settings_snapshot().await,
+        )]),
+        rollout_path: None,
+    });
+    submit_thread_settings(
+        &test.codex,
+        ThreadSettingsOverrides {
+            disabled_plugin_ids: Some(Vec::new()),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    let inherited = test
+        .thread_manager
+        .fork_thread_from_history(
+            ForkSnapshot::Interrupted,
+            codex_core::StartThreadOptions::new(test.config.clone()),
+            history.clone(),
+        )
+        .await?;
+    pretty_assertions::assert_eq!(
+        inherited
+            .thread
+            .thread_settings_snapshot()
+            .await
+            .disabled_plugin_ids,
+        selected
+    );
+
+    let explicit = test
+        .thread_manager
+        .fork_thread_from_history(
+            ForkSnapshot::Interrupted,
+            codex_core::StartThreadOptions {
+                disabled_plugin_ids: Some(Vec::new()),
+                ..codex_core::StartThreadOptions::new(test.config.clone())
+            },
+            history,
+        )
+        .await?;
+    pretty_assertions::assert_eq!(
+        explicit
+            .thread
+            .thread_settings_snapshot()
+            .await
+            .disabled_plugin_ids,
+        Vec::<String>::new()
+    );
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

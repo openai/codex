@@ -291,6 +291,7 @@ impl SessionConfiguration {
             parent_thread_id: self.parent_thread_id,
             thread_source: self.thread_source.clone(),
             originator: self.originator.clone(),
+            disabled_plugin_ids: self.disabled_plugin_ids.clone(),
         }
     }
 
