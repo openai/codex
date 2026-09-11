@@ -14,6 +14,7 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+codex-mxc-sandbox = { workspace = true }
 codex-network-proxy = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
@@ -30,7 +31,6 @@ url = { workspace = true }
 which = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
-codex-mxc-sandbox = { workspace = true }
 codex-otel = { workspace = true }
 codex-utils-home-dir = { workspace = true }
 

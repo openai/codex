@@ -1,24 +1,27 @@
-//! Native Windows process security environment availability and launch.
+//! Native Windows MXC helper. Policy conversion is portable; execution requires
+//! a usable process security environment and never enters MXC's ACL fallbacks.
 
 #[cfg(windows)]
-pub mod native;
+mod native;
+#[cfg(any(windows, test))]
+mod policy;
+mod transport;
+#[cfg(windows)]
+mod windows;
+
+use std::collections::HashMap;
+use std::path::Path;
+use std::path::PathBuf;
 
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::ensure;
 use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_protocol::models::PermissionProfile;
-use std::collections::HashMap;
-use std::path::Path;
-use std::path::PathBuf;
-
-/// Typed inputs for the native policy adapter.
-pub mod transport;
 use serde::Deserialize;
 use serde::Serialize;
 
 pub const CODEX_WINDOWS_MXC_ARG1: &str = "--__codex-windows-mxc";
-
 const CLIENT_ONLY_LOOPBACK_UNSUPPORTED: &str = "MXC cannot enforce managed networking with allow_local_binding=false: native host-loopback access is bidirectional";
 
 fn validate_managed_network(network: &ManagedNetworkSandboxContext) -> Result<()> {
@@ -38,14 +41,12 @@ fn validate_managed_network(network: &ManagedNetworkSandboxContext) -> Result<()
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct MxcCommand {
-    pub permissions: PermissionProfile,
-    pub sandbox_policy_cwd: PathBuf,
-    pub managed_network: Option<ManagedNetworkSandboxContext>,
-    pub command: Vec<String>,
+struct MxcCommand {
+    permissions: PermissionProfile,
+    sandbox_policy_cwd: PathBuf,
+    managed_network: Option<ManagedNetworkSandboxContext>,
+    command: Vec<String>,
 }
-
-pub mod policy;
 
 /// Inputs used to build an MXC helper invocation.
 #[derive(Debug)]
@@ -95,6 +96,25 @@ pub fn is_available() -> bool {
     #[cfg(not(windows))]
     {
         false
+    }
+}
+
+/// Entry point dispatched before ordinary Codex CLI parsing.
+pub fn run_main() -> ! {
+    #[cfg(windows)]
+    {
+        match windows::run() {
+            Ok(exit_code) => std::process::exit(exit_code),
+            Err(error) => {
+                eprintln!("MXC sandbox: {error:#}");
+                std::process::exit(1);
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        eprintln!("MXC sandbox execution requires Windows");
+        std::process::exit(1);
     }
 }
 

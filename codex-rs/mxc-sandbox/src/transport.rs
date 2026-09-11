@@ -23,7 +23,7 @@ fn is_transport_key(key: &str) -> bool {
         .is_some_and(|start| start.eq_ignore_ascii_case(PREFIX.as_bytes()))
 }
 
-pub fn encode(command: &MxcCommand, env: &mut HashMap<String, String>) -> Result<()> {
+pub(super) fn encode(command: &MxcCommand, env: &mut HashMap<String, String>) -> Result<()> {
     let payload = serde_json::to_string(command)?;
     ensure!(
         payload.len() <= MAX_BYTES,
@@ -53,7 +53,7 @@ pub fn encode(command: &MxcCommand, env: &mut HashMap<String, String>) -> Result
 }
 
 #[cfg(any(windows, test))]
-pub fn decode(env: &mut HashMap<String, String>) -> Result<MxcCommand> {
+pub(super) fn decode(env: &mut HashMap<String, String>) -> Result<MxcCommand> {
     let mut encoded = HashMap::new();
     let mut duplicate = false;
     let mut oversized = false;

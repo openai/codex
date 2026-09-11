@@ -100,6 +100,9 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
     }
 
     let argv1 = args.next().unwrap_or_default();
+    if argv1 == codex_sandboxing::CODEX_WINDOWS_MXC_ARG1 {
+        codex_sandboxing::run_windows_mxc_main();
+    }
     #[cfg(unix)]
     if argv1 == CODEX_ARG0_EXEC_HELPER_ARG1 {
         codex_exec_server::run_arg0_exec_helper_main();

@@ -107,6 +107,50 @@ fn command(permissions: &PermissionProfile, cwd: &Path) -> MxcCommand {
 }
 
 #[test]
+fn wrapper_preserves_exact_argv_and_separate_command_cwd() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let cwd = root.path().join("command-cwd");
+    let profile = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(Vec::new()),
+        NetworkSandboxPolicy::Restricted,
+    );
+    let argv = vec![
+        r"C:\Program Files\tool.exe".to_owned(),
+        "--permissions".to_owned(),
+        String::new(),
+        "quotes\" and slash\\".to_owned(),
+    ];
+    let mut env = HashMap::new();
+    let wrapped = create_command_args(CreateMxcCommandArgsParams {
+        command: argv.clone(),
+        permission_profile: &profile,
+        sandbox_policy_cwd: root.path(),
+        managed_network: None,
+        env: &mut env,
+    })?;
+    assert_eq!(wrapped, vec![crate::CODEX_WINDOWS_MXC_ARG1]);
+    let parsed = crate::transport::decode(&mut env)?;
+    assert_eq!(
+        (
+            &parsed.permissions,
+            parsed.sandbox_policy_cwd.as_path(),
+            &parsed.command
+        ),
+        (&profile, root.path(), &argv)
+    );
+    let request = build_request(&parsed, &cwd, vec!["CUSTOM=value".to_owned()], &[], &[])?;
+    assert_eq!(
+        (request.script_code, request.working_directory, request.env),
+        (
+            r#""C:\Program Files\tool.exe" --permissions "" "quotes\" and slash\\""#.to_owned(),
+            cwd.to_str().unwrap().to_owned(),
+            vec!["CUSTOM=value".to_owned()],
+        )
+    );
+    Ok(())
+}
+
+#[test]
 fn empty_command_is_rejected_before_native_launch() -> Result<()> {
     let root = tempfile::tempdir()?;
     let mut parsed = command(&PermissionProfile::read_only(), root.path());

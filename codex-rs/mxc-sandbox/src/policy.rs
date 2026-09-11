@@ -21,6 +21,7 @@ use wxc_common::filesystem_object::compare_existing_filesystem_objects;
 use wxc_common::filesystem_object::normalize_object_conflicts;
 use wxc_common::logger::Logger;
 use wxc_common::logger::Mode;
+use wxc_common::models::BaseProcessUiConfig;
 use wxc_common::models::ContainerPolicy;
 use wxc_common::models::ExecutionRequest;
 use wxc_common::models::FallbackPolicy;
@@ -31,6 +32,7 @@ use wxc_common::models::NetworkIngressPolicy;
 use wxc_common::models::NetworkPeer;
 use wxc_common::models::NetworkPolicy;
 use wxc_common::models::NetworkRule;
+use wxc_common::models::UiPolicy;
 
 use crate::MxcCommand;
 
@@ -67,7 +69,7 @@ pub enum PolicyError {
     CommandLine(#[from] CommandLineError),
 }
 
-pub fn build_request(
+pub(super) fn build_request(
     command: &MxcCommand,
     command_cwd: &Path,
     env: Vec<String>,
@@ -290,6 +292,16 @@ pub fn build_request(
             }),
             network_specified: true,
             network_mode_specified: true,
+            // PowerShell needs Win32k and desktop handles during DLL startup.
+            // Keep clipboard, input injection, and system-control restrictions.
+            ui: UiPolicy {
+                disable: false,
+                ..Default::default()
+            },
+            base_process_ui: BaseProcessUiConfig {
+                isolation: "desktop".to_owned(),
+                ..Default::default()
+            },
             ..Default::default()
         },
         ..Default::default()

@@ -16,8 +16,7 @@ use wxc_common::sandbox_process::StdioMode;
 #[link(name = "advapi32")]
 unsafe extern "system" {}
 
-/// Launch a native-only request and wait for its exit status.
-pub fn launch(request: &ExecutionRequest) -> Result<i32> {
+pub(super) fn launch(request: &ExecutionRequest) -> Result<i32> {
     ensure!(
         !request
             .policy
@@ -25,17 +24,6 @@ pub fn launch(request: &ExecutionRequest) -> Result<i32> {
             .iter()
             .any(|capability| capability.eq_ignore_ascii_case("permissiveLearningMode")),
         "MXC native launch does not support permissiveLearningMode"
-    );
-    ensure!(
-        crate::is_available(),
-        "native MXC is unavailable on this Windows build"
-    );
-    ensure!(
-        !request.policy.least_privilege_mode
-            && !request.policy.network_proxy.is_enabled()
-            && request.policy.capture_denials.is_none()
-            && !request.policy.fallback.allow_dacl_mutation,
-        "MXC native launch does not support fallback policies"
     );
     // With no least-privilege mode, legacy proxy, or capture enabled, this
     // probe guarantees BaseContainerRunner chooses PSEC rather than SBOX.

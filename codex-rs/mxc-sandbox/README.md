@@ -24,6 +24,8 @@ from the canonical Codex permission profile, including protected metadata
 carveouts. Supported managed network access allows IPv4 and IPv6 loopback
 clients and servers, including the dedicated proxy listeners, while denying
 direct non-loopback egress and general inbound network access.
+Win32k calls and desktop handles remain available for PowerShell startup;
+clipboard, input-injection, and desktop/system-control restrictions remain.
 
 ## Launch contract
 
