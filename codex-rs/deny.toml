@@ -313,6 +313,8 @@ allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = [
     "https://github.com/dzbarsky/rules_rust",
     "https://github.com/helix-editor/nucleo.git",
+    # CONNECT request handling needs this pinned H3 revision until released.
+    "https://github.com/hyperium/h3",
     "https://github.com/juberti-oai/rust-sdks.git",
     "https://github.com/microsoft/mxc",
     "https://github.com/openai-oss-forks/crossterm",
