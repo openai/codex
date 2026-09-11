@@ -1,7 +1,7 @@
 ---
 source: tui/src/app/tests/realtime_requests.rs
-assertion_line: 182
-expression: "rendered.replace(&app.config.cwd.display().to_string(), \"/tmp/project\")"
+assertion_line: 1023
+expression: "normalize_voice_snapshot_directory(&rendered, &app.config.cwd)"
 ---
 ╭────────────────────────────────────────╮
 │ >_ OpenAI Codex (v0.0.0)               │
@@ -17,4 +17,7 @@ expression: "rendered.replace(&app.config.cwd.display().to_string(), \"/tmp/proj
   /permissions - choose what Codex is allowed to do
   /model - choose what model and reasoning effort to use
   /review - review any changes and find issues
+• Earlier answer
 • spoken complete
+
+› Later typed question

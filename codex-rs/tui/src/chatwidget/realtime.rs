@@ -2,6 +2,7 @@
 //! Completed captions and both speakers' partials stay bounded across widget replacement.
 
 mod recording_controls;
+mod transcript_replay;
 
 use super::ChatWidget;
 use super::HistoryCell;
@@ -72,6 +73,7 @@ pub(crate) struct RealtimeTranscriptRecord {
     pub(crate) role: String,
     pub(crate) text: String,
     pub(crate) complete: bool,
+    pub(crate) before_turn_id: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -161,6 +163,7 @@ pub(super) struct RealtimeConversationUiState {
     pub(super) live_transcript_cell: Option<Box<dyn HistoryCell>>,
     pending_history_cells: VecDeque<Box<dyn HistoryCell>>,
     accepted_transcripts: VecDeque<RealtimeTranscriptRecord>,
+    replay_transcripts: Option<VecDeque<RealtimeTranscriptRecord>>,
     latest_input_was_voice: bool,
     input_generation: u64,
     latest_voice_input_fingerprint: Option<(usize, u64)>,
@@ -1014,6 +1017,7 @@ impl ChatWidget {
                 role,
                 text,
                 complete: false,
+                before_turn_id: None,
             });
         };
         if let Some((role, text)) = self.realtime_conversation.interleaved_transcript.take() {
@@ -1347,6 +1351,7 @@ impl ChatWidget {
                         role: role.clone(),
                         text: text.clone(),
                         complete: true,
+                        before_turn_id: None,
                     },
                 );
                 text.clone()
@@ -1488,6 +1493,7 @@ impl ChatWidget {
                     role: role.clone(),
                     text: text.clone(),
                     complete: true,
+                    before_turn_id: None,
                 });
             while self.realtime_conversation.pending_history_cells.len()
                 >= MAX_PENDING_TRANSCRIPT_CELLS
@@ -1713,6 +1719,7 @@ impl ChatWidget {
                     role,
                     text,
                     complete: true,
+                    before_turn_id: None,
                 });
         }
         let pending_history_cells =

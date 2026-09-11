@@ -146,6 +146,15 @@ impl App {
         thread_id: ThreadId,
         notification: &ServerNotification,
     ) {
+        if let ServerNotification::TurnStarted(started) = notification
+            && let Some(records) = self.pending_realtime_transcript_replay.get_mut(&thread_id)
+        {
+            for record in records {
+                if record.complete && record.before_turn_id.is_none() {
+                    record.before_turn_id = Some(started.turn.id.clone());
+                }
+            }
+        }
         let (role, text, complete) = match notification {
             ServerNotification::ThreadRealtimeTranscriptDelta(n) => {
                 (n.role.as_str(), n.delta.as_str(), false)
@@ -197,6 +206,7 @@ impl App {
                 role: role.to_string(),
                 text: bounded,
                 complete: true,
+                before_turn_id: None,
             });
         } else {
             if text.is_empty() {
@@ -231,6 +241,7 @@ impl App {
                     role: role.to_string(),
                     text: bounded,
                     complete: false,
+                    before_turn_id: None,
                 });
             }
         }
@@ -276,13 +287,12 @@ impl App {
         }
     }
 
-    pub(super) fn restore_realtime_replay_state_after_replay(
+    pub(super) fn prepare_realtime_transcript_replay(
         &mut self,
-        replayed_final_items: &HashMap<(String, String), String>,
         mut replayed_voice_texts: ReplayedVoiceTextCounts,
-    ) {
+    ) -> HashMap<String, usize> {
         let Some(thread_id) = self.chat_widget.thread_id() else {
-            return;
+            return HashMap::new();
         };
         self.realtime_replay_order
             .retain(|saved| *saved != thread_id);
@@ -308,8 +318,21 @@ impl App {
                         .or_default() += 1;
                 }
             }
-            self.chat_widget.restore_realtime_transcript_cells(cells);
+            self.chat_widget
+                .queue_realtime_transcripts_for_replay(cells);
         }
+        retained_assistant_captions
+    }
+
+    pub(super) fn restore_realtime_replay_state_after_replay(
+        &mut self,
+        replayed_final_items: &HashMap<(String, String), String>,
+        mut retained_assistant_captions: HashMap<String, usize>,
+    ) {
+        let Some(thread_id) = self.chat_widget.thread_id() else {
+            return;
+        };
+        self.chat_widget.finish_realtime_transcript_replay();
         let Some(pending) = self.pending_realtime_speech_replay.remove(&thread_id) else {
             return;
         };

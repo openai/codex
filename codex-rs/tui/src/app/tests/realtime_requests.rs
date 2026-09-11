@@ -588,6 +588,7 @@ async fn replay_reconciles_only_matching_voice_captions_one_for_one() {
         role: role.to_string(),
         text: text.to_string(),
         complete: true,
+        before_turn_id: None,
     })
     .collect();
     app.pending_realtime_transcript_replay
@@ -660,6 +661,7 @@ async fn retained_caption_consumes_only_one_matching_answer_fallback_on_reattach
             role: "assistant".into(),
             text: "Same   answer".into(),
             complete: true,
+            before_turn_id: None,
         }]
         .into(),
     );
@@ -755,6 +757,7 @@ async fn buffered_voice_items_reconcile_captions_after_thread_switch() {
             role: role.to_string(),
             text: text.to_string(),
             complete: true,
+            before_turn_id: None,
         })
         .collect(),
     );
@@ -834,6 +837,7 @@ async fn unrendered_buffered_items_do_not_consume_retained_captions() {
             role: role.to_string(),
             text: text.to_string(),
             complete: true,
+            before_turn_id: None,
         })
         .collect(),
     );
@@ -948,6 +952,16 @@ async fn completed_voice_caption_survives_repeated_thread_replacement() {
         .collect::<String>();
     assert_eq!(initial.matches("spoken complete").count(), 1);
 
+    let typed = test_turn(
+        "later-typed-turn",
+        TurnStatus::Completed,
+        vec![test_user_message("later-user", "Later typed question")],
+    );
+    app.chat_widget.handle_server_notification(
+        turn_started_notification(source, &typed.id),
+        /*replay_kind*/ None,
+    );
+
     for cycle in 0..2 {
         let side = ThreadId::new();
         let (side_widget, _, mut side_events, _) = make_chatwidget_manual_with_sender().await;
@@ -969,10 +983,14 @@ async fn completed_voice_caption_survives_repeated_thread_replacement() {
         let (source_widget, _, mut source_events, _) = make_chatwidget_manual_with_sender().await;
         app.active_thread_id = Some(source);
         app.replace_chat_widget(source_widget);
-        app.replay_thread_snapshot(
-            empty_thread_snapshot(&app, source),
-            /*resume_restored_queue*/ false,
-        );
+        let mut snapshot = empty_thread_snapshot(&app, source);
+        snapshot.turns.push(Turn {
+            id: "earlier-typed-turn".into(),
+            items: vec![test_agent_message("earlier-answer", "Earlier answer")],
+            ..typed.clone()
+        });
+        snapshot.turns.push(typed.clone());
+        app.replay_thread_snapshot(snapshot, /*resume_restored_queue*/ false);
         assert!(!app.pending_realtime_transcript_replay.contains_key(&source));
         let rendered = std::iter::from_fn(|| source_events.try_recv().ok())
             .filter_map(|event| match event {
@@ -988,12 +1006,91 @@ async fn completed_voice_caption_survives_repeated_thread_replacement() {
             .collect::<Vec<_>>()
             .join("\n");
         assert_eq!(rendered.matches("spoken complete").count(), 1);
+        assert!(
+            rendered.find("Earlier answer").unwrap() < rendered.find("spoken complete").unwrap()
+        );
+        assert!(
+            rendered.find("spoken complete").unwrap()
+                < rendered.find("Later typed question").unwrap()
+        );
         if cycle == 0 {
             insta::assert_snapshot!(
                 "voice_completed_after_thread_switch",
                 normalize_voice_snapshot_directory(&rendered, &app.config.cwd)
             );
         }
+    }
+}
+
+#[tokio::test]
+async fn inactive_caption_precedes_later_buffered_turn_without_start_event() {
+    for include_delta in [false, true] {
+        let (mut app, _initial_events, _ops) = make_test_app_with_channels().await;
+        let source = ThreadId::new();
+        app.retain_inactive_realtime_transcript(
+            source,
+            &ServerNotification::ThreadRealtimeTranscriptDone(
+                codex_app_server_protocol::ThreadRealtimeTranscriptDoneNotification {
+                    thread_id: source.to_string(),
+                    role: "assistant".into(),
+                    text: "Earlier spoken answer".into(),
+                },
+            ),
+        );
+        app.retain_inactive_realtime_transcript(
+            source,
+            &turn_started_notification(source, "later-turn"),
+        );
+        let (widget, _, mut events, _) = make_chatwidget_manual_with_sender().await;
+        app.active_thread_id = Some(source);
+        app.replace_chat_widget(widget);
+        let mut snapshot = empty_thread_snapshot(&app, source);
+        if include_delta {
+            snapshot
+                .events
+                .push(ThreadBufferedEvent::Notification(Box::new(
+                    ServerNotification::AgentMessageDelta(
+                        codex_app_server_protocol::AgentMessageDeltaNotification {
+                            thread_id: source.to_string(),
+                            turn_id: "later-turn".into(),
+                            item_id: "later-answer".into(),
+                            delta: "Later typed question".into(),
+                        },
+                    ),
+                )));
+        }
+        // The bounded replay buffer may have evicted both the start and item notifications.
+        snapshot
+            .events
+            .push(ThreadBufferedEvent::Notification(Box::new(
+                ServerNotification::TurnCompleted(TurnCompletedNotification {
+                    thread_id: source.to_string(),
+                    turn: test_turn(
+                        "later-turn",
+                        TurnStatus::Completed,
+                        vec![test_agent_message("later-answer", "Later typed question")],
+                    ),
+                }),
+            )));
+        app.replay_thread_snapshot(snapshot, /*resume_restored_queue*/ false);
+        let rendered = std::iter::from_fn(|| events.try_recv().ok())
+            .filter_map(|event| match event {
+                AppEvent::InsertHistoryCell(cell) => Some(
+                    cell.transcript_lines(/*width*/ 80)
+                        .into_iter()
+                        .map(|line| line.to_string())
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                ),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(rendered.matches("Earlier spoken answer").count(), 1);
+        assert!(
+            rendered.find("Earlier spoken answer").unwrap()
+                < rendered.find("Later typed question").unwrap()
+        );
     }
 }
 

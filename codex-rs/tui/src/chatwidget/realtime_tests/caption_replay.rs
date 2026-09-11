@@ -333,6 +333,7 @@ async fn restored_partial_caption_accepts_late_completion_without_duplicate_hist
             role: "user".into(),
             text: "last ".into(),
             complete: false,
+            before_turn_id: None,
         },
     ]));
     let live = chat
@@ -383,6 +384,7 @@ async fn empty_late_completion_discards_the_restored_partial() {
             role: "user".into(),
             text: "unfinished".into(),
             complete: false,
+            before_turn_id: None,
         },
     ]));
     chat.on_realtime_transcript_done("user".into(), String::new());

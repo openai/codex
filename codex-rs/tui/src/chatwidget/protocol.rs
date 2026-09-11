@@ -65,6 +65,11 @@ impl ChatWidget {
                 self.on_thread_settings_updated(notification);
             }
             ServerNotification::TurnStarted(notification) => {
+                if from_replay {
+                    self.restore_realtime_transcripts_before_turn(&notification.turn.id);
+                } else {
+                    self.anchor_realtime_transcripts_before_turn(&notification.turn.id);
+                }
                 if replay_kind.is_none() {
                     self.clear_misalignment_for_new_turn(
                         &notification.turn.id,
@@ -79,6 +84,7 @@ impl ChatWidget {
                 }
             }
             ServerNotification::TurnCompleted(notification) => {
+                self.restore_realtime_transcripts_before_turn(&notification.turn.id);
                 self.handle_turn_completed_notification(notification, replay_kind);
             }
             ServerNotification::ItemStarted(notification) => {
@@ -88,6 +94,7 @@ impl ChatWidget {
                 self.handle_item_completed_notification(notification, replay_kind);
             }
             ServerNotification::AgentMessageDelta(notification) => {
+                self.restore_realtime_transcripts_before_turn(&notification.turn_id);
                 if !self.is_realtime_delegated_reasoning_turn(&notification.turn_id)
                     && (from_replay
                         || !self.is_realtime_delegated_agent_item(
@@ -98,7 +105,10 @@ impl ChatWidget {
                     self.on_agent_message_delta(notification.delta);
                 }
             }
-            ServerNotification::PlanDelta(notification) => self.on_plan_delta(notification.delta),
+            ServerNotification::PlanDelta(notification) => {
+                self.restore_realtime_transcripts_before_turn(&notification.turn_id);
+                self.on_plan_delta(notification.delta);
+            }
             ServerNotification::ReasoningSummaryTextDelta(notification) => {
                 if !self.is_realtime_delegated_reasoning_item(
                     &notification.turn_id,
@@ -477,6 +487,7 @@ impl ChatWidget {
         notification: ItemStartedNotification,
         replay_kind: Option<ReplayKind>,
     ) {
+        self.restore_realtime_transcripts_before_turn(&notification.turn_id);
         match notification.item {
             ThreadItem::UserMessage { content, .. } if replay_kind.is_none() => {
                 self.note_realtime_user_item_started(&notification.turn_id, &content);
@@ -565,6 +576,7 @@ impl ChatWidget {
         notification: ItemCompletedNotification,
         replay_kind: Option<ReplayKind>,
     ) {
+        self.restore_realtime_transcripts_before_turn(&notification.turn_id);
         if replay_kind.is_none()
             && self.is_realtime_delegated_reasoning_turn(&notification.turn_id)
             && realtime::is_private_realtime_agent_item(&notification.item)
