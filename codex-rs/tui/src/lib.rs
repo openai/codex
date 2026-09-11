@@ -1818,8 +1818,7 @@ async fn run_ratatui_app(
             .requirements()
             .windows_sandbox_mode
             .source
-            .is_some()
-        && !crate::windows_sandbox::sandbox_setup_is_complete(config.codex_home.as_path());
+            .is_some();
     #[cfg(target_os = "windows")]
     let should_prompt_windows_sandbox_nux_at_startup = (trust_decision_was_made
         && windows_sandbox_level == WindowsSandboxLevel::Disabled)

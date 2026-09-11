@@ -15,6 +15,54 @@ use pretty_assertions::assert_eq;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::mpsc::unbounded_channel;
 
+#[tokio::test]
+async fn windows_sandbox_setup_uses_local_app_server_connection() {
+    let mut app = make_test_app().await;
+    assert!(app.windows_sandbox_setup_is_local());
+
+    let endpoint = crate::RemoteAppServerEndpoint::WebSocket {
+        websocket_url: "ws://127.0.0.1:4500".to_string(),
+        auth_token: None,
+    };
+    app.app_server_target = crate::AppServerTarget::LocalDaemon {
+        endpoint: endpoint.clone(),
+    };
+    assert!(app.windows_sandbox_setup_is_local());
+
+    app.app_server_target = crate::AppServerTarget::Remote { endpoint };
+    assert!(!app.windows_sandbox_setup_is_local());
+}
+
+#[tokio::test]
+async fn windows_sandbox_setup_skips_remote_default_executor() -> Result<()> {
+    let mut app = make_test_app().await;
+    app.environment_manager = Arc::new(
+        EnvironmentManager::create_for_tests(
+            Some("ws://127.0.0.1:8765".to_string()),
+            Some(codex_exec_server::ExecServerRuntimePaths::new(
+                std::env::current_exe()?,
+                /*codex_linux_sandbox_exe*/ None,
+            )?),
+        )
+        .await,
+    );
+    assert!(!app.windows_sandbox_setup_is_local());
+
+    app.environment_manager = Arc::new(
+        EnvironmentManager::create_for_tests_with_local(
+            Some("ws://127.0.0.1:8765".to_string()),
+            codex_exec_server::ExecServerRuntimePaths::new(
+                std::env::current_exe()?,
+                /*codex_linux_sandbox_exe*/ None,
+            )?,
+        )
+        .await,
+    );
+    assert_eq!(app.windows_sandbox_host(), WindowsSandboxHost::Mixed);
+    assert!(!app.windows_sandbox_setup_is_local());
+    Ok(())
+}
+
 fn startup_bottom_pane() -> (BottomPane, UnboundedReceiver<AppEvent>) {
     let (app_event_tx, app_event_rx) = unbounded_channel();
     (

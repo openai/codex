@@ -497,6 +497,12 @@ impl App {
         }
         chat_widget.remote_connection = self.chat_widget.remote_connection.clone();
         chat_widget.set_local_worktree_operations(self.chat_widget.local_worktree_operations);
+        chat_widget.windows_sandbox_host = self.chat_widget.windows_sandbox_host;
+        #[cfg(any(target_os = "windows", test))]
+        {
+            chat_widget.windows_sandbox_elevated_setup_complete =
+                self.chat_widget.windows_sandbox_elevated_setup_complete;
+        }
         chat_widget.set_agents_navigation_enabled(matches!(
             self.app_server_target,
             AppServerTarget::LocalDaemon { .. }

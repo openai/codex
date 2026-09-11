@@ -682,9 +682,39 @@ impl App {
             AppServerTarget::LocalDaemon { .. }
         ));
         let thread_and_widget_ms = thread_and_widget_started_at.elapsed().as_millis();
-        chat_widget
-            .maybe_prompt_windows_sandbox_enable(should_prompt_windows_sandbox_nux_at_startup);
-
+        let windows_sandbox_host =
+            windows_sandbox_host(&app_server_target, environment_manager.as_ref());
+        chat_widget.windows_sandbox_host = windows_sandbox_host;
+        let windows_sandbox_host_is_local = windows_sandbox_host == WindowsSandboxHost::Local;
+        #[cfg(target_os = "windows")]
+        let sandbox_ready =
+            if windows_sandbox_host_is_local && chat_widget.required_elevated_windows_sandbox() {
+                windows_sandbox_ready(&mut app_server).await
+            } else {
+                false
+            };
+        #[cfg(not(target_os = "windows"))]
+        let sandbox_ready = false;
+        #[cfg(target_os = "windows")]
+        if sandbox_ready {
+            chat_widget.windows_sandbox_elevated_setup_complete = true;
+        }
+        chat_widget.maybe_prompt_windows_sandbox_enable(
+            should_prompt_windows_sandbox_nux_at_startup
+                && windows_sandbox_host_is_local
+                && !sandbox_ready,
+        );
+        #[cfg(target_os = "windows")]
+        if windows_sandbox_host == WindowsSandboxHost::Mixed
+            && should_prompt_windows_sandbox_nux_at_startup
+        {
+            app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                history_cell::StartupWarningsCell::new(vec![
+                    "Windows sandbox setup is unavailable when local and remote executors are configured together."
+                        .to_string(),
+                ]),
+            )));
+        }
         let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
         let runtime_keymap =
             RuntimeKeymap::from_config(&local_settings.tui.keymap).map_err(|err| {

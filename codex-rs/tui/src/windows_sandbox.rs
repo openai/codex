@@ -15,6 +15,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 #[cfg(target_os = "windows")]
 use std::collections::HashMap;
+#[cfg(target_os = "windows")]
 use std::path::Path;
 
 pub(crate) fn level_from_config(config: &Config) -> WindowsSandboxLevel {
@@ -33,11 +34,6 @@ pub(crate) fn level_from_config(config: &Config) -> WindowsSandboxLevel {
 
 #[cfg(target_os = "windows")]
 pub(crate) use codex_windows_sandbox::sandbox_setup_is_complete;
-
-#[cfg(not(target_os = "windows"))]
-pub(crate) fn sandbox_setup_is_complete(_codex_home: &Path) -> bool {
-    false
-}
 
 #[cfg(target_os = "windows")]
 pub(crate) fn prepare_elevated_sandbox(

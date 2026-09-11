@@ -170,6 +170,9 @@ async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conv
         app.app_server_target = AppServerTarget::LocalDaemon {
             endpoint: endpoint.clone(),
         };
+        if previous_thread.is_none() {
+            app.chat_widget.windows_sandbox_elevated_setup_complete = true;
+        }
         let available = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let server_available = Arc::clone(&available);
         let restored_previous = previous_thread
@@ -314,6 +317,9 @@ async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conv
             CODEX_CLI_VERSION,
         )
         .await?;
+        if previous_thread.is_none() {
+            assert!(app.chat_widget.windows_sandbox_elevated_setup_complete);
+        }
         assert!(!app.reconnect.offline);
         assert_eq!(app.current_displayed_thread_id(), previous_thread);
 

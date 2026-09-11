@@ -323,6 +323,17 @@ impl ChatWidget {
         };
         let requires_confirmation =
             approvals_reviewer == ApprovalsReviewer::User && preset.id == "full-access";
+        #[cfg(target_os = "windows")]
+        if preset.id == "auto" && self.windows_sandbox_host == crate::app::WindowsSandboxHost::Mixed
+        {
+            let preset = preset.clone();
+            return vec![Box::new(move |tx| {
+                tx.send(AppEvent::OpenWindowsSandboxEnablePrompt {
+                    preset: preset.clone(),
+                    profile_selection: profile_selection.clone(),
+                });
+            })];
+        }
         if requires_confirmation {
             let preset = preset.clone();
             return vec![Box::new(move |tx| {
@@ -336,21 +347,15 @@ impl ChatWidget {
         if approvals_reviewer == ApprovalsReviewer::User && preset.id == "auto" {
             #[cfg(target_os = "windows")]
             {
+                if self.windows_sandbox_host == crate::app::WindowsSandboxHost::Remote {
+                    // The remote server owns the permission choice. Its executor
+                    // cannot be set up from this TUI's Windows account.
+                    return apply_actions();
+                }
                 if crate::windows_sandbox::level_from_config(&self.config)
                     == WindowsSandboxLevel::Disabled
                 {
                     let preset = preset.clone();
-                    if crate::windows_sandbox::sandbox_setup_is_complete(
-                        self.config.codex_home.as_path(),
-                    ) {
-                        return vec![Box::new(move |tx| {
-                            tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
-                                preset: preset.clone(),
-                                mode: WindowsSandboxEnableMode::Elevated,
-                                profile_selection: profile_selection.clone(),
-                            });
-                        })];
-                    }
                     return vec![Box::new(move |tx| {
                         tx.send(AppEvent::OpenWindowsSandboxEnablePrompt {
                             preset: preset.clone(),

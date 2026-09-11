@@ -48,6 +48,28 @@ impl App {
         {
             return Ok(AppRunControl::Continue);
         }
+        if matches!(
+            &event,
+            AppEvent::OpenWindowsSandboxEnablePrompt { .. }
+                | AppEvent::OpenWindowsSandboxFallbackPrompt { .. }
+                | AppEvent::BeginWindowsSandboxElevatedSetup { .. }
+                | AppEvent::BeginWindowsSandboxLegacySetup { .. }
+                | AppEvent::EnableWindowsSandboxForAgentMode { .. }
+        ) && !self.windows_sandbox_setup_is_local()
+        {
+            if matches!(
+                &event,
+                AppEvent::OpenWindowsSandboxFallbackPrompt { .. }
+                    | AppEvent::EnableWindowsSandboxForAgentMode { .. }
+            ) {
+                self.chat_widget.clear_windows_sandbox_setup_status();
+            }
+            self.chat_widget.add_info_message(
+                "Windows sandbox setup requires local connections and executors.".to_string(),
+                /*hint*/ None,
+            );
+            return Ok(AppRunControl::Continue);
+        }
         if self.chat_widget.has_misalignment_policy_violation()
             && matches!(
                 event,
@@ -2179,6 +2201,7 @@ impl App {
                         );
                         return Ok(AppRunControl::Continue);
                     }
+                    self.chat_widget.windows_sandbox_elevated_setup_complete = elevated_enabled;
                     let edits =
                         crate::config_update::build_windows_sandbox_mode_edits(elevated_enabled);
                     match crate::config_update::write_config_batch(

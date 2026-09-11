@@ -14,7 +14,7 @@ impl ChatWidget {
     }
 
     #[cfg(any(target_os = "windows", test))]
-    pub(super) fn elevated_windows_sandbox_setup_required(&self) -> bool {
+    pub(crate) fn required_elevated_windows_sandbox(&self) -> bool {
         crate::windows_sandbox::level_from_config(&self.config) == WindowsSandboxLevel::Elevated
             && self
                 .config
@@ -23,7 +23,11 @@ impl ChatWidget {
                 .windows_sandbox_mode
                 .source
                 .is_some()
-            && !crate::windows_sandbox::sandbox_setup_is_complete(self.config.codex_home.as_path())
+    }
+
+    #[cfg(any(target_os = "windows", test))]
+    pub(super) fn elevated_windows_sandbox_setup_required(&self) -> bool {
+        self.required_elevated_windows_sandbox() && !self.windows_sandbox_elevated_setup_complete
     }
 
     #[cfg(any(target_os = "windows", test))]

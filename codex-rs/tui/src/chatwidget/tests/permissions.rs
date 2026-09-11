@@ -11,6 +11,31 @@ use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use pretty_assertions::assert_eq;
 
+#[cfg(target_os = "windows")]
+#[tokio::test]
+async fn remote_windows_agent_permission_uses_server_selection() {
+    let preset = builtin_approval_presets()
+        .into_iter()
+        .find(|preset| preset.id == "auto")
+        .expect("Agent preset");
+    let (mut chat, mut events, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.windows_sandbox_host = crate::app::WindowsSandboxHost::Remote;
+    chat.config.permissions.windows_sandbox_mode = Some(WindowsSandboxModeToml::Elevated);
+    let actions = chat.permission_mode_actions(
+        &preset,
+        "Agent".to_string(),
+        ApprovalsReviewer::User,
+        /*profile_selection*/ None,
+        /*return_to_permissions*/ false,
+    );
+    actions[0](&chat.app_event_tx);
+    assert!(matches!(events.try_recv(), Ok(AppEvent::CodexOp(_))));
+    assert!(matches!(
+        events.try_recv(),
+        Ok(AppEvent::UpdateAskForApprovalPolicy(_))
+    ));
+}
+
 #[tokio::test]
 async fn permission_discovery_uses_server_catalog_for_remote_custom_selection() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
@@ -764,6 +789,22 @@ async fn required_windows_sandbox_setup_defers_configured_initial_prompt() {
             text_elements: Vec::new(),
         }]
     );
+}
+
+#[tokio::test]
+async fn mixed_executors_restore_required_sandbox_prompt_without_submitting() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.windows_sandbox_host = crate::app::WindowsSandboxHost::Mixed;
+    chat.config.permissions.windows_sandbox_mode = Some(WindowsSandboxModeToml::Elevated);
+    chat.config.config_layer_stack =
+        windows_sandbox_requirements_stack(vec![WindowsSandboxModeToml::Elevated]);
+    chat.initial_user_message =
+        create_initial_user_message(Some("review this".to_string()), Vec::new(), Vec::new());
+
+    chat.submit_initial_user_message_if_pending();
+
+    assert_eq!(chat.composer_text_with_pending(), "review this");
+    assert!(op_rx.try_recv().is_err());
 }
 
 #[tokio::test]

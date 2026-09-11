@@ -175,6 +175,12 @@ impl App {
             return false;
         }
         if !self.reconnect.offline {
+            #[cfg(target_os = "windows")]
+            if self.windows_sandbox_setup_is_local()
+                && let Some(message) = self.chat_widget.initial_user_message.take()
+            {
+                self.chat_widget.restore_user_message_to_composer(message);
+            }
             self.reconnect.offline = true;
             self.reconnect.failed = false;
             if self.pending_server_version_notice.take().is_some() {
@@ -259,6 +265,7 @@ impl App {
                 self.environment_manager.as_ref(),
             ),
         );
+        self.chat_widget.windows_sandbox_host = self.windows_sandbox_host();
         self.chat_widget.cyber_policy_notice = Default::default();
         self.chat_widget.requires_openai_auth = bootstrap.requires_openai_auth;
         self.chat_widget.remote_connection =
