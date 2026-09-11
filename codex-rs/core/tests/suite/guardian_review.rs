@@ -308,6 +308,7 @@ async fn guardian_review_compacts_with_summary_despite_parent_token_budget(
     let mut builder = test_codex()
         .with_model_info_override("gpt-5.5", |model| {
             model.auto_review_model_override = Some(model.slug.clone());
+            model.supports_experimental_context = true;
             model
                 .model_messages
                 .as_mut()

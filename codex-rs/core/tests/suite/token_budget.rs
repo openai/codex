@@ -364,6 +364,80 @@ async fn experimental_context_requires_capable_model_and_codex_backend(
     Ok(())
 }
 
+#[test_case(false, true, false; "explicit_history_notes_unsupported")]
+#[test_case(false, true, true; "explicit_history_notes_supported")]
+#[test_case(false, false, false; "explicit_standalone_token_budget")]
+#[test_case(true, true, false; "model_default_history_notes_unsupported")]
+#[test_case(true, true, true; "model_default_history_notes_supported")]
+#[test_case(true, false, false; "model_default_standalone_token_budget")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn token_budget_history_notes_requires_capable_starting_model(
+    use_model_defaults: bool,
+    use_history_notes: bool,
+    supports_context: bool,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let backend_url = format!("{}/backend-api/codex", server.uri());
+    let result = test_codex()
+        .with_auth(CodexAuth::from_external_chatgpt_tokens(
+            "header.e30.signature",
+            "account-123",
+            Some("plus"),
+        )?)
+        .with_pre_build_hook(move |home| {
+            let config = if use_model_defaults {
+                "[features.context_management]\nexperimental_mode = false\n".to_string()
+            } else {
+                format!(
+                    "[features.context_management]\nexperimental_mode = false\n[features.token_budget]\nenabled = true\nuse_history_notes_extension = {use_history_notes}\n"
+                )
+            };
+            std::fs::write(home.join("config.toml"), config)
+                .expect("write token-budget configuration");
+        })
+        .with_model_info_override("gpt-5.2", move |model_info| {
+            model_info.supports_experimental_context = supports_context;
+            let mut defaults = model_token_budget_config();
+            defaults.enabled = use_model_defaults;
+            defaults.use_history_notes_extension = use_history_notes;
+            model_info
+                .model_messages
+                .as_mut()
+                .expect("bundled model should have model messages")
+                .token_budget = Some(defaults);
+        })
+        .with_config(move |config| {
+            config.model_provider.base_url = Some(backend_url);
+            config.model_context_window = Some(CONFIGURED_CONTEXT_WINDOW);
+        })
+        .build_with_auto_env(&server)
+        .await;
+
+    if use_history_notes && !supports_context {
+        let error = result
+            .err()
+            .expect("unsupported history/notes must fail at startup");
+        assert!(error.to_string().contains(
+            "features.token_budget.use_history_notes_extension is not supported by model `gpt-5.2`"
+        ));
+        return Ok(());
+    }
+
+    let test = result?;
+    let response = mount_sse_once(&server, sse_completed("resp-1")).await;
+    test.submit_turn("inspect token-budget activation").await?;
+    let request = response.single_request();
+    assert!(
+        tool_names(&request)
+            .iter()
+            .any(|name| name == "new_context")
+    );
+    assert_eq!(token_budget_contexts(&request).len(), 1);
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn token_budget_uses_model_message_defaults() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -376,6 +450,7 @@ async fn token_budget_uses_model_message_defaults() -> Result<()> {
     let expected_guidance = model_defaults.guidance_message.clone();
     let test = test_codex()
         .with_model_info_override("gpt-5.2", move |model_info| {
+            model_info.supports_experimental_context = true;
             model_info
                 .model_messages
                 .as_mut()

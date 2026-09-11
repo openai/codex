@@ -64,6 +64,9 @@ async fn history_images_reach_the_next_model_request() -> Result<(), Box<dyn std
     );
     let test = test_codex()
         .with_auth(auth)
+        .with_model_info_override("gpt-5.5", |model_info| {
+            model_info.supports_experimental_context = true;
+        })
         .with_extensions(Arc::new(extensions.build()))
         .with_config(|config| {
             config.model_provider.name = "OpenAI".to_string();

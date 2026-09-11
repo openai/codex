@@ -112,8 +112,20 @@ async fn app_server_uses_configured_notes_backend_for_context_window_hints(
         .await;
 
     let codex_home = TempDir::new()?;
+    let config = load_default_config_for_test(&codex_home).await;
+    let mut model = codex_core::test_support::construct_model_info_offline("mock-model", &config);
+    model.supports_experimental_context = true;
+    let catalog_path = codex_home.path().join("models.json");
+    std::fs::write(
+        &catalog_path,
+        serde_json::to_vec(&json!({"models": [model]}))?,
+    )?;
     MockResponsesConfig::new(&server.uri())
         .with_root_config(&format!("chatgpt_base_url = \"{}\"", server.uri()))
+        .with_root_config(&format!(
+            "model_catalog_json = {}",
+            serde_json::to_string(&catalog_path)?
+        ))
         .with_model_provider("openai-custom")
         .with_provider_name("OpenAI")
         .with_provider_base_url(&format!("{}/backend-api/codex", server.uri()))
@@ -321,6 +333,7 @@ async fn history_notes_and_async_message_emit_control_tool_analytics() -> Result
     let codex_home = TempDir::new()?;
     let config = load_default_config_for_test(&codex_home).await;
     let mut model = codex_core::test_support::construct_model_info_offline("mock-model", &config);
+    model.supports_experimental_context = true;
     model
         .experimental_supported_tools
         .push("send_user_message_async".to_string());

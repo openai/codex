@@ -707,6 +707,16 @@ impl Session {
                 &model_info,
             )?;
             token_budget::apply_model_defaults(Arc::make_mut(&mut config), &model_info);
+            if config
+                .token_budget
+                .as_ref()
+                .is_some_and(|token_budget| token_budget.use_history_notes_extension)
+                && !model_info.supports_experimental_context
+            {
+                return Err(CodexErr::InvalidRequest(format!(
+                    "features.token_budget.use_history_notes_extension is not supported by model `{model}`; disable it or select a model that supports experimental context"
+                )));
+            }
         }
         let configured_config = Arc::clone(&config);
         let multi_agent_version = config.multi_agent_version_override().or_else(|| {
