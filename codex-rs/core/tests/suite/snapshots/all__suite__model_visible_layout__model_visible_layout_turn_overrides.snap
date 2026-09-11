@@ -1,24 +1,24 @@
 ---
 source: core/tests/suite/model_visible_layout.rs
-assertion_line: 360
 expression: "format_labeled_requests_snapshot(\"Second turn changes cwd and approval policy while keeping model constant.\",\n&[(\"First Request (Baseline)\", &requests[0]),\n(\"Second Request (Turn Overrides)\", &requests[1]),])"
 ---
 Scenario: Second turn changes cwd and approval policy while keeping model constant.
 
-## First Request (Baseline)
+## Window 1
+-- request 1 (turn; First Request (Baseline)) --
 00:message/developer[2]:
     [01] <SKILLS_INSTRUCTIONS>
     [02] <PERMISSIONS_INSTRUCTIONS>
-01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-02:message/user:first turn
-
-## Second Request (Turn Overrides)
-00:message/developer[2]:
-    [01] <SKILLS_INSTRUCTIONS>
-    [02] <PERMISSIONS_INSTRUCTIONS>
-01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-02:message/user:first turn
-03:message/assistant:turn one complete
-04:message/developer:<PERMISSIONS_INSTRUCTIONS>
-05:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
-06:message/user:second turn with context updates
+01:message/user:
+    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:
+    first turn
+-- request 2 (turn; Second Request (Turn Overrides)) --
+03:message/assistant:
+    turn one complete
+04:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+05:message/user:
+    <ENVIRONMENT_CONTEXT:cwd=<CWD>/PRETURN_CONTEXT_DIFF_CWD>
+06:message/user:
+    second turn with context updates

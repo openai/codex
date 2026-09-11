@@ -69,6 +69,8 @@ use core_test_support::PathBufExt;
 use core_test_support::TempDirExt;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
+use core_test_support::context_snapshot::SnapshotEntry;
+use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::assert_parent_turn;
 use core_test_support::responses::assert_root_turn;
 use core_test_support::responses::ev_assistant_message;
@@ -311,10 +313,41 @@ fn response_item_contains_message_text(item: &ResponseItem, needle: &str) -> boo
     })
 }
 
-fn guardian_snapshot_options() -> ContextSnapshotOptions {
-    ContextSnapshotOptions::default()
-        .strip_capability_instructions()
-        .strip_agents_md_user_context()
+fn format_guardian_requests_snapshot(
+    scenario: &str,
+    requests: &[(&str, &ResponsesRequest)],
+) -> String {
+    let bodies = requests
+        .iter()
+        .map(|(_, request)| {
+            let mut body = request.body_json();
+            // Project instructions depend on the checkout. Leave discovery enabled and omit
+            // only this content from these snapshots, as the previous renderer did.
+            for item in body["input"].as_array_mut().expect("request input") {
+                if item["type"] == "message" && item["role"] == "user" {
+                    item["content"]
+                        .as_array_mut()
+                        .expect("message content")
+                        .retain(|part| {
+                            !part["text"]
+                                .as_str()
+                                .is_some_and(|text| text.starts_with("# AGENTS.md instructions"))
+                        });
+                }
+            }
+            body
+        })
+        .collect::<Vec<_>>();
+    let entries = requests
+        .iter()
+        .zip(&bodies)
+        .map(|((label, _), body)| SnapshotEntry::body(body).labeled(label))
+        .collect::<Vec<_>>();
+    context_snapshot::format_context_snapshot(
+        scenario,
+        &entries,
+        &ContextSnapshotOptions::default().rewrite_known_segments(),
+    )
 }
 
 fn normalize_guardian_snapshot_paths(text: String) -> String {
@@ -329,18 +362,14 @@ fn normalize_guardian_snapshot_paths(text: String) -> String {
             .expect("test path should serialize")
             .trim_matches('"')
             .to_string();
+        // Function-call JSON strings are escaped once more by the one-line item renderer.
+        let rendered_platform_path = escaped_platform_path.replace('\\', "\\\\");
         text = text
+            .replace(&rendered_platform_path, canonical_path)
             .replace(&escaped_platform_path, canonical_path)
             .replace(&platform_path, canonical_path);
     }
-    let guardian_policy = guardian_policy_prompt_with_config_and_template(
-        BUNDLED_GUARDIAN_POLICY,
-        BUNDLED_GUARDIAN_POLICY_TEMPLATE,
-    )
-    .replace("\r\n", "\n")
-    .replace('\r', "\n")
-    .replace('\n', "\\n");
-    text.replace(&guardian_policy, "<GUARDIAN_POLICY>")
+    text
 }
 
 fn guardian_prompt_text(items: &[codex_protocol::user_input::UserInput]) -> String {
@@ -2296,6 +2325,10 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
         vec!["exec_command", "view_image", "write_stdin"]
     );
     let guardian_user_text = request.message_input_texts("user").join("\n");
+    assert!(guardian_user_text.contains(&format!(
+        "Reviewed Codex session id: {}",
+        fixed_guardian_parent_session_id()
+    )));
     assert!(
         guardian_user_text.contains(&format!("${GUARDIAN_SKILL_NAME}")),
         "guardian request should contain the untrusted skill mention from the parent transcript"
@@ -2362,10 +2395,9 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     settings.bind(|| {
         assert_snapshot!(
             "codex_core__guardian__tests__guardian_review_request_layout",
-            normalize_guardian_snapshot_paths(context_snapshot::format_labeled_requests_snapshot(
+            normalize_guardian_snapshot_paths(format_guardian_requests_snapshot(
                 "Guardian review request layout",
                 &[("Guardian Review Request", &request)],
-                &guardian_snapshot_options(),
             ))
         );
     });
@@ -2728,6 +2760,17 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
 
     let requests = request_log.requests();
     assert_eq!(requests.len(), 4);
+    for request in &requests[..2] {
+        assert!(
+            request
+                .message_input_texts("user")
+                .join("\n")
+                .contains(&format!(
+                    "Reviewed Codex session id: {}",
+                    fixed_guardian_parent_session_id()
+                ))
+        );
+    }
 
     let first_body = requests[0].body_json();
     let second_body = requests[1].body_json();
@@ -2804,16 +2847,13 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
             "codex_core__guardian__tests__guardian_followup_review_request_layout",
             format!(
                 "{}\n\nshared_prompt_cache_key: {}\nfollowup_contains_first_rationale: {}",
-                normalize_guardian_snapshot_paths(
-                    context_snapshot::format_labeled_requests_snapshot(
-                        "Guardian follow-up review request layout",
-                        &[
-                            ("Initial Guardian Review Request", &requests[0]),
-                            ("Follow-up Guardian Review Request", &requests[1]),
-                        ],
-                        &guardian_snapshot_options(),
-                    )
-                ),
+                normalize_guardian_snapshot_paths(format_guardian_requests_snapshot(
+                    "Guardian follow-up review request layout",
+                    &[
+                        ("Initial Guardian Review Request", &requests[0]),
+                        ("Follow-up Guardian Review Request", &requests[1]),
+                    ],
+                )),
                 first_body["prompt_cache_key"] == second_body["prompt_cache_key"],
                 second_body.to_string().contains(first_rationale),
             )

@@ -34,7 +34,7 @@ use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
-use core_test_support::context_snapshot::ContextSnapshotRenderMode;
+use core_test_support::context_snapshot::SnapshotEntry;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -97,8 +97,7 @@ fn skills_extensions() -> Arc<ExtensionRegistry<Config>> {
 }
 
 fn context_snapshot_options() -> ContextSnapshotOptions {
-    ContextSnapshotOptions::default()
-        .render_mode(ContextSnapshotRenderMode::KindWithTextPrefix { max_chars: 96 })
+    ContextSnapshotOptions::default().rewrite_known_segments()
 }
 
 fn format_labeled_requests_snapshot(
@@ -141,7 +140,11 @@ fn format_environment_context_subagents_snapshot(subagents: &[&str]) -> String {
             ),
         }],
     })];
-    context_snapshot::format_response_items_snapshot(items.as_slice(), &context_snapshot_options())
+    context_snapshot::format_context_snapshot(
+        "Environment context with subagents",
+        &[SnapshotEntry::items(&items)],
+        &context_snapshot_options(),
+    )
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -591,6 +594,12 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
     .await;
 
     let resumed_request = resumed_mock.single_request();
+    assert!(
+        resumed_request
+            .message_input_texts("user")
+            .iter()
+            .any(|text| text.contains(&format!("{PRETURN_CONTEXT_DIFF_CWD}</cwd>")))
+    );
     insta::assert_snapshot!(
         "model_visible_layout_resume_with_personality_change",
         format_labeled_requests_snapshot(
@@ -679,6 +688,12 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
     .await;
 
     let resumed_request = resumed_mock.single_request();
+    assert!(
+        resumed_request
+            .message_input_texts("user")
+            .iter()
+            .any(|text| text.contains(&format!("{PRETURN_CONTEXT_DIFF_CWD}</cwd>")))
+    );
     insta::assert_snapshot!(
         "model_visible_layout_resume_override_matches_rollout_model",
         format_labeled_requests_snapshot(

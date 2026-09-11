@@ -179,7 +179,6 @@ use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
-use core_test_support::context_snapshot::ContextSnapshotRenderMode;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -3793,10 +3792,7 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
     let snapshot = context_snapshot::format_labeled_requests_snapshot(
         "First request after fork when startup preserves the parent baseline, the fork changes approval policy, and the first forked turn enters plan mode.",
         &[("First Forked Turn Request", &request)],
-        &ContextSnapshotOptions::default()
-            .render_mode(ContextSnapshotRenderMode::KindWithTextPrefix { max_chars: 96 })
-            .strip_capability_instructions()
-            .strip_agents_md_user_context(),
+        &ContextSnapshotOptions::default().rewrite_known_segments(),
     );
 
     let mut settings = insta::Settings::clone_current();

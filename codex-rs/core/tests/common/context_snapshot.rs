@@ -1,787 +1,829 @@
-use regex_lite::Regex;
-use serde_json::Value;
-use similar::ChangeTag;
-use similar::TextDiff;
-use std::sync::OnceLock;
+//! Readable snapshots of captured model context.
+//!
+//! Capturing and grouping requests only decides which input items are new. All entry points
+//! render items with the same formatter, which then normalizes volatile text or replaces routine
+//! context blocks according to the caller's options.
 
 use crate::responses::ResponsesRequest;
+use crate::responses::strip_metadata_from_json;
 use crate::responses::strip_response_item_ids_from_json;
-use codex_protocol::protocol::APPS_INSTRUCTIONS_OPEN_TAG;
-use codex_protocol::protocol::PLUGINS_INSTRUCTIONS_OPEN_TAG;
-use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
-use codex_protocol::protocol::TOOLS_OPEN_TAG;
+use normalize::Normalizer;
+use normalize::fingerprint;
+use normalize::fnv1a;
+use normalize::normalize_json;
+use normalize::normalize_line_endings;
+use normalize::normalize_stable_text;
+use normalize::render_text;
+use normalize::shorten;
+use serde_json::Value;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum ContextSnapshotRenderMode {
-    #[default]
-    RedactedText,
-    FullText,
-    KindOnly,
-    KindWithTextPrefix {
-        max_chars: usize,
-    },
-}
+mod normalize;
+#[cfg(test)]
+#[path = "context_snapshot/context_snapshot_tests.rs"]
+mod tests;
 
-#[derive(Debug, Clone)]
+const MAX_SNAPSHOT_LINE_CHARS: usize = 160;
+
+#[derive(Debug, Clone, Default)]
 pub struct ContextSnapshotOptions {
-    render_mode: ContextSnapshotRenderMode,
-    strip_capability_instructions: bool,
-    strip_agents_md_user_context: bool,
-    strip_response_item_ids: bool,
-}
-
-impl Default for ContextSnapshotOptions {
-    fn default() -> Self {
-        Self {
-            render_mode: ContextSnapshotRenderMode::RedactedText,
-            strip_capability_instructions: false,
-            strip_agents_md_user_context: false,
-            strip_response_item_ids: false,
-        }
-    }
+    rewrite_known_segments: bool,
+    include_request_settings: bool,
 }
 
 impl ContextSnapshotOptions {
-    pub fn render_mode(mut self, render_mode: ContextSnapshotRenderMode) -> Self {
-        self.render_mode = render_mode;
+    /// Replace routine Apps, Skills, Plugins, AGENTS.md, permissions, environment,
+    /// model switches, personality, Guardian, and compaction guidance with named markers.
+    /// Message parts remain visible.
+    pub fn rewrite_known_segments(mut self) -> Self {
+        self.rewrite_known_segments = true;
         self
     }
 
-    pub fn strip_capability_instructions(mut self) -> Self {
-        self.strip_capability_instructions = true;
-        self
-    }
-
-    pub fn strip_agents_md_user_context(mut self) -> Self {
-        self.strip_agents_md_user_context = true;
-        self
-    }
-
-    pub fn strip_response_item_ids(mut self) -> Self {
-        self.strip_response_item_ids = true;
+    /// Render model, instructions, tools, and other settings at window boundaries.
+    /// Settings still participate in grouping when this is disabled.
+    pub fn include_request_settings(mut self) -> Self {
+        self.include_request_settings = true;
         self
     }
 }
 
-pub fn format_request_input_snapshot(
-    request: &ResponsesRequest,
-    options: &ContextSnapshotOptions,
-) -> String {
-    let items = request.input();
-    format_response_items_snapshot(items.as_slice(), options)
+// Capture and group: compare complete, normalized request inputs and request settings.
+// The first request in a window retains all its input; later requests retain their suffix index.
+#[derive(Clone, Copy)]
+enum SnapshotSource<'a> {
+    Captured(&'a ResponsesRequest),
+    Body(&'a Value),
+    Items(&'a [Value]),
 }
 
-pub fn format_response_items_snapshot(items: &[Value], options: &ContextSnapshotOptions) -> String {
-    items
-        .iter()
-        .enumerate()
-        .map(|(idx, item)| {
-            let Some(item_type) = item.get("type").and_then(Value::as_str) else {
-                return format!("{idx:02}:<MISSING_TYPE>");
-            };
+pub struct SnapshotEntry<'a> {
+    label: Option<&'a str>,
+    source: SnapshotSource<'a>,
+}
 
-            if options.render_mode == ContextSnapshotRenderMode::KindOnly {
-                return if item_type == "message" {
-                    let role = item.get("role").and_then(Value::as_str).unwrap_or("unknown");
-                    format!("{idx:02}:message/{role}")
+impl<'a> SnapshotEntry<'a> {
+    pub fn captured(request: &'a ResponsesRequest) -> Self {
+        Self {
+            label: None,
+            source: SnapshotSource::Captured(request),
+        }
+    }
+
+    pub fn body(body: &'a Value) -> Self {
+        Self {
+            label: None,
+            source: SnapshotSource::Body(body),
+        }
+    }
+
+    pub fn items(items: &'a [Value]) -> Self {
+        Self {
+            label: None,
+            source: SnapshotSource::Items(items),
+        }
+    }
+
+    pub fn labeled(mut self, label: &'a str) -> Self {
+        self.label = Some(label);
+        self
+    }
+}
+
+struct CapturedRequest {
+    number: usize,
+    kind: String,
+    label: Option<String>,
+    input: Vec<Value>,
+    settings: Option<Value>,
+}
+
+struct Window {
+    settings: Option<Value>,
+    boundary: Option<InputBoundary>,
+    requests: Vec<WindowRequest>,
+}
+
+struct WindowRequest {
+    number: usize,
+    kind: String,
+    label: Option<String>,
+    input: Vec<Value>,
+    suffix_start: usize,
+}
+
+enum InputBoundary {
+    Truncated(usize),
+    Diverged(usize),
+    Repeated,
+    SettingsUnavailable,
+}
+
+fn capture_request(number: usize, entry: &SnapshotEntry<'_>) -> CapturedRequest {
+    let (kind, input, settings) = match entry.source {
+        SnapshotSource::Captured(request) => {
+            let kind = request
+                .header("x-codex-turn-metadata")
+                .and_then(|header| serde_json::from_str::<Value>(&header).ok())
+                .and_then(|metadata| metadata["request_kind"].as_str().map(str::to_owned))
+                .unwrap_or_else(|| "request".to_string());
+            let (input, settings) = capture_body(request.body_json());
+            (kind, input, Some(settings))
+        }
+        SnapshotSource::Body(body) => {
+            let (input, settings) = capture_body(body.clone());
+            ("request".to_string(), input, Some(settings))
+        }
+        SnapshotSource::Items(items) => ("items".to_string(), Value::Array(items.to_vec()), None),
+    };
+    let input = strip_metadata_from_json(strip_response_item_ids_from_json(input));
+    CapturedRequest {
+        number,
+        kind,
+        label: entry.label.map(str::to_owned),
+        input: input
+            .as_array()
+            .expect("request input should be an array")
+            .clone(),
+        settings,
+    }
+}
+
+fn capture_body(mut body: Value) -> (Value, Value) {
+    let settings = body
+        .as_object_mut()
+        .expect("request body should be an object");
+    let input = settings
+        .remove("input")
+        .expect("request should contain input");
+    // Telemetry does not affect request context. Keep the cache key in settings so
+    // a change to it starts a new window.
+    settings.remove("client_metadata");
+    (input, body)
+}
+
+fn group_requests(requests: impl IntoIterator<Item = CapturedRequest>) -> Vec<Window> {
+    let mut windows: Vec<Window> = Vec::new();
+    for request in requests {
+        let previous = windows.last().and_then(|window| window.requests.last());
+        let shared = previous
+            .map(|previous| {
+                previous
+                    .input
+                    .iter()
+                    .zip(&request.input)
+                    .take_while(|(left, right)| left == right)
+                    .count()
+            })
+            .unwrap_or(0);
+        let rewritten = previous.is_some_and(|previous| shared != previous.input.len());
+        let repeated = previous.is_some_and(|previous| shared == previous.input.len())
+            && shared == request.input.len();
+        let settings_changed = windows
+            .last()
+            .is_some_and(|window| window.settings != request.settings);
+        let unknown_settings = request.settings.is_none();
+        let new_window =
+            previous.is_none() || rewritten || repeated || settings_changed || unknown_settings;
+        if new_window {
+            let boundary = if rewritten {
+                Some(if shared == request.input.len() {
+                    InputBoundary::Truncated(shared)
                 } else {
-                    format!("{idx:02}:{item_type}")
-                };
-            }
-
-            match item_type {
-                "message" => {
-                    let role = item.get("role").and_then(Value::as_str).unwrap_or("unknown");
-                    let rendered_parts = item
-                        .get("content")
-                        .and_then(Value::as_array)
-                        .map(|content| {
-                            content
-                                .iter()
-                                .filter_map(|entry| {
-                                    if let Some(text) = entry.get("text").and_then(Value::as_str) {
-                                        if options.strip_capability_instructions
-                                            && role == "developer"
-                                            && is_capability_instruction_text(text)
-                                        {
-                                            return None;
-                                        }
-                                        if options.strip_agents_md_user_context
-                                            && role == "user"
-                                            && text.starts_with("# AGENTS.md instructions")
-                                        {
-                                            return None;
-                                        }
-                                        return Some(format_snapshot_text(text, options));
-                                    }
-                                    let Some(content_type) =
-                                        entry.get("type").and_then(Value::as_str)
-                                    else {
-                                        return Some("<UNKNOWN_CONTENT_ITEM>".to_string());
-                                    };
-                                    let Some(content_object) = entry.as_object() else {
-                                        return Some(format!("<{content_type}>"));
-                                    };
-                                    let mut extra_keys = content_object
-                                        .keys()
-                                        .filter(|key| *key != "type" && *key != "text")
-                                        .cloned()
-                                        .collect::<Vec<String>>();
-                                    extra_keys.sort();
-                                    Some(if extra_keys.is_empty() {
-                                        format!("<{content_type}>")
-                                    } else {
-                                        format!("<{content_type}:{}>", extra_keys.join(","))
-                                    })
-                                })
-                                .collect::<Vec<String>>()
-                        })
-                        .unwrap_or_default();
-                    let role = if rendered_parts.len() > 1 {
-                        format!("{role}[{}]", rendered_parts.len())
-                    } else {
-                        role.to_string()
-                    };
-                    if rendered_parts.is_empty() {
-                        return format!("{idx:02}:message/{role}:<NO_TEXT>");
-                    }
-                    if rendered_parts.len() == 1 {
-                        return format!("{idx:02}:message/{role}:{}", rendered_parts[0]);
-                    }
-
-                    let parts = rendered_parts
-                        .iter()
-                        .enumerate()
-                        .map(|(part_idx, part)| {
-                            let part = part.replace('\n', "\n         ");
-                            format!("    [{:02}] {part}", part_idx + 1)
-                        })
-                        .collect::<Vec<String>>()
-                        .join("\n");
-                    format!("{idx:02}:message/{role}:\n{parts}")
-                }
-                "function_call" => {
-                    let name = item.get("name").and_then(Value::as_str).unwrap_or("unknown");
-                    format!("{idx:02}:function_call/{name}")
-                }
-                "function_call_output" => {
-                    let output = item
-                        .get("output")
-                        .and_then(Value::as_str)
-                        .map(|output| format_snapshot_text(output, options))
-                        .unwrap_or_else(|| "<NON_STRING_OUTPUT>".to_string());
-                    format!("{idx:02}:function_call_output:{output}")
-                }
-                "local_shell_call" => {
-                    let command = item
-                        .get("action")
-                        .and_then(|action| action.get("command"))
-                        .and_then(Value::as_array)
-                        .map(|parts| {
-                            parts
-                                .iter()
-                                .filter_map(Value::as_str)
-                                .collect::<Vec<&str>>()
-                                .join(" ")
-                        })
-                        .map(|command| format_snapshot_text(&command, options))
-                        .filter(|cmd| !cmd.is_empty())
-                        .unwrap_or_else(|| "<NO_COMMAND>".to_string());
-                    format!("{idx:02}:local_shell_call:{command}")
-                }
-                "reasoning" => {
-                    let summary_text = item
-                        .get("summary")
-                        .and_then(Value::as_array)
-                        .and_then(|summary| summary.first())
-                        .and_then(|entry| entry.get("text"))
-                        .and_then(Value::as_str)
-                        .map(|text| format_snapshot_text(text, options))
-                        .unwrap_or_else(|| "<NO_SUMMARY>".to_string());
-                    let has_encrypted_content = item
-                        .get("encrypted_content")
-                        .and_then(Value::as_str)
-                        .is_some_and(|value| !value.is_empty());
-                    format!(
-                        "{idx:02}:reasoning:summary={summary_text}:encrypted={has_encrypted_content}"
-                    )
-                }
-                "compaction" => {
-                    let has_encrypted_content = item
-                        .get("encrypted_content")
-                        .and_then(Value::as_str)
-                        .is_some_and(|value| !value.is_empty());
-                    format!("{idx:02}:compaction:encrypted={has_encrypted_content}")
-                }
-                other => format!("{idx:02}:{other}"),
-            }
-        })
-        .collect::<Vec<String>>()
-        .join("\n")
+                    InputBoundary::Diverged(shared)
+                })
+            } else if repeated {
+                Some(InputBoundary::Repeated)
+            } else if unknown_settings && previous.is_some() {
+                Some(InputBoundary::SettingsUnavailable)
+            } else {
+                None
+            };
+            windows.push(Window {
+                settings: request.settings,
+                boundary,
+                requests: Vec::new(),
+            });
+        }
+        windows
+            .last_mut()
+            .expect("first request starts a window")
+            .requests
+            .push(WindowRequest {
+                number: request.number,
+                kind: request.kind,
+                label: request.label,
+                input: request.input,
+                suffix_start: if new_window { 0 } else { shared },
+            });
+    }
+    windows
 }
 
+// Render: labeled snapshots and complete histories feed the same item renderer.
 pub fn format_labeled_requests_snapshot(
     scenario: &str,
     sections: &[(&str, &ResponsesRequest)],
     options: &ContextSnapshotOptions,
 ) -> String {
-    let sections = sections
+    let entries = sections
         .iter()
-        .map(|(title, request)| {
-            format!(
-                "## {title}\n{}",
-                format_request_input_snapshot(request, options)
-            )
-        })
-        .collect::<Vec<String>>()
-        .join("\n\n");
-    format!("Scenario: {scenario}\n\n{sections}")
+        .map(|(title, request)| SnapshotEntry::captured(request).labeled(title))
+        .collect::<Vec<_>>();
+    format_context_snapshot(scenario, &entries, options)
 }
 
-pub fn format_labeled_items_snapshot(
+/// Show every captured `/responses` request. A new window starts when a request no longer
+/// extends its predecessor's input or changes request settings. No server window IDs are
+/// used to infer boundaries.
+pub fn format_request_history_snapshot(
     scenario: &str,
-    sections: &[(&str, &[Value])],
+    requests: &[ResponsesRequest],
     options: &ContextSnapshotOptions,
 ) -> String {
-    let sections = sections
+    let entries = requests
         .iter()
-        .map(|(title, items)| {
-            format!(
-                "## {title}\n{}",
-                format_response_items_snapshot(items, options)
-            )
-        })
-        .collect::<Vec<String>>()
-        .join("\n\n");
-    format!("Scenario: {scenario}\n\n{sections}")
+        .map(SnapshotEntry::captured)
+        .collect::<Vec<_>>();
+    format_context_snapshot(scenario, &entries, options)
 }
 
-/// Render changed JSON lines between two captured `/responses` request bodies.
-///
-/// Request-parity tests use this to compare the entire JSON payload while showing only fields that
-/// changed, with the same redactions as the other context snapshots.
-pub fn format_request_body_diff_snapshot(
+pub fn format_context_snapshot(
     scenario: &str,
-    before_title: &str,
-    before_request: &ResponsesRequest,
-    after_title: &str,
-    after_request: &ResponsesRequest,
+    entries: &[SnapshotEntry<'_>],
     options: &ContextSnapshotOptions,
 ) -> String {
-    let before = format_request_body_snapshot(before_request, options);
-    let after = format_request_body_snapshot(after_request, options);
-    let diff = format_changed_lines_diff(before_title, &before, after_title, &after);
-    format!("Scenario: {scenario}\n\n{diff}")
-}
-
-fn format_request_body_snapshot(
-    request: &ResponsesRequest,
-    options: &ContextSnapshotOptions,
-) -> String {
-    let mut body = crate::responses::strip_metadata_from_json(request.body_json());
-    if options.strip_response_item_ids
-        && let Some(input) = body.get_mut("input")
-    {
-        *input = strip_response_item_ids_from_json(std::mem::take(input));
-    }
-    canonicalize_json_snapshot_value(&mut body, options);
-    serde_json::to_string_pretty(&body).expect("request body should serialize")
-}
-
-fn canonicalize_json_snapshot_value(value: &mut Value, options: &ContextSnapshotOptions) {
-    match value {
-        Value::Array(values) => {
-            for value in values {
-                canonicalize_json_snapshot_value(value, options);
+    let windows = group_requests(
+        entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| capture_request(index + 1, entry)),
+    );
+    let mut normalizer = Normalizer::default();
+    let mut result = format!("Scenario: {scenario}");
+    for (index, window) in windows.iter().enumerate() {
+        result.push_str(&format!("\n\n## Window {}", index + 1));
+        if let Some(previous) = index.checked_sub(1) {
+            result.push_str(&format!(
+                " (after request {}",
+                window.requests[0].number - 1
+            ));
+            if let Some(boundary) = &window.boundary {
+                result.push_str(&match boundary {
+                    InputBoundary::Truncated(at) => format!(": input truncated at item {at:02}"),
+                    InputBoundary::Diverged(at) => format!(": input diverged at item {at:02}"),
+                    InputBoundary::Repeated => ": input repeated".to_string(),
+                    InputBoundary::SettingsUnavailable => ": settings unavailable".to_string(),
+                });
+            }
+            if !options.include_request_settings {
+                let changed = windows[previous]
+                    .settings
+                    .as_ref()
+                    .zip(window.settings.as_ref())
+                    .filter(|(old, new)| old != new)
+                    .map(|(old, new)| changed_setting_keys(new, Some(old)).join(", "));
+                if let Some(changed) = changed {
+                    let separator = if window.boundary.is_some() {
+                        ", "
+                    } else {
+                        ": "
+                    };
+                    result.push_str(&format!("{separator}settings changed ({changed})"));
+                }
+            }
+            result.push(')');
+        }
+        if options.include_request_settings {
+            render_window_settings(&mut result, &windows, index, &mut normalizer);
+        }
+        for request in &window.requests {
+            let label = request
+                .label
+                .as_deref()
+                .map(|label| format!("; {label}"))
+                .unwrap_or_default();
+            result.push_str(&format!(
+                "\n-- request {} ({}{label}) --",
+                request.number, request.kind
+            ));
+            let suffix = &request.input[request.suffix_start..];
+            if !suffix.is_empty() {
+                result.push('\n');
+                result.push_str(&render_items(
+                    suffix,
+                    request.suffix_start,
+                    options,
+                    &mut normalizer,
+                ));
+            } else if request.number == window.requests[0].number {
+                result.push_str("\n<EMPTY_INPUT>");
             }
         }
-        Value::Object(map) => {
-            // Keep request-body snapshots stable when serde_json preserves insertion order.
-            let mut entries = std::mem::take(map).into_iter().collect::<Vec<_>>();
-            entries.sort_by(|(left_key, _), (right_key, _)| left_key.cmp(right_key));
-            for (key, mut value) in entries {
-                canonicalize_json_snapshot_value(&mut value, options);
-                map.insert(key, value);
-            }
-        }
-        Value::String(text) => {
-            *text = format_snapshot_json_string(text, options);
-        }
-        Value::Null | Value::Bool(_) | Value::Number(_) => {}
     }
+    result
 }
 
-fn format_snapshot_json_string(text: &str, options: &ContextSnapshotOptions) -> String {
-    let normalized = match options.render_mode {
-        ContextSnapshotRenderMode::RedactedText
-        | ContextSnapshotRenderMode::KindWithTextPrefix { .. } => {
-            normalize_snapshot_dynamic_values(&normalize_snapshot_line_endings(
-                &canonicalize_snapshot_text(text),
-            ))
-        }
-        ContextSnapshotRenderMode::FullText => normalize_snapshot_line_endings(text),
-        ContextSnapshotRenderMode::KindOnly => unreachable!(),
+fn render_window_settings(
+    result: &mut String,
+    windows: &[Window],
+    index: usize,
+    normalizer: &mut Normalizer,
+) {
+    let Some(settings) = &windows[index].settings else {
+        result.push_str("\nSettings: unavailable (items only)");
+        return;
     };
-    match options.render_mode {
-        ContextSnapshotRenderMode::KindWithTextPrefix { max_chars }
-            if normalized.chars().count() > max_chars =>
-        {
-            let prefix = normalized.chars().take(max_chars).collect::<String>();
-            format!("{prefix}...")
-        }
-        ContextSnapshotRenderMode::RedactedText
-        | ContextSnapshotRenderMode::FullText
-        | ContextSnapshotRenderMode::KindWithTextPrefix { .. } => normalized,
-        ContextSnapshotRenderMode::KindOnly => unreachable!(),
-    }
-}
-
-fn format_changed_lines_diff(
-    before_title: &str,
-    before: &str,
-    after_title: &str,
-    after: &str,
-) -> String {
-    let mut diff = format!("--- {before_title}\n+++ {after_title}\n");
-    for change in TextDiff::from_lines(before, after).iter_all_changes() {
-        match change.tag() {
-            ChangeTag::Equal => {}
-            ChangeTag::Delete => {
-                diff.push('-');
-                diff.push_str(change.value());
-            }
-            ChangeTag::Insert => {
-                diff.push('+');
-                diff.push_str(change.value());
-            }
-        }
-    }
-    diff
-}
-
-fn format_snapshot_text(text: &str, options: &ContextSnapshotOptions) -> String {
-    if text.starts_with(TOOLS_OPEN_TAG) {
-        return normalize_snapshot_line_endings(&canonicalize_snapshot_text(text));
-    }
-
-    match options.render_mode {
-        ContextSnapshotRenderMode::RedactedText => {
-            normalize_snapshot_line_endings(&canonicalize_snapshot_text(text)).replace('\n', "\\n")
-        }
-        ContextSnapshotRenderMode::FullText => {
-            normalize_snapshot_line_endings(text).replace('\n', "\\n")
-        }
-        ContextSnapshotRenderMode::KindWithTextPrefix { max_chars } => {
-            let normalized = normalize_snapshot_line_endings(&canonicalize_snapshot_text(text))
-                .replace('\n', "\\n");
-            if normalized.chars().count() <= max_chars {
-                normalized
-            } else {
-                let prefix = normalized.chars().take(max_chars).collect::<String>();
-                format!("{prefix}...")
-            }
-        }
-        ContextSnapshotRenderMode::KindOnly => unreachable!(),
-    }
-}
-
-fn normalize_snapshot_line_endings(text: &str) -> String {
-    text.replace("\r\n", "\n").replace('\r', "\n")
-}
-
-fn canonicalize_snapshot_text(text: &str) -> String {
-    if text.starts_with("<permissions instructions>") {
-        return "<PERMISSIONS_INSTRUCTIONS>".to_string();
-    }
-    if text.starts_with(APPS_INSTRUCTIONS_OPEN_TAG) {
-        return "<APPS_INSTRUCTIONS>".to_string();
-    }
-    if text.starts_with(SKILLS_INSTRUCTIONS_OPEN_TAG) {
-        return "<SKILLS_INSTRUCTIONS>".to_string();
-    }
-    if text.starts_with(PLUGINS_INSTRUCTIONS_OPEN_TAG) {
-        return "<PLUGINS_INSTRUCTIONS>".to_string();
-    }
-    if text.starts_with("# AGENTS.md instructions") {
-        return "<AGENTS_MD>".to_string();
-    }
-    if text.starts_with("<environment_context>") {
-        let subagent_count = text
-            .split_once("<subagents>")
-            .and_then(|(_, rest)| rest.split_once("</subagents>"))
-            .map(|(subagents, _)| {
-                subagents
-                    .lines()
-                    .filter(|line| line.trim_start().starts_with("- "))
-                    .count()
-            })
-            .unwrap_or(0);
-        let subagents_suffix = if subagent_count > 0 {
-            format!(":subagents={subagent_count}")
-        } else {
-            String::new()
-        };
-        if let (Some(cwd_start), Some(cwd_end)) = (text.find("<cwd>"), text.find("</cwd>")) {
-            let cwd = &text[cwd_start + "<cwd>".len()..cwd_end];
-            return if cwd.ends_with("PRETURN_CONTEXT_DIFF_CWD") {
-                format!("<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD{subagents_suffix}>")
-            } else {
-                format!("<ENVIRONMENT_CONTEXT:cwd=<CWD>{subagents_suffix}>")
-            };
-        }
-        return if subagent_count > 0 {
-            format!("<ENVIRONMENT_CONTEXT{subagents_suffix}>")
-        } else {
-            "<ENVIRONMENT_CONTEXT>".to_string()
-        };
-    }
-    if text.starts_with("You are performing a CONTEXT CHECKPOINT COMPACTION.") {
-        return "<SUMMARIZATION_PROMPT>".to_string();
-    }
-    if text.starts_with("Another language model started to solve this problem")
-        && let Some((_, summary)) = text.split_once('\n')
+    let Some(previous) = index.checked_sub(1) else {
+        result.push_str("\nSettings:");
+        result.push_str(&render_settings(
+            settings, /*previous*/ None, normalizer,
+        ));
+        return;
+    };
+    if let Some(same) = windows[..index]
+        .iter()
+        .position(|earlier| earlier.settings.as_ref() == Some(settings))
     {
-        return format!("<COMPACTION_SUMMARY>\n{summary}");
+        result.push_str(&format!("\nSettings: same as window {}", same + 1));
+        return;
     }
-    normalize_dynamic_snapshot_paths(text)
+    if windows[previous].settings.is_some() {
+        result.push_str(&format!("\nSettings: relative to window {}", previous + 1));
+    } else {
+        result.push_str("\nSettings:");
+    }
+    result.push_str(&render_settings(
+        settings,
+        windows[previous].settings.as_ref(),
+        normalizer,
+    ));
 }
 
-fn is_capability_instruction_text(text: &str) -> bool {
-    text.starts_with(APPS_INSTRUCTIONS_OPEN_TAG)
-        || text.starts_with(SKILLS_INSTRUCTIONS_OPEN_TAG)
-        || text.starts_with(PLUGINS_INSTRUCTIONS_OPEN_TAG)
+fn render_settings(
+    settings: &Value,
+    previous: Option<&Value>,
+    normalizer: &mut Normalizer,
+) -> String {
+    let mut lines = Vec::new();
+    let fields = settings.as_object().expect("request settings object");
+    for key in changed_setting_keys(settings, previous) {
+        let Some(value) = fields.get(&key) else {
+            lines.push(format!("  {key}: <removed>"));
+            continue;
+        };
+        match (key.as_str(), value) {
+            ("prompt_cache_key", Value::String(key)) => {
+                lines.push(format!(
+                    "  prompt_cache_key: \"{}\"",
+                    normalizer.prompt_cache_key(key)
+                ));
+            }
+            ("instructions", Value::String(text)) => {
+                let text = normalize_line_endings(text);
+                let first = text.lines().next().unwrap_or_default();
+                lines.push(format!(
+                    "  instructions ({} lines, {} chars, hash={}): {}",
+                    text.lines().count(),
+                    text.chars().count(),
+                    fingerprint(value),
+                    shorten(
+                        first, /*limit*/ 120, /*keep_tail*/ false, /*hash*/ false
+                    )
+                ));
+            }
+            ("tools", Value::Array(tools)) => {
+                let prior = previous
+                    .and_then(|old| old.get("tools"))
+                    .and_then(Value::as_array)
+                    .map(Vec::as_slice);
+                lines.push(format!(
+                    "  tools ({}; hash={}):",
+                    tools.len(),
+                    fingerprint(&Value::Array(
+                        tools.iter().map(portable_tool_schema).collect()
+                    ))
+                ));
+                lines.extend(render_tools(tools, prior));
+            }
+            _ => {
+                let mut normalized = value.clone();
+                normalize_json(&mut normalized, &mut |text| {
+                    normalize_stable_text(&normalizer.normalize_uuids(text))
+                });
+                lines.push(format!("  {key}: {normalized}"));
+            }
+        }
+    }
+    if lines.is_empty() {
+        String::new()
+    } else {
+        format!("\n{}", lines.join("\n"))
+    }
 }
 
-fn normalize_dynamic_snapshot_paths(text: &str) -> String {
-    static SYSTEM_SKILL_PATH_RE: OnceLock<Regex> = OnceLock::new();
-    let system_skill_path_re = SYSTEM_SKILL_PATH_RE.get_or_init(|| {
-        Regex::new(r"/[^)\n]*/skills/\.system/([^/\n]+)/SKILL\.md")
-            .expect("system skill path regex should compile")
-    });
-    system_skill_path_re
-        .replace_all(text, "<SYSTEM_SKILLS_ROOT>/$1/SKILL.md")
-        .into_owned()
-}
-
-fn normalize_snapshot_dynamic_values(text: &str) -> String {
-    static UUID_RE: OnceLock<Regex> = OnceLock::new();
-    let uuid_re = UUID_RE.get_or_init(|| {
-        Regex::new(
-            r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b",
+fn changed_setting_keys(settings: &Value, previous: Option<&Value>) -> Vec<String> {
+    let fields = settings.as_object().expect("request settings object");
+    let mut keys = fields
+        .keys()
+        .chain(
+            previous
+                .into_iter()
+                .flat_map(|old| old.as_object().expect("previous settings object").keys()),
         )
-        .expect("uuid regex should compile")
-    });
-    static TURN_STARTED_AT_UNIX_MS_RE: OnceLock<Regex> = OnceLock::new();
-    let turn_started_at_unix_ms_re = TURN_STARTED_AT_UNIX_MS_RE.get_or_init(|| {
-        Regex::new(r#""turn_started_at_unix_ms":\d+"#)
-            .expect("turn_started_at_unix_ms regex should compile")
-    });
-    static SANDBOX_RE: OnceLock<Regex> = OnceLock::new();
-    let sandbox_re = SANDBOX_RE
-        .get_or_init(|| Regex::new(r#""sandbox":"[^"]+""#).expect("sandbox regex should compile"));
-    let text = uuid_re.replace_all(text, "<UUID>");
-    let text =
-        turn_started_at_unix_ms_re.replace_all(&text, r#""turn_started_at_unix_ms":<UNIX_MS>"#);
-    sandbox_re
-        .replace_all(&text, r#""sandbox":"<SANDBOX>""#)
-        .into_owned()
+        .cloned()
+        .collect::<Vec<_>>();
+    keys.sort();
+    keys.dedup();
+    keys.retain(|key| previous.is_none_or(|old| old.get(key) != fields.get(key)));
+    keys
 }
 
-#[cfg(test)]
-mod tests {
-    use super::ContextSnapshotOptions;
-    use super::ContextSnapshotRenderMode;
-    use super::format_response_items_snapshot;
-    use super::format_snapshot_json_string;
-    use pretty_assertions::assert_eq;
-    use serde_json::json;
-
-    #[test]
-    fn full_text_mode_preserves_unredacted_text() {
-        let items = vec![json!({
-            "type": "message",
-            "role": "user",
-            "content": [{
-                "type": "input_text",
-                "text": "# AGENTS.md instructions for /tmp/example\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>"
-            }]
-        })];
-
-        let rendered = format_response_items_snapshot(
-            &items,
-            &ContextSnapshotOptions::default().render_mode(ContextSnapshotRenderMode::FullText),
-        );
-
-        assert_eq!(
-            rendered,
-            r"00:message/user:# AGENTS.md instructions for /tmp/example\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>"
-        );
+fn render_tools(tools: &[Value], previous: Option<&[Value]>) -> Vec<String> {
+    let Some(previous) = previous else {
+        return tools.iter().map(|tool| render_tool(tool, '-')).collect();
+    };
+    let mut labels = std::collections::HashSet::new();
+    if !previous.iter().all(|tool| labels.insert(tool_label(tool))) {
+        return vec!["    - inventory changed (ambiguous tool names)".to_string()];
     }
-
-    #[test]
-    fn full_text_mode_normalizes_crlf_line_endings() {
-        let items = vec![json!({
-            "type": "message",
-            "role": "user",
-            "content": [{
-                "type": "input_text",
-                "text": "line one\r\n\r\nline two"
-            }]
-        })];
-
-        let rendered = format_response_items_snapshot(
-            &items,
-            &ContextSnapshotOptions::default().render_mode(ContextSnapshotRenderMode::FullText),
-        );
-
-        assert_eq!(rendered, r"00:message/user:line one\n\nline two");
+    labels.clear();
+    if !tools.iter().all(|tool| labels.insert(tool_label(tool))) {
+        return vec!["    - inventory changed (ambiguous tool names)".to_string()];
     }
-
-    #[test]
-    fn redacted_text_mode_keeps_canonical_placeholders() {
-        let items = vec![json!({
-            "type": "message",
-            "role": "user",
-            "content": [{
-                "type": "input_text",
-                "text": "# AGENTS.md instructions for /tmp/example\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>"
-            }]
-        })];
-
-        let rendered = format_response_items_snapshot(
-            &items,
-            &ContextSnapshotOptions::default().render_mode(ContextSnapshotRenderMode::RedactedText),
-        );
-
-        assert_eq!(rendered, "00:message/user:<AGENTS_MD>");
+    let mut changes = Vec::new();
+    for old in previous {
+        if !tools.iter().any(|tool| tool_label(tool) == tool_label(old)) {
+            changes.push(format!("    - removed {}", tool_label(old)));
+        }
     }
-
-    #[test]
-    fn redacted_text_mode_keeps_capability_instruction_placeholders() {
-        let items = vec![json!({
-            "type": "message",
-            "role": "developer",
-            "content": [
-                {
-                    "type": "input_text",
-                    "text": "<apps_instructions>\n## Apps\nbody\n</apps_instructions>"
-                },
-                {
-                    "type": "input_text",
-                    "text": "<skills_instructions>\n## Skills\nbody\n</skills_instructions>"
-                },
-                {
-                    "type": "input_text",
-                    "text": "<plugins_instructions>\n## Plugins\nbody\n</plugins_instructions>"
-                }
-            ]
-        })];
-
-        let rendered = format_response_items_snapshot(
-            &items,
-            &ContextSnapshotOptions::default().render_mode(ContextSnapshotRenderMode::RedactedText),
-        );
-
-        assert_eq!(
-            rendered,
-            "00:message/developer[3]:\n    [01] <APPS_INSTRUCTIONS>\n    [02] <SKILLS_INSTRUCTIONS>\n    [03] <PLUGINS_INSTRUCTIONS>"
-        );
+    for tool in tools {
+        match previous
+            .iter()
+            .find(|old| tool_label(old) == tool_label(tool))
+        {
+            None => changes.push(render_tool(tool, '+')),
+            Some(old) if old != tool => {
+                changes.push(render_tool(tool, '~'));
+            }
+            _ => {}
+        }
     }
-
-    #[test]
-    fn strip_capability_instructions_omits_capability_parts_from_developer_messages() {
-        let items = vec![json!({
-            "type": "message",
-            "role": "developer",
-            "content": [
-                { "type": "input_text", "text": "<permissions instructions>\n...</permissions instructions>" },
-                { "type": "input_text", "text": "<skills_instructions>\n## Skills\n...</skills_instructions>" },
-                { "type": "input_text", "text": "<plugins_instructions>\n## Plugins\n...</plugins_instructions>" }
-            ]
-        })];
-
-        let rendered = format_response_items_snapshot(
-            &items,
-            &ContextSnapshotOptions::default()
-                .render_mode(ContextSnapshotRenderMode::RedactedText)
-                .strip_capability_instructions(),
-        );
-
-        assert_eq!(rendered, "00:message/developer:<PERMISSIONS_INSTRUCTIONS>");
+    if changes.is_empty() {
+        changes.push("    - order changed".to_string());
     }
+    changes
+}
 
-    #[test]
-    fn tools_context_uses_readable_multiline_snapshot_text() {
-        let items = vec![json!({
-            "type": "message",
-            "role": "developer",
-            "content": [
-                { "type": "input_text", "text": "<permissions instructions>...</permissions instructions>" },
-                {
-                    "type": "input_text",
-                    "text": "<tools>\nDeferred tool namespaces:\n- multi_agent_v1: Tools for spawning and managing sub-agents.\n</tools>"
-                }
-            ]
-        })];
-
-        let rendered = format_response_items_snapshot(
-            &items,
-            &ContextSnapshotOptions::default()
-                .render_mode(ContextSnapshotRenderMode::KindWithTextPrefix { max_chars: 32 }),
-        );
-
-        assert_eq!(
-            rendered,
-            "00:message/developer[2]:\n    [01] <PERMISSIONS_INSTRUCTIONS>\n    [02] <tools>\n         Deferred tool namespaces:\n         - multi_agent_v1: Tools for spawning and managing sub-agents.\n         </tools>"
-        );
+fn render_tool(tool: &Value, marker: char) -> String {
+    let stable = portable_tool_schema(tool);
+    let tool = &stable;
+    let label = tool_label(tool);
+    let definition = tool.get("function").unwrap_or(tool);
+    let description = definition
+        .get("description")
+        .and_then(Value::as_str)
+        .filter(|text| !text.is_empty())
+        .map(|text| {
+            format!(
+                ": {}",
+                shorten(
+                    &text.replace('\n', " "),
+                    /*limit*/ 100,
+                    /*keep_tail*/ false,
+                    /*hash*/ false,
+                )
+            )
+        })
+        .unwrap_or_default();
+    let args = definition
+        .get("parameters")
+        .and_then(|parameters| parameters.get("properties"))
+        .and_then(Value::as_object)
+        .map(|properties| {
+            let mut names = properties.keys().cloned().collect::<Vec<_>>();
+            names.sort();
+            format!("; args=[{}]", names.join(", "))
+        })
+        .unwrap_or_default();
+    let mut rendered = format!(
+        "    {marker} {label}{description}{args}; hash={}",
+        fingerprint(tool)
+    );
+    if let Some(members) = definition.get("tools").and_then(Value::as_array) {
+        for member in members {
+            rendered.push_str(&format!("\n      - {}", tool_label(member)));
+        }
     }
+    rendered
+}
 
-    #[test]
-    fn strip_agents_md_user_context_omits_agents_fragment_from_user_messages() {
-        let items = vec![json!({
-            "type": "message",
-            "role": "user",
-            "content": [
-                {
-                    "type": "input_text",
-                    "text": "# AGENTS.md instructions for /tmp/example\n\n<INSTRUCTIONS>\n- test\n</INSTRUCTIONS>"
-                },
-                {
-                    "type": "input_text",
-                    "text": "<environment_context>\n  <cwd>/tmp/example</cwd>\n</environment_context>"
-                }
-            ]
-        })];
-
-        let rendered = format_response_items_snapshot(
-            &items,
-            &ContextSnapshotOptions::default()
-                .render_mode(ContextSnapshotRenderMode::RedactedText)
-                .strip_agents_md_user_context(),
-        );
-
-        assert_eq!(rendered, "00:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>");
+// Shell guidance and its yield-time wording intentionally differ on Windows. Compare all other
+// tool schema fields, while keeping the context snapshots identical across operating systems.
+fn portable_tool_schema(tool: &Value) -> Value {
+    const BASE: &str =
+        "Runs a command in a PTY, returning output or a session ID for ongoing interaction.";
+    // Exact current Windows-only suffix. A change to its wording must be reviewed explicitly.
+    const WINDOWS_SAFETY_SUFFIX_HASH: u64 = 0x6de3_23e4_7060_6128;
+    const UNIX_WAIT: &str =
+        "Wait before yielding output. Defaults to 10000 ms; effective range is 250-30000 ms.";
+    const WINDOWS_WAIT: &str = "Maximum time to wait before returning a session ID for a still-running command. Commands that finish sooner return immediately. For ordinary commands, omit this parameter to use the 10000 ms default. Effective range on Windows is 10000-30000 ms.";
+    let mut stable = tool.clone();
+    if let Some(Value::Array(members)) = stable.get_mut("tools") {
+        for member in members {
+            *member = portable_tool_schema(member);
+        }
     }
-
-    #[test]
-    fn redacted_text_mode_normalizes_environment_context_with_subagents() {
-        let items = vec![json!({
-            "type": "message",
-            "role": "user",
-            "content": [{
-                "type": "input_text",
-                "text": "<environment_context>\n  <cwd>/tmp/example</cwd>\n  <shell>bash</shell>\n  <subagents>\n    - agent-1: atlas\n    - agent-2\n  </subagents>\n</environment_context>"
-            }]
-        })];
-
-        let rendered = format_response_items_snapshot(
-            &items,
-            &ContextSnapshotOptions::default().render_mode(ContextSnapshotRenderMode::RedactedText),
-        );
-
-        assert_eq!(
-            rendered,
-            "00:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>:subagents=2>"
-        );
+    let definition = if stable.get("function").is_some() {
+        stable
+            .get_mut("function")
+            .expect("function tool definition")
+    } else {
+        &mut stable
+    };
+    if definition.get("name").and_then(Value::as_str) == Some("exec") {
+        if let Some(Value::String(description)) = definition.get_mut("description") {
+            // Code mode embeds the exec_command description and its TypeScript declaration
+            // inside the exec tool. Apply the same narrow platform normalization there.
+            if let Some((start, section)) = description.split_once("### `exec_command`\n")
+                && let Some(rest) = section.strip_prefix(BASE)
+                && let Some((suffix, _)) = rest.split_once("\n\nexec tool declaration:")
+                && suffix.starts_with("\n\nWindows safety rules:")
+                && fnv1a(normalize_line_endings(suffix).as_bytes()) == WINDOWS_SAFETY_SUFFIX_HASH
+            {
+                *description =
+                    format!("{start}### `exec_command`\n{BASE}{}", &rest[suffix.len()..]);
+            }
+            for platform_wait in [UNIX_WAIT, WINDOWS_WAIT] {
+                *description = description.replace(
+                    &format!("  // {platform_wait}"),
+                    "  // <PLATFORM_WAIT_GUIDANCE>",
+                );
+            }
+        }
+        return stable;
     }
-
-    #[test]
-    fn kind_with_text_prefix_mode_normalizes_crlf_line_endings() {
-        let items = vec![json!({
-            "type": "message",
-            "role": "developer",
-            "content": [{
-                "type": "input_text",
-                "text": "<realtime_conversation>\r\nRealtime conversation started.\r\n\r\nYou are..."
-            }]
-        })];
-
-        let rendered = format_response_items_snapshot(
-            &items,
-            &ContextSnapshotOptions::default()
-                .render_mode(ContextSnapshotRenderMode::KindWithTextPrefix { max_chars: 64 }),
-        );
-
-        assert_eq!(
-            rendered,
-            r"00:message/developer:<realtime_conversation>\nRealtime conversation started.\n\nYou a..."
-        );
+    if definition.get("name").and_then(Value::as_str) != Some("exec_command") {
+        return stable;
     }
-
-    #[test]
-    fn image_only_message_is_rendered_as_non_text_span() {
-        let items = vec![json!({
-            "type": "message",
-            "role": "user",
-            "content": [{
-                "type": "input_image",
-                "image_url": "data:image/png;base64,AAAA"
-            }]
-        })];
-
-        let rendered = format_response_items_snapshot(&items, &ContextSnapshotOptions::default());
-
-        assert_eq!(rendered, "00:message/user:<input_image:image_url>");
+    if let Some(Value::String(description)) = definition.get_mut("description")
+        && description.strip_prefix(BASE).is_some_and(|rest| {
+            rest.starts_with("\n\nWindows safety rules:")
+                && fnv1a(normalize_line_endings(rest).as_bytes()) == WINDOWS_SAFETY_SUFFIX_HASH
+        })
+    {
+        *description = BASE.to_string();
     }
-
-    #[test]
-    fn mixed_text_and_image_message_keeps_image_span() {
-        let items = vec![json!({
-            "type": "message",
-            "role": "user",
-            "content": [
-                {
-                    "type": "input_text",
-                    "text": "<image>"
-                },
-                {
-                    "type": "input_image",
-                    "image_url": "data:image/png;base64,AAAA"
-                },
-                {
-                    "type": "input_text",
-                    "text": "</image>"
-                }
-            ]
-        })];
-
-        let rendered = format_response_items_snapshot(&items, &ContextSnapshotOptions::default());
-
-        assert_eq!(
-            rendered,
-            "00:message/user[3]:\n    [01] <image>\n    [02] <input_image:image_url>\n    [03] </image>"
-        );
+    if let Some(Value::String(wait)) =
+        definition.pointer_mut("/parameters/properties/yield_time_ms/description")
+        && (wait == UNIX_WAIT || wait == WINDOWS_WAIT)
+    {
+        *wait = "<PLATFORM_WAIT_GUIDANCE>".to_string();
     }
+    stable
+}
 
-    #[test]
-    fn redacted_text_mode_normalizes_system_skill_temp_paths() {
-        let items = vec![json!({
-            "type": "message",
-            "role": "developer",
-            "content": [{
-                "type": "input_text",
-                "text": "## Skills\n- openai-docs: helper (file: /private/var/folders/yk/p4jp9nzs79s5q84csslkgqtm0000gn/T/.tmpAnGVww/skills/.system/openai-docs/SKILL.md)"
-            }]
-        })];
+fn tool_label(tool: &Value) -> String {
+    let kind = tool
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let definition = tool.get("function").unwrap_or(tool);
+    let name = definition
+        .get("name")
+        .or_else(|| tool.get("server_label"))
+        .and_then(Value::as_str);
+    name.map_or_else(|| kind.to_string(), |name| format!("{kind}/{name}"))
+}
 
-        let rendered = format_response_items_snapshot(&items, &ContextSnapshotOptions::default());
+fn render_items(
+    items: &[Value],
+    start_index: usize,
+    options: &ContextSnapshotOptions,
+    normalizer: &mut Normalizer,
+) -> String {
+    items
+        .iter()
+        .enumerate()
+        .map(|(offset, item)| {
+            let rendered = render_item(start_index + offset, item, options, normalizer)
+                .replace('\n', "\n    ");
+            rendered
+                .split('\n')
+                .map(str::trim_end)
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 
-        assert_eq!(
-            rendered,
-            "00:message/developer:## Skills\\n- openai-docs: helper (file: <SYSTEM_SKILLS_ROOT>/openai-docs/SKILL.md)"
-        );
+fn render_item(
+    index: usize,
+    item: &Value,
+    options: &ContextSnapshotOptions,
+    normalizer: &mut Normalizer,
+) -> String {
+    let Some(kind) = item.get("type").and_then(Value::as_str) else {
+        return format!("{index:02}:<MISSING_TYPE>");
+    };
+    match kind {
+        "message" => render_message(index, item, options, normalizer),
+        "additional_tools" => {
+            let Some(tools) = item.get("tools").and_then(Value::as_array) else {
+                return format!("{index:02}:additional_tools:<MISSING_TOOLS>");
+            };
+            let portable = tools.iter().map(portable_tool_schema).collect();
+            let mut lines = vec![format!(
+                "{index:02}:additional_tools/{} ({}; hash={}):",
+                item.get("role")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown"),
+                tools.len(),
+                fingerprint(&Value::Array(portable))
+            )];
+            lines.extend(render_tools(tools, /*previous*/ None));
+            lines.join("\n")
+        }
+        "function_call" => {
+            let name = call_name(item);
+            let args = item
+                .get("arguments")
+                .and_then(Value::as_str)
+                .map(|text| {
+                    let normalized = serde_json::from_str::<Value>(text)
+                        .map(|mut value| {
+                            normalize_json(&mut value, &mut |text| {
+                                normalize_stable_text(&normalizer.normalize_uuids(text))
+                            });
+                            value.to_string()
+                        })
+                        .unwrap_or_else(|_| text.to_string());
+                    render_text(&normalized, options, normalizer)
+                })
+                .unwrap_or_else(|| "<NO_ARGUMENTS>".to_string());
+            format!("{index:02}:function_call/{name}:{args}")
+        }
+        "custom_tool_call" => {
+            let name = call_name(item);
+            let input = item
+                .get("input")
+                .and_then(Value::as_str)
+                .map(|input| render_text(input, options, normalizer))
+                .unwrap_or_else(|| "<NO_INPUT>".to_string());
+            format!("{index:02}:custom_tool_call/{name}:{input}")
+        }
+        "function_call_output" | "custom_tool_call_output" => {
+            let output = item
+                .get("output")
+                .map(|output| match output {
+                    Value::String(text) => render_text(text, options, normalizer),
+                    Value::Array(parts) => parts
+                        .iter()
+                        .map(|part| {
+                            part.get("text")
+                                .and_then(Value::as_str)
+                                .map(|text| render_text(text, options, normalizer))
+                                .unwrap_or_else(|| format!("<{}>", tool_label(part)))
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" | "),
+                    Value::Object(fields) => {
+                        let content = fields
+                            .get("content")
+                            .and_then(Value::as_str)
+                            .map(|text| render_text(text, options, normalizer))
+                            .unwrap_or_else(|| "<NO_TEXT>".to_string());
+                        match fields.get("success").and_then(Value::as_bool) {
+                            Some(success) => format!("success={success}:{content}"),
+                            None => content,
+                        }
+                    }
+                    _ => "<NON_TEXT_OUTPUT>".to_string(),
+                })
+                .unwrap_or_else(|| "<NO_OUTPUT>".to_string());
+            format!("{index:02}:{kind}:{output}")
+        }
+        "local_shell_call" => {
+            let command = item
+                .get("action")
+                .and_then(|action| action.get("command"))
+                .and_then(Value::as_array)
+                .map(|parts| {
+                    parts
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .filter(|text| !text.is_empty())
+                .map(|text| render_text(&text, options, normalizer))
+                .unwrap_or_else(|| "<NO_COMMAND>".to_string());
+            format!("{index:02}:local_shell_call:{command}")
+        }
+        "reasoning" => {
+            let summary = item
+                .get("summary")
+                .and_then(Value::as_array)
+                .and_then(|entries| entries.first())
+                .and_then(|entry| entry.get("text"))
+                .and_then(Value::as_str)
+                .map(|text| render_text(text, options, normalizer))
+                .unwrap_or_else(|| "<NO_SUMMARY>".to_string());
+            let encrypted = has_encrypted_content(item);
+            format!("{index:02}:reasoning:summary={summary}:encrypted={encrypted}")
+        }
+        "compaction" => {
+            let encrypted = item
+                .get("encrypted_content")
+                .and_then(Value::as_str)
+                .filter(|text| !text.is_empty());
+            match encrypted {
+                Some(content) => format!(
+                    "{index:02}:compaction:encrypted=true; chars={}; hash={}",
+                    content.chars().count(),
+                    fingerprint(&Value::String(content.to_owned()))
+                ),
+                None => format!("{index:02}:compaction:encrypted=false"),
+            }
+        }
+        other => format!("{index:02}:{other}"),
     }
+}
 
-    #[test]
-    fn redacted_text_mode_normalizes_turn_metadata_dynamic_json_strings() {
-        let rendered = format_snapshot_json_string(
-            r#"{"turn_id":"019eaded-ba5c-7d40-8a81-a4dcebc4679e","sandbox":"seccomp","turn_started_at_unix_ms":1781035793002}"#,
-            &ContextSnapshotOptions::default(),
-        );
+fn call_name(item: &Value) -> String {
+    let name = item
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    match item.get("namespace").and_then(Value::as_str) {
+        Some(namespace) => format!("{namespace}.{name}"),
+        None => name.to_string(),
+    }
+}
 
-        assert_eq!(
-            rendered,
-            r#"{"turn_id":"<UUID>","sandbox":"<SANDBOX>","turn_started_at_unix_ms":<UNIX_MS>}"#
-        );
+fn has_encrypted_content(item: &Value) -> bool {
+    item.get("encrypted_content")
+        .and_then(Value::as_str)
+        .is_some_and(|text| !text.is_empty())
+}
+
+fn render_message(
+    index: usize,
+    item: &Value,
+    options: &ContextSnapshotOptions,
+    normalizer: &mut Normalizer,
+) -> String {
+    let role = item
+        .get("role")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let parts = item
+        .get("content")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|part| {
+            if let Some(text) = part.get("text").and_then(Value::as_str) {
+                return render_text(text, options, normalizer);
+            }
+            let Some(kind) = part.get("type").and_then(Value::as_str) else {
+                return "<UNKNOWN_CONTENT_ITEM>".to_string();
+            };
+            let mut keys = part
+                .as_object()
+                .into_iter()
+                .flat_map(|part| part.keys())
+                .filter(|key| *key != "type" && *key != "text")
+                .cloned()
+                .collect::<Vec<_>>();
+            keys.sort();
+            if keys.is_empty() {
+                format!("<{kind}>")
+            } else {
+                format!("<{kind}:{}>", keys.join(","))
+            }
+        })
+        .collect::<Vec<_>>();
+    let role = if parts.len() > 1 {
+        format!("{role}[{}]", parts.len())
+    } else {
+        role.to_string()
+    };
+    match parts.as_slice() {
+        [] => format!("{index:02}:message/{role}:\n<NO_TEXT>"),
+        [part] => format!("{index:02}:message/{role}:\n{part}"),
+        _ => format!(
+            "{index:02}:message/{role}:\n{}",
+            parts
+                .iter()
+                .enumerate()
+                .map(|(number, part)| format!(
+                    "[{:02}] {}",
+                    number + 1,
+                    part.replace('\n', "\n    ")
+                ))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ),
     }
 }

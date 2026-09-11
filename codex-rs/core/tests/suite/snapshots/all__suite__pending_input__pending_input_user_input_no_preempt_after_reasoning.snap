@@ -2,19 +2,21 @@
 source: core/tests/suite/pending_input.rs
 expression: snapshot
 ---
-Scenario: /responses POST bodies (input only, redacted like other suite snapshots)
+Scenario: /responses POST bodies with pending input
 
-## First request
-00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-02:message/user:first prompt
-
-## Second request
-00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-02:message/user:first prompt
+## Window 1
+-- request 1 (request; First request) --
+00:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+01:message/user:
+    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:
+    first prompt
+-- request 2 (request; Second request) --
 03:reasoning:summary=thinking:encrypted=true
-04:function_call/shell
-05:message/assistant:first answer
+04:function_call/shell:{"command":"echo preserved tool call"}
+05:message/assistant:
+    first answer
 06:function_call_output:unsupported call: shell
-07:message/user:second prompt
+07:message/user:
+    second prompt

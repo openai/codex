@@ -1,19 +1,75 @@
 ---
 source: core/tests/suite/compact.rs
-expression: "format_labeled_requests_snapshot(\"Manual /compact with prior user history compacts existing history and the follow-up turn includes the compact summary plus new user message.\",\n&[(\"Local Compaction Request\", &requests[1]),\n(\"Local Post-Compaction History Layout\", &requests[2]),])"
+expression: "format_history_snapshot(\"Manual /compact with prior user history compacts existing history and the follow-up turn includes the compact summary plus new user message.\",\n&requests)"
 ---
 Scenario: Manual /compact with prior user history compacts existing history and the follow-up turn includes the compact summary plus new user message.
 
-## Local Compaction Request
-00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-02:message/user:first manual turn
-03:message/assistant:FIRST_REPLY
-04:message/user:<SUMMARIZATION_PROMPT>
+## Window 1
+-- request 1 (turn) --
+00:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+01:message/user:
+    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:
+    first manual turn
 
-## Local Post-Compaction History Layout
-00:message/user:first manual turn
-01:message/user:<COMPACTION_SUMMARY>\nFIRST_MANUAL_SUMMARY
-02:message/developer:<PERMISSIONS_INSTRUCTIONS>
-03:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-04:message/user:second manual turn
+## Window 2 (after request 1: settings changed (parallel_tool_calls, tools))
+-- request 2 (compaction) --
+00:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+01:message/user:
+    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:
+    first manual turn
+03:message/assistant:
+    FIRST_REPLY
+04:message/user:
+    <SUMMARIZATION_PROMPT>
+
+## Window 3 (after request 2: input diverged at item 00, settings changed (parallel_tool_calls, tools))
+-- request 3 (turn) --
+00:message/user:
+    first manual turn
+01:message/user:
+    <COMPACTION_SUMMARY>
+    FIRST_MANUAL_SUMMARY
+02:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+03:message/user:
+    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+04:message/user:
+    second manual turn
+
+## Window 4 (after request 3: settings changed (parallel_tool_calls, tools))
+-- request 4 (compaction) --
+00:message/user:
+    first manual turn
+01:message/user:
+    <COMPACTION_SUMMARY>
+    FIRST_MANUAL_SUMMARY
+02:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+03:message/user:
+    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+04:message/user:
+    second manual turn
+05:message/assistant:
+    SECOND_LARGE_REPLY
+06:message/user:
+    <SUMMARIZATION_PROMPT>
+
+## Window 5 (after request 4: input diverged at item 01, settings changed (parallel_tool_calls, tools))
+-- request 5 (turn) --
+00:message/user:
+    first manual turn
+01:message/user:
+    second manual turn
+02:message/user:
+    <COMPACTION_SUMMARY>
+    SECOND_MANUAL_SUMMARY
+03:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+04:message/user:
+    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+05:message/user:
+    post compact follow-up

@@ -4,28 +4,24 @@ expression: "format_labeled_requests_snapshot(\"Deferred namespaces appear after
 ---
 Scenario: Deferred namespaces appear after Apps recovers between sampling requests.
 
-## Apps unavailable
+## Window 1
+-- request 1 (turn; Apps unavailable) --
 00:message/developer[2]:
     [01] <PERMISSIONS_INSTRUCTIONS>
     [02] <tools>
-         Deferred tool namespaces:
-         - multi_agent_v1: Tools for spawning and managing sub-agents.
-         </tools>
-01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-02:message/user:use an app after it recovers
-
-## Apps recovered
-00:message/developer[2]:
-    [01] <PERMISSIONS_INSTRUCTIONS>
-    [02] <tools>
-         Deferred tool namespaces:
-         - multi_agent_v1: Tools for spawning and managing sub-agents.
-         </tools>
-01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-02:message/user:use an app after it recovers
-03:function_call/request_user_input
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
+01:message/user:
+    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:
+    use an app after it recovers
+-- request 2 (turn; Apps recovered) --
+03:function_call/request_user_input:{"questions":[{"header":"Continue","id":"continue","options":[{"description":"Continue the test.","label...:"No"}],"question":"Continue after Apps recovers?"}]} [hash=31004ebd8cd711b2]
 04:function_call_output:{"answers":{"continue":{"answers":["Yes (Recommended)"]}}}
-05:message/developer:<tools>
-Added deferred tool namespaces:
-- mcp__codex_apps__calendar: Plan events and manage your calendar.
-</tools>
+05:message/developer[2]:
+    [01] <APPS_INSTRUCTIONS>
+    [02] <tools>
+        Added deferred tool namespaces:
+        - mcp__codex_apps__calendar: Plan events and manage your calendar.
+        </tools>

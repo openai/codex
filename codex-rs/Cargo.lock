@@ -5516,7 +5516,6 @@ dependencies = [
  "regex-lite",
  "serde_json",
  "shlex",
- "similar",
  "tempfile",
  "tokio",
  "tokio-tungstenite",

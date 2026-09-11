@@ -1,19 +1,39 @@
 ---
 source: core/tests/suite/compact.rs
-expression: "format_labeled_requests_snapshot(\"True mid-turn continuation compaction after tool output: compact request includes tool artifacts, and the continuation request includes the summary in the same turn.\",\n&[(\"Local Compaction Request\", &auto_compact_mock.single_request()),\n(\"Local Post-Compaction History Layout\",\n&post_auto_compact_mock.single_request()),])"
+expression: "format_history_snapshot(\"True mid-turn continuation compaction after tool output: compact request includes tool artifacts, and the continuation request includes the summary in the same turn.\",\n&[first_turn_mock.single_request(), auto_compact_mock.single_request(),\npost_auto_compact_mock.single_request(),])"
 ---
 Scenario: True mid-turn continuation compaction after tool output: compact request includes tool artifacts, and the continuation request includes the summary in the same turn.
 
-## Local Compaction Request
-00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-02:message/user:function call limit push
-03:function_call/test_tool
-04:function_call_output:unsupported call: test_tool
-05:message/user:<SUMMARIZATION_PROMPT>
+## Window 1
+-- request 1 (turn) --
+00:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+01:message/user:
+    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:
+    function call limit push
 
-## Local Post-Compaction History Layout
-00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-02:message/user:function call limit push
-03:message/user:<COMPACTION_SUMMARY>\nAUTO_SUMMARY
+## Window 2 (after request 1: settings changed (parallel_tool_calls, tools))
+-- request 2 (compaction) --
+00:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+01:message/user:
+    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:
+    function call limit push
+03:function_call/test_tool:{}
+04:function_call_output:unsupported call: test_tool
+05:message/user:
+    <SUMMARIZATION_PROMPT>
+
+## Window 3 (after request 2: input diverged at item 03, settings changed (parallel_tool_calls, tools))
+-- request 3 (turn) --
+00:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+01:message/user:
+    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:
+    function call limit push
+03:message/user:
+    <COMPACTION_SUMMARY>
+    AUTO_SUMMARY

@@ -8,7 +8,6 @@ use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::user_input::UserInput;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
-use core_test_support::context_snapshot::ContextSnapshotRenderMode;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
@@ -92,9 +91,7 @@ async fn additional_context_is_model_visible_but_not_a_user_message_item() -> Re
         context_snapshot::format_labeled_requests_snapshot(
             "additional context is inserted before the user turn input.",
             &[("Request", &request)],
-            &ContextSnapshotOptions::default()
-                .strip_capability_instructions()
-                .render_mode(ContextSnapshotRenderMode::KindWithTextPrefix { max_chars: 160 }),
+            &ContextSnapshotOptions::default().rewrite_known_segments(),
         )
     );
     let developer_context_texts = request

@@ -1666,11 +1666,8 @@ async fn new_context_tool_skips_auto_compact_fallback() -> Result<()> {
     let snapshot = context_snapshot::format_labeled_requests_snapshot(
         "New context window tool installs fresh full context before the next follow-up request.",
         &[("Final Follow-Up Request", &requests[2])],
-        &ContextSnapshotOptions::default(),
+        &ContextSnapshotOptions::default().rewrite_known_segments(),
     );
-    let snapshot = snapshot
-        .replace(&new_first_window_id, "<FIRST_WINDOW_ID>")
-        .replace(&new_window_id, "<WINDOW_ID>");
     insta::assert_snapshot!(
         "token_budget_new_context_window_tool_full_context",
         snapshot

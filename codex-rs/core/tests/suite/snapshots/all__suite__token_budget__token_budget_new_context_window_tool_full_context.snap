@@ -4,11 +4,19 @@ expression: snapshot
 ---
 Scenario: New context window tool installs fresh full context before the next follow-up request.
 
-## Final Follow-Up Request
+## Window 1
+-- request 1 (turn; Final Follow-Up Request) --
 00:message/developer[2]:
     [01] <SKILLS_INSTRUCTIONS>
     [02] <PERMISSIONS_INSTRUCTIONS>
-01:message/developer:<context_window>\nAgent name: /root\nFirst context window id: <FIRST_WINDOW_ID>\nCurrent context window id: <WINDOW_ID>\nPrevious context window id: <FIRST_WINDOW_ID>\n</context_window>
-02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-03:function_call/update_plan
+01:message/developer:
+    <context_window>
+    Agent name: /root
+    First context window id: <UUID 1>
+    Current context window id: <UUID 2>
+    Previous context window id: <UUID 1>
+    </context_window>
+02:message/user:
+    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+03:function_call/update_plan:{"plan":[{"status":"in_progress","step":"Continue in the new context window"}]}
 04:function_call_output:Plan updated

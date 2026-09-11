@@ -36,7 +36,6 @@ use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
-use core_test_support::context_snapshot::ContextSnapshotRenderMode;
 use core_test_support::hooks::trust_discovered_hooks;
 use core_test_support::responses;
 use core_test_support::responses::ev_reasoning_item;
@@ -490,9 +489,7 @@ async fn assert_compaction_uses_turn_lifecycle_id(codex: &std::sync::Arc<codex_c
     );
 }
 fn context_snapshot_options() -> ContextSnapshotOptions {
-    ContextSnapshotOptions::default()
-        .strip_capability_instructions()
-        .render_mode(ContextSnapshotRenderMode::KindWithTextPrefix { max_chars: 64 })
+    ContextSnapshotOptions::default().rewrite_known_segments()
 }
 
 fn format_labeled_requests_snapshot(
@@ -503,6 +500,17 @@ fn format_labeled_requests_snapshot(
         scenario,
         sections,
         &context_snapshot_options(),
+    )
+}
+
+fn format_history_snapshot(
+    scenario: &str,
+    requests: &[core_test_support::responses::ResponsesRequest],
+) -> String {
+    context_snapshot::format_request_history_snapshot(
+        scenario,
+        requests,
+        &ContextSnapshotOptions::default().rewrite_known_segments(),
     )
 }
 
@@ -4110,12 +4118,9 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
 
     insta::assert_snapshot!(
         "manual_compact_with_history_shapes",
-        format_labeled_requests_snapshot(
+        format_history_snapshot(
             "Manual /compact with prior user history compacts existing history and the follow-up turn includes the compact summary plus new user message.",
-            &[
-                ("Local Compaction Request", &requests[1]),
-                ("Local Post-Compaction History Layout", &requests[2]),
-            ]
+            &requests
         )
     );
 
@@ -4358,17 +4363,12 @@ async fn snapshot_request_shape_mid_turn_continuation_compaction() {
 
     insta::assert_snapshot!(
         "mid_turn_compaction_shapes",
-        format_labeled_requests_snapshot(
+        format_history_snapshot(
             "True mid-turn continuation compaction after tool output: compact request includes tool artifacts, and the continuation request includes the summary in the same turn.",
             &[
-                (
-                    "Local Compaction Request",
-                    &auto_compact_mock.single_request()
-                ),
-                (
-                    "Local Post-Compaction History Layout",
-                    &post_auto_compact_mock.single_request()
-                ),
+                first_turn_mock.single_request(),
+                auto_compact_mock.single_request(),
+                post_auto_compact_mock.single_request(),
             ]
         )
     );
@@ -4848,14 +4848,17 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
     let requests = request_log.requests();
     assert_eq!(requests.len(), 4, "expected user, user, compact, follow-up");
 
+    assert!(requests[3].message_input_texts("user").iter().any(|text| {
+        text.contains(&format!(
+            "<cwd>{}</cwd>",
+            test_path_buf(PRETURN_CONTEXT_DIFF_CWD).display()
+        ))
+    }));
     insta::assert_snapshot!(
         "pre_turn_compaction_including_incoming_shapes",
-        format_labeled_requests_snapshot(
-            "Pre-turn auto-compaction with a context override emits the context diff in the compact request while the incoming user message is still excluded.",
-            &[
-                ("Local Compaction Request", &requests[2]),
-                ("Local Post-Compaction History Layout", &requests[3]),
-            ]
+        format_history_snapshot(
+            "Pre-turn auto-compaction uses the prior context without the incoming user message; the follow-up carries the cwd override, image, and text.",
+            &requests
         )
     );
     let compact_request_user_texts = requests[2].message_input_texts("user");
