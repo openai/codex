@@ -111,6 +111,8 @@ use test_case::test_case;
 use super::rmcp_client::remote_aware_environment_id;
 use super::rmcp_client::remote_aware_stdio_server_bin;
 
+mod code_mode_notifications;
+
 const MODEL_A: &str = "step-settings-a";
 const MODEL_B: &str = "step-settings-b";
 const MODEL_C: &str = "step-settings-c";

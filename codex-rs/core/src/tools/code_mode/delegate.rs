@@ -8,10 +8,13 @@ use codex_code_mode::CodeModeNestedToolCall;
 use codex_code_mode::CodeModeSessionDelegate;
 use codex_code_mode::NotificationFuture;
 use codex_code_mode::ToolInvocationFuture;
+use codex_history::CodexHarnessMetadata;
+use codex_history::ResponseItemEnvelope;
 use codex_protocol::ResponseItemId;
 use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
+use codex_utils_output_truncation::with_serialization_allowance;
 use serde_json::Value as JsonValue;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
@@ -138,6 +141,7 @@ impl CodeModeDispatchBroker {
                         call_id,
                         cell_id,
                         text,
+                        output_token_limit,
                         cancellation_token,
                         response_tx,
                     } => {
@@ -148,7 +152,8 @@ impl CodeModeDispatchBroker {
                         )
                         .await
                         {
-                            host.notify(call_id, cell_id, text).await
+                            host.notify(call_id, cell_id, text, output_token_limit)
+                                .await
                         } else {
                             remove_dispatch_gate(&dispatch_gates, &cell_id);
                             Err("code mode notification cancelled".to_string())
@@ -370,6 +375,14 @@ impl CodeModeSessionDelegate for CodeModeCellDelegate {
                     call_id,
                     cell_id,
                     text,
+                    output_token_limit: with_serialization_allowance(
+                        self.step_context
+                            .settings
+                            .model_info
+                            .truncation_policy
+                            .into(),
+                    )
+                    .token_budget(),
                     cancellation_token: cancellation_token.clone(),
                     response_tx,
                 })
@@ -403,6 +416,7 @@ enum DispatchMessage {
         call_id: String,
         cell_id: CellId,
         text: String,
+        output_token_limit: usize,
         cancellation_token: CancellationToken,
         response_tx: oneshot::Sender<Result<(), String>>,
     },
@@ -445,17 +459,29 @@ impl CoreTurnHost {
         async move { invocation?.await.map_err(|error| error.to_string()) }
     }
 
-    async fn notify(&self, call_id: String, cell_id: CellId, text: String) -> Result<(), String> {
+    async fn notify(
+        &self,
+        call_id: String,
+        cell_id: CellId,
+        text: String,
+        output_token_limit: usize,
+    ) -> Result<(), String> {
         if text.trim().is_empty() {
             return Ok(());
         }
         self.session
-            .inject_if_running(vec![ResponseItem::CustomToolCallOutput {
-                id: None,
-                call_id,
-                name: Some(PUBLIC_TOOL_NAME.to_string()),
-                output: FunctionCallOutputPayload::from_text(text),
-                internal_chat_message_metadata_passthrough: None,
+            .inject_if_running(vec![ResponseItemEnvelope {
+                item: ResponseItem::CustomToolCallOutput {
+                    id: None,
+                    call_id,
+                    name: Some(PUBLIC_TOOL_NAME.to_string()),
+                    output: FunctionCallOutputPayload::from_text(text),
+                    internal_chat_message_metadata_passthrough: None,
+                },
+                metadata: Some(CodexHarnessMetadata {
+                    history_truncation_token_limit: Some(output_token_limit),
+                    ..Default::default()
+                }),
             }])
             .await
             .map_err(|_| {

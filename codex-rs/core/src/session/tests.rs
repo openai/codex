@@ -1,3 +1,6 @@
+#[path = "notification_tests.rs"]
+mod notification_tests;
+
 use super::mcp_refresh::McpRefresh;
 use super::step_settings::ResolvedStepSettings;
 use super::step_settings::StepSettings;

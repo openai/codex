@@ -13,10 +13,10 @@ impl Session {
         clippy::await_holding_invalid_type,
         reason = "active turn checks and turn state updates must remain atomic"
     )]
-    pub async fn inject_if_running(
+    pub(crate) async fn inject_if_running<T: Into<ResponseItemEnvelope>>(
         &self,
-        input: Vec<ResponseItem>,
-    ) -> Result<(), Vec<ResponseItem>> {
+        input: Vec<T>,
+    ) -> Result<(), Vec<T>> {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
             Some(active_turn) => {
@@ -25,7 +25,7 @@ impl Session {
                         active_turn.turn_state.as_ref(),
                         input
                             .into_iter()
-                            .map(ResponseItemEnvelope::new)
+                            .map(Into::into)
                             .map(PendingTurnInput::ResponseItem)
                             .collect(),
                     )
