@@ -3038,7 +3038,6 @@ async fn apps_popup_for_not_installed_app_uses_install_only_selected_description
 async fn experimental_features_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    let voice = Feature::RealtimeConversation.stage();
     let features = vec![
         ExperimentalFeatureItem {
             key: Feature::JsRepl.key().to_string(),
@@ -3057,8 +3056,8 @@ async fn experimental_features_popup_snapshot() {
         ExperimentalFeatureItem {
             key: Feature::RealtimeConversation.key().to_string(),
             writable: true,
-            name: voice.experimental_menu_name().unwrap().to_string(),
-            description: voice.experimental_menu_description().unwrap().to_string(),
+            name: "Voice conversations".to_string(),
+            description: "Talk with Codex using /voice.".to_string(),
             enabled: false,
         },
     ];

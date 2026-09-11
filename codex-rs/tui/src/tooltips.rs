@@ -1,5 +1,6 @@
 use codex_features::FEATURES;
 use codex_features::Feature;
+use codex_features::FeatureSpec;
 use codex_protocol::account::PlanType;
 use lazy_static::lazy_static;
 use rand::Rng;
@@ -38,14 +39,18 @@ lazy_static! {
         let mut tips = Vec::new();
         tips.extend(TOOLTIPS.iter().copied());
         tips.extend(experimental_tooltips(
+            FEATURES,
             codex_realtime_webrtc::RealtimeWebrtcSession::is_supported,
         ));
         tips
     };
 }
 
-fn experimental_tooltips(voice_supported: impl Fn() -> bool) -> Vec<&'static str> {
-    FEATURES
+fn experimental_tooltips(
+    features: &[FeatureSpec],
+    voice_supported: impl Fn() -> bool,
+) -> Vec<&'static str> {
+    features
         .iter()
         .filter(|spec| spec.id != Feature::RealtimeConversation || voice_supported())
         .filter_map(|spec| spec.stage.experimental_announcement())
@@ -364,9 +369,19 @@ mod tests {
 
     #[test]
     fn experimental_voice_tooltip_requires_runtime_support() {
-        let unavailable = experimental_tooltips(|| false);
-        let available = experimental_tooltips(|| true);
-        let voice_tip = FEATURES
+        let mut features = FEATURES.to_vec();
+        features
+            .iter_mut()
+            .find(|spec| spec.id == Feature::RealtimeConversation)
+            .unwrap()
+            .stage = codex_features::Stage::Experimental {
+            name: "Voice conversations",
+            menu_description: "Talk with Codex using /voice.",
+            announcement: "NEW: Voice conversations can now be enabled from /experimental. Restart Codex after enabling, then use /voice.",
+        };
+        let unavailable = experimental_tooltips(&features, || false);
+        let available = experimental_tooltips(&features, || true);
+        let voice_tip = features
             .iter()
             .find(|spec| spec.id == Feature::RealtimeConversation)
             .and_then(|spec| spec.stage.experimental_announcement())
