@@ -1,0 +1,52 @@
+--- a/cargo/private/cargo_build_script_runner/lib.rs
++++ b/cargo/private/cargo_build_script_runner/lib.rs
+@@ -337,9 +337,18 @@
+             return "${pwd}".to_owned();
+         }
+ 
+-        value
++        let redacted = value
+             .replace(&format!("{exec_root}/"), "${pwd}/")
+-            .replace(&format!("{exec_root}\\"), "${pwd}\\")
++            .replace(&format!("{exec_root}\\"), "${pwd}\\");
++        #[cfg(windows)]
++        let redacted = {
++            // pkg-config can emit forward slashes for the same Windows root.
++            let root = exec_root.replace('\\', "/");
++            redacted
++                .replace(&format!("{root}/"), "${pwd}/")
++                .replace(&format!("{root}\\"), "${pwd}\\")
++        };
++        redacted
+     }
+ 
+     /// Redact for env vars: uses the generic `${out_dir}` token, resolved
+@@ -630,6 +639,28 @@
+                 link_search_paths:
+                     "-L${pwd}/${bazel-out/cfg/bin/pkg/_bs.out_dir}\n-L${pwd}/other/path".to_owned(),
+             }
++        );
++    }
++
++    #[cfg(windows)]
++    #[test]
++    fn windows_include_metadata_redacts_both_root_spellings() {
++        let root = r"D:\o\execroot\_main";
++        let forward = root.replace('\\', "/");
++        let outputs = vec![BuildScriptOutput::DepEnv(format!(
++            "INCLUDE={forward}/include;{root}\\lib;{forward}-other/include"
++        ))];
++        assert_eq!(
++            BuildScriptOutput::outputs_to_dep_env(&outputs, "glib", root),
++            format!("DEP_GLIB_INCLUDE=${{pwd}}/include;${{pwd}}\\lib;{forward}-other/include")
++        );
++        let directory = std::env::current_dir().unwrap();
++        let directory = directory.to_str().unwrap();
++        let forward = directory.replace('\\', "/");
++        let outputs = vec![BuildScriptOutput::DepEnv(format!("INCLUDE={forward}/."))];
++        assert_eq!(
++            BuildScriptOutput::nonhermetic_absolute_paths(&outputs, directory, ""),
++            Vec::<String>::new()
+         );
+     }
+ 

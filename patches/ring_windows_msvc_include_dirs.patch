@@ -1,8 +1,7 @@
 diff --git a/build.rs b/build.rs
-index 9843ad8aa..573075489 100644
 --- a/build.rs
 +++ b/build.rs
-@@ -346,7 +346,28 @@ fn ring_build_rs_main(c_root_dir: &Path, core_name_and_version: &str) {
+@@ -346,7 +346,27 @@
      // we want to optimize for minimizing the build tools required: No Perl,
      // no nasm, etc.
      let generated_dir = if !is_git {
@@ -31,7 +30,22 @@ index 9843ad8aa..573075489 100644
      } else {
          generate_sources_and_preassemble(
              &out_dir,
-@@ -569,6 +591,15 @@ fn configure_cc(c: &mut cc::Build, target: &Target, c_root_dir: &Path, include_d
+@@ -561,7 +581,13 @@
+     let compiler = c.get_compiler();
+     // FIXME: On Windows AArch64 we currently must use Clang to compile C code
+     let compiler = if target.os == WINDOWS && target.arch == AARCH64 && !compiler.is_like_clang() {
+-        let _ = c.compiler("clang");
++        // Keep inherited MSVC flags compatible with the selected Clang driver.
++        let clang = if compiler.is_like_msvc() {
++            "clang-cl"
++        } else {
++            "clang"
++        };
++        let _ = c.compiler(clang);
+         c.get_compiler()
+     } else {
+         compiler
+@@ -569,6 +595,15 @@
  
      let _ = c.include(c_root_dir.join("include"));
      let _ = c.include(include_dir);

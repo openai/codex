@@ -34,6 +34,9 @@ uuid = { workspace = true }
 anyhow = { workspace = true }
 assert_matches = { workspace = true }
 pretty_assertions = { workspace = true }
+rcgen = { workspace = true }
+rustls = { workspace = true }
+tempfile = { workspace = true }
 tokio-test = { workspace = true }
 wiremock = { workspace = true }
 

@@ -109,6 +109,8 @@ jobs:
           for binary in ${{ matrix.binaries }}; do
             build_args+=(--bin "$binary")
           done
+          STABLE_GIT_COMMIT="$(git rev-parse HEAD)"
+          export STABLE_GIT_COMMIT
           cargo build --target "$target" --release --timings "${build_args[@]}"
 
       - name: Upload Cargo timings
@@ -145,6 +147,134 @@ jobs:
           name: windows-binaries-${{ matrix.target }}-${{ matrix.bundle }}
           path: |
             ${{ env.CARGO_TARGET_DIR }}/${{ matrix.target }}/release/staged-${{ matrix.bundle }}/*
+
+  build-windows-voice:
+    name: Build Windows voice - ${{ matrix.target }}
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            arch: x86_64
+            python_arch: x64
+            runs_on:
+              group: ${{ github.event.repository.name }}-runners
+              labels: ${{ github.event.repository.name }}-windows-x64
+          - target: aarch64-pc-windows-msvc
+            arch: aarch64
+            python_arch: arm64
+            runs_on:
+              group: ${{ github.event.repository.name }}-runners
+              labels: ${{ github.event.repository.name }}-windows-arm64
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+          architecture: ${{ matrix.python_arch }}
+      - name: Prepare Bazel CI
+        uses: ./.github/actions/prepare-bazel-ci
+        with:
+          target: ${{ matrix.target }}
+          cache-scope: release-voice-windows
+      - uses: ./.github/actions/setup-msvc-env
+        with:
+          target: ${{ matrix.target }}
+      - name: Refresh Bazel PATH for the selected MSVC target
+        shell: pwsh
+        run: ./.github/scripts/compute-bazel-windows-path.ps1
+      - name: Download pinned Windows build inputs
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $manifest = Get-Content -Raw .github/scripts/voice-cygwin-snapshot.json | ConvertFrom-Json
+          $pin = $manifest.archive
+          $source = $manifest.sourceArchive
+          $directory = Join-Path $env:RUNNER_TEMP "voice-cygwin-snapshot"
+          New-Item -ItemType Directory -Path $directory | Out-Null
+          gh release download $pin.tag --repo "${{ github.repository }}" --pattern $pin.name --pattern $source.name --dir $directory
+          if ($LASTEXITCODE -ne 0) { throw "Cannot obtain the public Cygwin inputs and source" }
+          $sourceFile = Join-Path $directory $source.name
+          if ((Get-Item $sourceFile).Length -ne $source.bytes -or
+              (Get-FileHash $sourceFile -Algorithm SHA256).Hash.ToLowerInvariant() -ne $source.sha256) {
+            throw "Public Cygwin source archive mismatch"
+          }
+          "VOICE_CYGWIN_ARCHIVE=$(Join-Path $directory $pin.name)" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Verify and install pinned public build tools
+        shell: pwsh
+        run: |
+          & ./.github/scripts/setup-voice-windows.ps1 -Target "${{ matrix.target }}" -SnapshotArchive $env:VOICE_CYGWIN_ARCHIVE
+          if (-not $env:SystemRoot) { throw "Windows SystemRoot is required for native audio actions" }
+          "VOICE_WINDOWS_SYSTEM_ROOT=$env:SystemRoot" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          $hostArch = $env:PROCESSOR_ARCHITEW6432
+          if (-not $hostArch) { $hostArch = $env:PROCESSOR_ARCHITECTURE }
+          if (-not $hostArch) { throw "Windows host architecture is required" }
+          "VOICE_WINDOWS_HOST_ARCH=$hostArch" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Build same-commit native runtime and helper
+        shell: bash
+        env:
+          ARCH: ${{ matrix.arch }}
+          VOICE_ARCH: ${{ matrix.arch }}
+          # Avoid Java JIT crashes in the Windows ARM64 voice build.
+          BAZEL_HOST_JVM_ARG: ${{ matrix.arch == 'aarch64' && '-Xint' || '' }}
+          BUILDBUDDY_API_KEY: ""
+        run: |
+          (cd codex-rs && cargo update --workspace)
+          python .github/scripts/watch_voice_bazel.py "$(cygpath -w "$BASH")" ./.github/scripts/run-bazel-ci.sh \
+            --remote-download-toplevel \
+            --print-failed-action-summary \
+            --windows-msvc-host-platform \
+            -- \
+            test -c opt \
+            --platforms=//:local_windows_msvc \
+            --extra_toolchains=@local_config_cc//:cc-toolchain-x64_windows,@local_config_cc//:cc-toolchain-arm64_windows,//third_party/voice:windows_pkg_config_toolchain,//third_party/voice:windows_cmake_toolchain \
+            --repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=0 \
+            --repo_env=BAZEL_MSVC_RUNTIME_VISUAL_STUDIO_EULA=1 \
+            --inject_repository="voice_windows_tools=$VOICE_WINDOWS_BAZEL_REPOSITORY" \
+            --//third_party/voice:windows_installed_tools=@voice_windows_tools//:tools \
+            --action_env="SystemRoot=$VOICE_WINDOWS_SYSTEM_ROOT" \
+            --host_action_env="SystemRoot=$VOICE_WINDOWS_SYSTEM_ROOT" \
+            --action_env="PROCESSOR_ARCHITECTURE=$VOICE_WINDOWS_HOST_ARCH" \
+            --host_action_env="PROCESSOR_ARCHITECTURE=$VOICE_WINDOWS_HOST_ARCH" \
+            --output_groups=default,receipt,sdk \
+            --workspace_status_command=./scripts/workspace-status.cmd \
+            --build_metadata=COMMIT_SHA="$GITHUB_SHA" \
+            -- \
+            "//third_party/voice:native_runtime_windows_$ARCH" \
+            @rules_rust//cargo/private/cargo_build_script_runner:test \
+            //codex-rs/voice-host:codex-voice-host
+      - name: Stage verified voice build output
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          runtime="bazel-bin/third_party/voice/native_runtime_windows_${ARCH}"
+          PYTHONPATH=third_party/voice python - "$runtime" "$TARGET" <<'PY'
+          from pathlib import Path
+          import sys
+          from package_runtime import runtime_files
+          runtime_files(Path(sys.argv[1]).resolve(strict=True), sys.argv[2])
+          PY
+          output="voice-unsigned/${TARGET}"
+          mkdir -p "$output"
+          cp -R "$runtime" "$output/runtime"
+          cp bazel-bin/codex-rs/voice-host/codex-voice-host.exe "$output/codex-voice-host.exe"
+          chmod -R u+w "$output"
+          tar -C "$output" -czf "voice-unsigned-${TARGET}.tar.gz" runtime codex-voice-host.exe
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: voice-${{ matrix.target }}-unsigned
+          path: voice-unsigned-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
 
   build-windows-symbols:
     needs:
@@ -193,12 +323,13 @@ jobs:
   build-windows:
     needs:
       - build-windows-binaries
+      - build-windows-voice
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
     runs-on: ${{ matrix.runs_on }}
     environment:
       name: azure-artifact-signing
       deployment: false
-    timeout-minutes: 90
+    timeout-minutes: 120
     permissions:
       contents: read
       id-token: write
@@ -265,6 +396,76 @@ jobs:
           account-name: ${{ secrets.AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME }}
           certificate-profile-name: ${{ secrets.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
 
+      - name: Download matching native voice build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: voice-${{ matrix.target }}-unsigned
+          path: ${{ runner.temp }}/unsigned-voice
+
+      - name: Stage voice files for signing
+        id: voice_files
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="${{ matrix.target }}"
+          unsigned="${RUNNER_TEMP}/unsigned-voice/extracted"
+          signed="${GITHUB_WORKSPACE}/signed-voice/${target}"
+          mkdir -p "$unsigned" "$signed"
+          tar -xzf "$(cygpath -u "${RUNNER_TEMP}/unsigned-voice/voice-unsigned-${target}.tar.gz")" -C "$(cygpath -u "$unsigned")"
+          python "${GITHUB_WORKSPACE}/third_party/voice/release_runtime.py" stage \
+            --source "$unsigned/runtime" --target "$target" --output "$signed/runtime"
+          cp "$unsigned/codex-voice-host.exe" "$signed/codex-voice-host.exe"
+          chmod -R u+w "$signed"
+          {
+            echo 'files<<EOF'
+            echo "$signed/codex-voice-host.exe"
+            find "$signed/runtime/bin" -name '*.dll' -type f -print
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Sign Windows voice helper and native DLLs
+        uses: azure/trusted-signing-action@1d365fec12862c4aa68fcac418143d73f0cea293 # v0.5.11
+        with:
+          endpoint: ${{ secrets.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ secrets.AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ secrets.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-shared-token-cache-credential: true
+          exclude-visual-studio-credential: true
+          exclude-visual-studio-code-credential: true
+          exclude-azure-cli-credential: false
+          exclude-azure-powershell-credential: true
+          exclude-azure-developer-cli-credential: true
+          exclude-interactive-browser-credential: true
+          cache-dependencies: false
+          files: ${{ steps.voice_files.outputs.files }}
+
+      - uses: ./.github/actions/setup-msvc-env
+        with:
+          target: ${{ matrix.target }}
+
+      - name: Seal and verify signed voice output
+        shell: pwsh
+        run: |
+          $target = "${{ matrix.target }}"
+          $signed = Join-Path $env:GITHUB_WORKSPACE "signed-voice/$target"
+          python (Join-Path $env:GITHUB_WORKSPACE 'third_party/voice/windows_crt.py') --root (Join-Path $signed 'runtime') --target $target --helper (Join-Path $signed 'codex-voice-host.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot stage verified Microsoft CRT' }
+          $files = @(Join-Path $signed "codex-voice-host.exe") + @(
+            Get-ChildItem (Join-Path $signed "runtime/bin") -Filter *.dll -File |
+              ForEach-Object FullName
+          )
+          if ($files.Count -lt 8) { throw "Voice DLL closure is incomplete" }
+          foreach ($file in $files) {
+            $signature = Get-AuthenticodeSignature $file
+            if ($signature.Status -ne 'Valid') { throw "Unsigned voice file: $file ($($signature.Status))" }
+          }
+          python (Join-Path $env:GITHUB_WORKSPACE 'third_party/voice/release_runtime.py') seal --target $target --output (Join-Path $signed 'runtime')
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot seal signed voice runtime' }
+          "VOICE_RELEASE_DIR=$signed" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Stage artifacts
         shell: bash
         run: |
@@ -282,22 +483,34 @@ jobs:
           set -euo pipefail
           target="${{ matrix.target }}"
           archive_script="${GITHUB_WORKSPACE}/.github/scripts/build-codex-package-archive.sh"
-          temp_root="${RUNNER_TEMP}/codex-package-archives"
+          voice_args=(--voice-release-dir "$VOICE_RELEASE_DIR")
+          voice_args+=(--release-version "${GITHUB_REF_NAME#rust-v}")
+          bash "$archive_script" \
+            --target "$target" --bundle primary \
+            --entrypoint-dir "$CARGO_TARGET_DIR/$target/release" \
+            --archive-dir "dist/$target" "${voice_args[@]}"
+          bash "$archive_script" \
+            --target "$target" --bundle app-server \
+            --entrypoint-dir "$CARGO_TARGET_DIR/$target/release" \
+            --archive-dir "dist/$target"
 
-          # The package helper rewrites cached DotSlash executables. Keep the
-          # concurrent processes in separate temp roots because Windows cannot
-          # replace an executable while another process is using it.
-          mkdir -p "$temp_root/primary" "$temp_root/app-server"
-          printf '%s\0' primary app-server |
-            xargs -0 -P0 -I{} env \
-              TMPDIR="$temp_root/{}" \
-              TMP="$temp_root/{}" \
-              TEMP="$temp_root/{}" \
-              bash "$archive_script" \
-                --target "$target" \
-                --bundle "{}" \
-                --entrypoint-dir "$CARGO_TARGET_DIR/$target/release" \
-                --archive-dir "dist/$target"
+      - name: Verify packaged Windows voice closure
+        shell: pwsh
+        run: |
+          $target = "${{ matrix.target }}"
+          $package = Join-Path $env:RUNNER_TEMP "verify-voice-archive-$target"
+          New-Item -ItemType Directory -Path $package | Out-Null
+          tar -xzf "dist/$target/codex-package-$target.tar.gz" -C $package
+          if ($LASTEXITCODE -ne 0) { throw "Cannot extract the final Windows package" }
+          $voice = Join-Path $package 'codex-resources/voice'
+          $helper = Join-Path $voice 'bin/codex-voice-host.exe'
+          if (-not (Test-Path $helper) -or -not (Test-Path (Join-Path $voice 'bin/gstreamer-1.0-0.dll'))) {
+            throw 'Signed Windows voice files are missing from the canonical package'
+          }
+          $signature = Get-AuthenticodeSignature $helper
+          if ($signature.Status -ne 'Valid') { throw "Packaged helper signature: $($signature.Status)" }
+          python -c 'import sys; from pathlib import Path; sys.path.insert(0, sys.argv[3]); from package_runtime import runtime_files; runtime_files(Path(sys.argv[1]), sys.argv[2], public_release=True)' $voice $target (Join-Path $env:GITHUB_WORKSPACE 'third_party/voice')
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged runtime receipt verification failed' }
 
       - name: Build Python runtime wheel
         shell: bash
@@ -320,12 +533,25 @@ jobs:
           python -m venv "${RUNNER_TEMP}/python-runtime-build-venv"
           "${RUNNER_TEMP}/python-runtime-build-venv/Scripts/python.exe" -m pip install build
 
+          # The wheel's Windows support floor predates the native voice
+          # runtime's verified device/VC++ prerequisites. Keep it voice-free.
+          wheel_archives="${RUNNER_TEMP}/voice-free-wheel/${{ matrix.target }}"
+          bash "${GITHUB_WORKSPACE}/.github/scripts/build-codex-package-archive.sh" \
+            --target "${{ matrix.target }}" --bundle primary \
+            --entrypoint-dir "$CARGO_TARGET_DIR/${{ matrix.target }}/release" \
+            --archive-dir "$wheel_archives"
+          python - "$wheel_archives/codex-package-${{ matrix.target }}.tar.gz" <<'PY'
+          import sys
+          import tarfile
+          with tarfile.open(sys.argv[1]) as archive:
+              assert not any("codex-resources/voice/" in member.name for member in archive)
+          PY
           stage_dir="${RUNNER_TEMP}/openai-codex-cli-bin-${{ matrix.target }}"
           wheel_dir="${GITHUB_WORKSPACE}/python-runtime-dist/${{ matrix.target }}"
           python "${GITHUB_WORKSPACE}/sdk/python/scripts/update_sdk_artifacts.py" \
             stage-runtime \
             "$stage_dir" \
-            "dist/${{ matrix.target }}/codex-package-${{ matrix.target }}.tar.gz" \
+            "$wheel_archives/codex-package-${{ matrix.target }}.tar.gz" \
             --codex-version "${GITHUB_REF_NAME}" \
             --platform-tag "$platform_tag"
           "${RUNNER_TEMP}/python-runtime-build-venv/Scripts/python.exe" -m build --wheel --outdir "$wheel_dir" "$stage_dir"
@@ -378,25 +604,12 @@ jobs:
             # Must run from inside the dest dir so 7z does not embed the
             # directory path inside the zip.
             if [[ "$base" == "codex-${target}.exe" ]]; then
-              # Bundle the sandbox helper binaries into the main codex zip so
-              # WinGet installs include the required helpers next to codex.exe.
-              # Fall back to the single-binary zip if the helpers are missing
-              # to avoid breaking releases.
+              # Preserve WinGet executable paths while including the signed
+              # runtime, resources, and package metadata from the canonical tar.
               bundle_dir="$(mktemp -d)"
-              runner_src="$dest/codex-command-runner-${target}.exe"
-              setup_src="$dest/codex-windows-sandbox-setup-${target}.exe"
-              if [[ -f "$runner_src" && -f "$setup_src" ]]; then
-                cp "$dest/$base" "$bundle_dir/$base"
-                cp "$runner_src" "$bundle_dir/codex-command-runner.exe"
-                cp "$setup_src" "$bundle_dir/codex-windows-sandbox-setup.exe"
-                # Use an absolute path so bundle zips land in the real dist
-                # dir even when 7z runs from a temp directory.
-                (cd "$bundle_dir" && 7z a "$repo_root/$dest/${base}.zip" .)
-              else
-                echo "warning: missing sandbox binaries; falling back to single-binary zip"
-                echo "warning: expected $runner_src and $setup_src"
-                (cd "$dest" && 7z a "${base}.zip" "$base")
-              fi
+              tar -xzf "$dest/codex-package-${target}.tar.gz" -C "$bundle_dir"
+              python "${GITHUB_WORKSPACE}/scripts/build_winget_package.py" "$(cygpath -w "$bundle_dir")"
+              (cd "$bundle_dir" && 7z a "$repo_root/$dest/${base}.zip" .)
               rm -rf "$bundle_dir"
             else
               (cd "$dest" && 7z a "${base}.zip" "$base")

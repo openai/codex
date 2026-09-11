@@ -308,6 +308,47 @@ class AssembleTests(unittest.TestCase):
                     digest(staged / "runtime.json"),
                 )
 
+    def test_windows_release_packages_signed_receipt_and_exe_helper(self):
+        self.commit = "b" * 40
+        for target in ("x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"):
+            with self.subTest(target=target):
+                runtime, _ = self.make_runtime(target, "bin/gst{}.dll")
+                staged = self.root / f"signed-{target}"
+                stage(runtime, staged, target)
+                library = staged / "bin/gio-2.0-0.dll"
+                library.write_bytes(library.read_bytes() + b"signed")
+                seal(staged, target)
+                self.metadata.update(
+                    target=target,
+                    entrypoint="bin/codex.exe",
+                    version="0.154.0-beta.2",
+                )
+                (self.package / "bin/codex.exe").write_bytes(b"unchanged app")
+                (self.package / "codex-package.json").write_text(
+                    json.dumps(self.metadata)
+                )
+                output = self.root / f"windows-{target}"
+                assemble(
+                    self.package,
+                    self.helper,
+                    target,
+                    self.commit,
+                    output,
+                    runtime=staged,
+                    release_version="0.154.0-beta.2",
+                )
+                voice = output / "codex-resources/voice"
+                self.assertEqual(
+                    (voice / "bin/codex-voice-host.exe").read_bytes(),
+                    self.helper.read_bytes(),
+                )
+                self.assertEqual(
+                    (voice / "bin/gio-2.0-0.dll").read_bytes(), library.read_bytes()
+                )
+                self.assertTrue(
+                    runtime_files(voice.resolve(), target, public_release=True)
+                )
+
     def test_rejects_invalid_runtime_receipts_before_creating_package(self):
         runtime, original = self.make_runtime()
         changes = [

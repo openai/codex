@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 
 from pathlib import Path
+import hashlib
+import json
 import sys
 import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from build_winget_package import prepare_winget_package
 from codex_package.layout import build_package_dir
 from codex_package.layout import validate_package_dir
 from codex_package.targets import PACKAGE_VARIANTS
@@ -15,6 +18,69 @@ from codex_package.targets import TARGET_SPECS
 
 
 class PackageLayoutTest(unittest.TestCase):
+    def test_winget_preserves_signed_files_and_voice_hashes(self) -> None:
+        for target in ("x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"):
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as temp:
+                package = Path(temp)
+                files = {
+                    "bin/codex.exe": b"signed CLI",
+                    "bin/codex-code-mode-host.exe": b"signed code mode host",
+                    "codex-resources/codex-command-runner.exe": b"signed runner",
+                    "codex-resources/codex-windows-sandbox-setup.exe": b"signed setup",
+                    "codex-resources/voice/bin/codex-voice-host.exe": b"signed voice host",
+                    "codex-resources/voice/bin/gstreamer-1.0-0.dll": b"signed audio DLL",
+                    "codex-resources/voice/NOTICE.md": b"license notices",
+                    "codex-path/rg.exe": b"ripgrep",
+                }
+                for name, contents in files.items():
+                    path = package / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(contents)
+                metadata = {
+                    "layoutVersion": 1,
+                    "target": target,
+                    "entrypoint": "bin/codex.exe",
+                }
+                (package / "codex-package.json").write_text(json.dumps(metadata))
+                manifest = {
+                    "schemaVersion": 1,
+                    "sha256": {
+                        name: hashlib.sha256(contents).hexdigest()
+                        for name, contents in files.items()
+                        if name == "bin/codex.exe"
+                        or name.startswith("codex-resources/voice/")
+                    },
+                }
+                manifest_path = package / "codex-resources/voice/manifest.json"
+                manifest_path.write_text(json.dumps(manifest))
+                prepare_winget_package(package)
+                entrypoint = f"codex-{target}.exe"
+                files[entrypoint] = files.pop("bin/codex.exe")
+                files["codex-code-mode-host.exe"] = files.pop(
+                    "bin/codex-code-mode-host.exe"
+                )
+                for helper in (
+                    "codex-command-runner.exe",
+                    "codex-windows-sandbox-setup.exe",
+                ):
+                    files[helper] = files[f"codex-resources/{helper}"]
+                actual = {
+                    str(path.relative_to(package)).replace("\\", "/"): path.read_bytes()
+                    for path in package.rglob("*")
+                    if path.is_file()
+                }
+                actual_metadata = json.loads(actual.pop("codex-package.json"))
+                actual_manifest = json.loads(
+                    actual.pop("codex-resources/voice/manifest.json")
+                )
+                self.assertEqual(actual, files)
+                metadata["entrypoint"] = entrypoint
+                self.assertEqual(actual_metadata, metadata)
+                manifest["sha256"][entrypoint] = manifest["sha256"].pop("bin/codex.exe")
+                self.assertEqual(actual_manifest, manifest)
+                for name, digest in actual_manifest["sha256"].items():
+                    self.assertEqual(hashlib.sha256(actual[name]).hexdigest(), digest)
+
     def test_macos_package_preserves_prebuilt_resource_binaries(self) -> None:
         for variant_name in ("codex", "codex-app-server"):
             for target in ("aarch64-apple-darwin", "x86_64-apple-darwin"):

@@ -4,7 +4,7 @@
      use_bpf_linker = toolchain.target_arch in ("bpfeb", "bpfel") and toolchain.linker
 -    if not ld or toolchain.linker_preference == "rust" or use_bpf_linker:
 +    use_windows_msvc_linker = (
-+        toolchain.target_arch == "x86_64" and
++        toolchain.target_arch in ("x86_64", "aarch64") and
 +        toolchain.target_os == "windows" and
 +        toolchain.target_abi == "msvc" and
 +        toolchain.linker != None and

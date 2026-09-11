@@ -249,7 +249,23 @@ runtime inspection and SDK export. These targets are MSVC-only. They require
 native Windows execution of the matching architecture; they are not cross builds.
 The generic Rust-consumer aliases are connected separately, after these inputs.
 
-Provide the complete installed Cygwin/pkgconf repository explicitly. The default
+Provide the complete installed Cygwin/pkgconf repository explicitly. For a public
+Windows build, `.github/scripts/setup-voice-windows.ps1 -Target
+x86_64-pc-windows-msvc -SnapshotArchive <path>` (under `public/` in
+codex-internal) verifies the pinned archive and every input size and SHA-512
+digest, then runs the offline installer against its signed metadata. ARM64 uses
+`aarch64-pc-windows-msvc` and the same Cygwin x64 tools under emulation. The
+installed tool tree stays in the CI temporary directory and is never added to
+a Codex package. The upstream mirror's signed metadata changes over time, so
+the archived snapshot must be supplied separately. Private CI validates this
+public bootstrap against its existing pinned archive. Public release CI obtains
+the same hash-pinned build inputs from the public `openai/codex` release named
+by `voice-cygwin-snapshot.json`. That release also makes the corresponding
+upstream source archives available under `cygwin-build-sources.tar`, with its
+own size and SHA-256 pin. These Cygwin tools run only on the build runner;
+neither archive is included in the user's Codex package.
+
+The default
 `windows_installed_tools` label setting is empty and fails if a Windows action
 needs it. This keeps ordinary public dependency queries independent of private
 provisioning; it does not silently omit tools from a requested Windows build.
