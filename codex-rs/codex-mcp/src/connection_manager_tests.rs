@@ -552,6 +552,7 @@ pub(crate) async fn create_ready_async_managed_client(tools: Vec<ToolInfo>) -> A
         .boxed()
         .shared(),
         is_codex_apps_mcp_server: false,
+        server_capabilities: Arc::new(std::sync::Mutex::new(None)),
         cached_server_info: None,
         codex_apps_tools_cache_context: None,
         tool_catalog_cache_context: None,
@@ -717,6 +718,7 @@ fn create_gated_async_managed_client(
         AsyncManagedClient {
             client,
             is_codex_apps_mcp_server: false,
+            server_capabilities: Arc::new(std::sync::Mutex::new(None)),
             cached_server_info: None,
             codex_apps_tools_cache_context: None,
             tool_catalog_cache_context: None,
@@ -784,6 +786,7 @@ pub(crate) async fn create_test_manager_with_ready_apps_client(
             .boxed()
             .shared(),
             is_codex_apps_mcp_server: true,
+            server_capabilities: Arc::new(std::sync::Mutex::new(None)),
             cached_server_info: Some(create_test_server_info("Codex Apps")),
             codex_apps_tools_cache_context: Some(cache_context),
             tool_catalog_cache_context: None,
@@ -835,6 +838,7 @@ fn create_test_manager_with_failed_apps_startup(
         AsyncManagedClient {
             client,
             is_codex_apps_mcp_server: true,
+            server_capabilities: Arc::new(std::sync::Mutex::new(None)),
             cached_server_info: None,
             codex_apps_tools_cache_context: Some(cache_context),
             tool_catalog_cache_context: None,
@@ -2208,6 +2212,7 @@ async fn list_all_tools_uses_shared_codex_apps_cache_while_client_is_pending() {
         AsyncManagedClient {
             client: pending_client,
             is_codex_apps_mcp_server: true,
+            server_capabilities: Arc::new(std::sync::Mutex::new(None)),
             cached_server_info: None,
             codex_apps_tools_cache_context: Some(cache_context),
             tool_catalog_cache_context: None,
@@ -2266,6 +2271,7 @@ async fn capture_binding_uses_the_ready_clients_own_tools() {
         AsyncManagedClient {
             client: futures::future::ready(Ok(ready_client)).boxed().shared(),
             is_codex_apps_mcp_server: true,
+            server_capabilities: Arc::new(std::sync::Mutex::new(None)),
             cached_server_info: None,
             codex_apps_tools_cache_context: Some(cache_context),
             tool_catalog_cache_context: None,
@@ -2629,6 +2635,7 @@ async fn list_available_server_infos_uses_cache_while_client_is_pending() {
         AsyncManagedClient {
             client: pending_client,
             is_codex_apps_mcp_server: true,
+            server_capabilities: Arc::new(std::sync::Mutex::new(None)),
             cached_server_info: Some(server_info.clone()),
             codex_apps_tools_cache_context: None,
             tool_catalog_cache_context: None,
@@ -2725,6 +2732,7 @@ async fn capture_binding_exposes_cached_tools_before_startup() {
         AsyncManagedClient {
             client: pending_client,
             is_codex_apps_mcp_server: true,
+            server_capabilities: Arc::new(std::sync::Mutex::new(None)),
             cached_server_info: None,
             codex_apps_tools_cache_context: Some(cache_context),
             tool_catalog_cache_context: None,
@@ -2825,6 +2833,7 @@ async fn capture_binding_skips_pending_optional_servers_after_configured_shared_
                     .boxed()
                     .shared(),
                 is_codex_apps_mcp_server: false,
+                server_capabilities: Arc::new(std::sync::Mutex::new(None)),
                 cached_server_info: None,
                 codex_apps_tools_cache_context: None,
                 tool_catalog_cache_context: None,
@@ -3076,6 +3085,7 @@ async fn capture_binding_shares_optional_startup_grace_across_connection_sets() 
                     .boxed()
                     .shared(),
                 is_codex_apps_mcp_server: false,
+                server_capabilities: Arc::new(std::sync::Mutex::new(None)),
                 cached_server_info: None,
                 codex_apps_tools_cache_context: None,
                 tool_catalog_cache_context: Some(cache_context.clone()),
@@ -3709,6 +3719,7 @@ async fn list_all_tools_blocks_while_client_is_pending_without_cached_tools() {
         AsyncManagedClient {
             client: pending_client,
             is_codex_apps_mcp_server: true,
+            server_capabilities: Arc::new(std::sync::Mutex::new(None)),
             cached_server_info: None,
             codex_apps_tools_cache_context: None,
             tool_catalog_cache_context: None,
@@ -3766,6 +3777,7 @@ async fn shutdown_cancels_pending_tool_listing() {
         AsyncManagedClient {
             client: pending_client,
             is_codex_apps_mcp_server: true,
+            server_capabilities: Arc::new(std::sync::Mutex::new(None)),
             cached_server_info: None,
             codex_apps_tools_cache_context: None,
             tool_catalog_cache_context: None,
@@ -3812,6 +3824,7 @@ async fn shutdown_continues_after_caller_is_aborted() {
         AsyncManagedClient {
             client: blocking_client,
             is_codex_apps_mcp_server: true,
+            server_capabilities: Arc::new(std::sync::Mutex::new(None)),
             cached_server_info: None,
             codex_apps_tools_cache_context: None,
             tool_catalog_cache_context: None,
@@ -3864,6 +3877,7 @@ async fn list_all_tools_does_not_block_when_shared_codex_apps_cache_is_empty() {
         AsyncManagedClient {
             client: pending_client,
             is_codex_apps_mcp_server: true,
+            server_capabilities: Arc::new(std::sync::Mutex::new(None)),
             cached_server_info: None,
             codex_apps_tools_cache_context: Some(cache_context),
             tool_catalog_cache_context: None,
@@ -3916,6 +3930,7 @@ async fn list_all_tools_uses_shared_codex_apps_cache_when_client_startup_fails()
         AsyncManagedClient {
             client: failed_client,
             is_codex_apps_mcp_server: true,
+            server_capabilities: Arc::new(std::sync::Mutex::new(None)),
             cached_server_info: Some(server_info.clone()),
             codex_apps_tools_cache_context: Some(cache_context),
             tool_catalog_cache_context: None,
@@ -5350,6 +5365,7 @@ async fn reconciliation_reuses_connection_without_relisting_regular_tools() -> a
                 client: AsyncManagedClient {
                     client: futures::future::ready(Ok(managed_client)).boxed().shared(),
                     is_codex_apps_mcp_server: false,
+                    server_capabilities: Arc::new(std::sync::Mutex::new(None)),
                     cached_server_info: None,
                     codex_apps_tools_cache_context: None,
                     tool_catalog_cache_context: None,
@@ -5915,6 +5931,7 @@ async fn reconciliation_replaces_closed_connections() -> anyhow::Result<()> {
                 .boxed()
                 .shared(),
             is_codex_apps_mcp_server: false,
+            server_capabilities: Arc::new(std::sync::Mutex::new(None)),
             cached_server_info: None,
             codex_apps_tools_cache_context: None,
             tool_catalog_cache_context: None,

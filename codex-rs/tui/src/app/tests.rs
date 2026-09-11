@@ -398,6 +398,7 @@ async fn handle_mcp_inventory_result_respects_origin_thread() {
 
     app.handle_mcp_inventory_result(
         Ok(vec![McpServerStatus {
+            server_capabilities: None,
             tools_error: None,
             name: "docs".to_string(),
             runtime_status: None,

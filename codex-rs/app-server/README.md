@@ -174,3 +174,11 @@ Attachments record the resources currently associated with a thread, independent
 `thread/attachment/list` accepts one `threadId` and returns at most 100 attachments per page, ordered by creation time and attachment id. Continue with `nextCursor` and the same `threadId` until the cursor is `null`. Each thread can retain up to 100 attachments. Removing an attachment frees a slot for a new attachment.
 
 Attachment creation and deletion requests using the same thread ID are serialized across connections. The requesting client receives its response before the compact update is broadcast, and duplicate creates or absent deletes do not emit updates. Deleting the owning thread removes its attachments under the same lifecycle exclusion; queued attachment mutations then report that the thread was not found.
+
+# MCP server capabilities
+
+`mcpServerStatus/list` returns `serverCapabilities` for each initialized MCP server
+in both `full` and `toolsAndAuthOnly` detail modes, including thread-scoped reads.
+This is the server's advertised MCP capabilities object, including its `extensions`
+map. It is null when the connection has not initialized successfully; capabilities
+are never inferred from tools or copied from a shared catalog cache.

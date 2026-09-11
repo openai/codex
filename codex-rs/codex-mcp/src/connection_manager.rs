@@ -1000,6 +1000,22 @@ impl McpConnectionSet {
         Ok(call_tool_result_from_rmcp(result))
     }
 
+    /// Capabilities belong to the initialized connection, never a shared tool cache.
+    pub(crate) fn list_available_server_capabilities(&self) -> HashMap<String, serde_json::Value> {
+        self.servers
+            .iter()
+            .filter_map(|(name, view)| {
+                view.connection
+                    .client
+                    .server_capabilities
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone()
+                    .map(|capabilities| (name.clone(), capabilities))
+            })
+            .collect()
+    }
+
     /// Returns presentation metadata from the current connection.
     /// Codex Apps metadata may come from its existing cache; regular MCP server information is
     /// connection-specific, so pending regular clients are awaited.

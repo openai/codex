@@ -1591,6 +1591,7 @@ mod tests {
     fn mcp_inventory_maps_prefix_tool_names_by_server() {
         let statuses = vec![
             McpServerStatus {
+                server_capabilities: None,
                 tools_error: None,
                 name: "docs".to_string(),
                 runtime_status: None,
@@ -1614,6 +1615,7 @@ mod tests {
                 auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
             },
             McpServerStatus {
+                server_capabilities: None,
                 tools_error: None,
                 name: "disabled".to_string(),
                 runtime_status: None,

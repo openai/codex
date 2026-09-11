@@ -349,6 +349,7 @@ async fn oauth_login_automatically_selects_callback_specific_cimd_without_metada
         move || {
             Ok(McpStatusServer {
                 tool_name: Arc::clone(&tool_name),
+                tools_error: None,
             })
         },
         Arc::new(LocalSessionManager::default()),
@@ -527,7 +528,8 @@ async fn oauth_login_automatically_selects_callback_specific_cimd_without_metada
 #[tokio::test]
 async fn mcp_server_status_list_returns_raw_server_and_tool_names() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
-    let (mcp_server_url, mcp_server_handle) = start_mcp_server("look-up.raw").await?;
+    let (mcp_server_url, mcp_server_handle) =
+        start_mcp_server("look-up.raw", /*tools_error*/ None).await?;
     let codex_home = TempDir::new()?;
     mock_responses_config(&server.uri())
         .with_extra_config(&format!(
@@ -568,6 +570,7 @@ async fn mcp_server_status_list_returns_raw_server_and_tool_names() -> Result<()
         .find(|status| status.name == "broken-server")
         .unwrap();
     assert!(failed.tools.is_empty());
+    assert_eq!(failed.server_capabilities, None);
     assert!(
         failed
             .tools_error
@@ -579,6 +582,15 @@ async fn mcp_server_status_list_returns_raw_server_and_tool_names() -> Result<()
         .iter()
         .find(|status| status.name == "some-server")
         .unwrap();
+    assert_eq!(
+        status
+            .server_capabilities
+            .as_ref()
+            .and_then(|caps| caps.get("extensions")),
+        Some(&json!({
+            "openai/settings": { "readTool": "settings.read", "updateTool": "settings.update" }
+        }))
+    );
     assert_eq!(status.tools_error, None);
     assert_eq!(status.name, "some-server");
     assert_eq!(status.runtime_status, None);
@@ -684,7 +696,8 @@ MCP_TEST_PID_FILE = {}
 #[tokio::test]
 async fn mcp_server_status_list_uses_thread_project_local_config() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
-    let (mcp_server_url, mcp_server_handle) = start_mcp_server("project_lookup").await?;
+    let (mcp_server_url, mcp_server_handle) =
+        start_mcp_server("project_lookup", /*tools_error*/ None).await?;
     let codex_home = TempDir::new()?;
     let workspace = TempDir::new()?;
     mock_responses_config(&server.uri()).write(codex_home.path())?;
@@ -758,7 +771,8 @@ url = "{mcp_server_url}/mcp"
 #[tokio::test]
 async fn mcp_server_status_list_reports_thread_runtime_connections() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
-    let (mcp_server_url, mcp_server_handle) = start_mcp_server("lookup").await?;
+    let (mcp_server_url, mcp_server_handle) =
+        start_mcp_server("lookup", /*tools_error*/ None).await?;
     let codex_home = TempDir::new()?;
     mock_responses_config(&server.uri())
         .with_extra_config(&format!(
@@ -811,7 +825,8 @@ async fn mcp_server_status_list_reports_thread_runtime_connections() -> Result<(
     );
     // Inventory uses the latest config, but a same-name replacement is not the
     // connection that this thread started. Unchanged registrations retain status.
-    let (replacement_url, replacement_handle) = start_mcp_server("replacement_lookup").await?;
+    let (replacement_url, replacement_handle) =
+        start_mcp_server("replacement_lookup", /*tools_error*/ None).await?;
     mock_responses_config(&server.uri())
         .with_extra_config(&format!(
             "[mcp_servers.connected]\nurl = \"{replacement_url}/mcp\"\n\
@@ -928,14 +943,81 @@ async fn mcp_server_status_list_reports_disconnected_stdio_transport() -> Result
     Ok(())
 }
 
+#[tokio::test]
+async fn mcp_server_status_retains_capabilities_when_tool_discovery_fails() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let (url, handle) = start_mcp_server(
+        "lookup",
+        Some(rmcp::ErrorData::internal_error(
+            "tool discovery unavailable",
+            /*data*/ None,
+        )),
+    )
+    .await?;
+    let codex_home = TempDir::new()?;
+    mock_responses_config(&server.uri())
+        .with_extra_config(&format!("[mcp_servers.degraded]\nurl = \"{url}/mcp\""))
+        .write(codex_home.path())?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    for detail in [None, Some(McpServerStatusDetail::ToolsAndAuthOnly)] {
+        let response: ListMcpServerStatusResponse = app
+            .request(|request_id| ClientRequest::McpServerStatusList {
+                request_id,
+                params: ListMcpServerStatusParams {
+                    cursor: None,
+                    limit: None,
+                    detail,
+                    thread_id: None,
+                },
+            })
+            .await?;
+        let status = response
+            .data
+            .iter()
+            .find(|status| status.name == "degraded")
+            .expect("configured server is included");
+        assert!(status.tools.is_empty());
+        assert!(
+            status
+                .tools_error
+                .as_ref()
+                .is_some_and(|error| error.contains("tool discovery unavailable"))
+        );
+        assert_eq!(
+            status
+                .server_capabilities
+                .as_ref()
+                .and_then(|caps| caps.get("extensions")),
+            Some(&json!({
+                "openai/settings": { "readTool": "settings.read", "updateTool": "settings.update" }
+            }))
+        );
+    }
+    handle.abort();
+    let _ = handle.await;
+    Ok(())
+}
+
 #[derive(Clone)]
 struct McpStatusServer {
     tool_name: Arc<String>,
+    tools_error: Option<rmcp::ErrorData>,
 }
 
 impl ServerHandler for McpStatusServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_server_info(
+        let mut capabilities = ServerCapabilities::builder().enable_tools().build();
+        capabilities.extensions = Some(BTreeMap::from([(
+            "openai/settings".to_string(),
+            serde_json::from_value(
+                json!({ "readTool": "settings.read", "updateTool": "settings.update" }),
+            )
+            .expect("settings capability is a JSON object"),
+        )]));
+        ServerInfo::new(capabilities).with_server_info(
             Implementation::new("lookup-server", "1.0.0").with_title("Lookup Server"),
         )
     }
@@ -945,6 +1027,9 @@ impl ServerHandler for McpStatusServer {
         _request: Option<rmcp::model::PaginatedRequestParams>,
         _context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
     ) -> Result<ListToolsResult, rmcp::ErrorData> {
+        if let Some(error) = &self.tools_error {
+            return Err(error.clone());
+        }
         let input_schema: JsonObject = serde_json::from_value(json!({
             "type": "object",
             "additionalProperties": false
@@ -1065,9 +1150,10 @@ async fn mcp_server_status_list_tools_and_auth_only_skips_slow_inventory_calls()
 #[tokio::test]
 async fn mcp_server_status_list_keeps_tools_for_sanitized_name_collisions() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
-    let (dash_server_url, dash_server_handle) = start_mcp_server("dash_lookup").await?;
+    let (dash_server_url, dash_server_handle) =
+        start_mcp_server("dash_lookup", /*tools_error*/ None).await?;
     let (underscore_server_url, underscore_server_handle) =
-        start_mcp_server("underscore_lookup").await?;
+        start_mcp_server("underscore_lookup", /*tools_error*/ None).await?;
     let codex_home = TempDir::new()?;
     mock_responses_config(&server.uri())
         .with_extra_config(&format!(
@@ -1128,7 +1214,10 @@ url = "{underscore_server_url}/mcp"
     Ok(())
 }
 
-async fn start_mcp_server(tool_name: &str) -> Result<(String, JoinHandle<()>)> {
+async fn start_mcp_server(
+    tool_name: &str,
+    tools_error: Option<rmcp::ErrorData>,
+) -> Result<(String, JoinHandle<()>)> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
     let tool_name = Arc::new(tool_name.to_string());
@@ -1136,6 +1225,7 @@ async fn start_mcp_server(tool_name: &str) -> Result<(String, JoinHandle<()>)> {
         move || {
             Ok(McpStatusServer {
                 tool_name: Arc::clone(&tool_name),
+                tools_error: tools_error.clone(),
             })
         },
         Arc::new(LocalSessionManager::default()),

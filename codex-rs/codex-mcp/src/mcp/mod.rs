@@ -467,6 +467,7 @@ pub async fn read_mcp_resource(
 #[derive(Debug, Clone)]
 pub struct McpServerStatusSnapshot {
     pub server_infos: HashMap<String, McpServerInfo>,
+    pub server_capabilities: HashMap<String, serde_json::Value>,
     pub tools_by_server: HashMap<String, HashMap<String, Tool>>,
     pub tools_errors: HashMap<String, String>,
     pub resources: HashMap<String, Vec<Resource>>,
@@ -488,6 +489,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     if mcp_servers.is_empty() {
         return McpServerStatusSnapshot {
             server_infos: HashMap::new(),
+            server_capabilities: HashMap::new(),
             tools_by_server: HashMap::new(),
             tools_errors: HashMap::new(),
             resources: HashMap::new(),
@@ -819,6 +821,7 @@ async fn collect_mcp_server_status_snapshot_from_manager(
     }
 
     McpServerStatusSnapshot {
+        server_capabilities: mcp_connection_manager.list_available_server_capabilities(),
         server_infos,
         tools_by_server,
         tools_errors,

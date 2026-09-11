@@ -8340,6 +8340,13 @@ class McpServerStatus(BaseModel):
             description="Current thread-runtime connection state; null when unavailable or the configuration changed.",
         ),
     ] = None
+    server_capabilities: Annotated[
+        Any | None,
+        Field(
+            alias="serverCapabilities",
+            description="Capabilities advertised by the initialized MCP server; null when unavailable.",
+        ),
+    ] = None
     server_info: Annotated[McpServerInfo | None, Field(alias="serverInfo")] = None
     tools: dict[str, Tool]
     tools_error: Annotated[

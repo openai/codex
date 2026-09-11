@@ -79,6 +79,8 @@ pub struct McpServerStatus {
     pub runtime_status: Option<McpServerConnectionStatus>,
     pub plugin_id: Option<String>,
     pub server_info: Option<McpServerInfo>,
+    /// Capabilities advertised by the initialized MCP server; null when unavailable.
+    pub server_capabilities: Option<serde_json::Value>,
     pub tools: std::collections::HashMap<String, McpTool>,
     /// Tool discovery failed and no catalog was returned.
     /// Null when a catalog is returned, including cached or empty catalogs.

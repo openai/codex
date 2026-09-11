@@ -5,6 +5,7 @@ import type { McpServerInfo } from "../McpServerInfo";
 import type { Resource } from "../Resource";
 import type { ResourceTemplate } from "../ResourceTemplate";
 import type { Tool } from "../Tool";
+import type { JsonValue } from "../serde_json/JsonValue";
 import type { McpAuthStatus } from "./McpAuthStatus";
 import type { McpServerConnectionStatus } from "./McpServerConnectionStatus";
 
@@ -12,7 +13,11 @@ export type McpServerStatus = { name: string,
 /**
  * Current thread-runtime connection state; null when unavailable or the configuration changed.
  */
-runtimeStatus: McpServerConnectionStatus | null, pluginId: string | null, serverInfo: McpServerInfo | null, tools: { [key in string]?: Tool },
+runtimeStatus: McpServerConnectionStatus | null, pluginId: string | null, serverInfo: McpServerInfo | null,
+/**
+ * Capabilities advertised by the initialized MCP server; null when unavailable.
+ */
+serverCapabilities: JsonValue | null, tools: { [key in string]?: Tool },
 /**
  * Tool discovery failed and no catalog was returned.
  * Null when a catalog is returned, including cached or empty catalogs.
