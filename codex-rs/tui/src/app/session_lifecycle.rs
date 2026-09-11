@@ -1209,9 +1209,6 @@ impl App {
             Ok(config) => config,
             Err(control) => return Ok(control),
         };
-        if self.reject_remote_resume_permission_override(&resume_config) {
-            return Ok(AppRunControl::Continue);
-        }
         let baseline_approval = resume_config.permissions.approval_policy.value();
         let baseline_permissions = RuntimePermissionProfileOverride::from_config(&resume_config);
         self.apply_runtime_policy_overrides(&mut resume_config, RuntimePolicyOverrideScope::All);

@@ -12,6 +12,7 @@ use crate::config_update::ProjectTrustHost;
 use crate::config_update::RemoteProjectTrust;
 use crate::config_update::read_remote_project_trust;
 use crate::legacy_core::config::Config;
+use crate::onboarding::trust_directory::TrustCancelAction;
 use crate::onboarding::trust_directory::TrustDirectorySelection;
 use crate::onboarding::trust_directory::TrustDirectoryWidget;
 use crate::startup_draft::StartupDraftPump;
@@ -104,6 +105,11 @@ pub(crate) async fn check_directory_trust(
             steps: vec![Step::TrustDirectory(TrustDirectoryWidget {
                 restricted: project.trust_level == Some(TrustLevel::Untrusted),
                 existing_task: connected && resumed_thread.is_some(),
+                cancel: if connected {
+                    TrustCancelAction::AgentsOverview
+                } else {
+                    TrustCancelAction::Quit
+                },
                 cwd: project.cwd,
                 trust_target: project.trust_target,
                 show_windows_create_sandbox_hint: false,

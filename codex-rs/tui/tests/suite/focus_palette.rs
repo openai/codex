@@ -349,6 +349,7 @@ impl PtyCodex {
         let deadline = Instant::now() + STARTUP_TIMEOUT;
         while Instant::now() < deadline {
             self.read_output(Duration::from_millis(/*millis*/ 50))?;
+            self.answer_startup_queries()?;
             if self.screen_contains(text) {
                 return Ok(());
             }

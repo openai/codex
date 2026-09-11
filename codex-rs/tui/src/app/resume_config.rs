@@ -1,8 +1,13 @@
-//! Shared configuration and working-directory resolution for ordinary and overview cold resumes.
+//! Folder-entry consent and configuration for command-center dispatch and resume.
 //! Keeps CLI/runtime cwd precedence, remote-workspace checks, and interactive prompts aligned.
 //! Carries local preferences alongside the resolved configuration for session replacement.
 
+use super::agents_overview_view::AgentsOverviewFocus;
 use super::*;
+use crate::onboarding::onboarding_screen::check_directory_trust;
+use crate::startup_hooks_review::StartupHooksReviewOutcome;
+use crate::startup_hooks_review::load_startup_hooks_review_entry;
+use crate::startup_hooks_review::maybe_run_startup_hooks_review;
 use codex_config::types::ResumeCwdMode;
 
 impl App {
@@ -93,7 +98,7 @@ impl App {
             } else {
                 (current_cwd, resume_cwd)
             };
-        let resume_config = match self
+        let mut resume_config = match self
             .rebuild_config_for_resume_or_fallback(&config_current_cwd, config_resume_cwd)
             .await
         {
@@ -105,6 +110,121 @@ impl App {
                 return Err(AppRunControl::Continue);
             }
         };
+        if self.reject_remote_resume_permission_override(&resume_config.0) {
+            return Err(AppRunControl::Continue);
+        }
+        let resumed_thread =
+            if matches!(self.app_server_target, AppServerTarget::LocalDaemon { .. }) {
+                Some(
+                    app_server
+                        .thread_read(target_session.thread_id, /*include_turns*/ false)
+                        .await
+                        .map_err(|error| {
+                            self.add_session_picker_error(format!(
+                                "Unable to check resumed folder: {error}"
+                            ));
+                            AppRunControl::Continue
+                        })?,
+                )
+            } else {
+                None
+            };
+        let trust_cwd = resume_config.0.cwd.to_path_buf();
+        self.confirm_directory_trust(
+            tui,
+            app_server,
+            &mut resume_config.0,
+            &trust_cwd,
+            resumed_thread.as_ref(),
+        )
+        .await?;
+        resume_config.1 = crate::local_settings::LocalSettings::from(&resume_config.0);
         Ok(resume_config)
+    }
+
+    pub(super) async fn confirm_directory_trust(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+        config: &mut Config,
+        cwd: &Path,
+        resumed_thread: Option<&codex_app_server_protocol::Thread>,
+    ) -> std::result::Result<(), AppRunControl> {
+        // Keep the existing explicit remote --cd gate, including retries after cancellation.
+        // Other remote destinations await authoritative trust-root metadata.
+        let cwd = if self.app_server_target.uses_remote_workspace() {
+            let Some(cwd) = app_server.remote_cwd_override() else {
+                return Ok(());
+            };
+            cwd
+        } else {
+            cwd
+        };
+        let result = check_directory_trust(
+            tui,
+            app_server,
+            config,
+            &self.app_server_target,
+            cwd,
+            resumed_thread,
+            /*startup_draft*/ None,
+        )
+        .await
+        .map_err(|error| {
+            self.add_session_picker_error(format!("Unable to check folder trust: {error}"));
+            AppRunControl::Continue
+        })?;
+        if result.should_exit {
+            if matches!(self.app_server_target, AppServerTarget::Embedded) {
+                return Err(AppRunControl::Exit(ExitReason::UserRequested));
+            }
+            if self
+                .chat_widget
+                .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
+                .is_none()
+            {
+                self.open_agents_overview(app_server, AgentsOverviewFocus::List);
+            }
+            return Err(AppRunControl::Continue);
+        }
+        if result.directory_trust_persisted && !app_server.uses_remote_workspace() {
+            *config = self
+                .rebuild_config_for_cwd(config.cwd.to_path_buf())
+                .await
+                .map_err(|error| {
+                    self.add_session_picker_error(format!(
+                        "Failed to reload trusted folder settings: {error}"
+                    ));
+                    AppRunControl::Continue
+                })?;
+            if resumed_thread.is_none() {
+                let hooks = load_startup_hooks_review_entry(
+                    app_server.request_handle(),
+                    config.cwd.to_path_buf(),
+                )
+                .await;
+                match maybe_run_startup_hooks_review(
+                    app_server,
+                    tui,
+                    config,
+                    config.bypass_hook_trust,
+                    hooks,
+                )
+                .await
+                .map_err(|error| {
+                    self.add_session_picker_error(format!(
+                        "Unable to review folder hooks: {error}"
+                    ));
+                    AppRunControl::Continue
+                })? {
+                    StartupHooksReviewOutcome::Continue => {}
+                    StartupHooksReviewOutcome::OpenHooksBrowser(hooks) => {
+                        self.chat_widget.open_hooks_browser(hooks);
+                        return Err(AppRunControl::Continue);
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }

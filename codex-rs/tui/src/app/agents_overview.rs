@@ -406,7 +406,7 @@ impl App {
                 target_thread.status,
                 codex_app_server_protocol::ThreadStatus::NotLoaded
             );
-            let (mut resume_config, local_settings) = if unloaded {
+            let (mut resume_config, mut local_settings) = if unloaded {
                 let target_session = SessionTarget {
                     path: target_thread.path.clone(),
                     thread_id: root_thread_id,
@@ -440,8 +440,20 @@ impl App {
                     }
                 }
             };
-            if unloaded && self.reject_remote_resume_permission_override(&resume_config) {
-                return Ok(AppRunControl::Continue);
+            if !unloaded {
+                if let Err(control) = self
+                    .confirm_directory_trust(
+                        tui,
+                        app_server,
+                        &mut resume_config,
+                        target_thread.cwd.as_path(),
+                        Some(&target_thread),
+                    )
+                    .await
+                {
+                    return Ok(control);
+                }
+                local_settings = crate::local_settings::LocalSettings::from(&resume_config);
             }
             let baseline_approval = resume_config.permissions.approval_policy.value();
             let baseline_permissions =
@@ -660,6 +672,7 @@ impl App {
 
     pub(super) async fn dispatch_agents_overview_task(
         &mut self,
+        tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
         prompt: UserMessage,
         cwd: Option<AbsolutePathBuf>,
@@ -687,6 +700,21 @@ impl App {
             },
             None => self.fresh_session_config(),
         };
+        let trust_cwd = config.cwd.to_path_buf();
+        if self
+            .confirm_directory_trust(
+                tui,
+                app_server,
+                &mut config,
+                &trust_cwd,
+                /*resumed_thread*/ None,
+            )
+            .await
+            .is_err()
+        {
+            self.restore_agents_overview_prompt(prompt);
+            return;
+        }
         if let Some(profile) = self.runtime_permission_profile_override.as_ref()
             && profile.active_permission_profile.is_some()
             && (!profile.matches_config(&config)

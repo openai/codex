@@ -11,6 +11,6 @@ expression: terminal.backend()
   will not change.
 
 › 1. Open existing task                                               
-  2. Quit
+  2. Back to Agent Command Center
 
-  Press enter to continue; esc to quit
+  Press enter to continue; esc to go back

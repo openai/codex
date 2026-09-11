@@ -287,7 +287,11 @@ impl App {
                     cwd: None,
                     history_mode: None,
                 };
-                let _ = self.resume_target_session(tui, app_server, target).await;
+                if let Ok(AppRunControl::Exit(_)) =
+                    self.resume_target_session(tui, app_server, target).await
+                {
+                    self.app_event_tx.send(AppEvent::Exit(ExitMode::Immediate));
+                }
                 return;
             }
         }

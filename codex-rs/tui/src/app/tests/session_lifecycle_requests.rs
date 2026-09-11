@@ -111,6 +111,12 @@ async fn same_thread_retry_keeps_subscription_and_restores_draft() -> Result<()>
     app.ensure_thread_channel(thread_id).mark_external_writer();
     app.chat_widget.insert_str("Retained draft");
     app.chat_widget.show_external_writer_thread();
+    crate::legacy_core::config::set_project_trust_level(
+        app.config.codex_home.as_path(),
+        app.config.cwd.as_path(),
+        codex_protocol::config_types::TrustLevel::Trusted,
+    )
+    .map_err(std::io::Error::other)?;
     app.harness_overrides.cwd = Some(app.config.cwd.to_path_buf());
     requests.lock().expect("request recorder lock").clear();
     let mut tui = crate::tui::test_support::make_test_tui()?;
@@ -4224,6 +4230,12 @@ fn session_lifecycle_avoids_redundant_subagent_metadata_reads() -> Result<()> {
                     .count();
                 assert!(loaded_threads.contains(&child_thread_id.to_string()));
                 take_backfill_counts(&requests);
+                crate::legacy_core::config::set_project_trust_level(
+                    app.config.codex_home.as_path(),
+                    app.config.cwd.as_path(),
+                    codex_protocol::config_types::TrustLevel::Trusted,
+                )
+                .map_err(std::io::Error::other)?;
                 app.harness_overrides.cwd = Some(app.config.cwd.to_path_buf());
 
                 let control = app

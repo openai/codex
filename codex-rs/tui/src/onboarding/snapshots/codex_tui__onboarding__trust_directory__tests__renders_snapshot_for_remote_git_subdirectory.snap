@@ -14,6 +14,6 @@ expression: "terminal.backend().to_string().lines().map(str::trim_end).collect::
   trust these files. Your trust decision will be saved.
 
 › 1. Trust and continue
-  2. Quit
+  2. Back to Agent Command Center
 
-  Press enter to continue; esc to quit
+  Press enter to continue; esc to go back

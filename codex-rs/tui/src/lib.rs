@@ -1035,7 +1035,7 @@ pub async fn run_main(
 
 #[allow(clippy::too_many_arguments)]
 async fn run_ratatui_app(
-    cli: Cli,
+    mut cli: Cli,
     arg0_paths: Arg0DispatchPaths,
     loader_overrides: LoaderOverrides,
     strict_config: bool,
@@ -1328,7 +1328,7 @@ async fn run_ratatui_app(
         };
 
     let use_fork = cli.fork_picker || cli.fork_last || cli.fork_session_id.is_some();
-    let session_selection = if cli.agents_overview {
+    let mut session_selection = if cli.agents_overview {
         resume_picker::SessionSelection::AgentsOverview
     } else if use_fork {
         if let Some(id_str) = cli.fork_session_id.as_deref() {
@@ -1753,15 +1753,33 @@ async fn run_ratatui_app(
                 trust_decision_was_made = true;
             }
         } else if consent.should_exit {
-            shutdown_startup_session(Some(app_server), &mut terminal_restore_guard).await;
-            return Ok(AppExitInfo {
-                token_usage: crate::token_usage::TokenUsage::default(),
-                thread_id: None,
-                resume_hint: None,
-                disconnect_info: None,
-                update_action: None,
-                exit_reason: ExitReason::UserRequested,
-            });
+            if matches!(app_server_target, AppServerTarget::Embedded) {
+                shutdown_startup_session(Some(app_server), &mut terminal_restore_guard).await;
+                return Ok(AppExitInfo {
+                    token_usage: crate::token_usage::TokenUsage::default(),
+                    thread_id: None,
+                    resume_hint: None,
+                    disconnect_info: None,
+                    update_action: None,
+                    exit_reason: ExitReason::UserRequested,
+                });
+            }
+            if !uses_remote_workspace {
+                config = load_config_or_exit_with_fallback_cwd(
+                    cli_kv_overrides.clone(),
+                    overrides.clone(),
+                    loader_overrides.clone(),
+                    cloud_config_bundle.clone(),
+                    strict_config,
+                    Some(current_cwd.to_path_buf()),
+                    managed_worktree.as_ref(),
+                )
+                .await;
+            }
+            session_selection = resume_picker::SessionSelection::AgentsOverview;
+            cli.prompt = None;
+            cli.images.clear();
+            startup_draft.update_session_selection(&mut tui, &session_selection)?;
         }
     }
     startup_draft.apply_config(&config);

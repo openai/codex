@@ -186,6 +186,7 @@ impl OnboardingScreen {
             steps.push(Step::TrustDirectory(TrustDirectoryWidget {
                 restricted: false,
                 existing_task: false,
+                cancel: super::trust_directory::TrustCancelAction::Quit,
                 cwd,
                 trust_target,
                 show_windows_create_sandbox_hint,
@@ -803,6 +804,7 @@ mod tests {
             steps: vec![Step::TrustDirectory(TrustDirectoryWidget {
                 restricted: false,
                 existing_task: false,
+                cancel: super::super::trust_directory::TrustCancelAction::Quit,
                 cwd: PathBuf::from("/workspace/project"),
                 trust_target: PathBuf::from("/workspace/project"),
                 show_windows_create_sandbox_hint: false,
@@ -869,6 +871,7 @@ mod tests {
                 steps: vec![Step::TrustDirectory(TrustDirectoryWidget {
                     restricted: true,
                     existing_task: false,
+                    cancel: super::super::trust_directory::TrustCancelAction::AgentsOverview,
                     cwd: PathBuf::from("/workspace/project"),
                     trust_target: PathBuf::from("/workspace/project"),
                     show_windows_create_sandbox_hint: false,
@@ -899,6 +902,7 @@ mod tests {
             steps: vec![Step::TrustDirectory(TrustDirectoryWidget {
                 restricted: false,
                 existing_task: false,
+                cancel: super::super::trust_directory::TrustCancelAction::Quit,
                 cwd: PathBuf::from("/workspace/project"),
                 trust_target: PathBuf::from("/workspace/project"),
                 show_windows_create_sandbox_hint: false,

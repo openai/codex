@@ -26,6 +26,7 @@ use super::onboarding_screen::StepState;
 pub(crate) struct TrustDirectoryWidget {
     pub restricted: bool,
     pub existing_task: bool,
+    pub cancel: TrustCancelAction,
     pub cwd: PathBuf,
     pub trust_target: PathBuf,
     pub show_windows_create_sandbox_hint: bool,
@@ -33,6 +34,12 @@ pub(crate) struct TrustDirectoryWidget {
     pub selection: Option<TrustDirectorySelection>,
     pub highlighted: TrustDirectorySelection,
     pub error: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TrustCancelAction {
+    Quit,
+    AgentsOverview,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -102,7 +109,13 @@ impl WidgetRef for &TrustDirectoryWidget {
                 },
                 TrustDirectorySelection::Trust,
             ),
-            ("Quit", TrustDirectorySelection::Quit),
+            (
+                match self.cancel {
+                    TrustCancelAction::Quit => "Quit",
+                    TrustCancelAction::AgentsOverview => "Back to Agent Command Center",
+                },
+                TrustDirectorySelection::Quit,
+            ),
         ];
 
         for (idx, (text, selection)) in options.iter().enumerate() {
@@ -134,7 +147,11 @@ impl WidgetRef for &TrustDirectoryWidget {
                 if self.show_windows_create_sandbox_hint && !self.restricted {
                     " to continue and create a sandbox...".dim()
                 } else {
-                    " to continue; esc to quit".dim()
+                    match self.cancel {
+                        TrustCancelAction::Quit => " to continue; esc to quit",
+                        TrustCancelAction::AgentsOverview => " to continue; esc to go back",
+                    }
+                    .dim()
                 },
             ])
             .inset(Insets::tlbr(
@@ -218,6 +235,7 @@ mod tests {
         TrustDirectoryWidget {
             restricted: false,
             existing_task: false,
+            cancel: TrustCancelAction::Quit,
             cwd: PathBuf::from("/workspace/project"),
             trust_target: PathBuf::from("/workspace/project"),
             show_windows_create_sandbox_hint: false,
@@ -233,6 +251,7 @@ mod tests {
         let mut widget = TrustDirectoryWidget {
             restricted: false,
             existing_task: false,
+            cancel: TrustCancelAction::Quit,
             cwd: PathBuf::from("."),
             trust_target: PathBuf::from("."),
             show_windows_create_sandbox_hint: false,
@@ -295,6 +314,7 @@ mod tests {
         let widget = TrustDirectoryWidget {
             restricted: false,
             existing_task: false,
+            cancel: TrustCancelAction::AgentsOverview,
             cwd: PathBuf::from("/srv/remote/project/nested"),
             trust_target: PathBuf::from("/srv/remote/project"),
             ..widget(/*error*/ None)
@@ -323,6 +343,7 @@ mod tests {
             let widget = TrustDirectoryWidget {
                 restricted: true,
                 existing_task,
+                cancel: TrustCancelAction::AgentsOverview,
                 ..widget(/*error*/ None)
             };
             let mut terminal =

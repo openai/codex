@@ -11,6 +11,6 @@ expression: terminal.backend()
   Opening will not change saved trust.
 
 › 1. Open restricted                                                  
-  2. Quit
+  2. Back to Agent Command Center
 
-  Press enter to continue; esc to quit
+  Press enter to continue; esc to go back

@@ -401,8 +401,13 @@ async fn overview_composer_preserves_editing_and_routes_focus() {
         .await
         .unwrap();
     app.cli_kv_overrides = vec![("model".into(), toml::Value::Integer(1))];
-    app.dispatch_agents_overview_task(&mut server, "retry me".into(), Some(app.config.cwd.clone()))
-        .await;
+    app.dispatch_agents_overview_task(
+        &mut crate::tui::test_support::make_test_tui().expect("test tui"),
+        &mut server,
+        "retry me".into(),
+        Some(app.config.cwd.clone()),
+    )
+    .await;
     view.handle_paste(" later".into());
     app.submit_agents_overview_prompt(&server, thread_id, "older failure".into(), Vec::new())
         .await;
@@ -1722,6 +1727,7 @@ async fn failed_root_switch_keeps_background_requests_on_the_active_session() ->
 #[tokio::test]
 async fn root_switch_preserves_vim_line_yank() -> Result<()> {
     let mut app = make_test_app().await;
+    trust_fixture_folders(&mut app);
     std::fs::write(
         app.local_settings.user_config_path.as_path(),
         "[tui]\nresume_cwd = \"session\"\n",

@@ -11,15 +11,30 @@ use crate::chatwidget::UserMessage;
 use crate::chatwidget::tests::helpers::render_bottom_popup;
 use crate::model_catalog::ModelCatalog;
 use crate::test_support::PathBufExt;
+use crate::tui::test_support::make_test_tui;
 use codex_app_server_protocol::UserInput;
 use codex_protocol::openai_models::InputModality;
 use codex_state::SqliteConfig;
 use crossterm::event::KeyCode;
 use pretty_assertions::assert_eq;
 
+fn trust_launch_folder(app: &mut App) {
+    let projects = serde_json::json!({
+        app.config.cwd.display().to_string(): {"trust_level": "trusted"},
+        app.chat_widget.config_ref().cwd.display().to_string(): {"trust_level": "trusted"},
+    });
+    app.cli_kv_overrides.push((
+        "projects".into(),
+        TomlValue::try_from(projects).expect("trust fixture"),
+    ));
+    app.config.active_project.trust_level = Some(codex_protocol::config_types::TrustLevel::Trusted);
+}
+
 #[tokio::test]
 async fn background_task_sends_pasted_image_with_first_prompt() -> Result<()> {
+    let mut tui = make_test_tui()?;
     let (mut app, mut events, _) = make_test_app_with_channels().await;
+    trust_launch_folder(&mut app);
     let image_dir = tempdir()?;
     let image_path = image_dir.path().join("pasted.png");
     image::RgbImage::new(1, 1).save(&image_path)?;
@@ -58,7 +73,7 @@ async fn background_task_sends_pasted_image_with_first_prompt() -> Result<()> {
         LoaderOverrides::default(),
     )
     .await?;
-    app.dispatch_agents_overview_task(&mut server, prompt.clone(), /*cwd*/ None)
+    app.dispatch_agents_overview_task(&mut tui, &mut server, prompt.clone(), /*cwd*/ None)
         .await;
     let turns = recorded_params(&requests, "turn/start");
     assert_eq!(turns.len(), 1);
@@ -82,8 +97,13 @@ async fn background_task_sends_pasted_image_with_first_prompt() -> Result<()> {
     );
 
     app.cli_kv_overrides = vec![("model".into(), toml::Value::Integer(1))];
-    app.dispatch_agents_overview_task(&mut server, prompt.clone(), Some(app.config.cwd.clone()))
-        .await;
+    app.dispatch_agents_overview_task(
+        &mut tui,
+        &mut server,
+        prompt.clone(),
+        Some(app.config.cwd.clone()),
+    )
+    .await;
     let restored = app
         .agents_overview
         .view_state
@@ -103,8 +123,13 @@ async fn background_task_sends_pasted_image_with_first_prompt() -> Result<()> {
     );
     view.handle_key_event(KeyCode::Enter.into());
     assert!(view.handle_paste("A newer draft".into()));
-    app.dispatch_agents_overview_task(&mut server, prompt.clone(), Some(app.config.cwd.clone()))
-        .await;
+    app.dispatch_agents_overview_task(
+        &mut tui,
+        &mut server,
+        prompt.clone(),
+        Some(app.config.cwd.clone()),
+    )
+    .await;
     let current = app
         .agents_overview
         .view_state
@@ -132,7 +157,9 @@ async fn background_task_sends_pasted_image_with_first_prompt() -> Result<()> {
 
 #[tokio::test]
 async fn remote_background_task_sends_clipboard_image_bytes() -> Result<()> {
+    let mut tui = make_test_tui()?;
     let mut app = make_test_app_with_channels().await.0;
+    trust_launch_folder(&mut app);
     let image_dir = tempdir()?;
     let image_path = image_dir.path().join("pasted.png");
     image::RgbImage::new(1, 1).save(&image_path)?;
@@ -150,7 +177,7 @@ async fn remote_background_task_sends_clipboard_image_bytes() -> Result<()> {
         LoaderOverrides::default(),
     )
     .await?;
-    app.dispatch_agents_overview_task(&mut server, prompt, /*cwd*/ None)
+    app.dispatch_agents_overview_task(&mut tui, &mut server, prompt, /*cwd*/ None)
         .await;
     let turns = recorded_params(&requests, "turn/start");
     assert_eq!(turns.len(), 1);
@@ -169,7 +196,9 @@ async fn remote_background_task_sends_clipboard_image_bytes() -> Result<()> {
 
 #[tokio::test]
 async fn background_task_rejects_images_for_text_only_model() -> Result<()> {
+    let mut tui = make_test_tui()?;
     let (mut app, mut events, _) = make_test_app_with_channels().await;
+    trust_launch_folder(&mut app);
     let mut preset = app.model_catalog.models[0].clone();
     preset.model = "text-only-test-model".into();
     preset.input_modalities = vec![InputModality::Text];
@@ -191,7 +220,7 @@ async fn background_task_rejects_images_for_text_only_model() -> Result<()> {
         LoaderOverrides::default(),
     )
     .await?;
-    app.dispatch_agents_overview_task(&mut server, prompt.clone(), /*cwd*/ None)
+    app.dispatch_agents_overview_task(&mut tui, &mut server, prompt.clone(), /*cwd*/ None)
         .await;
     assert!(recorded_params(&requests, "thread/start").is_empty());
     let draft = app
@@ -221,6 +250,7 @@ async fn background_task_rejects_images_for_text_only_model() -> Result<()> {
 
 #[tokio::test]
 async fn background_task_reads_server_defaults_for_actual_destination() -> Result<()> {
+    let mut tui = make_test_tui()?;
     for (mode, explicit_cwd, launch_override, expected_cwd, expected_model) in [
         ("local", false, false, "launch", "server-model"),
         ("local", true, false, "destination", "destination-model"),
@@ -288,6 +318,7 @@ async fn background_task_reads_server_defaults_for_actual_destination() -> Resul
             .map_err(|error| color_eyre::eyre::eyre!(error.to_string()))?;
         }
         let mut app = make_test_app_with_channels().await.0;
+        trust_launch_folder(&mut app);
         if mode == "local" && explicit_cwd {
             app.harness_overrides.model_provider = Some("openai".into());
         }
@@ -315,6 +346,7 @@ async fn background_task_reads_server_defaults_for_actual_destination() -> Resul
                 ThreadId::new(),
                 launch.path().to_path_buf(),
             ));
+        trust_launch_folder(&mut app);
         let mut server_config = app.config.clone();
         server_config.codex_home = server_home.path().to_path_buf().abs();
         server_config.sqlite = SqliteConfig::new_for_testing(server_home.path().abs());
@@ -354,6 +386,7 @@ async fn background_task_reads_server_defaults_for_actual_destination() -> Resul
             expected_model.to_string()
         };
         app.dispatch_agents_overview_task(
+            &mut tui,
             &mut server,
             "background prompt".into(),
             explicit_cwd.then(|| destination.path().to_path_buf().abs()),
@@ -412,6 +445,7 @@ async fn background_task_reads_server_defaults_for_actual_destination() -> Resul
 
 #[tokio::test]
 async fn background_task_preserves_explicit_choices_and_managed_defaults() -> Result<()> {
+    let mut tui = make_test_tui()?;
     for (choice, expected_model, expected_effort) in [
         ("saved", "server-model", "high"),
         ("cli_effort", "server-model", "low"),
@@ -436,6 +470,7 @@ async fn background_task_preserves_explicit_choices_and_managed_defaults() -> Re
             )?;
         }
         let mut app = make_test_app_with_channels().await.0;
+        trust_launch_folder(&mut app);
         match choice {
             "cli_effort" => app.cli_kv_overrides.push((
                 "model_reasoning_effort".into(),
@@ -463,6 +498,7 @@ async fn background_task_preserves_explicit_choices_and_managed_defaults() -> Re
             .harness_overrides(app.harness_overrides.clone())
             .build()
             .await?;
+        trust_launch_folder(&mut app);
         let mut server_config = app.config.clone();
         server_config.codex_home = server_home.path().to_path_buf().abs();
         server_config.sqlite = SqliteConfig::new_for_testing(server_home.path().abs());
@@ -481,6 +517,7 @@ async fn background_task_preserves_explicit_choices_and_managed_defaults() -> Re
         .await?;
         server.bootstrap(&app.config).await?;
         app.dispatch_agents_overview_task(
+            &mut tui,
             &mut server,
             "background prompt".into(),
             /*cwd*/ None,
@@ -512,12 +549,14 @@ async fn background_task_preserves_explicit_choices_and_managed_defaults() -> Re
 
 #[tokio::test]
 async fn background_task_read_failure_keeps_prompt_and_does_not_start() -> Result<()> {
+    let mut tui = make_test_tui()?;
     for capability in [
         HistoryCapabilities::ConfigReadFails,
         HistoryCapabilities::ConfigReadUnsupported(-32600),
         HistoryCapabilities::ConfigReadUnsupported(-32601),
     ] {
         let (mut app, mut events, _) = make_test_app_with_channels().await;
+        trust_launch_folder(&mut app);
         app.harness_overrides.model = Some("local-model".into());
         let view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
         app.chat_widget.show_bottom_pane_view(Box::new(view));
@@ -531,6 +570,7 @@ async fn background_task_read_failure_keeps_prompt_and_does_not_start() -> Resul
         )
         .await?;
         app.dispatch_agents_overview_task(
+            &mut tui,
             &mut server,
             "retry background prompt".into(),
             /*cwd*/ None,
