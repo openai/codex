@@ -1,7 +1,62 @@
 //! Replacement starts use server defaults and preserve the current task on failure.
 
 use super::*;
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
+use crossterm::event::KeyModifiers;
 use pretty_assertions::assert_eq;
+
+#[tokio::test]
+async fn new_session_preserves_vim_line_yank() -> Result<()> {
+    let (mut app, _events, _ops) = make_test_app_with_channels().await;
+    let home = tempdir()?;
+    app.config.codex_home = home.path().to_path_buf().abs();
+    app.config.sqlite = SqliteConfig::new_for_testing(home.path().abs());
+    app.chat_widget.toggle_vim_mode_and_notify();
+    app.chat_widget.insert_str("saved line");
+    for code in [KeyCode::Esc, KeyCode::Char('d'), KeyCode::Char('d')] {
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(code, KeyModifiers::NONE));
+    }
+    assert_eq!(app.chat_widget.composer_text_with_pending(), "");
+
+    let (mut server, _requests, proxy) = start_recording_app_server_with_history(
+        &app.config,
+        HistoryCapabilities::Current,
+        /*blocked_thread_list*/ None,
+        /*failed_thread_name*/ None,
+        crate::app_server_session::ThreadParamsMode::Embedded,
+        LoaderOverrides::default(),
+    )
+    .await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    app.start_fresh_session_with_summary_hint(
+        &mut tui,
+        &mut server,
+        /*session_start_source*/ None,
+        /*initial_user_message*/ None,
+        /*new_thread_name*/ None,
+    )
+    .await;
+
+    app.chat_widget.toggle_vim_mode_and_notify();
+    app.chat_widget.insert_str("new line");
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
+    assert_eq!(
+        app.chat_widget.composer_text_with_pending(),
+        "new line\nsaved line"
+    );
+    let composer_lines = render_bottom_popup(&app.chat_widget, /*width*/ 80)
+        .lines()
+        .take(2)
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!(composer_lines);
+    server.shutdown().await?;
+    proxy.await??;
+    Ok(())
+}
 
 #[tokio::test]
 async fn replacement_uses_server_defaults_and_preserves_explicit_launch_settings() -> Result<()> {

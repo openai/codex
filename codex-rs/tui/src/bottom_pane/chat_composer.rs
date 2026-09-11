@@ -104,7 +104,8 @@
 //! When these paths clear the visible textarea after a successful submit or slash-command
 //! dispatch, they intentionally preserve the textarea kill buffer. That lets users `Ctrl+K` part
 //! of a draft, perform a composer action such as changing reasoning level, and then `Ctrl+Y` the
-//! killed text back into the now-empty draft.
+//! killed text back into the now-empty draft. Replacing the chat widget carries that buffer into
+//! the fresh composer so Vim yanks survive `/new` and thread switches.
 //!
 //! The numeric auto-submit path used by the slash popup performs the same pending-paste expansion
 //! and attachment pruning, and clears pending paste state on success.
@@ -336,6 +337,7 @@ use crate::app_event::ConnectorsSnapshot;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::MentionBinding;
+use crate::bottom_pane::textarea::KillBufferSnapshot;
 use crate::bottom_pane::textarea::TextArea;
 use crate::clipboard_paste::normalize_pasted_path;
 use crate::clipboard_paste::pasted_image_format;
@@ -1417,6 +1419,14 @@ impl ChatComposer {
     /// Resume text entry after a parent view takes focus, preserving Vim undo history.
     pub(crate) fn resume_text_entry(&mut self) {
         self.draft.textarea.enter_vim_insert_mode();
+    }
+
+    pub(crate) fn take_kill_buffer_snapshot(&mut self) -> KillBufferSnapshot {
+        self.draft.textarea.take_kill_buffer_snapshot()
+    }
+
+    pub(crate) fn restore_kill_buffer_snapshot(&mut self, snapshot: KillBufferSnapshot) {
+        self.draft.textarea.restore_kill_buffer_snapshot(snapshot);
     }
 
     /// Restore draft history transferred from the startup composer.

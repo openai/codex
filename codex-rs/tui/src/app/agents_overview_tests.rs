@@ -1617,6 +1617,60 @@ async fn failed_root_switch_keeps_background_requests_on_the_active_session() ->
 }
 
 #[tokio::test]
+async fn root_switch_preserves_vim_line_yank() -> Result<()> {
+    let mut app = make_test_app().await;
+    std::fs::write(
+        app.local_settings.user_config_path.as_path(),
+        "[tui]\nresume_cwd = \"session\"\n",
+    )?;
+    let mut app_server =
+        crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+    let previous = app_server.start_thread(&app.config).await?;
+    app.enqueue_primary_thread_session(previous.session, previous.turns)
+        .await?;
+    let target_thread_id = ThreadId::from_string(
+        &app_test_support::create_fake_rollout(
+            app.config.codex_home.as_path(),
+            "2025-01-05T12-00-00",
+            "2025-01-05T12:00:00Z",
+            "Target task",
+            Some(&app.config.model_provider_id),
+            /*git_info*/ None,
+        )
+        .expect("materialize target rollout"),
+    )?;
+    app.chat_widget.toggle_vim_mode_and_notify();
+    app.chat_widget.insert_str("saved line");
+    for code in [KeyCode::Esc, KeyCode::Char('d'), KeyCode::Char('d')] {
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(code, KeyModifiers::NONE));
+    }
+    assert_eq!(app.chat_widget.composer_text_with_pending(), "");
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+
+    app.select_agents_overview_thread(&mut tui, &mut app_server, target_thread_id)
+        .await?;
+
+    assert_eq!(app.current_displayed_thread_id(), Some(target_thread_id));
+    app.chat_widget.toggle_vim_mode_and_notify();
+    app.chat_widget.insert_str("new line");
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
+    assert_eq!(
+        app.chat_widget.composer_text_with_pending(),
+        "new line\nsaved line"
+    );
+    let composer_lines = render_bottom_popup(&app.chat_widget, /*width*/ 80)
+        .lines()
+        .take(2)
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!(composer_lines, @"› new line\n  saved line");
+    app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn root_switch_loads_local_preferences_from_disk() -> Result<()> {
     // Keep the large setup and root-switch futures off the test thread's stack.
     let mut app = Box::pin(make_test_app()).await;

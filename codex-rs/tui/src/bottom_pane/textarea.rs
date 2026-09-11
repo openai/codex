@@ -174,6 +174,12 @@ enum KillBufferKind {
     Linewise,
 }
 
+/// The last editor kill or Vim yank, carried between chat composers in the same TUI session.
+pub(crate) struct KillBufferSnapshot {
+    text: String,
+    kind: KillBufferKind,
+}
+
 impl TextArea {
     pub fn new() -> Self {
         let defaults = RuntimeKeymap::defaults();
@@ -1257,6 +1263,18 @@ impl TextArea {
         }
         let text = self.kill_buffer.clone();
         self.insert_str(&text);
+    }
+
+    pub(crate) fn take_kill_buffer_snapshot(&mut self) -> KillBufferSnapshot {
+        KillBufferSnapshot {
+            text: std::mem::take(&mut self.kill_buffer),
+            kind: self.kill_buffer_kind,
+        }
+    }
+
+    pub(crate) fn restore_kill_buffer_snapshot(&mut self, snapshot: KillBufferSnapshot) {
+        self.kill_buffer = snapshot.text;
+        self.kill_buffer_kind = snapshot.kind;
     }
 
     fn kill_range(&mut self, range: Range<usize>) {

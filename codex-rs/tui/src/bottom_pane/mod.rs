@@ -222,6 +222,7 @@ pub(crate) use chat_composer::ComposerDraftSnapshot;
 pub(crate) use chat_composer::InputResult;
 pub(crate) use chat_composer::QueuedInputAction;
 pub(crate) use chat_composer_history::HistoryEntry;
+pub(crate) use textarea::KillBufferSnapshot;
 
 use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::status_indicator_widget::StatusIndicatorWidget;
@@ -589,6 +590,14 @@ impl BottomPane {
             questions.set_vim_enabled(enabled);
         }
         self.request_redraw();
+    }
+
+    pub(crate) fn take_kill_buffer_snapshot(&mut self) -> KillBufferSnapshot {
+        self.composer.take_kill_buffer_snapshot()
+    }
+
+    pub(crate) fn restore_kill_buffer_snapshot(&mut self, snapshot: KillBufferSnapshot) {
+        self.composer.restore_kill_buffer_snapshot(snapshot);
     }
 
     pub(crate) fn toggle_vim_enabled(&mut self) -> bool {

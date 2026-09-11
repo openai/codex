@@ -1,0 +1,7 @@
+---
+source: tui/src/app/tests/new_session_tests.rs
+assertion_line: 55
+expression: composer_lines
+---
+› new line
+  saved line
