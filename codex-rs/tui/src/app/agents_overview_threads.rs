@@ -4,7 +4,7 @@
 
 use super::App;
 use super::agents_overview::AGENTS_OVERVIEW_VIEW_ID;
-use super::agents_overview_details::preview_text;
+use super::agents_overview_details::preview_agent_message;
 use super::app_server_event_targets::ServerNotificationThreadTarget;
 use super::app_server_event_targets::server_notification_thread_target;
 use crate::AppServerTarget;
@@ -324,7 +324,7 @@ impl App {
                                     last_message =
                                         turn.items.iter().rev().find_map(|item| match item {
                                             ThreadItem::AgentMessage { text, .. } => {
-                                                Some(preview_text(text))
+                                                Some(preview_agent_message(text))
                                             }
                                             _ => None,
                                         });

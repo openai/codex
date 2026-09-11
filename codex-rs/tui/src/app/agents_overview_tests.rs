@@ -1100,6 +1100,105 @@ fn reasoning_delta(thread_id: ThreadId, item_id: &str, delta: &str) -> ServerNot
 }
 
 #[tokio::test]
+async fn agents_overview_details_render_markdown() {
+    let mut app = make_test_app().await;
+    let thread_id = ThreadId::new();
+    let mut thread = overview_thread(
+        thread_id,
+        /*parent_thread_id*/ None,
+        "Review parser",
+        ThreadStatus::Idle,
+    );
+    thread.preview = "Review **parser** and `token` handling.".into();
+    app.agents_overview
+        .threads
+        .insert(thread_id, Some(thread.clone()));
+    let message = "## Findings\n\n- Fixed **parsing** and `tokens` with a long explanation that wraps.\n- Kept *compatibility*.\n\n```rust\nlet token = 1;\n```";
+    app.agents_overview.last_messages.insert(
+        thread_id,
+        super::super::agents_overview_details::preview_markdown(message),
+    );
+    let view = app.agents_overview_view(vec![thread.clone()], Some(thread_id));
+    let mut terminal = Terminal::new(TestBackend::new(/*width*/ 96, /*height*/ 40)).unwrap();
+    terminal
+        .draw(|frame| view.render(frame.area(), frame.buffer_mut()))
+        .unwrap();
+    let cached = terminal.backend().to_string();
+    let project = test_path_display("/tmp/project");
+    let padding = " ".repeat(project.len().saturating_sub("/tmp/project".len()));
+    insta::assert_snapshot!(
+        "agents_overview_markdown",
+        cached
+            .replace(
+                &format!("{project}  1"),
+                &format!("/tmp/project  1{padding}")
+            )
+            .replace(&project, &format!("/tmp/project{padding}"))
+    );
+
+    app.agents_overview.last_messages.clear();
+    app.track_agents_overview_activity(
+        thread_id,
+        &ServerNotification::ItemCompleted(codex_app_server_protocol::ItemCompletedNotification {
+            thread_id: thread.id.clone(),
+            turn_id: "turn".into(),
+            completed_at_ms: 0,
+            item: ThreadItem::AgentMessage {
+                id: "answer".into(),
+                text: message.into(),
+                phase: None,
+                memory_citation: None,
+                delivery: None,
+                questions: None,
+            },
+        }),
+    );
+    let view = app.agents_overview_view(vec![thread.clone()], Some(thread_id));
+    terminal
+        .draw(|frame| view.render(frame.area(), frame.buffer_mut()))
+        .unwrap();
+    assert_eq!(terminal.backend().to_string(), cached);
+
+    thread.preview = format!("```\n{}\n```", "long prompt ".repeat(25));
+    app.agents_overview.activity.clear();
+    app.agents_overview.last_messages.insert(
+        thread_id,
+        "```\nlet explanation = \"A long code line should wrap inside the task details panel.\";\n```".into(),
+    );
+    let view = app.agents_overview_view(vec![thread.clone()], Some(thread_id));
+    app.chat_widget.show_bottom_pane_view(Box::new(view));
+    let normalized_group = format!("/tmp/project  1{padding}");
+    insta::assert_snapshot!(
+        "agents_overview_markdown_long_lines",
+        render_bottom_popup(&app.chat_widget, /*width*/ 96)
+            .replace(&format!("{project}  1"), &normalized_group)
+            .replace(&project, "/tmp/project")
+    );
+
+    app.agents_overview.last_messages.insert(
+        thread_id,
+        "```md\n| Check | Result |\n| --- | --- |\n| Parser | Fixed |\n```".into(),
+    );
+    let view = app.agents_overview_view(vec![thread], Some(thread_id));
+    app.chat_widget.show_bottom_pane_view(Box::new(view));
+    insta::assert_snapshot!(
+        "agents_overview_markdown_table",
+        render_bottom_popup(&app.chat_widget, /*width*/ 96)
+            .replace(&format!("{project}  1"), &normalized_group)
+            .replace(&project, "/tmp/project")
+    );
+}
+
+#[test]
+fn agents_overview_markdown_preview_preserves_layout_and_bounds() {
+    let text = format!("a\r\n\t\u{1b}{}", "界".repeat(600));
+    assert_eq!(
+        super::super::agents_overview_details::preview_markdown(&text),
+        format!("a\n\t{}", "界".repeat(509))
+    );
+}
+
+#[tokio::test]
 async fn agents_overview_reasoning_uses_existing_events_and_expires_with_attachment() {
     let mut app = make_test_app().await;
     let thread_id = ThreadId::new();
@@ -1167,6 +1266,7 @@ async fn agents_overview_reasoning_uses_existing_events_and_expires_with_attachm
     );
     assert!(
         details
+            .lines
             .iter()
             .any(|line| line.to_string().contains("Checking cold-start regressions"))
     );
@@ -1176,10 +1276,8 @@ async fn agents_overview_reasoning_uses_existing_events_and_expires_with_attachm
     for delta in [format!("**{}", "界".repeat(10_000)), "**".into()] {
         app.track_agents_overview_notification(&reasoning_delta(thread_id, "oversized", &delta));
     }
-    assert_eq!(
-        app.agents_overview_details(&thread, &HashMap::new()),
-        Vec::<Line>::new()
-    );
+    let details = app.agents_overview_details(&thread, &HashMap::new());
+    assert_eq!((details.lines, details.last_message), (Vec::new(), None));
     app.track_agents_overview_notification(&reasoning_delta(
         thread_id,
         "next",
@@ -1189,10 +1287,8 @@ async fn agents_overview_reasoning_uses_existing_events_and_expires_with_attachm
         .get_mut(&thread_id)
         .unwrap()
         .mark_replay_only();
-    assert_eq!(
-        app.agents_overview_details(&thread, &HashMap::new()),
-        Vec::<Line>::new()
-    );
+    let details = app.agents_overview_details(&thread, &HashMap::new());
+    assert_eq!((details.lines, details.last_message), (Vec::new(), None));
     app.track_agents_overview_notification(&ServerNotification::ThreadClosed(
         ThreadClosedNotification {
             thread_id: thread_id.to_string(),

@@ -1,0 +1,28 @@
+---
+source: tui/src/app/agents_overview_tests.rs
+expression: "render_bottom_popup(&app.chat_widget,\n96).replace(&format!(\"{project}  1\"),\n&normalized_group).replace(&project, \"/tmp/project\")"
+---
+  Agent command center
+  0 need input   0 working   1 ready
+  ────────────────────────────────────────────────────────────────────────────────────────────
+  /tmp/project  1                                     │ Task details
+  › ○ Review parser  Ready                            │
+                                                      │ Review parser
+                                                      │ ○ Ready
+                                                      │
+                                                      │ Last message
+                                                      │  Check     Result
+                                                      │ ━━━━━━━━  ━━━━━━━━
+                                                      │  Parser    Fixed
+                                                      │
+                                                      │ Project
+                                                      │ /tmp/project
+                                                      │
+                                                      │ Prompt
+                                                      │ long prompt long prompt long prompt
+                                                      │ …
+  New task
+
+› Describe a new task
+
+   enter create task    ctrl+j newline    esc tasks    → open task

@@ -7,6 +7,7 @@ mod input;
 mod render;
 
 use super::agents_overview::AGENTS_OVERVIEW_VIEW_ID;
+use super::agents_overview_details::AgentsOverviewDetails;
 use crate::app_event::AgentsOverviewAction;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
@@ -86,7 +87,7 @@ impl AgentsOverviewGroup {
 
 #[derive(Clone)]
 pub(super) struct AgentsOverviewRow {
-    pub(super) details: Vec<Line<'static>>,
+    pub(super) details: AgentsOverviewDetails,
     pub(super) thread: Thread,
     pub(super) thread_id: ThreadId,
     pub(super) group: AgentsOverviewGroup,
@@ -477,17 +478,18 @@ impl AgentsOverviewView {
             lines.push("Branch".dim().into());
             lines.push(branch.clone().into());
         }
-        let preview = crate::text_formatting::truncate_text(&row.thread.preview, width * 2);
+        let preview = super::agents_overview_details::preview_markdown(&row.thread.preview);
         lines.extend([Line::default(), Line::from("Prompt".dim())]);
-        let mut prompt = crate::wrapping::word_wrap_lines(
+        let prompt = crate::markdown_render::render_markdown_text_with_width_and_cwd(
             match preview.as_str() {
                 "" => "No prompt available.",
                 preview => preview,
-            }
-            .lines()
-            .map(Line::from),
-            width,
-        );
+            },
+            Some(width),
+            Some(row.thread.cwd.as_path()),
+        )
+        .lines;
+        let mut prompt = crate::wrapping::word_wrap_lines(prompt, width);
         if prompt.len() > 2 {
             prompt.truncate(2);
             prompt[1] = "…".dim().into();
@@ -496,7 +498,17 @@ impl AgentsOverviewView {
         let details_start = crate::wrapping::word_wrap_lines(lines[..4].to_vec(), width).len();
         let mut lines = crate::wrapping::word_wrap_lines(lines, width);
         if self.state().connection_notice.is_none() {
-            let mut details = crate::wrapping::word_wrap_lines(row.details.clone(), width);
+            let mut details = row.details.lines.clone();
+            if let Some((message, cwd)) = &row.details.last_message {
+                details.extend([Line::default(), "Last message".dim().into()]);
+                crate::markdown::append_markdown(
+                    &crate::markdown::unwrap_markdown_fences(message),
+                    Some(width),
+                    Some(cwd.as_path()),
+                    &mut details,
+                );
+            }
+            let mut details = crate::wrapping::word_wrap_lines(details, width);
             let available = usize::from(area.height).saturating_sub(lines.len());
             if details.len() > available {
                 details.truncate(available);
