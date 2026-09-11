@@ -55,13 +55,12 @@ impl ChatWidget {
                 {
                     continue;
                 }
-                // These modes still need the explicit Windows setup/warning flow.
+                // Agent mode still needs explicit Windows setup.
                 #[cfg(target_os = "windows")]
                 if preset.id == "auto"
                     && reviewer == ApprovalsReviewer::User
-                    && (crate::windows_sandbox::level_from_config(&self.config)
+                    && crate::windows_sandbox::level_from_config(&self.config)
                         == WindowsSandboxLevel::Disabled
-                        || self.world_writable_warning_details().is_some())
                 {
                     continue;
                 }

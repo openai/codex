@@ -63,74 +63,6 @@ async fn terminal_color_probe_waits_for_startup_sandbox_choice() {
     assert!(app.ready_for_terminal_color_probe(/*has_pending_app_events*/ false));
 }
 
-#[tokio::test]
-async fn terminal_color_probe_waits_for_delayed_world_writable_scan_failure() {
-    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
-    app.startup_protected_input_boundary = true;
-    app.windows_sandbox.startup_world_writable_scan_pending = true;
-    while app_event_rx.try_recv().is_ok() {}
-
-    assert!(!app.ready_for_terminal_color_probe(/*has_pending_app_events*/ false));
-
-    app.app_event_tx
-        .send(AppEvent::OpenWorldWritableWarningConfirmation {
-            preset: None,
-            profile_selection: None,
-            sample_paths: Vec::new(),
-            extra_count: 0,
-            failed_scan: true,
-        });
-    app.app_event_tx
-        .send(AppEvent::StartupWorldWritableScanCompleted);
-    assert!(!app.ready_for_terminal_color_probe(/*has_pending_app_events*/ true));
-
-    let warning = app_event_rx
-        .try_recv()
-        .expect("the delayed scan should queue its warning before completion");
-    let AppEvent::OpenWorldWritableWarningConfirmation {
-        preset,
-        profile_selection,
-        sample_paths,
-        extra_count,
-        failed_scan,
-    } = warning
-    else {
-        panic!("the delayed scan should open a protected warning before completion");
-    };
-    app.chat_widget.open_world_writable_warning_confirmation(
-        preset,
-        profile_selection,
-        sample_paths,
-        extra_count,
-        failed_scan,
-    );
-    assert!(matches!(
-        app_event_rx.try_recv(),
-        Ok(AppEvent::StartupWorldWritableScanCompleted)
-    ));
-    app.windows_sandbox.startup_world_writable_scan_pending = false;
-
-    assert!(!app.windows_sandbox.startup_world_writable_scan_pending);
-    assert!(!app.ready_for_terminal_color_probe(/*has_pending_app_events*/ false));
-    for character in "20;rgb:2222/ffff/ffff".chars() {
-        app.chat_widget
-            .handle_key_event(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
-        assert!(app_event_rx.try_recv().is_err());
-    }
-
-    app.chat_widget
-        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert!(matches!(
-        app_event_rx.try_recv(),
-        Ok(AppEvent::UpdateWorldWritableWarningAcknowledged(true))
-    ));
-    assert!(matches!(
-        app_event_rx.try_recv(),
-        Ok(AppEvent::PersistWorldWritableWarningAcknowledged)
-    ));
-    assert!(app.ready_for_terminal_color_probe(/*has_pending_app_events*/ false));
-}
-
 #[test]
 fn startup_waiting_gate_is_only_for_fresh_or_exit_session_selection() {
     assert_eq!(
@@ -907,12 +839,7 @@ async fn queued_startup_app_event_owns_protected_view_before_draft_restore() -> 
 
     while let Ok(event) = app_event_rx.try_recv() {
         assert!(
-            !matches!(
-                event,
-                AppEvent::StartFileSearch(_)
-                    | AppEvent::UpdateWorldWritableWarningAcknowledged(_)
-                    | AppEvent::PersistWorldWritableWarningAcknowledged
-            ),
+            !matches!(event, AppEvent::StartFileSearch(_)),
             "protected startup app event must own input before draft side effects: {event:?}"
         );
     }

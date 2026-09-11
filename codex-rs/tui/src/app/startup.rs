@@ -128,7 +128,6 @@ impl App {
     pub(super) fn ready_for_terminal_color_probe(&self, has_pending_app_events: bool) -> bool {
         !has_pending_app_events
             && !self.chat_widget.has_active_view()
-            && !self.windows_sandbox.startup_world_writable_scan_pending
             && !self.startup_pending_protected_request
             && !self.has_queued_startup_protected_request()
             && !self.chat_widget.has_pending_protected_request()
@@ -863,39 +862,6 @@ See the Codex keymap documentation for supported actions and examples."
             )));
         }
         let initial_session_ms = initial_session_started_at.elapsed().as_millis();
-
-        // On startup, if a managed filesystem sandbox is active, warn about
-        // world-writable dirs on Windows.
-        #[cfg(target_os = "windows")]
-        {
-            let startup_permission_profile = app.config.permissions.effective_permission_profile();
-            let should_check = crate::windows_sandbox::level_from_config(&app.config)
-                != WindowsSandboxLevel::Disabled
-                && managed_filesystem_sandbox_is_restricted(&startup_permission_profile)
-                && !app
-                    .local_settings
-                    .notices
-                    .hide_world_writable_warning
-                    .unwrap_or(false);
-            if should_check {
-                app.windows_sandbox.startup_world_writable_scan_pending = true;
-                let cwd = app.config.cwd.clone();
-                let workspace_roots = app.config.effective_workspace_roots();
-                let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
-                let tx = app.app_event_tx.clone();
-                let logs_base_dir = app.config.codex_home.clone();
-                Self::spawn_world_writable_scan(
-                    cwd,
-                    workspace_roots,
-                    env_map,
-                    logs_base_dir,
-                    startup_permission_profile,
-                    app.session_telemetry.clone(),
-                    tx,
-                    /*startup_scan*/ true,
-                );
-            }
-        }
 
         if let Err(err) = startup_draft.flush_pending_events(tui).await {
             return shutdown_on_startup_error(app_server, err).await;

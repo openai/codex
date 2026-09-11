@@ -153,8 +153,6 @@ use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::Personality;
-#[cfg(target_os = "windows")]
-use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::PermissionProfile;
@@ -162,8 +160,6 @@ use codex_protocol::openai_models::ModelAvailabilityNux;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
-#[cfg(target_os = "windows")]
-use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_rollout::StateDbHandle;
 use codex_terminal_detection::user_agent;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -426,14 +422,6 @@ impl AutoReviewMode {
         builtin_permission_profile_for_active_permission_profile(&self.active_permission_profile)
             .expect("auto-review mode should use a built-in permission profile")
     }
-}
-
-#[cfg(target_os = "windows")]
-fn managed_filesystem_sandbox_is_restricted(permission_profile: &PermissionProfile) -> bool {
-    matches!(
-        permission_profile.file_system_sandbox_policy().kind,
-        FileSystemSandboxKind::Restricted
-    )
 }
 
 /// Baseline cadence for periodic stream commit animation ticks.

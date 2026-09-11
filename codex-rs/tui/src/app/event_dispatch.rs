@@ -1909,24 +1909,6 @@ impl App {
             AppEvent::ApplyPermissionShortcut { thread_id, selection } => {
                 self.apply_permission_shortcut(app_server, tui, thread_id, selection).await;
             }
-            AppEvent::OpenWorldWritableWarningConfirmation {
-                preset,
-                profile_selection,
-                sample_paths,
-                extra_count,
-                failed_scan,
-            } => {
-                self.chat_widget.open_world_writable_warning_confirmation(
-                    preset,
-                    profile_selection,
-                    sample_paths,
-                    extra_count,
-                    failed_scan,
-                );
-            }
-            AppEvent::StartupWorldWritableScanCompleted => {
-                self.windows_sandbox.startup_world_writable_scan_pending = false;
-            }
             AppEvent::OpenFeedbackNote {
                 category,
                 include_logs,
@@ -2229,36 +2211,7 @@ impl App {
                             );
                             let windows_sandbox_level =
                                 crate::windows_sandbox::level_from_config(&self.config);
-                            if let Some((sample_paths, extra_count, failed_scan)) =
-                                self.chat_widget.world_writable_warning_details()
-                            {
-                                self.app_event_tx.send(AppEvent::CodexOp(
-                                    AppCommand::override_turn_context(
-                                        /*cwd*/ None,
-                                        /*approval_policy*/ None,
-                                        /*approvals_reviewer*/ None,
-                                        /*permission_profile*/ None,
-                                        /*active_permission_profile*/ None,
-                                        #[cfg(target_os = "windows")]
-                                        Some(windows_sandbox_level),
-                                        /*model*/ None,
-                                        /*effort*/ None,
-                                        /*summary*/ None,
-                                        /*service_tier*/ None,
-                                        /*collaboration_mode*/ None,
-                                        /*personality*/ None,
-                                    ),
-                                ));
-                                self.app_event_tx.send(
-                                    AppEvent::OpenWorldWritableWarningConfirmation {
-                                        preset: Some(preset.clone()),
-                                        profile_selection: profile_selection.clone(),
-                                        sample_paths,
-                                        extra_count,
-                                        failed_scan,
-                                    },
-                                );
-                            } else if let Some(selection) = profile_selection {
+                            if let Some(selection) = profile_selection {
                                 self.app_event_tx.send(AppEvent::CodexOp(
                                     AppCommand::override_turn_context(
                                         /*cwd*/ None,
@@ -2504,9 +2457,6 @@ impl App {
                 else {
                     return Ok(AppRunControl::Continue);
                 };
-                #[cfg(target_os = "windows")]
-                let permission_profile_is_managed_restricted =
-                    managed_filesystem_sandbox_is_restricted(&permission_profile);
                 let permission_profile_for_chat = permission_profile.clone();
 
                 self.config = config;
@@ -2529,42 +2479,6 @@ impl App {
                 self.sync_active_thread_permission_settings_to_cached_session()
                     .await;
                 self.chat_widget.submit_initial_user_message_if_pending();
-
-                // If a managed filesystem sandbox is active, run the Windows
-                // world-writable scan.
-                #[cfg(target_os = "windows")]
-                {
-                    // One-shot suppression if the user just confirmed continue.
-                    if self.windows_sandbox.skip_world_writable_scan_once {
-                        self.windows_sandbox.skip_world_writable_scan_once = false;
-                        return Ok(AppRunControl::Continue);
-                    }
-
-                    let should_check = crate::windows_sandbox::level_from_config(&self.config)
-                        != WindowsSandboxLevel::Disabled
-                        && permission_profile_is_managed_restricted
-                        && !self.chat_widget.world_writable_warning_hidden();
-                    if should_check {
-                        let cwd = self.config.cwd.clone();
-                        let workspace_roots = self.config.effective_workspace_roots();
-                        let env_map: std::collections::HashMap<String, String> =
-                            std::env::vars().collect();
-                        let tx = self.app_event_tx.clone();
-                        let logs_base_dir = self.config.codex_home.clone();
-                        let permission_profile =
-                            self.config.permissions.effective_permission_profile();
-                        Self::spawn_world_writable_scan(
-                            cwd,
-                            workspace_roots,
-                            env_map,
-                            logs_base_dir,
-                            permission_profile,
-                            self.session_telemetry.clone(),
-                            tx,
-                            /*startup_scan*/ false,
-                        );
-                    }
-                }
             }
             AppEvent::SelectPermissionProfile(selection) => {
                 self.select_permission_profile(app_server, selection).await;
@@ -2621,13 +2535,6 @@ impl App {
             AppEvent::ResetMemories => {
                 self.reset_memories_with_app_server(app_server).await;
             }
-            AppEvent::SkipNextWorldWritableScan => {
-                self.windows_sandbox.skip_world_writable_scan_once = true;
-            }
-            AppEvent::UpdateWorldWritableWarningAcknowledged(ack) => {
-                self.chat_widget
-                    .set_world_writable_warning_acknowledged(ack);
-            }
             AppEvent::UpdateRateLimitSwitchPromptHidden(hidden) => {
                 self.chat_widget.set_rate_limit_switch_prompt_hidden(hidden);
             }
@@ -2635,22 +2542,6 @@ impl App {
                 self.on_update_plan_mode_reasoning_effort(effort);
                 self.sync_active_thread_plan_mode_reasoning_setting(app_server)
                     .await;
-            }
-            AppEvent::PersistWorldWritableWarningAcknowledged => {
-                self.local_settings.notices.hide_world_writable_warning = Some(true);
-                if let Err(err) = ConfigEditsBuilder::for_config_path(self.local_settings.user_config_path.as_path())
-                    .set_hide_world_writable_warning(/*acknowledged*/ true)
-                    .apply()
-                    .await
-                {
-                    tracing::error!(
-                        error = %err,
-                        "failed to persist world-writable warning acknowledgement"
-                    );
-                    self.chat_widget.add_error_message(format!(
-                        "Failed to save Agent mode warning preference: {err}"
-                    ));
-                }
             }
             AppEvent::PersistRateLimitSwitchPromptHidden => {
                 self.local_settings.notices.hide_rate_limit_model_nudge = Some(true);

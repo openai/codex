@@ -358,20 +358,6 @@ impl ChatWidget {
                         });
                     })];
                 }
-                if let Some((sample_paths, extra_count, failed_scan)) =
-                    self.world_writable_warning_details()
-                {
-                    let preset = preset.clone();
-                    return vec![Box::new(move |tx| {
-                        tx.send(AppEvent::OpenWorldWritableWarningConfirmation {
-                            preset: Some(preset.clone()),
-                            profile_selection: profile_selection.clone(),
-                            sample_paths: sample_paths.clone(),
-                            extra_count,
-                            failed_scan,
-                        });
-                    })];
-                }
             }
         }
         apply_actions()

@@ -140,18 +140,6 @@ impl ChatWidget {
         self.refresh_status_surfaces();
     }
 
-    pub(crate) fn set_world_writable_warning_acknowledged(&mut self, acknowledged: bool) {
-        self.local_settings.notices.hide_world_writable_warning = Some(acknowledged);
-    }
-
-    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-    pub(crate) fn world_writable_warning_hidden(&self) -> bool {
-        self.local_settings
-            .notices
-            .hide_world_writable_warning
-            .unwrap_or(false)
-    }
-
     /// Override the reasoning effort used when Plan mode is active.
     ///
     /// When the active mask is already Plan, the override is applied immediately

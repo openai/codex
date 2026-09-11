@@ -14,7 +14,6 @@ async fn permission_shortcuts_cycle_builtin_modes() {
     chat.chat_keymap.previous_permission_mode = vec![crate::key_hint::plain(KeyCode::F(7))];
     #[cfg(target_os = "windows")]
     {
-        chat.local_settings.notices.hide_world_writable_warning = Some(true);
         chat.set_windows_sandbox_mode(Some(WindowsSandboxModeToml::Unelevated));
     }
     for (current, reviewer, key, expected, next_reviewer) in [

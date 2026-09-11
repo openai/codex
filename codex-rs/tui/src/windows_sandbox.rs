@@ -8,8 +8,6 @@
 use crate::legacy_core::config::Config;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_features::Feature;
-#[cfg(target_os = "windows")]
-use codex_otel::SessionTelemetry;
 use codex_protocol::config_types::WindowsSandboxLevel;
 #[cfg(target_os = "windows")]
 use codex_protocol::models::PermissionProfile;
@@ -18,22 +16,6 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 #[cfg(target_os = "windows")]
 use std::collections::HashMap;
 use std::path::Path;
-
-#[cfg(target_os = "windows")]
-pub(crate) fn record_world_writable_scan_result(
-    session_telemetry: &SessionTelemetry,
-    result: &anyhow::Result<usize>,
-) {
-    let (flagged_count, result) = match result {
-        Ok(flagged_count) => (*flagged_count as i64, "success"),
-        Err(_) => (0, "error"),
-    };
-    session_telemetry.histogram(
-        "codex.windows_sandbox.world_writable_scan_flagged_directories",
-        flagged_count,
-        &[("result", result)],
-    );
-}
 
 pub(crate) fn level_from_config(config: &Config) -> WindowsSandboxLevel {
     match config.permissions.windows_sandbox_mode {
