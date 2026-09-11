@@ -1276,9 +1276,13 @@ fn guardian_reviewer_uses_dedicated_endpoint_only_with_codex_backend_auth() {
     );
 }
 
+#[test_case::test_case(/*cache_key*/ None; "own_cache")]
+#[test_case::test_case(Some("parent-session"); "inherited_cache")]
 #[tokio::test]
-async fn websocket_handshake_includes_attestation_for_chatgpt_codex_responses() {
-    let (model_client, attestation_calls) =
+async fn websocket_handshake_includes_attestation_for_chatgpt_codex_responses(
+    cache_key: Option<&str>,
+) {
+    let (mut model_client, attestation_calls) =
         model_client_with_counting_attestation(/*include_attestation*/ true);
     let responses_metadata = test_responses_metadata_for_client(
         &model_client,
@@ -1288,6 +1292,7 @@ async fn websocket_handshake_includes_attestation_for_chatgpt_codex_responses() 
         TestCodexResponsesRequestKind::WebsocketConnection,
     );
 
+    model_client.prompt_cache_key_override = cache_key.map(str::to_string);
     let headers = model_client
         .build_websocket_headers(&responses_metadata)
         .await;
@@ -1299,6 +1304,11 @@ async fn websocket_handshake_includes_attestation_for_chatgpt_codex_responses() 
         Some("v1.header-1"),
     );
     assert_eq!(attestation_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        headers["session-id"],
+        cache_key.unwrap_or(&responses_metadata.session_id)
+    );
+    assert_eq!(headers["thread-id"], responses_metadata.thread_id);
 }
 
 #[tokio::test]

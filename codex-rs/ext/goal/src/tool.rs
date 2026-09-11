@@ -29,6 +29,7 @@ use crate::spec::create_update_goal_tool;
 
 #[derive(Clone)]
 pub(crate) struct GoalToolExecutor {
+    pub(crate) execution_allowed: bool,
     kind: GoalToolKind,
     thread_id: ThreadId,
     state_db: Arc<codex_state::StateRuntime>,
@@ -84,6 +85,7 @@ impl GoalToolExecutor {
     ) -> Self {
         Self {
             kind: GoalToolKind::Get,
+            execution_allowed: true,
             thread_id,
             state_db,
             accounting_state,
@@ -105,6 +107,7 @@ impl GoalToolExecutor {
     ) -> Self {
         Self {
             kind: GoalToolKind::Create,
+            execution_allowed: true,
             thread_id,
             state_db,
             accounting_state,
@@ -125,6 +128,7 @@ impl GoalToolExecutor {
     ) -> Self {
         Self {
             kind: GoalToolKind::Update,
+            execution_allowed: true,
             thread_id,
             state_db,
             accounting_state,
@@ -161,6 +165,11 @@ impl<'call> ToolExecutor<ToolCall<'call>> for GoalToolExecutor {
         'call: 'a,
     {
         Box::pin(async move {
+            if !self.execution_allowed {
+                return Err(FunctionCallError::RespondToModel(
+                    "Goal tools require a persistent thread.".to_string(),
+                ));
+            }
             match self.kind {
                 GoalToolKind::Get => self.handle_get(invocation).await,
                 GoalToolKind::Create => self.handle_create(invocation).await,

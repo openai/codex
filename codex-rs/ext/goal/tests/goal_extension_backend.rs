@@ -148,18 +148,39 @@ async fn installed_goal_tools_apply_maximum_token_budget() -> anyhow::Result<()>
 }
 
 #[tokio::test]
-async fn goal_tools_hidden_for_ephemeral_threads() -> anyhow::Result<()> {
+async fn ephemeral_goal_tools_preserve_specs_but_reject_execution() -> anyhow::Result<()> {
     let runtime = test_runtime().await?;
     let thread_id = test_thread_id()?;
     let tools = installed_tools_with_start(
-        runtime,
+        runtime.clone(),
         thread_id,
         SessionSource::Cli,
         /*persistent_thread_state_available*/ false,
     )
     .await;
 
-    assert_eq!(Vec::<String>::new(), tool_names(&tools));
+    let parent_tools = installed_tools(runtime, ThreadId::new()).await;
+    assert_eq!(
+        tools.iter().map(|tool| tool.spec()).collect::<Vec<_>>(),
+        parent_tools
+            .iter()
+            .map(|tool| tool.spec())
+            .collect::<Vec<_>>(),
+    );
+    for tool in tools {
+        let Err(error) = tool
+            .handle(tool_call(&tool.tool_name().name, "ephemeral", json!({})))
+            .await
+        else {
+            panic!("ephemeral goal execution should fail");
+        };
+        assert_eq!(
+            error,
+            FunctionCallError::RespondToModel(
+                "Goal tools require a persistent thread.".to_string()
+            )
+        );
+    }
     Ok(())
 }
 

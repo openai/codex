@@ -799,6 +799,22 @@ impl Session {
                 ));
             }
         };
+        // Ephemeral forks reuse cache routing, without sharing storage or lifecycle identity.
+        let fork_cache_key = match &initial_history {
+            InitialHistory::Forked(items)
+                if config.ephemeral
+                    && !session_configuration.session_source.is_non_root_agent() =>
+            {
+                items.iter().find_map(|item| match item {
+                    RolloutItem::SessionMeta(meta) => Some(meta.meta.session_id.to_string()),
+                    _ => None,
+                })
+            }
+            InitialHistory::New
+            | InitialHistory::Cleared
+            | InitialHistory::Resumed(_)
+            | InitialHistory::Forked(_) => None,
+        };
         let resumed_session_id = match &initial_history {
             InitialHistory::Resumed(resumed) => {
                 resumed.history.iter().find_map(|item| match item {
@@ -1580,7 +1596,8 @@ impl Session {
                     crate::guardian::prompt_cache_key_override_for_review_session(
                         &session_configuration.session_source,
                         session_configuration.parent_thread_id,
-                    ),
+                    )
+                    .or(fork_cache_key),
                     tx_event.clone(),
                 ),
                 executed_tool_calls: executed_tool_calls.clone(),

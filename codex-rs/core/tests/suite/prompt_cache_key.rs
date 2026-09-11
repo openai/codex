@@ -158,3 +158,63 @@ async fn api_key_subagent_uses_session_id_as_prompt_cache_key() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn ephemeral_fork_shares_cache_routing_but_keeps_session_identity() -> Result<()> {
+    use codex_core::ForkSnapshot;
+    use codex_core::StartThreadOptions;
+    use core_test_support::responses::mount_sse_sequence;
+
+    let server = start_mock_server().await;
+    let requests = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![ev_completed("parent")]),
+            sse(vec![ev_completed("fork")]),
+        ],
+    )
+    .await;
+    let mut test = test_codex().build_with_auto_env(&server).await?;
+    test.submit_text_turn("parent").await?;
+    test.codex.flush_rollout().await?;
+    let parent_session = test.session_configured.session_id.to_string();
+    let mut config = test.config.clone();
+    config.ephemeral = true;
+    let fork = test
+        .thread_manager
+        .fork_thread(
+            ForkSnapshot::TruncateBeforeNthUserMessage(usize::MAX),
+            StartThreadOptions {
+                environments: Some(test.codex.environment_selections().await),
+                ..StartThreadOptions::new(config)
+            },
+            test.codex.rollout_path().expect("parent rollout"),
+        )
+        .await?;
+    let fork_session = fork.session_configured.session_id.to_string();
+    assert_ne!(fork_session, parent_session);
+    test.codex = fork.thread;
+    test.submit_text_turn("side").await?;
+    let requests = requests.requests();
+    let body = requests[1].body_json();
+    let metadata: Value = serde_json::from_str(
+        body["client_metadata"]["x-codex-turn-metadata"]
+            .as_str()
+            .expect("turn metadata"),
+    )?;
+    assert_eq!(
+        json!({
+            "cache": body["prompt_cache_key"],
+            "route": requests[1].header("session-id"),
+            "session": metadata["session_id"],
+            "thread": requests[1].header("thread-id"),
+            "tools": body["tools"],
+        }),
+        json!({
+            "cache": parent_session, "route": parent_session,
+            "session": fork_session, "thread": fork.thread_id.to_string(),
+            "tools": requests[0].body_json()["tools"],
+        }),
+    );
+    Ok(())
+}
