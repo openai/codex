@@ -61,9 +61,8 @@ jobs:
     needs: tag-check
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
-    # Release builds can take a long time, so leave some headroom to avoid
-    # having to restart the full workflow due to a timeout.
-    timeout-minutes: 90
+    # Linux releases also build the native voice runtime in this job.
+    timeout-minutes: 120
     permissions:
       contents: read
       id-token: write
@@ -292,6 +291,37 @@ jobs:
           path: codex-rs/symbols-dist/${{ matrix.artifact_name }}/*
           if-no-files-found: error
 
+      - name: Set up Bazel for Linux voice
+        if: ${{ matrix.bundle == 'primary' && contains(matrix.target, 'linux') }}
+        uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
+        with:
+          bazelisk-version: 1.28.1
+
+      - name: Build Linux voice runtime
+        if: ${{ matrix.bundle == 'primary' && contains(matrix.target, 'linux') }}
+        shell: bash
+        env:
+          APP_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          voice_target="${APP_TARGET%-musl}-gnu"
+          case "$voice_target" in
+            aarch64-unknown-linux-gnu) prefix=linux_aarch64 ;;
+            x86_64-unknown-linux-gnu) prefix=linux_x86_64 ;;
+            *) exit 1 ;;
+          esac
+          bazel build -c opt //codex-rs/voice-host:codex-voice-host //third_party/voice:native_runtime
+          source="bazel-bin/third_party/voice/native_runtime_${prefix}"
+          output="${RUNNER_TEMP}/signed-voice/${APP_TARGET}"
+          mkdir -p "$output"
+          python3 third_party/voice/release_runtime.py stage \
+            --target "$voice_target" --source "$source" --output "$output/runtime"
+          cp bazel-bin/codex-rs/voice-host/codex-voice-host "$output/codex-voice-host"
+          chmod 0755 "$output/codex-voice-host"
+          python3 third_party/voice/release_runtime.py seal \
+            --target "$voice_target" --output "$output/runtime"
+
       - if: ${{ runner.os == 'macOS' }}
         name: Stage unsigned macOS artifacts
         shell: bash
@@ -376,12 +406,26 @@ jobs:
           BUNDLE: ${{ matrix.bundle }}
         run: |
           set -euo pipefail
+          voice_args=()
+          if [[ "$BUNDLE" == "primary" && "$TARGET" == *-unknown-linux-musl ]]; then
+            voice_args+=(--voice-release-dir "${RUNNER_TEMP}/signed-voice/${TARGET}")
+            voice_args+=(--release-version "${GITHUB_REF_NAME#rust-v}")
+          fi
           bash "${GITHUB_WORKSPACE}/.github/scripts/build-codex-package-archive.sh" \
             --target "$TARGET" \
             --bundle "$BUNDLE" \
             --entrypoint-dir "target/${TARGET}/release" \
             --archive-dir "dist/${TARGET}" \
-            --zsh-manifest "${RUNNER_TEMP}/codex-zsh"
+            --zsh-manifest "${RUNNER_TEMP}/codex-zsh" \
+            "${voice_args[@]}"
+
+      - name: Cosign Linux voice package archives
+        if: ${{ matrix.bundle == 'primary' && contains(matrix.target, 'linux') }}
+        uses: ./.github/actions/linux-code-sign
+        with:
+          target: ${{ matrix.target }}
+          artifacts-dir: ${{ github.workspace }}/codex-rs/dist/${{ matrix.target }}
+          binaries: codex-package-${{ matrix.target }}.tar.gz codex-package-${{ matrix.target }}.tar.zst
 
       - name: Build Python runtime wheel
         if: ${{ matrix.bundle == 'primary' && runner.os != 'macOS' }}
@@ -413,13 +457,31 @@ jobs:
           # the Homebrew Python as externally managed under PEP 668.
           "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m pip install build
 
+          # Keep the existing manylinux_2_17 wheel compatible with older glibc.
+          # GNU voice libraries belong in the signed release package archives,
+          # but their minimum glibc version is not covered by this wheel tag.
+          wheel_archives="${RUNNER_TEMP}/voice-free-wheel/${{ matrix.target }}"
+          bash "${GITHUB_WORKSPACE}/.github/scripts/build-codex-package-archive.sh" \
+            --target "${{ matrix.target }}" \
+            --bundle primary \
+            --entrypoint-dir "target/${{ matrix.target }}/release" \
+            --archive-dir "$wheel_archives" \
+            --zsh-manifest "${RUNNER_TEMP}/codex-zsh"
+          wheel_archive="${wheel_archives}/codex-package-${{ matrix.target }}.tar.gz"
+          python3 - "$wheel_archive" <<'PY'
+          import sys
+          import tarfile
+          with tarfile.open(sys.argv[1]) as archive:
+              assert not any("codex-resources/voice/" in item.name for item in archive)
+          PY
+
           stage_dir="${RUNNER_TEMP}/openai-codex-cli-bin-${{ matrix.target }}"
           wheel_dir="${GITHUB_WORKSPACE}/python-runtime-dist/${{ matrix.target }}"
           stage_runtime_args=(
             "${GITHUB_WORKSPACE}/sdk/python/scripts/update_sdk_artifacts.py"
             stage-runtime
             "$stage_dir"
-            "dist/${{ matrix.target }}/codex-package-${{ matrix.target }}.tar.gz"
+            "$wheel_archive"
             --codex-version "${GITHUB_REF_NAME}"
             --platform-tag "$platform_tag"
           )
@@ -915,7 +977,7 @@ jobs:
           set -euo pipefail
           voice_args=()
           if [[ "$BUNDLE" == "primary" ]]; then
-            voice_args+=(--voice-signed-dir "${RUNNER_TEMP}/signed-voice/${TARGET}")
+            voice_args+=(--voice-release-dir "${RUNNER_TEMP}/signed-voice/${TARGET}")
             voice_args+=(--release-version "${GITHUB_REF_NAME#rust-v}")
           fi
           bash "${GITHUB_WORKSPACE}/.github/scripts/build-codex-package-archive.sh" \

@@ -133,6 +133,30 @@ alias(
     visibility = ["//visibility:public"],
 )
 
+# Explicitly select the installed pkgconf and pinned CMake in Windows voice CI.
+native_tool_toolchain(
+    name = "windows_pkg_config_tool",
+    env = {"PKG_CONFIG": "$(execpath :pkg_config)"},
+    path = "$(execpath :pkg_config)",
+    target = ":pkg_config",
+)
+
+toolchain(
+    name = "windows_pkg_config_toolchain",
+    exec_compatible_with = ["@platforms//os:windows"],
+    toolchain = ":windows_pkg_config_tool",
+    toolchain_type = "@rules_foreign_cc//toolchains:pkgconfig_toolchain",
+    visibility = ["//visibility:public"],
+)
+
+toolchain(
+    name = "windows_cmake_toolchain",
+    exec_compatible_with = ["@platforms//os:windows"],
+    toolchain = "@cmake-3.31.8-windows-x86_64//:cmake_tool",
+    toolchain_type = "@rules_foreign_cc//toolchains:cmake_toolchain",
+    visibility = ["//visibility:public"],
+)
+
 filegroup(
     name = "archives",
     srcs = [

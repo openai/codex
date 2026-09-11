@@ -142,6 +142,11 @@ use_repo(osx, "macos_sdk")
 # Needed to disable xcode...
 bazel_dep(name = "apple_support", version = "2.1.0")
 bazel_dep(name = "rules_cc", version = "0.2.18")
+
+# Windows voice jobs explicitly select the installed MSVC C toolchains.
+cc_configure = use_extension("@rules_cc//cc:extensions.bzl", "cc_configure_extension")
+use_repo(cc_configure, "local_config_cc")
+
 single_version_override(
     module_name = "rules_cc",
     patch_strip = 1,

@@ -25,12 +25,28 @@ const RUNTIME_INITIALIZATION_DEADLINE: Duration = Duration::from_secs(/*secs*/ 3
 pub enum ConnectionError {
     NegotiationTimedOut,
     Failed,
+    HelperStartup,
+    RuntimeInitialization,
+    Transport,
+    AudioDevices,
+    AudioControls,
+    AudioSession,
+    Shutdown,
 }
 impl std::fmt::Display for ConnectionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::NegotiationTimedOut => "voice negotiation timed out",
             Self::Failed => "voice connection failed",
+            Self::HelperStartup => "voice helper could not start",
+            Self::RuntimeInitialization => "voice audio runtime could not initialize",
+            Self::Transport => "voice transport could not connect",
+            Self::AudioDevices => {
+                "voice audio devices could not open; check microphone and speaker setup"
+            }
+            Self::AudioControls => "voice audio controls failed",
+            Self::AudioSession => "voice audio session stopped unexpectedly",
+            Self::Shutdown => "voice helper could not shut down cleanly",
         })
     }
 }
@@ -149,6 +165,16 @@ impl VoiceHost {
             "voice helper must be inside the physical package"
         );
         let environment = child_environment(std::env::vars_os());
+        #[cfg(target_os = "linux")]
+        let environment = {
+            let mut environment = environment;
+            if let Some(directory) =
+                crate::linux_alsa::plugin_directory(crate::linux_alsa::PLUGIN_DIRECTORIES)
+            {
+                environment.insert("ALSA_PLUGIN_DIR".to_owned(), directory.to_owned());
+            }
+            environment
+        };
         let SpawnedProcess {
             session,
             stdout_rx,

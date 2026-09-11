@@ -5,13 +5,56 @@ import errno
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
+
+import bazel_windows
 
 from bazel_copy import copy_payloads
 from bazel_windows import selected_inputs
 
 
 class WindowsInputsTests(unittest.TestCase):
+    def test_adapter_preserves_host_architecture_without_developer_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "action.json"
+            config.write_text("{}")
+            for architecture in ("AMD64", "ARM64"):
+                environment = {"PROCESSOR_ARCHITECTURE": architecture, "PATH": "unsafe"}
+                with (
+                    self.subTest(architecture=architecture),
+                    patch.object(
+                        bazel_windows, "os", SimpleNamespace(environ=environment)
+                    ),
+                    patch.object(
+                        bazel_windows.sys, "argv", ["driver", "unknown", str(config)]
+                    ),
+                    patch.object(
+                        bazel_windows,
+                        "selected_inputs",
+                        return_value={"target": "unused"},
+                    ),
+                    patch.object(
+                        bazel_windows,
+                        "build_environment",
+                        return_value=({"PATH": "declared"}, {}),
+                    ),
+                ):
+                    with self.assertRaisesRegex(
+                        ValueError, "unknown Windows native action"
+                    ):
+                        bazel_windows.main()
+                    self.assertEqual(
+                        environment,
+                        {
+                            "PROCESSOR_ARCHITECTURE": architecture,
+                            "PATH": "declared",
+                            "HOME": environment["HOME"],
+                            "USERPROFILE": environment["HOME"],
+                        },
+                    )
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)

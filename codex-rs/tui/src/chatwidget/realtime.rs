@@ -1599,6 +1599,7 @@ impl ChatWidget {
         {
             self.record_realtime_failure();
         }
+        let failed = self.realtime_conversation.failure_recorded;
         self.reset_realtime_conversation();
         if let Some(thread_id) = retry_thread_id {
             // The old backend is closed. A late peer result belongs to its attempt ID.
@@ -1615,6 +1616,7 @@ impl ChatWidget {
         }
         if let Some(reason) = reason
             && reason != "error"
+            && !(failed && reason == "requested")
         {
             self.add_info_message(
                 format!("Voice conversation ended: {reason}"),

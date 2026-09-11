@@ -153,6 +153,9 @@ fn helper() -> Result<()> {
                 if root.join("hold-initialization").exists() {
                     wait_for(|| root.join("release").exists())?;
                 }
+                if root.join("fail-initialization").exists() {
+                    anyhow::bail!("synthetic private runtime diagnostic");
+                }
                 stage = Stage::Offer;
                 Message::RuntimeReady {}
             }
@@ -176,6 +179,9 @@ fn helper() -> Result<()> {
                 Message::TransportReady {}
             }
             Message::OpenDevices {} if stage == Stage::Devices => {
+                if root.join("fail-devices").exists() {
+                    anyhow::bail!("synthetic private device diagnostic");
+                }
                 stage = Stage::Controls;
                 Message::DevicesOpened {}
             }
