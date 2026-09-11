@@ -266,7 +266,7 @@ async fn voice_meters_do_not_sample_again_on_early_redraws() {
             (119, 255)
         ])
     );
-    // Each channel settles on its first quiet sample, without clearing the other one.
+    // Quiet samples scroll into each channel without erasing earlier speech.
     for (elapsed_ms, peaks) in [(700, (0, 8192)), (800, (8192, 0))] {
         chat.refresh_realtime_audio_meters(
             now + std::time::Duration::from_millis(elapsed_ms),
@@ -274,6 +274,20 @@ async fn voice_meters_do_not_sample_again_on_early_redraws() {
         );
         meters.push(render_meter(&chat, /*width*/ 80));
     }
+    for frame in 0..super::super::MAX_REALTIME_AUDIO_METER_FRAMES {
+        chat.refresh_realtime_audio_meters(
+            now + std::time::Duration::from_millis(900 + frame as u64 * 100),
+            || (0, 0),
+        );
+        if frame == 0 {
+            meters.push(render_meter(&chat, /*width*/ 80));
+        }
+    }
+    assert_eq!(
+        chat.realtime_conversation.audio_meter_history,
+        std::collections::VecDeque::from([(0, 0); super::super::MAX_REALTIME_AUDIO_METER_FRAMES])
+    );
+    meters.push(render_meter(&chat, /*width*/ 80));
     insta::assert_snapshot!(meters.join("\n"));
 }
 
@@ -287,7 +301,7 @@ async fn voice_meters_preserve_silence_and_restart_sampling_after_reset() {
     chat.refresh_realtime_audio_meters(now + std::time::Duration::from_secs(1), || (0, 0));
     assert_eq!(
         chat.realtime_conversation.audio_meter_history,
-        std::collections::VecDeque::from([(0, 0), (0, 0)])
+        std::collections::VecDeque::from([(255, 119), (0, 0)])
     );
     chat.reset_realtime_conversation();
     activate_voice(&mut chat);

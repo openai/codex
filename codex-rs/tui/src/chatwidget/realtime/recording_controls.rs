@@ -222,15 +222,6 @@ impl ChatWidget {
             .audio_meter_history
             .iter()
             .any(|(microphone, speaker)| *microphone > 0 || *speaker > 0);
-        // Release a quiet channel instead of waiting for old peaks to scroll out.
-        for (microphone, speaker) in &mut self.realtime_conversation.audio_meter_history {
-            if microphone_intensity == 0 {
-                *microphone = 0;
-            }
-            if speaker_intensity == 0 {
-                *speaker = 0;
-            }
-        }
         if self.realtime_conversation.audio_meter_history.len() >= MAX_REALTIME_AUDIO_METER_FRAMES {
             self.realtime_conversation.audio_meter_history.pop_front();
         }
