@@ -122,6 +122,7 @@ async fn completed_user_transcript_keeps_the_old_assistant_turn_suppressed() {
 async fn final_only_assistant_transcript_cannot_release_an_interruption() {
     let (mut chat, _sender, _events, _ops) = make_chatwidget_manual_with_sender().await;
     activate_voice(&mut chat);
+    chat.realtime_conversation.speaker_level = 1;
     chat.on_realtime_transcript_delta("user".into(), "Stop".into());
     let generation = chat.realtime_conversation.input_generation;
     chat.on_realtime_transcript_done("user".into(), "Stop".into());
@@ -153,7 +154,7 @@ async fn transcript_deltas_track_the_current_speaker() {
     chat.on_realtime_transcript_done("assistant".to_string(), "Old".to_string());
     assert_eq!(
         chat.realtime_conversation.speaker_suppression_generation,
-        Some(chat.realtime_conversation.input_generation)
+        None
     );
 
     chat.on_realtime_transcript_done("user".to_string(), "Hello there".to_string());
@@ -163,9 +164,9 @@ async fn transcript_deltas_track_the_current_speaker() {
 
     chat.on_realtime_transcript_delta("user".to_string(), "Again".to_string());
     chat.on_realtime_transcript_done("user".to_string(), "Again".to_string());
-    assert!(owner(&chat).is_some());
+    assert!(owner(&chat).is_none());
     chat.on_realtime_transcript_delta("assistant".to_string(), "".to_string());
-    assert!(owner(&chat).is_some());
+    assert!(owner(&chat).is_none());
     chat.on_realtime_transcript_delta("assistant".to_string(), "Hi".to_string());
     assert!(owner(&chat).is_none());
 
@@ -771,4 +772,58 @@ async fn spoken_user_transcript_preserves_red_chevron_and_canonical_history() {
             .iter()
             .any(|line| line.to_string() == "› hello world")
     );
+}
+
+#[tokio::test]
+async fn quiet_voice_turns_accept_audio_before_assistant_captions() {
+    let (mut chat, _sender, _events, _ops) = make_chatwidget_manual_with_sender().await;
+    activate_voice(&mut chat);
+    for user_delta in [Some("First question"), None, Some("Third question")] {
+        if let Some(delta) = user_delta {
+            chat.on_realtime_transcript_delta("user".into(), delta.into());
+            assert_eq!(
+                chat.realtime_conversation.speaker_suppression_generation,
+                None
+            );
+        }
+        chat.on_realtime_transcript_done("user".into(), "Question".into());
+        // Audio can arrive before captions: keep the helper accepting it now.
+        assert_eq!(
+            chat.realtime_conversation.speaker_suppression_generation,
+            None
+        );
+        chat.on_realtime_transcript_delta("assistant".into(), "Answer".into());
+        chat.on_realtime_transcript_done("assistant".into(), "Answer".into());
+    }
+}
+
+#[tokio::test]
+async fn new_voice_turn_interrupts_uncaptioned_queued_speech() {
+    use super::super::PendingRealtimeSpeech;
+    use super::super::PendingSpeechState;
+
+    for (state, captioned, expected) in [
+        (PendingSpeechState::Queued(1), false, Some(1)),
+        (PendingSpeechState::Accepted, false, Some(1)),
+        (PendingSpeechState::AwaitingTurn, false, None),
+        (PendingSpeechState::Accepted, true, None),
+    ] {
+        let (mut chat, _sender, _events, _ops) = make_chatwidget_manual_with_sender().await;
+        let thread_id = activate_voice(&mut chat);
+        chat.realtime_conversation
+            .pending_speech
+            .push_back(PendingRealtimeSpeech {
+                state,
+                captioned,
+                input_generation: 0,
+                thread_id,
+                turn_id: "old-turn".into(),
+                item: agent_item("answer", "Old answer", Some(MessagePhase::FinalAnswer)),
+            });
+        chat.on_realtime_transcript_delta("user".into(), "New question".into());
+        assert_eq!(
+            chat.realtime_conversation.speaker_suppression_generation,
+            expected
+        );
+    }
 }

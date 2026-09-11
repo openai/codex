@@ -1201,7 +1201,7 @@ impl ChatWidget {
                 self.realtime_conversation.interruption_acknowledged_until =
                     Some(Instant::now() + INTERRUPTION_ACKNOWLEDGMENT);
             }
-            self.suppress_realtime_speaker();
+            self.suppress_active_realtime_speaker();
         }
         if active
             && role == "assistant"
@@ -1454,7 +1454,7 @@ impl ChatWidget {
                         .input_generation
                         .wrapping_add(/*rhs*/ 1);
                     self.realtime_conversation.latest_input_was_voice = true;
-                    self.suppress_realtime_speaker();
+                    self.suppress_active_realtime_speaker();
                 }
             }
         }

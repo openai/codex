@@ -41,6 +41,7 @@ async fn voice_live_transcript_renders_beside_the_streamed_cell() {
     let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.local_settings.tui.animations = false;
     activate_voice_for_thread(&mut chat, ThreadId::new());
+    chat.update_realtime_footer();
     chat.transcript.active_cell = Some(Box::new(history_cell::StreamingAgentTailCell::new(
         vec![Line::from("Agent answer arriving").into()],
         /*is_first_line*/ true,

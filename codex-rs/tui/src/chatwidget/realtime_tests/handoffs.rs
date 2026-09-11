@@ -416,7 +416,7 @@ async fn newer_voice_delegation_on_the_same_turn_speaks_only_its_own_answer() {
             if text.as_str() == "answer to the newer question"
     ));
     let owner = chat.realtime_conversation.speaker_suppression_generation;
-    assert_eq!(owner, Some(chat.realtime_conversation.input_generation));
+    assert_eq!(owner, None);
     chat.on_realtime_transcript_delta("assistant".to_string(), "answer".to_string());
     let owner = chat.realtime_conversation.speaker_suppression_generation;
     assert!(owner.is_none());
