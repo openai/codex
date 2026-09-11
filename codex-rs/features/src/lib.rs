@@ -1254,12 +1254,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Worktrees,
         key: "worktrees",
-        stage: Stage::Experimental {
-            name: "Worktrees",
-            menu_description: "Create isolated Git worktrees and group sessions by repository.",
-            announcement: "NEW: Worktrees can now be enabled from /experimental. Restart Codex after enabling it.",
-        },
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::RespectSystemProxy,

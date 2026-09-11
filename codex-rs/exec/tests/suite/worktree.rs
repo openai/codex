@@ -414,8 +414,16 @@ fn worktree_rejects_disabled_features_and_ignored_config_before_allocation() -> 
             vec!["--ignore-user-config", "prompt"],
             "--worktree cannot be combined with --ignore-user-config",
         ),
-        ("", vec!["prompt"], "--enable worktrees"),
-        ("", vec!["fork", "missing"], "--enable worktrees"),
+        (
+            "features.worktrees = false",
+            vec!["prompt"],
+            "--enable worktrees",
+        ),
+        (
+            "features.worktrees = false",
+            vec!["fork", "missing"],
+            "--enable worktrees",
+        ),
         (
             "features.worktrees = true",
             vec!["-c", "features.worktrees=false", "prompt"],

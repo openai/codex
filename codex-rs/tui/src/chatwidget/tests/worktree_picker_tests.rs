@@ -6,6 +6,7 @@ use pretty_assertions::assert_eq;
 #[tokio::test]
 async fn slash_new_and_fork_offer_checkout_choices_inside_local_git_repository() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Worktrees, /*enabled*/ false);
     let checkout = tempdir().expect("temporary checkout");
     std::fs::create_dir(checkout.path().join(".git")).expect("git directory");
     std::fs::write(checkout.path().join(".git/HEAD"), "ref: refs/heads/main\n").expect("git HEAD");

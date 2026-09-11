@@ -11,8 +11,6 @@ expression: popup
                            interactive website debugging and other inline
                            JavaScript execution capabilities.
   [x] Shell tool           Allow the model to run shell commands.
-  [ ] Worktrees            Create isolated Git worktrees and group sessions by
-                           repository.
   [ ] Voice conversations  Talk with Codex using /voice.
 
   Press space to select or enter to save

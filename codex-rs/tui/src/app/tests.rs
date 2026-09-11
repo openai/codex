@@ -69,6 +69,8 @@ mod transcript_composer;
 mod turn_submission;
 #[path = "tests/user_verification_routes_tests.rs"]
 mod user_verification_routes;
+#[path = "tests/worktree_background_terminals_tests.rs"]
+mod worktree_background_terminals_tests;
 
 use super::*;
 use crate::app_backtrack::BacktrackSelection;

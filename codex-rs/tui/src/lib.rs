@@ -3265,6 +3265,9 @@ requires_openai_auth = {requires_openai_auth}
             })
             .build()
             .await?;
+        config
+            .features
+            .set_enabled(codex_features::Feature::Worktrees, /*enabled*/ false)?;
         let model_provider = config.model_provider_id.as_str();
         let project_thread_id = write_session_rollout(
             temp_dir.path(),

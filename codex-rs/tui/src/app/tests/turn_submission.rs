@@ -14,6 +14,7 @@ use pretty_assertions::assert_eq;
 #[tokio::test]
 async fn worktree_creation_event_requires_feature() -> Result<()> {
     let (mut app, mut events, _op_rx) = make_test_app_with_channels().await;
+    app.config.features.disable(Feature::Worktrees)?;
     let mut tui = crate::tui::test_support::make_test_tui()?;
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
     while events.try_recv().is_ok() {}
@@ -35,7 +36,7 @@ async fn worktree_creation_event_requires_feature() -> Result<()> {
             _ => None,
         })
         .expect("disabled feature message");
-    insta::assert_snapshot!(message, @"■ Enable worktrees in /experimental to create a worktree.");
+    insta::assert_snapshot!(message, @"■ Enable worktrees in your Codex configuration to create a worktree.");
     assert!(!app.config.codex_home.join("worktrees").exists());
     app_server.shutdown().await?;
     Ok(())
