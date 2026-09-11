@@ -57,3 +57,9 @@ pub use crate::transport::ByteStream;
 pub use crate::transport::HttpTransport;
 pub use crate::transport::ReqwestTransport;
 pub use crate::transport::StreamResponse;
+
+#[cfg(windows)]
+mod windows_tls;
+
+#[cfg(windows)]
+pub use crate::windows_tls::build_windows_platform_tls_config;

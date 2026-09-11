@@ -818,3 +818,7 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+#[path = "custom_ca_tls_tests.rs"]
+mod tls_tests;
