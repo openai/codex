@@ -119,6 +119,18 @@
           "path": "codex-windows-sandbox-setup.exe"
         }
       }
+    },
+    "codex-windows-sandbox-service": {
+      "platforms": {
+        "windows-x86_64": {
+          "regex": "^codex-windows-sandbox-service-x86_64-pc-windows-msvc\\.exe\\.zst$",
+          "path": "codex-windows-sandbox-service.exe"
+        },
+        "windows-aarch64": {
+          "regex": "^codex-windows-sandbox-service-aarch64-pc-windows-msvc\\.exe\\.zst$",
+          "path": "codex-windows-sandbox-service.exe"
+        }
+      }
     }
   }
 }
