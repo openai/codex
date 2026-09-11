@@ -2498,6 +2498,12 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
         .start_or_steer_turn(read_only_user_turn(&fixture, "call the rmcp image tool"))
         .await?;
 
+    let turn_id = core_test_support::wait_for_event_match(&fixture.codex, |event| match event {
+        EventMsg::TurnStarted(started) => Some(started.turn_id.clone()),
+        _ => None,
+    })
+    .await;
+
     // Wait for tool begin/end and final completion.
     let begin_event = wait_for_event(&fixture.codex, |ev| {
         matches!(ev, EventMsg::McpToolCallBegin(_))
@@ -2509,6 +2515,7 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
     assert_eq!(
         begin,
         McpToolCallBeginEvent {
+            turn_id: turn_id.clone(),
             call_id: call_id.to_string(),
             invocation: McpInvocation {
                 server: server_name.to_string(),
@@ -2532,6 +2539,7 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
     let EventMsg::McpToolCallEnd(end) = end_event else {
         unreachable!("end");
     };
+    assert_eq!(end.turn_id, turn_id);
     assert_eq!(end.call_id, call_id);
     assert_eq!(
         end.invocation,

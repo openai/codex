@@ -146,7 +146,7 @@ pub(super) fn completed_item(
                     error,
                     duration: Some(event.duration),
                 }),
-                None,
+                (!event.turn_id.is_empty()).then(|| event.turn_id.clone()),
             ))
         }
         EventMsg::WebSearchEnd(event) => Some((

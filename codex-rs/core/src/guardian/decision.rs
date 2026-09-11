@@ -177,7 +177,7 @@ pub(crate) async fn decide_approval(
                         },
                     });
             }
-            record_guardian_non_denial(&session, turn_id).await;
+            record_guardian_non_denial(&session).await;
             Some(ReviewDecision::Approved)
         }
         Some(ApprovalDecision::Allow) => runtime.review(GuardianReviewReason::FreshRequired).await,

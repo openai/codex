@@ -136,13 +136,28 @@ pub(crate) fn is_basic_session_source(session_source: &SessionSource) -> bool {
     }
 }
 
-pub(super) async fn record_guardian_non_denial(session: &Arc<Session>, turn_id: &str) {
+pub(super) async fn record_guardian_non_denial(session: &Arc<Session>) {
+    let turn_id = {
+        let active = session.active_turn.lock().await;
+        let Some(task) = active.as_ref().and_then(|active| active.task.as_ref()) else {
+            return;
+        };
+        task.turn_context.sub_id.clone()
+    };
     codex_guardian_reviewer::ReviewDenials::for_thread(&session.services.thread_extension_data)
-        .record_non_denial(turn_id)
+        .record_non_denial(&turn_id)
         .await;
 }
 
-async fn record_guardian_denial(session: &Arc<Session>, turn: &Arc<TurnContext>, turn_id: &str) {
+async fn record_guardian_denial(session: &Arc<Session>) {
+    let turn = {
+        let active = session.active_turn.lock().await;
+        let Some(task) = active.as_ref().and_then(|active| active.task.as_ref()) else {
+            return;
+        };
+        Arc::clone(&task.turn_context)
+    };
+    let turn_id = &turn.sub_id;
     let Some(message) =
         codex_guardian_reviewer::ReviewDenials::for_thread(&session.services.thread_extension_data)
             .record_denial(turn_id, turn.model_info())
@@ -180,12 +195,8 @@ async fn record_guardian_denial(session: &Arc<Session>, turn: &Arc<TurnContext>,
 }
 
 #[cfg(test)]
-pub(crate) async fn record_guardian_denial_for_test(
-    session: &Arc<Session>,
-    turn: &Arc<TurnContext>,
-    turn_id: &str,
-) {
-    record_guardian_denial(session, turn, turn_id).await;
+pub(crate) async fn record_guardian_denial_for_test(session: &Arc<Session>) {
+    record_guardian_denial(session).await;
 }
 
 #[derive(Clone)]

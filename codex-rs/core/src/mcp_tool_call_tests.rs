@@ -3309,3 +3309,63 @@ async fn approve_mode_skips_guardian_in_every_permission_mode() {
         assert_eq!(decision, None);
     }
 }
+
+#[tokio::test]
+async fn approval_metadata_is_released_when_the_invocation_future_is_dropped() {
+    let (session, _) = crate::session::tests::make_session_and_context().await;
+    let invocation = McpInvocation {
+        server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        tool: "write_record".to_string(),
+        arguments: Some(serde_json::json!({"value": 42})),
+    };
+    let metadata = approval_metadata(
+        Some("connector"),
+        /*connector_name*/ None,
+        /*connector_description*/ None,
+        /*tool_title*/ None,
+        /*tool_description*/ None,
+    );
+    let mut call = Box::pin(async {
+        let _approval_metadata =
+            session.register_mcp_tool_approval_metadata("call", &invocation, metadata.clone());
+        std::future::pending::<()>().await;
+    });
+    assert!(futures::poll!(call.as_mut()).is_pending());
+    let _other_metadata =
+        session.register_mcp_tool_approval_metadata("other-call", &invocation, metadata.clone());
+    assert_eq!(
+        session
+            .mcp_tool_approval_metadata(CODEX_APPS_MCP_SERVER_NAME, "call")
+            .map(|(invocation, metadata)| (invocation, metadata.connector_id)),
+        Some((Some(invocation.clone()), Some("connector".to_string()))),
+    );
+    assert!(
+        session
+            .mcp_tool_approval_metadata("another-server", "call")
+            .is_none()
+    );
+    drop(call);
+    assert!(
+        session
+            .mcp_tool_approval_metadata(CODEX_APPS_MCP_SERVER_NAME, "call")
+            .is_none()
+    );
+    let _next_metadata =
+        session.register_mcp_tool_approval_metadata("next-call", &invocation, metadata);
+    let registry = session.mcp_tool_approval_metadata.lock().unwrap();
+    let mut keys = registry.keys().cloned().collect::<Vec<_>>();
+    keys.sort();
+    assert_eq!(
+        keys,
+        vec![
+            (
+                CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                "next-call".to_string()
+            ),
+            (
+                CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                "other-call".to_string()
+            ),
+        ],
+    );
+}

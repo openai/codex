@@ -34,7 +34,7 @@ impl CodeModeExecuteHandler {
     async fn execute(
         &self,
         session: std::sync::Arc<crate::session::session::Session>,
-        step_context: std::sync::Arc<crate::session::step_context::StepContext>,
+        step_context: Arc<crate::session::step_context::StepContext>,
         call_id: String,
         originating_item_id: Option<codex_protocol::ResponseItemId>,
         code: String,
@@ -71,13 +71,16 @@ impl CodeModeExecuteHandler {
             .session
             .services
             .code_mode_service
-            .execute(codex_code_mode::ExecuteRequest {
-                tool_call_id: call_id.clone(),
-                enabled_tools,
-                source: args.code.clone(),
-                yield_time_ms: args.yield_time_ms,
-                max_output_tokens: args.max_output_tokens,
-            })
+            .execute(
+                codex_code_mode::ExecuteRequest {
+                    tool_call_id: call_id.clone(),
+                    enabled_tools,
+                    source: args.code.clone(),
+                    yield_time_ms: args.yield_time_ms,
+                    max_output_tokens: args.max_output_tokens,
+                },
+                Arc::clone(&step_context),
+            )
             .await
             .map_err(FunctionCallError::RespondToModel)?;
         let cell_id = started_cell.cell_id.clone();

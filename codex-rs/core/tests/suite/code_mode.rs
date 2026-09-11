@@ -3342,6 +3342,7 @@ text((await tools.exec_command({{cmd: "printf 'phase 3'"}})).output);
     let first_completion = responses::mount_sse_once(
         &server,
         sse(vec![
+            responses::ev_response_created("resp-2"),
             ev_assistant_message("msg-1", "waiting"),
             ev_completed("resp-2"),
         ]),
@@ -3453,8 +3454,8 @@ text((await tools.exec_command({{cmd: "printf 'phase 3'"}})).output);
     );
     assert_eq!(text_item(&third_items, /*index*/ 1), "phase 3");
 
-    // Resuming the cell changes the response id, but its nested calls retain
-    // the original exec item's identity for request-local freshness accounting.
+    // Nested calls retain the original exec item and turn context when later
+    // turns resume the cell with wait.
     let originating_items = observer.originating_items.lock().unwrap();
     let wrapper_item = originating_items[0]
         .1
@@ -3470,15 +3471,12 @@ text((await tools.exec_command({{cmd: "printf 'phase 3'"}})).output);
     let observed = observer.response_ids.lock().unwrap();
     let mut nested_response_ids = observed
         .iter()
+        .skip_while(|(tool, _)| tool != "wait")
         .filter(|(tool, _)| tool == "exec_command")
-        .filter_map(|(_, response_id)| response_id.clone())
-        .skip_while(|response_id| response_id != &"resp-3".to_owned())
+        .map(|(_, response_id)| response_id.clone())
         .collect::<Vec<_>>();
     nested_response_ids.dedup();
-    assert_eq!(
-        nested_response_ids,
-        vec!["resp-3".to_owned(), "resp-5".to_owned()]
-    );
+    assert_eq!(nested_response_ids, vec![Some("resp-2".to_owned())]);
     assert_eq!(
         observed
             .iter()
@@ -6117,6 +6115,93 @@ impl<'call> ToolExecutor<ToolCall<'call>> for NamespacedCustomTool {
             }))) as Box<dyn ToolOutput>)
         })
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn yielded_code_mode_tool_callbacks_keep_their_originating_step() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    extensions.tool_contributor(Arc::new(NamespacedCustomTool {
+        generation: 0,
+        generations: Arc::new(AtomicUsize::new(0)),
+    }));
+    let mut builder = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .with_model_info_override("gpt-5.4", |model| {
+            model.tool_mode = Some(ToolMode::CodeMode);
+            model.experimental_supported_tools = vec!["test_sync_tool".to_string()];
+        })
+        .with_config(|config| {
+            config.features.enable(Feature::CodeMode).unwrap();
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    // A cannot invoke its editor until B is executing in the next turn.
+    let barrier = r#"await tools.test_sync_tool({barrier: {
+        id: "code-mode-origin-turns", participants: 2, timeout_ms: 60000
+    }});"#;
+    responses::mount_sse_once(&server, sse(vec![
+        ev_response_created("resp-a"),
+        ev_custom_tool_call("call-a", "exec", &format!(
+            "// @exec: {{\"yield_time_ms\": 1}}\n{barrier}\ntext('A_ORIGIN:' + (await tools.editor__apply_patch('A')).generation);"
+        )),
+        ev_completed("resp-a"),
+    ])).await;
+    let yielded = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-a", "waiting for the next turn"),
+            ev_completed("resp-a-done"),
+        ]),
+    )
+    .await;
+    test.submit_turn("start A and leave it running").await?;
+    let cell_id = extract_running_cell_id(text_item(
+        &custom_tool_output_items(&yielded.single_request(), "call-a"),
+        /*index*/ 0,
+    ));
+
+    responses::mount_sse_once(&server, sse(vec![
+        ev_response_created("resp-b"),
+        ev_custom_tool_call("call-b", "exec", &format!(
+            "// @exec: {{\"yield_time_ms\": 60000}}\n{barrier}\ntext('B_ORIGIN:' + (await tools.editor__apply_patch('B')).generation);"
+        )),
+        ev_completed("resp-b"),
+    ])).await;
+    let b_finished = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-wait"),
+            responses::ev_function_call(
+                "call-wait-a",
+                "wait",
+                &serde_json::json!({
+                    "cell_id": cell_id, "yield_time_ms": 60000,
+                })
+                .to_string(),
+            ),
+            ev_completed("resp-wait"),
+        ]),
+    )
+    .await;
+    let completed = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-b", "both cells finished"),
+            ev_completed("resp-b-done"),
+        ]),
+    )
+    .await;
+    test.submit_turn("run B, then wait for A").await?;
+    assert_eq!(
+        custom_tool_output_body_and_success(&b_finished.single_request(), "call-b").0,
+        "B_ORIGIN:3"
+    );
+    let live = completed.single_request();
+    let a_output = function_tool_output_items(&live, "call-wait-a");
+    assert!(text_item(&a_output, /*index*/ 0).starts_with("Script completed"));
+    assert_eq!(text_item(&a_output, /*index*/ 1), "A_ORIGIN:1");
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

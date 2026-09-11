@@ -6743,6 +6743,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
         multi_agent_version: OnceLock::from(config.multi_agent_version_from_features()),
         mcp_refresh: McpRefresh::new(),
+        mcp_tool_approval_metadata: Default::default(),
         mcp_elicitation_reviewer_handle: OnceLock::new(),
         mcp_elicitation_lifecycle_handle: OnceLock::new(),
         mcp_prewarm_tx: async_channel::bounded(1).0,
@@ -8917,6 +8918,7 @@ where
             codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
         multi_agent_version: OnceLock::from(config.multi_agent_version_from_features()),
         mcp_refresh: McpRefresh::new(),
+        mcp_tool_approval_metadata: Default::default(),
         mcp_elicitation_reviewer_handle: OnceLock::new(),
         mcp_elicitation_lifecycle_handle: OnceLock::new(),
         mcp_prewarm_tx: async_channel::bounded(1).0,
@@ -11245,12 +11247,12 @@ impl SessionTask for GuardianDeniedApprovalTask {
     async fn run(
         self: Arc<Self>,
         session: Arc<Session>,
-        ctx: Arc<TurnContext>,
+        _ctx: Arc<TurnContext>,
         _input: Vec<TurnInput>,
         cancellation_token: CancellationToken,
     ) -> SessionTaskResult {
         for _ in 0..3 {
-            crate::guardian::record_guardian_denial_for_test(&session, &ctx, &ctx.sub_id).await;
+            crate::guardian::record_guardian_denial_for_test(&session).await;
         }
 
         cancellation_token.cancelled().await;
@@ -11621,8 +11623,6 @@ async fn guardian_helper_review_interrupts_after_three_consecutive_denials() {
     .await;
 
     let session_for_review = Arc::clone(&sess);
-    let turn_for_review = Arc::clone(&tc);
-    let turn_id = tc.sub_id.clone();
     let review_thread = std::thread::spawn(move || {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -11630,12 +11630,7 @@ async fn guardian_helper_review_interrupts_after_three_consecutive_denials() {
             .expect("helper review runtime");
         runtime.block_on(async move {
             for _ in 0..3 {
-                crate::guardian::record_guardian_denial_for_test(
-                    &session_for_review,
-                    &turn_for_review,
-                    &turn_id,
-                )
-                .await;
+                crate::guardian::record_guardian_denial_for_test(&session_for_review).await;
             }
         });
     });

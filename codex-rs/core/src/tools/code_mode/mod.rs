@@ -47,6 +47,7 @@ use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::formatted_truncate_text_content_items_with_policy;
 use codex_utils_output_truncation::truncate_function_output_items_with_policy;
 
+use delegate::CodeModeCellDelegate;
 use delegate::CodeModeDispatchBroker;
 use delegate::CodeModeDispatchWorker;
 pub(crate) use execute_handler::CodeModeExecuteHandler;
@@ -125,14 +126,16 @@ impl CodeModeService {
     pub(crate) async fn execute(
         &self,
         mut request: codex_code_mode::ExecuteRequest,
+        step_context: Arc<StepContext>,
     ) -> Result<codex_code_mode::StartedCell, String> {
         request
             .yield_time_ms
             .get_or_insert(self.default_exec_yield_time_ms);
-        self.session()
-            .await?
-            .execute(request, self.dispatch_broker.clone())
-            .await
+        let delegate = Arc::new(CodeModeCellDelegate {
+            broker: Arc::clone(&self.dispatch_broker),
+            step_context,
+        });
+        self.session().await?.execute(request, delegate).await
     }
 
     pub(crate) async fn wait(
@@ -209,18 +212,13 @@ impl CodeModeService {
         step_context: Arc<StepContext>,
         tracker: SharedTurnDiffTracker,
     ) -> Option<CodeModeDispatchWorker> {
-        let turn = &step_context.turn;
         if !step_context.tool_router.requires_code_mode_worker() {
             return None;
         }
 
-        let exec = ExecContext {
-            session: Arc::clone(session),
-            turn: Arc::clone(turn),
-        };
         Some(
             self.dispatch_broker
-                .start_turn_worker(exec, step_context, tracker),
+                .start_turn_worker(Arc::clone(session), step_context, tracker),
         )
     }
 
@@ -346,7 +344,8 @@ fn truncate_code_mode_result(
 
 // Submit synchronously so the recorder sees the call before the cell's dispatch gate closes.
 fn submit_nested_tool(
-    exec: ExecContext,
+    session: Arc<Session>,
+    step_context: Arc<StepContext>,
     tool_runtime: ToolCallRuntime,
     invocation: CodeModeNestedToolCall,
     call_id: String,
@@ -362,8 +361,8 @@ fn submit_nested_tool(
         tool_kind,
         input,
     } = invocation;
-    let thread_id = exec.session.thread_id;
-    let turn_id = exec.turn.sub_id.clone();
+    let thread_id = session.thread_id;
+    let turn_id = step_context.turn.sub_id.clone();
     let tool_name = tool_name.with_default_namespace();
     // A cell can outlive a turn; the broker records arrival before a dispatching turn is known.
     tracing::event!(
@@ -402,16 +401,17 @@ fn submit_nested_tool(
         payload,
         encrypted_function_args: None,
     };
-    exec.session
+    session
         .services
         .analytics_events_client
         .track_code_mode_tool_call(codex_analytics::CodeModeToolCallFact::ChildStarted {
-            thread_id: exec.session.thread_id.to_string(),
-            turn_id: exec.turn.sub_id.clone(),
+            thread_id: session.thread_id.to_string(),
+            turn_id: step_context.turn.sub_id.clone(),
             call_id: call.call_id.clone(),
             cell_id: cell_id.to_string(),
         });
     let result = tool_runtime.handle_tool_call_with_source(
+        step_context,
         call,
         ToolCallSource::CodeMode {
             cell_id: cell_id.to_string(),

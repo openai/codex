@@ -789,9 +789,8 @@ async fn review_guardian_mcp_elicitation(
             .meta()
             .and_then(|meta| meta.get("callId"))
             .and_then(Value::as_str)
-        && let Some((Some(invocation), _)) = session
-            .mcp_tool_approval_metadata(&turn_context.sub_id, call_id)
-            .await
+        && let Some((Some(invocation), _)) =
+            session.mcp_tool_approval_metadata(&request.server_name, call_id)
         && invocation.server == request.server_name
     {
         Some(call_id)
@@ -828,9 +827,8 @@ async fn review_guardian_mcp_elicitation(
             else {
                 return Ok(None);
             };
-            let Some((Some(invocation), metadata)) = session
-                .mcp_tool_approval_metadata(&turn_context.sub_id, call_id)
-                .await
+            let Some((Some(invocation), metadata)) =
+                session.mcp_tool_approval_metadata(&request.server_name, call_id)
             else {
                 return Ok(None);
             };

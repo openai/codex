@@ -472,9 +472,10 @@ impl FileChangeItem {
 }
 
 impl McpToolCallItem {
-    pub fn as_legacy_begin_event(&self) -> EventMsg {
+    pub fn as_legacy_begin_event(&self, turn_id: String) -> EventMsg {
         EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
             call_id: self.id.clone(),
+            turn_id,
             invocation: McpInvocation {
                 server: self.server.clone(),
                 tool: self.tool.clone(),
@@ -490,7 +491,7 @@ impl McpToolCallItem {
         })
     }
 
-    pub fn as_legacy_end_event(&self) -> Option<EventMsg> {
+    pub fn as_legacy_end_event(&self, turn_id: String) -> Option<EventMsg> {
         let result = match (&self.result, &self.error) {
             (Some(result), _) => Ok(result.clone()),
             (None, Some(error)) => Err(error.message.clone()),
@@ -499,6 +500,7 @@ impl McpToolCallItem {
 
         Some(EventMsg::McpToolCallEnd(McpToolCallEndEvent {
             call_id: self.id.clone(),
+            turn_id,
             invocation: McpInvocation {
                 server: self.server.clone(),
                 tool: self.tool.clone(),
@@ -542,7 +544,10 @@ impl TurnItem {
                 .as_legacy_end_event(String::new())
                 .into_iter()
                 .collect(),
-            TurnItem::McpToolCall(item) => item.as_legacy_end_event().into_iter().collect(),
+            TurnItem::McpToolCall(item) => item
+                .as_legacy_end_event(String::new())
+                .into_iter()
+                .collect(),
             TurnItem::Reasoning(item) => item.as_legacy_events(show_raw_agent_reasoning),
             TurnItem::ContextCompaction(item) => vec![item.as_legacy_event()],
         }
@@ -562,7 +567,7 @@ impl HasLegacyEvent for ItemStartedEvent {
                 })]
             }
             TurnItem::FileChange(item) => vec![item.as_legacy_begin_event(self.turn_id.clone())],
-            TurnItem::McpToolCall(item) => vec![item.as_legacy_begin_event()],
+            TurnItem::McpToolCall(item) => vec![item.as_legacy_begin_event(self.turn_id.clone())],
             TurnItem::CommandExecution(item) => {
                 vec![item.as_legacy_begin_event(self.turn_id.clone(), self.started_at_ms)]
             }
@@ -581,6 +586,10 @@ impl HasLegacyEvent for ItemStartedEvent {
 impl HasLegacyEvent for ItemCompletedEvent {
     fn as_legacy_events(&self, show_raw_agent_reasoning: bool) -> Vec<EventMsg> {
         match &self.item {
+            TurnItem::McpToolCall(item) => item
+                .as_legacy_end_event(self.turn_id.clone())
+                .into_iter()
+                .collect(),
             TurnItem::FileChange(item) => item
                 .as_legacy_end_event(self.turn_id.clone())
                 .into_iter()

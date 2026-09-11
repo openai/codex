@@ -253,8 +253,8 @@ pub(crate) async fn handle_mcp_tool_call(
                 .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new())),
         };
     }
-    sess.register_mcp_tool_approval_metadata(turn_context, &call_id, &invocation, metadata.clone())
-        .await;
+    let _approval_metadata =
+        sess.register_mcp_tool_approval_metadata(&call_id, &invocation, metadata.clone());
     notify_mcp_tool_call_started(
         sess.as_ref(),
         turn_context.as_ref(),
@@ -1139,40 +1139,41 @@ pub(crate) struct McpToolApprovalMetadata {
 }
 
 impl Session {
-    async fn register_mcp_tool_approval_metadata(
+    fn register_mcp_tool_approval_metadata(
         &self,
-        turn_context: &TurnContext,
         call_id: &str,
         invocation: &McpInvocation,
         metadata: McpToolApprovalMetadata,
-    ) {
-        let Some(turn_state) = self
-            .input_queue
-            .turn_state_for_sub_id(&self.active_turn, &turn_context.sub_id)
-            .await
-        else {
-            return;
-        };
-        turn_state.lock().await.insert_mcp_tool_approval_metadata(
-            call_id.to_string(),
+    ) -> Arc<(Option<McpInvocation>, McpToolApprovalMetadata)> {
+        let key = (invocation.server.clone(), call_id.to_string());
+        let metadata = Arc::new((
             (invocation.server == CODEX_APPS_MCP_SERVER_NAME
                 || is_node_repl_backed_server(&invocation.server))
             .then(|| invocation.clone()),
             metadata,
-        );
+        ));
+        let mut registry = self
+            .mcp_tool_approval_metadata
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Keep approval details available while a tool is running, even across turns.
+        // When a new call starts, clean up entries left by finished calls.
+        registry.retain(|_, entry| entry.strong_count() != 0);
+        registry.insert(key, Arc::downgrade(&metadata));
+        metadata
     }
 
-    pub(crate) async fn mcp_tool_approval_metadata(
+    pub(crate) fn mcp_tool_approval_metadata(
         &self,
-        sub_id: &str,
+        server: &str,
         call_id: &str,
     ) -> Option<(Option<McpInvocation>, McpToolApprovalMetadata)> {
-        let turn_state = self
-            .input_queue
-            .turn_state_for_sub_id(&self.active_turn, sub_id)
-            .await?;
-
-        turn_state.lock().await.mcp_tool_approval_metadata(call_id)
+        self.mcp_tool_approval_metadata
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&(server.to_string(), call_id.to_string()))
+            .and_then(std::sync::Weak::upgrade)
+            .map(|metadata| (*metadata).clone())
     }
 }
 
@@ -1571,8 +1572,7 @@ pub(crate) async fn request_mcp_tool_user_approval(
     );
     if tool_call_mcp_elicitation_enabled {
         let link_id = sess
-            .mcp_tool_approval_metadata(&turn_context.sub_id, id)
-            .await
+            .mcp_tool_approval_metadata(server, id)
             .and_then(|(_, metadata)| metadata.link_id);
         let metadata = McpToolApprovalMetadata {
             annotations: None,

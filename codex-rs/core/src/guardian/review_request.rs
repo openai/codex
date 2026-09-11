@@ -129,7 +129,7 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
             session
                 .send_event(turn.as_ref(), EventMsg::GuardianAssessment(completed.event))
                 .await;
-            record_guardian_non_denial(&session, report.turn_id()).await;
+            record_guardian_non_denial(&session).await;
             return Err(ReviewDecision::Abort);
         }
 
@@ -259,9 +259,9 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
             .send_event(turn.as_ref(), EventMsg::GuardianAssessment(completed.event))
             .await;
         if completed.assessment_outcome == Some(GuardianAssessmentOutcome::Deny) {
-            record_guardian_denial(&session, &turn, report.turn_id()).await;
+            record_guardian_denial(&session).await;
         } else {
-            record_guardian_non_denial(&session, report.turn_id()).await;
+            record_guardian_non_denial(&session).await;
         }
         completed.decision
     }

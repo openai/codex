@@ -2208,3 +2208,170 @@ printf '%s\n' "${@: -1}" >> "${payload_path}""#,
 
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn yielded_code_mode_denials_interrupt_the_servicing_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_wine_exec!(
+        Ok(()),
+        "Guardian approval actions require host-native paths"
+    );
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex()
+        .with_model_info_override("gpt-5.4", |model| {
+            model.tool_mode = Some(codex_protocol::openai_models::ToolMode::CodeMode);
+            model.experimental_supported_tools = vec!["test_sync_tool".to_string()];
+        })
+        .with_config(|config| {
+            config.features.enable(Feature::CodeMode).unwrap();
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    let barrier = r#"await tools.test_sync_tool({barrier: {
+        id: "guardian-origin", participants: 2, timeout_ms: 60000
+    }});"#;
+    let code = format!(
+        r#"// @exec: {{"yield_time_ms": 1}}
+{barrier}
+for (let index = 0; index < 6; index++) {{
+    try {{
+        text(await tools.exec_command({{
+            cmd: `echo review-${{index}}`,
+            sandbox_permissions: "require_escalated",
+            justification: "Exercise originating-cell Guardian reviews."
+        }}));
+    }} catch (error) {{
+        text(String(error));
+    }}
+}}
+"#
+    );
+    core_test_support::responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("origin-a"),
+            core_test_support::responses::ev_custom_tool_call("cell-a", "exec", &code),
+            ev_completed("origin-a"),
+        ]),
+    )
+    .await;
+    let yielded = core_test_support::responses::mount_sse_once(
+        &server,
+        sse(vec![ev_completed("a-finished")]),
+    )
+    .await;
+    test.submit_text_turn("Start A and leave its cell running.")
+        .await?;
+    let output = yielded.single_request().custom_tool_call_output("cell-a");
+    let text = output["output"]
+        .as_str()
+        .or_else(|| output["output"][0]["text"].as_str())
+        .context("A should return text")?;
+    let cell_id = text
+        .strip_prefix("Script running with cell ID ")
+        .and_then(|text| text.lines().next())
+        .context("A should yield a running cell")?
+        .to_string();
+
+    core_test_support::responses::mount_sse_once(
+        &server,
+        sse(vec![
+            core_test_support::responses::ev_custom_tool_call("cell-b", "exec", barrier),
+            ev_completed("b-started"),
+        ]),
+    )
+    .await;
+    let mut reviews = Vec::new();
+    // An approval resets B's consecutive count; only the final three denials interrupt it.
+    for outcome in ["deny", "deny", "allow", "deny", "deny", "deny"] {
+        reviews.push(
+            core_test_support::responses::mount_sse_once_match(
+                &server,
+                wiremock::matchers::body_partial_json(json!({
+                    "client_metadata": {"x-openai-subagent": "guardian"}
+                })),
+                sse(vec![
+                    ev_assistant_message(
+                        "review",
+                        &json!({
+                            "risk_level": if outcome == "allow" { "low" } else { "high" },
+                            "user_authorization": "high", "outcome": outcome,
+                            "rationale": "Test decision for the delayed cell.",
+                        })
+                        .to_string(),
+                    ),
+                    ev_completed("review-done"),
+                ]),
+            )
+            .await,
+        );
+    }
+    core_test_support::responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_function_call(
+                "wait-a",
+                "wait",
+                &json!({
+                    "cell_id": cell_id, "yield_time_ms": 60000,
+                })
+                .to_string(),
+            ),
+            ev_completed("b-wait"),
+        ]),
+    )
+    .await;
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "Run B and wait for A.".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let mut active_id = None;
+    let mut warning_id = None;
+    loop {
+        let event =
+            tokio::time::timeout(Duration::from_secs(60), test.codex.next_event()).await??;
+        match event.msg {
+            EventMsg::TurnStarted(_) => active_id = Some(event.id),
+            EventMsg::GuardianWarning(warning)
+                if warning.message.contains("too many approval requests") =>
+            {
+                assert!(
+                    warning
+                        .message
+                        .contains("3 consecutive, 5 in the last 50 reviews"),
+                    "{}",
+                    warning.message
+                );
+                warning_id = Some(event.id);
+            }
+            EventMsg::TurnAborted(aborted) => {
+                assert_eq!(aborted.reason, TurnAbortReason::Interrupted);
+                assert_eq!(Some(event.id), active_id);
+                break;
+            }
+            EventMsg::TurnComplete(_) => panic!("B must be interrupted by A's denials"),
+            _ => {}
+        }
+    }
+    assert!(active_id.is_some());
+    assert_eq!(warning_id, active_id);
+    for review in reviews {
+        assert_eq!(
+            review
+                .requests()
+                .iter()
+                .filter(
+                    |request| request.body_json()["client_metadata"]["x-openai-subagent"]
+                        == "guardian"
+                )
+                .count(),
+            1
+        );
+    }
+    Ok(())
+}

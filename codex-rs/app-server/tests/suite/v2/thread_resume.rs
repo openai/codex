@@ -2678,6 +2678,7 @@ fn append_resume_redaction_history(
     let persisted_rollout = std::fs::read_to_string(&rollout_file_path)?;
     let appended_rollout = [
         EventMsg::McpToolCallEnd(McpToolCallEndEvent {
+            turn_id: String::new(),
             call_id: "mcp-1".to_string(),
             invocation: McpInvocation {
                 server: "docs".to_string(),

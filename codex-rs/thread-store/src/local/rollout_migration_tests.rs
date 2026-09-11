@@ -507,6 +507,18 @@ async fn migration_keeps_late_completions_in_their_original_turn() {
             started("current"),
             user_message("current question"),
             exec_completion("old", "call-old"),
+            serde_json::from_value(json!({
+                "type": "event_msg",
+                "payload": {
+                    "type": "mcp_tool_call_end",
+                    "call_id": "mcp-old",
+                    "turn_id": "old",
+                    "invocation": {"server": "slack", "tool": "search", "arguments": {}},
+                    "duration": {"secs": 0, "nanos": 0},
+                    "result": {"Ok": {"content": []}}
+                }
+            }))
+            .expect("build late legacy MCP completion"),
             agent_message("current answer"),
             completed("current"),
         ],
@@ -545,7 +557,10 @@ async fn migration_keeps_late_completions_in_their_original_turn() {
         .iter()
         .map(|item| item.turn_id.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(item_turn_ids, vec!["old", "current", "old", "current"]);
+    assert_eq!(
+        item_turn_ids,
+        vec!["old", "current", "old", "old", "current"]
+    );
 }
 
 #[tokio::test]

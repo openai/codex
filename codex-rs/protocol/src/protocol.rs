@@ -2617,6 +2617,9 @@ pub struct McpInvocation {
 pub struct McpToolCallBeginEvent {
     /// Identifier so this can be paired with the McpToolCallEnd event.
     pub call_id: String,
+    /// Originating turn; absent in older rollout records.
+    #[serde(default)]
+    pub turn_id: String,
     pub invocation: McpInvocation,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -2646,6 +2649,9 @@ pub struct McpToolCallBeginEvent {
 pub struct McpToolCallEndEvent {
     /// Identifier for the corresponding McpToolCallBegin that finished.
     pub call_id: String,
+    /// Originating turn; absent in older rollout records.
+    #[serde(default)]
+    pub turn_id: String,
     pub invocation: McpInvocation,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -5361,6 +5367,7 @@ mod tests {
         assert_eq!(legacy_events.len(), 1);
         match &legacy_events[0] {
             EventMsg::McpToolCallBegin(event) => {
+                assert_eq!(event.turn_id, "turn-1");
                 assert_eq!(event.call_id, "mcp-1");
                 assert_eq!(event.invocation.server, "server");
                 assert_eq!(event.invocation.tool, "tool");
@@ -5486,6 +5493,7 @@ mod tests {
         assert_eq!(legacy_events.len(), 1);
         match &legacy_events[0] {
             EventMsg::McpToolCallEnd(event) => {
+                assert_eq!(event.turn_id, "turn-1");
                 assert_eq!(event.call_id, "mcp-1");
                 assert_eq!(event.invocation.server, "server");
                 assert_eq!(event.invocation.tool, "tool");

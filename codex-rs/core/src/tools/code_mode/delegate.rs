@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::Weak;
 
 use codex_code_mode::CellId;
 use codex_code_mode::CodeModeNestedToolCall;
@@ -17,12 +18,12 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
-use super::ExecContext;
 use super::PUBLIC_TOOL_NAME;
 use super::submit_nested_tool;
 use super::telemetry::DispatchInterruption;
 use super::telemetry::NestedToolDispatchTrace;
 use super::telemetry::trace_id;
+use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::tools::ExecutedToolCalls;
 use crate::tools::call_trace;
@@ -35,6 +36,12 @@ pub(super) struct CodeModeDispatchBroker {
     dispatch_rx: async_channel::Receiver<DispatchMessage>,
     dispatch_gates: Arc<Mutex<HashMap<CellId, CellDispatchGate>>>,
     executed_tool_calls: ExecutedToolCalls,
+}
+
+/// Retains the step advertised to one execution, including callbacks after it yields.
+pub(super) struct CodeModeCellDelegate {
+    pub(super) broker: Arc<CodeModeDispatchBroker>,
+    pub(super) step_context: Arc<StepContext>,
 }
 
 struct CellDispatchGate {
@@ -105,13 +112,15 @@ impl CodeModeDispatchBroker {
 
     pub(super) fn start_turn_worker(
         &self,
-        exec: ExecContext,
+        session: Arc<Session>,
         step_context: Arc<StepContext>,
         tracker: SharedTurnDiffTracker,
     ) -> CodeModeDispatchWorker {
-        let track_completeness = ExecutedToolCalls::is_enabled(&exec.turn.config.features);
-        let tool_runtime = ToolCallRuntime::new(Arc::clone(&exec.session), step_context, tracker);
-        let host = Arc::new(CoreTurnHost { exec, tool_runtime });
+        let tool_runtime = ToolCallRuntime::new(Arc::clone(&session), step_context, tracker);
+        let host = Arc::new(CoreTurnHost {
+            session,
+            tool_runtime,
+        });
         let dispatch_rx = self.dispatch_rx.clone();
         let dispatch_gates = Arc::clone(&self.dispatch_gates);
         let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
@@ -148,6 +157,7 @@ impl CodeModeDispatchBroker {
                     }
                     DispatchMessage::InvokeTool {
                         invocation,
+                        step_context,
                         mut dispatch_trace,
                         cancellation_token,
                         response_tx,
@@ -169,6 +179,16 @@ impl CodeModeDispatchBroker {
                             remove_dispatch_gate(&dispatch_gates, &cell_id);
                             continue;
                         }
+                        let Some(step_context) = step_context
+                            .upgrade()
+                            .filter(|_| !cancellation_token.is_cancelled())
+                        else {
+                            let _ = response_tx
+                                .send(Err("code mode nested tool call cancelled".to_string()));
+                            continue;
+                        };
+                        let track_completeness =
+                            ExecutedToolCalls::is_enabled(&step_context.turn.config.features);
                         let host = Arc::clone(&host);
                         let dispatch_gates = Arc::clone(&dispatch_gates);
                         let span = dispatch_trace.span.clone();
@@ -196,6 +216,7 @@ impl CodeModeDispatchBroker {
                                     dispatch_trace.interruption = None;
                                     host.submit_tool(
                                         invocation,
+                                        step_context,
                                         dispatch_trace.call_id.clone(),
                                         cancellation_token.clone(),
                                     )
@@ -273,13 +294,13 @@ async fn wait_until_cell_ready_for_dispatch(
     }
 }
 
-impl CodeModeSessionDelegate for CodeModeDispatchBroker {
+impl CodeModeSessionDelegate for CodeModeCellDelegate {
     #[tracing::instrument(
         name = "code_mode.broker.invoke_tool",
         level = "info",
         skip_all,
         fields(
-            conversation.id = %self.thread_id,
+            conversation.id = %self.broker.thread_id,
             cell.id = %invocation.cell_id,
             runtime_tool_call_id = invocation.runtime_tool_call_id.as_str(),
             tool_name = invocation.tool_name.name.as_str(),
@@ -294,7 +315,7 @@ impl CodeModeSessionDelegate for CodeModeDispatchBroker {
         Box::pin(async move {
             let call_id = format!("{PUBLIC_TOOL_NAME}-{}", uuid::Uuid::new_v4());
             call_trace::received(
-                self.thread_id,
+                self.broker.thread_id,
                 &invocation.tool_name,
                 &call_id,
                 call_trace::Receipt::CodeModeBroker {
@@ -303,16 +324,18 @@ impl CodeModeSessionDelegate for CodeModeDispatchBroker {
                 },
             );
             let mut dispatch_trace =
-                Box::new(NestedToolDispatchTrace::new(self.thread_id, call_id));
+                Box::new(NestedToolDispatchTrace::new(self.broker.thread_id, call_id));
             if cancellation_token.is_cancelled() {
                 dispatch_trace.interruption = Some(DispatchInterruption::Cancelled);
                 return Err("code mode nested tool call cancelled".to_string());
             }
             let (response_tx, response_rx) = oneshot::channel();
             // Only the worker can tell whether dispatch beats cancellation once the call is queued.
-            self.dispatch_tx
+            self.broker
+                .dispatch_tx
                 .send(DispatchMessage::InvokeTool {
                     invocation,
+                    step_context: Arc::downgrade(&self.step_context),
                     dispatch_trace,
                     cancellation_token: cancellation_token.clone(),
                     response_tx,
@@ -341,7 +364,8 @@ impl CodeModeSessionDelegate for CodeModeDispatchBroker {
                 return Err("code mode notification cancelled".to_string());
             }
             let (response_tx, response_rx) = oneshot::channel();
-            self.dispatch_tx
+            self.broker
+                .dispatch_tx
                 .send(DispatchMessage::Notify {
                     call_id,
                     cell_id,
@@ -362,13 +386,15 @@ impl CodeModeSessionDelegate for CodeModeDispatchBroker {
     }
 
     fn cell_closed(&self, cell_id: &CellId) {
-        self.close_cell(cell_id);
+        self.broker.close_cell(cell_id);
     }
 }
 
 enum DispatchMessage {
     InvokeTool {
         invocation: CodeModeNestedToolCall,
+        // The delegate owns the step while the callback is live; stale queued work must not.
+        step_context: Weak<StepContext>,
         dispatch_trace: Box<NestedToolDispatchTrace>,
         cancellation_token: CancellationToken,
         response_tx: oneshot::Sender<Result<JsonValue, String>>,
@@ -395,7 +421,7 @@ impl Drop for CodeModeDispatchWorker {
 }
 
 struct CoreTurnHost {
-    exec: ExecContext,
+    session: Arc<Session>,
     tool_runtime: ToolCallRuntime,
 }
 
@@ -403,11 +429,13 @@ impl CoreTurnHost {
     fn submit_tool(
         &self,
         invocation: CodeModeNestedToolCall,
+        step_context: Arc<StepContext>,
         call_id: String,
         cancellation_token: CancellationToken,
     ) -> impl std::future::Future<Output = Result<JsonValue, String>> + Send + 'static {
         let invocation = submit_nested_tool(
-            self.exec.clone(),
+            Arc::clone(&self.session),
+            step_context,
             self.tool_runtime.clone(),
             invocation,
             call_id,
@@ -421,8 +449,7 @@ impl CoreTurnHost {
         if text.trim().is_empty() {
             return Ok(());
         }
-        self.exec
-            .session
+        self.session
             .inject_if_running(vec![ResponseItem::CustomToolCallOutput {
                 id: None,
                 call_id,
