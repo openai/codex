@@ -25,9 +25,12 @@ use wxc_common::models::ContainerPolicy;
 use wxc_common::models::ExecutionRequest;
 use wxc_common::models::FallbackPolicy;
 use wxc_common::models::NetworkAction;
+use wxc_common::models::NetworkCidr;
 use wxc_common::models::NetworkEgressPolicy;
 use wxc_common::models::NetworkIngressPolicy;
+use wxc_common::models::NetworkPeer;
 use wxc_common::models::NetworkPolicy;
+use wxc_common::models::NetworkRule;
 
 use crate::MxcCommand;
 
@@ -209,20 +212,49 @@ pub fn build_request(
     // API receives one effective access mode for each path identity.
     read.retain(|key, _| !write.contains_key(key) && !deny.contains_key(key));
     let network_enabled = permissions.network_sandbox_policy().is_enabled();
-    let egress_default = if network_enabled {
+    let proxied = command.managed_network.is_some();
+    if let Some(network) = &command.managed_network {
+        crate::validate_managed_network(network)
+            .map_err(|error| PolicyError::PolicyResolution(error.to_string()))?;
+    }
+    let egress_default = if network_enabled && !proxied {
         NetworkAction::Allow
     } else {
         NetworkAction::Deny
     };
-    let ingress_default = if network_enabled {
+    let ingress_default = if network_enabled && !proxied {
         NetworkAction::Allow
     } else {
         NetworkAction::Deny
     };
-    let egress = NetworkEgressPolicy {
+    let mut egress = NetworkEgressPolicy {
         default: egress_default,
         ..Default::default()
     };
+    if proxied {
+        // PSEC host loopback is bidirectional. This shape is supported only
+        // when the caller already allows local clients and servers. Keep
+        // private-network ingress denied and allow no direct DNS bypass.
+        egress.allow.push(NetworkRule {
+            to: vec![
+                NetworkPeer {
+                    cidr: NetworkCidr {
+                        address: std::net::Ipv4Addr::new(127, 0, 0, 0).into(),
+                        prefix_length: 8,
+                    },
+                    except: Vec::new(),
+                },
+                NetworkPeer {
+                    cidr: NetworkCidr {
+                        address: std::net::Ipv6Addr::LOCALHOST.into(),
+                        prefix_length: 128,
+                    },
+                    except: Vec::new(),
+                },
+            ],
+            ports: Vec::new(),
+        });
+    }
     let mut request = ExecutionRequest {
         script_code: cmdline_from_argv_for_context(
             &command.command,
@@ -250,7 +282,7 @@ pub fn build_request(
             network_egress: Some(egress),
             network_ingress: Some(NetworkIngressPolicy {
                 default: ingress_default,
-                host_loopback: if network_enabled {
+                host_loopback: if network_enabled || proxied {
                     NetworkAction::Allow
                 } else {
                     NetworkAction::Deny

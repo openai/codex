@@ -1,9 +1,11 @@
 //! Portable policy and launcher regressions, with Windows identity coverage.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::Result;
+use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxPolicyContext;
 use codex_protocol::protocol::FileSystemAccessMode;
@@ -15,8 +17,16 @@ use codex_protocol::protocol::NetworkSandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
+use wxc_common::models::NetworkAction;
+use wxc_common::models::NetworkCidr;
+use wxc_common::models::NetworkEgressPolicy;
+use wxc_common::models::NetworkIngressPolicy;
+use wxc_common::models::NetworkPeer;
+use wxc_common::models::NetworkRule;
 
+use crate::CreateMxcCommandArgsParams;
 use crate::MxcCommand;
+use crate::create_command_args;
 use crate::policy::PolicyError;
 use crate::policy::build_request;
 use crate::policy::materialize_volume_roots;
@@ -91,6 +101,7 @@ fn command(permissions: &PermissionProfile, cwd: &Path) -> MxcCommand {
     MxcCommand {
         permissions: permissions.clone(),
         sandbox_policy_cwd: cwd.to_owned(),
+        managed_network: None,
         command: vec!["program.exe".to_owned(), "--arg".to_owned()],
     }
 }
@@ -342,6 +353,90 @@ fn full_access_enumerates_children_of_every_volume() -> Result<()> {
                 .collect::<Vec<_>>()
         );
         assert_eq!(other, Vec::<String>::new());
+    }
+    Ok(())
+}
+
+#[test]
+fn managed_network_allows_authorized_loopback_without_lan_or_dns_access() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let profile = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(Vec::new()),
+        NetworkSandboxPolicy::Enabled,
+    );
+    let proxy = ManagedNetworkSandboxContext {
+        loopback_ports: vec![43123, 43124],
+        allow_local_binding: true,
+    };
+    let mut env = HashMap::new();
+    create_command_args(CreateMxcCommandArgsParams {
+        command: vec!["program.exe".to_owned()],
+        permission_profile: &profile,
+        sandbox_policy_cwd: root.path(),
+        managed_network: Some(&proxy),
+        env: &mut env,
+    })?;
+    let parsed = crate::transport::decode(&mut env)?;
+    let request = build_request(&parsed, root.path(), Vec::new(), &[], &[])?;
+    assert_eq!(
+        request.policy.network_egress,
+        Some(NetworkEgressPolicy {
+            default: NetworkAction::Deny,
+            allow: vec![NetworkRule {
+                to: vec![
+                    NetworkPeer {
+                        cidr: "127.0.0.0/8".parse()?,
+                        except: Vec::new()
+                    },
+                    NetworkPeer {
+                        cidr: NetworkCidr {
+                            address: std::net::Ipv6Addr::LOCALHOST.into(),
+                            prefix_length: 128
+                        },
+                        except: Vec::new()
+                    },
+                ],
+                ports: Vec::new(),
+            }],
+            deny: Vec::new(),
+        })
+    );
+    assert_eq!(
+        request.policy.network_ingress,
+        Some(NetworkIngressPolicy {
+            default: NetworkAction::Deny,
+            host_loopback: NetworkAction::Allow,
+        })
+    );
+    Ok(())
+}
+
+#[test]
+fn invalid_managed_network_is_rejected_at_both_boundaries() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let cwd = root.path();
+    let profile = PermissionProfile::read_only();
+    for (loopback_ports, allow_local_binding) in
+        [(Vec::new(), true), (vec![0], true), (vec![43123], false)]
+    {
+        let proxy = ManagedNetworkSandboxContext {
+            loopback_ports,
+            allow_local_binding,
+        };
+        let mut env = HashMap::new();
+        assert!(
+            create_command_args(CreateMxcCommandArgsParams {
+                command: Vec::new(),
+                permission_profile: &profile,
+                sandbox_policy_cwd: cwd,
+                managed_network: Some(&proxy),
+                env: &mut env,
+            })
+            .is_err()
+        );
+        let mut parsed = command(&profile, cwd);
+        parsed.managed_network = Some(proxy);
+        assert!(build_request(&parsed, cwd, Vec::new(), &[], &[]).is_err());
     }
     Ok(())
 }

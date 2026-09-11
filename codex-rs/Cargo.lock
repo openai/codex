@@ -4070,6 +4070,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "appcontainer_common",
+ "codex-network-proxy",
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-path-uri",

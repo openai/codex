@@ -21,6 +21,7 @@ fn command(args: Vec<String>) -> MxcCommand {
     MxcCommand {
         permissions: PermissionProfile::read_only(),
         sandbox_policy_cwd: PathBuf::from("workspace"),
+        managed_network: None,
         command: args,
     }
 }
