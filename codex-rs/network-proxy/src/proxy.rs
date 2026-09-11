@@ -673,7 +673,6 @@ pub const NO_PROXY_ENV_KEYS: &[&str] = &[
     "no_proxy",
     "npm_config_noproxy",
     "NPM_CONFIG_NOPROXY",
-    "YARN_NO_PROXY",
     "BUNDLE_NO_PROXY",
 ];
 
