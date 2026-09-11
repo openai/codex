@@ -1,9 +1,11 @@
+use codex_code_mode_protocol::NoopCodeModeSessionDelegate;
 use codex_code_mode_runtime::ExecuteRequest;
 use codex_code_mode_runtime::InProcessCodeModeSession;
 use codex_code_mode_runtime::RuntimeResponse;
 use codex_code_mode_runtime::V8JitMode;
 use codex_code_mode_runtime::initialize_v8;
 use pretty_assertions::assert_eq;
+use std::sync::Arc;
 
 #[tokio::test]
 async fn code_mode_runs_with_jit_disabled() {
@@ -11,13 +13,16 @@ async fn code_mode_runs_with_jit_disabled() {
 
     let service = InProcessCodeModeSession::new();
     let started = service
-        .execute(ExecuteRequest {
-            tool_call_id: "call_1".to_string(),
-            enabled_tools: Vec::new(),
-            source: "21 * 2;".to_string(),
-            yield_time_ms: None,
-            max_output_tokens: None,
-        })
+        .execute(
+            ExecuteRequest {
+                tool_call_id: "call_1".to_string(),
+                enabled_tools: Vec::new(),
+                source: "21 * 2;".to_string(),
+                yield_time_ms: None,
+                max_output_tokens: None,
+            },
+            Arc::new(NoopCodeModeSessionDelegate),
+        )
         .await
         .expect("start code-mode cell");
     let cell_id = started.cell_id.clone();

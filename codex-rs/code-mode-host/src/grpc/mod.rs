@@ -148,7 +148,7 @@ impl GrpcCodeModeHost {
             _ = session.closed.cancelled() => {
                 return Err(Status::cancelled("code-mode session is closed"));
             }
-            result = session.runtime.execute(request) => {
+            result = session.runtime.execute(request, Arc::new(delegate::GrpcDelegate::new(Arc::downgrade(&session)))) => {
                 result.map_err(Status::failed_precondition)?
             }
         };

@@ -129,7 +129,10 @@ impl CodeModeService {
         request
             .yield_time_ms
             .get_or_insert(self.default_exec_yield_time_ms);
-        self.session().await?.execute(request).await
+        self.session()
+            .await?
+            .execute(request, self.dispatch_broker.clone())
+            .await
     }
 
     pub(crate) async fn wait(
@@ -237,7 +240,7 @@ impl CodeModeService {
                     }
                     session = self
                         .session_provider
-                        .create_session(self.dispatch_broker.clone()) => session?,
+                        .create_session() => session?,
                 };
                 if self.shutdown_token.is_cancelled() {
                     let _ = session.shutdown().await;

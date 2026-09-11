@@ -153,15 +153,13 @@ impl ConnectionDriver {
         match pending {
             PendingRequest::OpenSession {
                 session,
-                delegate,
                 cleanup,
                 cancellation,
                 response_tx,
             } => match result {
                 Ok(HostResponse::SessionReady { session_id }) if session_id == session.id => {
                     let abandoned = cancellation.is_cancelled() || response_tx.is_closed();
-                    self.sessions
-                        .insert_ready(session.clone(), delegate, cleanup);
+                    self.sessions.insert_ready(session.clone(), cleanup);
                     if abandoned || response_tx.send(Ok(())).is_err() {
                         return self.shutdown_abandoned_session(session);
                     }
@@ -179,6 +177,7 @@ impl ConnectionDriver {
             },
             PendingRequest::Execute {
                 session,
+                delegate,
                 response_tx,
                 initial_response_tx,
                 initial_response_rx,
@@ -188,7 +187,7 @@ impl ConnectionDriver {
                     // The host owns a checked, never-reused ID sequence. Retain only live
                     // IDs so client memory scales with concurrency, not session lifetime.
                     let remote_cell_id = cell_id.clone();
-                    let public_id = match self.sessions.admit_cell(&session, cell_id) {
+                    let public_id = match self.sessions.admit_cell(&session, cell_id, delegate) {
                         Ok(public_id) => public_id,
                         Err(CellAdmissionError::MissingSession) => {
                             let _ = response_tx

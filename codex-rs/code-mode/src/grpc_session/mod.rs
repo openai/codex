@@ -30,6 +30,7 @@ use tonic::transport::Channel;
 use tracing::Instrument;
 
 use self::operations::WaitSlot;
+use self::state::ClosedCell;
 use self::state::SessionState;
 use self::transport::GrpcTransport;
 use self::transport::SharedTransport;
@@ -96,7 +97,6 @@ impl GrpcCodeModeSessionProvider {
     #[tracing::instrument(name = "code_mode.grpc.open_binding", level = "info", skip_all)]
     async fn open_binding(
         &self,
-        delegate: Arc<dyn CodeModeSessionDelegate>,
         limits: CodeModeSessionCellExecutionLimits,
     ) -> Result<Arc<GrpcCodeModeSession>, String> {
         let mut client = deadline::startup("transport connection", self.transport.client()).await?;
@@ -136,7 +136,6 @@ impl GrpcCodeModeSessionProvider {
         let inner = Arc::new(SessionInner {
             id: opened.session_id,
             client,
-            delegate,
             runtime: tokio::runtime::Handle::current(),
             state: Mutex::new(SessionState::default()),
             wait_slots: Mutex::new(HashMap::new()),
@@ -180,24 +179,16 @@ impl GrpcCodeModeSessionProvider {
 }
 
 impl CodeModeSessionProvider for GrpcCodeModeSessionProvider {
-    fn create_session<'a>(
-        &'a self,
-        delegate: Arc<dyn CodeModeSessionDelegate>,
-    ) -> CodeModeSessionProviderFuture<'a> {
-        self.create_session_with_limits(delegate, CodeModeSessionCellExecutionLimits::default())
+    fn create_session(&self) -> CodeModeSessionProviderFuture<'_> {
+        self.create_session_with_limits(CodeModeSessionCellExecutionLimits::default())
     }
 
     fn create_session_with_limits<'a>(
         &'a self,
-        delegate: Arc<dyn CodeModeSessionDelegate>,
         limits: CodeModeSessionCellExecutionLimits,
     ) -> CodeModeSessionProviderFuture<'a> {
         Box::pin(async move {
-            let session = Arc::new(reconnect::ReconnectableSession::new(
-                self.clone(),
-                delegate,
-                limits,
-            ));
+            let session = Arc::new(reconnect::ReconnectableSession::new(self.clone(), limits));
             session.initialize().await?;
             Ok(session as _)
         })
@@ -229,8 +220,9 @@ impl CodeModeSession for GrpcCodeModeSession {
     fn execute<'a>(
         &'a self,
         request: ExecuteRequest,
+        delegate: Arc<dyn CodeModeSessionDelegate>,
     ) -> CodeModeSessionResultFuture<'a, StartedCell> {
-        Box::pin(self.inner.execute(request))
+        Box::pin(self.inner.execute(request, delegate))
     }
 
     fn wait<'a>(&'a self, request: WaitRequest) -> CodeModeSessionResultFuture<'a, WaitOutcome> {
@@ -255,7 +247,6 @@ impl Drop for GrpcCodeModeSession {
 pub(super) struct SessionInner {
     pub(super) id: String,
     pub(super) client: GrpcClient,
-    pub(super) delegate: Arc<dyn CodeModeSessionDelegate>,
     runtime: tokio::runtime::Handle,
     state: Mutex<SessionState>,
     wait_slots: Mutex<HashMap<CellId, Weak<WaitSlot>>>,
@@ -282,14 +273,14 @@ impl SessionInner {
         Ok(())
     }
 
-    pub(super) fn report_closed_cell(&self, cell_id: Option<CellId>) {
-        if let Some(cell_id) = cell_id {
+    pub(super) fn report_closed_cell(&self, cell: Option<ClosedCell>) {
+        if let Some((cell_id, delegate)) = cell {
             self.wait_slots
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .remove(&cell_id);
             let _ = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                self.delegate.cell_closed(&cell_id);
+                delegate.cell_closed(&cell_id);
             }));
         }
     }

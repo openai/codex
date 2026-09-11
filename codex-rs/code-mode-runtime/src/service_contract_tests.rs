@@ -1,3 +1,4 @@
+use codex_code_mode_protocol::NoopCodeModeSessionDelegate;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -185,14 +186,87 @@ async fn next_event(events_rx: &mut mpsc::UnboundedReceiver<DelegateEvent>) -> D
 }
 
 #[tokio::test]
+async fn yielded_cells_retain_their_own_delegate_until_closed() {
+    let service = InProcessCodeModeSession::new();
+    let (delegate_a, mut events_a) = BlockingDelegate::new();
+    let (delegate_b, mut events_b) = BlockingDelegate::new();
+    let weak_a = Arc::downgrade(&delegate_a);
+    let request = ExecuteRequest {
+        enabled_tools: vec![blocking_tool()],
+        ..execute_request("await tools.block({}); await tools.block({});")
+    };
+    let a = service
+        .execute(request.clone(), delegate_a.clone())
+        .await
+        .unwrap();
+    assert_eq!(next_event(&mut events_a).await, DelegateEvent::ToolStarted);
+    assert!(matches!(
+        a.initial_response().await.unwrap(),
+        RuntimeResponse::Yielded { .. }
+    ));
+
+    let b = service.execute(request, delegate_b.clone()).await.unwrap();
+    assert_eq!(next_event(&mut events_b).await, DelegateEvent::ToolStarted);
+    assert!(matches!(
+        b.initial_response().await.unwrap(),
+        RuntimeResponse::Yielded { .. }
+    ));
+
+    // A's next callback must still reach A after B has started in the same session.
+    delegate_a.release_tool();
+    assert_eq!(next_event(&mut events_a).await, DelegateEvent::ToolStarted);
+    delegate_a.release_tool();
+    assert_eq!(
+        service
+            .wait(WaitRequest {
+                cell_id: cell_id("1"),
+                yield_time_ms: 60_000
+            })
+            .await
+            .unwrap(),
+        WaitOutcome::LiveCell(RuntimeResponse::Result {
+            code_mode_host_duration: None,
+            cell_id: cell_id("1"),
+            content_items: Vec::new(),
+            error_text: None
+        })
+    );
+    assert_eq!(
+        next_event(&mut events_a).await,
+        DelegateEvent::CellClosed(cell_id("1"))
+    );
+    drop(delegate_a);
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), events_a.recv())
+            .await
+            .unwrap(),
+        None
+    );
+    assert!(weak_a.upgrade().is_none());
+
+    service.terminate(cell_id("2")).await.unwrap();
+    assert_eq!(
+        next_event(&mut events_b).await,
+        DelegateEvent::ToolCancelled
+    );
+    assert_eq!(
+        next_event(&mut events_b).await,
+        DelegateEvent::CellClosed(cell_id("2"))
+    );
+}
+
+#[tokio::test]
 async fn yields_and_resumes() {
     let service = InProcessCodeModeSession::new();
     let cell = service
-        .execute(ExecuteRequest {
-            source: r#"text("before"); yield_control(); text("after");"#.to_string(),
-            yield_time_ms: Some(60_000),
-            ..execute_request("")
-        })
+        .execute(
+            ExecuteRequest {
+                source: r#"text("before"); yield_control(); text("after");"#.to_string(),
+                yield_time_ms: Some(60_000),
+                ..execute_request("")
+            },
+            Arc::new(NoopCodeModeSessionDelegate),
+        )
         .await
         .unwrap();
 
@@ -228,20 +302,23 @@ async fn yields_and_resumes() {
 #[tokio::test]
 async fn returns_and_resumes_from_the_pending_frontier() {
     let (delegate, mut events_rx) = BlockingDelegate::new();
-    let service = InProcessCodeModeSession::with_delegate(delegate.clone());
+    let service = InProcessCodeModeSession::new();
 
     assert_eq!(
         service
-            .execute_to_pending(ExecuteRequest {
-                enabled_tools: vec![blocking_tool()],
-                source: r#"
+            .execute_to_pending(
+                ExecuteRequest {
+                    enabled_tools: vec![blocking_tool()],
+                    source: r#"
 await tools.block({});
 text("after");
 "#
-                .to_string(),
-                yield_time_ms: Some(60_000),
-                ..execute_request("")
-            })
+                    .to_string(),
+                    yield_time_ms: Some(60_000),
+                    ..execute_request("")
+                },
+                delegate.clone()
+            )
             .await
             .unwrap(),
         ExecuteToPendingOutcome::Pending {
@@ -278,9 +355,10 @@ text("after");
 async fn observed_natural_completion_wins_over_termination() {
     let service = InProcessCodeModeSession::new();
     let cell = service
-        .execute(execute_request(
-            r#"yield_control(); store("finished", true); text("done");"#,
-        ))
+        .execute(
+            execute_request(r#"yield_control(); store("finished", true); text("done");"#),
+            Arc::new(NoopCodeModeSessionDelegate),
+        )
         .await
         .unwrap();
 
@@ -295,10 +373,13 @@ async fn observed_natural_completion_wins_over_termination() {
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
             let response = service
-                .execute(ExecuteRequest {
-                    yield_time_ms: Some(60_000),
-                    ..execute_request(r#"text(String(load("finished")));"#)
-                })
+                .execute(
+                    ExecuteRequest {
+                        yield_time_ms: Some(60_000),
+                        ..execute_request(r#"text(String(load("finished")));"#)
+                    },
+                    Arc::new(NoopCodeModeSessionDelegate),
+                )
                 .await
                 .unwrap()
                 .initial_response()
@@ -335,11 +416,12 @@ async fn observed_natural_completion_wins_over_termination() {
 #[tokio::test]
 async fn termination_cancels_pending_callbacks_before_responding() {
     let (delegate, mut events_rx) = BlockingDelegate::new();
-    let service = InProcessCodeModeSession::with_delegate(delegate.clone());
+    let service = InProcessCodeModeSession::new();
     let cell = service
-        .execute(execute_request(
-            r#"notify("pending"); await new Promise(() => {});"#,
-        ))
+        .execute(
+            execute_request(r#"notify("pending"); await new Promise(() => {});"#),
+            delegate.clone(),
+        )
         .await
         .unwrap();
 
@@ -377,9 +459,9 @@ async fn termination_cancels_pending_callbacks_before_responding() {
 #[tokio::test]
 async fn shutdown_cancels_notifications_while_natural_completion_is_draining() {
     let (delegate, mut events_rx) = HeldNotificationDelegate::new();
-    let service = Arc::new(InProcessCodeModeSession::with_delegate(delegate.clone()));
+    let service = Arc::new(InProcessCodeModeSession::new());
     service
-        .execute(execute_request(r#"notify("pending");"#))
+        .execute(execute_request(r#"notify("pending");"#), delegate.clone())
         .await
         .unwrap();
 
@@ -407,11 +489,12 @@ async fn shutdown_cancels_notifications_while_natural_completion_is_draining() {
 #[tokio::test]
 async fn repeated_termination_is_rejected_while_callback_cleanup_is_pending() {
     let (delegate, mut events_rx) = HeldNotificationDelegate::new();
-    let service = Arc::new(InProcessCodeModeSession::with_delegate(delegate.clone()));
+    let service = Arc::new(InProcessCodeModeSession::new());
     let cell = service
-        .execute(execute_request(
-            r#"notify("pending"); await new Promise(() => {});"#,
-        ))
+        .execute(
+            execute_request(r#"notify("pending"); await new Promise(() => {});"#),
+            delegate.clone(),
+        )
         .await
         .unwrap();
 
@@ -461,7 +544,10 @@ async fn repeated_termination_is_rejected_while_callback_cleanup_is_pending() {
 async fn second_observer_is_rejected_without_displacing_the_first() {
     let service = InProcessCodeModeSession::new();
     let cell = service
-        .execute(execute_request("await new Promise(() => {});"))
+        .execute(
+            execute_request("await new Promise(() => {});"),
+            Arc::new(NoopCodeModeSessionDelegate),
+        )
         .await
         .unwrap();
 
@@ -509,14 +595,17 @@ async fn second_observer_is_rejected_without_displacing_the_first() {
 #[tokio::test]
 async fn natural_completion_cleans_up_callbacks_before_responding() {
     let (delegate, mut events_rx) = BlockingDelegate::new();
-    let service = InProcessCodeModeSession::with_delegate(delegate.clone());
+    let service = InProcessCodeModeSession::new();
     let cell = service
-        .execute(ExecuteRequest {
-            enabled_tools: vec![blocking_tool()],
-            source: r#"tools.block({}); text("done");"#.to_string(),
-            yield_time_ms: Some(60_000),
-            ..execute_request("")
-        })
+        .execute(
+            ExecuteRequest {
+                enabled_tools: vec![blocking_tool()],
+                source: r#"tools.block({}); text("done");"#.to_string(),
+                yield_time_ms: Some(60_000),
+                ..execute_request("")
+            },
+            delegate.clone(),
+        )
         .await
         .unwrap();
 

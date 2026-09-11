@@ -133,12 +133,12 @@ impl SessionInner {
         }
         let invocation_id = call.invocation_id.clone();
         let cancellation = match admission {
-            CallbackAdmission::Active(cancellation) => Ok(cancellation),
+            CallbackAdmission::Active(cancellation, delegate) => Ok((cancellation, delegate)),
             CallbackAdmission::Cancelled => return Ok(()),
             CallbackAdmission::Closed => Err(format!("code-mode cell {} is closed", call.cell_id)),
             CallbackAdmission::Rejected(error) => Err(error),
         };
-        let cancellation = match cancellation {
+        let (cancellation, delegate) = match cancellation {
             Ok(cancellation) => cancellation,
             Err(error) => {
                 let inner = Arc::clone(self);
@@ -157,19 +157,18 @@ impl SessionInner {
                 let result = match invocation {
                     Ok(invocation) => {
                         let callback = AssertUnwindSafe(async {
-                            inner
-                                .delegate
+                            delegate
                                 .invoke_tool(invocation, cancellation.child_token())
                                 .await
                         })
                         .catch_unwind();
                         tokio::select! {
-                            biased;
-                            _ = cancellation.cancelled() => return,
-                            result = callback => match result {
-                                Ok(result) => result,
-                                Err(_) => Err("code-mode tool delegate panicked".to_string()),
-                            },
+                                biased;
+                                _ = cancellation.cancelled() => return,
+                                result = callback => match result {
+                                    Ok(result) => result,
+                                    Err(_) => Err("code-mode tool delegate panicked".to_string()),
+                                },
                         }
                     }
                     Err(error) => Err(error),
@@ -223,8 +222,8 @@ impl SessionInner {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .admit_notification(&notification)?;
-        let cancellation = match admission {
-            CallbackAdmission::Active(cancellation) => cancellation,
+        let (cancellation, delegate) = match admission {
+            CallbackAdmission::Active(cancellation, delegate) => (cancellation, delegate),
             CallbackAdmission::Cancelled | CallbackAdmission::Closed => return Ok(()),
             CallbackAdmission::Rejected(error) => {
                 warn!("code-mode notification was dropped: {error}");
@@ -237,8 +236,7 @@ impl SessionInner {
         // them without waiting for arbitrary delegate work to complete.
         tokio::spawn(async move {
             let callback = AssertUnwindSafe(async {
-                inner
-                    .delegate
+                delegate
                     .notify(
                         notification.call_id,
                         CellId::new(notification.cell_id),

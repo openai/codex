@@ -26,7 +26,6 @@ use self::connection::Connection;
 use self::connection::ConnectionError;
 use self::connection::RemoteSession;
 use self::connection::SessionCleanup;
-use crate::NoopCodeModeSessionDelegate;
 
 mod connection;
 
@@ -73,19 +72,15 @@ impl CodeModeSessionProvider for ProcessOwnedCodeModeSessionProvider {
         }
     }
 
-    fn create_session<'a>(
-        &'a self,
-        delegate: Arc<dyn CodeModeSessionDelegate>,
-    ) -> CodeModeSessionProviderFuture<'a> {
-        self.create_session_with_limits(delegate, CodeModeSessionCellExecutionLimits::default())
+    fn create_session(&self) -> CodeModeSessionProviderFuture<'_> {
+        self.create_session_with_limits(CodeModeSessionCellExecutionLimits::default())
     }
 
     fn create_session_with_limits<'a>(
         &'a self,
-        delegate: Arc<dyn CodeModeSessionDelegate>,
         limits: CodeModeSessionCellExecutionLimits,
     ) -> CodeModeSessionProviderFuture<'a> {
-        Box::pin(create_host_session(delegate, self.process_host(), limits))
+        Box::pin(create_host_session(self.process_host(), limits))
     }
 }
 
@@ -94,28 +89,23 @@ impl CodeModeSessionProvider for DisabledCodeModeSessionProvider {
         Err("code-mode host is disabled".to_string())
     }
 
-    fn create_session<'a>(
-        &'a self,
-        _delegate: Arc<dyn CodeModeSessionDelegate>,
-    ) -> CodeModeSessionProviderFuture<'a> {
+    fn create_session(&self) -> CodeModeSessionProviderFuture<'_> {
         Box::pin(async { Err("code-mode host is disabled".to_string()) })
     }
 
     fn create_session_with_limits<'a>(
         &'a self,
-        delegate: Arc<dyn CodeModeSessionDelegate>,
         _limits: CodeModeSessionCellExecutionLimits,
     ) -> CodeModeSessionProviderFuture<'a> {
-        self.create_session(delegate)
+        self.create_session()
     }
 }
 
 async fn create_host_session(
-    delegate: Arc<dyn CodeModeSessionDelegate>,
     host: Arc<OwnedCodeModeHost>,
     limits: CodeModeSessionCellExecutionLimits,
 ) -> Result<Arc<dyn CodeModeSession>, String> {
-    let session = ProcessOwnedCodeModeSession::with_host(delegate, host, limits);
+    let session = ProcessOwnedCodeModeSession::with_host(host, limits);
     session.connection().await?;
     Ok(Arc::new(session))
 }
@@ -223,7 +213,6 @@ struct SessionBinding {
 
 struct SessionInner {
     host: Arc<OwnedCodeModeHost>,
-    delegate: Arc<dyn CodeModeSessionDelegate>,
     limits: CodeModeSessionCellExecutionLimits,
     state: StdMutex<SessionState>,
     next_generation: AtomicU64,
@@ -240,7 +229,6 @@ pub struct ProcessOwnedCodeModeSession {
 impl ProcessOwnedCodeModeSession {
     pub fn new() -> Self {
         Self::with_host(
-            Arc::new(NoopCodeModeSessionDelegate),
             Arc::new(OwnedCodeModeHost::new(
                 InstallContext::current().code_mode_host_program(),
             )),
@@ -248,15 +236,10 @@ impl ProcessOwnedCodeModeSession {
         )
     }
 
-    fn with_host(
-        delegate: Arc<dyn CodeModeSessionDelegate>,
-        host: Arc<OwnedCodeModeHost>,
-        limits: CodeModeSessionCellExecutionLimits,
-    ) -> Self {
+    fn with_host(host: Arc<OwnedCodeModeHost>, limits: CodeModeSessionCellExecutionLimits) -> Self {
         Self {
             inner: Arc::new(SessionInner {
                 host,
-                delegate,
                 limits,
                 state: StdMutex::new(SessionState::New),
                 next_generation: AtomicU64::new(1),
@@ -271,9 +254,16 @@ impl ProcessOwnedCodeModeSession {
         self.inner.connection().await
     }
 
-    pub async fn execute(&self, request: ExecuteRequest) -> Result<StartedCell, String> {
+    pub async fn execute(
+        &self,
+        request: ExecuteRequest,
+        delegate: Arc<dyn CodeModeSessionDelegate>,
+    ) -> Result<StartedCell, String> {
         let binding = self.connection().await?;
-        binding.connection.execute(binding.remote, request).await
+        binding
+            .connection
+            .execute(binding.remote, request, delegate)
+            .await
     }
 
     pub async fn wait(&self, request: WaitRequest) -> Result<WaitOutcome, String> {
@@ -348,11 +338,7 @@ impl SessionInner {
         let result = match self.host.connection().await {
             Ok(connection) => {
                 let cleanup = connection
-                    .open_session(
-                        remote.clone(),
-                        Arc::clone(&self.delegate),
-                        self.limits.clone(),
-                    )
+                    .open_session(remote.clone(), self.limits.clone())
                     .await;
                 cleanup.map(|cleanup| SessionBinding {
                     connection,
@@ -532,8 +518,11 @@ impl CodeModeSession for ProcessOwnedCodeModeSession {
     fn execute<'a>(
         &'a self,
         request: ExecuteRequest,
+        delegate: Arc<dyn CodeModeSessionDelegate>,
     ) -> CodeModeSessionResultFuture<'a, StartedCell> {
-        Box::pin(ProcessOwnedCodeModeSession::execute(self, request))
+        Box::pin(ProcessOwnedCodeModeSession::execute(
+            self, request, delegate,
+        ))
     }
 
     fn wait<'a>(&'a self, request: WaitRequest) -> CodeModeSessionResultFuture<'a, WaitOutcome> {

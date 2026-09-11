@@ -62,7 +62,7 @@ async fn provider_returns_missing_host_error() {
     );
 
     let error = provider
-        .create_session(Arc::new(NoopCodeModeSessionDelegate))
+        .create_session()
         .await
         .err()
         .expect("missing host should fail");
@@ -76,13 +76,16 @@ async fn shutdown_before_open_does_not_spawn_the_host() {
 
     session.shutdown().await.expect("shutdown session");
     let error = session
-        .execute(codex_code_mode_protocol::ExecuteRequest {
-            tool_call_id: "call-1".to_string(),
-            enabled_tools: Vec::new(),
-            source: "text('unreachable')".to_string(),
-            yield_time_ms: None,
-            max_output_tokens: None,
-        })
+        .execute(
+            codex_code_mode_protocol::ExecuteRequest {
+                tool_call_id: "call-1".to_string(),
+                enabled_tools: Vec::new(),
+                source: "text('unreachable')".to_string(),
+                yield_time_ms: None,
+                max_output_tokens: None,
+            },
+            Arc::new(NoopCodeModeSessionDelegate),
+        )
         .await
         .err()
         .expect("shutdown session should reject execution");

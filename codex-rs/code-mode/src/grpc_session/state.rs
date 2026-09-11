@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
+use std::sync::Arc;
+
+use codex_code_mode_protocol::CodeModeSessionDelegate;
 
 use codex_code_mode_protocol::CellId;
 use codex_code_mode_protocol::grpc;
@@ -16,15 +19,17 @@ struct ActiveCallback {
     cancellation: CancellationToken,
 }
 
+pub(super) type ClosedCell = (CellId, Arc<dyn CodeModeSessionDelegate>);
+
 pub(super) enum CallbackAdmission {
-    Active(CancellationToken),
+    Active(CancellationToken, Arc<dyn CodeModeSessionDelegate>),
     Cancelled,
     Closed,
     Rejected(String),
 }
 
-#[derive(Default)]
 struct ExecutionRecord {
+    delegate: Arc<dyn CodeModeSessionDelegate>,
     cell_id: Option<CellId>,
     tool_call_id: String,
     enabled_tools: HashMap<ToolName, i32>,
@@ -101,7 +106,11 @@ impl SessionState {
         Ok(())
     }
 
-    pub(super) fn begin_execution(&mut self, request: &grpc::ExecuteRequest) -> Result<(), String> {
+    pub(super) fn begin_execution(
+        &mut self,
+        request: &grpc::ExecuteRequest,
+        delegate: Arc<dyn CodeModeSessionDelegate>,
+    ) -> Result<(), String> {
         self.require_open()?;
         if request.execution_id.is_empty() || self.executions.contains_key(&request.execution_id) {
             return Err("code-mode execution ID was empty or reused".to_string());
@@ -127,7 +136,13 @@ impl SessionState {
             ExecutionRecord {
                 tool_call_id: request.tool_call_id.clone(),
                 enabled_tools,
-                ..ExecutionRecord::default()
+                delegate,
+                cell_id: None,
+                started: false,
+                ready: false,
+                closed: false,
+                notifications: 0,
+                cancellation: CancellationToken::new(),
             },
         );
         Ok(())
@@ -155,7 +170,7 @@ impl SessionState {
     pub(super) fn mark_execution_ready(
         &mut self,
         execution_id: &str,
-    ) -> Result<Option<CellId>, String> {
+    ) -> Result<Option<ClosedCell>, String> {
         self.require_open()?;
         let execution = self
             .executions
@@ -224,7 +239,10 @@ impl SessionState {
                 cancellation: cancellation.clone(),
             },
         );
-        Ok(CallbackAdmission::Active(cancellation))
+        Ok(CallbackAdmission::Active(
+            cancellation,
+            Arc::clone(&execution.delegate),
+        ))
     }
 
     pub(super) fn admit_notification(
@@ -255,10 +273,11 @@ impl SessionState {
         self.notifications += 1;
         Ok(CallbackAdmission::Active(
             execution.cancellation.child_token(),
+            Arc::clone(&execution.delegate),
         ))
     }
 
-    pub(super) fn finish_notification(&mut self, execution_id: &str) -> Option<CellId> {
+    pub(super) fn finish_notification(&mut self, execution_id: &str) -> Option<ClosedCell> {
         let execution = self.executions.get_mut(execution_id)?;
         execution.notifications = execution.notifications.checked_sub(1)?;
         self.notifications -= 1;
@@ -296,7 +315,7 @@ impl SessionState {
     pub(super) fn close_cell(
         &mut self,
         closed: grpc::CellClosed,
-    ) -> Result<Option<CellId>, String> {
+    ) -> Result<Option<ClosedCell>, String> {
         self.require_open()?;
         self.check_cell_ownership(&closed.execution_id, &closed.cell_id)?;
         let Some(execution) = self.executions.get_mut(&closed.execution_id) else {
@@ -317,7 +336,7 @@ impl SessionState {
         Ok(self.close_execution_if_ready(&closed.execution_id))
     }
 
-    pub(super) fn close(&mut self, failure: Option<String>) -> Vec<CellId> {
+    pub(super) fn close(&mut self, failure: Option<String>) -> Vec<ClosedCell> {
         if self.closed {
             return Vec::new();
         }
@@ -331,12 +350,14 @@ impl SessionState {
             .drain()
             .filter_map(|(_, execution)| {
                 execution.cancellation.cancel();
-                execution.cell_id
+                execution
+                    .cell_id
+                    .map(|cell_id| (cell_id, execution.delegate))
             })
             .collect()
     }
 
-    fn close_execution_if_ready(&mut self, execution_id: &str) -> Option<CellId> {
+    fn close_execution_if_ready(&mut self, execution_id: &str) -> Option<ClosedCell> {
         self.executions
             .get(execution_id)
             .is_some_and(|execution| {
@@ -349,12 +370,14 @@ impl SessionState {
             .flatten()
     }
 
-    pub(super) fn remove_execution(&mut self, execution_id: &str) -> Option<CellId> {
+    pub(super) fn remove_execution(&mut self, execution_id: &str) -> Option<ClosedCell> {
         let execution = self.executions.remove(execution_id)?;
         self.notifications -= execution.notifications;
         execution.cancellation.cancel();
         self.revoke_execution_callbacks(execution_id);
-        execution.cell_id
+        execution
+            .cell_id
+            .map(|cell_id| (cell_id, execution.delegate))
     }
 
     fn check_cell_ownership(&self, execution_id: &str, cell_id: &str) -> Result<(), String> {

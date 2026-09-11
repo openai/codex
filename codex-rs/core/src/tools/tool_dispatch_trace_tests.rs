@@ -66,10 +66,7 @@ impl CoreToolRuntime for TestHandler {}
 struct MissingCellCodeModeSessionProvider;
 
 impl codex_code_mode::CodeModeSessionProvider for MissingCellCodeModeSessionProvider {
-    fn create_session<'a>(
-        &'a self,
-        _delegate: Arc<dyn codex_code_mode::CodeModeSessionDelegate>,
-    ) -> codex_code_mode::CodeModeSessionProviderFuture<'a> {
+    fn create_session(&self) -> codex_code_mode::CodeModeSessionProviderFuture<'_> {
         Box::pin(async {
             Ok(Arc::new(MissingCellCodeModeSession) as Arc<dyn codex_code_mode::CodeModeSession>)
         })
@@ -82,6 +79,7 @@ impl codex_code_mode::CodeModeSession for MissingCellCodeModeSession {
     fn execute<'a>(
         &'a self,
         _request: codex_code_mode::ExecuteRequest,
+        _delegate: Arc<dyn codex_code_mode::CodeModeSessionDelegate>,
     ) -> codex_code_mode::CodeModeSessionResultFuture<'a, codex_code_mode::StartedCell> {
         Box::pin(async { Err("test session cannot execute cells".to_string()) })
     }
