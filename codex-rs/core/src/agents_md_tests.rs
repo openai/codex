@@ -418,6 +418,7 @@ fn foreign_agents_md_uses_environment_native_paths() {
     let source_path = cwd.join("AGENTS.md").expect("AGENTS.md URI");
     let loaded = LoadedAgentsMd {
         user_instructions: None,
+        thread_instructions: None,
         entries: vec![InstructionEntry {
             contents: "remote instructions".to_string(),
             provenance: InstructionProvenance::Project {
@@ -451,6 +452,7 @@ fn multi_environment_agents_md_renders_mixed_path_conventions() {
         .expect("Windows AGENTS.md URI");
     let loaded = LoadedAgentsMd {
         user_instructions: None,
+        thread_instructions: None,
         entries: vec![
             InstructionEntry {
                 contents: "POSIX instructions".to_string(),
@@ -509,7 +511,7 @@ async fn make_config(root: &TempDir, limit: usize, instructions: Option<&str>) -
 
     let user_instructions = instructions.map(|text| Instructions {
         text: text.to_owned(),
-        source: config.codex_home.join(DEFAULT_AGENTS_MD_FILENAME),
+        source: Some(config.codex_home.join(DEFAULT_AGENTS_MD_FILENAME)),
     });
     TestConfig {
         config,
@@ -558,7 +560,7 @@ async fn make_config_with_project_root_markers(
     config.project_doc_max_bytes = limit;
     let user_instructions = instructions.map(|text| Instructions {
         text: text.to_owned(),
-        source: config.codex_home.join(DEFAULT_AGENTS_MD_FILENAME),
+        source: Some(config.codex_home.join(DEFAULT_AGENTS_MD_FILENAME)),
     });
     TestConfig {
         config,
@@ -608,6 +610,7 @@ fn empty_loaded_instructions_are_empty() {
 fn loaded_instructions_with_only_empty_or_whitespace_entries_are_empty() {
     let empty = LoadedAgentsMd {
         user_instructions: None,
+        thread_instructions: None,
         entries: vec![InstructionEntry {
             contents: String::new(),
             provenance: InstructionProvenance::Internal,
@@ -615,6 +618,7 @@ fn loaded_instructions_with_only_empty_or_whitespace_entries_are_empty() {
     };
     let whitespace = LoadedAgentsMd {
         user_instructions: None,
+        thread_instructions: None,
         entries: vec![InstructionEntry {
             contents: " \n\t".to_string(),
             provenance: InstructionProvenance::Internal,
@@ -686,6 +690,7 @@ async fn total_byte_limit_truncates_later_project_docs() {
     let loaded = load_agents_md(&config).await.expect("project instructions");
     let expected = LoadedAgentsMd {
         user_instructions: None,
+        thread_instructions: None,
         entries: vec![
             InstructionEntry {
                 contents: "root".to_string(),
@@ -1100,16 +1105,16 @@ async fn zero_byte_limit_disables_docs() {
     );
 }
 
-/// When both system instructions and AGENTS.md docs are present the two
-/// should be concatenated with the separator.
+/// User instructions precede project docs without consuming their byte budget.
 #[tokio::test]
 async fn merges_existing_instructions_with_agents_md() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    fs::write(tmp.path().join("AGENTS.md"), "proj doc").unwrap();
+    fs::write(tmp.path().join("AGENTS.md"), "proj document").unwrap();
 
     const INSTRUCTIONS: &str = "base instructions";
+    let limit = "proj doc".len();
 
-    let res = get_user_instructions(&make_config(&tmp, /*limit*/ 4096, Some(INSTRUCTIONS)).await)
+    let res = get_user_instructions(&make_config(&tmp, limit, Some(INSTRUCTIONS)).await)
         .await
         .expect("should produce a combined instruction string");
 
@@ -1173,11 +1178,13 @@ secondary doc"#,
         loaded.sources().collect::<Vec<_>>(),
         vec![
             PathUri::from_abs_path(
-                &config
+                config
                     .user_instructions
                     .as_ref()
                     .expect("global instructions")
-                    .source,
+                    .source
+                    .as_ref()
+                    .expect("global instruction source"),
             ),
             PathUri::from_abs_path(&primary.path().join("AGENTS.md").abs()),
             PathUri::from_abs_path(&primary_nested.join("AGENTS.md").abs()),
@@ -1376,6 +1383,7 @@ async fn concatenates_root_and_cwd_docs() {
     let crate_agents = cfg.cwd.join("AGENTS.md");
     let expected = LoadedAgentsMd {
         user_instructions: None,
+        thread_instructions: None,
         entries: vec![
             InstructionEntry {
                 contents: "root doc".to_string(),
@@ -1513,8 +1521,9 @@ async fn instruction_sources_include_global_before_agents_md_docs() {
     let expected = LoadedAgentsMd {
         user_instructions: Some(Instructions {
             text: "global doc".to_string(),
-            source: global_agents.clone(),
+            source: Some(global_agents.clone()),
         }),
+        thread_instructions: None,
         entries: vec![InstructionEntry {
             contents: "project doc".to_string(),
             provenance: project_provenance(project_agents.clone(), cfg.cwd.clone()),

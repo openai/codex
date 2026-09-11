@@ -5,7 +5,6 @@ use std::sync::Arc;
 use std::sync::Weak;
 
 use codex_async_utils::OrCancelExt;
-use codex_extension_api::LoadedUserInstructions;
 use codex_history::InitialHistory;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::InternalSessionSource;
@@ -75,28 +74,28 @@ impl ManagedReviewerThreads {
             thread_source: Some(ThreadSource::GuardianReview),
             environments: Some(context.environments().to_selections()),
             inherited_environments: Some(context.environments().clone()),
-            user_instructions: Some(LoadedUserInstructions {
-                instructions: parent.inherited_instructions().await.user,
-                warnings: Vec::new(),
-            }),
             client_mcp_extensions: parent.services.client_mcp_extensions.clone(),
             ..StartThreadOptions::new(config)
         };
-        let spawned = match history.unwrap_or(InitialHistory::New) {
-            InitialHistory::Forked(history) => manager
-                .fork_internal_session(parent.thread_id(), options, history)
-                .or_cancel(&cancel)
-                .await
-                .map_err(codex_protocol::error::CodexErr::from)??,
-            InitialHistory::New | InitialHistory::Cleared => manager
-                .spawn_internal_session(parent.thread_id(), options)
-                .or_cancel(&cancel)
-                .await
-                .map_err(codex_protocol::error::CodexErr::from)??,
+        let history = match history.unwrap_or(InitialHistory::New) {
+            InitialHistory::Forked(history) => InitialHistory::Forked(history),
+            InitialHistory::New | InitialHistory::Cleared => InitialHistory::New,
             InitialHistory::Resumed(_) => {
                 anyhow::bail!("guardian review forks cannot resume an existing thread")
             }
         };
+        // Generic internal sessions start isolated. Reviewers explicitly inherit
+        // the parent's applied instructions, just like standalone delegates.
+        let spawned = manager
+            .spawn_internal_session_with_history(
+                parent.thread_id(),
+                options,
+                history,
+                Some(parent.inherited_instructions().await),
+            )
+            .or_cancel(&cancel)
+            .await
+            .map_err(codex_protocol::error::CodexErr::from)??;
         let thread = spawned.thread;
         let session = Arc::clone(&thread.session);
         let io = forward_session_io(

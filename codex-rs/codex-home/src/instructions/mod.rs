@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use codex_extension_api::Instructions;
-use codex_extension_api::LoadUserInstructionsFuture;
+use codex_extension_api::LoadInstructionsFuture;
 use codex_extension_api::LoadedUserInstructions;
 use codex_extension_api::UserInstructionsProvider;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -70,7 +70,7 @@ impl CodexHomeUserInstructionsProvider {
                 return LoadedUserInstructions {
                     instructions: Some(Instructions {
                         text: trimmed.to_string(),
-                        source: path,
+                        source: Some(path),
                     }),
                     warnings,
                 };
@@ -84,7 +84,7 @@ impl CodexHomeUserInstructionsProvider {
 }
 
 impl UserInstructionsProvider for CodexHomeUserInstructionsProvider {
-    fn load_user_instructions(&self) -> LoadUserInstructionsFuture<'_> {
+    fn load_user_instructions(&self) -> LoadInstructionsFuture<'_> {
         Box::pin(async move {
             let mut loaded = self.load_from_codex_home().await;
             let mut state = self

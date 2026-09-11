@@ -557,7 +557,17 @@ impl AgentControl {
                 None,
             )
         };
-        // Reserving a slot can evict an idle nested parent. Keep its authority captured above.
+        let inherited_instructions = if let Some((parent, _)) = parent.as_ref() {
+            Some(parent.session.inherited_instructions().await)
+        } else if let Some(parent_thread_id) = parent_thread_id
+            && let Ok(parent) = state.get_thread(parent_thread_id).await
+        {
+            Some(parent.session.inherited_instructions().await)
+        } else {
+            None
+        };
+        // Reserving a slot can evict an idle nested parent. Capture its instructions
+        // alongside its authority so the child does not depend on a later live lookup.
         let residency_slot = self
             .reserve_v2_residency_slot(&state, &config, Some(thread_id))
             .await?;
@@ -571,6 +581,7 @@ impl AgentControl {
                 parent_thread_id,
                 environment_selections,
                 inherited_environments,
+                inherited_instructions,
                 inherited_exec_policy,
                 client_mcp_extensions,
             })
@@ -1277,6 +1288,7 @@ impl AgentControl {
                 parent_thread_id,
                 environment_selections: None,
                 inherited_environments,
+                inherited_instructions: None,
                 inherited_exec_policy,
                 client_mcp_extensions: None,
             })

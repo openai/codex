@@ -6,12 +6,19 @@ use codex_core::TurnInputRequest;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_exec_server::REMOTE_ENVIRONMENT_ID;
-use codex_extension_api::LoadUserInstructionsFuture;
+use codex_extension_api::Instructions;
+use codex_extension_api::LoadInstructionsFuture;
+use codex_extension_api::LoadedUserInstructions;
+use codex_extension_api::ThreadInstructionsProvider;
 use codex_extension_api::UserInstructionsProvider;
 use codex_features::Feature;
+use codex_history::InitialHistory;
+use codex_history::ResumedHistory;
 use codex_history::RolloutItem;
 use codex_home::CodexHomeUserInstructionsProvider;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::TrustLevel;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -20,11 +27,19 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use codex_protocol::protocol::TurnEnvironmentSelections;
+use codex_protocol::request_user_input::RequestUserInputAnswer;
+use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
+use codex_thread_store::ForkBoundary;
+use codex_thread_store::LoadThreadHistoryParams;
+use codex_thread_store::PrepareForkParams;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
+use codex_utils_string::approx_bytes_for_tokens;
 use core_test_support::PathBufExt;
 use core_test_support::create_directory_symlink;
 use core_test_support::load_default_config_for_test;
@@ -39,6 +54,7 @@ use core_test_support::skip_if_no_remote_env;
 use core_test_support::skip_if_sandbox;
 use core_test_support::skip_if_target_windows;
 use core_test_support::test_codex::RecordingUserInstructionsProvider;
+use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::executor_path_uri;
 use core_test_support::test_codex::test_codex;
@@ -46,9 +62,12 @@ use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -64,6 +83,8 @@ const NEW_PROJECT_INSTRUCTIONS: &str = "new project instructions";
 const OLD_GLOBAL_INSTRUCTIONS: &str = "old global instructions";
 const PROJECT_INSTRUCTIONS: &str = "project instructions";
 const PROJECT_SEPARATOR: &str = "--- project-doc ---";
+const TASK_USER_INSTRUCTIONS: &str = "task user instructions";
+const UPDATED_TASK_USER_INSTRUCTIONS: &str = "updated task user instructions";
 const SPAWN_CALL_ID: &str = "spawn-global-instructions-child";
 const SPAWN_CHILD_PROMPT: &str = "inspect inherited global instructions";
 const SPAWN_FRESH_PARENT_PROMPT: &str = "spawn a child with fresh context";
@@ -77,7 +98,7 @@ struct WarningInstructionsProvider {
 }
 
 impl UserInstructionsProvider for WarningInstructionsProvider {
-    fn load_user_instructions(&self) -> LoadUserInstructionsFuture<'_> {
+    fn load_user_instructions(&self) -> LoadInstructionsFuture<'_> {
         Box::pin(async move {
             let mut loaded = self.inner.load_user_instructions().await;
             if self.warning_active.load(Ordering::SeqCst) {
@@ -85,6 +106,60 @@ impl UserInstructionsProvider for WarningInstructionsProvider {
             }
             loaded
         })
+    }
+}
+
+struct RecordingThreadInstructionsProvider {
+    loaded: Mutex<LoadedUserInstructions>,
+    load_count: AtomicUsize,
+}
+
+impl RecordingThreadInstructionsProvider {
+    fn new(instructions: Option<Instructions>) -> Self {
+        Self {
+            loaded: Mutex::new(LoadedUserInstructions {
+                instructions,
+                warnings: Vec::new(),
+            }),
+            load_count: AtomicUsize::new(0),
+        }
+    }
+
+    fn with_text(text: impl Into<String>) -> Self {
+        Self::new(Some(Instructions {
+            text: text.into(),
+            source: None,
+        }))
+    }
+
+    fn load_count(&self) -> usize {
+        self.load_count.load(Ordering::SeqCst)
+    }
+
+    fn set_instructions(&self, instructions: Option<Instructions>) {
+        self.loaded
+            .lock()
+            .expect("instruction snapshot lock")
+            .instructions = instructions;
+    }
+
+    fn set_warnings(&self, warnings: Vec<String>) {
+        self.loaded
+            .lock()
+            .expect("instruction snapshot lock")
+            .warnings = warnings;
+    }
+}
+
+impl ThreadInstructionsProvider for RecordingThreadInstructionsProvider {
+    fn load_thread_instructions(&self) -> LoadInstructionsFuture<'_> {
+        self.load_count.fetch_add(1, Ordering::SeqCst);
+        let loaded = self
+            .loaded
+            .lock()
+            .expect("instruction snapshot lock")
+            .clone();
+        Box::pin(async move { loaded })
     }
 }
 
@@ -173,6 +248,32 @@ async fn submit_thread_turn(thread: &Arc<codex_core::CodexThread>, prompt: &str)
         .await?;
     wait_for_event(thread, |event| matches!(event, EventMsg::TurnComplete(_))).await;
     Ok(())
+}
+
+async fn persisted_resume_history(
+    thread: &Arc<codex_core::CodexThread>,
+) -> Result<(ThreadId, InitialHistory)> {
+    thread.ensure_rollout_materialized().await;
+    thread.flush_rollout().await?;
+    let stored = thread
+        .read_thread(
+            /*include_archived*/ true, /*include_history*/ true,
+        )
+        .await?;
+    let thread_id = stored.thread_id;
+    Ok((
+        thread_id,
+        InitialHistory::Resumed(ResumedHistory {
+            conversation_id: thread_id,
+            history: Arc::new(
+                stored
+                    .history
+                    .ok_or_else(|| anyhow!("thread history should be loaded"))?
+                    .items,
+            ),
+            rollout_path: stored.rollout_path,
+        }),
+    ))
 }
 
 fn request_body_contains(request: &wiremock::Request, text: &str) -> bool {
@@ -916,6 +1017,561 @@ async fn loads_user_instructions_without_a_primary_environment() -> Result<()> {
     assert!(instruction_fragments[0].contains(GLOBAL_INSTRUCTIONS));
     assert!(!instruction_fragments[0].contains(PROJECT_INSTRUCTIONS));
 
+    Ok(())
+}
+
+struct ThreadInstructionsFixture {
+    test: TestCodex,
+    thread: Arc<codex_core::CodexThread>,
+    provider: Arc<RecordingThreadInstructionsProvider>,
+}
+
+impl ThreadInstructionsFixture {
+    async fn new(server: &wiremock::MockServer) -> Result<Self> {
+        let home = Arc::new(TempDir::new()?);
+        write_global_file(home.as_ref(), GLOBAL_AGENTS_FILENAME, GLOBAL_INSTRUCTIONS)?;
+        let global_provider = Arc::new(RecordingUserInstructionsProvider::new(Arc::new(
+            CodexHomeUserInstructionsProvider::new(AbsolutePathBuf::try_from(
+                home.path().to_path_buf(),
+            )?),
+        )));
+        let mut builder = test_codex()
+            .with_home(home)
+            .with_user_instructions_provider(global_provider.clone())
+            .with_config(|config| {
+                config.project_doc_max_bytes = PROJECT_INSTRUCTIONS.len();
+                config
+                    .features
+                    .enable(Feature::DefaultModeRequestUserInput)
+                    .expect("test config should allow request-user-input feature");
+            })
+            .with_workspace_setup(|cwd, fs| async move {
+                let project_agents_uri = executor_path_uri(cwd.join(GLOBAL_AGENTS_FILENAME))?;
+                fs.write_file(
+                    &project_agents_uri,
+                    PROJECT_INSTRUCTIONS.as_bytes().to_vec(),
+                    Default::default(),
+                    /*sandbox*/ None,
+                )
+                .await?;
+                Ok(())
+            });
+        let test = builder.build_with_auto_env(server).await?;
+        assert_eq!(global_provider.load_count(), 1);
+        let provider = Arc::new(RecordingThreadInstructionsProvider::with_text(
+            TASK_USER_INSTRUCTIONS,
+        ));
+        let thread = test
+            .thread_manager
+            .start_thread(StartThreadOptions {
+                environments: Some(vec![test.executor_environment().selection().clone()]),
+                thread_instructions_provider: Some(provider.clone()),
+                ..StartThreadOptions::new(test.config.clone())
+            })
+            .await?
+            .thread;
+        Ok(Self {
+            test,
+            thread,
+            provider,
+        })
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn thread_provider_composes_and_clears_only_its_instructions() -> Result<()> {
+    let server = start_mock_server().await;
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        ["initial", "unchanged", "cleared", "unchanged-empty"]
+            .map(|id| sse(vec![ev_response_created(id), ev_completed(id)]))
+            .to_vec(),
+    )
+    .await;
+    let fixture = ThreadInstructionsFixture::new(&server).await?;
+    let sources = vec![
+        PathUri::from_abs_path(&fixture.test.config.codex_home.join(GLOBAL_AGENTS_FILENAME)),
+        fixture.test.workspace_path_uri(GLOBAL_AGENTS_FILENAME)?,
+    ];
+    assert_eq!(fixture.thread.instruction_sources().await, sources);
+    for prompt in [
+        "inspect task instructions",
+        "inspect unchanged task instructions",
+    ] {
+        submit_thread_turn(&fixture.thread, prompt).await?;
+    }
+    for instructions in [
+        Some(Instructions {
+            text: String::new(),
+            source: None,
+        }),
+        None,
+    ] {
+        fixture.provider.set_instructions(instructions);
+        submit_thread_turn(&fixture.thread, "inspect cleared task instructions").await?;
+    }
+    assert!(fixture.provider.load_count() > 1);
+    assert_eq!(fixture.thread.instruction_sources().await, sources);
+
+    let cwd = &fixture.test.executor_environment().selection().cwd;
+    let initial = expected_instruction_fragment(
+        cwd,
+        &format!(
+            "{GLOBAL_INSTRUCTIONS}\n\n{TASK_USER_INSTRUCTIONS}\n\n{PROJECT_SEPARATOR}\n\n{PROJECT_INSTRUCTIONS}"
+        ),
+    );
+    let cleared = expected_instruction_fragment(
+        cwd,
+        &format!(
+            "These AGENTS.md instructions replace all previously provided AGENTS.md instructions.\n\n{GLOBAL_INSTRUCTIONS}\n\n{PROJECT_SEPARATOR}\n\n{PROJECT_INSTRUCTIONS}"
+        ),
+    );
+    assert_eq!(
+        response_mock
+            .requests()
+            .iter()
+            .map(instruction_fragments)
+            .collect::<Vec<_>>(),
+        vec![
+            vec![initial.clone()],
+            vec![initial.clone()],
+            vec![initial.clone(), cleared.clone()],
+            vec![initial, cleared],
+        ],
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn thread_provider_refreshes_at_the_next_step_of_an_active_turn() -> Result<()> {
+    let server = start_mock_server().await;
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("active-turn"),
+                responses::ev_function_call(
+                    "pause-for-thread-instructions",
+                    "request_user_input",
+                    &json!({
+                        "questions": [{
+                            "id": "continue",
+                            "header": "Continue",
+                            "question": "Continue after updating thread instructions?",
+                            "options": [{
+                                "label": "Yes (Recommended)",
+                                "description": "Continue the current turn."
+                            }, {
+                                "label": "No",
+                                "description": "Stop the current turn."
+                            }]
+                        }]
+                    })
+                    .to_string(),
+                ),
+                ev_completed("active-turn"),
+            ]),
+            sse(vec![
+                ev_response_created("updated"),
+                ev_completed("updated"),
+            ]),
+        ],
+    )
+    .await;
+    let fixture = ThreadInstructionsFixture::new(&server).await?;
+    fixture
+        .thread
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "inspect instructions updated during the active turn".to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let EventMsg::RequestUserInput(request) = wait_for_event(&fixture.thread, |event| {
+        matches!(event, EventMsg::RequestUserInput(_))
+    })
+    .await
+    else {
+        unreachable!("wait_for_event should return the request-user-input event")
+    };
+    // Only the host's provider changes; no explicit instruction update or resume call.
+    fixture.provider.set_instructions(Some(Instructions {
+        text: UPDATED_TASK_USER_INSTRUCTIONS.to_string(),
+        source: None,
+    }));
+    fixture
+        .thread
+        .submit(Op::UserInputAnswer {
+            id: request.turn_id,
+            response: RequestUserInputResponse {
+                answers: HashMap::from([(
+                    "continue".to_string(),
+                    RequestUserInputAnswer {
+                        answers: vec!["Yes (Recommended)".to_string()],
+                    },
+                )]),
+            },
+        })
+        .await?;
+    wait_for_event(&fixture.thread, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let cwd = &fixture.test.executor_environment().selection().cwd;
+    let initial = expected_instruction_fragment(
+        cwd,
+        &format!(
+            "{GLOBAL_INSTRUCTIONS}\n\n{TASK_USER_INSTRUCTIONS}\n\n{PROJECT_SEPARATOR}\n\n{PROJECT_INSTRUCTIONS}"
+        ),
+    );
+    let updated = expected_instruction_fragment(
+        cwd,
+        &format!(
+            "These AGENTS.md instructions replace all previously provided AGENTS.md instructions.\n\n{GLOBAL_INSTRUCTIONS}\n\n{UPDATED_TASK_USER_INSTRUCTIONS}\n\n{PROJECT_SEPARATOR}\n\n{PROJECT_INSTRUCTIONS}"
+        ),
+    );
+    assert_eq!(
+        response_mock
+            .requests()
+            .iter()
+            .map(instruction_fragments)
+            .collect::<Vec<_>>(),
+        vec![vec![initial.clone()], vec![initial, updated]],
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn thread_provider_enforces_its_own_limit_before_startup_and_sampling() -> Result<()> {
+    let server = start_mock_server().await;
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        ["initial", "full-thread-budget"]
+            .map(|id| sse(vec![ev_response_created(id), ev_completed(id)]))
+            .to_vec(),
+    )
+    .await;
+    let fixture = ThreadInstructionsFixture::new(&server).await?;
+    let oversized = Instructions {
+        text: "x".repeat(approx_bytes_for_tokens(/*tokens*/ 10_001)),
+        source: None,
+    };
+    let error = fixture
+        .test
+        .thread_manager
+        .start_thread(StartThreadOptions {
+            environments: Some(vec![
+                fixture.test.executor_environment().selection().clone(),
+            ]),
+            thread_instructions_provider: Some(Arc::new(RecordingThreadInstructionsProvider::new(
+                Some(oversized.clone()),
+            ))),
+            ..StartThreadOptions::new(fixture.test.config.clone())
+        })
+        .await
+        .err()
+        .ok_or_else(|| anyhow!("oversized instructions must fail before thread creation"))?;
+    assert!(matches!(
+        error.details(),
+        CodexErrorDetails::InvalidRequest(_)
+    ));
+    assert!(error.to_string().contains("10000 estimated tokens"));
+
+    submit_thread_turn(&fixture.thread, "inspect valid instructions").await?;
+    fixture.provider.set_instructions(Some(oversized));
+    fixture
+        .provider
+        .set_warnings(vec!["provider refresh warning".to_string()]);
+    let request_count = response_mock.requests().len();
+    fixture
+        .thread
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "reject oversized instructions before sampling".to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let EventMsg::Warning(warning) = wait_for_event(&fixture.thread, |event| {
+        matches!(event, EventMsg::Warning(_) | EventMsg::Error(_))
+    })
+    .await
+    else {
+        panic!("provider warnings must be emitted before validation errors");
+    };
+    assert_eq!(warning.message, "provider refresh warning");
+    let EventMsg::Error(error) =
+        wait_for_event(&fixture.thread, |event| matches!(event, EventMsg::Error(_))).await
+    else {
+        unreachable!();
+    };
+    assert!(error.message.contains("10000 estimated tokens"));
+    wait_for_event(&fixture.thread, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    assert_eq!(response_mock.requests().len(), request_count);
+    fixture.provider.set_warnings(Vec::new());
+
+    // The full thread budget is independent of global instructions and wrapping.
+    // Changing environments must also remove the previously selected repository docs.
+    let host_text = "x".repeat(approx_bytes_for_tokens(/*tokens*/ 10_000));
+    let expected = expected_provider_only_instruction_fragment(&format!(
+        "These AGENTS.md instructions replace all previously provided AGENTS.md instructions.\n\n{GLOBAL_INSTRUCTIONS}\n\n{host_text}"
+    ));
+    fixture.provider.set_instructions(Some(Instructions {
+        text: host_text,
+        source: None,
+    }));
+    fixture
+        .thread
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "inspect instructions without the previous environment".to_string(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                environments: Some(TurnEnvironmentSelections::new(
+                    fixture.test.config.cwd.clone(),
+                    Vec::new(),
+                )),
+                ..Default::default()
+            }),
+        )
+        .await?;
+    wait_for_event(&fixture.thread, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(instruction_fragments(&requests[1]).last(), Some(&expected));
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum InstructionForkSource {
+    LiveRollout,
+    OfflineHistory,
+    OfflinePrepared,
+}
+
+#[test_case::test_case(InstructionForkSource::LiveRollout; "live snapshot")]
+#[test_case::test_case(InstructionForkSource::OfflineHistory; "offline history provider")]
+#[test_case::test_case(InstructionForkSource::OfflinePrepared; "offline prepared provider")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fork_preserves_thread_instructions(source: InstructionForkSource) -> Result<()> {
+    let server = start_mock_server().await;
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        ["parent", "fork", "updated-fork"]
+            .map(|id| sse(vec![ev_response_created(id), ev_completed(id)]))
+            .to_vec(),
+    )
+    .await;
+    let history_mode = match source {
+        InstructionForkSource::LiveRollout | InstructionForkSource::OfflineHistory => {
+            ThreadHistoryMode::Legacy
+        }
+        InstructionForkSource::OfflinePrepared => ThreadHistoryMode::Paginated,
+    };
+    let mut builder = test_codex()
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::Sqlite)
+                .expect("enable local persistence");
+        })
+        .with_history_mode(history_mode);
+    let test = builder.build_with_auto_env(&server).await?;
+    let parent_provider = Arc::new(RecordingThreadInstructionsProvider::with_text(
+        TASK_USER_INSTRUCTIONS,
+    ));
+    let parent = test
+        .thread_manager
+        .start_thread(StartThreadOptions {
+            environments: Some(Vec::new()),
+            thread_instructions_provider: Some(parent_provider.clone()),
+            history_mode: Some(history_mode),
+            ..StartThreadOptions::new(test.config.clone())
+        })
+        .await?;
+    submit_thread_turn(&parent.thread, "persist parent instructions").await?;
+    parent.thread.ensure_rollout_materialized().await;
+    parent.thread.flush_rollout().await?;
+    let parent_id = parent.thread_id;
+    let rollout_path = parent
+        .thread
+        .rollout_path()
+        .expect("persisted parent rollout");
+    let parent_loads = parent_provider.load_count();
+    let offline = !matches!(source, InstructionForkSource::LiveRollout);
+    if offline {
+        parent.thread.shutdown_and_wait().await?;
+        test.thread_manager
+            .remove_thread_if_matches(&parent_id, &parent.thread)
+            .await;
+    }
+    let fork_provider = Arc::new(RecordingThreadInstructionsProvider::with_text(
+        TASK_USER_INSTRUCTIONS,
+    ));
+    let options = StartThreadOptions {
+        environments: Some(Vec::new()),
+        thread_instructions_provider: offline
+            .then(|| fork_provider.clone() as Arc<dyn ThreadInstructionsProvider>),
+        ..StartThreadOptions::new(test.config.clone())
+    };
+    let fork = match source {
+        InstructionForkSource::LiveRollout => {
+            test.thread_manager
+                .fork_thread(ForkSnapshot::Interrupted, options, rollout_path)
+                .await?
+        }
+        InstructionForkSource::OfflineHistory => {
+            let stored = test
+                .thread_store
+                .load_latest_model_context(LoadThreadHistoryParams {
+                    thread_id: parent_id,
+                    include_archived: true,
+                })
+                .await?;
+            let history = InitialHistory::Resumed(ResumedHistory {
+                conversation_id: parent_id,
+                history: Arc::new(stored.items),
+                rollout_path: None,
+            });
+            test.thread_manager
+                .fork_thread_from_history(ForkSnapshot::Interrupted, options, history)
+                .await?
+        }
+        InstructionForkSource::OfflinePrepared => {
+            let prepared = test
+                .thread_store
+                .prepare_fork(PrepareForkParams {
+                    thread_id: parent_id,
+                    boundary: ForkBoundary::Latest,
+                })
+                .await?;
+            test.thread_manager
+                .fork_prepared_thread(options, prepared)
+                .await?
+        }
+    };
+    submit_thread_turn(&fork.thread, "continue with inherited instructions").await?;
+    // Live forks inherit only a snapshot; offline forks retain their own provider.
+    // Neither path may call the original task's provider.
+    for provider in [&parent_provider, &fork_provider] {
+        provider.set_instructions(Some(Instructions {
+            text: UPDATED_TASK_USER_INSTRUCTIONS.to_string(),
+            source: None,
+        }));
+    }
+    submit_thread_turn(&fork.thread, "continue after source update").await?;
+    assert_eq!(parent_provider.load_count(), parent_loads);
+    let initial = expected_provider_only_instruction_fragment(TASK_USER_INSTRUCTIONS);
+    let final_fragments = if offline {
+        vec![
+            initial.clone(),
+            expected_provider_only_instruction_fragment(&format!(
+                "These AGENTS.md instructions replace all previously provided AGENTS.md instructions.\n\n{UPDATED_TASK_USER_INSTRUCTIONS}"
+            )),
+        ]
+    } else {
+        vec![initial.clone()]
+    };
+    assert_eq!(
+        response_mock
+            .requests()
+            .iter()
+            .map(instruction_fragments)
+            .collect::<Vec<_>>(),
+        vec![vec![initial.clone()], vec![initial], final_fragments]
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn thread_provider_lives_with_its_session_across_resume() -> Result<()> {
+    let server = start_mock_server().await;
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        ["updated-live-session", "cold-session"]
+            .map(|id| sse(vec![ev_response_created(id), ev_completed(id)]))
+            .to_vec(),
+    )
+    .await;
+    let mut builder = test_codex();
+    let test = builder.build_with_auto_env(&server).await?;
+    let provider = Arc::new(RecordingThreadInstructionsProvider::new(
+        /*instructions*/ None,
+    ));
+    let started = test
+        .thread_manager
+        .start_thread(StartThreadOptions {
+            environments: Some(Vec::new()),
+            thread_instructions_provider: Some(provider.clone()),
+            ..StartThreadOptions::new(test.config.clone())
+        })
+        .await?;
+    assert_eq!(provider.load_count(), 1);
+    let (_, history) = persisted_resume_history(&started.thread).await?;
+    let cold_provider = Arc::new(RecordingThreadInstructionsProvider::with_text(
+        "cold session instructions",
+    ));
+    provider.set_instructions(Some(Instructions {
+        text: UPDATED_TASK_USER_INSTRUCTIONS.to_string(),
+        source: None,
+    }));
+    let same_provider = Arc::new(RecordingThreadInstructionsProvider::with_text(
+        UPDATED_TASK_USER_INSTRUCTIONS,
+    ));
+    for supplied in [
+        None,
+        Some(same_provider.clone() as Arc<dyn ThreadInstructionsProvider>),
+        Some(cold_provider.clone() as Arc<dyn ThreadInstructionsProvider>),
+    ] {
+        let resumed = test
+            .thread_manager
+            .start_thread(StartThreadOptions {
+                initial_history: history.clone(),
+                thread_instructions_provider: supplied,
+                ..StartThreadOptions::new(test.config.clone())
+            })
+            .await?;
+        assert!(Arc::ptr_eq(&resumed.thread, &started.thread));
+        assert_eq!(provider.load_count(), 1);
+        assert_eq!(same_provider.load_count(), 0);
+        assert_eq!(cold_provider.load_count(), 0);
+    }
+
+    // Reattachment does no loading; the existing Session pulls at the next model step.
+    submit_thread_turn(&started.thread, "load instructions added after creation").await?;
+    assert_eq!(provider.load_count(), 2);
+    assert_eq!(same_provider.load_count(), 0);
+    let (_, history) = persisted_resume_history(&started.thread).await?;
+    started.thread.shutdown_and_wait().await?;
+    let resumed = test
+        .thread_manager
+        .start_thread(StartThreadOptions {
+            initial_history: history,
+            environments: Some(Vec::new()),
+            thread_instructions_provider: Some(cold_provider.clone()),
+            ..StartThreadOptions::new(test.config.clone())
+        })
+        .await?;
+    assert!(!Arc::ptr_eq(&resumed.thread, &started.thread));
+    assert_eq!(cold_provider.load_count(), 1);
+    submit_thread_turn(&resumed.thread, "load cold session instructions").await?;
+    assert_eq!(provider.load_count(), 2);
+    let requests = response_mock.requests();
+    assert_single_instruction_fragment(
+        &requests[0],
+        &expected_provider_only_instruction_fragment(UPDATED_TASK_USER_INSTRUCTIONS),
+    );
+    assert_eq!(
+        instruction_fragments(&requests[1]).last(),
+        Some(&expected_provider_only_instruction_fragment(
+            "These AGENTS.md instructions replace all previously provided AGENTS.md instructions.\n\ncold session instructions",
+        )),
+    );
     Ok(())
 }
 

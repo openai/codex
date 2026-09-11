@@ -18,8 +18,9 @@ use codex_config::ConfigRequirementsWithSources;
 use codex_config::RequirementSource;
 use codex_config::Sourced;
 use codex_extension_api::Instructions;
-use codex_extension_api::LoadUserInstructionsFuture;
+use codex_extension_api::LoadInstructionsFuture;
 use codex_extension_api::LoadedUserInstructions;
+use codex_extension_api::ThreadInstructionsProvider;
 use codex_extension_api::UserInstructionsProvider;
 use codex_http_client::HttpClientFactory;
 use codex_login::AuthManager;
@@ -60,42 +61,54 @@ use tokio_util::sync::CancellationToken;
 const MODEL_A: &str = "step-activation-a";
 const MODEL_B: &str = "step-activation-b";
 
+struct GatedInstructionsProvider {
+    instructions: StdMutex<Option<Instructions>>,
+    block_next_read: AtomicBool,
+    read_started: Notify,
+}
+
+impl GatedInstructionsProvider {
+    fn load(&self) -> LoadInstructionsFuture<'_> {
+        let instructions = self
+            .instructions
+            .lock()
+            .expect("instruction snapshot")
+            .clone();
+        let block = self.block_next_read.swap(/*val*/ false, Ordering::SeqCst);
+        Box::pin(async move {
+            if block {
+                self.read_started.notify_one();
+                std::future::pending::<()>().await;
+            }
+            LoadedUserInstructions {
+                instructions,
+                warnings: Vec::new(),
+            }
+        })
+    }
+}
+
+impl UserInstructionsProvider for GatedInstructionsProvider {
+    fn load_user_instructions(&self) -> LoadInstructionsFuture<'_> {
+        self.load()
+    }
+}
+
+impl ThreadInstructionsProvider for GatedInstructionsProvider {
+    fn load_thread_instructions(&self) -> LoadInstructionsFuture<'_> {
+        self.load()
+    }
+}
+
 #[tokio::test]
 async fn instruction_refresh_serializes_reads_and_releases_on_cancellation() {
-    struct GatedInstructionsProvider {
-        instructions: StdMutex<Option<Instructions>>,
-        block_next_read: AtomicBool,
-        read_started: Notify,
-    }
-
-    impl UserInstructionsProvider for GatedInstructionsProvider {
-        fn load_user_instructions(&self) -> LoadUserInstructionsFuture<'_> {
-            let instructions = self
-                .instructions
-                .lock()
-                .expect("instruction snapshot")
-                .clone();
-            let block = self.block_next_read.swap(/*val*/ false, Ordering::SeqCst);
-            Box::pin(async move {
-                if block {
-                    self.read_started.notify_one();
-                    std::future::pending::<()>().await;
-                }
-                LoadedUserInstructions {
-                    instructions,
-                    warnings: Vec::new(),
-                }
-            })
-        }
-    }
-
     let (mut session, turn) = make_session_and_context().await;
     let turn = Arc::new(turn);
     let source = turn.config.codex_home.join("AGENTS.md");
     let instructions = |text: &str| {
         Some(Instructions {
             text: text.to_string(),
-            source: source.clone(),
+            source: Some(source.clone()),
         })
     };
     let provider = Arc::new(GatedInstructionsProvider {
@@ -146,6 +159,91 @@ async fn instruction_refresh_serializes_reads_and_releases_on_cancellation() {
     assert_eq!(
         session.inherited_instructions().await.user,
         instructions("latest")
+    );
+}
+
+#[test_case(None; "thread only")]
+#[test_case(Some("global instructions"); "with global instructions")]
+#[tokio::test]
+async fn thread_instruction_refresh_serializes_reads_and_releases_on_cancellation(
+    global_text: Option<&str>,
+) {
+    let (mut session, mut turn) = make_session_and_context().await;
+    // This tests provider snapshots, not the checkout's repository instructions.
+    Arc::make_mut(&mut turn.config).project_doc_max_bytes = 0;
+    let turn = Arc::new(turn);
+    let global = global_text.map(|text| Instructions {
+        text: text.to_string(),
+        source: Some(turn.config.codex_home.join("AGENTS.md")),
+    });
+    let instructions = |text: &str| {
+        Some(Instructions {
+            text: text.to_string(),
+            source: None,
+        })
+    };
+    let provider = Arc::new(GatedInstructionsProvider {
+        instructions: StdMutex::new(instructions("initial")),
+        block_next_read: AtomicBool::new(/*v*/ false),
+        read_started: Notify::new(),
+    });
+    session.services.agents_md_manager = Arc::new(AgentsMdManager::new(SessionInstructions {
+        user: global.clone(),
+        thread_provider: Some(provider.clone()),
+        ..Default::default()
+    }));
+    let session = Arc::new(session);
+    session
+        .services
+        .agents_md_manager
+        .refresh(&turn.config, &turn.environments)
+        .await
+        .0
+        .expect("install initial provider");
+    *provider.instructions.lock().expect("instruction snapshot") = instructions("cancelled");
+    provider
+        .block_next_read
+        .store(/*val*/ true, Ordering::SeqCst);
+
+    let cancellation = CancellationToken::new();
+    let first_capture = session.capture_step_context(Arc::clone(&turn), &cancellation);
+    tokio::pin!(first_capture);
+    tokio::select! {
+        _ = &mut first_capture => panic!("capture must wait for provider"),
+        () = provider.read_started.notified() => {}
+    }
+
+    *provider.instructions.lock().expect("instruction snapshot") = instructions("latest");
+    let next_cancellation = CancellationToken::new();
+    let next_capture = session.capture_step_context(turn, &next_cancellation);
+    tokio::pin!(next_capture);
+    assert!(futures::poll!(&mut next_capture).is_pending());
+    let inherited = session.inherited_instructions().await;
+    assert_eq!(
+        (inherited.user, inherited.thread),
+        (global.clone(), instructions("initial"))
+    );
+
+    cancellation.cancel();
+    assert!(first_capture.await.is_err());
+    let step = next_capture
+        .await
+        .expect("cancelled read releases the refresh guard");
+    let inherited = session.inherited_instructions().await;
+    assert_eq!(
+        (inherited.user, inherited.thread),
+        (global, instructions("latest"))
+    );
+    let expected = global_text.map_or_else(
+        || "latest".to_string(),
+        |global| format!("{global}\n\nlatest"),
+    );
+    assert_eq!(
+        step.loaded_agents_md
+            .as_ref()
+            .expect("captured instructions")
+            .text(),
+        expected
     );
 }
 

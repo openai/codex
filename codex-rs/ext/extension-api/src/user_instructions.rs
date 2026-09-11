@@ -5,17 +5,17 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 
 /// Instructions supplied by the host.
 ///
-/// `source` must be an absolute filesystem path because the app-server
-/// `instructionSources` API currently exposes instruction sources as
-/// `AbsolutePathBuf` values.
+/// Filesystem-backed instructions retain their absolute source path for the
+/// app-server `instructionSources` API. Other host-provided instructions do
+/// not report a filesystem source.
 // TODO(anp): Replace the absolute path with a more general instruction-source
 // abstraction when non-filesystem providers need first-class attribution.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Instructions {
     /// Model-visible instruction text.
     pub text: String,
-    /// Absolute filesystem path reported through `instructionSources`.
-    pub source: AbsolutePathBuf,
+    /// Absolute filesystem path reported through `instructionSources`, if any.
+    pub source: Option<AbsolutePathBuf>,
 }
 
 /// Result of loading host-provided user instructions.
@@ -28,9 +28,23 @@ pub struct LoadedUserInstructions {
     pub warnings: Vec<String>,
 }
 
-/// Future returned by a [`UserInstructionsProvider`].
-pub type LoadUserInstructionsFuture<'a> =
+/// Future returned by an instruction provider.
+pub type LoadInstructionsFuture<'a> =
     Pin<Box<dyn Future<Output = LoadedUserInstructions> + Send + 'a>>;
+
+/// Loads host-provided instructions that apply to one root thread.
+///
+/// These instructions follow the global [`UserInstructionsProvider`] snapshot
+/// and precede repository instructions. A result with no instructions or
+/// blank instructions clears only the thread-scoped contribution. Core retains
+/// the provider and reads it at startup and when capturing model-request context.
+/// Implementations own fetching and caching; repeated reads should be cheap and
+/// return a coherent snapshot. On a recoverable fetch failure, return the last
+/// usable snapshot with warnings rather than an empty result that clears it.
+pub trait ThreadInstructionsProvider: Send + Sync {
+    /// Loads the current snapshot for the provider's root thread.
+    fn load_thread_instructions(&self) -> LoadInstructionsFuture<'_>;
+}
 
 /// Loads global user instructions shared across root threads.
 ///
@@ -40,5 +54,5 @@ pub type LoadUserInstructionsFuture<'a> =
 /// while still returning usable fallback instructions when available.
 pub trait UserInstructionsProvider: Send + Sync {
     /// Loads the current global snapshot for a root runtime.
-    fn load_user_instructions(&self) -> LoadUserInstructionsFuture<'_>;
+    fn load_user_instructions(&self) -> LoadInstructionsFuture<'_>;
 }

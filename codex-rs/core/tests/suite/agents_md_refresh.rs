@@ -207,7 +207,7 @@ async fn interrupting_a_provider_read_allows_the_next_turn_to_refresh() -> Resul
         started: Notify,
     }
     impl UserInstructionsProvider for GatedProvider {
-        fn load_user_instructions(&self) -> LoadUserInstructionsFuture<'_> {
+        fn load_user_instructions(&self) -> LoadInstructionsFuture<'_> {
             Box::pin(async move {
                 if self.block_next.swap(/*val*/ false, Ordering::SeqCst) {
                     self.started.notify_one();
