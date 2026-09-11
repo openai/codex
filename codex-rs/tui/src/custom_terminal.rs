@@ -142,6 +142,8 @@ where
     current: usize,
     /// Whether the cursor is currently hidden
     pub hidden_cursor: bool,
+    /// Last cursor style sent successfully, so ordinary redraws do not repaint its repair anchor.
+    last_cursor_style: Option<SetCursorStyle>,
     /// Area of the viewport
     pub viewport_area: Rect,
     /// Last known size of the terminal. Used to detect if the internal buffers have to be resized.
@@ -221,6 +223,7 @@ where
             buffers: [Buffer::empty(Rect::ZERO), Buffer::empty(Rect::ZERO)],
             current: 0,
             hidden_cursor: false,
+            last_cursor_style: None,
             viewport_area: Rect::new(
                 /*x*/ 0,
                 cursor_pos.y,
@@ -291,6 +294,10 @@ where
     /// current backend for drawing.
     pub fn flush(&mut self) -> io::Result<()> {
         let updates = diff_buffers(self.previous_buffer(), self.current_buffer());
+        self.flush_updates(updates)
+    }
+
+    fn flush_updates(&mut self, updates: Vec<DrawCommand>) -> io::Result<()> {
         let last_put_command = updates.iter().rfind(|command| command.is_put());
         if let Some(&DrawCommand::Put { x, y, .. }) = last_put_command {
             self.last_known_cursor_pos = Position { x, y };
@@ -309,6 +316,9 @@ where
 
     /// Sets the viewport area.
     pub fn set_viewport_area(&mut self, area: Rect) {
+        if self.viewport_area != area {
+            self.invalidate_cursor_state();
+        }
         self.current_buffer_mut().resize(area);
         self.previous_buffer_mut().resize(area);
         self.viewport_area = area;
@@ -428,11 +438,17 @@ where
         let cursor_position = frame.cursor_position;
         let cursor_style = frame.cursor_style;
 
-        // Draw to stdout
-        self.flush()?;
+        // Not every terminal or multiplexer hides intermediate cursor moves inside a
+        // synchronized update, especially when the frame spans multiple writes.
+        let updates = diff_buffers(self.previous_buffer(), self.current_buffer());
+        if !updates.is_empty() && !self.hidden_cursor {
+            self.hide_cursor()?;
+        }
+        self.flush_updates(updates)?;
 
         match cursor_position {
-            None => self.hide_cursor()?,
+            None if !self.hidden_cursor => self.hide_cursor()?,
+            None => {}
             Some(position) => {
                 self.set_cursor_style_with_repair(cursor_style)?;
                 self.set_cursor_position(position)?;
@@ -463,7 +479,9 @@ where
 
     /// Sets the visible terminal cursor style.
     pub fn set_cursor_style(&mut self, style: SetCursorStyle) -> io::Result<()> {
-        queue!(self.backend, style)
+        queue!(self.backend, style)?;
+        self.last_cursor_style = Some(style);
+        Ok(())
     }
 
     /// Restores the user-configured terminal cursor style.

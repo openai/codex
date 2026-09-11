@@ -464,6 +464,10 @@ impl ChatWidget {
         )
     }
 
+    pub(crate) fn set_sparkle_terminal_focus(&mut self, focused: bool) {
+        self.bottom_pane.set_sparkle_terminal_focus(focused);
+    }
+
     pub(super) fn refresh_model_display(&mut self) {
         let effective = self.effective_collaboration_mode();
         self.session_header.set_model(effective.model());

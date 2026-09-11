@@ -9,6 +9,15 @@
 //! The plain-text preset keeps command prefixes literal, including `!`, so Enter and Tab
 //! submit ordinary text without enabling shell mode.
 //!
+//! # Astra Sparkle
+//!
+//! Selecting Astra animates stars in the untouched composer for 15 seconds from its first visible
+//! frame, then fades them smoothly for one second. The deadline runs even without terminal focus.
+//! Keys, paste, an existing draft, voice input, or a popup start a quick fade; offline Enter and
+//! Tab do too. Placeholder and draft text, including spaces, stay unchanged. Mouse reporting stays
+//! disabled for native selection and scrolling; hover or selection alone does not stop the stars.
+//! Reselecting Astra starts a new flourish.
+//!
 //! # Mention Menus
 //!
 //! By default, `@` lists plugins, filesystem entries, and skills. Skills are hidden when their
@@ -1227,6 +1236,7 @@ impl ChatComposer {
     /// In all cases, clears any paste-burst Enter suppression state so a real paste cannot affect
     /// the next user Enter key, then syncs popup state.
     pub fn handle_paste(&mut self, pasted: String) -> bool {
+        self.interact_with_astra_sparkle();
         let pasted = pasted.replace("\r\n", "\n").replace('\r', "\n");
         let pasted = sanitize_user_text(pasted.into());
         if let Some(query) = self.draft.textarea.vim_query_mut() {
@@ -2028,6 +2038,7 @@ impl ChatComposer {
             return (InputResult::None, false);
         }
 
+        self.interact_with_astra_sparkle();
         if self.history_search.is_none()
             && !self.popups.active()
             && self.draft.textarea.wants_vim_search_key(key_event)
@@ -5068,6 +5079,7 @@ impl ChatComposer {
         if self.astra_sparkle.is_some() {
             self.render_sparkle(
                 composer_rect,
+                textarea_rect,
                 self.cursor_pos_with_textarea_right_reserve(area, textarea_right_reserve),
                 buf,
             );

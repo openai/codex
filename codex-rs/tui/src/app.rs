@@ -906,6 +906,8 @@ impl App {
 
         match &event {
             TuiEvent::FocusLost => {
+                self.chat_widget
+                    .set_sparkle_terminal_focus(/*focused*/ false);
                 let now = Instant::now();
                 let thread_id = self.current_displayed_thread_id();
 
@@ -1019,6 +1021,8 @@ impl App {
 
     fn render_chat_widget_frame(&mut self, tui: &mut tui::Tui, screen_size: Size) -> Result<Rect> {
         self.sync_thread_title_progress();
+        self.chat_widget
+            .set_sparkle_terminal_focus(tui.is_terminal_focused());
         let dashboard_visible = self
             .chat_widget
             .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)

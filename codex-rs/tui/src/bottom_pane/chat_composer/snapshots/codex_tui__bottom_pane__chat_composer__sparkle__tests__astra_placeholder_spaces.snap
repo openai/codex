@@ -1,0 +1,12 @@
+---
+source: tui/src/bottom_pane/chat_composer/sparkle_tests.rs
+expression: buffer_text(&active)
+---
+    ⠈                    ⢀  ⠈           ⠁        ⠐ ⠐     ⠐              ⠄      ⠈
+›⠁Ask Codex to do anything   ⠈          ⠁ ⠁                  ⠈
+      ⠠          ⠄                             ⢀      ⠄                   ⠄⠈   ⠄
+             ⠐ ⠄        ⡀               ⠠
+ ⠈      ⠠⠁            ⠠⠠   ⢀                        ⠂
+  ⠄              ⠄                ⠐   ⠠                  ⠂                  ⡀
+                                 ⠁
+  ? for shortcuts                                            100% context left

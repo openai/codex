@@ -1,0 +1,7 @@
+---
+source: tui/src/tui_panic_tests.rs
+expression: "phases.join(\"\\n\")"
+---
+panic hook: \u{1b}[0 q \u{1b}[?25h
+hidden repaint: \u{1b}[?25l \u{1b}[1;12H \u{1b}[2;2H \u{1b}[1;1H \u{1b}[2;1H
+visible frame: \u{1b}[1;1H \u{1b}[6 q \u{1b}[1;1H \u{1b}[2;5H \u{1b}[?25h

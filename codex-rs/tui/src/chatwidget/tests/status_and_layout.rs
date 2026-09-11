@@ -12,6 +12,31 @@ use ratatui::backend::TestBackend;
 use serial_test::serial;
 
 #[tokio::test]
+async fn astra_sparkle_pauses_and_resumes_with_terminal_focus() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(Some("gpt-5.6-sol")).await;
+    chat.local_settings.tui.animations = true;
+    chat.local_settings.tui.whimsy = true;
+    chat.set_model("gpt-6-astra");
+    crate::terminal_palette::with_test_default_colors(
+        crate::terminal_probe::DefaultColors {
+            fg: (230, 216, 255),
+            bg: (36, 27, 53),
+        },
+        || {
+            let contains_stars = |text: &str| text.chars().any(|ch| "⠁⠂⠄⠈⠐⠠⡀⢀".contains(ch));
+            chat.set_sparkle_terminal_focus(/*focused*/ false);
+            assert!(!contains_stars(&render_bottom_popup(
+                &chat, /*width*/ 80
+            )));
+            chat.set_sparkle_terminal_focus(/*focused*/ true);
+            assert!(contains_stars(&render_bottom_popup(
+                &chat, /*width*/ 80
+            )));
+        },
+    );
+}
+
+#[tokio::test]
 async fn voice_live_transcript_renders_beside_the_streamed_cell() {
     let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.local_settings.tui.animations = false;

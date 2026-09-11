@@ -45,6 +45,11 @@ impl ChatComposer {
     }
 
     pub(crate) fn handle_disconnected_key(&mut self, key: KeyEvent) {
+        if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+            && !matches!(key.code, KeyCode::Null)
+        {
+            self.interact_with_astra_sparkle();
+        }
         self.cancel_history_search();
         self.attachments.clear_remote_image_selection();
         self.popups.active = ActivePopup::None;

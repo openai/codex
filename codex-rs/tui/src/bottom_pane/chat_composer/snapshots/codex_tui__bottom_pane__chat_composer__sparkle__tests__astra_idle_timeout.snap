@@ -1,0 +1,34 @@
+---
+source: tui/src/bottom_pane/chat_composer/sparkle_tests.rs
+assertion_line: 260
+expression: "format!(\"before timeout\\n{}\\n\\nfading\\n{}\\n\\nfinished\\n{}\",\nbuffer_text(&active), buffer_text(&fading), buffer_text(&finished),)"
+---
+before timeout
+⠁             ⠄             ⠈           ⠁                ⠐              ⠄ ⢀
+›⠁Ask Codex to do anything   ⠈            ⠁                  ⠈        ⠄    ⠂
+      ⠠⢀⠐        ⠄        ⠄         ⠠                 ⠄⠂  ⡀                ⠈   ⠄
+               ⠄                            ⠐
+ ⠈      ⠠             ⠠   ⢀⢀    ⠐                   ⠂    ⠐      ⠐    ⡀
+  ⠄                    ⠄      ⢀ ⢀     ⠠              ⠠  ⠄                   ⡀⠂
+                              ⠈  ⠁    ⠐                  ⠐           ⢀
+  ? for shortcuts                                            100% context left
+
+fading
+⠁             ⠄             ⠈           ⠁                ⠐              ⠄ ⢀
+›⠁Ask Codex to do anything   ⠈            ⠁                  ⠈        ⠄
+      ⠠⢀                                              ⠄⠂  ⡀                ⠈   ⠄
+               ⠄
+        ⠠             ⠠   ⢀⢀                        ⠂           ⠐    ⡀
+  ⠄                           ⢀       ⠠              ⠠  ⠄                   ⡀⠂
+                                 ⠁    ⠐                  ⠐           ⢀
+  ? for shortcuts                                            100% context left
+
+finished
+
+› Ask Codex to do anything
+
+
+
+
+
+  ? for shortcuts                                            100% context left

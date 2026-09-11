@@ -1,7 +1,8 @@
 ---
 source: tui/src/custom_terminal/tests/cursor_tests.rs
+assertion_line: 189
 expression: "frames.join(\"\\n\")"
 ---
-\u{1b}[1;1H\u{1b}[39;48;5;4mx\u{1b}[39m\u{1b}[49m\u{1b}[0m\u{1b}[1;1H\u{1b}[0 q\u{1b}[1;1H\u{1b}[39;48;5;4mx\u{1b}[39m\u{1b}[49m\u{1b}[0m\u{1b}[1;1H\u{1b}[?25h
-\u{1b}[39m\u{1b}[49m\u{1b}[0m\u{1b}[1;1H\u{1b}[0 q\u{1b}[1;1H\u{1b}[39;48;5;4mx\u{1b}[39m\u{1b}[49m\u{1b}[0m\u{1b}[1;1H\u{1b}[?25h
-\u{1b}[39m\u{1b}[49m\u{1b}[0m\u{1b}[1;1H\u{1b}[0 q\u{1b}[1;1H\u{1b}[39;48;5;4mx\u{1b}[39m\u{1b}[49m\u{1b}[0m\u{1b}[1;1H\u{1b}[?25h
+\u{1b}[?25l\u{1b}[1;1H\u{1b}[39;48;5;4mx\u{1b}[39m\u{1b}[49m\u{1b}[0m\u{1b}[1;1H\u{1b}[0 q\u{1b}[1;1H\u{1b}[39;48;5;4mx\u{1b}[39m\u{1b}[49m\u{1b}[0m\u{1b}[1;1H\u{1b}[?25h
+\u{1b}[39m\u{1b}[49m\u{1b}[0m\u{1b}[1;1H\u{1b}[?25h
+\u{1b}[39m\u{1b}[49m\u{1b}[0m\u{1b}[1;1H\u{1b}[?25h

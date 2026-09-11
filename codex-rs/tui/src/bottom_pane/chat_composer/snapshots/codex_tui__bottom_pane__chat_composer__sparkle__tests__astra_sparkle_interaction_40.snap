@@ -1,0 +1,21 @@
+---
+source: tui/src/bottom_pane/chat_composer/sparkle_tests.rs
+expression: "format!(\"idle\\n{}\\n\\nfading\\n{}\\n\\nfinished\\n{}\", buffer_text(&active),\nbuffer_text(&fading), buffer_text(&finished),)"
+---
+idle
+                         ⢀      ⠁ ⢀
+› Ask Codex to do anything         ⠈
+      ⠠⢀            ⠠     ⠄         ⠠
+  ? for shortcuts    100% context left
+
+fading
+                                ⠁ ⢀
+› Ask Codex to do anything         ⠈
+       ⢀            ⠠     ⠄
+  ? for shortcuts    100% context left
+
+finished
+
+› Ask Codex to do anything
+
+  ? for shortcuts    100% context left
