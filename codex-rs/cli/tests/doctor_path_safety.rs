@@ -256,7 +256,7 @@ async fn interactive_tmux_startup_does_not_execute_workspace_helpers() -> Result
                 .chars()
                 .filter(|character| !character.is_whitespace())
                 .collect();
-            if text.contains("Doyoutrustthecontentsofthisdirectory?") {
+            if text.contains("Trustthisfolder?") {
                 return Ok::<_, anyhow::Error>(());
             }
         }

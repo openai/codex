@@ -1,15 +1,16 @@
 ---
 source: tui/src/onboarding/trust_directory.rs
+assertion_line: 295
 expression: terminal.backend()
 ---
 > You are in /workspace/project
 
-  Do you trust the contents of this directory? Working with untrusted
-  contents comes with higher risk of prompt injection. Trusting the
-  directory allows project-local config, hooks, and exec policies to
-  load.
+  Trust this folder? Codex can read, edit, and run files here, subject
+  to your permission settings. Folder settings can run code
+  automatically, even without a model request. Continue only if you
+  trust these files. Your trust decision will be saved.
 
-› 1. Yes, continue                                                    
-  2. No, quit
+› 1. Trust and continue                                               
+  2. Quit
 
-  Press enter to continue
+  Press enter to continue; esc to quit

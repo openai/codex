@@ -1,0 +1,16 @@
+---
+source: tui/src/onboarding/trust_directory.rs
+assertion_line: 335
+expression: terminal.backend()
+---
+> You are in /workspace/project
+
+  This folder is marked untrusted. Project-local config, hooks, and
+  exec policies stay disabled. Skills still load, and tool execution
+  follows your permission settings. Opening it will not change its
+  trust setting.
+
+› 1. Open restricted                                                  
+  2. Quit
+
+  Press enter to continue; esc to quit

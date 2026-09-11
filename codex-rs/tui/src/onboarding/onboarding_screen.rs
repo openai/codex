@@ -177,6 +177,7 @@ impl OnboardingScreen {
                 }
             };
             steps.push(Step::TrustDirectory(TrustDirectoryWidget {
+                restricted: false,
                 cwd,
                 trust_target,
                 show_windows_create_sandbox_hint,
@@ -650,6 +651,7 @@ async fn persist_selected_trust(
         .find_map(|(index, step)| {
             if let Step::TrustDirectory(widget) = step
                 && widget.selection == Some(TrustDirectorySelection::Trust)
+                && !widget.restricted
             {
                 return Some((index, widget.trust_target.clone()));
             }
@@ -783,6 +785,7 @@ mod tests {
         let mut onboarding_screen = OnboardingScreen {
             request_frame: FrameRequester::test_dummy(),
             steps: vec![Step::TrustDirectory(TrustDirectoryWidget {
+                restricted: false,
                 cwd: PathBuf::from("/workspace/project"),
                 trust_target: PathBuf::from("/workspace/project"),
                 show_windows_create_sandbox_hint: false,
@@ -842,10 +845,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn restricted_acceptance_and_cancellation_do_not_persist_trust() {
+        for key in [KeyCode::Enter, KeyCode::Esc] {
+            let mut screen = OnboardingScreen {
+                request_frame: FrameRequester::test_dummy(),
+                steps: vec![Step::TrustDirectory(TrustDirectoryWidget {
+                    restricted: true,
+                    cwd: PathBuf::from("/workspace/project"),
+                    trust_target: PathBuf::from("/workspace/project"),
+                    show_windows_create_sandbox_hint: false,
+                    should_quit: false,
+                    selection: None,
+                    highlighted: TrustDirectorySelection::Trust,
+                    error: None,
+                })],
+                remote_trust_key: Some("/workspace/project".to_string()),
+                is_done: false,
+                should_exit: false,
+            };
+            screen.handle_key_event(key.into());
+            assert!(!persist_selected_trust(&mut screen, /*request_handle*/ None).await);
+            assert!(screen.is_done());
+            assert_eq!(screen.should_exit(), key == KeyCode::Esc);
+            let Step::TrustDirectory(widget) = &screen.steps[0] else {
+                panic!("trust step")
+            };
+            assert_eq!(widget.error, None);
+        }
+    }
+
+    #[tokio::test]
     async fn trust_persistence_failure_keeps_trust_step_in_progress() {
         let mut onboarding_screen = OnboardingScreen {
             request_frame: FrameRequester::test_dummy(),
             steps: vec![Step::TrustDirectory(TrustDirectoryWidget {
+                restricted: false,
                 cwd: PathBuf::from("/workspace/project"),
                 trust_target: PathBuf::from("/workspace/project"),
                 show_windows_create_sandbox_hint: false,
