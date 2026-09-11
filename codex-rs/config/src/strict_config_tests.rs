@@ -1,4 +1,7 @@
 use super::*;
+use crate::ConfigLayerEntry;
+use crate::ConfigLayerSource;
+use crate::ConfigRequirements;
 use crate::config_toml::ConfigToml;
 use crate::diagnostics::TextPosition;
 use crate::diagnostics::TextRange;
@@ -149,4 +152,52 @@ collapsed = true"#;
     let error = config_error_from_ignored_toml_fields::<ConfigToml>(path, contents);
 
     assert_eq!(error, None);
+}
+
+fn layer(source: ConfigLayerSource, contents: &str) -> ConfigLayerEntry {
+    ConfigLayerEntry::new(source, toml::from_str(contents).unwrap())
+}
+
+#[test]
+fn checks_merged_config_and_ignores_disabled_layers() {
+    let layers = vec![
+        layer(
+            ConfigLayerSource::EnterpriseManaged {
+                id: "cfg".into(),
+                name: "Defaults".into(),
+            },
+            r#"
+[model_providers.custom]
+name = "Custom"
+wire_api = "responses"
+unknown_timeout = 1
+[model_providers.custom.http_headers]
+custom_header = "accepted"
+"#,
+        ),
+        ConfigLayerEntry::new_disabled(
+            ConfigLayerSource::SessionFlags,
+            toml::from_str("disabled_unknown = true").unwrap(),
+            "not trusted",
+        ),
+        layer(
+            ConfigLayerSource::SessionFlags,
+            r#"
+[model_providers.custom]
+unknown_timeout = 42
+[profiles.work.features]
+include_view_image_tool = false
+"#,
+        ),
+    ];
+    let config = ConfigLayerStack::new(
+        layers,
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        ignored_config_warning(&config, &[]).unwrap(),
+        "Codex is ignoring 3 unrecognized configuration settings. Check for typos or deprecated settings.\n  enterprise-managed (Defaults, cfg): `model_providers.custom.unknown_timeout` is ignored.\n  session-flags: `model_providers.custom.unknown_timeout` is ignored.\n  session-flags: `profiles.work.features.include_view_image_tool` is ignored. Use [features].view_image to configure the image tool."
+    );
 }

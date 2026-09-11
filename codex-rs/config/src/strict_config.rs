@@ -1,5 +1,10 @@
 //! Strict config validation built on top of serde's ignored-field tracking.
 
+use crate::CONFIG_TOML_FILE;
+use crate::ConfigLayerStack;
+use crate::ConfigRequirementsToml;
+use crate::RequirementsLayerEntry;
+use crate::config_toml::ConfigToml;
 use crate::diagnostics::ConfigDiagnosticSource;
 use crate::diagnostics::ConfigError;
 use crate::diagnostics::config_error_from_toml_for_source;
@@ -7,8 +12,13 @@ use crate::diagnostics::default_range;
 use crate::diagnostics::span_for_config_path;
 use crate::diagnostics::span_for_toml_key_path;
 use crate::diagnostics::text_range_from_span;
+use crate::format_config_layer_source;
+use crate::requirements_layers::strip_cloud_auth_requirements;
 use codex_features::is_known_feature_key;
+use codex_utils_absolute_path::AbsolutePathBufGuard;
 use serde::de::DeserializeOwned;
+use std::collections::BTreeSet;
+use std::fmt::Write;
 use std::path::Path;
 use toml::Value as TomlValue;
 
@@ -84,7 +94,7 @@ fn config_error_from_ignored_toml_value_fields_for_source<T: DeserializeOwned>(
     }
 }
 
-pub(crate) fn ignored_toml_value_field<T: DeserializeOwned>(value: TomlValue) -> Option<String> {
+pub(crate) fn ignored_toml_value_fields<T: DeserializeOwned>(value: TomlValue) -> Vec<Vec<String>> {
     let mut ignored_paths = Vec::new();
     let result: Result<T, _> = serde_ignored::deserialize(value, |ignored_path| {
         let path_segments = ignored_path_segments(&ignored_path);
@@ -93,13 +103,10 @@ pub(crate) fn ignored_toml_value_field<T: DeserializeOwned>(value: TomlValue) ->
         }
     });
     if result.is_err() {
-        return None;
+        return Vec::new();
     }
 
     ignored_paths
-        .into_iter()
-        .next()
-        .map(|path_segments| path_segments.join("."))
 }
 
 pub(crate) fn unknown_feature_toml_value_field(value: &TomlValue) -> Option<String> {
@@ -193,6 +200,111 @@ fn push_ignored_path_segments(path: &serde_ignored::Path<'_>, segments: &mut Vec
             push_ignored_path_segments(parent, segments);
         }
     }
+}
+
+pub(crate) fn ignored_config_warning(
+    config: &ConfigLayerStack,
+    requirements: &[RequirementsLayerEntry],
+) -> Option<String> {
+    let mut fields = BTreeSet::new();
+    // Validate the merged config so incomplete layer fragments (e.g. a provider
+    // override) do not hide diagnostics.
+    let effective = config.effective_config();
+    let unknown_features = unknown_feature_toml_value_path(&effective);
+    for path in ignored_toml_value_fields::<ConfigToml>(effective)
+        .into_iter()
+        .chain(unknown_features)
+    {
+        // Origins only track leaf values; an ignored field can be a whole table.
+        for layer in config.layers_high_to_low().filter(|layer| {
+            path.iter()
+                .try_fold(&layer.config, |value, key| match value {
+                    toml::Value::Array(items) => {
+                        key.parse::<usize>().ok().and_then(|i| items.get(i))
+                    }
+                    _ => value.get(key),
+                })
+                .is_some()
+        }) {
+            fields.insert((
+                format_config_layer_source(&layer.name, CONFIG_TOML_FILE),
+                path.clone(),
+            ));
+        }
+    }
+
+    // Requirements use a different schema and lose unknown fields during
+    // composition. Inspect their original layers, with the same path bases.
+    // Normal loading remains responsible for reporting parse/type errors.
+    for layer in requirements {
+        let Ok((source, mut value, base_dir)) = layer.clone().into_raw_parts() else {
+            continue;
+        };
+        let _guard = base_dir
+            .as_ref()
+            .map(|base_dir| AbsolutePathBufGuard::new(base_dir.as_path()));
+        strip_cloud_auth_requirements(&source, &mut value);
+        fields.extend(
+            ignored_toml_value_fields::<ConfigRequirementsToml>(value)
+                .into_iter()
+                .map(|path| (format!("requirements ({source})"), path)),
+        );
+    }
+
+    if fields.is_empty() {
+        return None;
+    }
+    let count = fields.len();
+    let setting = if count == 1 { "setting" } else { "settings" };
+    let mut warning = format!(
+        "Codex is ignoring {count} unrecognized configuration {setting}. Check for typos or deprecated settings."
+    );
+    for (source, path) in fields.iter().take(3) {
+        let source = bounded_label(source);
+        let key = bounded_label(&path.join("."));
+        let hint = match path
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .as_slice()
+        {
+            ["network_proxy"] => {
+                " Use [permissions.<name>.network] for network settings, or [experimental_network] in requirements.toml for enforced network policy."
+            }
+            ["allowed_permissions"] => {
+                " Use [allowed_permission_profiles] and default_permissions; the old allowlist is ignored even when both forms are present."
+            }
+            ["include_view_image_tool"]
+            | ["features", "include_view_image_tool"]
+            | ["profiles", _, "include_view_image_tool"]
+            | ["profiles", _, "features", "include_view_image_tool"] => {
+                " Use [features].view_image to configure the image tool."
+            }
+            _ => "",
+        };
+        let _ = write!(warning, "\n  {source}: `{key}` is ignored.{hint}");
+    }
+    if fields.len() > 3 {
+        let remaining = fields.len() - 3;
+        let _ = write!(warning, "\n  ... and {remaining} more ignored settings.");
+    }
+    Some(warning)
+}
+
+fn bounded_label(value: &str) -> String {
+    let mut label = String::new();
+    for character in value.chars() {
+        if label.len() >= 200 {
+            label.push('…');
+            break;
+        }
+        if character.is_control() {
+            label.extend(character.escape_default());
+        } else {
+            label.push(character);
+        }
+    }
+    label
 }
 
 #[cfg(test)]

@@ -102,11 +102,7 @@ impl ComposableRequirementsLayer {
             let mut regular_toml = parse_layer_toml(&toml, &source)?;
 
             // These fields can only be set locally; ignore them before validating cloud policy.
-            if matches!(source, RequirementSource::EnterpriseManaged { .. }) {
-                for field in LOCAL_ONLY_AUTH_REQUIREMENTS {
-                    remove_top_level_field(&mut regular_toml, field);
-                }
-            }
+            strip_cloud_auth_requirements(&source, &mut regular_toml);
 
             // Provider fragments can be incomplete until all requirements layers
             // are merged. Resolve explicit paths while their source base is still
@@ -276,6 +272,14 @@ fn strip_special_fields(layer_toml: &mut TomlValue) {
     remove_top_level_field(layer_toml, "hooks");
     remove_nested_field_and_prune_empty(layer_toml, &["permissions", "filesystem", "deny_read"]);
     remove_nested_field_and_prune_empty(layer_toml, &["auto_review", "required_on_models"]);
+}
+
+pub(crate) fn strip_cloud_auth_requirements(source: &RequirementSource, value: &mut TomlValue) {
+    if matches!(source, RequirementSource::EnterpriseManaged { .. }) {
+        for field in LOCAL_ONLY_AUTH_REQUIREMENTS {
+            remove_top_level_field(value, field);
+        }
+    }
 }
 
 fn remove_top_level_field(value: &mut TomlValue, key: &str) -> Option<TomlValue> {

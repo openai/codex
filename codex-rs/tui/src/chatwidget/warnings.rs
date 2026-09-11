@@ -8,13 +8,16 @@ const FALLBACK_MODEL_METADATA_WARNING_SUFFIX: &str =
 pub(super) struct WarningDisplayState {
     /// Completed resume history does not end startup; active work does.
     pub(super) startup_complete: bool,
+    /// Initialization config warnings may also arrive as ordinary thread warnings.
+    pub(super) startup_config_warnings: HashSet<String>,
     fallback_model_metadata_slugs: HashSet<String>,
 }
 
 impl WarningDisplayState {
     pub(super) fn should_display(&mut self, message: &str) -> bool {
-        fallback_model_metadata_warning_slug(message)
-            .is_none_or(|slug| self.fallback_model_metadata_slugs.insert(slug.to_string()))
+        !self.startup_config_warnings.contains(message)
+            && fallback_model_metadata_warning_slug(message)
+                .is_none_or(|slug| self.fallback_model_metadata_slugs.insert(slug.to_string()))
     }
 }
 

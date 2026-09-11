@@ -3727,7 +3727,7 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
     tokio::fs::create_dir_all(nested.join(".codex")).await?;
     tokio::fs::write(
         nested.join(".codex").join(CONFIG_TOML_FILE),
-        r#"foo = "child"
+        r#"model = "child"
 profile = "ignored"
 "#,
     )
@@ -3749,7 +3749,7 @@ profile = "ignored"
     tokio::fs::write(
         &untrusted_config_path,
         format!(
-            r#"foo = "user"
+            r#"model = "user"
 {untrusted_config_contents}"#
         ),
     )
@@ -3774,7 +3774,7 @@ profile = "ignored"
         "expected untrusted project layer to be disabled"
     );
     assert_eq!(
-        project_layers_untrusted[0].config.get("foo"),
+        project_layers_untrusted[0].config.get("model"),
         Some(&TomlValue::String("child".to_string()))
     );
     assert!(
@@ -3782,7 +3782,7 @@ profile = "ignored"
         "expected unsupported project config keys to be ignored even when the layer is disabled"
     );
     assert_eq!(
-        layers_untrusted.effective_config().get("foo"),
+        layers_untrusted.effective_config().get("model"),
         Some(&TomlValue::String("user".to_string()))
     );
     let empty_warnings: &[String] = &[];
@@ -3792,7 +3792,7 @@ profile = "ignored"
     tokio::fs::create_dir_all(&codex_home_unknown).await?;
     tokio::fs::write(
         codex_home_unknown.join(CONFIG_TOML_FILE),
-        r#"foo = "user"
+        r#"model = "user"
 "#,
     )
     .await?;
@@ -3816,7 +3816,7 @@ profile = "ignored"
         "expected unknown-trust project layer to be disabled"
     );
     assert_eq!(
-        project_layers_unknown[0].config.get("foo"),
+        project_layers_unknown[0].config.get("model"),
         Some(&TomlValue::String("child".to_string()))
     );
     assert!(
@@ -3824,7 +3824,7 @@ profile = "ignored"
         "expected unsupported project config keys to be ignored even when the layer is disabled"
     );
     assert_eq!(
-        layers_unknown.effective_config().get("foo"),
+        layers_unknown.effective_config().get("model"),
         Some(&TomlValue::String("user".to_string()))
     );
     assert_eq!(layers_unknown.startup_warnings(), Some(empty_warnings));

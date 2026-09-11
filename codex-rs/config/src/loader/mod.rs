@@ -34,7 +34,8 @@ use crate::state::ConfigLoadOptions;
 use crate::state::LoaderOverrides;
 use crate::state::validate_enabled_config_layers;
 use crate::strict_config::config_error_from_ignored_toml_value_fields;
-use crate::strict_config::ignored_toml_value_field;
+use crate::strict_config::ignored_config_warning;
+use crate::strict_config::ignored_toml_value_fields;
 use crate::strict_config::unknown_feature_toml_value_field;
 use crate::thread_config::ThreadConfigContext;
 use crate::thread_config::ThreadConfigLoader;
@@ -242,8 +243,7 @@ pub async fn load_config_layers_state(
     let loaded_config_layers =
         layer_io::load_config_layers_internal(fs, codex_home, overrides.clone(), strict_config)
             .await?;
-    let mut startup_warnings = (!loaded_config_layers.startup_warnings.is_empty())
-        .then(|| loaded_config_layers.startup_warnings.clone());
+    let mut startup_warnings = loaded_config_layers.startup_warnings.clone();
     if !ignore_managed_requirements {
         requirements_layers.extend(system_requirements_layer);
         requirements_layers.extend(bundle_requirements_layers);
@@ -257,7 +257,7 @@ pub async fn load_config_layers_state(
     }
 
     let mut config_requirements_toml =
-        compose_requirements(requirements_layers)?.unwrap_or_default();
+        compose_requirements(requirements_layers.clone())?.unwrap_or_default();
     // Remote app servers enforce auth policy for their workspaces; do not let local
     // requirements reintroduce authentication restrictions for those workspaces.
     if overrides.ignore_login_requirements {
@@ -436,9 +436,7 @@ pub async fn load_config_layers_state(
         )
         .await?;
         layers.extend(project_layers.layers);
-        startup_warnings
-            .get_or_insert_with(Vec::new)
-            .extend(project_layers.startup_warnings);
+        startup_warnings.extend(project_layers.startup_warnings);
     }
 
     // Add a layer for runtime overrides from the CLI or UI, if any exist.
@@ -521,10 +519,11 @@ pub async fn load_config_layers_state(
         config_requirements_toml.into_toml(),
     )?
     .with_user_and_project_exec_policy_rules_ignored(ignore_user_and_project_exec_policy_rules);
-    Ok(match startup_warnings {
-        Some(startup_warnings) => config_layer_stack.with_startup_warnings(startup_warnings),
-        None => config_layer_stack,
-    })
+    startup_warnings.extend(ignored_config_warning(
+        &config_layer_stack,
+        &requirements_layers,
+    ));
+    Ok(config_layer_stack.with_startup_warnings(startup_warnings))
 }
 
 async fn load_user_config_layer(
@@ -676,8 +675,9 @@ fn validate_cli_overrides_strictly(
     base_dir: &Path,
 ) -> io::Result<()> {
     let _guard = AbsolutePathBufGuard::new(base_dir);
-    if let Some(ignored_path) = ignored_toml_value_field::<ConfigToml>(cli_overrides_layer.clone())
+    if let Some(path) = ignored_toml_value_fields::<ConfigToml>(cli_overrides_layer.clone()).first()
     {
+        let ignored_path = path.join(".");
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("unknown configuration field `{ignored_path}` in -c/--config override"),
