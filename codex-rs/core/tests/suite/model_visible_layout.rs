@@ -286,11 +286,6 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
         .with_model("gpt-5.4")
         .with_config(|config| {
             config.update_plan_enabled = true;
-            config
-                .features
-                .enable(Feature::Personality)
-                .expect("test config should allow feature update");
-            config.personality = Some(Personality::Pragmatic);
         });
     let test = builder.build(&server).await?;
     let preturn_context_diff_cwd = test.cwd_path().join(PRETURN_CONTEXT_DIFF_CWD);
@@ -343,7 +338,6 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
                 approval_policy: Some(AskForApproval::OnRequest),
                 sandbox_policy: Some(second_sandbox_policy),
                 permission_profile: second_permission_profile,
-                personality: Some(Personality::Friendly),
                 collaboration_mode: Some(CollaborationMode {
                     mode: ModeKind::Default,
                     settings: Settings {
@@ -366,7 +360,7 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
     insta::assert_snapshot!(
         "model_visible_layout_turn_overrides",
         format_labeled_requests_snapshot(
-            "Second turn changes cwd, approval policy, and personality while keeping model constant.",
+            "Second turn changes cwd and approval policy while keeping model constant.",
             &[
                 ("First Request (Baseline)", &requests[0]),
                 ("Second Request (Turn Overrides)", &requests[1]),

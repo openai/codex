@@ -6086,7 +6086,7 @@ async fn thread_resume_accepts_personality_override() -> Result<()> {
 
     let start_id = primary
         .send_thread_start_request_with_auto_env(ThreadStartParams {
-            model: Some("gpt-5.4".to_string()),
+            model: Some("exp-codex-personality".to_string()),
             ..Default::default()
         })
         .await?;
@@ -6124,7 +6124,7 @@ async fn thread_resume_accepts_personality_override() -> Result<()> {
     let resume_id = secondary
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: thread.id,
-            model: Some("gpt-5.4".to_string()),
+            model: Some("exp-codex-personality".to_string()),
             personality: Some(Personality::Friendly),
             ..Default::default()
         })

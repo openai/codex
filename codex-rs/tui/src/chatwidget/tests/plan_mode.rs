@@ -1329,10 +1329,7 @@ async fn enter_submits_when_plan_stream_is_not_active() {
 
     assert!(chat.input_queue.queued_user_messages.is_empty());
     match next_submit_op(&mut op_rx) {
-        Op::UserTurn {
-            personality: Some(Personality::Pragmatic),
-            ..
-        } => {}
+        Op::UserTurn { .. } => {}
         other => panic!("expected Op::UserTurn, got {other:?}"),
     }
 }
@@ -1720,7 +1717,6 @@ async fn collab_mode_is_sent_after_enabling() {
                     mode: ModeKind::Default,
                     ..
                 }),
-            personality: Some(Personality::Pragmatic),
             ..
         } => {}
         other => {
@@ -1744,7 +1740,6 @@ async fn collab_mode_applies_default_preset() {
                     mode: ModeKind::Default,
                     ..
                 }),
-            personality: Some(Personality::Pragmatic),
             ..
         } => {}
         other => {
@@ -1758,21 +1753,49 @@ async fn collab_mode_applies_default_preset() {
 
 #[tokio::test]
 async fn user_turn_includes_personality_from_config() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
-    chat.set_feature_enabled(Feature::Personality, /*enabled*/ true);
-    chat.thread_id = Some(ThreadId::new());
-    chat.set_model("gpt-5.5");
-    chat.set_personality(Personality::Friendly);
+    for configured_personality in [
+        Personality::Friendly,
+        Personality::Pragmatic,
+        Personality::None,
+    ] {
+        let preset = crate::test_support::legacy_personality_model_preset();
+        let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some(&preset.model)).await;
+        Arc::make_mut(&mut chat.model_catalog).models = vec![preset];
+        chat.set_feature_enabled(Feature::Personality, /*enabled*/ true);
+        chat.thread_id = Some(ThreadId::new());
+        chat.set_personality(configured_personality);
 
-    chat.bottom_pane
-        .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
-    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn {
-            personality: Some(Personality::Friendly),
-            ..
-        } => {}
-        other => panic!("expected Op::UserTurn with friendly personality, got {other:?}"),
+        chat.bottom_pane
+            .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
+        chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+        let Op::UserTurn { personality, .. } = next_submit_op(&mut op_rx) else {
+            panic!("expected Op::UserTurn");
+        };
+        assert_eq!(personality, Some(configured_personality));
+    }
+}
+
+#[tokio::test]
+async fn user_turn_omits_personality_for_fixed_personality_models() {
+    for model in ["gpt-5.4", "gpt-5.5"] {
+        for configured_personality in [
+            Personality::Friendly,
+            Personality::Pragmatic,
+            Personality::None,
+        ] {
+            let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some(model)).await;
+            chat.set_feature_enabled(Feature::Personality, /*enabled*/ true);
+            chat.thread_id = Some(ThreadId::new());
+            chat.set_personality(configured_personality);
+
+            chat.bottom_pane
+                .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
+            chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+            let Op::UserTurn { personality, .. } = next_submit_op(&mut op_rx) else {
+                panic!("expected Op::UserTurn");
+            };
+            assert_eq!(personality, None, "model: {model}");
+        }
     }
 }
 

@@ -3591,12 +3591,33 @@ async fn model_picker_refresh_dismisses_empty_choices() {
 
 #[tokio::test]
 async fn personality_selection_popup_snapshot() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
+    let preset = crate::test_support::legacy_personality_model_preset();
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some(&preset.model)).await;
+    Arc::make_mut(&mut chat.model_catalog).models = vec![preset];
     chat.thread_id = Some(ThreadId::new());
+    chat.set_personality(Personality::Pragmatic);
     chat.open_personality_popup();
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert_chatwidget_snapshot!("personality_selection_popup", popup);
+}
+
+#[tokio::test]
+async fn personality_selection_is_unavailable_for_fixed_personality_models() {
+    for model in ["gpt-5.4", "gpt-5.5"] {
+        let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some(model)).await;
+        chat.thread_id = Some(ThreadId::new());
+        while rx.try_recv().is_ok() {}
+
+        chat.open_personality_popup();
+
+        assert!(!chat.bottom_pane.has_active_view());
+        let cell = assert_matches!(rx.try_recv(), Ok(AppEvent::InsertHistoryCell(cell)) => cell);
+        let message = lines_to_single_string(&cell.display_lines(/*width*/ 120));
+        assert!(message.contains(&format!(
+            "Current model ({model}) doesn't support personalities."
+        )));
+    }
 }
 
 #[tokio::test]
