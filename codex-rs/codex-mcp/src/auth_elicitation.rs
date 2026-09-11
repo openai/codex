@@ -66,35 +66,10 @@ pub fn connector_auth_failure_from_tool_result(
     connector_name: Option<&str>,
     install_url: Option<String>,
 ) -> Option<CodexAppsConnectorAuthFailure> {
-    if result.is_error != Some(true) {
-        return None;
-    }
-
-    let auth_failure = result
-        .meta
-        .as_ref()?
-        .as_object()?
-        .get(MCP_TOOL_CODEX_APPS_META_KEY)?
-        .as_object()?
-        .get(CONNECTOR_AUTH_FAILURE_META_KEY)?
-        .as_object()?;
-    if auth_failure
-        .get(CONNECTOR_AUTH_FAILURE_IS_AUTH_FAILURE_KEY)
-        .and_then(serde_json::Value::as_bool)
-        != Some(true)
-    {
-        return None;
-    }
-
     let connector_id = connector_id
         .map(str::trim)
         .filter(|connector_id| !connector_id.is_empty())?;
-    if let Some(auth_failure_connector_id) =
-        string_auth_failure_field(auth_failure, CONNECTOR_AUTH_FAILURE_CONNECTOR_ID_KEY)
-        && auth_failure_connector_id != connector_id
-    {
-        return None;
-    }
+    let auth_failure = connector_auth_failure_metadata(result, connector_id)?;
     let connector_name = connector_name
         .map(str::trim)
         .filter(|name| !name.is_empty())
@@ -119,6 +94,49 @@ pub fn connector_auth_failure_from_tool_result(
             CONNECTOR_AUTH_FAILURE_ERROR_ACTION_KEY,
         ),
     })
+}
+
+pub fn is_connector_auth_failure_from_tool_result(
+    result: &CallToolResult,
+    connector_id: Option<&str>,
+) -> bool {
+    connector_id
+        .map(str::trim)
+        .filter(|connector_id| !connector_id.is_empty())
+        .is_some_and(|connector_id| connector_auth_failure_metadata(result, connector_id).is_some())
+}
+
+fn connector_auth_failure_metadata<'a>(
+    result: &'a CallToolResult,
+    connector_id: &str,
+) -> Option<&'a serde_json::Map<String, serde_json::Value>> {
+    if result.is_error != Some(true) {
+        return None;
+    }
+
+    let auth_failure = result
+        .meta
+        .as_ref()?
+        .as_object()?
+        .get(MCP_TOOL_CODEX_APPS_META_KEY)?
+        .as_object()?
+        .get(CONNECTOR_AUTH_FAILURE_META_KEY)?
+        .as_object()?;
+    if auth_failure
+        .get(CONNECTOR_AUTH_FAILURE_IS_AUTH_FAILURE_KEY)
+        .and_then(serde_json::Value::as_bool)
+        != Some(true)
+    {
+        return None;
+    }
+    if let Some(auth_failure_connector_id) =
+        string_auth_failure_field(auth_failure, CONNECTOR_AUTH_FAILURE_CONNECTOR_ID_KEY)
+        && auth_failure_connector_id != connector_id
+    {
+        return None;
+    }
+
+    Some(auth_failure)
 }
 
 pub fn build_auth_elicitation_plan(
@@ -291,6 +309,76 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn detects_auth_failure_without_an_install_url() {
+        let result = auth_failure_result();
+
+        assert_eq!(
+            is_connector_auth_failure_from_tool_result(&result, Some("connector_calendar")),
+            true
+        );
+        assert_eq!(
+            connector_auth_failure_from_tool_result(
+                &result,
+                Some("connector_calendar"),
+                Some("Google Calendar"),
+                /*install_url*/ None,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn auth_failure_detection_requires_trusted_connector_identity_and_auth_flag() {
+        let result = auth_failure_result();
+        assert_eq!(
+            is_connector_auth_failure_from_tool_result(&result, /*connector_id*/ None),
+            false
+        );
+        assert_eq!(
+            is_connector_auth_failure_from_tool_result(&result, Some("connector_drive")),
+            false
+        );
+
+        let mut ordinary_error = result.clone();
+        ordinary_error.meta.as_mut().expect("auth metadata")[MCP_TOOL_CODEX_APPS_META_KEY]
+            [CONNECTOR_AUTH_FAILURE_META_KEY][CONNECTOR_AUTH_FAILURE_IS_AUTH_FAILURE_KEY] =
+            serde_json::Value::Bool(false);
+        assert_eq!(
+            is_connector_auth_failure_from_tool_result(&ordinary_error, Some("connector_calendar"),),
+            false
+        );
+
+        let mut successful_result = result;
+        successful_result.is_error = Some(false);
+        assert_eq!(
+            is_connector_auth_failure_from_tool_result(
+                &successful_result,
+                Some("connector_calendar"),
+            ),
+            false
+        );
+    }
+
+    #[test]
+    fn detects_each_supported_connector_auth_reason() {
+        for auth_reason in [
+            "missing_link",
+            "oauth_upgrade_required",
+            "reauthentication_required",
+        ] {
+            let mut result = auth_failure_result();
+            result.meta.as_mut().expect("auth metadata")[MCP_TOOL_CODEX_APPS_META_KEY]
+                [CONNECTOR_AUTH_FAILURE_META_KEY][CONNECTOR_AUTH_FAILURE_AUTH_REASON_KEY] =
+                serde_json::Value::String(auth_reason.to_string());
+
+            assert_eq!(
+                is_connector_auth_failure_from_tool_result(&result, Some("connector_calendar")),
+                true
+            );
+        }
     }
 
     #[test]
