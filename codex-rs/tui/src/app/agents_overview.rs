@@ -334,8 +334,10 @@ impl App {
         root_thread_id: ThreadId,
     ) -> color_eyre::Result<AppRunControl> {
         if self.current_displayed_thread_id() == Some(root_thread_id)
-            && !self.thread_unavailable(root_thread_id)
+            && (!self.thread_unavailable(root_thread_id)
+                || self.chat_widget.is_external_writer_view())
         {
+            // Keep the displayed read-only snapshot frozen; R explicitly retries attachment.
             if let Ok(mut state) = self.agents_overview.view_state.lock() {
                 state.completion = Some(crate::bottom_pane::ViewCompletion::Accepted);
             }

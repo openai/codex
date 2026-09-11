@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/rendering_tests.rs
+expression: rendered
+---
+
+
+  🔒   This conversation is open in another app  R to Retry
+      Close it there and press R to continue here.
+
+   r retry   esc command center   ctrl+c/q exit   ctrl+t
+  transcript

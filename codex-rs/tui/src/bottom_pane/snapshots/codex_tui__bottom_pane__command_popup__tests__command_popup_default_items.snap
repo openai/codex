@@ -17,7 +17,7 @@ expression: commands
 /rename - rename the current thread
 /new - start a new chat during a conversation
 /archive - archive this session
-/delete - permanently delete this session and exit
+/delete - permanently delete this session
 /resume - resume a saved chat
 /fork - fork the current chat
 /app - continue this session in the Desktop app

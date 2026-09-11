@@ -252,6 +252,13 @@ impl App {
             && key_event.kind == KeyEventKind::Press
         {
             let modifiers = key_event.modifiers;
+            if key_event.code == KeyCode::Esc
+                && modifiers == KeyModifiers::NONE
+                && !matches!(self.app_server_target, AppServerTarget::Embedded)
+            {
+                self.open_agents_overview(app_server, AgentsOverviewFocus::List);
+                return;
+            }
             let quit = match key_event.code {
                 KeyCode::Esc => modifiers == KeyModifiers::NONE,
                 KeyCode::Char('q' | 'Q') => {

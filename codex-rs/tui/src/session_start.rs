@@ -53,16 +53,24 @@ impl SessionStartAction {
     }
 }
 
+#[derive(Debug)]
+pub(crate) enum SessionStartOutcome {
+    Started(Box<AppServerStartedThread>),
+    CommandCenter,
+    Exit,
+}
+
 pub(crate) async fn complete_session_start(
     app_server: &mut AppServerSession,
     config: &Config,
+    app_server_target: &crate::AppServerTarget,
     target: &SessionTarget,
     action: SessionStartAction,
     initial_result: Result<AppServerStartedThread>,
     confirm: impl AsyncFnOnce() -> Result<UnarchiveChoice>,
-) -> Result<Option<AppServerStartedThread>> {
+) -> Result<SessionStartOutcome> {
     match initial_result {
-        Ok(started) => return Ok(Some(started)),
+        Ok(started) => return Ok(SessionStartOutcome::Started(Box::new(started))),
         Err(err) => {
             // Match the requested ID as well as the server's archive guidance: an unrelated
             // startup failure must never cause us to unarchive a session.
@@ -75,8 +83,16 @@ pub(crate) async fn complete_session_start(
         }
     }
 
-    if confirm().await? == UnarchiveChoice::Cancel {
-        return Ok(None);
+    match confirm().await? {
+        UnarchiveChoice::Cancel => {
+            return Ok(match app_server_target {
+                crate::AppServerTarget::LocalDaemon { .. }
+                | crate::AppServerTarget::Remote { .. } => SessionStartOutcome::CommandCenter,
+                crate::AppServerTarget::Embedded => SessionStartOutcome::Exit,
+            });
+        }
+        UnarchiveChoice::Quit => return Ok(SessionStartOutcome::Exit),
+        UnarchiveChoice::Unarchive => {}
     }
 
     app_server
@@ -87,7 +103,7 @@ pub(crate) async fn complete_session_start(
     action
         .start(app_server, config, target)
         .await
-        .map(Some)
+        .map(|started| SessionStartOutcome::Started(Box::new(started)))
         .map_err(|err| session_start_error(action.verb(), target, err))
 }
 
