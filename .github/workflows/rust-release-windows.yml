@@ -604,25 +604,12 @@ jobs:
             # Must run from inside the dest dir so 7z does not embed the
             # directory path inside the zip.
             if [[ "$base" == "codex-${target}.exe" ]]; then
-              # Bundle the sandbox helper binaries into the main codex zip so
-              # WinGet installs include the required helpers next to codex.exe.
-              # Fall back to the single-binary zip if the helpers are missing
-              # to avoid breaking releases.
+              # Preserve WinGet executable paths while including the signed
+              # runtime, resources, and package metadata from the canonical tar.
               bundle_dir="$(mktemp -d)"
-              runner_src="$dest/codex-command-runner-${target}.exe"
-              setup_src="$dest/codex-windows-sandbox-setup-${target}.exe"
-              if [[ -f "$runner_src" && -f "$setup_src" ]]; then
-                cp "$dest/$base" "$bundle_dir/$base"
-                cp "$runner_src" "$bundle_dir/codex-command-runner.exe"
-                cp "$setup_src" "$bundle_dir/codex-windows-sandbox-setup.exe"
-                # Use an absolute path so bundle zips land in the real dist
-                # dir even when 7z runs from a temp directory.
-                (cd "$bundle_dir" && 7z a "$repo_root/$dest/${base}.zip" .)
-              else
-                echo "warning: missing sandbox binaries; falling back to single-binary zip"
-                echo "warning: expected $runner_src and $setup_src"
-                (cd "$dest" && 7z a "${base}.zip" "$base")
-              fi
+              tar -xzf "$dest/codex-package-${target}.tar.gz" -C "$bundle_dir"
+              python "${GITHUB_WORKSPACE}/scripts/build_winget_package.py" "$(cygpath -w "$bundle_dir")"
+              (cd "$bundle_dir" && 7z a "$repo_root/$dest/${base}.zip" .)
               rm -rf "$bundle_dir"
             else
               (cd "$dest" && 7z a "${base}.zip" "$base")

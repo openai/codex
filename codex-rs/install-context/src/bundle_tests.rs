@@ -46,3 +46,31 @@ fn bundle_executable_preserves_package_layout_and_install_method() -> std::io::R
     );
     Ok(())
 }
+
+#[cfg(windows)]
+#[test]
+fn winget_root_requires_metadata_for_the_actual_executable() -> std::io::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let package = canonical_absolute_path(temp.path()).unwrap();
+    let name = "codex-x86_64-pc-windows-msvc.exe";
+    let executable = package.join(name);
+    fs::write(&executable, "signed CLI")?;
+    for directory in [RESOURCES_DIRNAME, PATH_DIRNAME] {
+        fs::create_dir_all(package.join(directory))?;
+    }
+    assert_eq!(CodexPackageLayout::from_exe(executable.as_path()), None);
+    for entrypoint in ["other.exe", "bin/codex.exe", name] {
+        fs::write(
+            package.join(PACKAGE_METADATA_FILENAME),
+            serde_json::json!({"layoutVersion": 1, "entrypoint": entrypoint}).to_string(),
+        )?;
+        let expected = (entrypoint == name).then(|| CodexPackageLayout {
+            package_dir: package.clone(),
+            bin_dir: package.clone(),
+            resources_dir: Some(package.join(RESOURCES_DIRNAME)),
+            path_dir: Some(package.join(PATH_DIRNAME)),
+        });
+        assert_eq!(CodexPackageLayout::from_exe(executable.as_path()), expected);
+    }
+    Ok(())
+}
