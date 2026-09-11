@@ -1806,7 +1806,9 @@ impl PluginRequestProcessor {
             config.cwd.to_path_buf(),
         );
         for (name, server) in plugin_mcp_servers {
-            if !server.enabled {
+            // EMA uses the account's enterprise grant, never per-plugin OAuth fallback.
+            if !server.enabled || matches!(server.auth, codex_config::types::McpServerAuth::EmaAuth)
+            {
                 continue;
             }
             if !server.is_local_environment() {

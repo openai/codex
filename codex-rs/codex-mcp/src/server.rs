@@ -139,6 +139,7 @@ impl McpServerConnectionIdentity {
                 .all(|byte| byte == b'\t' || (byte >= b' ' && byte != 0x7f))
         };
         let stored_oauth_url = if runtime_auth_provider.is_none()
+            && !matches!(config.auth, McpServerAuth::EmaAuth)
             && (!matches!(config.auth, McpServerAuth::ChatGpt) || config.is_local_environment())
         {
             match &config.transport {

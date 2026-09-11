@@ -584,6 +584,7 @@ fn declared_placement_preserves_local_plugin_normalization() {
             client_id: Some("client-id".to_string()),
             callback_url: Some("http://127.0.0.1/callback/registered".to_string()),
             callback_port: Some(9876),
+            ..Default::default()
         }),
         oauth_resource: None,
         tools: HashMap::new(),
@@ -630,6 +631,33 @@ fn declared_placement_preserves_local_plugin_normalization() {
             errors: Vec::new(),
         }
     );
+}
+
+#[test]
+fn native_plugin_mcp_cannot_self_declare_ema_auth() {
+    let server = serde_json::json!({
+        "type": "http",
+        "url": "https://resource.example/mcp",
+        "auth": "ema_auth"
+    });
+    for contents in [
+        serde_json::json!({"enterprise": server}),
+        serde_json::json!({"mcpServers": {"enterprise": server}}),
+    ] {
+        let outcome = parse_plugin_mcp_config(&plugin_root(), &contents.to_string())
+            .expect("parse plugin MCP config");
+
+        assert_eq!(
+            outcome,
+            PluginMcpConfigParseOutcome {
+                servers: BTreeMap::new(),
+                errors: vec![PluginMcpServerParseError {
+                    name: "enterprise".to_string(),
+                    message: "plugin MCP declarations cannot select ema_auth; configure enterprise authentication in host policy".to_string(),
+                }],
+            }
+        );
+    }
 }
 
 #[test]

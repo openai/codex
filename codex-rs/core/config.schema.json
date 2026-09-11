@@ -1073,6 +1073,9 @@
             "use_linux_sandbox_bwrap": {
               "type": "boolean"
             },
+            "use_xaa": {
+              "type": "boolean"
+            },
             "view_image": {
               "type": "boolean"
             },
@@ -2073,8 +2076,25 @@
       },
       "type": "object"
     },
+    "McpEnterpriseManagedAuthConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "idp": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/McpServerIdpOAuthConfig"
+            }
+          ],
+          "description": "Shared enterprise authorization, independent of Codex account credentials."
+        }
+      },
+      "required": [
+        "idp"
+      ],
+      "type": "object"
+    },
     "McpServerAuth": {
-      "description": "Authentication flow Codex attempts after resolving an HTTP MCP server's configured bearer token and authorization headers, which always take precedence. ChatGPT authentication falls back to stored OAuth credentials when its session provider is unavailable; both modes ultimately fall back to an unauthenticated connection.",
+      "description": "Authentication flow for an HTTP MCP server. Explicit credentials take precedence for OAuth and ChatGPT; EMA rejects alternate credentials and fallback.",
       "oneOf": [
         {
           "description": "Use stored MCP OAuth credentials when available. Starting an OAuth login is a separate operation.",
@@ -2087,6 +2107,13 @@
           "description": "Use the current ChatGPT session for servers on the trusted first-party ChatGPT origin. If no ChatGPT session provider is available, startup can still fall back to stored OAuth credentials.",
           "enum": [
             "chatgpt"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Exchange an enterprise IdP refresh token for resource-specific authorization. Alternate credentials and ordinary OAuth fallback are not permitted.",
+          "enum": [
+            "ema_auth"
           ],
           "type": "string"
         }
@@ -2114,10 +2141,32 @@
         }
       ]
     },
+    "McpServerIdpOAuthConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "client_id": {
+          "description": "Public OAuth client registered with that enterprise IdP.",
+          "type": "string"
+        },
+        "issuer": {
+          "description": "Issuer used for enterprise OAuth discovery and identity validation.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "client_id",
+        "issuer"
+      ],
+      "type": "object"
+    },
     "McpServerOAuthConfig": {
       "additionalProperties": false,
-      "description": "OAuth client settings used when Codex launches an MCP OAuth flow.",
+      "description": "Client settings for MCP OAuth login or enterprise token exchange.",
       "properties": {
+        "authorization_server_issuer": {
+          "description": "Expected resource authorization server issuer for EMA token exchange.",
+          "type": "string"
+        },
         "callback_port": {
           "description": "Fixed callback port that takes precedence over Codex's global OAuth callback port.",
           "format": "uint16",
@@ -3167,7 +3216,7 @@
     },
     "PluginMcpServerConfig": {
       "additionalProperties": false,
-      "description": "Policy settings for a plugin-provided MCP server.\n\nThis intentionally excludes transport settings: plugin manifests own how the MCP server is launched, while user config owns enablement and tool policy.",
+      "description": "Policy settings for a plugin-provided MCP server.\n\nThis intentionally excludes transport settings: plugin manifests own how the MCP server is launched, while host config owns enablement, auth, and tool policy.",
       "properties": {
         "default_tools_approval_mode": {
           "allOf": [
@@ -3183,6 +3232,14 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "ema_auth": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/PluginMcpServerEmaAuthConfig"
+            }
+          ],
+          "description": "Host-configured EMA registration; the plugin still owns its endpoint."
         },
         "enabled": {
           "default": true,
@@ -3204,6 +3261,39 @@
           "type": "object"
         }
       },
+      "type": "object"
+    },
+    "PluginMcpServerEmaAuthConfig": {
+      "additionalProperties": false,
+      "description": "Resource registration applied through an existing per-plugin policy overlay. The enterprise IdP is selected separately by trusted host configuration.",
+      "properties": {
+        "authorization_server_issuer": {
+          "type": "string"
+        },
+        "client_id": {
+          "type": "string"
+        },
+        "resource": {
+          "type": "string"
+        },
+        "scopes": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "url": {
+          "description": "Exact plugin endpoint approved by the host; never overrides the declaration.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "authorization_server_issuer",
+        "client_id",
+        "resource",
+        "url"
+      ],
       "type": "object"
     },
     "ProfileTui": {
@@ -6598,6 +6688,9 @@
         "use_linux_sandbox_bwrap": {
           "type": "boolean"
         },
+        "use_xaa": {
+          "type": "boolean"
+        },
         "view_image": {
           "type": "boolean"
         },
@@ -6739,6 +6832,15 @@
       "default": {},
       "description": "User-level marketplace entries keyed by marketplace name.",
       "type": "object"
+    },
+    "mcp_enterprise_managed_auth": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/McpEnterpriseManagedAuthConfig"
+        }
+      ],
+      "default": null,
+      "description": "Trusted enterprise IdP shared by EMA-enabled MCP servers and plugins."
     },
     "mcp_oauth_callback_port": {
       "description": "Optional fixed port for the local HTTP callback server used during MCP OAuth login. When unset, Codex will bind to an ephemeral port chosen by the OS.",

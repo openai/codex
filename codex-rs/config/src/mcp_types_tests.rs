@@ -376,6 +376,7 @@ fn deserialize_streamable_http_server_config_with_oauth_client_id() {
             client_id: Some("eci-prd-pub-codex-123".to_string()),
             callback_url: Some("http://127.0.0.1/callback/registered".to_string()),
             callback_port: Some(9876),
+            ..Default::default()
         })
     );
 }

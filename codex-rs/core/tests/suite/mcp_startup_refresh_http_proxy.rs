@@ -419,6 +419,7 @@ async fn skill_mcp_dependency_oauth_uses_configured_http_client() -> Result<()> 
             client_id: None,
             callback_url: None,
             callback_port: Some(skill_callback_port),
+            ..Default::default()
         })
     );
     assert!(!servers.contains_key(DENIED_SERVER_NAME));

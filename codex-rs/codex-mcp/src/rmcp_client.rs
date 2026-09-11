@@ -1145,6 +1145,11 @@ pub(crate) async fn make_rmcp_client(
     protocol_mode: McpProtocolMode,
 ) -> Result<RmcpClient, StartupOutcomeError> {
     let config = server.config().clone();
+    if matches!(config.auth, McpServerAuth::EmaAuth) {
+        return Err(StartupOutcomeError::from(anyhow!(
+            "EMA MCP connections are not enabled in this version"
+        )));
+    }
     if matches!(config.auth, McpServerAuth::ChatGpt)
         && !config.is_local_environment()
         && !has_explicit_http_authorization(&config)

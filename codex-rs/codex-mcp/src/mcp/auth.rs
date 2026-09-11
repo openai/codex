@@ -213,22 +213,13 @@ where
         };
         let config = server.config().clone();
         let runtime_context = runtime_context.clone();
-        let has_runtime_auth = matches!(&config.auth, McpServerAuth::ChatGpt)
-            && auth.is_some_and(CodexAuth::uses_codex_backend)
-            && matches!(
-                &config.transport,
-                McpServerTransportConfig::StreamableHttp {
-                    bearer_token_env_var: None,
-                    ..
-                }
-            );
         async move {
             let auth_state = match compute_auth_status(
                 &name,
                 &config,
                 store_mode,
                 keyring_backend_kind,
-                has_runtime_auth,
+                auth,
                 &runtime_context,
                 redirect_mode,
             )
@@ -256,13 +247,26 @@ async fn compute_auth_status(
     config: &McpServerConfig,
     store_mode: OAuthCredentialsStoreMode,
     keyring_backend_kind: AuthKeyringBackendKind,
-    has_runtime_auth: bool,
+    auth: Option<&CodexAuth>,
     runtime_context: &McpRuntimeContext,
     redirect_mode: StreamableHttpRedirectMode,
 ) -> Result<McpAuthState> {
     if !config.enabled {
         return Ok(McpAuthState::Unsupported);
     }
+    if matches!(config.auth, McpServerAuth::EmaAuth) {
+        // EMA connections are not enabled until the runtime stage of the stack.
+        return Ok(McpAuthState::Unsupported);
+    }
+    let has_runtime_auth = matches!(config.auth, McpServerAuth::ChatGpt)
+        && auth.is_some_and(CodexAuth::uses_codex_backend)
+        && matches!(
+            &config.transport,
+            McpServerTransportConfig::StreamableHttp {
+                bearer_token_env_var: None,
+                ..
+            }
+        );
 
     if matches!(config.auth, McpServerAuth::ChatGpt) && !config.is_local_environment() {
         return Ok(if has_explicit_http_authorization(config) {

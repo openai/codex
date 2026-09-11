@@ -101,8 +101,10 @@ fn serialize_mcp_server_table(config: &McpServerConfig) -> anyhow::Result<TomlTa
         }
     }
 
-    if matches!(&config.auth, McpServerAuth::ChatGpt) {
-        entry["auth"] = value("chatgpt");
+    match config.auth {
+        McpServerAuth::OAuth => {}
+        McpServerAuth::ChatGpt => entry["auth"] = value("chatgpt"),
+        McpServerAuth::EmaAuth => entry["auth"] = value("ema_auth"),
     }
     if !config.enabled {
         entry["enabled"] = value(false);
@@ -158,6 +160,9 @@ fn serialize_mcp_server_table(config: &McpServerConfig) -> anyhow::Result<TomlTa
         }
         if let Some(callback_url) = &oauth.callback_url {
             oauth_table["callback_url"] = value(callback_url.clone());
+        }
+        if let Some(issuer) = &oauth.authorization_server_issuer {
+            oauth_table["authorization_server_issuer"] = value(issuer.clone());
         }
         if let Some(callback_port) = oauth.callback_port {
             oauth_table["callback_port"] = value(i64::from(callback_port));

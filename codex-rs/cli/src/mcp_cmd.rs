@@ -406,6 +406,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
                 client_id: Some(client_id),
                 callback_url: callback_url.clone(),
                 callback_port: None,
+                ..Default::default()
             }),
         oauth_resource: oauth_resource.clone(),
         tools: HashMap::new(),
@@ -524,6 +525,12 @@ async fn run_login(config: &Config, login_args: LoginArgs) -> Result<()> {
     let Some(server) = mcp_servers.get(&name) else {
         bail!("No MCP server named '{name}' found.");
     };
+
+    if matches!(server.auth, codex_config::types::McpServerAuth::EmaAuth) {
+        bail!(
+            "Enterprise MCP authorization is managed by Codex account sign-in. Open Codex to sign in."
+        );
+    }
 
     let (url, http_headers, env_http_headers) = match &server.transport {
         McpServerTransportConfig::StreamableHttp {

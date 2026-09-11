@@ -969,6 +969,9 @@ async fn load_plugin(
 
 fn apply_plugin_mcp_server_policy(config: &mut McpServerConfig, policy: &PluginMcpServerConfig) {
     config.enabled = policy.enabled;
+    if policy.ema_auth.is_some() {
+        config.auth = codex_config::McpServerAuth::EmaAuth;
+    }
     if let Some(approval_mode) = policy.default_tools_approval_mode {
         config.default_tools_approval_mode = Some(approval_mode);
     }
@@ -1435,6 +1438,9 @@ pub fn apply_configured_plugin_mcp_server_policies(
 ) {
     for (name, server) in servers {
         if let Some(policy) = policies.get(name) {
+            if policy.ema_auth.is_some() {
+                server.auth = codex_config::McpServerAuth::EmaAuth;
+            }
             let declared_approval_mode = server.default_tools_approval_mode.unwrap_or_default();
             server.enabled &= policy.enabled;
 

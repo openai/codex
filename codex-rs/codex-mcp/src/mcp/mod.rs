@@ -398,7 +398,7 @@ pub fn effective_mcp_servers_from_configured(
                         server.auth = McpServerAuth::OAuth;
                     }
                 }
-                McpServerAuth::OAuth => {}
+                McpServerAuth::OAuth | McpServerAuth::EmaAuth => {}
             }
             let agent_plugin = config
                 .mcp_server_catalog
