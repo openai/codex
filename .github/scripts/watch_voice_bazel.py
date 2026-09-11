@@ -69,6 +69,9 @@ def main():
                 diagnose()
             time.sleep(1)
         reader.join()
+        if process.returncode and not captured:
+            print("Bazel command failed; capturing diagnostics", flush=True)
+            diagnose()
         return process.returncode
 
 
