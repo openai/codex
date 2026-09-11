@@ -1,4 +1,4 @@
-//! Resolves global and repository instructions into one validated snapshot.
+//! Resolves global, thread, and repository instructions into one validated snapshot.
 //! Refreshes are serialized; the state lock is never held while calling providers.
 
 use crate::agents_md::LoadedAgentsMd;
@@ -6,11 +6,14 @@ use crate::agents_md::load_project_instructions;
 use crate::config::Config;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use codex_extension_api::Instructions;
+use codex_extension_api::ThreadInstructionsProvider;
 use codex_extension_api::UserInstructionsProvider;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use codex_utils_string::approx_bytes_for_tokens;
+use codex_utils_string::approx_tokens_from_byte_count;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
@@ -25,7 +28,9 @@ pub(crate) struct AgentsMdManager {
 #[derive(Clone, Default)]
 pub(crate) struct SessionInstructions {
     pub(crate) user: Option<Instructions>,
+    pub(crate) thread: Option<Instructions>,
     pub(crate) user_provider: Option<Arc<dyn UserInstructionsProvider>>,
+    pub(crate) thread_provider: Option<Arc<dyn ThreadInstructionsProvider>>,
 }
 
 struct AgentsMdState {
@@ -43,6 +48,7 @@ struct AgentsMdCache {
 impl AgentsMdManager {
     pub(crate) fn new(mut instructions: SessionInstructions) -> Self {
         instructions.user = normalize_instructions(instructions.user);
+        instructions.thread = normalize_instructions(instructions.thread);
         Self {
             refresh_lock: Semaphore::new(/*permits*/ 1),
             state: Mutex::new(AgentsMdState {
@@ -96,11 +102,21 @@ impl AgentsMdManager {
             instructions.user = normalize_instructions(loaded.instructions);
             warnings.extend(loaded.warnings);
         }
+        if let Some(provider) = &instructions.thread_provider {
+            let loaded = provider.load_thread_instructions().await;
+            instructions.thread = normalize_instructions(loaded.instructions);
+            warnings.extend(loaded.warnings);
+        }
 
         let result = async {
+            if let Some(input) = &instructions.thread {
+                validate_thread_instruction_size(input.text.len())?;
+            }
             if !refresh_repository {
                 let state = self.state.lock().await;
-                if state.instructions.user == instructions.user {
+                if state.instructions.user == instructions.user
+                    && state.instructions.thread == instructions.thread
+                {
                     return Ok(cached);
                 }
             }
@@ -112,7 +128,7 @@ impl AgentsMdManager {
             } else {
                 cached.as_deref().cloned().unwrap_or_default()
             }
-            .with_user_instructions(instructions.user.clone())
+            .with_instructions(instructions.user.clone(), instructions.thread.clone())
             .map(Arc::new);
             let mut state = self.state.lock().await;
             state.instructions = instructions;
@@ -135,9 +151,25 @@ impl AgentsMdManager {
         let state = self.state.lock().await;
         SessionInstructions {
             user: state.instructions.user.clone(),
+            thread: state.instructions.thread.clone(),
             ..Default::default()
         }
     }
+}
+
+// Bound the new host-provided contribution independently of project_doc_max_bytes,
+// which controls repository discovery. Existing global and combined instruction
+// size policy is unchanged; reject oversized thread input rather than truncate it.
+const MAX_THREAD_INSTRUCTIONS_TOKENS: usize = 10_000;
+
+fn validate_thread_instruction_size(bytes: usize) -> CodexResult<()> {
+    if bytes > approx_bytes_for_tokens(MAX_THREAD_INSTRUCTIONS_TOKENS) {
+        let estimated_tokens = approx_tokens_from_byte_count(bytes);
+        return Err(CodexErr::InvalidRequest(format!(
+            "thread instructions exceed the limit of {MAX_THREAD_INSTRUCTIONS_TOKENS} estimated tokens ({estimated_tokens} estimated tokens provided)"
+        )));
+    }
+    Ok(())
 }
 
 fn normalize_instructions(instructions: Option<Instructions>) -> Option<Instructions> {

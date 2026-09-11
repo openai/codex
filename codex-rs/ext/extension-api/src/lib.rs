@@ -104,6 +104,7 @@ pub use state::ExtensionData;
 pub use state::ExtensionDataInit;
 pub use turn_admission::TurnStartAdmission;
 pub use user_instructions::Instructions;
-pub use user_instructions::LoadUserInstructionsFuture;
+pub use user_instructions::LoadInstructionsFuture;
 pub use user_instructions::LoadedUserInstructions;
+pub use user_instructions::ThreadInstructionsProvider;
 pub use user_instructions::UserInstructionsProvider;

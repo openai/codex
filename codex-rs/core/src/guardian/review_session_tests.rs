@@ -282,22 +282,27 @@ async fn spawned_guardian_session_preserves_windows_sandbox_proxy_settings() {
 #[tokio::test]
 async fn spawned_guardian_reuse_key_matches_inherited_instructions() {
     let mut params = test_review_params().await;
+    let latest = Some(Instructions {
+        text: "latest thread instructions".to_string(),
+        source: None,
+    });
     let latest_global = Some(Instructions {
         text: "latest global instructions".to_string(),
-        source: params.spawn_config.codex_home.join("AGENTS.md"),
+        source: None,
     });
     let parent = Arc::get_mut(&mut params.parent_session).expect("unshared parent session");
     parent.services.agents_md_manager = Arc::new(AgentsMdManager::new(SessionInstructions {
         user: latest_global.clone(),
+        thread: latest.clone(),
         ..Default::default()
     }));
     // Reproduce an update between reuse-key capture and reviewer creation.
     let stale_key = GuardianReviewSessionReuseKey::from_spawn_config(
         &params.spawn_config,
         SessionInstructions {
-            user: Some(Instructions {
-                text: "previous global instructions".to_string(),
-                source: params.spawn_config.codex_home.join("AGENTS.md"),
+            thread: Some(Instructions {
+                text: "previous thread instructions".to_string(),
+                source: None,
             }),
             ..Default::default()
         },
@@ -305,7 +310,8 @@ async fn spawned_guardian_reuse_key_matches_inherited_instructions() {
         parent.guardian_context_mode,
     );
     let expected_key = GuardianReviewSessionReuseKey {
-        user_instructions: latest_global.clone(),
+        user_instructions: latest_global,
+        thread_instructions: latest.clone(),
         ..stale_key.clone()
     };
     let prepared = factory::prepare_review(params)
@@ -323,10 +329,7 @@ async fn spawned_guardian_reuse_key_matches_inherited_instructions() {
         .expect("spawn reviewer after instruction update");
 
     assert_eq!(review.reuse_key, expected_key);
-    assert_eq!(
-        review.session.inherited_instructions().await.user,
-        latest_global
-    );
+    assert_eq!(review.session.inherited_instructions().await.thread, latest);
     review.shutdown().await;
 }
 
@@ -393,6 +396,17 @@ async fn guardian_review_session_config_change_invalidates_cached_session() {
             /*parent_history_version*/ 1,
             GuardianContextMode::Legacy,
         )
+    );
+    assert_ne!(
+        cached_reuse_key.clone(),
+        GuardianReviewSessionReuseKey {
+            thread_instructions: Some(Instructions {
+                text: "updated thread instructions".to_string(),
+                source: None,
+            }),
+            ..cached_reuse_key.clone()
+        },
+        "changing thread instructions must invalidate reviewer history"
     );
     assert_ne!(
         cached_reuse_key
@@ -969,7 +983,11 @@ async fn run_review_removes_trunk_when_event_stream_is_broken() {
     parent.services.agents_md_manager = Arc::new(AgentsMdManager::new(SessionInstructions {
         user: Some(Instructions {
             text: "parent global instructions".to_string(),
-            source: params.spawn_config.codex_home.join("AGENTS.md"),
+            source: None,
+        }),
+        thread: Some(Instructions {
+            text: "parent thread instructions".to_string(),
+            source: None,
         }),
         ..Default::default()
     }));

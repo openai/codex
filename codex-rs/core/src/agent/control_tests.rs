@@ -18,9 +18,15 @@ use crate::thread_manager::StartThreadOptions;
 use crate::tools::handlers::multi_agents_common::thread_spawn_source;
 use assert_matches::assert_matches;
 use codex_extension_api::ExtensionDataInit;
+use codex_extension_api::Instructions;
+use codex_extension_api::LoadInstructionsFuture;
+use codex_extension_api::LoadedUserInstructions;
+use codex_extension_api::ThreadInstructionsProvider;
 use codex_extension_api::empty_extension_registry;
 use codex_features::Feature;
 use codex_history::CompactedItem;
+use codex_history::InitialHistory;
+use codex_history::ResumedHistory;
 use codex_history::RolloutItem;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -788,6 +794,16 @@ async fn check_v2_agent_reload(route: V2ReloadRoute) {
         .start_thread(StartThreadOptions {
             history_mode: Some(ThreadHistoryMode::Paginated),
             client_mcp_extensions: client_mcp_extensions.clone(),
+            user_instructions: Some(LoadedUserInstructions {
+                instructions: Some(Instructions {
+                    text: "global instructions survive parent eviction".to_string(),
+                    source: None,
+                }),
+                warnings: Vec::new(),
+            }),
+            thread_instructions_provider: Some(Arc::new(StaticThreadInstructionsProvider(
+                "thread instructions survive parent eviction",
+            ))),
             ..StartThreadOptions::new(harness.config.clone())
         })
         .await
@@ -811,6 +827,9 @@ async fn check_v2_agent_reload(route: V2ReloadRoute) {
         }
     };
     let parent_thread_id = parent_thread.session.thread_id;
+    let inherited_instructions = parent_thread.session.inherited_instructions().await;
+    assert!(inherited_instructions.user.is_some());
+    assert!(inherited_instructions.thread.is_some());
     let mut child_config = harness.config.clone();
     child_config.model = Some("gpt-5.6-luna".to_string());
     let spawned_agent =
@@ -910,6 +929,12 @@ async fn check_v2_agent_reload(route: V2ReloadRoute) {
         .get_thread(spawned_agent.thread_id)
         .await
         .expect("reloaded child thread should exist");
+    let reloaded_instructions = reloaded_child.session.inherited_instructions().await;
+    assert_eq!(
+        (reloaded_instructions.user, reloaded_instructions.thread),
+        (inherited_instructions.user, inherited_instructions.thread),
+        "reloading a child must retain both parent snapshots, even if residency evicts the parent",
+    );
     if matches!(route, V2ReloadRoute::NestedParent) {
         let reloaded_turn = reloaded_child.session.new_default_turn().await;
         assert_eq!(
@@ -1102,6 +1127,120 @@ async fn resume_agent_from_rollout_does_not_reopen_v2_descendants() {
     assert!(closed_worker.is_err());
     assert!(surviving_sibling.is_ok());
     assert_thread_not_loaded(&resumed_manager, sibling_thread_id).await;
+}
+
+struct StaticThreadInstructionsProvider(&'static str);
+
+impl ThreadInstructionsProvider for StaticThreadInstructionsProvider {
+    fn load_thread_instructions(&self) -> LoadInstructionsFuture<'_> {
+        let instructions = Instructions {
+            text: self.0.to_string(),
+            source: None,
+        };
+        Box::pin(async move {
+            LoadedUserInstructions {
+                instructions: Some(instructions),
+                warnings: Vec::new(),
+            }
+        })
+    }
+}
+
+#[tokio::test]
+async fn cold_resume_with_thread_instructions_preserves_lazy_v2_child_inheritance() {
+    let (home, mut config) = test_config().await;
+    let _ = config.features.enable(Feature::MultiAgentV2);
+    let _ = config.features.enable(Feature::Sqlite);
+    let harness = AgentControlHarness::new_with_config(home, config).await;
+    let parent = harness
+        .manager
+        .start_thread(StartThreadOptions {
+            thread_instructions_provider: Some(Arc::new(StaticThreadInstructionsProvider(
+                "initial thread instructions",
+            ))),
+            ..StartThreadOptions::new(harness.config.clone())
+        })
+        .await
+        .expect("start parent with thread instructions");
+    let parent_thread_id = parent.thread_id;
+    let control = &parent.thread.session.services.agent_control;
+    let worker_thread_id =
+        spawn_v2_reload_test_child(control, harness.config.clone(), &parent.thread, "worker")
+            .await
+            .thread_id;
+    let worker = harness
+        .manager
+        .get_thread(worker_thread_id)
+        .await
+        .expect("worker should be loaded");
+    persist_thread_for_tree_resume(&parent.thread, "parent persisted").await;
+    persist_thread_for_tree_resume(&worker, "worker persisted").await;
+    wait_for_live_thread_spawn_children(control, parent_thread_id, &[worker_thread_id]).await;
+
+    let stored_parent = parent
+        .thread
+        .read_thread(
+            /*include_archived*/ true, /*include_history*/ true,
+        )
+        .await
+        .expect("read parent history");
+    let initial_history = InitialHistory::Resumed(ResumedHistory {
+        conversation_id: parent_thread_id,
+        history: Arc::new(stored_parent.history.expect("parent history").items),
+        rollout_path: stored_parent.rollout_path,
+    });
+    let report = harness
+        .manager
+        .shutdown_all_threads_bounded(Duration::from_secs(5))
+        .await;
+    assert_eq!(report.submit_failed, Vec::<ThreadId>::new());
+    assert_eq!(report.timed_out, Vec::<ThreadId>::new());
+
+    let resumed_manager = ThreadManager::with_models_provider_home_and_state_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        harness.config.model_provider.clone(),
+        harness.config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        harness.state_db.clone(),
+    );
+    let resumed_parent = resumed_manager
+        .start_thread(StartThreadOptions {
+            initial_history,
+            session_source: Some(SessionSource::Exec),
+            thread_instructions_provider: Some(Arc::new(StaticThreadInstructionsProvider(
+                "resumed thread instructions",
+            ))),
+            ..StartThreadOptions::new(harness.config.clone())
+        })
+        .await
+        .expect("cold resume parent with updated thread instructions");
+    let thread_instructions = Instructions {
+        text: "resumed thread instructions".to_string(),
+        source: None,
+    };
+    assert_eq!(
+        resumed_parent
+            .thread
+            .session
+            .inherited_instructions()
+            .await
+            .thread,
+        Some(thread_instructions.clone()),
+    );
+    assert_thread_not_loaded(&resumed_manager, worker_thread_id).await;
+
+    resumed_manager
+        .ensure_multi_agent_v2_child_loaded(worker_thread_id)
+        .await
+        .expect("resume v2 worker on demand");
+    let resumed_worker = resumed_manager
+        .get_thread(worker_thread_id)
+        .await
+        .expect("resumed worker should be loaded");
+    assert_eq!(
+        resumed_worker.session.inherited_instructions().await.thread,
+        Some(thread_instructions),
+    );
 }
 
 #[tokio::test]

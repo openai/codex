@@ -137,6 +137,7 @@ impl ReviewerSessionFactory for PreparedSession {
         let inherited = session.inherited_instructions().await;
         let context = GuardianReviewSessionReuseKey {
             user_instructions: inherited.user,
+            thread_instructions: inherited.thread,
             ..context
         };
         Ok(GuardianReviewSession {
