@@ -2700,6 +2700,13 @@ class ModeKind(Enum):
     default = "default"
 
 
+class ModelAccessPrograms(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    cyber: Annotated[list[CyberAccessProgram], Field(description="Accepted explicit selections.")]
+
+
 class ModelAvailabilityNux(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -8415,6 +8422,13 @@ class Model(BaseModel):
         Field(alias="additionalSpeedTiers", description="Deprecated: use `serviceTiers` instead."),
     ] = []
     availability_nux: Annotated[ModelAvailabilityNux | None, Field(alias="availabilityNux")] = None
+    available_access_programs: Annotated[
+        ModelAccessPrograms | None,
+        Field(
+            alias="availableAccessPrograms",
+            description="Null when the catalog does not provide access-program metadata.",
+        ),
+    ] = None
     default_reasoning_effort: Annotated[ReasoningEffort, Field(alias="defaultReasoningEffort")]
     default_service_tier: Annotated[
         str | None,

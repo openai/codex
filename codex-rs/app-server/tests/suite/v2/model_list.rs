@@ -188,6 +188,7 @@ fn model_from_preset(preset: &ModelPreset) -> Model {
             })
             .collect(),
         default_service_tier: preset.default_service_tier.clone(),
+        available_access_programs: preset.available_access_programs.clone().map(Into::into),
         is_default: preset.is_default,
     }
 }
@@ -275,43 +276,52 @@ async fn list_models_uses_remote_catalog_as_source_of_truth(
     api_key: Option<&str>,
 ) -> Result<()> {
     let server = MockServer::start().await;
-    let remote_models = [json!("2030-01-01T00:00:00Z"), serde_json::Value::Null]
-        .into_iter()
-        .enumerate()
-        .map(|(priority, retirement_at)| {
-            serde_json::from_value::<ModelInfo>(json!({
-                "slug": format!("remote-only-{priority}"),
-                "display_name": "Remote Only",
-                "description": "Remote-only model for app-server model/list coverage",
-                "model_specialty": MODEL_SPECIALTY_CYBER,
-                "default_reasoning_level": "max",
-                "supported_reasoning_levels": [
-                    {"effort": "max", "description": "Maximum"},
-                    {"effort": "low", "description": "Low"},
-                    {"effort": "focused", "description": "Focused"}
-                ],
-                "shell_type": "shell_command",
-                "visibility": "list",
-                "minimal_client_version": [0, 1, 0],
-                "supported_in_api": true,
-                "priority": priority,
-                "upgrade": {
-                    "model": "replacement-model",
-                    "migration_markdown": "Use the replacement model.",
-                    "retirement_at": retirement_at,
-                },
-                "support_verbosity": false,
-                "default_verbosity": null,
-                "apply_patch_tool_type": null,
-                "truncation_policy": {"mode": "bytes", "limit": 10_000},
-                "supports_image_detail_original": false,
-                "multi_agent_version": "v2",
-                "context_window": 272_000,
-                "max_context_window": 272_000,
-                "experimental_supported_tools": [],
-            }))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let remote_models = [
+        (
+            json!("2030-01-01T00:00:00Z"),
+            json!({ "cyber": ["standard", "daybreak_blue"] }),
+        ),
+        (json!(null), json!({ "cyber": ["daybreak_red"] })),
+        (json!(null), json!({ "cyber": [] })),
+        (json!(null), json!(null)),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(priority, (retirement_at, access_programs))| {
+        serde_json::from_value::<ModelInfo>(json!({
+            "slug": format!("remote-only-{priority}"),
+            "display_name": "Remote Only",
+            "description": "Remote-only model for app-server model/list coverage",
+            "model_specialty": MODEL_SPECIALTY_CYBER,
+            "available_access_programs": access_programs,
+            "default_reasoning_level": "max",
+            "supported_reasoning_levels": [
+                {"effort": "max", "description": "Maximum"},
+                {"effort": "low", "description": "Low"},
+                {"effort": "focused", "description": "Focused"}
+            ],
+            "shell_type": "shell_command",
+            "visibility": "list",
+            "minimal_client_version": [0, 1, 0],
+            "supported_in_api": true,
+            "priority": priority,
+            "upgrade": {
+                "model": "replacement-model",
+                "migration_markdown": "Use the replacement model.",
+                "retirement_at": retirement_at,
+            },
+            "support_verbosity": false,
+            "default_verbosity": null,
+            "apply_patch_tool_type": null,
+            "truncation_policy": {"mode": "bytes", "limit": 10_000},
+            "supports_image_detail_original": false,
+            "multi_agent_version": "v2",
+            "context_window": 272_000,
+            "max_context_window": 272_000,
+            "experimental_supported_tools": [],
+        }))
+    })
+    .collect::<Result<Vec<_>, _>>()?;
     // The startup refresh worker and model/list can both fetch before the cache is populated.
     let _models_mock = Mock::given(method("GET"))
         .and(path("/v1/models"))
@@ -378,6 +388,20 @@ api_key_model_discovery = true
     assert_eq!(
         response.result["data"][1]["upgradeInfo"]["retirementAt"],
         serde_json::Value::Null
+    );
+    assert_eq!(
+        response.result["data"]
+            .as_array()
+            .expect("model/list data should be an array")
+            .iter()
+            .map(|model| model["availableAccessPrograms"].clone())
+            .collect::<Vec<_>>(),
+        vec![
+            json!({ "cyber": ["standard", "daybreakBlue"] }),
+            json!({ "cyber": ["daybreakRed"] }),
+            json!({ "cyber": [] }),
+            json!(null),
+        ]
     );
     let ModelListResponse {
         data: items,

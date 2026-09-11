@@ -104,6 +104,7 @@ fn test_model_info(
         additional_speed_tiers: Vec::new(),
         service_tiers,
         default_service_tier: None,
+        available_access_programs: None,
         upgrade: None,
         model_messages: None,
         include_skills_usage_instructions: false,

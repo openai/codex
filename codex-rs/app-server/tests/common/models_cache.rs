@@ -28,6 +28,7 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
         additional_speed_tiers: preset.additional_speed_tiers.clone(),
         service_tiers: preset.service_tiers.clone(),
         default_service_tier: preset.default_service_tier.clone(),
+        available_access_programs: preset.available_access_programs.clone(),
         upgrade: preset.upgrade.as_ref().map(Into::into),
         model_messages: Some(ModelMessages {
             persistent_instructions: None,

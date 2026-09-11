@@ -1803,6 +1803,7 @@ fn model_preset_from_api_model(model: ApiModel) -> ModelPreset {
             })
             .collect(),
         default_service_tier: model.default_service_tier,
+        available_access_programs: model.available_access_programs.map(Into::into),
         is_default: model.is_default,
         upgrade,
         show_in_picker: !model.hidden,
@@ -2643,6 +2644,7 @@ mod tests {
             additional_speed_tiers: Vec::new(),
             service_tiers: Vec::new(),
             default_service_tier: None,
+            available_access_programs: None,
             is_default: false,
         }
     }

@@ -626,6 +626,7 @@ fn remote_model_with_auto_review_override(slug: &str, review_model: &str) -> Mod
         additional_speed_tiers: Vec::new(),
         service_tiers: Vec::new(),
         default_service_tier: None,
+        available_access_programs: None,
         upgrade: None,
         model_messages: None,
         include_skills_usage_instructions: false,

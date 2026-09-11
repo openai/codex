@@ -306,6 +306,7 @@ export type { MigrationDetails } from "./MigrationDetails";
 export type { MisalignmentErrorDetails } from "./MisalignmentErrorDetails";
 export type { MisalignmentSteer } from "./MisalignmentSteer";
 export type { Model } from "./Model";
+export type { ModelAccessPrograms } from "./ModelAccessPrograms";
 export type { ModelAvailabilityNux } from "./ModelAvailabilityNux";
 export type { ModelListParams } from "./ModelListParams";
 export type { ModelListResponse } from "./ModelListResponse";

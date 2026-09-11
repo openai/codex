@@ -15110,6 +15110,18 @@
               }
             ]
           },
+          "availableAccessPrograms": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ModelAccessPrograms"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Null when the catalog does not provide access-program metadata."
+          },
           "defaultReasoningEffort": {
             "$ref": "#/definitions/v2/ReasoningEffort"
           },
@@ -15210,6 +15222,22 @@
           "isDefault",
           "model",
           "supportedReasoningEfforts"
+        ],
+        "type": "object"
+      },
+      "ModelAccessPrograms": {
+        "description": "Caller-specific explicit access programs advertised by model discovery.",
+        "properties": {
+          "cyber": {
+            "description": "Accepted explicit selections.",
+            "items": {
+              "$ref": "#/definitions/v2/CyberAccessProgram"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "cyber"
         ],
         "type": "object"
       },

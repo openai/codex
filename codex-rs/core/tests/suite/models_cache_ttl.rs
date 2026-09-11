@@ -534,6 +534,7 @@ fn test_remote_model(slug: &str, priority: i32) -> ModelInfo {
         additional_speed_tiers: Vec::new(),
         service_tiers: Vec::new(),
         default_service_tier: None,
+        available_access_programs: None,
         upgrade: None,
         model_messages: Some(ModelMessages {
             persistent_instructions: None,

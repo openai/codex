@@ -139,6 +139,16 @@ impl From<CyberAccessProgram> for CoreCyberAccessProgram {
     }
 }
 
+impl From<CoreCyberAccessProgram> for CyberAccessProgram {
+    fn from(value: CoreCyberAccessProgram) -> Self {
+        match value {
+            CoreCyberAccessProgram::Standard => Self::Standard,
+            CoreCyberAccessProgram::DaybreakBlue => Self::DaybreakBlue,
+            CoreCyberAccessProgram::DaybreakRed => Self::DaybreakRed,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

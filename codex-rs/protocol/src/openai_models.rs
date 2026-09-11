@@ -33,6 +33,7 @@ use crate::config_types::ServiceTier;
 use crate::config_types::Verbosity;
 use crate::protocol::MultiAgentVersion;
 
+mod access_programs;
 #[path = "openai_models/guardian.rs"]
 mod guardian;
 pub use guardian::GuardianModelPolicy;
@@ -44,6 +45,7 @@ mod guardian_v2;
 #[path = "openai_models/reasoning_effort.rs"]
 mod reasoning_effort;
 
+pub use access_programs::ModelAccessPrograms;
 pub use guardian_v2::GuardianV2ModelConfig;
 pub use guardian_v2::GuardianV2TranscriptModelConfig;
 
@@ -258,6 +260,9 @@ pub struct ModelPreset {
     /// Catalog default service tier id for this model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_service_tier: Option<String>,
+    /// Caller-specific explicit access programs, when discovery resolved them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub available_access_programs: Option<ModelAccessPrograms>,
     /// Whether this is the default model for new users.
     pub is_default: bool,
     /// recommended upgrade model
@@ -419,6 +424,8 @@ pub struct ModelInfo {
     pub service_tiers: Vec<ModelServiceTier>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_service_tier: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub available_access_programs: Option<ModelAccessPrograms>,
     pub availability_nux: Option<ModelAvailabilityNux>,
     pub upgrade: Option<ModelInfoUpgrade>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -883,6 +890,7 @@ impl From<ModelInfo> for ModelPreset {
             additional_speed_tiers: info.additional_speed_tiers,
             service_tiers: info.service_tiers,
             default_service_tier: info.default_service_tier,
+            available_access_programs: info.available_access_programs,
             is_default: false, // default is the highest priority available model
             upgrade: info.upgrade.as_ref().map(|upgrade| ModelUpgrade {
                 id: upgrade.model.clone(),
@@ -991,6 +999,7 @@ mod tests {
             additional_speed_tiers: Vec::new(),
             service_tiers: Vec::new(),
             default_service_tier: None,
+            available_access_programs: None,
             availability_nux: None,
             upgrade: None,
             model_messages: spec,
@@ -2033,6 +2042,40 @@ mod tests {
             preset.default_service_tier,
             Some(ServiceTier::Fast.request_value().to_string())
         );
+    }
+
+    #[test]
+    fn model_access_programs_preserve_explicit_selection_availability() {
+        use crate::turn_input::CyberAccessProgram;
+
+        for (metadata, expected) in [
+            (None, None),
+            (Some(serde_json::Value::Null), None),
+            (
+                Some(serde_json::json!({ "cyber": [] })),
+                Some(ModelAccessPrograms { cyber: vec![] }),
+            ),
+            (
+                Some(serde_json::json!({
+                    "cyber": ["standard", "daybreak_blue", "future_program", "daybreak_red"]
+                })),
+                Some(ModelAccessPrograms {
+                    cyber: vec![
+                        CyberAccessProgram::Standard,
+                        CyberAccessProgram::DaybreakBlue,
+                        CyberAccessProgram::DaybreakRed,
+                    ],
+                }),
+            ),
+        ] {
+            let mut value = serde_json::to_value(test_model(/*spec*/ None)).unwrap();
+            if let Some(metadata) = metadata {
+                value["available_access_programs"] = metadata;
+            }
+            let model: ModelInfo = serde_json::from_value(value).unwrap();
+            assert_eq!(model.available_access_programs, expected);
+            assert_eq!(ModelPreset::from(model).available_access_programs, expected);
+        }
     }
 
     #[test]

@@ -62,6 +62,7 @@ fn model_from_preset(preset: ModelPreset) -> Model {
             })
             .collect(),
         default_service_tier: preset.default_service_tier,
+        available_access_programs: preset.available_access_programs.map(Into::into),
         is_default: preset.is_default,
     }
 }
