@@ -1,3 +1,4 @@
+use crate::config_manager::ConfigManager;
 use std::sync::Arc;
 
 use crate::error_code::internal_error;
@@ -38,6 +39,7 @@ use codex_thread_store::ThreadStore;
 use codex_thread_store::ThreadStoreError;
 
 use super::TurnRequestProcessor;
+use super::config_load_error;
 use super::thread_input::DIRECT_INPUT_TO_MULTI_AGENT_V2_SUBAGENT_ERROR;
 use super::thread_input::can_accept_direct_input;
 use super::thread_processor::THREAD_LIST_DEFAULT_LIMIT;
@@ -51,6 +53,7 @@ pub(crate) struct ThreadQueueRequestProcessor {
     thread_manager: Arc<ThreadManager>,
     thread_store: Arc<dyn ThreadStore>,
     outgoing: Arc<OutgoingMessageSender>,
+    config_manager: ConfigManager,
     service: Option<Arc<QueuedItemService>>,
 }
 
@@ -59,12 +62,14 @@ impl ThreadQueueRequestProcessor {
         thread_manager: Arc<ThreadManager>,
         thread_store: Arc<dyn ThreadStore>,
         outgoing: Arc<OutgoingMessageSender>,
+        config_manager: ConfigManager,
         service: Option<Arc<QueuedItemService>>,
     ) -> Self {
         Self {
             thread_manager,
             thread_store,
             outgoing,
+            config_manager,
             service,
         }
     }
@@ -187,6 +192,10 @@ impl ThreadQueueRequestProcessor {
         ensure_direct_input_allowed(loaded_thread.as_deref(), &source)?;
         let thread = loaded_thread
             .ok_or_else(|| invalid_request("resume the thread before starting a queued message"))?;
+        self.config_manager
+            .check_thread_model_provider(thread.config().await.as_ref())
+            .await
+            .map_err(|error| config_load_error(&error))?;
         let submission = self
             .service()?
             .start(

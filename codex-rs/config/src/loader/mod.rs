@@ -2,6 +2,7 @@ mod layer_io;
 mod local;
 #[cfg(target_os = "macos")]
 mod macos;
+mod managed_requirements;
 mod project_discovery;
 #[cfg(test)]
 mod tests;
@@ -14,7 +15,6 @@ use crate::CloudConfigBundleLayers;
 use crate::ConfigLayerSource;
 use crate::ProfileV2Name;
 use crate::RequirementsLayerEntry;
-use crate::compose_requirements;
 use crate::config_requirements::RequirementSource;
 use crate::config_requirements::SandboxModeRequirement;
 use crate::config_toml::ConfigToml;
@@ -61,6 +61,7 @@ pub use local::LocalConfigLayers;
 pub use local::LocalTomlLayer;
 pub use local::LocalTomlLayerStack;
 pub use local::load_local_config_layers;
+pub use managed_requirements::load_managed_requirements_state;
 #[cfg(windows)]
 pub use windows::WindowsSystemConfigNamespaceProbe;
 #[cfg(windows)]
@@ -190,80 +191,40 @@ pub async fn load_config_layers_state(
         )
     };
     let active_user_profile = overrides.user_config_profile.clone();
-    let ignore_managed_requirements = overrides.ignore_managed_requirements;
     let ignore_user_config = overrides.ignore_user_config;
     let ignore_project_config = overrides.ignore_project_config;
     let ignore_user_and_project_exec_policy_rules =
         overrides.ignore_user_and_project_exec_policy_rules;
-    let mut requirements_layers = Vec::new();
     let mut bundle_requirements_layers = Vec::new();
-    let mut system_requirements_layer = None;
-    let managed_preferences_requirements_layer;
     let mut cloud_config_layers = Vec::new();
 
-    if !ignore_managed_requirements {
-        if let Some(bundle) = cloud_config_bundle.get().await.map_err(io::Error::other)? {
-            let cloud_config_base_dir = AbsolutePathBuf::from_absolute_path(codex_home)?;
-            let bundle_layers = if strict_config {
-                CloudConfigBundleLayers::from_bundle_strict_config(bundle, &cloud_config_base_dir)?
-            } else {
-                CloudConfigBundleLayers::from_bundle(bundle, &cloud_config_base_dir)?
-            };
-            let CloudConfigBundleLayers {
-                enterprise_managed_config,
-                enterprise_managed_requirements,
-            } = bundle_layers;
-            bundle_requirements_layers = enterprise_managed_requirements;
-            cloud_config_layers = enterprise_managed_config;
-        }
-
-        #[cfg(target_os = "macos")]
-        {
-            let managed_preferences_base_dir = AbsolutePathBuf::from_absolute_path(codex_home)?;
-            managed_preferences_requirements_layer = macos::load_managed_admin_requirements_layer(
-                overrides
-                    .macos_managed_config_requirements_base64
-                    .as_deref(),
-            )
-            .await?
-            .map(|layer| layer.with_base_dir(managed_preferences_base_dir));
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            managed_preferences_requirements_layer = None;
-        }
-
-        // Honor the system requirements.toml location.
-        let requirements_toml_file = system_requirements_toml_file_with_overrides(&overrides)?;
-        system_requirements_layer = load_requirements_toml(fs, &requirements_toml_file).await?;
-    } else {
-        managed_preferences_requirements_layer = None;
+    if !overrides.ignore_managed_requirements
+        && let Some(bundle) = cloud_config_bundle.get().await.map_err(io::Error::other)?
+    {
+        let cloud_config_base_dir = AbsolutePathBuf::from_absolute_path(codex_home)?;
+        let bundle_layers = if strict_config {
+            CloudConfigBundleLayers::from_bundle_strict_config(bundle, &cloud_config_base_dir)?
+        } else {
+            CloudConfigBundleLayers::from_bundle(bundle, &cloud_config_base_dir)?
+        };
+        let CloudConfigBundleLayers {
+            enterprise_managed_config,
+            enterprise_managed_requirements,
+        } = bundle_layers;
+        bundle_requirements_layers = enterprise_managed_requirements;
+        cloud_config_layers = enterprise_managed_config;
     }
 
-    let loaded_config_layers =
-        layer_io::load_config_layers_internal(fs, codex_home, overrides.clone(), strict_config)
-            .await?;
-    let mut startup_warnings = loaded_config_layers.startup_warnings.clone();
-    if !ignore_managed_requirements {
-        requirements_layers.extend(system_requirements_layer);
-        requirements_layers.extend(bundle_requirements_layers);
-        // Continue to support loaded legacy `managed_config.toml` sources as
-        // requirements layers for backwards compatibility.
-        requirements_layers.extend(requirements_layers_from_legacy_scheme(
-            loaded_config_layers.clone(),
+    let (config_requirements_toml, loaded_config_layers, requirements_layers) =
+        managed_requirements::load_requirements_from_sources(
+            fs,
             codex_home,
-        )?);
-        requirements_layers.extend(managed_preferences_requirements_layer);
-    }
-
-    let mut config_requirements_toml =
-        compose_requirements(requirements_layers.clone())?.unwrap_or_default();
-    // Remote app servers enforce auth policy for their workspaces; do not let local
-    // requirements reintroduce authentication restrictions for those workspaces.
-    if overrides.ignore_login_requirements {
-        config_requirements_toml.allowed_login_methods = None;
-        config_requirements_toml.allowed_chatgpt_workspaces = None;
-    }
+            &overrides,
+            strict_config,
+            bundle_requirements_layers,
+        )
+        .await?;
+    let mut startup_warnings = loaded_config_layers.startup_warnings.clone();
 
     let thread_config_context = ThreadConfigContext {
         thread_id: None,

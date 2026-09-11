@@ -362,7 +362,8 @@ async fn review_start_with_detached_delivery_returns_new_thread_id() -> Result<(
     .await;
 
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    let startup_provider = responses::start_mock_server().await;
+    create_config_toml(codex_home.path(), &startup_provider.uri())?;
     let colliding_skill_dir = codex_home.path().join("skills/review-agent-collision");
     std::fs::create_dir_all(&colliding_skill_dir)?;
     std::fs::write(
@@ -384,6 +385,14 @@ async fn review_start_with_detached_delivery_returns_new_thread_id() -> Result<(
         .with_codex_home(codex_home.path())
         .build_initialized()
         .await?;
+    // New threads use the refreshed route; detached review must inherit that route.
+    std::fs::write(
+        codex_home.path().join("requirements.toml"),
+        format!(
+            "model_provider = 'review-gateway'\n[model_providers.review-gateway]\nname = 'Review Gateway'\nbase_url = '{}/v1'\n",
+            server.uri()
+        ),
+    )?;
     let ThreadStartResponse { thread, .. } = mcp
         .start_thread(ThreadStartParams {
             model: Some("mock-model".to_string()),

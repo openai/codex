@@ -113,6 +113,15 @@ Failures use the normal JSON-RPC error envelope with closed `{type, reason}` dat
 `invalidRequest`, `unavailable`, `cancelled`, or `failed`. UI clients branch on
 these values rather than message text. Native diagnostic payloads stay private.
 
+## Managed model provider requirements
+
+Existing threads retain their provider configuration. Input RPCs reject requests when managed
+`model_provider` or `model_providers` requirements no longer match that configuration, or cannot
+be loaded. This covers turn start/steer, review, compaction, manual queue start, and active goal
+updates. Realtime connections use separate routing configuration and are not checked here.
+Interrupt, realtime stop, and goal pause/clear remain available. User and project
+configuration changes alone do not invalidate existing threads.
+
 # Amazon Bedrock authentication
 
 If `model_providers.amazon-bedrock.aws.credential_export` is configured, Bedrock setup and

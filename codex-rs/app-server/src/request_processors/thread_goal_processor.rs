@@ -26,6 +26,7 @@ pub(crate) struct ThreadGoalRequestProcessor {
     thread_state_manager: ThreadStateManager,
     state_db: Option<StateDbHandle>,
     goal_service: Arc<GoalService>,
+    config_manager: ConfigManager,
 }
 
 impl ThreadGoalRequestProcessor {
@@ -36,6 +37,7 @@ impl ThreadGoalRequestProcessor {
         thread_state_manager: ThreadStateManager,
         state_db: Option<StateDbHandle>,
         goal_service: Arc<GoalService>,
+        config_manager: ConfigManager,
     ) -> Self {
         Self {
             thread_manager,
@@ -44,6 +46,7 @@ impl ThreadGoalRequestProcessor {
             thread_state_manager,
             state_db,
             goal_service,
+            config_manager,
         }
     }
 
@@ -135,6 +138,26 @@ impl ThreadGoalRequestProcessor {
             .await?;
         self.reconcile_thread_goal_rollout(thread_id, &state_db)
             .await?;
+        // Active goals can immediately inject an objective or start an idle turn.
+        // Stopping a goal must remain possible after managed policy changes.
+        let existing_goal = self
+            .goal_service
+            .get_thread_goal(&state_db, thread_id)
+            .await
+            .map_err(goal_service_error)?;
+        let resulting_status = params
+            .status
+            .map(ThreadGoalStatus::to_core)
+            .or_else(|| existing_goal.as_ref().map(|goal| goal.status))
+            .unwrap_or(codex_protocol::protocol::ThreadGoalStatus::Active);
+        if resulting_status == codex_protocol::protocol::ThreadGoalStatus::Active
+            && let Ok(thread) = self.thread_manager.get_thread(thread_id).await
+        {
+            self.config_manager
+                .check_thread_model_provider(thread.config().await.as_ref())
+                .await
+                .map_err(|error| config_load_error(&error))?;
+        }
         let max_goal_token_budget = match self.thread_manager.get_thread(thread_id).await {
             Ok(thread) => thread.config().await.max_goal_token_budget,
             Err(_) => self.config.max_goal_token_budget,

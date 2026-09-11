@@ -956,6 +956,7 @@ struct BlockingRemoteControlBackend {
 struct ConnectedRemoteControlBackend {
     initialized_rx: Option<oneshot::Receiver<std::result::Result<(), String>>>,
     server_task: JoinHandle<Result<()>>,
+    _models_server: wiremock::MockServer,
 }
 
 struct ClientManagementRemoteControlBackend {
@@ -966,6 +967,20 @@ struct ClientManagementRemoteControlBackend {
 impl ConnectedRemoteControlBackend {
     async fn start(codex_home: &std::path::Path) -> Result<Self> {
         let listener = configured_remote_control_listener(codex_home).await?;
+        // Model refreshes can arrive after enrollment, when this listener expects a WebSocket.
+        let models_server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/v1/models"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(/*s*/ 200)
+                    .set_body_json(serde_json::json!({ "models": [] })),
+            )
+            .mount(&models_server)
+            .await;
+        let remote_control_url = format!("http://{}/backend-api/", listener.local_addr()?);
+        MockResponsesConfig::new(&models_server.uri())
+            .with_root_config(&format!("chatgpt_base_url = \"{remote_control_url}\""))
+            .write(codex_home)?;
         let (initialized_tx, initialized_rx) = oneshot::channel();
         let server_task = tokio::spawn(async move {
             let mut initialized_tx = Some(initialized_tx);
@@ -1061,6 +1076,7 @@ impl ConnectedRemoteControlBackend {
         Ok(Self {
             initialized_rx: Some(initialized_rx),
             server_task,
+            _models_server: models_server,
         })
     }
 

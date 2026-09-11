@@ -5,6 +5,7 @@ use codex_config::ConfigLayerStack;
 use codex_config::LoaderOverrides;
 use codex_config::ThreadConfigLoader;
 use codex_config::loader::load_config_layers_state;
+use codex_config::loader::load_managed_requirements_state;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
@@ -12,6 +13,10 @@ use codex_exec_server::LOCAL_FS;
 use codex_features::feature_for_key;
 use codex_login::AuthManager;
 use codex_login::default_client::set_default_client_residency_requirement;
+use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
+use codex_model_provider_info::AMAZON_BEDROCK_RUNTIME_PROVIDER_ID;
+use codex_model_provider_info::built_in_model_providers;
+use codex_model_provider_info::merge_configured_model_providers;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_json_to_toml::json_to_toml;
 use std::collections::BTreeMap;
@@ -24,6 +29,12 @@ use std::sync::RwLock;
 use toml::Value as TomlValue;
 use tracing::instrument;
 use tracing::warn;
+
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "Your organization's required model provider settings changed. Restart Codex to apply them; this request was not sent"
+)]
+pub(crate) struct ModelProviderRequirementsChanged;
 
 /// Shared app-server entry point for loading effective Codex configuration.
 #[derive(Clone)]
@@ -165,6 +176,62 @@ impl ConfigManager {
         self.apply_runtime_feature_enablement(&mut config);
         self.apply_arg0_paths(&mut config);
         Ok(config)
+    }
+
+    /// Checks the retained session route against current managed provider requirements.
+    pub(crate) async fn check_thread_model_provider(
+        &self,
+        current: &Config,
+    ) -> std::io::Result<()> {
+        // Existing threads retain their session route; only managed
+        // requirements can invalidate it.
+        let requirements = load_managed_requirements_state(
+            LOCAL_FS.as_ref(),
+            &self.codex_home,
+            codex_config::ConfigLoadOptions {
+                loader_overrides: self.loader_overrides.clone(),
+                strict_config: self.strict_config,
+                cloud_config_bundle: self.current_cloud_config_bundle(),
+            },
+        )
+        .await?;
+        let selection_changed = requirements
+            .model_provider
+            .as_ref()
+            .is_some_and(|provider_id| provider_id != &current.model_provider_id);
+        let required_provider = requirements
+            .model_providers
+            .as_ref()
+            .and_then(|providers| providers.get(&current.model_provider_id))
+            .cloned();
+        let required_provider = match required_provider {
+            Some(provider)
+                if matches!(
+                    current.model_provider_id.as_str(),
+                    AMAZON_BEDROCK_PROVIDER_ID | AMAZON_BEDROCK_RUNTIME_PROVIDER_ID
+                ) =>
+            {
+                // Bedrock requirements contain overrides of the built-in provider.
+                merge_configured_model_providers(
+                    built_in_model_providers(/*openai_base_url*/ None),
+                    HashMap::from([(current.model_provider_id.clone(), provider)]),
+                )
+                .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidData, message))?
+                .remove(&current.model_provider_id)
+            }
+            Some(provider) => Some(provider),
+            None => None,
+        };
+        let definition_changed = required_provider
+            .as_ref()
+            .is_some_and(|provider| provider != &current.model_provider);
+        if selection_changed || definition_changed {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                ModelProviderRequirementsChanged,
+            ));
+        }
+        Ok(())
     }
 
     pub(crate) async fn load_default_config(&self) -> std::io::Result<Config> {
@@ -325,6 +392,10 @@ impl ConfigManager {
         )
     }
 }
+
+#[cfg(test)]
+#[path = "config_manager_provider_tests.rs"]
+mod provider_tests;
 
 pub(crate) fn protected_feature_keys(config_layer_stack: &ConfigLayerStack) -> BTreeSet<String> {
     let mut protected_features = config_layer_stack

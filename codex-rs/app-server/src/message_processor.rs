@@ -486,11 +486,13 @@ impl MessageProcessor {
             thread_state_manager.clone(),
             state_db.clone(),
             Arc::clone(&goal_service),
+            config_manager.clone(),
         );
         let thread_queue_processor = ThreadQueueRequestProcessor::new(
             Arc::clone(&thread_manager),
             Arc::clone(&thread_store),
             outgoing.clone(),
+            config_manager.clone(),
             queue_service,
         );
         let project_processor = ProjectRequestProcessor::new(
