@@ -231,7 +231,7 @@ async fn reconnect_restores_history_permissions_and_keeps_old_input_paused() -> 
                 &mut app.rate_limit_hard_stop_generation,
             )
             .unwrap();
-        let before_disconnect = Instant::now() - Duration::from_secs(/*secs*/ 300);
+        let before_disconnect = Instant::now();
         app.recap.note_focus_lost(before_disconnect);
         for _ in 0..3 {
             app.recap
@@ -273,6 +273,10 @@ async fn reconnect_restores_history_permissions_and_keeps_old_input_paused() -> 
             !app.agent_navigation
                 .finish_picker_refresh(id, stale_picker_refresh)
         );
+        // Let the rebound timer become due without depending on machine uptime.
+        tokio::time::pause();
+        tokio::time::advance(recap::RECAP_DELAY).await;
+        tokio::time::resume();
         let mut deferred = Vec::new();
         tokio::time::timeout(Duration::from_secs(/*secs*/ 5), async {
             loop {

@@ -1,6 +1,9 @@
 //! Informational, warning, update, and policy notice history cells.
 
 use super::*;
+use crate::line_truncation::line_width;
+use crate::wrapping::url_preserving_wrap_options;
+use crate::wrapping::word_wrap_line;
 
 #[cfg_attr(not(test), allow(dead_code))]
 const RECAP_HEADING: &str = "Conversation recap";
@@ -325,39 +328,43 @@ impl ThreadRecapHistoryCell {
 
 impl HistoryCell for ThreadRecapHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let width = usize::from(width);
-        let mut remaining_width = width;
-        let mut heading = Vec::new();
-
-        if remaining_width > 0 {
-            heading.push("─".dim());
-            remaining_width -= 1;
-        }
-        if remaining_width > 0 {
-            heading.push(" ".dim());
-            remaining_width -= 1;
+        if width == 0 {
+            return Vec::new();
         }
 
-        let (visible_heading, _suffix, heading_width) =
-            take_prefix_by_width(RECAP_HEADING, remaining_width);
-        if !visible_heading.is_empty() {
-            heading.push(visible_heading.bold());
-            remaining_width -= heading_width;
+        let wrap_width = usize::from(width.saturating_sub(/*rhs*/ 2).max(/*other*/ 1));
+        let mut body = raw_lines_from_source(&self.recap)
+            .into_iter()
+            .map(Line::italic)
+            .collect::<Vec<_>>();
+        let prefix = Line::from(vec!["  ".into(), "↳ ".dim(), "Recap: ".bold()]).italic();
+        let mut options = if wrap_width <= prefix.width() {
+            // Keep the text readable when the terminal cannot fit the hanging indent.
+            body.insert(
+                /*index*/ 0,
+                Line::from(vec!["↳ ".dim(), "Recap:".bold()]).italic(),
+            );
+            RtOptions::new(wrap_width)
+        } else {
+            RtOptions::new(wrap_width)
+                .subsequent_indent(" ".repeat(prefix.width()).into())
+                .initial_indent(prefix)
+        };
+        let mut lines = Vec::new();
+        for line in body {
+            let mut wrapped = adaptive_wrap_line(&line, options.clone());
+            if wrapped.iter().any(|line| line_width(line) > wrap_width) {
+                // Terminal autowrap loses the hanging indent. Rewrap the source line so only
+                // oversized tokens split, without applying the recap prefix a second time.
+                wrapped = word_wrap_line(
+                    &line,
+                    url_preserving_wrap_options(options.clone())
+                        .break_words(/*break_words*/ true),
+                );
+            }
+            push_owned_lines(&wrapped, &mut lines);
+            options.initial_indent = options.subsequent_indent.clone();
         }
-        if remaining_width > 0 {
-            heading.push(" ".dim());
-            remaining_width -= 1;
-        }
-        if remaining_width > 0 {
-            heading.push("─".repeat(remaining_width).dim());
-        }
-
-        let wrap_width = width.saturating_sub(2).max(1);
-        let body = raw_lines_from_source(&self.recap);
-        let wrapped = adaptive_wrap_lines(body, RtOptions::new(wrap_width));
-        let mut lines = vec![heading.into(), Line::default()];
-        lines.extend(prefix_lines(wrapped, "  ".into(), "  ".into()));
-
         lines
     }
 

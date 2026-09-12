@@ -21,10 +21,13 @@ use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::ThreadRecapHistoryCell;
 use crate::history_cell::ThreadRecapLoadingCell;
 use crate::history_cell::UserHistoryCell;
+use crate::line_truncation::line_width;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnStatus;
 use codex_protocol::ThreadId;
 use pretty_assertions::assert_eq;
+use ratatui::style::Modifier;
+use ratatui::style::Stylize;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -316,7 +319,7 @@ fn regaining_focus_preserves_only_manual_in_flight_request() {
 }
 
 #[tokio::test(flavor = "current_thread", start_paused = true)]
-async fn scheduled_check_fires_at_recap_deadline() {
+async fn scheduled_check_fires_after_thirty_minutes() {
     let thread_id = ThreadId::new();
     let now = Instant::now();
     let mut app = make_test_app().await;
@@ -330,7 +333,7 @@ async fn scheduled_check_fires_at_recap_deadline() {
     app.schedule_recap_check(thread_id, now);
     tokio::task::yield_now().await;
 
-    tokio::time::advance(RECAP_DELAY - Duration::from_secs(/*secs*/ 1)).await;
+    tokio::time::advance(Duration::from_secs(/*secs*/ 30 * 60 - 1)).await;
     tokio::task::yield_now().await;
     assert!(matches!(event_rx.try_recv(), Err(TryRecvError::Empty)));
 
@@ -518,20 +521,28 @@ fn restored_history_never_reduces_observed_completed_turns() {
 }
 
 #[test]
-fn recap_history_cell_uses_labeled_checkpoint_layout() {
+fn recap_history_cell_uses_hanging_indent_and_right_padding() {
     let cell =
         ThreadRecapHistoryCell::new("Automatic recaps stay compact on wide terminals.".to_string());
-    let rendered = cell
-        .display_lines(/*width*/ 64)
+    let lines = cell.display_lines(/*width*/ 56);
+    assert!(
+        lines
+            .iter()
+            .all(|line| line.style.add_modifier.contains(Modifier::ITALIC))
+    );
+    assert_eq!(
+        &lines[0].spans[..3],
+        &["  ".into(), "↳ ".dim(), "Recap: ".bold()],
+    );
+    let rendered = lines
         .iter()
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join("\n");
 
     insta::assert_snapshot!(rendered, @r"
-    ─ Conversation recap ───────────────────────────────────────────
-
-      Automatic recaps stay compact on wide terminals.
+      ↳ Recap: Automatic recaps stay compact on wide
+               terminals.
     ");
 }
 
@@ -548,11 +559,117 @@ fn recap_history_cell_wraps_in_narrow_terminals() {
         .join("\n");
 
     insta::assert_snapshot!(rendered, @r"
-    ─ Conversation recap ───────────
-
-      Keep conversation recaps
-      readable in narrow terminals.
+      ↳ Recap: Keep conversation
+               recaps readable in
+               narrow terminals.
     ");
+}
+
+#[test]
+fn recap_history_cell_preserves_unicode_and_url_tokens() {
+    let cell = ThreadRecapHistoryCell::new(
+        "Résumé ready. See https://example.com/review/42 日本語 details.".to_string(),
+    );
+    let rendered = cell
+        .display_lines(/*width*/ 48)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    insta::assert_snapshot!(rendered, @r"
+      ↳ Recap: Résumé ready. See
+               https://example.com/review/42
+               日本語 details.
+    ");
+}
+
+#[test]
+fn recap_history_cell_wraps_long_urls_in_narrow_terminals() {
+    let cell = ThreadRecapHistoryCell::new(
+        "The café review is paused with the draft ready at https://example.com/review/42. 日本語"
+            .to_string(),
+    );
+    let lines = cell.display_lines(/*width*/ 32);
+    assert!(lines.iter().all(|line| line_width(line) <= 30));
+    assert!(
+        lines
+            .iter()
+            .skip(/*n*/ 1)
+            .all(|line| line.to_string().starts_with("           "))
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|line| line.style.add_modifier.contains(Modifier::ITALIC))
+    );
+    let rendered = lines
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    insta::assert_snapshot!(rendered, @"
+    ↳ Recap: The café review is
+             paused with the
+             draft ready at
+             https://example.com
+             /review/42. 日本語
+    ");
+}
+
+#[test]
+fn recap_history_cell_splits_only_urls_wider_than_the_text_column() {
+    for (url, expected) in [
+        (
+            "https://example.com",
+            vec!["  ↳ Recap: https://example.com"],
+        ),
+        (
+            "https://example.com/",
+            vec!["  ↳ Recap: https://example.com", "           /"],
+        ),
+        (
+            "https://a.co/ｶﾞｶﾞｶﾞｶﾞｶﾞｶﾞ",
+            vec!["  ↳ Recap: https://a.co/ｶﾞｶﾞｶﾞ", "           ｶﾞｶﾞｶﾞ"],
+        ),
+    ] {
+        let cell = ThreadRecapHistoryCell::new(url.to_string());
+        let lines = cell.display_lines(/*width*/ 32);
+        assert!(lines.iter().all(|line| line_width(line) <= 30));
+        assert_eq!(
+            lines.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            expected
+        );
+        let displayed_url = lines
+            .iter()
+            .map(|line| line.to_string().chars().skip(/*n*/ 11).collect::<String>())
+            .collect::<String>();
+        assert_eq!(displayed_url, url);
+    }
+}
+
+#[test]
+fn recap_history_cell_uses_available_space_below_indent_width() {
+    let cell = ThreadRecapHistoryCell::new(
+        "Resume this task.\nhttps://example.com/review/42.".to_string(),
+    );
+    let rendered = cell
+        .display_lines(/*width*/ 12)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    insta::assert_snapshot!(rendered, @r"
+    ↳ Recap:
+    Resume
+    this task.
+    https://ex
+    ample.com/
+    review/42.
+    ");
+    assert_eq!(cell.display_lines(/*width*/ 0), Vec::new());
 }
 
 #[test]
@@ -590,10 +707,8 @@ fn recap_history_cell_preserves_explicit_line_breaks() {
         .join("\n");
 
     insta::assert_snapshot!(displayed, @r"
-    ─ Conversation recap ───────────────────────────
-
-      Finished the parser.
-      Next: run the focused tests.
+      ↳ Recap: Finished the parser.
+               Next: run the focused tests.
     ");
     insta::assert_snapshot!(raw, @r"
     Conversation recap

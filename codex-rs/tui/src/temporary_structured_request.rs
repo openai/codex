@@ -85,10 +85,6 @@ pub(crate) async fn start_temporary_thread(
         ("orchestrator.skills.enabled".to_string(), false.into()),
         ("skills.include_instructions".to_string(), false.into()),
         (
-            "token_budget.use_history_notes_extension".to_string(),
-            false.into(),
-        ),
-        (
             "tools.experimental_request_user_input.enabled".to_string(),
             false.into(),
         ),

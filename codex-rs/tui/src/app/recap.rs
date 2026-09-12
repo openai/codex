@@ -33,7 +33,7 @@ use uuid::Uuid;
 
 const MIN_COMPLETED_TURNS: usize = 3;
 const MIN_TURNS_BETWEEN_RECAPS: usize = 2;
-pub(super) const RECAP_DELAY: Duration = Duration::from_secs(/*secs*/ 3 * 60);
+pub(super) const RECAP_DELAY: Duration = Duration::from_secs(/*secs*/ 30 * 60);
 const RECAP_HISTORY_MAX_TURNS: usize = 8;
 const RECAP_MAX_CHARS: usize = 320;
 const RECAP_RETRY_DELAY: Duration = Duration::from_secs(/*secs*/ 30);
@@ -196,10 +196,11 @@ impl App {
             return;
         };
         let delay = deadline.saturating_duration_since(now);
+        let sleep = tokio::time::sleep(delay);
         let app_event_tx = self.app_event_tx.clone();
 
         self.recap.scheduled_check = Some(tokio::spawn(async move {
-            tokio::time::sleep(delay).await;
+            sleep.await;
             app_event_tx.send(AppEvent::CheckRecap { thread_id });
         }));
     }
@@ -357,7 +358,9 @@ impl App {
         };
 
         let trigger_is_eligible = match trigger {
-            RecapTrigger::Automatic => self.recap.should_generate(Instant::now()),
+            RecapTrigger::Automatic => self
+                .recap
+                .should_generate(tokio::time::Instant::now().into_std()),
             RecapTrigger::Manual => true,
         };
 

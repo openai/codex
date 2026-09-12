@@ -2950,7 +2950,9 @@ impl App {
             AppEvent::CheckRecap { thread_id } => {
                 if self.current_displayed_thread_id() == Some(thread_id)
                     && !self.chat_widget.is_user_turn_pending_or_running()
-                    && self.recap.should_generate(std::time::Instant::now())
+                    && self
+                        .recap
+                        .should_generate(tokio::time::Instant::now().into_std())
                 {
                     self.request_recap(app_server, thread_id, RecapTrigger::Automatic);
                 }
