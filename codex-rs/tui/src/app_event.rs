@@ -726,6 +726,13 @@ pub(crate) enum AppEvent {
         result: Result<ThreadUsageOutcome, String>,
     },
 
+    /// Result of fetching usage for the selected dashboard task.
+    AgentsOverviewUsageLoaded {
+        thread_id: ThreadId,
+        request_id: Uuid,
+        result: Result<ThreadUsageOutcome, String>,
+    },
+
     /// Fetch workspace messages for the status-line headline item.
     RefreshStatusLineWorkspaceHeadline {
         request_id: u64,

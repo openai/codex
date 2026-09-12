@@ -200,6 +200,9 @@ impl App {
             self.agents_overview.request_id = None;
             self.agents_overview.refresh_pending = false;
             self.agents_overview.refresh_notifications.clear();
+            self.agents_overview.pending_usage = None;
+            self.agents_overview.usage_disabled = false;
+            self.agents_overview.usage.clear();
             self.agents_overview.activity.clear();
             self.agents_overview.last_messages.clear();
             self.reconnect.presentation = if self

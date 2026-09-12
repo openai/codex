@@ -40,6 +40,9 @@ pub(super) struct AgentsOverviewState {
     /// Local visibility only; activity and metadata refreshes never reveal hidden roots.
     pub(super) hidden_threads: HashSet<ThreadId>,
     pub(super) last_messages: HashMap<ThreadId, String>,
+    pub(super) usage: HashMap<ThreadId, super::agents_overview_usage::AgentsOverviewUsage>,
+    pub(super) pending_usage: Option<(ThreadId, Uuid)>,
+    pub(super) usage_disabled: bool,
     pub(super) activity: HashMap<ThreadId, super::agents_overview_details::AgentsOverviewActivity>,
     pub(super) initialized: bool,
     pub(super) unsent_prompt: Option<String>,
@@ -175,6 +178,7 @@ impl App {
                             self.agents_overview.threads.remove(&thread_id);
                             self.agents_overview.last_messages.remove(&thread_id);
                             self.agents_overview.activity.remove(&thread_id);
+                            self.agents_overview.usage.remove(&thread_id);
                             continue;
                         }
                         thread.turns.clear();
@@ -197,6 +201,9 @@ impl App {
                 {
                     // Discard stale read results without clearing activity received after the revert.
                     self.agents_overview.last_messages.remove(&thread_id);
+                    if let Some(usage) = self.agents_overview.usage.get_mut(&thread_id) {
+                        usage.tokens = None;
+                    }
                     continue;
                 }
                 self.track_agents_overview_notification(&notification);

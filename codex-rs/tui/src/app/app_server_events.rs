@@ -78,6 +78,9 @@ impl App {
                 self.agents_overview.refresh_notifications.clear();
                 self.agents_overview.activity.clear();
                 self.agents_overview.last_messages.clear();
+                self.agents_overview.usage.clear();
+                self.agents_overview.pending_usage = None;
+                self.agents_overview.usage_disabled = false;
                 self.repaint_agents_overview();
                 self.refresh_agents_overview_threads(app_server_client);
             }
@@ -227,6 +230,10 @@ impl App {
                 return;
             }
             ServerNotification::AccountUpdated(notification) => {
+                self.agents_overview.usage.clear();
+                self.agents_overview.pending_usage = None;
+                self.agents_overview.usage_disabled = false;
+                self.repaint_agents_overview();
                 self.chat_widget.cyber_policy_notice = Default::default();
                 self.rate_limit_hard_stop_generation =
                     self.rate_limit_hard_stop_generation.wrapping_add(1);

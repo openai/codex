@@ -36,6 +36,7 @@ pub(super) fn preview_markdown(text: &str) -> String {
 #[derive(Clone, Default)]
 pub(super) struct AgentsOverviewDetails {
     pub(super) lines: Vec<Line<'static>>,
+    pub(super) usage_lines: Vec<Line<'static>>,
     pub(super) last_message: Option<(String, AbsolutePathBuf)>,
 }
 
@@ -216,6 +217,11 @@ impl App {
             .map(|message| (message.clone(), source.cwd.clone()));
         AgentsOverviewDetails {
             lines,
+            usage_lines: ThreadId::from_string(&root.id)
+                .ok()
+                .and_then(|id| self.agents_overview.usage.get(&id))
+                .map(super::agents_overview_usage::usage_lines)
+                .unwrap_or_default(),
             last_message,
         }
     }

@@ -2995,3 +2995,6 @@ fn trust_fixture_folders(app: &mut App) {
         toml::Value::try_from(projects).expect("trust fixture"),
     ));
 }
+
+#[path = "agents_overview_usage_tests.rs"]
+mod usage;

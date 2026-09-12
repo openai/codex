@@ -32,7 +32,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 
 const TOKEN_ACTIVITY_FETCH_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(/*secs*/ 15);
-const THREAD_USAGE_FETCH_TIMEOUT: std::time::Duration =
+pub(super) const THREAD_USAGE_FETCH_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(/*secs*/ 65);
 const RATE_LIMIT_RESET_REQUEST_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(/*secs*/ 15);
@@ -844,7 +844,7 @@ pub(super) async fn fetch_account_token_activity(
         .wrap_err("account/usage/read failed in TUI")
 }
 
-async fn fetch_thread_usage(
+pub(super) async fn fetch_thread_usage(
     request_handle: AppServerRequestHandle,
     thread_id: ThreadId,
 ) -> Result<ThreadUsageOutcome> {

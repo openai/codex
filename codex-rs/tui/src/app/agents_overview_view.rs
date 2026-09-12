@@ -480,6 +480,7 @@ impl AgentsOverviewView {
                 model_name(&row.thread).to_string().into(),
             ]),
         ];
+        lines.extend(row.details.usage_lines.clone());
         if let Some(branch) = row
             .thread
             .git_info
@@ -491,6 +492,7 @@ impl AgentsOverviewView {
             lines.push(branch.clone().into());
         }
         let preview = super::agents_overview_details::preview_markdown(&row.thread.preview);
+        let prompt_start = crate::wrapping::word_wrap_lines(lines.clone(), width).len();
         lines.extend([Line::default(), Line::from("Prompt".dim())]);
         let prompt = crate::markdown_render::render_markdown_text_with_width_and_cwd(
             match preview.as_str() {
@@ -521,6 +523,12 @@ impl AgentsOverviewView {
                 );
             }
             let mut details = crate::wrapping::word_wrap_lines(details, width);
+            if !row.details.usage_lines.is_empty()
+                && details.len() > usize::from(area.height).saturating_sub(lines.len())
+            {
+                // Activity and usage take precedence over repeating the original prompt.
+                lines.truncate(prompt_start);
+            }
             let available = usize::from(area.height).saturating_sub(lines.len());
             if details.len() > available {
                 details.truncate(available);

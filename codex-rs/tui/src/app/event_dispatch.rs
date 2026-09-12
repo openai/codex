@@ -1699,6 +1699,9 @@ impl App {
             } => {
                 self.finish_thread_usage_refresh(tui, thread_id, request_id, result)?;
             }
+            AppEvent::AgentsOverviewUsageLoaded { thread_id, request_id, result } => {
+                self.finish_agents_overview_usage(thread_id, request_id, result);
+            }
             AppEvent::CommitPendingUsageOutput => {
                 self.insert_pending_usage_output_if_ready(tui);
             }

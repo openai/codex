@@ -266,6 +266,7 @@ impl App {
                 self.agents_overview.threads.remove(&removed_id);
                 self.agents_overview.activity.remove(&removed_id);
                 self.agents_overview.last_messages.remove(&removed_id);
+                self.agents_overview.usage.remove(&removed_id);
                 self.agents_overview.refresh_thread_ids.remove(&removed_id);
                 self.agents_overview.input_states.remove(&removed_id);
                 self.agents_overview.dispatched_requests.remove(&removed_id);
