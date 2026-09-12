@@ -8,9 +8,9 @@ title:  | 550e8400-e29b-41d4-a716-446655440000 | 550e8400-e29b-41d4-a716-44665..
 default title: project
 
 name=None, pending=true
-status: renaming... ⠋ | 550e8400-e29b-41d4-a716-446655440000 ⠋ | 550e8400-e29b-41d4-a716-446655440000 ⠋
-title: renaming... ⠋ | 550e8400-e29b-41d4-a716-446655440000 ⠋ | 550e8400-e29b-41d4-a716-44665... ⠋
-default title: renaming... ⠋ | project
+status: ⠋ | 550e8400-e29b-41d4-a716-446655440000 ⠋ | 550e8400-e29b-41d4-a716-446655440000 ⠋
+title: ⠋ | 550e8400-e29b-41d4-a716-446655440000 ⠋ | 550e8400-e29b-41d4-a716-44665... ⠋
+default title: ⠋ | project
 
 name=Some("Fix login timeout"), pending=true
 status: Fix login timeout ⠋ | Fix login timeout ⠋ | 550e8400-e29b-41d4-a716-446655440000 ⠋

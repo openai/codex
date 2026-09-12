@@ -3,6 +3,7 @@
 
 use std::time::Duration;
 use std::time::Instant;
+use tokio_util::sync::CancellationToken;
 
 use super::App;
 use crate::app_event::AppEvent;
@@ -333,6 +334,7 @@ impl App {
                 recap_output_schema(),
                 /*effort*/ None,
                 receiver,
+                CancellationToken::new(),
             )
             .await
             .map_err(|error| error.to_string());

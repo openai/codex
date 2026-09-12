@@ -312,14 +312,14 @@ async fn thread_title_progress_animates_when_main_turn_is_idle() {
     chat.terminal_title_animation_origin = now;
     assert_eq!(
         chat.terminal_title_value_for_item(TerminalTitleItem::ThreadName, now),
-        Some("renaming... ⠋".to_string())
+        Some("⠋".to_string())
     );
     assert_eq!(
         chat.terminal_title_value_for_item(
             TerminalTitleItem::ThreadName,
             now + Duration::from_millis(/*millis*/ 100)
         ),
-        Some("renaming... ⠙".to_string())
+        Some("⠙".to_string())
     );
     chat.refresh_thread_title_progress_for_time_tick();
     assert!(draw_rx.try_recv().is_ok());
@@ -335,7 +335,7 @@ async fn thread_title_progress_animates_when_main_turn_is_idle() {
     chat.local_settings.tui.animations = false;
     chat.refresh_status_surfaces();
     assert!(chat.terminal_title_next_refresh.is_none());
-    assert_eq!(chat.last_terminal_title, Some("renaming... ⠋".to_string()));
+    assert_eq!(chat.last_terminal_title, Some("⠋".to_string()));
     chat.local_settings.tui.animations = true;
     chat.set_thread_title_generation_pending(/*pending*/ false);
     assert_eq!(chat.last_terminal_title, None);

@@ -42,8 +42,10 @@ impl ChatWidget {
         } else {
             TERMINAL_TITLE_SPINNER_FRAMES[0]
         };
-        let value = value.unwrap_or_else(|| "renaming...".to_string());
-        Some(format!("{value} {spinner}"))
+        Some(match value {
+            Some(value) => format!("{value} {spinner}"),
+            None => spinner.to_string(),
+        })
     }
 
     pub(crate) fn refresh_thread_title_progress_for_time_tick(&mut self) {
