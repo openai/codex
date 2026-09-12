@@ -1060,6 +1060,9 @@ pub(crate) enum AppEvent {
 
     InsertHistoryCell(Box<dyn HistoryCell>),
 
+    /// Move visible completed voice captions into history in one app event.
+    CommitRealtimeTranscriptHistory,
+
     /// Finish buffering initial resume replay after all replay events have been queued.
     EndInitialHistoryReplayBuffer,
 

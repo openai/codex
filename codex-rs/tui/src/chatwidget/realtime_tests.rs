@@ -32,6 +32,27 @@ use codex_protocol::models::MessagePhase;
 use futures::future::AbortHandle;
 use std::collections::VecDeque;
 
+// Model the app's atomic handoff before inspecting its ordinary history events.
+pub(crate) fn commit_realtime_history_events(
+    chat: &mut ChatWidget,
+    events: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+) {
+    let mut forwarded = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        match event {
+            AppEvent::CommitRealtimeTranscriptHistory => forwarded.extend(
+                chat.take_realtime_transcript_history()
+                    .into_iter()
+                    .map(AppEvent::InsertHistoryCell),
+            ),
+            event => forwarded.push(event),
+        }
+    }
+    for event in forwarded {
+        chat.app_event_tx.send(event);
+    }
+}
+
 fn activate_voice(chat: &mut ChatWidget) -> ThreadId {
     let thread_id = ThreadId::new();
     activate_voice_for_thread(chat, thread_id);

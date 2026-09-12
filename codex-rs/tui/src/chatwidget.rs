@@ -415,6 +415,8 @@ pub(crate) use realtime::realtime_delegation_display_text;
 pub(crate) use realtime::realtime_delegation_input;
 #[cfg(test)]
 pub(crate) use realtime::tests::activate_voice_for_thread;
+#[cfg(test)]
+pub(crate) use realtime::tests::commit_realtime_history_events;
 mod reasoning_shortcuts;
 use self::realtime::RealtimeConversationUiState;
 mod rendering;
@@ -1221,8 +1223,8 @@ impl ChatWidget {
         }
     }
 
-    fn flush_completed_tool_activity(&mut self) {
-        if self.transcript.active_cell.as_ref().is_some_and(|cell| {
+    fn has_completed_tool_activity(&self) -> bool {
+        self.transcript.active_cell.as_ref().is_some_and(|cell| {
             cell.as_any()
                 .downcast_ref::<ExecCell>()
                 .is_some_and(|cell| !cell.is_active())
@@ -1230,7 +1232,11 @@ impl ChatWidget {
                     .as_any()
                     .downcast_ref::<history_cell::ComputerActivityCell>()
                     .is_some_and(|cell| !cell.is_active())
-        }) {
+        })
+    }
+
+    fn flush_completed_tool_activity(&mut self) {
+        if self.has_completed_tool_activity() {
             self.flush_active_cell();
         }
     }
@@ -1240,6 +1246,17 @@ impl ChatWidget {
     }
 
     fn add_boxed_history(&mut self, cell: Box<dyn HistoryCell>) {
+        if let Some(active) = self.take_history_insertion_prefix(cell.as_ref()) {
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
+            self.request_pending_usage_output_insertion();
+        }
+        self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
+    }
+
+    fn take_history_insertion_prefix(
+        &mut self,
+        cell: &dyn HistoryCell,
+    ) -> Option<Box<dyn HistoryCell>> {
         // Keep the placeholder session header as the active cell until real session info arrives,
         // so we can merge headers instead of committing a duplicate box to history.
         let keep_placeholder_header_active = !self.is_session_configured()
@@ -1261,24 +1278,15 @@ impl ChatWidget {
         {
             // Only break exec grouping if the cell renders visible lines.
             if !self.has_active_stream_tail() {
-                self.flush_active_cell();
+                return self.transcript.take_active_cell();
             }
         } else if !keep_placeholder_header_active
-            && self
-                .transcript
-                .active_cell
-                .as_ref()
-                .is_some_and(|active_cell| {
-                    active_cell.as_any().is::<ExecCell>()
-                        || active_cell
-                            .as_any()
-                            .is::<history_cell::ComputerActivityCell>()
-                })
+            && self.has_completed_tool_activity()
             && !cell.transcript_lines(history_width).is_empty()
         {
-            self.flush_completed_tool_activity();
+            return self.transcript.take_active_cell();
         }
-        self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
+        None
     }
 
     fn enter_review_mode_with_hint(&mut self, hint: String, from_replay: bool) {
@@ -1964,11 +1972,16 @@ impl ChatWidget {
     /// the main viewport updates.
     pub(crate) fn active_cell_transcript_key(&self) -> Option<ActiveCellTranscriptKey> {
         let cell = self.transcript.active_cell.as_ref();
-        let realtime_cell = self.realtime_conversation.live_transcript_cell.as_ref();
+        let mut realtime_cells = self.realtime_conversation.live_transcript_cells();
         let token_activity_cell = self.pending_token_activity_output();
         let rate_limit_reset_hint = self.pending_rate_limit_reset_hint();
         if cell.is_none()
-            && realtime_cell.is_none()
+            && self
+                .realtime_conversation
+                .live_transcript_cells()
+                .next()
+                .is_none()
+            && self.realtime_conversation.pending_history_cells.is_empty()
             && token_activity_cell.is_none()
             && rate_limit_reset_hint.is_none()
         {
@@ -1981,7 +1994,7 @@ impl ChatWidget {
                 .unwrap_or(false),
             animation_tick: cell
                 .and_then(|cell| cell.transcript_animation_tick())
-                .or_else(|| realtime_cell.and_then(|cell| cell.transcript_animation_tick())),
+                .or_else(|| realtime_cells.find_map(|cell| cell.transcript_animation_tick())),
         })
     }
 
@@ -1999,7 +2012,12 @@ impl ChatWidget {
         if let Some(cell) = self.transcript.active_cell.as_ref() {
             lines.extend(cell.transcript_hyperlink_lines(width));
         }
-        if let Some(cell) = self.realtime_conversation.live_transcript_cell.as_ref() {
+        for cell in self
+            .realtime_conversation
+            .pending_history_cells
+            .iter()
+            .chain(self.realtime_conversation.live_transcript_cells())
+        {
             let realtime_lines = cell.transcript_hyperlink_lines(width);
             if !realtime_lines.is_empty() && !lines.is_empty() {
                 lines.push(HyperlinkLine::from(""));

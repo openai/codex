@@ -10,6 +10,7 @@ async fn enabling_voice_on_an_open_thread_snapshots_the_new_thread_notice() {
         codex_features::Feature::RealtimeConversation,
         /*enabled*/ true,
     );
+    commit_realtime_history_events(&mut chat, &mut events);
     let rendered = std::iter::from_fn(|| events.try_recv().ok())
         .filter_map(|event| match event {
             AppEvent::InsertHistoryCell(cell) => Some(
@@ -33,6 +34,7 @@ async fn voice_cannot_start_in_a_side_conversation() {
 
     chat.toggle_realtime_conversation();
 
+    commit_realtime_history_events(&mut chat, &mut events);
     let Ok(AppEvent::InsertHistoryCell(cell)) = events.try_recv() else {
         panic!("voice should report that side conversations are unsupported");
     };
@@ -129,6 +131,7 @@ async fn audio_failure_cancels_pending_voice_and_reports_the_device_error() {
 
     chat.on_realtime_error("speaker stream failed: device disconnected".to_string());
 
+    commit_realtime_history_events(&mut chat, &mut events);
     let Ok(AppEvent::InsertHistoryCell(cell)) = events.try_recv() else {
         panic!("voice should report the speaker failure");
     };
@@ -209,6 +212,7 @@ async fn voice_becomes_active_only_after_backend_and_current_peer_are_ready() {
         chat.realtime_conversation.phase,
         RealtimeConversationPhase::Active
     );
+    commit_realtime_history_events(&mut chat, &mut events);
     let Ok(AppEvent::InsertHistoryCell(cell)) = events.try_recv() else {
         panic!("voice start should insert its history banner");
     };
@@ -230,6 +234,7 @@ async fn normal_voice_close_renders_the_ended_message() {
 
     chat.on_realtime_conversation_closed(Some("transport_closed".into()));
 
+    commit_realtime_history_events(&mut chat, &mut events);
     let rendered = std::iter::from_fn(|| events.try_recv().ok())
         .filter_map(|event| match event {
             AppEvent::InsertHistoryCell(cell) => Some(
@@ -291,6 +296,7 @@ async fn startup_retry_waits_for_closed_then_uses_a_fresh_attempt_and_preserves_
     );
     assert!(ops.try_recv().is_err());
     let mut rendered = Vec::new();
+    commit_realtime_history_events(&mut chat, &mut events);
     while let Ok(event) = events.try_recv() {
         if let AppEvent::InsertHistoryCell(cell) = event {
             rendered.extend(
@@ -394,6 +400,7 @@ async fn startup_transport_close_before_peer_timeout_retries_once_and_ignores_ol
         ops.try_recv().is_err(),
         "closed backend needs no extra stop"
     );
+    commit_realtime_history_events(&mut chat, &mut events);
     let rendered = std::iter::from_fn(|| events.try_recv().ok())
         .filter_map(|event| match event {
             AppEvent::InsertHistoryCell(cell) => Some(
@@ -487,6 +494,7 @@ async fn failure_cleanup_does_not_attribute_stop_to_the_user() {
         chat.realtime_conversation.phase,
         RealtimeConversationPhase::Inactive
     );
+    commit_realtime_history_events(&mut chat, &mut events);
     let rendered = std::iter::from_fn(|| events.try_recv().ok())
         .filter_map(|event| match event {
             AppEvent::InsertHistoryCell(cell) => Some(

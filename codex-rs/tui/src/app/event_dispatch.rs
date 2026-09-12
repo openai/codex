@@ -35,6 +35,7 @@ impl App {
             && !matches!(
                 &event,
                 AppEvent::InsertHistoryCell(_)
+                    | AppEvent::CommitRealtimeTranscriptHistory
                     | AppEvent::AgentsOverviewError(_)
                     | AppEvent::ViewAgentsOverviewUnsentPrompt(_)
                     | AppEvent::ResetTranscriptForThreadSwitch
@@ -669,6 +670,11 @@ impl App {
             AppEvent::ResetTranscriptForThreadSwitch => {
                 self.reset_for_thread_switch(tui)?;
                 self.pending_thread_switch_resets -= 1;
+            }
+            AppEvent::CommitRealtimeTranscriptHistory => {
+                for cell in self.chat_widget.take_realtime_transcript_history() {
+                    self.insert_history_cell(tui, cell);
+                }
             }
             AppEvent::InsertHistoryCell(cell) => {
                 self.insert_history_cell(tui, cell);

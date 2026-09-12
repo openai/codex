@@ -5,6 +5,7 @@ use crate::app::tests::session_lifecycle_requests::RealtimeRequestBehavior;
 use crate::app::tests::session_lifecycle_requests::recorded_params;
 use crate::app::tests::session_lifecycle_requests::start_recording_realtime_speech_app_server;
 use crate::app::tests::session_lifecycle_requests::start_recording_remote_app_server;
+use crate::chatwidget::commit_realtime_history_events;
 use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
@@ -410,6 +411,7 @@ async fn switching_threads_keeps_the_source_voice_partial_only_on_reattach() {
         ),
         /*replay_kind*/ None,
     );
+    commit_realtime_history_events(&mut app.chat_widget, &mut source_events);
     let rendered = std::iter::from_fn(|| source_events.try_recv().ok())
         .filter_map(|event| match event {
             AppEvent::InsertHistoryCell(cell) => Some(
@@ -553,6 +555,7 @@ async fn queued_voice_caption_after_switch_returns_once_to_its_source_thread() {
         empty_thread_snapshot(&app, source),
         /*resume_restored_queue*/ false,
     );
+    commit_realtime_history_events(&mut app.chat_widget, &mut source_events);
     let rendered = std::iter::from_fn(|| source_events.try_recv().ok())
         .filter_map(|event| match event {
             AppEvent::InsertHistoryCell(cell) => Some(
@@ -625,6 +628,7 @@ async fn replay_reconciles_only_matching_voice_captions_one_for_one() {
         },
         /*resume_restored_queue*/ false,
     );
+    commit_realtime_history_events(&mut app.chat_widget, &mut events);
     let rendered = std::iter::from_fn(|| events.try_recv().ok())
         .filter_map(|event| match event {
             AppEvent::InsertHistoryCell(cell) => Some(
@@ -649,7 +653,7 @@ async fn replay_reconciles_only_matching_voice_captions_one_for_one() {
 }
 
 #[tokio::test]
-async fn retained_caption_consumes_only_one_matching_answer_fallback_on_reattach() {
+async fn retained_caption_consumes_only_one_matching_answer_fallback_on_reattach() -> Result<()> {
     let (mut app, _initial_events, _ops) = make_test_app_with_channels().await;
     let source = ThreadId::new();
     let (widget, _, mut events, _) = make_chatwidget_manual_with_sender().await;
@@ -685,23 +689,26 @@ async fn retained_caption_consumes_only_one_matching_answer_fallback_on_reattach
         empty_thread_snapshot(&app, source),
         /*resume_restored_queue*/ false,
     );
-    let rendered = std::iter::from_fn(|| events.try_recv().ok())
-        .filter_map(|event| match event {
-            AppEvent::InsertHistoryCell(cell) => Some(
-                cell.display_lines(/*width*/ 80)
-                    .into_iter()
-                    .map(|line| line.to_string())
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            ),
-            _ => None,
-        })
+    let (mut app_server, _requests, proxy) = start_recording_remote_app_server(&app.config).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    while let Ok(event) = events.try_recv() {
+        Box::pin(app.handle_event(&mut tui, &mut app_server, event)).await?;
+        app.chat_widget.pre_draw_tick();
+    }
+    let rendered = app
+        .transcript_cells
+        .iter()
+        .flat_map(|cell| cell.display_lines(/*width*/ 80))
+        .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join("\n");
     assert_eq!(rendered.matches("Same answer").count(), 1);
     assert_eq!(rendered.matches("Same   answer").count(), 1);
     assert_eq!(rendered.matches("Different answer").count(), 1);
     assert!(!rendered.contains("[FINAL]"));
+    app_server.shutdown().await?;
+    proxy.await??;
+    Ok(())
 }
 
 #[tokio::test]
@@ -899,6 +906,7 @@ async fn unrendered_buffered_items_do_not_consume_retained_captions() {
         },
         /*resume_restored_queue*/ false,
     );
+    commit_realtime_history_events(&mut app.chat_widget, &mut events);
     let rendered = std::iter::from_fn(|| events.try_recv().ok())
         .filter_map(|event| match event {
             AppEvent::InsertHistoryCell(cell) => Some(
@@ -939,6 +947,7 @@ async fn completed_voice_caption_survives_repeated_thread_replacement() {
         ),
         /*replay_kind*/ None,
     );
+    commit_realtime_history_events(&mut app.chat_widget, &mut initial_events);
     let initial = std::iter::from_fn(|| initial_events.try_recv().ok())
         .filter_map(|event| match event {
             AppEvent::InsertHistoryCell(cell) => Some(
@@ -992,6 +1001,7 @@ async fn completed_voice_caption_survives_repeated_thread_replacement() {
         snapshot.turns.push(typed.clone());
         app.replay_thread_snapshot(snapshot, /*resume_restored_queue*/ false);
         assert!(!app.pending_realtime_transcript_replay.contains_key(&source));
+        commit_realtime_history_events(&mut app.chat_widget, &mut source_events);
         let rendered = std::iter::from_fn(|| source_events.try_recv().ok())
             .filter_map(|event| match event {
                 AppEvent::InsertHistoryCell(cell) => Some(
