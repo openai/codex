@@ -47,6 +47,36 @@ fn lite_tool_catalog_and_code_calls_are_visible() {
 }
 
 #[test]
+fn tool_outputs_show_only_their_own_names_and_namespaces() {
+    let items = [
+        json!({ "type": "function_call", "call_id": "lookup", "namespace": "collaboration", "name": "lookup", "arguments": "{}" }),
+        json!({ "type": "custom_tool_call", "call_id": "custom", "namespace": "functions", "name": "exec", "input": "" }),
+        json!({ "type": "function_call_output", "call_id": "lookup", "output": "ordinary function result" }),
+        json!({ "type": "custom_tool_call_output", "call_id": "custom", "output": "ordinary custom result" }),
+        json!({ "type": "custom_tool_call_output", "call_id": "custom", "name": "exec", "output": "Code Mode notification" }),
+        json!({ "type": "function_call_output", "call_id": "lookup", "name": "lookup", "output": "explicit name only" }),
+        json!({ "type": "function_call_output", "name": "notifications", "namespace": "slack", "output": "standalone" }),
+        json!({ "type": "function_call_output", "call_id": "lookup", "namespace": "slack", "output": "explicit namespace only" }),
+    ];
+    let rendered = render_test_items(&items, &ContextSnapshotOptions::default());
+    let outputs = rendered
+        .lines()
+        .filter(|line| line.contains("call_output"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        outputs,
+        [
+            "02:function_call_output:ordinary function result",
+            "03:custom_tool_call_output:ordinary custom result",
+            "04:custom_tool_call_output/exec:Code Mode notification",
+            "05:function_call_output/lookup:explicit name only",
+            "06:function_call_output/slack.notifications:standalone",
+            "07:function_call_output[namespace=slack]:explicit namespace only",
+        ]
+    );
+}
+
+#[test]
 fn encrypted_compaction_payload_changes_are_visible_without_exposing_contents() {
     let render = |encrypted_content| {
         render_test_items(

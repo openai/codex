@@ -1,9 +1,10 @@
-//! A multi-turn Astra scenario whose actual requests expose the context around remote compaction.
+//! Multi-turn Astra scenarios snapshot the model-visible request history of shipped features.
 
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use base64::Engine;
@@ -11,6 +12,8 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
 use codex_config::types::McpServerConfig;
+use codex_context_fragments::AnsweredQuestion;
+use codex_context_fragments::ContextualUserFragment;
 use codex_core::TurnInputRequest;
 use codex_core::config::Config;
 use codex_extension_api::ExtensionRegistry;
@@ -18,6 +21,8 @@ use codex_extension_api::ExtensionRegistryBuilder;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_models_manager::bundled_models_response;
+use codex_protocol::items::AgentMessageDelivery;
+use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
@@ -25,6 +30,7 @@ use codex_skills_extension::SkillsExtensionConfig;
 use codex_skills_extension::install;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
+use core_test_support::context_snapshot::SnapshotEntry;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_custom_tool_call;
@@ -36,12 +42,16 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_wine_exec;
 use core_test_support::stdio_server_bin;
+use core_test_support::streaming_sse::StreamingSseChunk;
+use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::test_codex::executor_path_uri;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
 use core_test_support::wait_for_mcp_server;
 use serde_json::json;
 use tempfile::TempDir;
+use tokio::sync::oneshot;
 
 const ONE_PIXEL_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
 
@@ -158,6 +168,129 @@ fn configure_scenario_catalog(config: &mut Config) {
     .expect("fixture config layers");
     config.model_catalog = Some(bundled_models_response().expect("bundled model catalog"));
     config.orchestrator_skills_enabled = false;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn astra_asks_an_async_question_and_receives_the_answer_while_working() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let question = "Who should receive the launch update?";
+    let (release_continuation, continuation_gate) = oneshot::channel();
+    let mut working_message = ev_assistant_message("working", "I drafted a short launch update.");
+    working_message["item"]["phase"] = json!("commentary");
+    let (streaming, _completions) = start_streaming_sse_server(vec![
+        vec![StreamingSseChunk {
+            gate: None,
+            body: sse(vec![
+                ev_response_created("question-response"),
+                ev_function_call_with_namespace(
+                    "audience-question",
+                    "functions",
+                    "request_user_input_async",
+                    &json!({"questions": [{"title": question, "options": ["Internal team", "Customers"]}]}).to_string(),
+                ),
+                ev_completed("question-response"),
+            ]),
+        }],
+        vec![
+            StreamingSseChunk {
+                gate: None,
+                body: sse(vec![ev_response_created("working-response"), working_message]),
+            },
+            StreamingSseChunk {
+                gate: Some(continuation_gate),
+                body: sse(vec![ev_completed("working-response")]),
+            },
+        ],
+        vec![StreamingSseChunk {
+            gate: None,
+            body: sse(vec![
+                ev_response_created("answered-response"),
+                ev_assistant_message("answered", "Here is the launch update for customers."),
+                ev_completed("answered-response"),
+            ]),
+        }],
+        vec![StreamingSseChunk {
+            gate: None,
+            body: sse(vec![
+                ev_response_created("follow-up-response"),
+                ev_assistant_message("follow-up", "The email subject is: Launch update."),
+                ev_completed("follow-up-response"),
+            ]),
+        }],
+    ])
+    .await;
+    let config_server = start_mock_server().await;
+    let base_url = format!("{}/v1", streaming.uri());
+    let test = test_codex()
+        .with_model("gpt-6-astra")
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            configure_scenario_catalog(config);
+            config.model_provider.base_url = Some(base_url);
+            // The gated mock records raw request bodies for the shared snapshot renderer.
+            config
+                .features
+                .disable(Feature::EnableRequestCompression)
+                .expect("disable compression for the gated mock");
+        })
+        .build_with_auto_env(&config_server)
+        .await?;
+
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![text(
+            "Draft a short launch update. Ask me who it is for and keep working while I answer.",
+        )]))
+        .await?;
+    let turn_id = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::TurnStarted(event) => Some(event.turn_id.clone()),
+        _ => None,
+    })
+    .await;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::ItemCompleted(event)
+            if matches!(&event.item, TurnItem::AgentMessage(message)
+                if message.delivery == Some(AgentMessageDelivery::Async)))
+    })
+    .await;
+    tokio::time::timeout(
+        Duration::from_secs(/*secs*/ 10),
+        streaming.wait_for_request_count(/*count*/ 2),
+    )
+    .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::ItemCompleted(event)
+            if matches!(&event.item, TurnItem::AgentMessage(message) if message.id == "working"))
+    })
+    .await;
+
+    let answer = format!("{}Customers", AnsweredQuestion::new(question).render());
+    test.codex
+        .steer_turn(TurnInputRequest::user_input(vec![text(&answer)]), turn_id)
+        .await?;
+    release_continuation.send(()).expect("release continuation");
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    test.submit_turn("Now give it an email subject.").await?;
+
+    let requests = streaming
+        .requests()
+        .await
+        .iter()
+        .map(|body| serde_json::from_slice(body))
+        .collect::<serde_json::Result<Vec<_>>>()?;
+    let entries = requests.iter().map(SnapshotEntry::body).collect::<Vec<_>>();
+    insta::assert_snapshot!(
+        "astra_async_question_and_answer",
+        context_snapshot::format_context_snapshot(
+            "Astra asks who a launch update is for, keeps working, and receives the user's answer in the active turn.",
+            &entries,
+            &ContextSnapshotOptions::default().rewrite_known_segments(),
+        )
+    );
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -380,6 +513,121 @@ text(`MCP: ${ping.structuredContent?.echo ?? "missing"}`);"#,
         "astra_settings_release_check_tool_shapes",
         context_snapshot::format_request_history_snapshot(
             "Astra checks a Settings release using direct collaboration and Code Mode tools.",
+            &mock.requests(),
+            &ContextSnapshotOptions::default().include_request_settings(),
+        )
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn astra_refreshes_plugin_tools_and_skills_in_an_existing_thread() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    core_test_support::skip_if_remote!(Ok(()), "plugin and MCP fixtures use host-local paths");
+
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    let config = "[features]\nplugins = true\n\n[skills.bundled]\nenabled = false\n";
+    fs::write(home.path().join("config.toml"), config)?;
+    let lookup = r#"text(ALL_TOOLS.filter(({ name }) => name === "mcp__notes__echo").map(({ name }) => name));"#;
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("before-refresh"),
+                ev_custom_tool_call("before-lookup", "exec", lookup),
+                ev_completed("before-refresh"),
+            ]),
+            sse(vec![
+                ev_assistant_message("missing-tool", "The Notes tool is not installed yet."),
+                ev_completed("missing-tool-response"),
+            ]),
+            sse(vec![
+                ev_response_created("after-refresh"),
+                ev_custom_tool_call("after-lookup", "exec", lookup),
+                ev_completed("after-refresh"),
+            ]),
+            sse(vec![
+                ev_response_created("first-echo"),
+                ev_custom_tool_call(
+                    "first-echo-call",
+                    "exec",
+                    r#"const result = await tools.mcp__notes__echo({ message: "Mira owns the kickoff" }); text(result.structuredContent?.echo);"#,
+                ),
+                ev_completed("first-echo"),
+            ]),
+            sse(vec![
+                ev_assistant_message("owner", "The Notes plugin confirms Mira owns the kickoff."),
+                ev_completed("owner-response"),
+            ]),
+            sse(vec![
+                ev_response_created("follow-up"),
+                ev_custom_tool_call(
+                    "second-echo-call",
+                    "exec",
+                    r#"const result = await tools.mcp__notes__echo({ message: "The kickoff is Friday" }); text(result.structuredContent?.echo);"#,
+                ),
+                ev_completed("follow-up"),
+            ]),
+            sse(vec![
+                ev_assistant_message("deadline", "The Notes plugin confirms the kickoff is Friday."),
+                ev_completed("deadline-response"),
+            ]),
+        ],
+    )
+    .await;
+    let mut builder = test_codex()
+        .with_model("gpt-6-astra")
+        .with_home(Arc::clone(&home))
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_extensions(skills_extensions())
+        .with_config(configure_scenario_catalog);
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("Check whether the Notes plugin echo tool is available.")
+        .await?;
+
+    let plugin_root = home.path().join("plugins/cache/test/notes/local");
+    fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
+    fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        json!({ "name": "notes", "description": "Look up and summarize team notes" }).to_string(),
+    )?;
+    fs::write(
+        plugin_root.join(".mcp.json"),
+        json!({ "mcpServers": { "notes": { "command": stdio_server_bin()?, "cwd": "." } } })
+            .to_string(),
+    )?;
+    let skill = write_skill(
+        &plugin_root.join("skills/summarize"),
+        "summarize",
+        "Summarize team notes",
+        "State the owner and date from the notes.",
+    )?;
+    fs::write(
+        home.path().join("config.toml"),
+        format!("{config}\n[plugins.\"notes@test\"]\nenabled = true\n"),
+    )?;
+    test.codex.submit(Op::ReloadUserConfig).await?;
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![
+            text("I installed Notes. Use $notes:summarize and the Notes tool to check that Mira owns the kickoff."),
+            plugin("notes"),
+            selected_skill("notes:summarize", &skill),
+        ]))
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    test.submit_text_turn("Use the Notes tool again to check that the kickoff is Friday.")
+        .await?;
+
+    insta::assert_snapshot!(
+        "astra_plugin_refresh",
+        context_snapshot::format_request_history_snapshot(
+            "Astra checks for Notes, refreshes its installed plugin without restarting, and uses the new skill and Code Mode MCP tool across turns.",
             &mock.requests(),
             &ContextSnapshotOptions::default().include_request_settings(),
         )

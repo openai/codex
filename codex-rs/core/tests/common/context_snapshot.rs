@@ -673,6 +673,16 @@ fn render_item(
             format!("{index:02}:custom_tool_call/{name}:{input}")
         }
         "function_call_output" | "custom_tool_call_output" => {
+            let name = item
+                .get("name")
+                .and_then(Value::as_str)
+                .map(|_| format!("/{}", call_name(item)))
+                .or_else(|| {
+                    item.get("namespace")
+                        .and_then(Value::as_str)
+                        .map(|namespace| format!("[namespace={namespace}]"))
+                })
+                .unwrap_or_default();
             let output = item
                 .get("output")
                 .map(|output| match output {
@@ -701,7 +711,7 @@ fn render_item(
                     _ => "<NON_TEXT_OUTPUT>".to_string(),
                 })
                 .unwrap_or_else(|| "<NO_OUTPUT>".to_string());
-            format!("{index:02}:{kind}:{output}")
+            format!("{index:02}:{kind}{name}:{output}")
         }
         "local_shell_call" => {
             let command = item
