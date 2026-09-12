@@ -1,23 +1,15 @@
 use codex_config::types::Personality;
 use codex_core::TurnInputRequest;
 use codex_features::Feature;
-use codex_models_manager::bundled_models_response;
-use codex_models_manager::manager::RefreshStrategy;
-use codex_models_manager::manager::SharedModelsManager;
-use codex_models_manager::model_info::BASE_INSTRUCTIONS;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::models::BaseInstructionsProvenance;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::openai_models::ModelInstructionsVariables;
-use codex_protocol::openai_models::ModelVisibility;
-use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
-use core_test_support::responses::mount_models_once;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse_completed;
@@ -30,16 +22,11 @@ use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use test_case::test_case;
-use tokio::time::Duration;
-use tokio::time::Instant;
-use tokio::time::sleep;
-use wiremock::MockServer;
 
 const LOCAL_FRIENDLY_TEMPLATE: &str =
     "You optimize for team morale and being a supportive teammate as much as code quality.";
 const BUNDLED_FRIENDLY_TEMPLATE: &str = "You have a vivid inner life as Codex:";
 const CUSTOM_INSTRUCTIONS: &str = "Custom instructions\n# Personality\nThis must remain\n## Writing Style\nThis must also remain\n# General\nGeneral instructions";
-const LOCAL_PRAGMATIC_TEMPLATE: &str = "You are a deeply pragmatic, effective software engineer.";
 
 fn read_only_text_turn(
     test: &TestCodex,
@@ -102,10 +89,7 @@ async fn config_personality_none_sends_no_personality() -> anyhow::Result<()> {
         !instructions_text.contains(BUNDLED_FRIENDLY_TEMPLATE),
         "expected no friendly personality template, got: {instructions_text:?}"
     );
-    assert!(
-        !instructions_text.contains(LOCAL_PRAGMATIC_TEMPLATE),
-        "expected no pragmatic personality template, got: {instructions_text:?}"
-    );
+    assert!(!instructions_text.contains("# Personality"));
     assert!(
         !instructions_text.contains("{{ personality }}"),
         "expected personality placeholder to be removed, got: {instructions_text:?}"
@@ -221,6 +205,7 @@ async fn default_instructions_are_friendly_without_config_toml() -> anyhow::Resu
             .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
+    assert_eq!(test.config.personality, None);
 
     test.codex
         .start_or_steer_turn(read_only_text_turn(
@@ -241,278 +226,6 @@ async fn default_instructions_are_friendly_without_config_toml() -> anyhow::Resu
     );
     assert!(!request.body_contains_text("<personality_spec>"));
 
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn user_turn_personality_same_value_does_not_add_update_message() -> anyhow::Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    let resp_mock = mount_sse_sequence(
-        &server,
-        vec![sse_completed("resp-1"), sse_completed("resp-2")],
-    )
-    .await;
-    let mut builder = test_codex()
-        .with_model("exp-codex-personality")
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::Personality)
-                .expect("test config should allow feature update");
-            config.personality = Some(Personality::Pragmatic);
-        });
-    let test = builder.build(&server).await?;
-
-    test.codex
-        .start_or_steer_turn(read_only_text_turn(
-            &test,
-            "hello",
-            test.session_configured.model.clone(),
-            test.config.permissions.approval_policy.value(),
-        ))
-        .await?;
-
-    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-
-    core_test_support::submit_thread_settings(
-        &test.codex,
-        ThreadSettingsOverrides {
-            personality: Some(Personality::Pragmatic),
-            ..Default::default()
-        },
-    )
-    .await?;
-
-    test.codex
-        .start_or_steer_turn(read_only_text_turn(
-            &test,
-            "hello",
-            test.session_configured.model.clone(),
-            test.config.permissions.approval_policy.value(),
-        ))
-        .await?;
-
-    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-
-    let requests = resp_mock.requests();
-    assert_eq!(requests.len(), 2, "expected two requests");
-    let request = requests
-        .last()
-        .expect("expected second request after personality override");
-
-    let developer_texts = request.message_input_texts("developer");
-    let personality_text = developer_texts
-        .iter()
-        .find(|text| text.contains("<personality_spec>"));
-    assert!(
-        personality_text.is_none(),
-        "expected no personality preamble for unchanged personality, got {personality_text:?}"
-    );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn disabled_personality_sends_remote_default_instructions() -> anyhow::Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = MockServer::start().await;
-    let remote_slug = "remote-disabled-personality";
-    let default_personality = "default remote personality";
-    let friendly_personality = "friendly remote personality";
-    let mut remote_model = bundled_models_response()?
-        .models
-        .into_iter()
-        .find(|model| model.slug == "gpt-5.5")
-        .expect("bundled gpt-5.5 model");
-    remote_model.slug = remote_slug.to_string();
-    if let Some(model_messages) = remote_model.model_messages.as_mut() {
-        model_messages.instructions_template = Some("remote base\n{{ personality }}".to_string());
-        model_messages.instructions_variables = Some(ModelInstructionsVariables {
-            personality_default: Some(default_personality.to_string()),
-            personality_friendly: Some(friendly_personality.to_string()),
-            personality_pragmatic: Some("pragmatic remote personality".to_string()),
-        });
-    }
-    mount_models_once(
-        &server,
-        ModelsResponse {
-            models: vec![remote_model],
-        },
-    )
-    .await;
-    let response = mount_sse_once(&server, sse_completed("resp-1")).await;
-    let mut builder = test_codex()
-        .with_auth(codex_login::CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config(move |config| {
-            config
-                .features
-                .disable(Feature::Personality)
-                .expect("test config should allow feature update");
-            config.model = Some(remote_slug.to_string());
-            config.personality = Some(Personality::Friendly);
-        });
-    let test = builder.build_with_auto_env(&server).await?;
-
-    test.submit_turn("use the default personality").await?;
-
-    assert_eq!(
-        response.single_request().instructions_text(),
-        format!("remote base\n{default_personality}")
-    );
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn user_turn_personality_skips_if_feature_disabled() -> anyhow::Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    let resp_mock = mount_sse_sequence(
-        &server,
-        vec![sse_completed("resp-1"), sse_completed("resp-2")],
-    )
-    .await;
-    let mut builder = test_codex()
-        .with_model("exp-codex-personality")
-        .with_config(|config| {
-            config.update_plan_enabled = true;
-            config
-                .features
-                .disable(Feature::Personality)
-                .expect("test config should allow feature update");
-        });
-    let test = builder.build(&server).await?;
-
-    test.codex
-        .start_or_steer_turn(read_only_text_turn(
-            &test,
-            "hello",
-            test.session_configured.model.clone(),
-            test.config.permissions.approval_policy.value(),
-        ))
-        .await?;
-
-    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-
-    core_test_support::submit_thread_settings(
-        &test.codex,
-        ThreadSettingsOverrides {
-            personality: Some(Personality::Pragmatic),
-            ..Default::default()
-        },
-    )
-    .await?;
-
-    test.codex
-        .start_or_steer_turn(read_only_text_turn(
-            &test,
-            "hello",
-            test.session_configured.model.clone(),
-            test.config.permissions.approval_policy.value(),
-        ))
-        .await?;
-
-    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-
-    let requests = resp_mock.requests();
-    assert_eq!(requests.len(), 2, "expected two requests");
-    assert!(
-        requests
-            .iter()
-            .all(|request| request.instructions_text() == BASE_INSTRUCTIONS)
-    );
-    let request = requests
-        .last()
-        .expect("expected personality update request");
-
-    let developer_texts = request.message_input_texts("developer");
-    let personality_text = developer_texts
-        .iter()
-        .find(|text| text.contains("<personality_spec>"));
-    assert!(
-        personality_text.is_none(),
-        "expected no personality preamble, got {personality_text:?}"
-    );
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn legacy_remote_catalog_renders_selection_and_updates() -> anyhow::Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = MockServer::start().await;
-    let remote_slug = "codex-remote-personality";
-    let friendly = "Friendly from remote template";
-    let pragmatic = "Pragmatic from remote template";
-    let mut remote_model = bundled_models_response()?
-        .models
-        .into_iter()
-        .find(|model| model.slug == "gpt-5.5")
-        .expect("bundled gpt-5.5 model");
-    remote_model.slug = remote_slug.to_string();
-    remote_model.visibility = ModelVisibility::List;
-    let messages = remote_model
-        .model_messages
-        .as_mut()
-        .expect("model messages");
-    messages.instructions_template = Some("Base instructions\n{{ personality }}\n".to_string());
-    messages.instructions_variables = Some(ModelInstructionsVariables {
-        personality_default: Some("Default from remote template".to_string()),
-        personality_friendly: Some(friendly.to_string()),
-        personality_pragmatic: Some(pragmatic.to_string()),
-    });
-    mount_models_once(
-        &server,
-        ModelsResponse {
-            models: vec![remote_model],
-        },
-    )
-    .await;
-    let responses = mount_sse_sequence(
-        &server,
-        vec![sse_completed("resp-1"), sse_completed("resp-2")],
-    )
-    .await;
-    let mut builder = test_codex()
-        .with_auth(codex_login::CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_model(remote_slug)
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::Personality)
-                .expect("test config should allow feature update");
-            config.personality = Some(Personality::Friendly);
-        });
-    let test = builder.build_with_auto_env(&server).await?;
-    wait_for_model_available(&test.thread_manager.get_models_manager(), remote_slug).await;
-    test.submit_turn("first turn").await?;
-
-    core_test_support::submit_thread_settings(
-        &test.codex,
-        ThreadSettingsOverrides {
-            personality: Some(Personality::Pragmatic),
-            ..Default::default()
-        },
-    )
-    .await?;
-    test.submit_turn("use the pragmatic selection").await?;
-
-    let requests = responses.requests();
-    assert_eq!(requests.len(), 2);
-    assert_eq!(
-        requests[0].instructions_text(),
-        format!("Base instructions\n{friendly}\n")
-    );
-    let developer_texts = requests[1].message_input_texts("developer");
-    let personality_text = developer_texts
-        .iter()
-        .find(|text| text.contains("<personality_spec>"))
-        .expect("expected personality update message");
-    assert!(personality_text.contains("The user has requested a new communication style."));
-    assert!(personality_text.contains(pragmatic));
     Ok(())
 }
 
@@ -610,23 +323,4 @@ async fn legacy_personality_session_resumes_and_completes() -> anyhow::Result<()
             .any(|text| text == "first turn")
     );
     Ok(())
-}
-
-async fn wait_for_model_available(manager: &SharedModelsManager, slug: &str) {
-    let deadline = Instant::now() + Duration::from_secs(2);
-    loop {
-        let models = manager
-            .list_models(
-                RefreshStrategy::OnlineIfUncached,
-                codex_core::test_support::default_http_client_factory(),
-            )
-            .await;
-        if models.iter().any(|model| model.model == slug) {
-            return;
-        }
-        if Instant::now() >= deadline {
-            panic!("timed out waiting for the remote model {slug} to appear");
-        }
-        sleep(Duration::from_millis(25)).await;
-    }
 }

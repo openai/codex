@@ -77,6 +77,7 @@ use codex_core::test_support::all_model_presets;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_features::Feature;
 use codex_login::AuthCredentialsStoreMode;
+use codex_models_manager::model_info::BASE_INSTRUCTIONS;
 use codex_models_manager::model_info::model_info_from_slug;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
@@ -2433,8 +2434,29 @@ async fn turn_start_uses_thread_feature_overrides_for_request_user_input_tool_de
     Ok(())
 }
 
+fn assert_fallback_model_instructions(request: &responses::ResponsesRequest) {
+    let instructions = request.instructions_text();
+    let expected_intro = BASE_INSTRUCTIONS
+        .lines()
+        .next()
+        .expect("fallback prompt has an opening sentence");
+    let expected_personality = BASE_INSTRUCTIONS
+        .lines()
+        .find(|line| line.starts_with("Your default personality and tone"))
+        .expect("fallback prompt has a Friendly personality section");
+
+    assert!(
+        instructions.contains(expected_intro),
+        "expected fallback model identity instructions in the request"
+    );
+    assert!(
+        instructions.contains(expected_personality),
+        "expected baked Friendly instructions in the request"
+    );
+}
+
 #[tokio::test]
-async fn turn_start_accepts_personality_override_v2() -> Result<()> {
+async fn turn_start_accepts_deprecated_personality_override_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -2485,6 +2507,7 @@ async fn turn_start_accepts_personality_override_v2() -> Result<()> {
     .await??;
 
     let request = response_mock.single_request();
+    assert_fallback_model_instructions(&request);
     let developer_texts = request.message_input_texts("developer");
     if developer_texts.is_empty() {
         eprintln!("request body: {}", request.body_json());
@@ -2493,8 +2516,8 @@ async fn turn_start_accepts_personality_override_v2() -> Result<()> {
     assert!(
         developer_texts
             .iter()
-            .any(|text| text.contains("<personality_spec>")),
-        "expected personality update message in developer input, got {developer_texts:?}"
+            .all(|text| !text.contains("<personality_spec>")),
+        "deprecated personality override emitted a developer update: {developer_texts:?}"
     );
 
     Ok(())
@@ -2641,7 +2664,7 @@ async fn thread_start_ignores_deprecated_multi_agent_mode() -> Result<()> {
 }
 
 #[tokio::test]
-async fn turn_start_change_personality_mid_thread_v2() -> Result<()> {
+async fn turn_start_ignores_personality_change_mid_thread_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -2722,6 +2745,7 @@ async fn turn_start_change_personality_mid_thread_v2() -> Result<()> {
     assert_eq!(requests.len(), 2, "expected two requests");
 
     let first_developer_texts = requests[0].message_input_texts("developer");
+    assert_fallback_model_instructions(&requests[0]);
     assert!(
         first_developer_texts
             .iter()
@@ -2730,11 +2754,12 @@ async fn turn_start_change_personality_mid_thread_v2() -> Result<()> {
     );
 
     let second_developer_texts = requests[1].message_input_texts("developer");
+    assert_fallback_model_instructions(&requests[1]);
     assert!(
         second_developer_texts
             .iter()
-            .any(|text| text.contains("<personality_spec>")),
-        "expected personality update message in second request, got {second_developer_texts:?}"
+            .all(|text| !text.contains("<personality_spec>")),
+        "deprecated personality change emitted a developer update: {second_developer_texts:?}"
     );
 
     Ok(())

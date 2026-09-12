@@ -76,7 +76,6 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
-use codex_protocol::openai_models::ModelInstructionsVariables;
 use codex_protocol::openai_models::ModelServiceTier;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::permissions::FileSystemAccessMode;
@@ -10130,9 +10129,7 @@ async fn build_initial_context_uses_retained_step_after_model_change() {
             CodexAuth::from_api_key("Test API Key"),
             Vec::new(),
             |config| {
-                config.features.enable(Feature::Personality).unwrap();
                 config.features.enable(Feature::TokenBudget).unwrap();
-                config.personality = Some(Personality::Friendly);
             },
         )
         .await;
@@ -10153,12 +10150,8 @@ async fn build_initial_context_uses_retained_step_after_model_change() {
         model_info.context_window = None;
         model_info.max_context_window = None;
         let messages = model_info.model_messages.as_mut().unwrap();
-        messages.instructions_template = Some("A instructions: {{ personality }}".to_string());
-        messages.instructions_variables = Some(ModelInstructionsVariables {
-            personality_default: Some("default".to_string()),
-            personality_friendly: Some("friendly".to_string()),
-            personality_pragmatic: Some("pragmatic".to_string()),
-        });
+        messages.instructions_template = Some("A instructions".to_string());
+        messages.instructions_variables = None;
     });
     session
         .set_previous_turn_settings(Some(PreviousTurnSettings {
@@ -10181,7 +10174,6 @@ async fn build_initial_context_uses_retained_step_after_model_change() {
 
     let mut selected_b = step_a.settings.selected().clone();
     selected_b.collaboration_mode.settings.model = "model-b".to_string();
-    selected_b.personality = Some(Personality::Pragmatic);
     let mut model_b = step_a.settings.model_info.as_ref().clone();
     model_b.slug = "model-b".to_string();
     model_b.context_window = Some(128_000);
@@ -10190,7 +10182,7 @@ async fn build_initial_context_uses_retained_step_after_model_change() {
         .model_messages
         .as_mut()
         .unwrap()
-        .instructions_template = Some("B instructions: {{ personality }}".to_string());
+        .instructions_template = Some("B instructions".to_string());
     turn_context
         .current_settings
         .store(Arc::new(ResolvedStepSettings::new(
@@ -10218,9 +10210,9 @@ async fn build_initial_context_uses_retained_step_after_model_change() {
         .collect::<Vec<_>>();
     let a_text = developer_input_texts(&initial_a).join("\n");
     let b_text = developer_input_texts(&initial_b).join("\n");
-    assert!(a_text.contains("A instructions: friendly"));
+    assert!(a_text.contains("A instructions"));
     assert!(!a_text.contains("<context_window>"));
-    assert!(b_text.contains("B instructions: pragmatic"));
+    assert!(b_text.contains("B instructions"));
     assert!(!b_text.contains("A instructions:"));
     assert!(!a_text.contains("turn context extension enabled"));
     assert!(b_text.contains("turn context extension enabled"));
@@ -11944,36 +11936,9 @@ async fn sample_rollout(
     let mut rollout_items = Vec::new();
     let mut live_history = ContextManager::new();
 
-    // Use the same turn_context source as record_initial_history so model_info (and thus
-    // personality_spec) matches reconstruction.
+    // Use the same turn_context source as record_initial_history so model_info matches reconstruction.
     let reconstruction_turn = session.new_default_turn().await;
-    let mut initial_context = build_initial_context(session, &reconstruction_turn).await;
-    // Ensure personality_spec is present when Personality is enabled, so expected matches
-    // what reconstruction produces (build_initial_context may omit it when baked into model).
-    if !initial_context.iter().any(|m| {
-        matches!(m, ResponseItem::Message { role, content, .. }
-        if role == "developer"
-            && content.iter().any(|c| {
-                matches!(c, ContentItem::InputText { text } if text.contains("<personality_spec>"))
-            }))
-    }) && let Some(p) = reconstruction_turn.personality()
-        && session.features.enabled(Feature::Personality)
-        && let Some(personality_message) = reconstruction_turn
-            .model_info()
-            .model_messages
-            .as_ref()
-            .and_then(|m| m.get_personality_message(Some(p)).filter(|s| !s.is_empty()))
-    {
-        let msg = crate::context::ContextualUserFragment::into(
-            crate::context::PersonalitySpecInstructions::new(personality_message),
-        );
-        let insert_at = initial_context
-            .iter()
-            .position(|m| matches!(m, ResponseItem::Message { role, .. } if role == "developer"))
-            .map(|i| i + 1)
-            .unwrap_or(0);
-        initial_context.insert(insert_at, msg);
-    }
+    let initial_context = build_initial_context(session, &reconstruction_turn).await;
     for item in &initial_context {
         rollout_items.push(RolloutItem::ResponseItem(item.clone().into()));
     }

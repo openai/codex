@@ -219,7 +219,7 @@ async fn first_turn_model_change_appends_model_instructions_developer_message(
         developer_texts
             .iter()
             .all(|text| !text.contains("<personality_spec>")),
-        "model instructions already include the selected personality"
+        "model switch should not emit a personality update"
     );
 
     Ok(())
@@ -389,7 +389,8 @@ async fn model_change_appends_model_instructions_developer_message() -> Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn model_and_personality_change_only_appends_model_instructions() -> Result<()> {
+async fn model_change_with_legacy_personality_override_only_appends_model_instructions()
+-> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;

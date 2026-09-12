@@ -23,7 +23,6 @@ use codex_login::CodexAuth;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::config_types::ApprovalsReviewer;
-use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
@@ -40,7 +39,6 @@ use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ConfirmationPolicies;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
-use codex_protocol::openai_models::ModelInstructionsVariables;
 use codex_protocol::openai_models::ModelTokenBudgetConfig;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::MultiAgentMessages;
@@ -1050,13 +1048,8 @@ async fn active_model_switch_updates_core_context_from_captured_settings(
                 .expect("enable token-budget feature");
             config
                 .features
-                .enable(Feature::Personality)
-                .expect("enable personality");
-            config
-                .features
                 .enable(Feature::MultiAgentV2)
                 .expect("enable multi-agent V2");
-            config.personality = Some(Personality::Pragmatic);
             if context_window_model.is_some() {
                 config.model_context_window = None;
             }
@@ -1073,14 +1066,8 @@ async fn active_model_switch_updates_core_context_from_captured_settings(
                     model.max_context_window = None;
                 }
                 let messages = model.model_messages.as_mut().expect("model messages");
-                messages.instructions_template = Some(format!(
-                    "Instructions for {slug}. {{{{ personality }}}}"
-                ));
-                messages.instructions_variables = Some(ModelInstructionsVariables {
-                    personality_default: Some(format!("Default {slug} personality.")),
-                    personality_friendly: Some(format!("Friendly {slug} personality.")),
-                    personality_pragmatic: Some(format!("Pragmatic {slug} personality.")),
-                });
+                messages.instructions_template = Some(format!("Instructions for {slug}."));
+                messages.instructions_variables = None;
                 messages.collaboration_modes = Some(CollaborationModeMessages {
                     default: Some(format!("Default collaboration for {slug}.")),
                     plan: None,
@@ -1164,8 +1151,7 @@ async fn active_model_switch_updates_core_context_from_captured_settings(
             .collect::<Vec<_>>(),
         vec![json!(MODEL_A), json!(MODEL_B), json!(MODEL_B)]
     );
-    let initial_instructions =
-        format!("Instructions for {MODEL_A}. Pragmatic {MODEL_A} personality.");
+    let initial_instructions = format!("Instructions for {MODEL_A}.");
     assert_eq!(requests[0].instructions_text(), initial_instructions);
     assert!(!requests[0].body_contains_text("<model_switch>"));
     for text in [
@@ -1193,12 +1179,10 @@ async fn active_model_switch_updates_core_context_from_captured_settings(
             .filter(|text| text.contains("<model_switch>"))
             .collect::<Vec<_>>();
         assert_eq!(switches.len(), 1);
-        assert!(switches[0].contains(&format!(
-            "Instructions for {MODEL_B}. Pragmatic {MODEL_B} personality."
-        )));
+        assert!(switches[0].contains(&format!("Instructions for {MODEL_B}.")));
         assert!(
             !request.body_contains_text("<personality_spec>"),
-            "personality is included in the model-switch instructions"
+            "model-switch instructions should not contain a personality update"
         );
         for text in [
             format!("Default collaboration for {MODEL_B}."),

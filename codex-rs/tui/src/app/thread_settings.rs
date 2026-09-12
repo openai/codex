@@ -5,6 +5,7 @@ use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
 use crate::app_event::PermissionProfileSelection;
 use crate::app_server_session::AppServerSession;
+use crate::app_server_session::personality_opt_out_only;
 use crate::chatwidget::cyber_model_approval_reviewer;
 use crate::session_state::ThreadSessionState;
 use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
@@ -211,8 +212,9 @@ impl App {
     pub(super) async fn send_thread_settings_update(
         &mut self,
         app_server: &mut AppServerSession,
-        params: ThreadSettingsUpdateParams,
+        mut params: ThreadSettingsUpdateParams,
     ) -> bool {
+        params.personality = personality_opt_out_only(params.personality);
         if !thread_settings_update_has_changes(&params) {
             return false;
         }

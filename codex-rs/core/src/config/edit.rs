@@ -8,7 +8,6 @@ use codex_config::types::ResumeCwdMode;
 use codex_config::types::SessionPickerViewMode;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_features::FEATURES;
-use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -39,8 +38,6 @@ pub enum ConfigEdit {
     },
     /// Update the service tier preference for future turns.
     SetServiceTier { service_tier: Option<String> },
-    /// Update the active (or default) model personality.
-    SetModelPersonality { personality: Option<Personality> },
     /// Toggle the acknowledgement flag under `[notice]`.
     SetNoticeHideFullAccessWarning(bool),
     /// Toggle the Windows world-writable directories warning acknowledgement flag.
@@ -244,10 +241,6 @@ impl ConfigDocument {
                     };
                     value(config_value)
                 }),
-            )),
-            ConfigEdit::SetModelPersonality { personality } => Ok(self.write_optional_value(
-                &["personality"],
-                personality.map(|personality| value(personality.to_string())),
             )),
             ConfigEdit::SetNoticeHideFullAccessWarning(acknowledged) => Ok(self.write_value(
                 &[NOTICE_TABLE_KEY, "hide_full_access_warning"],

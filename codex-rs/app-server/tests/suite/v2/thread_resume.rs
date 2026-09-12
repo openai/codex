@@ -159,7 +159,6 @@ use super::analytics::wait_for_matching_analytics_event;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
 #[cfg(not(windows))]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-const CODEX_5_2_INSTRUCTIONS_TEMPLATE_DEFAULT: &str = "You are Codex, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals.";
 
 #[tokio::test]
 async fn thread_resume_paginated_model_context_preserves_original_metadata() -> Result<()> {
@@ -6060,7 +6059,7 @@ async fn start_materialized_thread_and_restart(
 }
 
 #[tokio::test]
-async fn thread_resume_accepts_personality_override() -> Result<()> {
+async fn thread_resume_accepts_deprecated_personality_override() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -6157,6 +6156,8 @@ async fn thread_resume_accepts_personality_override() -> Result<()> {
     .await??;
 
     let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2, "expected initial and resumed turns");
+    let initial_instructions_text = requests[0].instructions_text();
     let request = requests
         .last()
         .expect("expected request for resumed thread turn");
@@ -6164,13 +6165,13 @@ async fn thread_resume_accepts_personality_override() -> Result<()> {
     assert!(
         developer_texts
             .iter()
-            .any(|text| text.contains("<personality_spec>")),
-        "expected a personality update message in developer input, got {developer_texts:?}"
+            .all(|text| !text.contains("<personality_spec>")),
+        "deprecated personality override emitted a developer update: {developer_texts:?}"
     );
     let instructions_text = request.instructions_text();
-    assert!(
-        instructions_text.contains(CODEX_5_2_INSTRUCTIONS_TEMPLATE_DEFAULT),
-        "expected default base instructions from history, got {instructions_text:?}"
+    assert_eq!(
+        instructions_text, initial_instructions_text,
+        "resume should retain the original base instructions"
     );
 
     Ok(())

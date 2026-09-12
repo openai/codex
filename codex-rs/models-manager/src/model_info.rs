@@ -2,7 +2,6 @@ use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
-use codex_protocol::openai_models::ModelInstructionsVariables;
 use codex_protocol::openai_models::ModelMessages;
 use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::TruncationMode;
@@ -15,11 +14,6 @@ use codex_utils_output_truncation::approx_bytes_for_tokens;
 use tracing::warn;
 
 pub const BASE_INSTRUCTIONS: &str = include_str!("../prompt.md");
-const DEFAULT_PERSONALITY_HEADER: &str = "You are Codex, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals.";
-const LOCAL_FRIENDLY_TEMPLATE: &str =
-    "You optimize for team morale and being a supportive teammate as much as code quality.";
-const LOCAL_PRAGMATIC_TEMPLATE: &str = "You are a deeply pragmatic, effective software engineer.";
-const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
 const PERSONALITY_SECTION_HEADER: &str = "# Personality";
 
 pub fn with_config_overrides(mut model: ModelInfo, config: &ModelsManagerConfig) -> ModelInfo {
@@ -66,38 +60,14 @@ pub fn with_config_overrides(mut model: ModelInfo, config: &ModelsManagerConfig)
         });
         model_messages.instructions_template = Some(base_instructions.clone());
         model_messages.instructions_variables = None;
-    } else {
-        if config.personality_enabled
-            && config.personality == Some(Personality::None)
-            && let Some(instructions_template) = model
-                .model_messages
-                .as_mut()
-                .and_then(|messages| messages.instructions_template.as_mut())
-        {
-            *instructions_template =
-                strip_personality_section(std::mem::take(instructions_template));
-        }
-        let uses_local_personality_template = model.used_fallback_model_metadata
-            && matches!(
-                model.slug.as_str(),
-                "gpt-5.2-codex" | "exp-codex-personality"
-            );
-        if !config.personality_enabled
-            && let Some(model_messages) = model.model_messages.as_mut()
-        {
-            if uses_local_personality_template {
-                model_messages.instructions_template = Some(BASE_INSTRUCTIONS.to_string());
-            } else {
-                let personality_default = model_messages
-                    .get_personality_message(/*personality*/ None)
-                    .unwrap_or_default();
-                if let Some(instructions_template) = model_messages.instructions_template.as_mut() {
-                    *instructions_template = instructions_template
-                        .replace(PERSONALITY_PLACEHOLDER, &personality_default);
-                }
-            }
-            model_messages.instructions_variables = None;
-        }
+    } else if config.personality_enabled
+        && config.personality == Some(Personality::None)
+        && let Some(instructions_template) = model
+            .model_messages
+            .as_mut()
+            .and_then(|messages| messages.instructions_template.as_mut())
+    {
+        *instructions_template = strip_personality_section(std::mem::take(instructions_template));
     }
 
     model
@@ -158,7 +128,7 @@ pub fn model_info_from_slug(slug: &str) -> ModelInfo {
         available_access_programs: None,
         availability_nux: None,
         upgrade: None,
-        model_messages: Some(local_model_messages_for_slug(slug)),
+        model_messages: Some(local_model_messages()),
         include_skills_usage_instructions: false,
         include_plugin_usage_instructions: false,
         include_apps_usage_instructions: false,
@@ -192,42 +162,20 @@ pub fn model_info_from_slug(slug: &str) -> ModelInfo {
     }
 }
 
-fn local_model_messages_for_slug(slug: &str) -> ModelMessages {
-    match slug {
-        "gpt-5.2-codex" | "exp-codex-personality" => ModelMessages {
-            persistent_instructions: None,
-            tools: None,
-            instructions_template: Some(format!(
-                "{DEFAULT_PERSONALITY_HEADER}\n\n{PERSONALITY_PLACEHOLDER}\n\n{BASE_INSTRUCTIONS}"
-            )),
-            instructions_variables: Some(ModelInstructionsVariables {
-                personality_default: Some(String::new()),
-                personality_friendly: Some(LOCAL_FRIENDLY_TEMPLATE.to_string()),
-                personality_pragmatic: Some(LOCAL_PRAGMATIC_TEMPLATE.to_string()),
-            }),
-            approvals: None,
-            collaboration_modes: None,
-            auto_review: None,
-            permissions: None,
-            multi_agent: None,
-            token_budget: None,
-            confirmation_policies: None,
-            guardian_v2: None,
-        },
-        _ => ModelMessages {
-            persistent_instructions: None,
-            tools: None,
-            instructions_template: Some(BASE_INSTRUCTIONS.to_string()),
-            instructions_variables: None,
-            approvals: None,
-            collaboration_modes: None,
-            auto_review: None,
-            permissions: None,
-            multi_agent: None,
-            token_budget: None,
-            confirmation_policies: None,
-            guardian_v2: None,
-        },
+fn local_model_messages() -> ModelMessages {
+    ModelMessages {
+        persistent_instructions: None,
+        tools: None,
+        instructions_template: Some(BASE_INSTRUCTIONS.to_string()),
+        instructions_variables: None,
+        approvals: None,
+        collaboration_modes: None,
+        auto_review: None,
+        permissions: None,
+        multi_agent: None,
+        token_budget: None,
+        confirmation_policies: None,
+        guardian_v2: None,
     }
 }
 

@@ -3931,13 +3931,7 @@ impl Config {
                             auto_review.policy.as_deref(),
                         ))
                 });
-        let personality = personality
-            .or(cfg.personality)
-            .or_else(|| {
-                features
-                    .enabled(Feature::Personality)
-                    .then_some(Personality::Pragmatic)
-            });
+        let personality = personality.or(cfg.personality);
 
         let experimental_compact_prompt_path = cfg.experimental_compact_prompt_file.as_ref();
         let file_compact_prompt = Self::try_read_non_empty_file(

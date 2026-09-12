@@ -132,6 +132,7 @@ use codex_config::ConfigLayerSource;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::GuardianAssessmentEvent;
+use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::BaseInstructionsProvenance;
@@ -1356,7 +1357,7 @@ impl AppServerSession {
                     service_tier_for_turn: None,
                     effort,
                     summary,
-                    personality,
+                    personality: personality_opt_out_only(personality),
                     output_schema,
                     collaboration_mode,
                     multi_agent_mode: None,
@@ -1824,6 +1825,11 @@ fn approvals_reviewer_override_from_config(
     Some(config.approvals_reviewer.into())
 }
 
+// Keep the explicit Bridge opt-out while retiring Friendly/Pragmatic selection.
+pub(crate) fn personality_opt_out_only(personality: Option<Personality>) -> Option<Personality> {
+    personality.filter(|personality| *personality == Personality::None)
+}
+
 fn config_request_overrides_from_config(
     config: &Config,
 ) -> Option<HashMap<String, serde_json::Value>> {
@@ -1881,9 +1887,7 @@ fn config_request_overrides_from_config(
     );
     insert(
         "personality",
-        config
-            .personality
-            .map(|personality| personality.to_string()),
+        personality_opt_out_only(config.personality).map(|personality| personality.to_string()),
     );
     insert(
         "web_search",
@@ -3390,7 +3394,6 @@ mod tests {
             ("model_reasoning_effort".to_string(), string("high")),
             ("model_reasoning_summary".to_string(), string("detailed")),
             ("model_verbosity".to_string(), string("low")),
-            ("personality".to_string(), string("pragmatic")),
             ("web_search".to_string(), string("disabled")),
             ("bypass_hook_trust".to_string(), true.into()),
         ]);
@@ -3412,6 +3415,7 @@ mod tests {
         config.model_provider_id = "configured-provider".to_string();
         config.model_reasoning_effort = Some(ReasoningEffort::Ultra);
         config.model_reasoning_summary = Some(ReasoningSummary::Detailed);
+        config.personality = Some(Personality::Pragmatic);
 
         let params = thread_resume_params_from_config(
             config,
@@ -3429,10 +3433,6 @@ mod tests {
                 (
                     "model_reasoning_summary".to_string(),
                     serde_json::Value::String("detailed".to_string()),
-                ),
-                (
-                    "personality".to_string(),
-                    serde_json::Value::String("pragmatic".to_string()),
                 ),
                 (
                     "web_search".to_string(),
@@ -3701,7 +3701,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn config_request_overrides_preserve_implicit_personality_default() {
+    async fn config_request_overrides_only_forward_explicit_personality_opt_out() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let mut config = build_config(&temp_dir).await;
         config.personality = None;
@@ -3711,6 +3711,13 @@ mod tests {
 
         assert!(!implicit_overrides.contains_key("personality"));
 
+        for personality in [Personality::Friendly, Personality::Pragmatic] {
+            config.personality = Some(personality);
+            let ordinary_overrides =
+                config_request_overrides_from_config(&config).expect("config overrides");
+            assert!(!ordinary_overrides.contains_key("personality"));
+        }
+
         config.personality = Some(Personality::None);
         let explicit_overrides =
             config_request_overrides_from_config(&config).expect("config overrides");
@@ -3719,6 +3726,34 @@ mod tests {
             explicit_overrides.get("personality"),
             Some(&serde_json::Value::String("none".to_string()))
         );
+
+        for mode in [ThreadParamsMode::Embedded, ThreadParamsMode::Remote] {
+            let start = thread_start_params_from_config(
+                &config, mode, /*remote_cwd_override*/ None,
+                /*session_start_source*/ None,
+            );
+            let resume = thread_resume_params_from_config(
+                config.clone(),
+                ThreadId::new(),
+                mode,
+                /*remote_cwd_override*/ None,
+                ResumeModelSettings::OverrideFromCurrentConfig,
+            );
+            let fork = thread_fork_params_from_config(
+                config.clone(),
+                ThreadId::new(),
+                mode,
+                /*remote_cwd_override*/ None,
+            );
+            for overrides in [start.config, resume.config, fork.config] {
+                assert_eq!(
+                    overrides
+                        .as_ref()
+                        .and_then(|overrides| overrides.get("personality")),
+                    Some(&serde_json::Value::String("none".to_string()))
+                );
+            }
+        }
     }
 
     #[tokio::test]
