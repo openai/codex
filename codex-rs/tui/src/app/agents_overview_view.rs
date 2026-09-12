@@ -1,10 +1,15 @@
 //! Dashboard for inspecting and managing the TUI's retained daemon tasks.
 //! The shared view state retains the new-task editor across metadata refreshes.
 
+#[path = "agents_overview_grouping.rs"]
+mod grouping;
 #[path = "agents_overview_input.rs"]
 mod input;
 #[path = "agents_overview_render.rs"]
 mod render;
+
+pub(super) use grouping::AgentsOverviewGrouping;
+use grouping::model_name;
 
 use super::agents_overview::AGENTS_OVERVIEW_VIEW_ID;
 use super::agents_overview_details::AgentsOverviewDetails;
@@ -138,7 +143,7 @@ pub(super) struct AgentsOverviewViewState {
     pub(super) server_version_notice: Option<String>,
     search: String,
     searching: bool,
-    pub(super) status_grouping: bool,
+    pub(super) grouping: AgentsOverviewGrouping,
     pub(super) renaming: bool,
     // The picker can finish this retained view when it selects the already active session.
     pub(super) completion: Option<ViewCompletion>,
@@ -281,13 +286,20 @@ impl AgentsOverviewView {
                 (search.is_empty() || searchable.contains(&search)).then_some(index)
             })
             .collect::<Vec<_>>();
-        if !state.status_grouping {
-            visible.sort_by_key(|index| {
+        match state.grouping {
+            AgentsOverviewGrouping::Project => visible.sort_by_key(|index| {
                 (
                     &self.project_groups[*index].key,
                     std::cmp::Reverse(self.rows[*index].thread.updated_at),
                 )
-            });
+            }),
+            AgentsOverviewGrouping::Status => {}
+            AgentsOverviewGrouping::Model => visible.sort_by_key(|index| {
+                (
+                    model_name(&self.rows[*index].thread),
+                    std::cmp::Reverse(self.rows[*index].thread.updated_at),
+                )
+            }),
         }
         visible
     }
@@ -367,11 +379,7 @@ impl AgentsOverviewView {
     fn render_rows(&self, area: Rect, buf: &mut Buffer) {
         let mut offset = 0;
         let mut previous_group_index: Option<usize> = None;
-        let project_grouping = !self
-            .state
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .status_grouping;
+        let grouping = self.state().grouping;
         let visible = self.visible_indices();
         let mut first = visible
             .iter()
@@ -381,13 +389,7 @@ impl AgentsOverviewView {
         while first > 0 {
             let previous_index = visible[first - 1];
             let current_index = visible[first];
-            let previous = &self.rows[previous_index];
-            let current = &self.rows[current_index];
-            let group_changed = if project_grouping {
-                self.project_groups[previous_index].key != self.project_groups[current_index].key
-            } else {
-                previous.group != current.group
-            };
+            let group_changed = !self.same_group(grouping, previous_index, current_index);
             let added_height = 1 + 2 * u16::from(group_changed);
             if height + added_height > area.height {
                 break;
@@ -400,18 +402,15 @@ impl AgentsOverviewView {
                 break;
             }
             let row = &self.rows[index];
-            let group = if project_grouping {
-                self.project_groups[index].heading.display().to_string()
-            } else {
-                row.group.label().to_string()
-            };
-            let group_changed = previous_group_index.is_none_or(|previous_index| {
-                if project_grouping {
-                    self.project_groups[previous_index].key != self.project_groups[index].key
-                } else {
-                    self.rows[previous_index].group != row.group
+            let group = match grouping {
+                AgentsOverviewGrouping::Project => {
+                    self.project_groups[index].heading.display().to_string()
                 }
-            });
+                AgentsOverviewGrouping::Status => row.group.label().to_string(),
+                AgentsOverviewGrouping::Model => model_name(&row.thread).to_string(),
+            };
+            let group_changed = previous_group_index
+                .is_none_or(|previous_index| !self.same_group(grouping, previous_index, index));
             if group_changed {
                 offset += u16::from(previous_group_index.is_some());
                 if offset >= area.height {
@@ -421,13 +420,8 @@ impl AgentsOverviewView {
                     .rows
                     .iter()
                     .enumerate()
-                    .filter(|(candidate_index, candidate)| {
-                        if project_grouping {
-                            self.project_groups[*candidate_index].key
-                                == self.project_groups[index].key
-                        } else {
-                            candidate.group == row.group
-                        }
+                    .filter(|(candidate_index, _)| {
+                        self.same_group(grouping, *candidate_index, index)
                     })
                     .count();
                 Line::from(vec![group.clone().bold(), format!("  {count}").dim()])
@@ -453,7 +447,7 @@ impl AgentsOverviewView {
                 Span::styled(display_title(&row.thread), self.title_style(row.thread_id)),
                 current.dim(),
             ];
-            if project_grouping {
+            if grouping != AgentsOverviewGrouping::Status {
                 spans.extend(["  ".into(), status.dim()]);
             }
             Line::from(spans).render(Rect::new(area.x, area.y + offset, area.width, 1), buf);
@@ -481,6 +475,10 @@ impl AgentsOverviewView {
             Line::default(),
             Line::from("Project".dim()),
             Line::from(row.thread.cwd.display().to_string()),
+            Line::from(vec![
+                "Model: ".dim(),
+                model_name(&row.thread).to_string().into(),
+            ]),
         ];
         if let Some(branch) = row
             .thread
@@ -692,7 +690,11 @@ impl BottomPaneView for AgentsOverviewView {
         }
         if self.agents_keymap.toggle_grouping.is_pressed(key) {
             let mut state = self.state();
-            state.status_grouping = !state.status_grouping;
+            state.grouping = match state.grouping {
+                AgentsOverviewGrouping::Project => AgentsOverviewGrouping::Status,
+                AgentsOverviewGrouping::Status => AgentsOverviewGrouping::Model,
+                AgentsOverviewGrouping::Model => AgentsOverviewGrouping::Project,
+            };
             return;
         }
         if self.agents_keymap.new_task.is_pressed(key) {

@@ -1,0 +1,28 @@
+---
+source: tui/src/app/agents_overview_tests.rs
+expression: "render_bottom_popup(&app.chat_widget,\n100).replace(&test_path_display(\"/tmp/project\"),\n\"/tmp/project\").replace(\"fwd del\", \"del\")"
+---
+  Agent command center
+  0 need input   0 working   4 ready
+  ────────────────────────────────────────────────────────────────────────────────────────────────
+  Unknown  1                                              │ Task details
+  › ○ Legacy task  Ready                                  │
+                                                          │ Legacy task
+  model-a  2                                              │ ○ Ready
+    ○ Recent task  Ready                                  │
+    ○ Older task  Ready                                   │ Project
+                                                          │ /tmp/project
+  model-b  1                                              │ Model: Unknown
+    ○ Other model  Ready                                  │
+                                                          │ Prompt
+                                                          │ Legacy task
+                                                          │
+                                                          │
+                                                          │
+                                                          │
+  New task
+
+› Describe a new task
+
+  ↑↓ navigate ctrl+o resume → open ctrl+n new task ctrl+f search ctrl+s group: model ctrl+r rename
+  ctrl+x stop ctrl+w hide ctrl+e archive del delete esc back

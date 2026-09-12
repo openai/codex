@@ -12,10 +12,10 @@ expression: "render_bottom_popup(&app.chat_widget, 100)"
                                                           │
                                                           │ Project
                                                           │ /tmp/project
+                                                          │ Model: Unknown
                                                           │
                                                           │ Prompt
                                                           │ Selected task
-                                                          │
                                                           │
                                                           │
                                                           │

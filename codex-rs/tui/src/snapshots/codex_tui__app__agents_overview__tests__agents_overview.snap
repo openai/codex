@@ -16,10 +16,10 @@ expression: "render_bottom_popup(&app.chat_widget,\n96).replace(&format!(\"{proj
                                                       │
                                                       │ Project
                                                       │ /tmp/project
+                                                      │ Model: Unknown
                                                       │
                                                       │ Prompt
                                                       │ Build the dashboard
-                                                      │
   New task
 
 › First line

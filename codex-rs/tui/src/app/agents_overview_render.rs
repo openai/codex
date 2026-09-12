@@ -95,7 +95,11 @@ impl AgentsOverviewView {
         add_hint(
             self.agents_keymap
                 .primary_hint("toggle_grouping", &self.agents_keymap.toggle_grouping),
-            "group",
+            match self.state().grouping {
+                AgentsOverviewGrouping::Project => "group: project",
+                AgentsOverviewGrouping::Status => "group: status",
+                AgentsOverviewGrouping::Model => "group: model",
+            },
             true,
         );
         add_hint(

@@ -13,11 +13,11 @@ expression: "render_bottom_popup(&app.chat_widget,\n96).replace(&format!(\"{proj
                                                       │ Agent: Check dependencies
                                                       │ Which dependency version should I use?
                                                       │ Open task to review.
-                                                      │ Waiting for approval.
-                                                      │ Waiting for your response.
+                                                      │ …
                                                       │
                                                       │ Project
                                                       │ /tmp/project
+                                                      │ Model: Unknown
                                                       │
                                                       │ Prompt
                                                       │ Repair authentication

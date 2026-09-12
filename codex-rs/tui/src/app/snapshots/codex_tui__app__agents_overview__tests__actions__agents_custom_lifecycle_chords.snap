@@ -1,6 +1,6 @@
 ---
 source: tui/src/app/agents_overview_actions_tests.rs
-expression: "render_bottom_popup(&app.chat_widget, 48)"
+expression: "render_bottom_popup(&app.chat_widget,\n48).replace(&test_path_display(\"/tmp/project\"), \"/tmp/project\")"
 ---
   Agent command center
   0 need input   0 working   1 ready
@@ -17,12 +17,12 @@ expression: "render_bottom_popup(&app.chat_widget, 48)"
 
 
 
-
   New task
 
 › Describe a new task
 
   ↑↓ navigate ctrl+o resume → open
-  ctrl+n new task ctrl+f search ctrl+s group
-  ctrl+r rename ctrl+x stop f5 f8 hide
-  f5 f6 archive f5 f7 delete esc back
+  ctrl+n new task ctrl+f search
+  ctrl+s group: project ctrl+r rename
+  ctrl+x stop f5 f8 hide f5 f6 archive
+  f5 f7 delete esc back

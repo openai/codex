@@ -12,11 +12,11 @@ expression: "render_bottom_popup(&app.chat_widget,\n96).replace(&format!(\"{proj
                                                       │
                                                       │ Last message
                                                       │  Check     Result
-                                                      │ ━━━━━━━━  ━━━━━━━━
-                                                      │  Parser    Fixed
+                                                      │ …
                                                       │
                                                       │ Project
                                                       │ /tmp/project
+                                                      │ Model: Unknown
                                                       │
                                                       │ Prompt
                                                       │ long prompt long prompt long prompt

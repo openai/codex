@@ -1,6 +1,5 @@
 ---
 source: tui/src/keymap_setup.rs
-assertion_line: 1039
 expression: agents
 ---
 Resume | ctrl-o | Agents resume Resume Open the session resume picker. ctrl-o Default
@@ -11,4 +10,4 @@ Stop | ctrl-x | Agents stop Stop Stop the selected running task. ctrl-x Default
 Archive | ctrl-e | Agents archive Archive Archive the selected task and its child agents. ctrl-e Default
 Delete | delete | Agents delete Delete Permanently delete the selected task and its child agents. delete Default
 Hide | ctrl-w | Agents hide Hide Hide the selected task until explicitly resumed. ctrl-w Default
-Toggle Grouping | ctrl-s | Agents toggle_grouping Toggle Grouping Group tasks by status or project. ctrl-s Default
+Toggle Grouping | ctrl-s | Agents toggle_grouping Toggle Grouping Cycle task grouping by project, status, or model. ctrl-s Default

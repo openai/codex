@@ -221,7 +221,7 @@ pub(super) const KEYMAP_ACTIONS: &[KeymapActionDescriptor] = &[
     action("agents", "Agents", "archive", "Archive the selected task and its child agents."),
     action("agents", "Agents", "delete", "Permanently delete the selected task and its child agents."),
     action("agents", "Agents", "hide", "Hide the selected task until explicitly resumed."),
-    action("agents", "Agents", "toggle_grouping", "Group tasks by status or project."),
+    action("agents", "Agents", "toggle_grouping", "Cycle task grouping by project, status, or model."),
     action("approval", "Approval", "open_fullscreen", "Open approval details fullscreen."),
     action("approval", "Approval", "open_thread", "Open the approval source thread when available."),
     action("approval", "Approval", "approve", "Approve the primary option."),

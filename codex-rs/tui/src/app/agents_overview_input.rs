@@ -12,7 +12,7 @@ impl AgentsOverviewView {
     pub(super) fn handle_composer_key(&mut self, key: KeyEvent) {
         let mut state = self.state();
         let offline = state.connection_notice.is_some();
-        let status_grouping = state.status_grouping;
+        let grouping = state.grouping;
         if !offline
             && crate::key_hint::plain(KeyCode::Right).is_press(key)
             && state
@@ -78,7 +78,7 @@ impl AgentsOverviewView {
             self.app_event_tx
                 .send(AppEvent::DispatchAgentsOverviewTask {
                     prompt,
-                    cwd: (!status_grouping)
+                    cwd: (grouping == AgentsOverviewGrouping::Project)
                         .then(|| self.selected_row().map(|row| row.thread.cwd.clone()))
                         .flatten(),
                 });

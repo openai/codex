@@ -1,3 +1,4 @@
+use super::super::agents_overview_view::AgentsOverviewGrouping;
 use super::*;
 
 #[tokio::test]
@@ -1404,6 +1405,64 @@ async fn worktrees_overview_grouping_requires_feature() {
 }
 
 #[tokio::test]
+async fn overview_model_grouping_shows_details_and_preserves_selection() {
+    let mut app = make_test_app().await;
+    let threads = [
+        ("Older task", Some("model-a"), 1),
+        ("Other model", Some("model-b"), 2),
+        ("Recent task", Some("model-a"), 3),
+        ("Legacy task", None, 4),
+    ]
+    .into_iter()
+    .map(|(name, model, index)| {
+        let mut thread = overview_thread(
+            ThreadId::from_u128(index),
+            /*parent_thread_id*/ None,
+            name,
+            ThreadStatus::Idle,
+        );
+        thread.model = model.map(str::to_string);
+        thread.updated_at = index as i64;
+        thread
+    })
+    .collect();
+    let selected = ThreadId::from_u128(/*value*/ 1);
+    let mut view = app.agents_overview_view(threads, Some(selected));
+    view.handle_key_event(KeyCode::Esc.into());
+    for _ in 0..2 {
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+    }
+    assert_eq!(
+        app.agents_overview.view_state.lock().unwrap().grouping,
+        AgentsOverviewGrouping::Model
+    );
+    assert_eq!(
+        view.rows[view.selected_index().unwrap()].thread_id,
+        selected
+    );
+    // Within a model, newer tasks come first; navigation then crosses model groups.
+    for (key, expected) in [
+        (KeyCode::Up, 3),
+        (KeyCode::Down, 1),
+        (KeyCode::Down, 2),
+        (KeyCode::Down, 4),
+    ] {
+        view.handle_key_event(key.into());
+        assert_eq!(
+            view.rows[view.selected_index().unwrap()].thread_id,
+            ThreadId::from_u128(expected)
+        );
+    }
+    app.chat_widget.show_bottom_pane_view(Box::new(view));
+    insta::assert_snapshot!(
+        "agents_overview_model_grouping",
+        render_bottom_popup(&app.chat_widget, /*width*/ 100)
+            .replace(&test_path_display("/tmp/project"), "/tmp/project")
+            .replace("fwd del", "del")
+    );
+}
+
+#[tokio::test]
 async fn shared_overview_shows_only_root_sessions() {
     assert_eq!(
         AgentsOverviewGroup::for_status(&ThreadStatus::SystemError),
@@ -1466,12 +1525,21 @@ async fn shared_overview_shows_only_root_sessions() {
         Arc::clone(&app.agents_overview.view_state),
     );
     let state = &app.agents_overview.view_state;
-    assert!(!state.lock().unwrap().status_grouping);
+    assert_eq!(
+        state.lock().unwrap().grouping,
+        AgentsOverviewGrouping::Project
+    );
     action_view.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     action_view.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
-    assert!(state.lock().unwrap().status_grouping);
+    assert_eq!(
+        state.lock().unwrap().grouping,
+        AgentsOverviewGrouping::Status
+    );
     app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
-    assert!(state.lock().unwrap().status_grouping);
+    assert_eq!(
+        state.lock().unwrap().grouping,
+        AgentsOverviewGrouping::Status
+    );
     assert!(
         action_view.handle_paste("Use \u{1b}[31mthe\u{1b}[0m current project\u{7}".to_string())
     );
@@ -1483,6 +1551,23 @@ async fn shared_overview_shows_only_root_sessions() {
     ));
     action_view.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     action_view.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+    assert_eq!(
+        state.lock().unwrap().grouping,
+        AgentsOverviewGrouping::Model
+    );
+    assert!(action_view.handle_paste("Use the default project".to_string()));
+    action_view.handle_key_event(KeyCode::Enter.into());
+    assert!(matches!(
+        event_rx.try_recv(),
+        Ok(AppEvent::DispatchAgentsOverviewTask { prompt, cwd: None })
+            if prompt.text == "Use the default project"
+    ));
+    action_view.handle_key_event(KeyCode::Esc.into());
+    action_view.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+    assert_eq!(
+        state.lock().unwrap().grouping,
+        AgentsOverviewGrouping::Project
+    );
     assert!(action_view.handle_paste("Fix the flaky tests after all retries complete".to_string()));
     let area = ratatui::layout::Rect::new(
         /*x*/ 0, /*y*/ 0, /*width*/ 40, /*height*/ 12,

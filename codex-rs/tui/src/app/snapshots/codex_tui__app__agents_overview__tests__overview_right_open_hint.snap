@@ -2,4 +2,4 @@
 source: tui/src/app/agents_overview_tests.rs
 expression: "rendered.lines().find(|line| line.contains(\"open\")).unwrap()"
 ---
-  ↑↓ navigate ctrl+o resume → open ctrl+n new task ctrl+f search ctrl+s group ctrl+r rename
+  ↑↓ navigate ctrl+o resume → open ctrl+n new task ctrl+f search ctrl+s group: project
