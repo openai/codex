@@ -3358,7 +3358,7 @@ async fn websocket_v2_background_agent_returns_function_output() -> Result<()> {
                 }),
                 json!({
                     "type": "conversation.item.input_audio_transcription.completed",
-                    "transcript": "The secret word is strawberry"
+                    "transcript": "The secret word is blueberry"
                 }),
                 json!({
                     "type": "conversation.item.created",
@@ -3373,7 +3373,7 @@ async fn websocket_v2_background_agent_returns_function_output() -> Result<()> {
                 }),
                 json!({
                     "type": "response.output_audio_transcript.delta",
-                    "delta": "Got it-strawberry. What's next on the menu?"
+                    "delta": "Got it-blueberry. What's next on the menu?"
                 }),
                 v2_background_agent_tool_call("call_v2", "run ls"),
             ],
@@ -3404,7 +3404,7 @@ async fn websocket_v2_background_agent_returns_function_output() -> Result<()> {
     assert!(
         response_request_contains_text(
             &requests[0],
-            "<realtime_delegation>\n  <input>run ls</input>\n  <transcript_delta>user: Hi how are you\nassistant: Doing well, what can I help you with?\nuser: The secret word is strawberry\nassistant: Got it-strawberry. What's next on the menu?\nuser: run ls</transcript_delta>\n</realtime_delegation>",
+            "<realtime_delegation>\n  <input>run ls</input>\n  <transcript_delta>user: Hi how are you\nassistant: Doing well, what can I help you with?\nuser: The secret word is blueberry\nassistant: Got it-blueberry. What's next on the menu?\nuser: run ls</transcript_delta>\n</realtime_delegation>",
         ),
         "delegated Responses request should contain realtime delegation envelope: {}",
         requests[0]
