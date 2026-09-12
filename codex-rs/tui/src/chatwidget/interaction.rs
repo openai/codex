@@ -516,7 +516,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_paste(&mut self, text: String) {
-        if self.external_writer_view {
+        if self.external_writer_view && !self.bottom_pane.has_active_view() {
             return;
         }
         self.bottom_pane.handle_paste(text);

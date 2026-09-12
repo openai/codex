@@ -2644,31 +2644,82 @@ async fn command_center_handles_resume_failure_and_success() -> Result<()> {
 }
 
 #[tokio::test]
-async fn command_center_attach_conflict_preserves_selection_and_draft() -> Result<()> {
+async fn command_center_attach_conflict_opens_read_only_and_retries() -> Result<()> {
     let mut app = Box::pin(make_test_app()).await;
     trust_fixture_folders(&mut app);
     std::fs::write(
         app.config.codex_home.join("config.toml"),
         "[tui]\nresume_cwd = \"current\"\n",
     )?;
+    for cwd in [test_path_buf("/"), app.config.cwd.to_path_buf()] {
+        crate::legacy_core::config::set_project_trust_level(
+            app.config.codex_home.as_path(),
+            &cwd,
+            codex_protocol::config_types::TrustLevel::Trusted,
+        )
+        .map_err(std::io::Error::other)?;
+    }
+    let thread_id = ThreadId::from_string(
+        &app_test_support::create_fake_rollout(
+            app.config.codex_home.as_path(),
+            "2025-01-05T12-00-00",
+            "2025-01-05T12:00:00Z",
+            "Saved task",
+            Some(&app.config.model_provider_id),
+            /*git_info*/ None,
+        )
+        .expect("saved task"),
+    )?;
     let mut owner = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
-    let started = Box::pin(owner.start_thread(&app.config)).await?;
-    let thread_id = started.session.thread_id;
-    // Materialize the lazy rollout so the second server can discover the locked task.
-    owner.thread_inject_items(thread_id, vec![serde_json::from_value(serde_json::json!({
-        "type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Saved task"}]
-    }))?]).await?;
+    Box::pin(owner.resume_thread(
+        &app.local_settings,
+        app.config.clone(),
+        thread_id,
+        crate::app_server_session::ResumeModelSettings::PreserveExistingThread,
+    ))
+    .await?;
     let thread = owner
         .thread_read(thread_id, /*include_turns*/ false)
         .await?;
     let mut server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+    app.app_server_target = AppServerTarget::LocalDaemon {
+        endpoint: crate::resolve_remote_addr("ws://127.0.0.1:4500")?,
+    };
+    app.chat_widget.remote_connection =
+        crate::status::remote_connection::remote_connection_status_value(
+            &app.app_server_target,
+            /*server_version*/ None,
+        );
+    app.agents_overview
+        .threads
+        .insert(thread_id, Some(thread.clone()));
+    app.chat_widget.insert_str("Retained task draft");
+    app.agents_overview.input_states.insert(
+        thread_id,
+        app.chat_widget
+            .capture_thread_input_state()
+            .expect("task draft"),
+    );
+    app.agents_overview.dispatched_requests.insert(
+        thread_id,
+        vec![ServerRequest::ToolRequestUserInput {
+            request_id: RequestId::Integer(42),
+            params: ToolRequestUserInputParams {
+                thread_id: thread_id.to_string(),
+                turn_id: "turn".into(),
+                item_id: "question".into(),
+                questions: Vec::new(),
+                is_blocking: true,
+                auto_resolution_ms: None,
+            },
+        }],
+    );
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     app.app_event_tx = AppEventSender::new(tx);
     let mut view = app.agents_overview_view(vec![thread], Some(thread_id));
     view.handle_paste("Keep this draft".into());
     view.handle_key_event(KeyCode::Esc.into());
     app.chat_widget.show_bottom_pane_view(Box::new(view));
-    let before = render_bottom_popup(&app.chat_widget, /*width*/ 96);
     let draft = overview_draft(&app);
     let selection = app
         .chat_widget
@@ -2681,34 +2732,101 @@ async fn command_center_attach_conflict_preserves_selection_and_draft() -> Resul
         matches!(event, AppEvent::SelectAgentsOverviewThread { thread_id: id } if id == thread_id)
     );
     Box::pin(app.handle_event(&mut tui, &mut server, event)).await?;
-
+    assert_eq!(app.chat_widget.thread_id(), Some(thread_id));
+    assert!(app.chat_widget.is_external_writer_view());
+    assert_eq!(
+        app.thread_event_channels[&thread_id].attachment(),
+        ThreadEventAttachment::ExternalWriter
+    );
+    assert_eq!(app.agents_overview.dispatched_requests[&thread_id].len(), 1);
+    assert_eq!(
+        app.chat_widget.composer_text_with_pending(),
+        "Retained task draft"
+    );
+    let turns = app.thread_event_channels[&thread_id]
+        .store
+        .lock()
+        .await
+        .snapshot()
+        .turns;
+    assert!(serde_json::to_string(&turns)?.contains("Saved task"));
     insta::with_settings!({snapshot_path => "../snapshots"}, {
         insta::assert_snapshot!("agents_overview_attach_conflict", render_bottom_popup(&app.chat_widget, /*width*/ 96));
     });
-    app.chat_widget.handle_key_event(KeyCode::Esc.into());
-    assert_eq!(render_bottom_popup(&app.chat_widget, /*width*/ 96), before);
+
+    app.handle_key_event(&mut tui, &mut server, KeyCode::Esc.into())
+        .await;
     assert_eq!(overview_draft(&app), draft);
     assert_eq!(
         app.chat_widget
             .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID),
         selection
     );
-    owner.shutdown().await?;
-    // Once the owner releases the task, the same keyboard path closes the dashboard.
-    app.chat_widget.handle_key_event(KeyCode::Right.into());
-    Box::pin(app.handle_event(&mut tui, &mut server, rx.try_recv()?)).await?;
-    assert_eq!(app.chat_widget.thread_id(), Some(thread_id));
+    app.chat_widget.handle_paste(" and this paste".into());
+    assert_eq!(overview_draft(&app).0, "Keep this draft and this paste");
+    // Opening the displayed task returns to the same frozen snapshot without retrying.
+    Box::pin(app.handle_event(
+        &mut tui,
+        &mut server,
+        AppEvent::SelectAgentsOverviewThread { thread_id },
+    ))
+    .await?;
     assert!(app.chat_widget.no_modal_or_popup_active());
+    assert!(app.chat_widget.is_external_writer_view());
+    app.chat_widget.handle_paste(" should be ignored".into());
+    assert_eq!(
+        app.chat_widget.composer_text_with_pending(),
+        "Retained task draft"
+    );
+    assert_eq!(
+        app.thread_event_channels[&thread_id]
+            .store
+            .lock()
+            .await
+            .snapshot()
+            .turns,
+        turns
+    );
 
-    // Opening the already displayed task also returns to its conversation.
-    let thread = server
-        .thread_read(thread_id, /*include_turns*/ false)
-        .await?;
-    let view = app.agents_overview_view(vec![thread], Some(thread_id));
-    app.chat_widget.show_bottom_pane_view(Box::new(view));
-    while rx.try_recv().is_ok() {}
-    app.chat_widget.handle_key_event(KeyCode::Right.into());
-    Box::pin(app.handle_event(&mut tui, &mut server, rx.try_recv()?)).await?;
+    // An explicit retry remains read-only while the other server owns the task.
+    Box::pin(app.handle_key_event(&mut tui, &mut server, KeyCode::Char('r').into())).await;
+    assert!(app.chat_widget.is_external_writer_view());
+    assert_eq!(
+        app.chat_widget.composer_text_with_pending(),
+        "Retained task draft"
+    );
+    assert!(
+        server
+            .thread_loaded_list(codex_app_server_protocol::ThreadLoadedListParams {
+                cursor: None,
+                limit: None,
+            })
+            .await?
+            .data
+            .is_empty()
+    );
+
+    // Buffered requests stay untouched while viewing; remove the synthetic request before retry.
+    assert_eq!(
+        app.agents_overview
+            .dispatched_requests
+            .remove(&thread_id)
+            .unwrap()
+            .len(),
+        1
+    );
+    owner.shutdown().await?;
+    Box::pin(app.handle_key_event(&mut tui, &mut server, KeyCode::Char('r').into())).await;
+    assert_eq!(app.chat_widget.thread_id(), Some(thread_id));
+    assert!(!app.chat_widget.is_external_writer_view());
+    assert_eq!(
+        app.thread_event_channels[&thread_id].attachment(),
+        ThreadEventAttachment::Live
+    );
+    assert_eq!(
+        app.chat_widget.composer_text_with_pending(),
+        "Retained task draft"
+    );
     assert!(app.chat_widget.no_modal_or_popup_active());
     server.shutdown().await?;
     Ok(())

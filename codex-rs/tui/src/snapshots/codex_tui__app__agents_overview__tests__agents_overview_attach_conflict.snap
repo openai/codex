@@ -1,12 +1,8 @@
 ---
 source: tui/src/app/agents_overview_tests.rs
-assertion_line: 2231
 expression: "render_bottom_popup(&app.chat_widget, 96)"
 ---
-  Unable to complete action
-  Task is open elsewhere. Another app server is managing this task, so it can’t be attached
-  here.
+  🔒   This conversation is open in another app                                      R to Retry
+      Close it there and press R to continue here.
 
-› 1. Return to command center
-
-  Press enter to confirm or esc to go back
+   r retry   esc command center   ctrl+c/q exit   ctrl+t transcript

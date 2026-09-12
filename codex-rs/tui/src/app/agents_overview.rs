@@ -1,4 +1,5 @@
 //! Daemon-wide overview of recent and locally retained sessions and their subagents.
+//! Tasks owned by another app server open as frozen, read-only history snapshots.
 
 #[path = "agents_overview_composer.rs"]
 mod composer;
@@ -494,7 +495,7 @@ impl App {
                     crate::app_server_session::ResumeModelSettings::PreserveExistingThread
                 }
             };
-            let resumed = match app_server
+            let (resumed, read_only) = match app_server
                 .resume_thread(
                     &local_settings,
                     resume_config.clone(),
@@ -503,15 +504,23 @@ impl App {
                 )
                 .await
             {
-                Ok(resumed) => resumed,
+                Ok(resumed) => (resumed, false),
+                Err(error) if crate::app_server_session::is_active_writer_error(&error) => {
+                    match app_server
+                        .read_thread_for_viewing(&resume_config, &local_settings, root_thread_id)
+                        .await
+                    {
+                        Ok(thread) => (thread, true),
+                        Err(error) => {
+                            self.add_agents_overview_error(format!(
+                                "Failed to view task open elsewhere: {error}"
+                            ));
+                            return Ok(AppRunControl::Continue);
+                        }
+                    }
+                }
                 Err(error) => {
-                    let message = if crate::app_server_session::is_active_writer_error(&error) {
-                        tracing::warn!("failed to attach to task managed by another server");
-                        "Task is open elsewhere. Another app server is managing this task, so it can’t be attached here.".to_string()
-                    } else {
-                        format!("Failed to attach to task: {error}")
-                    };
-                    self.add_agents_overview_error(message);
+                    self.add_agents_overview_error(format!("Failed to attach to task: {error}"));
                     return Ok(AppRunControl::Continue);
                 }
             };
@@ -577,6 +586,11 @@ impl App {
                 self.add_agents_overview_error(format!("Failed to attach to task: {error}"));
                 return Ok(AppRunControl::Continue);
             }
+            if read_only {
+                self.ensure_thread_channel(root_thread_id)
+                    .mark_external_writer();
+                self.chat_widget.show_external_writer_thread();
+            }
             let mut destination_config = self.chat_widget.config_ref().clone();
             if self.app_server_target.uses_remote_workspace() {
                 destination_config.cwd.clone_from(&self.config.cwd);
@@ -624,20 +638,25 @@ impl App {
         }
 
         if self.current_displayed_thread_id() != Some(root_thread_id)
-            || self.thread_unavailable(root_thread_id)
+            || (self.thread_unavailable(root_thread_id)
+                && !self.chat_widget.is_external_writer_view())
         {
             self.select_agent_thread_and_discard_side(tui, app_server, root_thread_id)
                 .await?;
         }
-        self.replay_agents_overview_requests(app_server, root_thread_id)
-            .await;
+        let read_only = self.chat_widget.is_external_writer_view();
+        if !read_only {
+            self.replay_agents_overview_requests(app_server, root_thread_id)
+                .await;
+        }
         if self.current_displayed_thread_id() == Some(root_thread_id)
             && let Some(input_state) = self.agents_overview.input_states.remove(&root_thread_id)
         {
-            let preserve_in_flight_turn = self
-                .active_turn_id_for_thread(root_thread_id)
-                .await
-                .is_some();
+            let preserve_in_flight_turn = !read_only
+                && self
+                    .active_turn_id_for_thread(root_thread_id)
+                    .await
+                    .is_some();
             self.chat_widget.restore_thread_input_state(
                 Some(input_state),
                 ThreadInputStateRestoreMode {
@@ -648,8 +667,10 @@ impl App {
                 self.chat_widget.maybe_send_next_queued_input();
             }
         }
-        self.maybe_prompt_resume_paused_goal_after_resume(app_server, root_thread_id)
-            .await;
+        if !read_only {
+            self.maybe_prompt_resume_paused_goal_after_resume(app_server, root_thread_id)
+                .await;
+        }
 
         Ok(AppRunControl::Continue)
     }

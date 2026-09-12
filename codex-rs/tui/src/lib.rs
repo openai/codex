@@ -1014,12 +1014,13 @@ pub async fn run_main(
     explicit_remote_endpoint: Option<RemoteAppServerEndpoint>,
 ) -> std::io::Result<AppExitInfo> {
     system_motion::initialize().await;
-    match startup_orchestration::run_main_inner(
+    // Keep the startup future out of the CLI caller's frame while the TUI is running.
+    match Box::pin(startup_orchestration::run_main_inner(
         cli,
         arg0_paths,
         loader_overrides,
         explicit_remote_endpoint,
-    )
+    ))
     .await
     {
         Err(err) if startup_draft::StartupCancelled::matches(&err) => Ok(AppExitInfo {
@@ -2194,6 +2195,7 @@ pub(crate) mod tests {
     use super::*;
     use crate::legacy_core::config::ConfigBuilder;
     use crate::legacy_core::config::ConfigOverrides;
+    use clap::Parser;
     use codex_app_server_protocol::AskForApproval;
     use codex_app_server_protocol::ClientRequest;
     use codex_app_server_protocol::RequestId;
@@ -2204,6 +2206,19 @@ pub(crate) mod tests {
     use pretty_assertions::assert_eq;
     use serial_test::serial;
     use tempfile::TempDir;
+
+    #[test]
+    fn tui_startup_future_stays_bounded() {
+        let future = run_main(
+            Cli::parse_from(["codex"]),
+            Arg0DispatchPaths::default(),
+            LoaderOverrides::default(),
+            /*explicit_remote_endpoint*/ None,
+        );
+        let size = std::mem::size_of_val(&future);
+
+        assert!(size < 64 * 1024, "TUI startup future is {size} bytes");
+    }
 
     async fn build_config(temp_dir: &TempDir) -> std::io::Result<Config> {
         ConfigBuilder::default()
