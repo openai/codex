@@ -1190,11 +1190,12 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
     }
 
     if !turn_context.session_source.is_non_root_agent()
-        && context
-            .model_info
-            .experimental_supported_tools
-            .iter()
-            .any(|tool| tool == "send_message_to_user_async")
+        && (features.enabled(Feature::SendMessageToUserAsync)
+            || context
+                .model_info
+                .experimental_supported_tools
+                .iter()
+                .any(|tool| tool == "send_message_to_user_async"))
     {
         registry.add_with_exposure(SendMessageToUserAsyncHandler, ToolExposure::DirectModelOnly);
     }

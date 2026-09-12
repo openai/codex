@@ -971,6 +971,9 @@
             "send_async_message": {
               "type": "boolean"
             },
+            "send_message_to_user_async": {
+              "type": "boolean"
+            },
             "shell_snapshot": {
               "type": "boolean"
             },
@@ -6584,6 +6587,9 @@
           "type": "boolean"
         },
         "send_async_message": {
+          "type": "boolean"
+        },
+        "send_message_to_user_async": {
           "type": "boolean"
         },
         "shell_snapshot": {

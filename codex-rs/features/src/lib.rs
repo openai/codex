@@ -307,6 +307,8 @@ pub enum Feature {
     DefaultModeRequestUserInput,
     /// Removed compatibility flag for model-enabled async user messaging.
     SendAsyncMessage,
+    /// Allow root agents to send async user messages without model catalog support.
+    SendMessageToUserAsync,
     /// Enable automatic review for approval prompts.
     GuardianApproval,
     /// Select thread-owned context for both Guardian reviewers.
@@ -1555,6 +1557,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::SendAsyncMessage,
         key: "send_async_message",
         stage: Stage::Removed,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::SendMessageToUserAsync,
+        key: "send_message_to_user_async",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
