@@ -174,9 +174,9 @@ jobs:
           prerelease: true
 
       - name: Publish DotSlash manifest
-        uses: facebook/dotslash-publish-release@9c9ec027515c34db9282a09a25a9cab5880b2c52 # v2
+        uses: ./.github/actions/publish-dotslash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag: ${{ needs.metadata.outputs.release_tag }}
-          config: .github/dotslash-zsh-config.json
+          configs: .github/dotslash-zsh-config.json

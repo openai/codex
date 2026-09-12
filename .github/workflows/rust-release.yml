@@ -1724,19 +1724,14 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: facebook/dotslash-publish-release@9c9ec027515c34db9282a09a25a9cab5880b2c52 # v2
+      - uses: ./.github/actions/publish-dotslash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag: ${{ github.ref_name }}
-          config: .github/dotslash-config.json
-
-      - uses: facebook/dotslash-publish-release@9c9ec027515c34db9282a09a25a9cab5880b2c52 # v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag: ${{ github.ref_name }}
-          config: .github/dotslash-argument-comment-lint-config.json
+          configs: |
+            .github/dotslash-config.json
+            .github/dotslash-argument-comment-lint-config.json
 
   # Publish to npm using OIDC authentication.
   # July 31, 2025: https://github.blog/changelog/2025-07-31-npm-trusted-publishing-with-oidc-is-generally-available/

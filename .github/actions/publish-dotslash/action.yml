@@ -1,0 +1,52 @@
+name: Publish DotSlash manifests
+description: Run the pinned upstream publisher directly on an Ubuntu runner.
+
+inputs:
+  tag:
+    description: Release tag to publish manifests for.
+    required: true
+  configs:
+    description: Newline-separated paths to DotSlash configuration files.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Checkout DotSlash publisher
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        repository: facebook/dotslash-publish-release
+        ref: 9c9ec027515c34db9282a09a25a9cab5880b2c52 # v2
+        path: .dotslash-publish-release
+        persist-credentials: false
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+      with:
+        version: "0.12.13"
+        checksum: "745765a3b6e360ad76743599ae5c42e9278c7edf8bbff9fc76d05bf2623a04dd"
+        github-token: ""
+        enable-cache: false
+
+    - name: Publish DotSlash manifests
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        RELEASE_TAG: ${{ inputs.tag }}
+        DOTSLASH_CONFIGS: ${{ inputs.configs }}
+      run: |
+        set -euo pipefail
+
+        # Ubuntu runners already provide Python and gh. Avoid rebuilding the
+        # upstream Docker image and downloading its apt dependencies per release.
+        uv venv --python "$(command -v python3)" "${RUNNER_TEMP}/dotslash-publish-release-venv"
+        python="${RUNNER_TEMP}/dotslash-publish-release-venv/bin/python"
+        uv pip install --python "$python" \
+          --require-hashes --only-binary=:all: -r "${ACTION_PATH}/requirements.txt"
+
+        while IFS= read -r config; do
+          if [[ -n "$config" ]]; then
+            "$python" .dotslash-publish-release/process_config.py \
+              --config "$config" --tag "$RELEASE_TAG" --upload
+          fi
+        done <<< "$DOTSLASH_CONFIGS"
