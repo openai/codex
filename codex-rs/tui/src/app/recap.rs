@@ -1,7 +1,6 @@
-//! Determines when an unfocused conversation is ready for an automatic recap.
+//! Schedules and generates bounded recaps through the existing temporary request path.
 //! The TUI opt-out suppresses automatic scheduling and requests, but not manual `/recap`.
 
-use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -10,12 +9,8 @@ use crate::app_event::AppEvent;
 use crate::app_event::RecapTrigger;
 use crate::app_event_sender::AppEventSender;
 use crate::app_server_session::AppServerSession;
-use crate::history_cell::AgentMarkdownCell;
-use crate::history_cell::AgentMessageCell;
-use crate::history_cell::HistoryCell;
 use crate::history_cell::ThreadRecapHistoryCell;
 use crate::history_cell::ThreadRecapLoadingCell;
-use crate::history_cell::UserHistoryCell;
 use crate::pager_overlay::Overlay;
 use crate::temporary_structured_request::TemporaryStructuredThreadOptions;
 use crate::temporary_structured_request::run_temporary_structured_turn;
@@ -23,6 +18,8 @@ use crate::temporary_structured_request::start_temporary_thread;
 use crate::temporary_structured_request::unsubscribe_temporary_thread;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnStatus;
+use codex_context_fragments::ContextualUserFragment;
+use codex_context_fragments::RecapPrompt;
 use codex_protocol::ThreadId;
 use serde::Deserialize;
 use serde_json::Value;
@@ -34,137 +31,68 @@ use uuid::Uuid;
 const MIN_COMPLETED_TURNS: usize = 3;
 const MIN_TURNS_BETWEEN_RECAPS: usize = 2;
 pub(super) const RECAP_DELAY: Duration = Duration::from_secs(/*secs*/ 30 * 60);
-const RECAP_HISTORY_MAX_TURNS: usize = 8;
-const RECAP_MAX_CHARS: usize = 320;
+const RECAP_MAX_CHARS: usize = 700;
+const RECAP_NEXT_MAX_CHARS: usize = 200;
 const RECAP_RETRY_DELAY: Duration = Duration::from_secs(/*secs*/ 30);
 const MANUAL_RECAP_FAILURE_MESSAGE: &str = "Could not generate a recap. Please try again.";
 const MANUAL_RECAP_IN_PROGRESS_MESSAGE: &str = "A recap is already being generated.";
 const MANUAL_RECAP_EMPTY_HISTORY_MESSAGE: &str = "There is no conversation history to recap.";
-const RECAP_PROMPT_PREFIX: &str = concat!(
-    "Write a brief catch-up for a user returning to this Codex task. ",
-    "In at most 40 words and one or two plain-text sentences, explain the ",
-    "objective, what was completed or learned, and the next step or blocker. ",
-    "Mention changed files, tests, approvals, or requested decisions only ",
-    "when relevant. Never claim changes were made or tests passed unless ",
-    "the conversation confirms it. If the task is complete, say so instead ",
-    "of inventing more work. Use the user's language; omit greetings, ",
-    "markdown, lists, and tool chatter.\n\nRecent conversation:\n",
-);
-pub(super) const RECAP_PROMPT_MAX_BYTES: usize = 900;
+#[cfg(test)]
+pub(super) const RECAP_PROMPT_MAX_BYTES: usize = RecapPrompt::MAX_BYTES;
 
-fn render_recap_message(role: &str, content: &str, max_bytes: usize) -> Option<String> {
-    let prefix = format!("{role}: ");
-    let content_budget = max_bytes.checked_sub(prefix.len())?;
-    let end = content.floor_char_boundary(content_budget.min(content.len()));
-    Some(format!("{prefix}{}", &content[..end]))
-}
+#[path = "recap_history.rs"]
+mod history;
+use history::recap_history;
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 struct GeneratedRecap {
-    recap: String,
-}
-
-fn recap_history(cells: &[Arc<dyn HistoryCell>]) -> String {
-    let mut messages = Vec::new();
-    let mut user_turns = 0;
-
-    for cell in cells.iter().rev() {
-        let is_user = cell.as_any().is::<UserHistoryCell>();
-
-        let role = if is_user {
-            "User"
-        } else if cell.as_any().is::<AgentMarkdownCell>() || cell.as_any().is::<AgentMessageCell>()
-        {
-            "Assistant"
-        } else {
-            continue;
-        };
-
-        let content = cell
-            .raw_lines()
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        let content = content.trim();
-        if content.is_empty() {
-            continue;
-        }
-
-        messages.push((role, content.to_string()));
-
-        if is_user {
-            user_turns += 1;
-            if user_turns == RECAP_HISTORY_MAX_TURNS {
-                break;
-            }
-        }
-    }
-
-    messages.reverse();
-    if messages.is_empty() {
-        return String::new();
-    }
-    let byte_budget = RECAP_PROMPT_MAX_BYTES.saturating_sub(RECAP_PROMPT_PREFIX.len());
-    let latest = messages
-        .iter()
-        .rposition(|(r, _)| *r == "User")
-        .unwrap_or(messages.len() - 1);
-    // Reserve half the budget for the latest request, then fill from newest to oldest.
-    let latest_user_budget = byte_budget / 2;
-    let (role, content) = &messages[latest];
-    let latest_user = render_recap_message(role, content, latest_user_budget).unwrap_or_default();
-    let mut selected = vec![(latest, latest_user)];
-    let mut remaining = byte_budget.saturating_sub(selected[0].1.len());
-    for (index, (role, content)) in messages.iter().enumerate().rev() {
-        if index == latest || remaining <= 2 {
-            continue;
-        }
-
-        let Some(rendered) = render_recap_message(role, content, remaining - 2) else {
-            continue;
-        };
-        remaining = remaining.saturating_sub(rendered.len() + 2);
-        selected.push((index, rendered));
-    }
-
-    selected.sort_unstable_by_key(|(index, _)| *index);
-    selected
-        .into_iter()
-        .map(|(_, message)| message)
-        .collect::<Vec<_>>()
-        .join("\n\n")
+    summary: String,
+    #[serde(deserialize_with = "Option::deserialize")]
+    next_action: Option<String>,
 }
 
 fn recap_prompt(history: &str) -> String {
-    format!("{RECAP_PROMPT_PREFIX}{}", history.trim())
+    RecapPrompt::new(history).render()
 }
 
 fn recap_output_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
-            "recap": {
+            "summary": {
                 "type": "string",
                 "minLength": 1,
                 "maxLength": RECAP_MAX_CHARS,
             },
+            "next_action": {
+                "type": ["string", "null"],
+                "maxLength": RECAP_NEXT_MAX_CHARS,
+            },
         },
-        "required": ["recap"],
+        "required": ["summary", "next_action"],
         "additionalProperties": false,
     })
 }
 
-fn parse_recap(response: &str) -> Option<String> {
-    let recap = serde_json::from_str::<GeneratedRecap>(response).ok()?.recap;
-
-    let recap = recap.trim();
-    if recap.is_empty() {
+fn parse_recap(response: &str) -> Option<GeneratedRecap> {
+    let mut recap = serde_json::from_str::<GeneratedRecap>(response).ok()?;
+    recap.summary = recap.summary.trim().to_string();
+    if recap.summary.is_empty() || recap.summary.chars().count() > RECAP_MAX_CHARS {
         return None;
     }
-
-    Some(recap.chars().take(RECAP_MAX_CHARS).collect())
+    recap.next_action = recap
+        .next_action
+        .map(|action| action.trim().to_string())
+        .filter(|action| !action.is_empty());
+    if recap
+        .next_action
+        .as_ref()
+        .is_some_and(|action| action.chars().count() > RECAP_NEXT_MAX_CHARS)
+    {
+        return None;
+    }
+    Some(recap)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -464,7 +392,7 @@ impl App {
                 };
 
                 self.recap.mark_recapped(completed_turn_count);
-                Some(ThreadRecapHistoryCell::new(recap))
+                Some(ThreadRecapHistoryCell::new(recap.summary).with_next_action(recap.next_action))
             }
             Err(error) => {
                 tracing::warn!(%thread_id, %error, "failed to generate thread recap");

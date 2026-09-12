@@ -62,7 +62,7 @@ async fn recap_generation_uses_bounded_structured_request_and_inserts_result() -
         ev_response_created("recap-response"),
         ev_assistant_message(
             "recap-message",
-            r#"{"recap":"Finished parsing. Next: run focused tests."}"#,
+            r#"{"summary":"Finished parsing.","next_action":"Run focused tests."}"#,
         ),
         ev_completed("recap-response"),
     ]
@@ -118,6 +118,22 @@ stream_max_retries = 0
     while app_event_rx.try_recv().is_ok() {}
 
     prepare_eligible_recap(&mut app, thread_id).await;
+    app.transcript_cells
+        .push(Arc::new(crate::history_cell::AgentMarkdownCell::new(
+            format!(
+                "Parser fix implemented. {} What should empty input do?",
+                "progress ".repeat(/*n*/ 5_000)
+            ),
+            std::path::Path::new("."),
+        )));
+    app.transcript_cells
+        .push(Arc::new(crate::history_cell::UserHistoryCell {
+            message: "Keep follow-up work queued.".to_string(),
+            spoken: false,
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        }));
 
     app.handle_event(
         &mut tui,
@@ -169,7 +185,8 @@ stream_max_retries = 0
             .collect::<Vec<_>>(),
         vec![
             "Conversation recap",
-            "Finished parsing. Next: run focused tests.",
+            "Finished parsing.",
+            "Next: Run focused tests.",
         ]
     );
 
@@ -188,7 +205,20 @@ stream_max_retries = 0
         "prompt: {prompt}\nrequest: {request}"
     );
     assert!(prompt.len() <= recap::RECAP_PROMPT_MAX_BYTES);
+    assert!(prompt.contains("Assistant: Parser fix implemented."));
+    assert!(prompt.contains("What should empty input do?"));
+    assert!(prompt.contains("[... excerpted ...]"));
+    assert_eq!(
+        prompt
+            .matches("Pending user request: Keep follow-up work queued.")
+            .count(),
+        1
+    );
     assert_eq!(request["text"]["format"]["type"], "json_schema");
+    assert_eq!(
+        request["text"]["format"]["schema"]["required"],
+        serde_json::json!(["summary", "next_action"])
+    );
     assert_eq!(request["tools"], serde_json::json!([]));
 
     app_server.shutdown().await?;

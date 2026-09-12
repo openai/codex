@@ -73,7 +73,7 @@ pub fn approx_token_count(text: &str) -> usize {
     len.saturating_add(APPROX_BYTES_PER_TOKEN.saturating_sub(1)) / APPROX_BYTES_PER_TOKEN
 }
 
-pub fn approx_bytes_for_tokens(tokens: usize) -> usize {
+pub const fn approx_bytes_for_tokens(tokens: usize) -> usize {
     tokens.saturating_mul(APPROX_BYTES_PER_TOKEN)
 }
 

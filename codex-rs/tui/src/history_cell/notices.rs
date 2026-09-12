@@ -317,12 +317,21 @@ impl HistoryCell for ThreadRecapLoadingCell {
 #[derive(Debug)]
 pub(crate) struct ThreadRecapHistoryCell {
     recap: String,
+    next_action: Option<String>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
 impl ThreadRecapHistoryCell {
     pub(crate) fn new(recap: String) -> Self {
-        Self { recap }
+        Self {
+            recap,
+            next_action: None,
+        }
+    }
+
+    pub(crate) fn with_next_action(mut self, next_action: Option<String>) -> Self {
+        self.next_action = next_action;
+        self
     }
 }
 
@@ -333,10 +342,15 @@ impl HistoryCell for ThreadRecapHistoryCell {
         }
 
         let wrap_width = usize::from(width.saturating_sub(/*rhs*/ 2).max(/*other*/ 1));
-        let mut body = raw_lines_from_source(&self.recap)
-            .into_iter()
-            .map(Line::italic)
-            .collect::<Vec<_>>();
+        let mut body = raw_lines_from_source(&self.recap);
+        if let Some(action) = &self.next_action {
+            body.extend(prefix_lines(
+                raw_lines_from_source(action),
+                "Next: ".bold().cyan(),
+                "".into(),
+            ));
+        }
+        let mut body = body.into_iter().map(Line::italic).collect::<Vec<_>>();
         let prefix = Line::from(vec!["  ".into(), "↳ ".dim(), "Recap: ".bold()]).italic();
         let mut options = if wrap_width <= prefix.width() {
             // Keep the text readable when the terminal cannot fit the hanging indent.
@@ -371,6 +385,9 @@ impl HistoryCell for ThreadRecapHistoryCell {
     fn raw_lines(&self) -> Vec<Line<'static>> {
         let mut lines = vec![Line::from(RECAP_HEADING)];
         lines.extend(raw_lines_from_source(&self.recap));
+        if let Some(action) = &self.next_action {
+            lines.extend(raw_lines_from_source(&format!("Next: {action}")));
+        }
         lines
     }
 }
