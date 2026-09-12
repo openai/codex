@@ -9,7 +9,7 @@ Scenario: /responses POST bodies with pending input
 00:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
 01:message/user:
-    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    <ENVIRONMENT_CONTEXT>
 02:message/user:
     first prompt
 -- request 2 (request; Second request) --

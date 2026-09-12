@@ -9,7 +9,7 @@ Scenario: Manual /compact with prior user history compacts existing history and 
 00:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
 01:message/user:
-    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    <ENVIRONMENT_CONTEXT>
 02:message/user:
     first manual turn
 
@@ -18,7 +18,7 @@ Scenario: Manual /compact with prior user history compacts existing history and 
 00:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
 01:message/user:
-    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    <ENVIRONMENT_CONTEXT>
 02:message/user:
     first manual turn
 03:message/assistant:
@@ -36,7 +36,7 @@ Scenario: Manual /compact with prior user history compacts existing history and 
 02:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
 03:message/user:
-    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    <ENVIRONMENT_CONTEXT>
 04:message/user:
     second manual turn
 
@@ -50,7 +50,7 @@ Scenario: Manual /compact with prior user history compacts existing history and 
 02:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
 03:message/user:
-    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    <ENVIRONMENT_CONTEXT>
 04:message/user:
     second manual turn
 05:message/assistant:
@@ -70,6 +70,6 @@ Scenario: Manual /compact with prior user history compacts existing history and 
 03:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
 04:message/user:
-    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    <ENVIRONMENT_CONTEXT>
 05:message/user:
     post compact follow-up

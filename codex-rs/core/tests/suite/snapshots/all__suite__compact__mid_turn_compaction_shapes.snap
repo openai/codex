@@ -9,7 +9,7 @@ Scenario: True mid-turn continuation compaction after tool output: compact reque
 00:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
 01:message/user:
-    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    <ENVIRONMENT_CONTEXT>
 02:message/user:
     function call limit push
 
@@ -18,7 +18,7 @@ Scenario: True mid-turn continuation compaction after tool output: compact reque
 00:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
 01:message/user:
-    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    <ENVIRONMENT_CONTEXT>
 02:message/user:
     function call limit push
 03:function_call/test_tool:{}
@@ -31,7 +31,7 @@ Scenario: True mid-turn continuation compaction after tool output: compact reque
 00:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
 01:message/user:
-    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    <ENVIRONMENT_CONTEXT>
 02:message/user:
     function call limit push
 03:message/user:

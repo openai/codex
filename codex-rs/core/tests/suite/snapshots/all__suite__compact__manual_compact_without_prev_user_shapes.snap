@@ -17,6 +17,6 @@ Scenario: Manual /compact with no prior user turn currently still issues a compa
 01:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
 02:message/user:
-    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    <ENVIRONMENT_CONTEXT>
 03:message/user:
     AFTER_MANUAL_EMPTY_COMPACT

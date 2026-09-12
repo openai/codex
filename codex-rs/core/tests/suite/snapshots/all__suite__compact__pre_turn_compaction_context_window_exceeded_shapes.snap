@@ -9,7 +9,7 @@ Scenario: Pre-turn auto-compaction context-window failure: compaction request ex
 00:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
 01:message/user:
-    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    <ENVIRONMENT_CONTEXT>
 02:message/user:
     USER_ONE
 03:message/assistant:

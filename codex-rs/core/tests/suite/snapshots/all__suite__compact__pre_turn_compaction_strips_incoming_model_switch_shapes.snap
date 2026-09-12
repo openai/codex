@@ -9,7 +9,7 @@ Scenario: Pre-turn compaction during model switch (without pre-sampling model-sw
 00:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
 01:message/user:
-    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    <ENVIRONMENT_CONTEXT>
 02:message/user:
     BEFORE_SWITCH_USER
 
@@ -18,7 +18,7 @@ Scenario: Pre-turn compaction during model switch (without pre-sampling model-sw
 00:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
 01:message/user:
-    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    <ENVIRONMENT_CONTEXT>
 02:message/user:
     BEFORE_SWITCH_USER
 03:message/assistant:
@@ -35,9 +35,8 @@ Scenario: Pre-turn compaction during model switch (without pre-sampling model-sw
     PRETURN_SWITCH_SUMMARY
 02:message/developer[2]:
     [01] <MODEL_SWITCH>
-        The user was previously using a different model. Please continue the conversation according to the following instructions:
     [02] <PERMISSIONS_INSTRUCTIONS>
 03:message/user:
-    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    <ENVIRONMENT_CONTEXT>
 04:message/user:
     AFTER_SWITCH_USER

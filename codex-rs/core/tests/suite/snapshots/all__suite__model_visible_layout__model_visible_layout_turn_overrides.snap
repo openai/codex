@@ -10,7 +10,7 @@ Scenario: Second turn changes cwd and approval policy while keeping model consta
     [01] <SKILLS_INSTRUCTIONS>
     [02] <PERMISSIONS_INSTRUCTIONS>
 01:message/user:
-    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    <ENVIRONMENT_CONTEXT>
 02:message/user:
     first turn
 -- request 2 (turn; Second Request (Turn Overrides)) --
@@ -19,6 +19,6 @@ Scenario: Second turn changes cwd and approval policy while keeping model consta
 04:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
 05:message/user:
-    <ENVIRONMENT_CONTEXT:cwd=<CWD>/PRETURN_CONTEXT_DIFF_CWD>
+    <ENVIRONMENT_CONTEXT>
 06:message/user:
     second turn with context updates

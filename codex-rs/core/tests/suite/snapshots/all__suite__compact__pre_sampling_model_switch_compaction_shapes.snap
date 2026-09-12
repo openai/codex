@@ -9,7 +9,7 @@ Scenario: Pre-sampling compaction on model switch to a smaller context window: c
 00:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
 01:message/user:
-    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    <ENVIRONMENT_CONTEXT>
 02:message/user:
     before switch
 
@@ -18,7 +18,7 @@ Scenario: Pre-sampling compaction on model switch to a smaller context window: c
 00:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
 01:message/user:
-    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    <ENVIRONMENT_CONTEXT>
 02:message/user:
     before switch
 03:message/assistant:
@@ -35,9 +35,8 @@ Scenario: Pre-sampling compaction on model switch to a smaller context window: c
     PRE_SAMPLING_SUMMARY
 02:message/developer[2]:
     [01] <MODEL_SWITCH>
-        The user was previously using a different model. Please continue the conversation according to the following instructions:
     [02] <PERMISSIONS_INSTRUCTIONS>
 03:message/user:
-    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    <ENVIRONMENT_CONTEXT>
 04:message/user:
     after switch

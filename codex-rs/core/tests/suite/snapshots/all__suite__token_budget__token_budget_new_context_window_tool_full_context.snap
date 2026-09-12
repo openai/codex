@@ -17,6 +17,6 @@ Scenario: New context window tool installs fresh full context before the next fo
     Previous context window id: <UUID 1>
     </context_window>
 02:message/user:
-    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    <ENVIRONMENT_CONTEXT>
 03:function_call/update_plan:{"plan":[{"status":"in_progress","step":"Continue in the new context window"}]}
 04:function_call_output:Plan updated

@@ -1,16 +1,20 @@
-//! Normalize rendered context after requests have been grouped into windows.
-//! Known guidance is rewritten only when requested; volatile values get stable snapshot labels.
+//! All display normalization for context snapshots: known text, volatile values and tool schemas.
+//! Request grouping stays independent of these display rules.
 
 use super::ContextSnapshotOptions;
-use super::MAX_SNAPSHOT_LINE_CHARS;
-use codex_protocol::protocol::APPS_INSTRUCTIONS_OPEN_TAG;
-use codex_protocol::protocol::PLUGINS_INSTRUCTIONS_OPEN_TAG;
-use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
 use regex_lite::Regex;
 use serde_json::Value;
 use std::sync::OnceLock;
 
-const RETAINED_SEGMENT_EDGE_LINES: usize = 16;
+const GUARDIAN_INSTRUCTIONS_PREFIX: &str = "You are judging one planned coding-agent action.";
+
+#[derive(Clone, Copy)]
+pub(super) enum TextSource<'a> {
+    ModelInstructions,
+    Message(&'a str),
+    FunctionArguments,
+    Other,
+}
 
 // Normalize or replace text in one place, after the structural renderer selects a content item.
 // Per-snapshot state gives distinct working directories stable labels without fixture-specific names.
@@ -18,46 +22,93 @@ const RETAINED_SEGMENT_EDGE_LINES: usize = 16;
 pub(super) struct Normalizer {
     working_directories: Vec<String>,
     workspace_roots: Vec<String>,
+    temporary_directories: Vec<String>,
     prompt_cache_keys: Vec<String>,
     uuids: Vec<String>,
 }
 
 impl Normalizer {
-    pub(super) fn normalize_uuids(&mut self, text: &str) -> String {
+    pub(super) fn observe_request(&mut self, input: &[Value]) {
+        // Permissions precede environment context, but can cite the same paths.
+        for item in input.iter().filter(|item| item["role"] == "user") {
+            for part in item["content"].as_array().into_iter().flatten() {
+                if let Some(text) = part["text"].as_str()
+                    && guidance_tag(text) == Some("environment_context")
+                {
+                    self.environment(text);
+                }
+            }
+        }
+    }
+
+    pub(super) fn text(
+        &mut self,
+        text: &str,
+        source: TextSource<'_>,
+        options: &ContextSnapshotOptions,
+    ) -> String {
+        let text = if matches!(source, TextSource::FunctionArguments) {
+            self.arguments(text)
+        } else {
+            text.to_string()
+        };
+        let text = normalize_line_endings(&text);
+        let segment = known_segment_name(&text, source);
+        let text = self.normalize_values(&text);
+        let text = match segment.as_deref() {
+            Some("PERMISSIONS_INSTRUCTIONS") => self.permissions(&text),
+            Some("ENVIRONMENT_CONTEXT") => self.environment(&text),
+            _ => text,
+        };
+        if options.rewrite_known_segments
+            && let Some(segment) = segment
+        {
+            let marker = format!("<{segment}>");
+            if segment == "COMPACTION_SUMMARY"
+                && let Some((_, summary)) = text.split_once('\n')
+                && !summary.is_empty()
+            {
+                // Only the standard preamble is guidance; the generated summary is conversation data.
+                format!("{marker}\n{summary}")
+            } else {
+                marker
+            }
+        } else {
+            text
+        }
+    }
+
+    pub(super) fn json(&mut self, value: &Value) -> Value {
+        let mut value = value.clone();
+        normalize_json(&mut value, &mut |text| {
+            normalize_stable_text(&self.normalize_uuids(text))
+        });
+        value
+    }
+
+    fn arguments(&mut self, text: &str) -> String {
+        serde_json::from_str::<Value>(text)
+            .map(|value| self.json(&value).to_string())
+            .unwrap_or_else(|_| text.to_string())
+    }
+
+    fn normalize_uuids(&mut self, text: &str) -> String {
         uuid_regex()
             .replace_all(text, |captures: &regex_lite::Captures<'_>| {
                 let id = captures[0].to_ascii_lowercase();
-                let index = self
-                    .uuids
-                    .iter()
-                    .position(|known| *known == id)
-                    .unwrap_or_else(|| {
-                        self.uuids.push(id);
-                        self.uuids.len() - 1
-                    });
-                format!("<UUID {}>", index + 1)
+                format!("<UUID {}>", stable_index(&mut self.uuids, &id))
             })
             .into_owned()
     }
 
     pub(super) fn prompt_cache_key(&mut self, key: &str) -> String {
-        let index = self
-            .prompt_cache_keys
-            .iter()
-            .position(|known| known == key)
-            .unwrap_or_else(|| {
-                self.prompt_cache_keys.push(key.to_string());
-                self.prompt_cache_keys.len() - 1
-            });
-        format!("<PROMPT_CACHE_KEY {}>", index + 1)
+        format!(
+            "<PROMPT_CACHE_KEY {}>",
+            stable_index(&mut self.prompt_cache_keys, key)
+        )
     }
 
-    pub(super) fn normalize_or_replace(
-        &mut self,
-        text: &str,
-        rewrite_known_segments: bool,
-    ) -> String {
-        let text = normalize_line_endings(text);
+    fn normalize_values(&mut self, text: &str) -> String {
         // Code Mode reports elapsed wall time in an otherwise stable tool output header.
         let text = if text.starts_with("Script completed\nWall time ") {
             static WALL_TIME: OnceLock<Regex> = OnceLock::new();
@@ -66,21 +117,12 @@ impl Normalizer {
                     Regex::new(r"(?m)^Wall time [0-9]+(?:\.[0-9]+)? seconds$")
                         .expect("code mode wall time regex")
                 })
-                .replace(&text, "Wall time <DURATION> seconds")
+                .replace(text, "Wall time <DURATION> seconds")
                 .into_owned()
         } else {
-            text
+            text.to_string()
         };
-        if rewrite_known_segments && text.starts_with("<environment_context>") {
-            return routine_context_placeholder(&self.environment(&text))
-                .expect("environment context has a placeholder");
-        }
-        if rewrite_known_segments && let Some(replacement) = routine_context_placeholder(&text) {
-            return replacement;
-        }
-        let text = if text.starts_with("<environment_context>") {
-            self.environment(&text)
-        } else if !rewrite_known_segments && text.starts_with("# AGENTS.md instructions for ") {
+        let text = if text.starts_with("# AGENTS.md instructions for ") {
             let (header, body) = text.split_once('\n').unwrap_or((&text, ""));
             if let Some((_, directory)) = header.split_once("for ")
                 && (directory.starts_with('/') || directory.as_bytes().get(1) == Some(&b':'))
@@ -95,7 +137,7 @@ impl Normalizer {
         normalize_skill_references(&self.normalize_uuids(&text))
     }
 
-    fn environment(&mut self, text: &str) -> String {
+    pub(super) fn environment(&mut self, text: &str) -> String {
         static CWD: OnceLock<Regex> = OnceLock::new();
         static PATH: OnceLock<Regex> = OnceLock::new();
         static HOST: OnceLock<Regex> = OnceLock::new();
@@ -134,6 +176,29 @@ impl Normalizer {
                 self.workspace_roots.push(root.to_string());
             }
         }
+        let aliases = self.path_aliases();
+        let text = path.replace_all(text, |captures: &regex_lite::Captures<'_>| {
+            let value = &captures[3];
+            format!(
+                "{}{}",
+                &captures[1],
+                normalize_path(value, &aliases).as_deref().unwrap_or(value)
+            )
+        });
+        host.replace_all(&text, |captures: &regex_lite::Captures<'_>| {
+            let label = match &captures[2] {
+                "shell" => "HOST_SHELL",
+                "shell_version" => "HOST_SHELL_VERSION",
+                "current_date" => "CURRENT_DATE",
+                "timezone" => "HOST_TIMEZONE",
+                _ => unreachable!(),
+            };
+            format!("{}<{label}>", &captures[1])
+        })
+        .into_owned()
+    }
+
+    fn path_aliases(&self) -> Vec<(String, String)> {
         let mut aliases = self
             .working_directories
             .iter()
@@ -154,158 +219,118 @@ impl Normalizer {
             )
             .collect::<Vec<_>>();
         aliases.sort_by_key(|(path, _)| std::cmp::Reverse(path.len()));
-        let text = path.replace_all(text, |captures: &regex_lite::Captures<'_>| {
-            let value = &captures[3];
-            let replacement = aliases.iter().find_map(|(path, label)| {
-                let suffix = value.strip_prefix(path)?;
-                if suffix.is_empty() || suffix.starts_with('/') || suffix.starts_with('\\') {
-                    Some(format!("{label}{}", suffix.replace('\\', "/")))
-                } else {
-                    None
+        aliases
+    }
+
+    fn permissions(&mut self, text: &str) -> String {
+        static PATH: OnceLock<Regex> = OnceLock::new();
+        let path = PATH.get_or_init(|| Regex::new(r"`([^`]+)`").expect("permission path regex"));
+        let aliases = self.path_aliases();
+        text.split('\n')
+            .map(|line| {
+                let writable = line.trim_start().starts_with("The writable root");
+                if !writable && !line.starts_with("- path `") && !line.starts_with("- glob `") {
+                    return line.to_string();
                 }
-            });
-            format!(
-                "{}{}",
-                &captures[1],
-                replacement.as_deref().unwrap_or(value)
-            )
-        });
-        host.replace_all(&text, |captures: &regex_lite::Captures<'_>| {
-            let label = match &captures[2] {
-                "shell" => "HOST_SHELL",
-                "shell_version" => "HOST_SHELL_VERSION",
-                "current_date" => "CURRENT_DATE",
-                "timezone" => "HOST_TIMEZONE",
-                _ => unreachable!(),
-            };
-            format!("{}<{label}>", &captures[1])
-        })
-        .into_owned()
-    }
-}
-
-pub(super) fn render_text(
-    text: &str,
-    options: &ContextSnapshotOptions,
-    normalizer: &mut Normalizer,
-) -> String {
-    let normalized = normalizer.normalize_or_replace(text, options.rewrite_known_segments);
-    let mut lines = normalized.split('\n').collect::<Vec<_>>();
-    // Trim only when the omitted middle is larger than one retained edge.
-    // The hidden middle has a fingerprint; visible edits change only their own lines.
-    let marker = (lines.len() > RETAINED_SEGMENT_EDGE_LINES * 3).then(|| {
-        let omitted =
-            &lines[RETAINED_SEGMENT_EDGE_LINES..lines.len() - RETAINED_SEGMENT_EDGE_LINES];
-        let omitted_text = omitted.join("\n");
-        format!(
-            "<OMITTED {} LINES; ~{} TOKENS; hash={}>",
-            omitted.len(),
-            omitted_text.chars().count() / 4,
-            fingerprint(&Value::String(omitted_text))
-        )
-    });
-    if let Some(marker) = &marker {
-        lines.splice(
-            RETAINED_SEGMENT_EDGE_LINES..lines.len() - RETAINED_SEGMENT_EDGE_LINES,
-            [marker.as_str()],
-        );
-    }
-    lines
-        .into_iter()
-        .map(|line| {
-            shorten(
-                line.trim_end(),
-                MAX_SNAPSHOT_LINE_CHARS,
-                /*keep_tail*/ true,
-                /*hash*/ true,
-            )
-            .replace('\\', "\\\\")
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-pub(super) fn shorten(text: &str, limit: usize, keep_tail: bool, hash: bool) -> String {
-    let len = text.chars().count();
-    if len <= limit {
-        return text.to_string();
-    }
-    let budget = limit.saturating_sub(3);
-    let head = if keep_tail { budget * 2 / 3 } else { budget };
-    let tail = budget - head;
-    let mut result = text.chars().take(head).collect::<String>();
-    result.push_str("...");
-    if tail > 0 {
-        result.extend(text.chars().skip(len - tail));
-    }
-    if hash {
-        result.push_str(&format!(
-            " [hash={}]",
-            fingerprint(&Value::String(text.to_string()))
-        ));
-    }
-    result
-}
-
-fn routine_context_placeholder(text: &str) -> Option<String> {
-    let replacement = if text.starts_with("<permissions instructions>") {
-        "<PERMISSIONS_INSTRUCTIONS>"
-    } else if text.starts_with(APPS_INSTRUCTIONS_OPEN_TAG) {
-        "<APPS_INSTRUCTIONS>"
-    } else if text.starts_with(SKILLS_INSTRUCTIONS_OPEN_TAG) {
-        "<SKILLS_INSTRUCTIONS>"
-    } else if text.starts_with(PLUGINS_INSTRUCTIONS_OPEN_TAG) {
-        "<PLUGINS_INSTRUCTIONS>"
-    } else if text.starts_with("# AGENTS.md instructions") {
-        "<AGENTS_MD>"
-    } else if let Some(body) = text.strip_prefix("<model_switch>") {
-        return Some(guidance_with_intro("<MODEL_SWITCH>", body));
-    } else if let Some(body) = text.strip_prefix("<personality_spec>") {
-        return Some(guidance_with_intro("<PERSONALITY_SPEC>", body));
-    } else if text.starts_with("You are judging one planned coding-agent action.") {
-        return Some(format!(
-            "<GUARDIAN_INSTRUCTIONS:hash={}>",
-            fingerprint(&Value::String(text.to_string()))
-        ));
-    } else if text.starts_with("You are performing a CONTEXT CHECKPOINT COMPACTION.") {
-        "<SUMMARIZATION_PROMPT>"
-    } else if text.starts_with("<environment_context>") {
-        let count = text
-            .split_once("<subagents>")
-            .and_then(|(_, rest)| rest.split_once("</subagents>"))
-            .map(|(agents, _)| {
-                agents
-                    .lines()
-                    .filter(|line| line.trim_start().starts_with("- "))
-                    .count()
+                path.replace_all(line, |captures: &regex_lite::Captures<'_>| {
+                    let value = &captures[1];
+                    let normalized =
+                        normalize_path(value, &aliases).or_else(|| self.temporary_path(value));
+                    format!("`{}`", normalized.as_deref().unwrap_or(value))
+                })
+                .into_owned()
             })
-            .unwrap_or(0);
-        let cwd = text
-            .split_once("<cwd>")
-            .and_then(|(_, rest)| rest.split_once("</cwd>"))
-            .map(|(directory, _)| format!(":cwd={directory}"))
-            .unwrap_or_default();
-        return Some(if count == 0 {
-            format!("<ENVIRONMENT_CONTEXT{cwd}>")
-        } else {
-            format!("<ENVIRONMENT_CONTEXT{cwd}:subagents={count}>")
-        });
-    } else if text.starts_with("Another language model started to solve this problem") {
-        return Some(text.split_once('\n').map_or_else(
-            || "<COMPACTION_SUMMARY>".to_string(),
-            |(_, body)| format!("<COMPACTION_SUMMARY>\n{body}"),
-        ));
-    } else {
-        return None;
-    };
-    Some(replacement.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn temporary_path(&mut self, value: &str) -> Option<String> {
+        // tempfile uses randomized `.tmp…` directories under the host's configured temp root.
+        // Keep other names, including stable policy paths, visible to the fingerprint.
+        let temp_dir = std::env::temp_dir().to_string_lossy().replace('\\', "/");
+        let value = value.replace('\\', "/");
+        let suffix = value.strip_prefix(temp_dir.trim_end_matches('/'))?;
+        if suffix.is_empty() {
+            return Some("<TEMP_DIR>".to_string());
+        }
+        let suffix = suffix.strip_prefix('/')?;
+        let first = suffix.split('/').next()?;
+        let tail = &suffix[first.len()..];
+        if !first.strip_prefix(".tmp").is_some_and(|random| {
+            !random.is_empty()
+                && random
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric())
+        }) {
+            return Some(format!("<TEMP_DIR>/{suffix}"));
+        }
+        let index = stable_index(&mut self.temporary_directories, first);
+        Some(format!("<TEMP_DIR>/<TEMP {index}>{tail}"))
+    }
 }
 
-fn guidance_with_intro(marker: &str, body: &str) -> String {
-    body.lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .map_or_else(|| marker.to_string(), |intro| format!("{marker}\n{intro}"))
+fn stable_index(values: &mut Vec<String>, value: &str) -> usize {
+    if let Some(index) = values.iter().position(|known| known == value) {
+        index + 1
+    } else {
+        values.push(value.to_string());
+        values.len()
+    }
+}
+
+fn normalize_path(value: &str, aliases: &[(String, String)]) -> Option<String> {
+    aliases.iter().find_map(|(path, label)| {
+        let suffix = value.strip_prefix(path)?;
+        (suffix.is_empty() || suffix.starts_with('/') || suffix.starts_with('\\'))
+            .then(|| format!("{label}{}", suffix.replace('\\', "/")))
+    })
+}
+
+fn known_segment_name(text: &str, source: TextSource<'_>) -> Option<String> {
+    let prefixes: &[(&str, &str)] = match source {
+        TextSource::ModelInstructions => &[
+            (GUARDIAN_INSTRUCTIONS_PREFIX, "GUARDIAN_INSTRUCTIONS"),
+            ("", "MODEL_INSTRUCTIONS"),
+        ],
+        TextSource::Message("developer") => {
+            &[(GUARDIAN_INSTRUCTIONS_PREFIX, "GUARDIAN_INSTRUCTIONS")]
+        }
+        TextSource::Message("user") => &[
+            ("# AGENTS.md instructions", "AGENTS_MD"),
+            (
+                "You are performing a CONTEXT CHECKPOINT COMPACTION.",
+                "SUMMARIZATION_PROMPT",
+            ),
+            (
+                "Another language model started to solve this problem",
+                "COMPACTION_SUMMARY",
+            ),
+        ],
+        _ => &[],
+    };
+    if let Some((_, name)) = prefixes
+        .iter()
+        .find(|(prefix, _)| text.starts_with(*prefix))
+    {
+        return Some((*name).to_string());
+    }
+    let tag = guidance_tag(text)?;
+    matches!(
+        (source, tag),
+        (
+            TextSource::Message("developer"),
+            "permissions instructions"
+                | "collaboration_mode"
+                | "multi_agent_role"
+                | "multi_agent_mode"
+                | "apps_instructions"
+                | "skills_instructions"
+                | "plugins_instructions"
+                | "model_switch"
+                | "personality_spec"
+        ) | (TextSource::Message("user"), "environment_context")
+    )
+    .then(|| tag.replace(' ', "_").to_ascii_uppercase())
 }
 
 fn normalize_skill_references(text: &str) -> String {
@@ -351,11 +376,11 @@ fn normalize_skill_path(path: &str) -> String {
     }
 }
 
-pub(super) fn normalize_line_endings(text: &str) -> String {
+fn normalize_line_endings(text: &str) -> String {
     text.replace("\r\n", "\n").replace('\r', "\n")
 }
 
-pub(super) fn normalize_stable_text(text: &str) -> String {
+fn normalize_stable_text(text: &str) -> String {
     static SYSTEM_SKILL_PATH: OnceLock<Regex> = OnceLock::new();
     static TURN_TIME: OnceLock<Regex> = OnceLock::new();
     static SANDBOX: OnceLock<Regex> = OnceLock::new();
@@ -394,26 +419,126 @@ pub(super) fn fingerprint(value: &Value) -> String {
     format!("{:016x}", fnv1a(&bytes))
 }
 
-pub(super) fn fnv1a(bytes: &[u8]) -> u64 {
+fn fnv1a(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
         (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
     })
 }
 
-pub(super) fn normalize_json(value: &mut Value, normalize: &mut impl FnMut(&str) -> String) {
+fn normalize_json(value: &mut Value, normalize: &mut impl FnMut(&str) -> String) {
     match value {
         Value::String(text) => *text = normalize(text),
         Value::Array(values) => values
             .iter_mut()
             .for_each(|value| normalize_json(value, normalize)),
         Value::Object(map) => {
-            let mut entries = std::mem::take(map).into_iter().collect::<Vec<_>>();
-            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
-            for (key, mut value) in entries {
-                normalize_json(&mut value, normalize);
-                map.insert(key, value);
+            map.sort_keys();
+            for value in map.values_mut() {
+                normalize_json(value, normalize);
             }
         }
         Value::Null | Value::Bool(_) | Value::Number(_) => {}
     }
+}
+
+// Shell guidance and its yield-time wording intentionally differ on Windows. Compare all other
+// tool schema fields, while keeping the context snapshots identical across operating systems.
+pub(super) fn portable_tool_schema(tool: &Value) -> Value {
+    const BASE: &str =
+        "Runs a command in a PTY, returning output or a session ID for ongoing interaction.";
+    // Exact current Windows-only suffix. A change to its wording must be reviewed explicitly.
+    const WINDOWS_SAFETY_SUFFIX_HASH: u64 = 0x6de3_23e4_7060_6128;
+    const UNIX_WAIT: &str =
+        "Wait before yielding output. Defaults to 10000 ms; effective range is 250-30000 ms.";
+    const WINDOWS_WAIT: &str = "Maximum time to wait before returning a session ID for a still-running command. Commands that finish sooner return immediately. For ordinary commands, omit this parameter to use the 10000 ms default. Effective range on Windows is 10000-30000 ms.";
+    let mut stable = tool.clone();
+    if let Some(Value::Array(members)) = stable.get_mut("tools") {
+        for member in members {
+            *member = portable_tool_schema(member);
+        }
+    }
+    let definition = if stable.get("function").is_some() {
+        stable
+            .get_mut("function")
+            .expect("function tool definition")
+    } else {
+        &mut stable
+    };
+    if definition.get("name").and_then(Value::as_str) == Some("exec") {
+        if let Some(Value::String(description)) = definition.get_mut("description") {
+            // Code mode embeds the exec_command description and its TypeScript declaration
+            // inside the exec tool. Apply the same narrow platform normalization there.
+            if let Some((start, section)) = description.split_once("### `exec_command`\n")
+                && let Some(rest) = section.strip_prefix(BASE)
+                && let Some((suffix, _)) = rest.split_once("\n\nexec tool declaration:")
+                && suffix.starts_with("\n\nWindows safety rules:")
+                && fnv1a(normalize_line_endings(suffix).as_bytes()) == WINDOWS_SAFETY_SUFFIX_HASH
+            {
+                *description =
+                    format!("{start}### `exec_command`\n{BASE}{}", &rest[suffix.len()..]);
+            }
+            for platform_wait in [UNIX_WAIT, WINDOWS_WAIT] {
+                *description = description.replace(
+                    &format!("  // {platform_wait}"),
+                    "  // <PLATFORM_WAIT_GUIDANCE>",
+                );
+            }
+        }
+        return stable;
+    }
+    if definition.get("name").and_then(Value::as_str) != Some("exec_command") {
+        return stable;
+    }
+    if let Some(Value::String(description)) = definition.get_mut("description")
+        && description.strip_prefix(BASE).is_some_and(|rest| {
+            rest.starts_with("\n\nWindows safety rules:")
+                && fnv1a(normalize_line_endings(rest).as_bytes()) == WINDOWS_SAFETY_SUFFIX_HASH
+        })
+    {
+        *description = BASE.to_string();
+    }
+    if let Some(Value::String(wait)) =
+        definition.pointer_mut("/parameters/properties/yield_time_ms/description")
+        && (wait == UNIX_WAIT || wait == WINDOWS_WAIT)
+    {
+        *wait = "<PLATFORM_WAIT_GUIDANCE>".to_string();
+    }
+    stable
+}
+
+pub(super) fn is_bundled_model_instructions(text: &str) -> bool {
+    static PROMPTS: OnceLock<Vec<String>> = OnceLock::new();
+    text == codex_models_manager::model_info::BASE_INSTRUCTIONS
+        || PROMPTS
+            .get_or_init(|| {
+                codex_models_manager::bundled_models_response()
+                    .expect("bundled model catalog")
+                    .models
+                    .into_iter()
+                    .filter_map(|model| model.model_messages?.instructions_template)
+                    .collect()
+            })
+            .iter()
+            .any(|prompt| prompt == text)
+}
+
+// Only complete, balanced wrappers identify guidance. Adjacent or malformed wrappers remain text.
+fn guidance_tag(text: &str) -> Option<&str> {
+    let text = text.trim();
+    let (tag, rest) = text.strip_prefix('<')?.split_once('>')?;
+    let open = &text[..tag.len() + 2];
+    let close = format!("</{tag}>");
+    let mut depth = 1;
+    for (offset, _) in rest.match_indices('<') {
+        let after = &rest[offset..];
+        if after.starts_with(open) {
+            depth += 1;
+        } else if after.starts_with(&close) {
+            depth -= 1;
+            if depth == 0 {
+                return (after == close.as_str()).then_some(tag);
+            }
+        }
+    }
+    None
 }

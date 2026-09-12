@@ -13,7 +13,7 @@ Scenario: Deferred namespaces appear after Apps recovers between sampling reques
         - multi_agent_v1: Tools for spawning and managing sub-agents.
         </tools>
 01:message/user:
-    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    <ENVIRONMENT_CONTEXT>
 02:message/user:
     use an app after it recovers
 -- request 2 (turn; Apps recovered) --

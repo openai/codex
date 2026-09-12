@@ -10,7 +10,7 @@ Scenario: First post-resume turn where resumed config model differs from rollout
     [01] <SKILLS_INSTRUCTIONS>
     [02] <PERMISSIONS_INSTRUCTIONS>
 01:message/user:
-    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    <ENVIRONMENT_CONTEXT>
 02:message/user:
     seed resume history
 
@@ -20,17 +20,16 @@ Scenario: First post-resume turn where resumed config model differs from rollout
     [01] <SKILLS_INSTRUCTIONS>
     [02] <PERMISSIONS_INSTRUCTIONS>
 01:message/user:
-    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    <ENVIRONMENT_CONTEXT>
 02:message/user:
     seed resume history
 03:message/assistant:
     recorded before resume
 04:message/developer:
     <MODEL_SWITCH>
-    The user was previously using a different model. Please continue the conversation according to the following instructions:
 05:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
 06:message/user:
-    <ENVIRONMENT_CONTEXT:cwd=<CWD 2>>
+    <ENVIRONMENT_CONTEXT>
 07:message/user:
     resume and change personality

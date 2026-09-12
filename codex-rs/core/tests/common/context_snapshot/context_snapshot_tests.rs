@@ -8,8 +8,36 @@ fn render_test_items(items: &[Value], options: &ContextSnapshotOptions) -> Strin
     render_items(
         items,
         /*start_index*/ 0,
+        &[],
         options,
         &mut Normalizer::default(),
+    )
+}
+
+fn message(role: &str, text: &str) -> Value {
+    json!({"type": "message", "role": role, "content": [{"type": "input_text", "text": text}]})
+}
+
+fn tagged_message(role: &str, tag: &str, body: &str) -> Value {
+    message(role, &format!("<{tag}>{body}</{tag}>"))
+}
+
+fn detailed(items: &[Value]) -> String {
+    render_test_items(items, &ContextSnapshotOptions::default())
+}
+
+fn rewritten(items: &[Value]) -> String {
+    render_test_items(
+        items,
+        &ContextSnapshotOptions::default().rewrite_known_segments(),
+    )
+}
+
+fn captured(body: &Value) -> String {
+    format_context_snapshot(
+        "test",
+        &[SnapshotEntry::body(body)],
+        &ContextSnapshotOptions::default(),
     )
 }
 
@@ -98,17 +126,19 @@ fn grouping_only_continues_when_input_extends_and_settings_match() {
         kind: "turn".to_string(),
         label: None,
         input,
+        model_instruction_parts: Vec::new(),
         settings: Some(json!({ "reasoning": { "effort": effort } })),
     };
     let one = json!({ "type": "message", "role": "user", "content": [] });
     let two = json!({ "type": "message", "role": "assistant", "content": [] });
-    let windows = group_requests([
+    let requests = [
         request(1, vec![one.clone()], "medium"),
         request(2, vec![one.clone(), two.clone()], "medium"),
         request(3, vec![one.clone(), two], "high"),
         request(4, vec![one.clone()], "high"),
         request(5, vec![one], "high"),
-    ]);
+    ];
+    let windows = group_requests(&requests);
     assert_eq!(windows.len(), 4);
     assert_eq!(windows[0].requests[1].suffix_start, 1);
     assert_eq!(windows[1].requests[0].suffix_start, 0);
@@ -237,7 +267,12 @@ fn changed_tools_show_only_the_inventory_delta() {
             { "type": "function", "function": { "name": "read", "description": "Read a changed file" } },
             { "type": "function", "function": { "name": "search", "description": "Find a file" } }
         ] });
-    let rendered = render_settings(&new, Some(&old), &mut Normalizer::default());
+    let rendered = render_settings(
+        &new,
+        Some(&old),
+        &ContextSnapshotOptions::default(),
+        &mut Normalizer::default(),
+    );
     assert!(rendered.contains("- removed function/write"));
     assert!(rendered.contains("~ function/read:"));
     assert!(rendered.contains("+ function/search:"));
@@ -251,7 +286,12 @@ fn unnamed_tools_with_shared_type_do_not_get_misreported_as_order_changes() {
             { "type": "mcp", "server_label": "mail" }
         ] });
     let new = json!({ "tools": [{ "type": "mcp", "server_label": "calendar" }] });
-    let rendered = render_settings(&new, Some(&old), &mut Normalizer::default());
+    let rendered = render_settings(
+        &new,
+        Some(&old),
+        &ContextSnapshotOptions::default(),
+        &mut Normalizer::default(),
+    );
     assert!(rendered.contains("- removed mcp/mail"));
     assert!(!rendered.contains("order changed"));
 }
@@ -349,7 +389,7 @@ fn uuid_labels_preserve_identity_across_message_and_function_content() {
 }
 
 #[test]
-fn rewritten_model_and_personality_guidance_keep_their_intro() {
+fn rewritten_model_and_personality_use_plain_tags() {
     let render = |text| {
         render_test_items(
             &[json!({ "type": "message", "role": "developer", "content": [{ "text": text }] })],
@@ -358,22 +398,343 @@ fn rewritten_model_and_personality_guidance_keep_their_intro() {
     };
     assert_eq!(
         render("<model_switch>\nOriginal intro\n\nlong instructions\n</model_switch>"),
-        "00:message/developer:\n    <MODEL_SWITCH>\n    Original intro"
+        "00:message/developer:\n    <MODEL_SWITCH>"
     );
     assert_eq!(
         render("<personality_spec> Original intro \nlong instructions\n</personality_spec>"),
-        "00:message/developer:\n    <PERSONALITY_SPEC>\n    Original intro"
+        "00:message/developer:\n    <PERSONALITY_SPEC>"
     );
     assert_ne!(render("<model_switch>"), render("<model_switch>New intro"));
+}
+
+#[test]
+fn base_instructions_use_the_same_mode_in_settings_and_annotated_developer_content() {
+    let prompt = "My model instructions\nA rule below the prefix";
+    let developer = |metadata: Value| {
+        json!({
+            "type": "message", "role": "developer",
+            "content": [{ "type": "input_text", "text": "Neighbor stays literal" },
+                        { "type": "input_text", "text": prompt }],
+            "internal_chat_message_metadata_passthrough": metadata
+        })
+    };
+    let annotated = developer(json!({"content_item_kinds": [null, "model.base_instructions"]}));
+    let plain = developer(Value::Null);
+    let first = json!({"instructions": prompt, "input": [annotated]});
+    let second = json!({"instructions": prompt, "input": [plain,
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Next turn"}]}]});
+    let render = |options: ContextSnapshotOptions| {
+        format_context_snapshot(
+            "transport",
+            &[SnapshotEntry::body(&first), SnapshotEntry::body(&second)],
+            &options.include_request_settings(),
+        )
+    };
+    let detailed = render(ContextSnapshotOptions::default());
+    let shape = render(ContextSnapshotOptions::default().rewrite_known_segments());
+    for rendered in [&detailed, &shape] {
+        assert!(rendered.contains("Neighbor stays literal"));
+        assert_eq!(rendered.matches("## Window").count(), 1);
+    }
+    assert_eq!(detailed.matches("My model instructions").count(), 2);
+    assert_eq!(detailed.matches("A rule below the prefix").count(), 2);
+    assert_eq!(shape.matches("<MODEL_INSTRUCTIONS>").count(), 2);
+    assert!(!shape.contains("A rule below the prefix"));
+    let unmarked = captured(&json!({"input": [plain]}));
+    assert!(unmarked.contains("A rule below the prefix"));
+
+    let catalog_prompt = codex_models_manager::model_info::BASE_INSTRUCTIONS;
+    let lite = |prompt: &str| {
+        json!({"input": [
+            {"type": "additional_tools", "role": "developer", "tools": []},
+            {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": prompt}]},
+            {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": catalog_prompt}]}
+        ]})
+    };
+    let rewrite = |body: &Value| {
+        format_context_snapshot(
+            "test",
+            &[SnapshotEntry::body(body)],
+            &ContextSnapshotOptions::default().rewrite_known_segments(),
+        )
+    };
+    let known = rewrite(&lite(catalog_prompt));
+    assert_eq!(known.matches("<MODEL_INSTRUCTIONS>").count(), 1);
+    let custom = rewrite(&lite(&format!("{catalog_prompt}\nKeep this line")));
+    assert!(!custom.contains("<MODEL_INSTRUCTIONS>"));
+    assert!(custom.contains("Keep this line"));
+    let mut annotated_other = lite(catalog_prompt);
+    annotated_other["input"][1]["internal_chat_message_metadata_passthrough"] =
+        json!({"content_item_kinds": ["developer_instructions"]});
+    assert!(!rewrite(&annotated_other).contains("<MODEL_INSTRUCTIONS>"));
+    let mut multipart = lite(catalog_prompt);
+    multipart["input"][1]["content"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"type": "input_text", "text": "Keep neighboring guidance"}));
+    let multipart = rewrite(&multipart);
+    assert!(!multipart.contains("<MODEL_INSTRUCTIONS>"));
+    assert!(multipart.contains("Keep neighboring guidance"));
+}
+
+#[test]
+fn known_harness_text_stays_literal_unless_rewriting_is_enabled() {
+    let developer = |tag, body| tagged_message("developer", tag, body);
+    let items = [
+        developer(
+            "collaboration_mode",
+            "# Collaboration Mode: Plan\nHidden rule",
+        ),
+        developer("multi_agent_role", "You are `/root`\nHidden rule"),
+        developer("multi_agent_mode", "Delegation is enabled.\nHidden rule"),
+        developer(
+            "permissions instructions",
+            "Sandbox policy\nApproval policy is currently never.\nHidden rule",
+        ),
+        tagged_message(
+            "user",
+            "environment_context",
+            "\n<cwd>/tmp/fixture</cwd>\n<shell>zsh</shell>\n<subagents>\n- running\n</subagents>\n",
+        ),
+        developer("skills_instructions", "Plugin-specific skill inventory"),
+        tagged_message("user", "skill", "Scenario-specific skill"),
+        message(
+            "developer",
+            "<collaboration_mode>unclosed developer instruction",
+        ),
+        tagged_message("user", "collaboration_mode", "user-supplied tags"),
+        json!({"type": "function_call_output", "output": "<collaboration_mode>tool-supplied tags</collaboration_mode>"}),
+        message(
+            "developer",
+            "<collaboration_mode>One</collaboration_mode>\nIndependent instruction\n<collaboration_mode>Two</collaboration_mode>",
+        ),
+        tagged_message(
+            "user",
+            "permissions instructions",
+            "\n The writable root is `/tmp/fixture/user`.\n",
+        ),
+        json!({"type": "function_call_output", "output": "<permissions instructions>\n The writable root is `/tmp/fixture/tool`.\n</permissions instructions>"}),
+    ];
+    let rendered = detailed(&items);
+    for visible in [
+        "# Collaboration Mode: Plan",
+        "You are `/root`",
+        "Delegation is enabled.",
+        "Sandbox policy",
+        "Approval policy is currently never.",
+        "<environment_context>",
+        "<cwd><CWD></cwd>",
+        "<shell><HOST_SHELL></shell>",
+        "- running",
+        "Hidden rule",
+        "Plugin-specific skill inventory",
+        "Scenario-specific skill",
+        "unclosed developer instruction",
+        "user-supplied tags",
+        "tool-supplied tags",
+        "Independent instruction",
+        "`/tmp/fixture/user`",
+        "`/tmp/fixture/tool`",
+    ] {
+        assert!(rendered.contains(visible), "{visible}: {rendered}");
+    }
+    assert!(!rendered.contains("[hash="));
+    let collaboration = |body| detailed(&[developer("collaboration_mode", body)]);
+    assert!(collaboration("# Collaboration Mode: Plan\nChanged rule").contains("Changed rule"));
+    let nested = collaboration(
+        "# Collaboration Mode: Plan\nQuote `<collaboration_mode>...</collaboration_mode>`.",
+    );
+    assert!(nested.contains("Quote `<collaboration_mode>...</collaboration_mode>`."));
+    let environment = |path: &str, shell: &str, agent: &str| {
+        detailed(&[tagged_message(
+            "user",
+            "environment_context",
+            &format!(
+                "\n<cwd>{path}</cwd>\n<shell>{shell}</shell>\n<subagents>\n- {agent}\n</subagents>\n"
+            ),
+        )])
+    };
+    let first_environment = environment("/tmp/one", "zsh", "one");
+    assert_eq!(first_environment, environment("/tmp/two", "bash", "one"));
+    assert_ne!(first_environment, environment("/tmp/two", "bash", "two"));
+    let inputs = [
+        message("user", "<environment_context><cwd>/fake</cwd>"),
+        tagged_message("user", "environment_context", "<cwd>/real</cwd>"),
+        json!({"type": "function_call_output", "output": "<environment_context><cwd>/real/tool</cwd></environment_context>"}),
+    ];
+    let malformed = captured(&json!({"input": inputs}));
+    assert!(malformed.contains("<cwd>/fake</cwd>"));
+    assert!(malformed.contains("<environment_context><cwd><CWD></cwd></environment_context>"));
+    assert!(malformed.contains("<cwd>/real/tool</cwd>"));
+
+    let shape = rewritten(&items);
+    assert!(shape.contains("<COLLABORATION_MODE>"));
+    assert!(shape.contains("<MULTI_AGENT_ROLE>"));
+    assert!(shape.contains("<MULTI_AGENT_MODE>"));
+    assert!(shape.contains("<PERMISSIONS_INSTRUCTIONS>"));
+    assert!(shape.contains("<SKILLS_INSTRUCTIONS>"));
+    assert!(shape.contains("<ENVIRONMENT_CONTEXT>"));
+    assert!(!shape.contains("Sandbox policy"));
+    assert!(!shape.contains("Hidden rule"));
+    for lookalike in [
+        "Scenario-specific skill",
+        "unclosed developer instruction",
+        "user-supplied tags",
+        "tool-supplied tags",
+        "Independent instruction",
+    ] {
+        assert!(shape.contains(lookalike));
+    }
+}
+
+#[test]
+fn detailed_skills_use_the_same_truncation_and_dynamic_normalization_as_other_text() {
+    let catalog = "## Skills\nRead the skill before using it.\n### Skill roots\n- `r0` = `/home/test/skills`\n### Available skills\n- notes:summarize: Find owners. (file: r0/summarize/SKILL.md)";
+    let render = |body: &str| detailed(&[tagged_message("developer", "skills_instructions", body)]);
+    let rendered = render(catalog);
+    assert_eq!(
+        rendered,
+        "00:message/developer:\n    <skills_instructions>## Skills\n    Read the skill before using it.\n    ### Skill roots\n    - `r0` = `<SKILLS_ROOT>`\n    ### Available skills\n    - notes:summarize: Find owners. (file: r0/summarize/SKILL.md)</skills_instructions>"
+    );
+    assert_eq!(rendered, render(&catalog.replace("/home/test", "/other")));
+    assert_eq!(
+        rewritten(&[tagged_message("developer", "skills_instructions", catalog)]),
+        "00:message/developer:\n    <SKILLS_INSTRUCTIONS>"
+    );
+    assert_eq!(
+        rewritten(&[tagged_message("user", "skills_instructions", catalog)]),
+        rendered.replace("message/developer", "message/user")
+    );
+
+    let large = (0..30)
+        .map(|index| format!("- skill-{index}: Description"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let large_text =
+        format!("<skills_instructions>### Available skills\n{large}</skills_instructions>");
+    let large = render(&format!("### Available skills\n{large}"));
+    assert_eq!(
+        large,
+        detailed(&[message("user", &large_text)]).replace("message/user", "message/developer")
+    );
+    assert!(large.contains("skill-0"));
+    assert!(large.contains("skill-29"));
+    assert!(large.contains("<OMITTED 15 LINES;"));
+    assert!(!large.contains("skill-15"));
+}
+
+#[test]
+fn rewritten_segments_share_one_tag_format_and_keep_compaction_data() {
+    let developer = |tag, body| tagged_message("developer", tag, body);
+    let items = [
+        developer("apps_instructions", "Apps guidance"),
+        developer("plugins_instructions", "Plugins guidance"),
+        message(
+            "developer",
+            "You are judging one planned coding-agent action.\nRoutine guidance.",
+        ),
+        message(
+            "user",
+            "# AGENTS.md instructions for project\n\n<INSTRUCTIONS>\nProject rules\n</INSTRUCTIONS>",
+        ),
+        message(
+            "user",
+            "You are performing a CONTEXT CHECKPOINT COMPACTION. Routine guidance.",
+        ),
+        message(
+            "user",
+            "Another language model started to solve this problem.\nGenerated summary",
+        ),
+    ];
+    let original = rewritten(&items);
+    let lines = original
+        .lines()
+        .filter_map(|line| line.strip_prefix("    "))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        lines,
+        [
+            "<APPS_INSTRUCTIONS>",
+            "<PLUGINS_INSTRUCTIONS>",
+            "<GUARDIAN_INSTRUCTIONS>",
+            "<AGENTS_MD>",
+            "<SUMMARIZATION_PROMPT>",
+            "<COMPACTION_SUMMARY>",
+            "Generated summary",
+        ]
+    );
+    let full = detailed(&items);
+    assert!(full.contains("Routine guidance."));
+    assert!(full.contains("Project rules"));
+    assert!(full.contains("Another language model started to solve this problem."));
+    assert!(full.contains("Generated summary"));
+}
+
+#[test]
+fn detailed_permissions_normalize_paths_and_keep_policy_changes_visible() {
+    let render = |cwd: &str, external: &str, separator: &str, network: &str, denied: &str| {
+        let permissions = format!(
+            "<permissions instructions>\nFilesystem sandboxing defines which files can be read or written. `sandbox_mode` is `workspace-write`: {} Network access is {network}.\nApproval policy is currently never.\n The writable roots are `{cwd}`, `{external}`.\n- path `{cwd}{separator}{denied}`\n- glob `{external}{separator}*.key`\n</permissions instructions>",
+            "Some additional sandbox guidance. ".repeat(5)
+        );
+        let environment = format!(
+            "<environment_context>\n<cwd>{cwd}</cwd>\n<root>{external}</root>\n</environment_context>"
+        );
+        let body = json!({"input": [
+            {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": permissions}]},
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": environment}]}
+        ]});
+        captured(&body)
+    };
+    let unix = render("/tmp/random", "/private/random", "/", "enabled", "secret");
+    assert_eq!(
+        unix,
+        render(r"C:\Temp\random", r"D:\Random", r"\", "enabled", "secret")
+    );
+    assert!(unix.contains("`workspace-write`"));
+    assert!(unix.contains("Network access is enabled."));
+    assert!(unix.contains("Approval policy is currently never."));
+    let changed = |network, denied| render("/tmp/random", "/private/random", "/", network, denied);
+    assert_ne!(unix, changed("restricted", "secret"));
+    assert_ne!(unix, changed("enabled", "different"));
+
+    let external = |root: &str, denied: &str| {
+        let text = format!(
+            "<permissions instructions>Policy\nApproval\n The writable root is `{root}`.\n- path `{denied}`\n</permissions instructions>"
+        );
+        detailed(&[message("developer", &text)])
+    };
+    assert_ne!(
+        external("/policy/secret", "/policy/secret"),
+        external("/policy/public", "/policy/secret")
+    );
+    assert_ne!(
+        external("/policy/secret", "/policy/secret"),
+        external("/policy/secret", "/policy/public")
+    );
+    let temp_path = |name: &str| {
+        std::env::temp_dir()
+            .join(name)
+            .join("secret")
+            .to_string_lossy()
+            .into_owned()
+    };
+    assert_eq!(
+        external("/policy/stable", &temp_path(".tmpAbc123")),
+        external("/policy/stable", &temp_path(".tmpDef456"))
+    );
+    assert_ne!(
+        external("/policy/stable", &temp_path("named-one")),
+        external("/policy/stable", &temp_path("named-two"))
+    );
 }
 
 #[test]
 fn normalization_labels_distinct_working_directories_and_retains_permissions() {
     let mut normalizer = Normalizer::default();
     let render = |normalizer: &mut Normalizer, cwd: &str| {
-        normalizer.normalize_or_replace(
+        normalizer.environment(
             &format!("<environment_context>\n<cwd>{cwd}</cwd>\n<shell>zsh</shell>\n<filesystem><root>{cwd}/src</root></filesystem>\n</environment_context>"),
-            /*rewrite_known_segments*/ false,
         )
     };
     assert!(render(&mut normalizer, "/tmp/one").contains("<cwd><CWD></cwd>"));
@@ -382,9 +743,11 @@ fn normalization_labels_distinct_working_directories_and_retains_permissions() {
     assert!(second.contains("<root><CWD 2>/src</root>"));
     let nested = render(&mut normalizer, "/tmp/one/PRETURN_CONTEXT_DIFF_CWD");
     assert!(nested.contains("<cwd><CWD>/PRETURN_CONTEXT_DIFF_CWD</cwd>"));
-    let permissions = normalizer.normalize_or_replace(
+    let permissions = render_text(
         "<permissions instructions>\nAsk approval\n</permissions instructions>",
-        /*rewrite_known_segments*/ false,
+        TextSource::Message("developer"),
+        &ContextSnapshotOptions::default(),
+        &mut normalizer,
     );
     assert!(permissions.contains("Ask approval"));
 }
@@ -413,22 +776,19 @@ fn skill_paths_are_stable_across_hosts_without_rewriting_uris() {
 #[test]
 fn cwd_aliases_match_path_components_only() {
     let mut normalizer = Normalizer::default();
-    let text = normalizer.normalize_or_replace(
+    let text = normalizer.environment(
             "<environment_context><cwd>/tmp/repo</cwd><root>/tmp/repo/src</root><root>/tmp/repo-other</root></environment_context>",
-            /*rewrite_known_segments*/ false,
         );
     assert!(text.contains("<root><CWD>/src</root>"));
     assert!(text.contains("<root><WORKSPACE_ROOT 1></root>"));
 
     let mut windows = Normalizer::default();
-    let first = windows.normalize_or_replace(
+    let first = windows.environment(
             r"<environment_context><cwd>C:\tmp\repo</cwd><root>C:\tmp\repo\src</root></environment_context>",
-            /*rewrite_known_segments*/ false,
         );
     assert!(first.contains("<root><CWD>/src</root>"));
-    let nested = windows.normalize_or_replace(
+    let nested = windows.environment(
             r"<environment_context><cwd>C:\tmp\repo\PRETURN_CONTEXT_DIFF_CWD</cwd></environment_context>",
-            /*rewrite_known_segments*/ false,
         );
     assert!(nested.contains("<cwd><CWD>/PRETURN_CONTEXT_DIFF_CWD</cwd>"));
 }
@@ -473,16 +833,14 @@ fn hidden_changes_remain_visible_in_fingerprints() {
     assert_ne!(ordinary("before"), ordinary("after"));
 
     let guardian = |policy| {
-        render_test_items(
-            &[
-                json!({ "type": "message", "role": "developer", "content": [{ "type": "input_text", "text": format!("You are judging one planned coding-agent action.\n{policy}") }] }),
-            ],
-            &options.clone().rewrite_known_segments(),
+        message(
+            "developer",
+            &format!("You are judging one planned coding-agent action.\n{policy}"),
         )
     };
-    let before = guardian("Original policy");
-    assert!(before.contains("<GUARDIAN_INSTRUCTIONS:hash="));
-    assert_ne!(before, guardian("Changed policy"));
+    let before = detailed(&[guardian("Original policy")]);
+    assert!(before.contains("Original policy"));
+    assert_ne!(before, detailed(&[guardian("Changed policy")]));
 }
 
 #[test]
@@ -509,8 +867,8 @@ fn long_content_parts_keep_both_ends_and_fingerprint_only_the_omitted_middle() {
     assert!(before.contains("visible before"));
     assert!(before.contains("line 79"));
     assert!(!before.contains("hidden before"));
-    assert!(before.contains("<OMITTED 48 LINES; ~97 TOKENS; hash="));
-    assert!(render(&"é".repeat(13), "visible before").contains("~97 TOKENS; hash="));
+    assert!(before.contains("<OMITTED 64 LINES; ~129 TOKENS; hash="));
+    assert!(render(&"é".repeat(13), "visible before").contains("~129 TOKENS; hash="));
     assert_ne!(before, hidden_change);
     assert_eq!(
         before.lines().find(|line| line.contains("<OMITTED")),
@@ -518,7 +876,7 @@ fn long_content_parts_keep_both_ends_and_fingerprint_only_the_omitted_middle() {
             .lines()
             .find(|line| line.contains("<OMITTED"))
     );
-    let near_threshold = (0..48)
+    let near_threshold = (0..24)
         .map(|index| format!("line {index:02}"))
         .collect::<Vec<_>>()
         .join("\n");

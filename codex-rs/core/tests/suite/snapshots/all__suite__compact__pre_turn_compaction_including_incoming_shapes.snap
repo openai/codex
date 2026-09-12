@@ -9,7 +9,7 @@ Scenario: Pre-turn auto-compaction uses the prior context without the incoming u
 00:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
 01:message/user:
-    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    <ENVIRONMENT_CONTEXT>
 02:message/user:
     USER_ONE
 -- request 2 (turn) --
@@ -23,7 +23,7 @@ Scenario: Pre-turn auto-compaction uses the prior context without the incoming u
 00:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
 01:message/user:
-    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    <ENVIRONMENT_CONTEXT>
 02:message/user:
     USER_ONE
 03:message/assistant:
@@ -47,7 +47,7 @@ Scenario: Pre-turn auto-compaction uses the prior context without the incoming u
 03:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
 04:message/user:
-    <ENVIRONMENT_CONTEXT:cwd=<CWD 2>>
+    <ENVIRONMENT_CONTEXT>
 05:message/user[2]:
     [01] <input_image:detail,image_url>
     [02] USER_THREE

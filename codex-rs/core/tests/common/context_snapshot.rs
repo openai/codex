@@ -8,19 +8,18 @@ use crate::responses::ResponsesRequest;
 use crate::responses::strip_metadata_from_json;
 use crate::responses::strip_response_item_ids_from_json;
 use normalize::Normalizer;
+use normalize::TextSource;
 use normalize::fingerprint;
-use normalize::fnv1a;
-use normalize::normalize_json;
-use normalize::normalize_line_endings;
-use normalize::normalize_stable_text;
-use normalize::render_text;
-use normalize::shorten;
+use normalize::is_bundled_model_instructions;
+use normalize::portable_tool_schema;
 use serde_json::Value;
+use text::render_text;
 
 mod normalize;
 #[cfg(test)]
 #[path = "context_snapshot/context_snapshot_tests.rs"]
 mod tests;
+mod text;
 
 const MAX_SNAPSHOT_LINE_CHARS: usize = 160;
 
@@ -31,9 +30,9 @@ pub struct ContextSnapshotOptions {
 }
 
 impl ContextSnapshotOptions {
-    /// Replace routine Apps, Skills, Plugins, AGENTS.md, permissions, environment,
-    /// model switches, personality, Guardian, and compaction guidance with named markers.
-    /// Message parts remain visible.
+    /// Replace known guidance with one-line tags such as `<PERMISSIONS_INSTRUCTIONS>`.
+    /// The default retains the text and only truncates long lines or sections. Both normalize
+    /// dynamic values such as paths and IDs before rendering.
     pub fn rewrite_known_segments(mut self) -> Self {
         self.rewrite_known_segments = true;
         self
@@ -94,20 +93,18 @@ struct CapturedRequest {
     kind: String,
     label: Option<String>,
     input: Vec<Value>,
+    model_instruction_parts: Vec<(usize, usize)>,
     settings: Option<Value>,
 }
 
-struct Window {
-    settings: Option<Value>,
+struct Window<'a> {
+    settings: Option<&'a Value>,
     boundary: Option<InputBoundary>,
-    requests: Vec<WindowRequest>,
+    requests: Vec<WindowRequest<'a>>,
 }
 
-struct WindowRequest {
-    number: usize,
-    kind: String,
-    label: Option<String>,
-    input: Vec<Value>,
+struct WindowRequest<'a> {
+    request: &'a CapturedRequest,
     suffix_start: usize,
 }
 
@@ -135,6 +132,40 @@ fn capture_request(number: usize, entry: &SnapshotEntry<'_>) -> CapturedRequest 
         }
         SnapshotSource::Items(items) => ("items".to_string(), Value::Array(items.to_vec()), None),
     };
+    // Responses Lite moves base instructions into an annotated developer content part. Keep its
+    // location for rendering, while still excluding transport metadata from window comparison.
+    let mut model_instruction_parts: Vec<_> = input
+        .as_array()
+        .expect("request input should be an array")
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| item["role"] == "developer")
+        .flat_map(|(item_index, item)| {
+            item["internal_chat_message_metadata_passthrough"]["content_item_kinds"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .enumerate()
+                .filter(|(_, kind)| **kind == "model.base_instructions")
+                .map(move |(part_index, _)| (item_index, part_index))
+        })
+        .collect();
+    // Providers can remove annotations. The Lite prefix still identifies the position, but an
+    // empty base prompt also leaves ordinary developer guidance there; require a complete catalog prompt.
+    if model_instruction_parts.is_empty()
+        && input[0]["type"] == "additional_tools"
+        && input[0]["role"] == "developer"
+        && input[1]["type"] == "message"
+        && input[1]["role"] == "developer"
+        && input[1]["content"]
+            .as_array()
+            .is_some_and(|content| content.len() == 1)
+        && input[1]["internal_chat_message_metadata_passthrough"]["content_item_kinds"][0].is_null()
+        && let Some(text) = input[1]["content"][0]["text"].as_str()
+        && is_bundled_model_instructions(text)
+    {
+        model_instruction_parts.push((1, 0));
+    }
     let input = strip_metadata_from_json(strip_response_item_ids_from_json(input));
     CapturedRequest {
         number,
@@ -144,6 +175,7 @@ fn capture_request(number: usize, entry: &SnapshotEntry<'_>) -> CapturedRequest 
             .as_array()
             .expect("request input should be an array")
             .clone(),
+        model_instruction_parts,
         settings,
     }
 }
@@ -161,10 +193,13 @@ fn capture_body(mut body: Value) -> (Value, Value) {
     (input, body)
 }
 
-fn group_requests(requests: impl IntoIterator<Item = CapturedRequest>) -> Vec<Window> {
+fn group_requests(requests: &[CapturedRequest]) -> Vec<Window<'_>> {
     let mut windows: Vec<Window> = Vec::new();
     for request in requests {
-        let previous = windows.last().and_then(|window| window.requests.last());
+        let previous = windows
+            .last()
+            .and_then(|window| window.requests.last())
+            .map(|entry| entry.request);
         let shared = previous
             .map(|previous| {
                 previous
@@ -175,31 +210,26 @@ fn group_requests(requests: impl IntoIterator<Item = CapturedRequest>) -> Vec<Wi
                     .count()
             })
             .unwrap_or(0);
-        let rewritten = previous.is_some_and(|previous| shared != previous.input.len());
-        let repeated = previous.is_some_and(|previous| shared == previous.input.len())
-            && shared == request.input.len();
-        let settings_changed = windows
-            .last()
-            .is_some_and(|window| window.settings != request.settings);
-        let unknown_settings = request.settings.is_none();
-        let new_window =
-            previous.is_none() || rewritten || repeated || settings_changed || unknown_settings;
-        if new_window {
-            let boundary = if rewritten {
+        let boundary = previous.and_then(|previous| {
+            if shared < previous.input.len() {
                 Some(if shared == request.input.len() {
                     InputBoundary::Truncated(shared)
                 } else {
                     InputBoundary::Diverged(shared)
                 })
-            } else if repeated {
+            } else if shared == request.input.len() {
                 Some(InputBoundary::Repeated)
-            } else if unknown_settings && previous.is_some() {
+            } else if request.settings.is_none() {
                 Some(InputBoundary::SettingsUnavailable)
             } else {
                 None
-            };
+            }
+        });
+        let new_window = boundary.is_some()
+            || previous.is_none_or(|previous| previous.settings != request.settings);
+        if new_window {
             windows.push(Window {
-                settings: request.settings,
+                settings: request.settings.as_ref(),
                 boundary,
                 requests: Vec::new(),
             });
@@ -209,10 +239,7 @@ fn group_requests(requests: impl IntoIterator<Item = CapturedRequest>) -> Vec<Wi
             .expect("first request starts a window")
             .requests
             .push(WindowRequest {
-                number: request.number,
-                kind: request.kind,
-                label: request.label,
-                input: request.input,
+                request,
                 suffix_start: if new_window { 0 } else { shared },
             });
     }
@@ -252,12 +279,12 @@ pub fn format_context_snapshot(
     entries: &[SnapshotEntry<'_>],
     options: &ContextSnapshotOptions,
 ) -> String {
-    let windows = group_requests(
-        entries
-            .iter()
-            .enumerate()
-            .map(|(index, entry)| capture_request(index + 1, entry)),
-    );
+    let requests = entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| capture_request(index + 1, entry))
+        .collect::<Vec<_>>();
+    let windows = group_requests(&requests);
     let mut normalizer = Normalizer::default();
     let mut result = format!("Scenario: {scenario}");
     for (index, window) in windows.iter().enumerate() {
@@ -265,7 +292,7 @@ pub fn format_context_snapshot(
         if let Some(previous) = index.checked_sub(1) {
             result.push_str(&format!(
                 " (after request {}",
-                window.requests[0].number - 1
+                window.requests[0].request.number - 1
             ));
             if let Some(boundary) = &window.boundary {
                 result.push_str(&match boundary {
@@ -278,8 +305,7 @@ pub fn format_context_snapshot(
             if !options.include_request_settings {
                 let changed = windows[previous]
                     .settings
-                    .as_ref()
-                    .zip(window.settings.as_ref())
+                    .zip(window.settings)
                     .filter(|(old, new)| old != new)
                     .map(|(old, new)| changed_setting_keys(new, Some(old)).join(", "));
                 if let Some(changed) = changed {
@@ -294,9 +320,14 @@ pub fn format_context_snapshot(
             result.push(')');
         }
         if options.include_request_settings {
-            render_window_settings(&mut result, &windows, index, &mut normalizer);
+            render_window_settings(&mut result, &windows, index, options, &mut normalizer);
         }
-        for request in &window.requests {
+        for WindowRequest {
+            request,
+            suffix_start,
+        } in &window.requests
+        {
+            normalizer.observe_request(&request.input);
             let label = request
                 .label
                 .as_deref()
@@ -306,16 +337,17 @@ pub fn format_context_snapshot(
                 "\n-- request {} ({}{label}) --",
                 request.number, request.kind
             ));
-            let suffix = &request.input[request.suffix_start..];
+            let suffix = &request.input[*suffix_start..];
             if !suffix.is_empty() {
                 result.push('\n');
                 result.push_str(&render_items(
                     suffix,
-                    request.suffix_start,
+                    *suffix_start,
+                    &request.model_instruction_parts,
                     options,
                     &mut normalizer,
                 ));
-            } else if request.number == window.requests[0].number {
+            } else if request.number == window.requests[0].request.number {
                 result.push_str("\n<EMPTY_INPUT>");
             }
         }
@@ -325,24 +357,25 @@ pub fn format_context_snapshot(
 
 fn render_window_settings(
     result: &mut String,
-    windows: &[Window],
+    windows: &[Window<'_>],
     index: usize,
+    options: &ContextSnapshotOptions,
     normalizer: &mut Normalizer,
 ) {
-    let Some(settings) = &windows[index].settings else {
+    let Some(settings) = windows[index].settings else {
         result.push_str("\nSettings: unavailable (items only)");
         return;
     };
     let Some(previous) = index.checked_sub(1) else {
         result.push_str("\nSettings:");
         result.push_str(&render_settings(
-            settings, /*previous*/ None, normalizer,
+            settings, /*previous*/ None, options, normalizer,
         ));
         return;
     };
     if let Some(same) = windows[..index]
         .iter()
-        .position(|earlier| earlier.settings.as_ref() == Some(settings))
+        .position(|earlier| earlier.settings == Some(settings))
     {
         result.push_str(&format!("\nSettings: same as window {}", same + 1));
         return;
@@ -354,7 +387,8 @@ fn render_window_settings(
     }
     result.push_str(&render_settings(
         settings,
-        windows[previous].settings.as_ref(),
+        windows[previous].settings,
+        options,
         normalizer,
     ));
 }
@@ -362,6 +396,7 @@ fn render_window_settings(
 fn render_settings(
     settings: &Value,
     previous: Option<&Value>,
+    options: &ContextSnapshotOptions,
     normalizer: &mut Normalizer,
 ) -> String {
     let mut lines = Vec::new();
@@ -379,16 +414,10 @@ fn render_settings(
                 ));
             }
             ("instructions", Value::String(text)) => {
-                let text = normalize_line_endings(text);
-                let first = text.lines().next().unwrap_or_default();
                 lines.push(format!(
-                    "  instructions ({} lines, {} chars, hash={}): {}",
-                    text.lines().count(),
-                    text.chars().count(),
-                    fingerprint(value),
-                    shorten(
-                        first, /*limit*/ 120, /*keep_tail*/ false, /*hash*/ false
-                    )
+                    "  instructions: {}",
+                    render_text(text, TextSource::ModelInstructions, options, normalizer)
+                        .replace('\n', "\n    ")
                 ));
             }
             ("tools", Value::Array(tools)) => {
@@ -406,10 +435,7 @@ fn render_settings(
                 lines.extend(render_tools(tools, prior));
             }
             _ => {
-                let mut normalized = value.clone();
-                normalize_json(&mut normalized, &mut |text| {
-                    normalize_stable_text(&normalizer.normalize_uuids(text))
-                });
+                let normalized = normalizer.json(value);
                 lines.push(format!("  {key}: {normalized}"));
             }
         }
@@ -484,15 +510,12 @@ fn render_tool(tool: &Value, marker: char) -> String {
         .and_then(Value::as_str)
         .filter(|text| !text.is_empty())
         .map(|text| {
-            format!(
-                ": {}",
-                shorten(
-                    &text.replace('\n', " "),
-                    /*limit*/ 100,
-                    /*keep_tail*/ false,
-                    /*hash*/ false,
-                )
-            )
+            let text = text.replace('\n', " ");
+            if text.chars().count() > 100 {
+                format!(": {}...", text.chars().take(97).collect::<String>())
+            } else {
+                format!(": {text}")
+            }
         })
         .unwrap_or_default();
     let args = definition
@@ -517,71 +540,6 @@ fn render_tool(tool: &Value, marker: char) -> String {
     rendered
 }
 
-// Shell guidance and its yield-time wording intentionally differ on Windows. Compare all other
-// tool schema fields, while keeping the context snapshots identical across operating systems.
-fn portable_tool_schema(tool: &Value) -> Value {
-    const BASE: &str =
-        "Runs a command in a PTY, returning output or a session ID for ongoing interaction.";
-    // Exact current Windows-only suffix. A change to its wording must be reviewed explicitly.
-    const WINDOWS_SAFETY_SUFFIX_HASH: u64 = 0x6de3_23e4_7060_6128;
-    const UNIX_WAIT: &str =
-        "Wait before yielding output. Defaults to 10000 ms; effective range is 250-30000 ms.";
-    const WINDOWS_WAIT: &str = "Maximum time to wait before returning a session ID for a still-running command. Commands that finish sooner return immediately. For ordinary commands, omit this parameter to use the 10000 ms default. Effective range on Windows is 10000-30000 ms.";
-    let mut stable = tool.clone();
-    if let Some(Value::Array(members)) = stable.get_mut("tools") {
-        for member in members {
-            *member = portable_tool_schema(member);
-        }
-    }
-    let definition = if stable.get("function").is_some() {
-        stable
-            .get_mut("function")
-            .expect("function tool definition")
-    } else {
-        &mut stable
-    };
-    if definition.get("name").and_then(Value::as_str) == Some("exec") {
-        if let Some(Value::String(description)) = definition.get_mut("description") {
-            // Code mode embeds the exec_command description and its TypeScript declaration
-            // inside the exec tool. Apply the same narrow platform normalization there.
-            if let Some((start, section)) = description.split_once("### `exec_command`\n")
-                && let Some(rest) = section.strip_prefix(BASE)
-                && let Some((suffix, _)) = rest.split_once("\n\nexec tool declaration:")
-                && suffix.starts_with("\n\nWindows safety rules:")
-                && fnv1a(normalize_line_endings(suffix).as_bytes()) == WINDOWS_SAFETY_SUFFIX_HASH
-            {
-                *description =
-                    format!("{start}### `exec_command`\n{BASE}{}", &rest[suffix.len()..]);
-            }
-            for platform_wait in [UNIX_WAIT, WINDOWS_WAIT] {
-                *description = description.replace(
-                    &format!("  // {platform_wait}"),
-                    "  // <PLATFORM_WAIT_GUIDANCE>",
-                );
-            }
-        }
-        return stable;
-    }
-    if definition.get("name").and_then(Value::as_str) != Some("exec_command") {
-        return stable;
-    }
-    if let Some(Value::String(description)) = definition.get_mut("description")
-        && description.strip_prefix(BASE).is_some_and(|rest| {
-            rest.starts_with("\n\nWindows safety rules:")
-                && fnv1a(normalize_line_endings(rest).as_bytes()) == WINDOWS_SAFETY_SUFFIX_HASH
-        })
-    {
-        *description = BASE.to_string();
-    }
-    if let Some(Value::String(wait)) =
-        definition.pointer_mut("/parameters/properties/yield_time_ms/description")
-        && (wait == UNIX_WAIT || wait == WINDOWS_WAIT)
-    {
-        *wait = "<PLATFORM_WAIT_GUIDANCE>".to_string();
-    }
-    stable
-}
-
 fn tool_label(tool: &Value) -> String {
     let kind = tool
         .get("type")
@@ -598,6 +556,7 @@ fn tool_label(tool: &Value) -> String {
 fn render_items(
     items: &[Value],
     start_index: usize,
+    model_instruction_parts: &[(usize, usize)],
     options: &ContextSnapshotOptions,
     normalizer: &mut Normalizer,
 ) -> String {
@@ -605,8 +564,14 @@ fn render_items(
         .iter()
         .enumerate()
         .map(|(offset, item)| {
-            let rendered = render_item(start_index + offset, item, options, normalizer)
-                .replace('\n', "\n    ");
+            let rendered = render_item(
+                start_index + offset,
+                item,
+                model_instruction_parts,
+                options,
+                normalizer,
+            )
+            .replace('\n', "\n    ");
             rendered
                 .split('\n')
                 .map(str::trim_end)
@@ -620,6 +585,7 @@ fn render_items(
 fn render_item(
     index: usize,
     item: &Value,
+    model_instruction_parts: &[(usize, usize)],
     options: &ContextSnapshotOptions,
     normalizer: &mut Normalizer,
 ) -> String {
@@ -627,7 +593,7 @@ fn render_item(
         return format!("{index:02}:<MISSING_TYPE>");
     };
     match kind {
-        "message" => render_message(index, item, options, normalizer),
+        "message" => render_message(index, item, model_instruction_parts, options, normalizer),
         "additional_tools" => {
             let Some(tools) = item.get("tools").and_then(Value::as_array) else {
                 return format!("{index:02}:additional_tools:<MISSING_TOOLS>");
@@ -649,17 +615,7 @@ fn render_item(
             let args = item
                 .get("arguments")
                 .and_then(Value::as_str)
-                .map(|text| {
-                    let normalized = serde_json::from_str::<Value>(text)
-                        .map(|mut value| {
-                            normalize_json(&mut value, &mut |text| {
-                                normalize_stable_text(&normalizer.normalize_uuids(text))
-                            });
-                            value.to_string()
-                        })
-                        .unwrap_or_else(|_| text.to_string());
-                    render_text(&normalized, options, normalizer)
-                })
+                .map(|text| render_text(text, TextSource::FunctionArguments, options, normalizer))
                 .unwrap_or_else(|| "<NO_ARGUMENTS>".to_string());
             format!("{index:02}:function_call/{name}:{args}")
         }
@@ -668,7 +624,7 @@ fn render_item(
             let input = item
                 .get("input")
                 .and_then(Value::as_str)
-                .map(|input| render_text(input, options, normalizer))
+                .map(|input| render_text(input, TextSource::Other, options, normalizer))
                 .unwrap_or_else(|| "<NO_INPUT>".to_string());
             format!("{index:02}:custom_tool_call/{name}:{input}")
         }
@@ -686,13 +642,17 @@ fn render_item(
             let output = item
                 .get("output")
                 .map(|output| match output {
-                    Value::String(text) => render_text(text, options, normalizer),
+                    Value::String(text) => {
+                        render_text(text, TextSource::Other, options, normalizer)
+                    }
                     Value::Array(parts) => parts
                         .iter()
                         .map(|part| {
                             part.get("text")
                                 .and_then(Value::as_str)
-                                .map(|text| render_text(text, options, normalizer))
+                                .map(|text| {
+                                    render_text(text, TextSource::Other, options, normalizer)
+                                })
                                 .unwrap_or_else(|| format!("<{}>", tool_label(part)))
                         })
                         .collect::<Vec<_>>()
@@ -701,7 +661,7 @@ fn render_item(
                         let content = fields
                             .get("content")
                             .and_then(Value::as_str)
-                            .map(|text| render_text(text, options, normalizer))
+                            .map(|text| render_text(text, TextSource::Other, options, normalizer))
                             .unwrap_or_else(|| "<NO_TEXT>".to_string());
                         match fields.get("success").and_then(Value::as_bool) {
                             Some(success) => format!("success={success}:{content}"),
@@ -726,7 +686,7 @@ fn render_item(
                         .join(" ")
                 })
                 .filter(|text| !text.is_empty())
-                .map(|text| render_text(&text, options, normalizer))
+                .map(|text| render_text(&text, TextSource::Other, options, normalizer))
                 .unwrap_or_else(|| "<NO_COMMAND>".to_string());
             format!("{index:02}:local_shell_call:{command}")
         }
@@ -737,7 +697,7 @@ fn render_item(
                 .and_then(|entries| entries.first())
                 .and_then(|entry| entry.get("text"))
                 .and_then(Value::as_str)
-                .map(|text| render_text(text, options, normalizer))
+                .map(|text| render_text(text, TextSource::Other, options, normalizer))
                 .unwrap_or_else(|| "<NO_SUMMARY>".to_string());
             let encrypted = has_encrypted_content(item);
             format!("{index:02}:reasoning:summary={summary}:encrypted={encrypted}")
@@ -780,6 +740,7 @@ fn has_encrypted_content(item: &Value) -> bool {
 fn render_message(
     index: usize,
     item: &Value,
+    model_instruction_parts: &[(usize, usize)],
     options: &ContextSnapshotOptions,
     normalizer: &mut Normalizer,
 ) -> String {
@@ -792,9 +753,15 @@ fn render_message(
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .map(|part| {
+        .enumerate()
+        .map(|(part_index, part)| {
             if let Some(text) = part.get("text").and_then(Value::as_str) {
-                return render_text(text, options, normalizer);
+                let source = if model_instruction_parts.contains(&(index, part_index)) {
+                    TextSource::ModelInstructions
+                } else {
+                    TextSource::Message(role)
+                };
+                return render_text(text, source, options, normalizer);
             }
             let Some(kind) = part.get("type").and_then(Value::as_str) else {
                 return "<UNKNOWN_CONTENT_ITEM>".to_string();

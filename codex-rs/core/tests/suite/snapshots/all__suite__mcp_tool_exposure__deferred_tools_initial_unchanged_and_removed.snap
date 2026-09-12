@@ -14,7 +14,7 @@ Scenario: Initially available deferred tools remain unchanged until disabling Ca
         - mcp__codex_apps__calendar: Plan events and manage your calendar.
         </tools>
 01:message/user:
-    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    <ENVIRONMENT_CONTEXT>
 02:message/user:
     inspect initially available deferred tools
 -- request 2 (turn; Unchanged follow-up) --
@@ -33,7 +33,7 @@ Scenario: Initially available deferred tools remain unchanged until disabling Ca
         - mcp__codex_apps__calendar: Plan events and manage your calendar.
         </tools>
 01:message/user:
-    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    <ENVIRONMENT_CONTEXT>
 02:message/user:
     inspect initially available deferred tools
 03:message/assistant:

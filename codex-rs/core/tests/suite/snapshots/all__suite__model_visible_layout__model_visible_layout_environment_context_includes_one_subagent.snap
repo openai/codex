@@ -7,4 +7,4 @@ Scenario: Environment context with subagents
 ## Window 1
 -- request 1 (items) --
 00:message/user:
-    <ENVIRONMENT_CONTEXT:cwd=<CWD>:subagents=1>
+    <ENVIRONMENT_CONTEXT>

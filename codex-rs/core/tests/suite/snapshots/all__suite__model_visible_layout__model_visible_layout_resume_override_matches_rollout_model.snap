@@ -10,13 +10,13 @@ Scenario: First post-resume turn where pre-turn override sets model to rollout m
     [01] <SKILLS_INSTRUCTIONS>
     [02] <PERMISSIONS_INSTRUCTIONS>
 01:message/user:
-    <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    <ENVIRONMENT_CONTEXT>
 02:message/user:
     seed resume history
 -- request 2 (turn; First Request After Resume + Override) --
 03:message/assistant:
     recorded before resume
 04:message/user:
-    <ENVIRONMENT_CONTEXT:cwd=<CWD 2>>
+    <ENVIRONMENT_CONTEXT>
 05:message/user:
     first resumed turn after model override
