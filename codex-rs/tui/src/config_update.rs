@@ -121,24 +121,6 @@ pub(crate) fn build_service_tier_selection_edits(service_tier: Option<&str>) -> 
     vec![service_tier_edit]
 }
 
-#[cfg(target_os = "windows")]
-pub(crate) fn build_windows_sandbox_mode_edits(elevated_enabled: bool) -> Vec<ConfigEdit> {
-    let feature_key_path = |feature: &str| format!("features.{feature}");
-    vec![
-        replace_config_value(
-            "windows.sandbox",
-            serde_json::json!(if elevated_enabled {
-                "elevated"
-            } else {
-                "unelevated"
-            }),
-        ),
-        clear_config_value(feature_key_path("experimental_windows_sandbox")),
-        clear_config_value(feature_key_path("elevated_windows_sandbox")),
-        clear_config_value(feature_key_path("enable_experimental_windows_sandbox")),
-    ]
-}
-
 pub(crate) fn build_feature_enabled_edit(feature_key: &str, enabled: bool) -> ConfigEdit {
     let key_path = format!("features.{feature_key}");
     let is_default_false_feature = FEATURES

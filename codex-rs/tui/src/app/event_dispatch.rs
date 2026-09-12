@@ -1988,186 +1988,31 @@ impl App {
                 preset,
                 profile_selection,
             } => {
-                #[cfg(any(target_os = "windows", test))]
-                if !self.chat_widget.windows_sandbox_mode_allowed(
-                    codex_config::types::WindowsSandboxModeToml::Elevated,
-                ) {
-                    tracing::warn!(
-                        "refusing to set up elevated Windows sandbox mode disallowed by requirements"
-                    );
-                    self.chat_widget.add_info_message(
-                        "That Windows sandbox option is disallowed by requirements.".to_string(),
-                        /*hint*/ None,
-                    );
-                    return Ok(AppRunControl::Continue);
-                }
                 #[cfg(target_os = "windows")]
-                {
-                    let setup_permissions = match self
-                        .windows_setup_permissions(&preset, profile_selection.as_ref())
-                        .await
-                    {
-                        Ok(setup_permissions) => setup_permissions,
-                        Err(err) => {
-                            tracing::warn!(
-                                error = %err,
-                                "failed to resolve permission profile for elevated Windows sandbox setup"
-                            );
-                            self.chat_widget.add_error_message(format!(
-                                "Failed to prepare Windows sandbox for the selected permission profile: {err}"
-                            ));
-                            return Ok(AppRunControl::Continue);
-                        }
-                    };
-                    let permission_profile = setup_permissions.permission_profile;
-                    let workspace_roots = setup_permissions.workspace_roots;
-                    let command_cwd = self.config.cwd.clone();
-                    let env_map: std::collections::HashMap<String, String> =
-                        std::env::vars().collect();
-                    let codex_home = self.config.codex_home.clone();
-                    let tx = self.app_event_tx.clone();
-
-                    self.chat_widget.show_windows_sandbox_setup_status();
-                    self.windows_sandbox.setup_started_at = Some(Instant::now());
-                    let session_telemetry = self.session_telemetry.clone();
-                    tokio::task::spawn_blocking(move || {
-                        let result = crate::windows_sandbox::prepare_elevated_sandbox(
-                            &permission_profile,
-                            workspace_roots.as_slice(),
-                            command_cwd.as_path(),
-                            &env_map,
-                            codex_home.as_path(),
-                        );
-                        let event = match result {
-                            Ok(()) => {
-                                session_telemetry.counter(
-                                    "codex.windows_sandbox.elevated_setup_success",
-                                    /*inc*/ 1,
-                                    &[],
-                                );
-                                AppEvent::EnableWindowsSandboxForAgentMode {
-                                    preset: preset.clone(),
-                                    mode: WindowsSandboxEnableMode::Elevated,
-                                    profile_selection: profile_selection.clone(),
-                                }
-                            }
-                            Err(err) => {
-                                let mut code_tag: Option<String> = None;
-                                let mut message_tag: Option<String> = None;
-                                if let Some((code, message)) =
-                                    crate::windows_sandbox::elevated_setup_failure_details(&err)
-                                {
-                                    code_tag = Some(code);
-                                    message_tag = Some(message);
-                                }
-                                let mut tags: Vec<(&str, &str)> = Vec::new();
-                                if let Some(code) = code_tag.as_deref() {
-                                    tags.push(("code", code));
-                                }
-                                if let Some(message) = message_tag.as_deref() {
-                                    tags.push(("message", message));
-                                }
-                                session_telemetry.counter(
-                                    crate::windows_sandbox::elevated_setup_failure_metric_name(
-                                        &err,
-                                    ),
-                                    /*inc*/ 1,
-                                    &tags,
-                                );
-                                tracing::error!(
-                                    error = %err,
-                                    "failed to run elevated Windows sandbox setup"
-                                );
-                                AppEvent::OpenWindowsSandboxFallbackPrompt {
-                                    preset,
-                                    profile_selection,
-                                }
-                            }
-                        };
-                        tx.send(event);
-                    });
-                }
+                self.begin_windows_sandbox_setup(
+                    app_server,
+                    preset,
+                    profile_selection,
+                    WindowsSandboxEnableMode::Elevated,
+                )
+                .await;
                 #[cfg(not(target_os = "windows"))]
-                {
-                    let _ = (preset, profile_selection);
-                }
+                let _ = (preset, profile_selection);
             }
             AppEvent::BeginWindowsSandboxLegacySetup {
                 preset,
                 profile_selection,
             } => {
-                #[cfg(any(target_os = "windows", test))]
-                if !self.chat_widget.windows_sandbox_mode_allowed(
-                    codex_config::types::WindowsSandboxModeToml::Unelevated,
-                ) {
-                    tracing::warn!(
-                        "refusing to set up unelevated Windows sandbox mode disallowed by requirements"
-                    );
-                    self.chat_widget.add_info_message(
-                        "That Windows sandbox option is disallowed by requirements.".to_string(),
-                        /*hint*/ None,
-                    );
-                    return Ok(AppRunControl::Continue);
-                }
                 #[cfg(target_os = "windows")]
-                {
-                    let setup_permissions = match self
-                        .windows_setup_permissions(&preset, profile_selection.as_ref())
-                        .await
-                    {
-                        Ok(setup_permissions) => setup_permissions,
-                        Err(err) => {
-                            tracing::warn!(
-                                error = %err,
-                                "failed to resolve permission profile for legacy Windows sandbox setup"
-                            );
-                            self.chat_widget.add_error_message(format!(
-                                "Failed to prepare Windows sandbox for the selected permission profile: {err}"
-                            ));
-                            return Ok(AppRunControl::Continue);
-                        }
-                    };
-                    let permission_profile = setup_permissions.permission_profile;
-                    let workspace_roots = setup_permissions.workspace_roots;
-                    let command_cwd = self.config.cwd.clone();
-                    let env_map: std::collections::HashMap<String, String> =
-                        std::env::vars().collect();
-                    let codex_home = self.config.codex_home.clone();
-                    let tx = self.app_event_tx.clone();
-                    let session_telemetry = self.session_telemetry.clone();
-
-                    self.chat_widget.show_windows_sandbox_setup_status();
-                    tokio::task::spawn_blocking(move || {
-                        if let Err(err) =
-                            codex_windows_sandbox::run_windows_sandbox_legacy_preflight(
-                                &permission_profile,
-                                workspace_roots.as_slice(),
-                                codex_home.as_path(),
-                                command_cwd.as_path(),
-                                &env_map,
-                            )
-                        {
-                            session_telemetry.counter(
-                                "codex.windows_sandbox.legacy_setup_preflight_failed",
-                                /*inc*/ 1,
-                                &[],
-                            );
-                            tracing::warn!(
-                                error = %err,
-                                "failed to preflight non-admin Windows sandbox setup"
-                            );
-                        }
-                        tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
-                            preset,
-                            mode: WindowsSandboxEnableMode::Legacy,
-                            profile_selection,
-                        });
-                    });
-                }
+                self.begin_windows_sandbox_setup(
+                    app_server,
+                    preset,
+                    profile_selection,
+                    WindowsSandboxEnableMode::Legacy,
+                )
+                .await;
                 #[cfg(not(target_os = "windows"))]
-                {
-                    let _ = (preset, profile_selection);
-                }
+                let _ = (preset, profile_selection);
             }
             AppEvent::EnableWindowsSandboxForAgentMode {
                 preset,
@@ -2177,7 +2022,9 @@ impl App {
                 #[cfg(target_os = "windows")]
                 {
                     self.chat_widget.clear_windows_sandbox_setup_status();
-                    if let Some(started_at) = self.windows_sandbox.setup_started_at.take() {
+                    if let Some(started_at) = self.windows_sandbox.setup_started_at.take()
+                        && mode == WindowsSandboxEnableMode::Elevated
+                    {
                         self.session_telemetry.record_duration(
                             "codex.windows_sandbox.elevated_setup_duration_ms",
                             started_at.elapsed(),
@@ -2192,7 +2039,7 @@ impl App {
                     if !self.chat_widget.windows_sandbox_mode_allowed(selected_mode) {
                         tracing::warn!(
                             ?selected_mode,
-                            "refusing to persist Windows sandbox mode disallowed by requirements"
+                            "refusing to enable Windows sandbox mode disallowed by requirements"
                         );
                         self.chat_widget.add_info_message(
                             "That Windows sandbox option is disallowed by requirements."
@@ -2201,20 +2048,12 @@ impl App {
                         );
                         return Ok(AppRunControl::Continue);
                     }
-                    self.chat_widget.windows_sandbox_elevated_setup_complete = elevated_enabled;
-                    let edits =
-                        crate::config_update::build_windows_sandbox_mode_edits(elevated_enabled);
-                    match crate::config_update::write_config_batch(
-                        app_server.request_handle(),
-                        edits,
-                    )
-                    .await
+                    if self
+                        .verify_windows_sandbox_mode_after_setup(app_server, selected_mode)
+                        .await
                     {
-                        Ok(response) if response.status == WriteStatus::OkOverridden => {
-                            self.sync_windows_sandbox_after_overridden_write(app_server, &response)
-                                .await;
-                        }
-                        Ok(_) => {
+                            self.chat_widget.windows_sandbox_elevated_setup_complete =
+                                elevated_enabled;
                             if elevated_enabled {
                                 self.config.set_windows_sandbox_enabled(/*value*/ false);
                                 self.config
@@ -2250,14 +2089,6 @@ impl App {
                                 if self.apply_permission_profile_selection(selection).await {
                                     self.chat_widget.submit_initial_user_message_if_pending();
                                 }
-                                self.chat_widget.add_plain_history_lines(vec![
-                                    Line::from(vec!["• ".dim(), "Sandbox ready".into()]),
-                                    Line::from(vec![
-                                        "  ".into(),
-                                        "Codex can now safely edit files and execute commands in your computer"
-                                            .dark_gray(),
-                                    ]),
-                                ]);
                             } else {
                                 self.app_event_tx.send(AppEvent::CodexOp(
                                     AppCommand::override_turn_context(
@@ -2283,6 +2114,7 @@ impl App {
                                     .send(AppEvent::UpdateActivePermissionProfile(
                                         preset.active_permission_profile.clone(),
                                     ));
+                            }
                                 self.chat_widget.add_plain_history_lines(vec![
                                     Line::from(vec!["• ".dim(), "Sandbox ready".into()]),
                                     Line::from(vec![
@@ -2291,17 +2123,8 @@ impl App {
                                             .dark_gray(),
                                     ]),
                                 ]);
-                            }
-                        }
-                        Err(err) => {
-                            tracing::error!(
-                                error = %err,
-                                "failed to enable Windows sandbox feature"
-                            );
-                            self.chat_widget.add_error_message(format!(
-                                "Failed to enable the Windows sandbox feature: {err}"
-                            ));
-                        }
+                    } else {
+                        self.chat_widget.retain_input_after_failed_permission_selection();
                     }
                 }
                 #[cfg(not(target_os = "windows"))]

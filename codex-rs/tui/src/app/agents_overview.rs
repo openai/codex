@@ -334,6 +334,9 @@ impl App {
         app_server: &mut AppServerSession,
         root_thread_id: ThreadId,
     ) -> color_eyre::Result<AppRunControl> {
+        if self.windows_sandbox_blocks_thread_switch() {
+            return Ok(AppRunControl::Continue);
+        }
         if self.current_displayed_thread_id() == Some(root_thread_id)
             && (!self.thread_unavailable(root_thread_id)
                 || self.chat_widget.is_external_writer_view())

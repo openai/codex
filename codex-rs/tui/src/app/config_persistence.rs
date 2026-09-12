@@ -6,14 +6,6 @@
 
 use super::*;
 use codex_config::ConfigLayerSource;
-#[cfg(target_os = "windows")]
-use codex_utils_approval_presets::ApprovalPreset;
-
-#[cfg(target_os = "windows")]
-pub(super) struct WindowsSetupPermissions {
-    pub(super) permission_profile: PermissionProfile,
-    pub(super) workspace_roots: Vec<AbsolutePathBuf>,
-}
 
 async fn build_config_on_runtime_worker(
     builder: ConfigBuilder,
@@ -125,29 +117,6 @@ impl App {
             format!("Failed to rebuild config for permission profile {profile_id}"),
         )
         .await
-    }
-
-    #[cfg(target_os = "windows")]
-    pub(super) async fn windows_setup_permissions(
-        &self,
-        preset: &ApprovalPreset,
-        profile_selection: Option<&PermissionProfileSelection>,
-    ) -> Result<WindowsSetupPermissions> {
-        match profile_selection {
-            Some(selection) => {
-                let selected_config = self
-                    .rebuild_config_for_permission_profile(selection.profile_id.as_str())
-                    .await?;
-                Ok(WindowsSetupPermissions {
-                    permission_profile: selected_config.permissions.permission_profile().clone(),
-                    workspace_roots: selected_config.effective_workspace_roots(),
-                })
-            }
-            None => Ok(WindowsSetupPermissions {
-                permission_profile: preset.permission_profile.clone(),
-                workspace_roots: self.config.effective_workspace_roots(),
-            }),
-        }
     }
 
     pub(super) async fn apply_permission_profile_selection(
@@ -1266,31 +1235,34 @@ impl App {
     }
 
     #[cfg(target_os = "windows")]
-    pub(super) async fn sync_windows_sandbox_after_overridden_write(
+    pub(super) async fn verify_windows_sandbox_mode_after_setup(
         &mut self,
         app_server: &mut AppServerSession,
-        write_response: &ConfigWriteResponse,
-    ) {
-        let message = overridden_write_message(write_response);
-        tracing::warn!(
-            message,
-            "Windows sandbox config write was overridden by effective config"
-        );
-        self.chat_widget.add_error_message(format!(
-            "Windows sandbox changes were saved but not applied: {message}"
-        ));
-        let Some(effective_config) = self
-            .read_effective_config_after_overridden_write(app_server, "Windows sandbox changes")
+        requested_mode: codex_config::types::WindowsSandboxModeToml,
+    ) -> bool {
+        let cwd = self.chat_widget.config_ref().cwd.display().to_string();
+        let mode = crate::config_update::read_effective_config(app_server.request_handle(), cwd)
             .await
-        else {
-            return;
-        };
-        let Some(mode) = windows_sandbox_mode_from_effective_config(&effective_config) else {
-            return;
+            .ok()
+            .and_then(|config| windows_sandbox_mode_from_effective_config(&config));
+        let Some(mode) = mode else {
+            self.chat_widget.add_error_message(
+                "Windows sandbox setup completed, but Codex could not verify the effective sandbox mode."
+                    .to_string(),
+            );
+            return false;
         };
         self.config.permissions.windows_sandbox_mode = Some(mode);
+        if mode == requested_mode {
+            return true;
+        }
         self.chat_widget.set_windows_sandbox_mode(Some(mode));
         self.propagate_windows_sandbox_turn_context();
+        self.chat_widget.add_error_message(
+            "Windows sandbox setup completed, but its mode was overridden by the effective configuration."
+                .to_string(),
+        );
+        false
     }
 
     fn propagate_windows_sandbox_turn_context(&self) {

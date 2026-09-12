@@ -259,6 +259,16 @@ impl App {
         self.rate_limit_refresh_state.invalidate_recovery();
         session.inherit_task_tool_capabilities(app_server);
         *app_server = session;
+        #[cfg(any(target_os = "windows", test))]
+        let interrupted_windows_setup = self.windows_sandbox.pending_setup.take().is_some();
+        #[cfg(any(target_os = "windows", test))]
+        {
+            if interrupted_windows_setup {
+                self.windows_sandbox.setup_started_at = None;
+                self.chat_widget.clear_windows_sandbox_setup_status();
+                self.chat_widget.windows_sandbox_elevated_setup_complete = false;
+            }
+        }
         self.chat_widget.set_local_worktree_operations(
             !crate::uses_remote_workspace_or_environment(
                 &self.app_server_target,
@@ -418,6 +428,13 @@ impl App {
             let view = self.agents_overview_view(threads, selected);
             self.chat_widget.show_bottom_pane_view(Box::new(view));
             self.refresh_agents_overview_threads(app_server);
+        }
+        #[cfg(any(target_os = "windows", test))]
+        if interrupted_windows_setup {
+            self.chat_widget.add_error_message(
+                "Windows sandbox setup was interrupted. Restart Codex before using Agent mode."
+                    .to_string(),
+            );
         }
         // Only accept fresh task-tool calls once this connection and its event queue are adopted.
         if let ThreadToolTransport::Mcp(server) = app_server.thread_tool_transport() {

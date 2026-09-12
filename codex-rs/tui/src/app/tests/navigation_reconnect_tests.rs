@@ -6,6 +6,7 @@ use super::*;
 use crate::app::reconnect::ReconnectPresentation;
 use crate::app::reconnect::reconnect;
 use crate::app_event::AgentsOverviewThreadRefresh;
+use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_server_session::ThreadParamsMode;
 use codex_app_server_client::AppServerEvent;
 use pretty_assertions::assert_eq;
@@ -170,7 +171,16 @@ async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conv
         app.app_server_target = AppServerTarget::LocalDaemon {
             endpoint: endpoint.clone(),
         };
-        if previous_thread.is_none() {
+        let interrupted_setup = previous_thread.is_none() && !overview_initialized;
+        if interrupted_setup {
+            let preset = codex_utils_approval_presets::builtin_approval_presets()
+                .into_iter()
+                .find(|preset| preset.id == "auto")
+                .expect("auto preset");
+            app.windows_sandbox.pending_setup =
+                Some((WindowsSandboxEnableMode::Elevated, preset, None));
+            app.windows_sandbox.setup_started_at = Some(Instant::now());
+        } else if previous_thread.is_none() {
             app.chat_widget.windows_sandbox_elevated_setup_complete = true;
         }
         let available = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -317,7 +327,27 @@ async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conv
             CODEX_CLI_VERSION,
         )
         .await?;
-        if previous_thread.is_none() {
+        if interrupted_setup {
+            assert!(app.windows_sandbox.pending_setup.is_none());
+            assert!(app.windows_sandbox.setup_started_at.is_none());
+            let mut retained = Vec::new();
+            let mut saw_warning = false;
+            while let Ok(event) = events.try_recv() {
+                if let AppEvent::InsertHistoryCell(cell) = &event {
+                    let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 100));
+                    if rendered.contains("Windows sandbox setup was interrupted") {
+                        insta::assert_snapshot!(rendered, @"■ Windows sandbox setup was interrupted. Restart Codex before using Agent mode.");
+                        saw_warning = true;
+                        continue;
+                    }
+                }
+                retained.push(event);
+            }
+            assert!(saw_warning);
+            for event in retained {
+                app.app_event_tx.send(event);
+            }
+        } else if previous_thread.is_none() {
             assert!(app.chat_widget.windows_sandbox_elevated_setup_complete);
         }
         assert!(!app.reconnect.offline);

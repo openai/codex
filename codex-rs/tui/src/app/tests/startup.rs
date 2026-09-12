@@ -63,6 +63,109 @@ async fn windows_sandbox_setup_skips_remote_default_executor() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn uncertain_windows_sandbox_setup_keeps_intent_and_input_locked() {
+    use crate::app_event::WindowsSandboxEnableMode;
+    use codex_app_server_protocol::WindowsSandboxSetupStartResponse;
+    let preset = builtin_approval_presets()
+        .into_iter()
+        .find(|preset| preset.id == "auto")
+        .expect("auto preset");
+
+    for response in [
+        Ok(Err(TypedRequestError::Transport {
+            method: "windowsSandbox/setupStart".to_string(),
+            source: std::io::Error::new(std::io::ErrorKind::BrokenPipe, "connection closed"),
+        })),
+        tokio::time::timeout(
+            Duration::ZERO,
+            std::future::pending::<
+                std::result::Result<WindowsSandboxSetupStartResponse, TypedRequestError>,
+            >(),
+        )
+        .await,
+    ] {
+        let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+        while events.try_recv().is_ok() {}
+        app.windows_sandbox.pending_setup =
+            Some((WindowsSandboxEnableMode::Elevated, preset.clone(), None));
+        app.windows_sandbox.setup_started_at = Some(Instant::now());
+        app.chat_widget.show_windows_sandbox_setup_status();
+        let transport_error = matches!(&response, Ok(Err(TypedRequestError::Transport { .. })));
+
+        app.finish_windows_sandbox_setup_start(response);
+
+        assert!(app.windows_sandbox.pending_setup.is_some());
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert!(app.chat_widget.composer_text_with_pending().is_empty());
+        let cell = match events.try_recv() {
+            Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+            other => panic!("expected setup error message, got {other:?}"),
+        };
+        let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 160));
+        if transport_error {
+            insta::assert_snapshot!(rendered, @"■ Windows sandbox setup response was lost. Waiting for completion or reconnection.");
+        } else {
+            insta::assert_snapshot!(rendered, @"■ Windows sandbox setup request timed out. Waiting for completion; restart Codex if it does not finish.");
+        }
+    }
+}
+
+#[tokio::test]
+async fn windows_sandbox_setup_completion_requires_matching_pending_mode() -> Result<()> {
+    use crate::app_event::WindowsSandboxEnableMode;
+    use codex_app_server_protocol::WindowsSandboxSetupCompletedNotification;
+    use codex_app_server_protocol::WindowsSandboxSetupMode;
+
+    let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    while events.try_recv().is_ok() {}
+    let app_server =
+        crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+    let preset = builtin_approval_presets()
+        .into_iter()
+        .find(|preset| preset.id == "auto")
+        .expect("auto preset");
+    app.windows_sandbox.pending_setup = Some((WindowsSandboxEnableMode::Elevated, preset, None));
+    app.windows_sandbox.setup_started_at = Some(Instant::now());
+
+    for mode in [
+        WindowsSandboxSetupMode::Unelevated,
+        WindowsSandboxSetupMode::Elevated,
+    ] {
+        app.handle_app_server_event(
+            &app_server,
+            codex_app_server_client::AppServerEvent::ServerNotification(Box::new(
+                ServerNotification::WindowsSandboxSetupCompleted(
+                    WindowsSandboxSetupCompletedNotification {
+                        mode,
+                        success: true,
+                        error: None,
+                    },
+                ),
+            )),
+        )
+        .await;
+        assert_eq!(
+            app.windows_sandbox.pending_setup.is_some(),
+            mode == WindowsSandboxSetupMode::Unelevated
+        );
+    }
+    assert!(!app.chat_widget.windows_sandbox_elevated_setup_complete);
+    assert!(app.windows_sandbox_blocks_thread_switch());
+    assert!(matches!(
+        events.try_recv(),
+        Ok(AppEvent::EnableWindowsSandboxForAgentMode {
+            mode: WindowsSandboxEnableMode::Elevated,
+            ..
+        })
+    ));
+    assert!(events.try_recv().is_err());
+
+    app_server.shutdown().await?;
+    Ok(())
+}
+
 fn startup_bottom_pane() -> (BottomPane, UnboundedReceiver<AppEvent>) {
     let (app_event_tx, app_event_rx) = unbounded_channel();
     (

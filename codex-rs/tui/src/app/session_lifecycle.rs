@@ -538,10 +538,17 @@ impl App {
         } else {
             None
         };
+        if self.active_thread_id == Some(thread_id) && !self.thread_unavailable(thread_id) {
+            return Ok(());
+        }
+        if self.windows_sandbox_blocks_thread_switch() {
+            self.chat_widget.add_info_message(
+                "Finish Windows sandbox setup before switching threads.".to_string(),
+                /*hint*/ None,
+            );
+            return Ok(());
+        }
         if self.active_thread_id == Some(thread_id) {
-            if !self.thread_unavailable(thread_id) {
-                return Ok(());
-            }
             // Detach the cached receiver before a successful attachment replaces its channel.
             self.store_active_thread_receiver().await;
         }
@@ -1205,6 +1212,13 @@ impl App {
                 .remove(&target_session.thread_id);
             self.repaint_agents_overview();
             tui.frame_requester().schedule_frame();
+            return Ok(AppRunControl::Continue);
+        }
+        if self.windows_sandbox_blocks_thread_switch() {
+            self.chat_widget.add_info_message(
+                "Finish Windows sandbox setup before switching threads.".to_string(),
+                /*hint*/ None,
+            );
             return Ok(AppRunControl::Continue);
         }
 

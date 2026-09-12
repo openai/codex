@@ -169,6 +169,9 @@ impl App {
         thread_id: ThreadId,
         action: AgentsOverviewAction,
     ) -> color_eyre::Result<()> {
+        if self.windows_sandbox_blocks_thread_switch() {
+            return Ok(());
+        }
         // The overview may lack intermediate ancestors, or even the primary's metadata.
         let mut removes_primary = self.primary_thread_id == Some(thread_id);
         let mut attempted = false;
