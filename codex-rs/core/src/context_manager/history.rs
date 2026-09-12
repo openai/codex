@@ -1,6 +1,7 @@
 //! Parent model history and bounded host-owned context facts.
 //! Compaction replaces only the model window. Snapshots include retained facts atomically;
 //! checkpoint replay and source-call rollback share their live lifecycle.
+//! Token estimates charge item content rather than transport metadata.
 //! Oversized instructions keep an incomplete excerpt for bounded root review, including
 //! sources recovered from legacy Guardian checkpoints before their raw history is dropped.
 
@@ -34,6 +35,7 @@ use codex_history::ResponseItemEnvelope;
 use codex_history::RetainedContext;
 use codex_history::RetainedContextEvent;
 use codex_history::RetainedInputSource;
+use codex_protocol::DEFAULT_FUNCTION_NAMESPACE;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::BaseInstructions;
@@ -808,8 +810,7 @@ fn estimate_encrypted_function_output_length(encoded_len: usize) -> usize {
 
 /// Returns the same coarse, model-visible token estimate used for full history estimates.
 ///
-/// Ordinary items are JSON-serialized, so callers estimating many items should reuse these
-/// results instead of repeatedly estimating the full history.
+/// Counts content directly, excluding transport IDs, metadata, and outer JSON escaping.
 pub(crate) fn estimate_item_token_count(item: &ResponseItem) -> i64 {
     let model_visible_bytes = estimate_response_item_model_visible_bytes(item);
     approx_tokens_from_byte_count_i64(model_visible_bytes)
@@ -839,6 +840,36 @@ static ORIGINAL_IMAGE_ESTIMATE_CACHE: LazyLock<BlockingLruCache<[u8; 20], Option
 
 fn estimate_response_item_model_visible_bytes(item: &ResponseItem) -> i64 {
     match item {
+        ResponseItem::Message { content, .. } => content
+            .iter()
+            .map(|part| match part {
+                ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                    text_bytes(text)
+                }
+                ContentItem::InputImage { image_url, detail } => {
+                    estimate_image_bytes(image_url, *detail)
+                }
+                ContentItem::InputAudio { audio_url } => estimate_audio_bytes(audio_url),
+            })
+            .fold(0i64, i64::saturating_add),
+        ResponseItem::AgentMessage {
+            author,
+            recipient,
+            content,
+            ..
+        } => content
+            .iter()
+            .map(|part| match part {
+                AgentMessageInputContent::InputText { text } => text_bytes(text),
+                AgentMessageInputContent::EncryptedContent { encrypted_content } => i64::try_from(
+                    estimate_encrypted_function_output_length(encrypted_content.len()),
+                )
+                .unwrap_or(i64::MAX),
+            })
+            .fold(
+                text_bytes(author).saturating_add(text_bytes(recipient)),
+                i64::saturating_add,
+            ),
         ResponseItem::Reasoning {
             encrypted_content: Some(content),
             ..
@@ -851,46 +882,87 @@ fn estimate_response_item_model_visible_bytes(item: &ResponseItem) -> i64 {
             encrypted_content: Some(content),
             ..
         } => i64::try_from(estimate_reasoning_length(content.len())).unwrap_or(i64::MAX),
-        item => {
-            let raw = serialized_json_bytes(item)
-                .map(|len| i64::try_from(len).unwrap_or(i64::MAX))
-                .unwrap_or_default();
-            let (image_payload_bytes, image_replacement_bytes) =
-                image_data_url_estimate_adjustment(item);
-            let (audio_payload_bytes, audio_replacement_bytes) =
-                audio_data_url_estimate_adjustment(item);
-            let (encrypted_payload_bytes, encrypted_replacement_bytes) =
-                encrypted_function_output_estimate_adjustment(item);
-            // Replace raw base64 payload bytes with per-modality estimates.
-            // We intentionally preserve the data URL prefix and JSON
-            // wrapper bytes already included in `raw`.
-            let raw = raw
-                .saturating_sub(image_payload_bytes)
-                .saturating_add(image_replacement_bytes)
-                .saturating_sub(audio_payload_bytes)
-                .saturating_add(audio_replacement_bytes);
-            raw.saturating_sub(encrypted_payload_bytes)
-                .saturating_add(encrypted_replacement_bytes)
+        ResponseItem::FunctionCall {
+            name,
+            namespace,
+            arguments: input,
+            ..
         }
+        | ResponseItem::CustomToolCall {
+            name,
+            namespace,
+            input,
+            ..
+        } => text_bytes(name)
+            .saturating_add(text_bytes(
+                namespace.as_deref().unwrap_or(DEFAULT_FUNCTION_NAMESPACE),
+            ))
+            .saturating_add(text_bytes(input)),
+        ResponseItem::FunctionCallOutput {
+            call_id,
+            name,
+            namespace,
+            output,
+            ..
+        } => estimate_function_output_bytes(&output.body)
+            .saturating_add(text_bytes(call_id.as_deref().unwrap_or_default()))
+            .saturating_add(text_bytes(name.as_deref().unwrap_or_default()))
+            .saturating_add(text_bytes(namespace.as_deref().unwrap_or_default())),
+        ResponseItem::CustomToolCallOutput {
+            call_id,
+            name,
+            output,
+            ..
+        } => estimate_function_output_bytes(&output.body)
+            .saturating_add(text_bytes(call_id))
+            .saturating_add(text_bytes(name.as_deref().unwrap_or_default())),
+        // These payloads are themselves JSON arguments, rather than transport envelopes
+        // around text. Keep their JSON syntax in the estimate.
+        ResponseItem::AdditionalTools { tools, .. } => json_content_bytes(tools),
+        ResponseItem::ToolSearchCall { arguments, .. } => json_content_bytes(arguments),
+        ResponseItem::ToolSearchOutput { tools, .. } => json_content_bytes(tools),
+        ResponseItem::LocalShellCall { action, .. } => json_content_bytes(action),
+        ResponseItem::WebSearchCall { action, .. } => {
+            action.as_ref().map(json_content_bytes).unwrap_or_default()
+        }
+        ResponseItem::ImageGenerationCall {
+            revised_prompt,
+            result,
+            ..
+        } => text_bytes(revised_prompt.as_deref().unwrap_or_default()).saturating_add(
+            if result.is_empty() {
+                0
+            } else {
+                RESIZED_IMAGE_BYTES_ESTIMATE
+            },
+        ),
+        ResponseItem::ContextCompaction {
+            encrypted_content: None,
+            ..
+        } => 0,
+        // Plaintext reasoning is excluded from replay accounting.
+        ResponseItem::Reasoning {
+            encrypted_content: None,
+            ..
+        } => 0,
+        ResponseItem::ConfigurationUpdate { .. }
+        | ResponseItem::CompactionTrigger { .. }
+        | ResponseItem::Other => 0,
     }
 }
 
-/// Returns the base64 payload byte length for inline image data URLs that are
-/// eligible for token-estimation discounting.
-///
-/// We only discount payloads for `data:image/...;base64,...` URLs (case
-/// insensitive markers) and leave everything else at raw serialized size.
+fn text_bytes(text: &str) -> i64 {
+    i64::try_from(text.len()).unwrap_or(i64::MAX)
+}
+
+fn json_content_bytes(value: &(impl serde::Serialize + ?Sized)) -> i64 {
+    serialized_json_bytes(value)
+        .map(|len| i64::try_from(len).unwrap_or(i64::MAX))
+        .unwrap_or_default()
+}
+
+/// Extracts inline image bytes for the original-detail dimension estimate.
 fn parse_base64_image_data_url(url: &str) -> Option<&str> {
-    parse_base64_data_url(url, "image/")
-}
-
-/// Returns the base64 payload for inline audio data URLs that are eligible for
-/// token-estimation discounting.
-fn parse_base64_audio_data_url(url: &str) -> Option<&str> {
-    parse_base64_data_url(url, "audio/")
-}
-
-fn parse_base64_data_url<'a>(url: &'a str, media_type_prefix: &str) -> Option<&'a str> {
     if !url
         .get(.."data:".len())
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case("data:"))
@@ -908,8 +980,8 @@ fn parse_base64_data_url<'a>(url: &'a str, media_type_prefix: &str) -> Option<&'
     let mime_type = metadata_parts.next().unwrap_or_default();
     let has_base64_marker = metadata_parts.any(|part| part.eq_ignore_ascii_case("base64"));
     if !mime_type
-        .get(..media_type_prefix.len())
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(media_type_prefix))
+        .get(.."image/".len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("image/"))
     {
         return None;
     }
@@ -955,7 +1027,7 @@ fn estimate_original_image_bytes(image_url: &str) -> Option<i64> {
     })
 }
 
-/// Shared image estimate, excluding the data URL prefix and message framing.
+/// Shared image estimate, excluding message framing.
 pub(crate) fn estimate_image_bytes(image_url: &str, detail: Option<ImageDetail>) -> i64 {
     match detail {
         Some(ImageDetail::Original) => {
@@ -965,130 +1037,35 @@ pub(crate) fn estimate_image_bytes(image_url: &str, detail: Option<ImageDetail>)
     }
 }
 
-/// Scans one response item for discount-eligible inline image data URLs and
-/// returns:
-/// - total base64 payload bytes to subtract from raw serialized size
-/// - total replacement byte estimate for those images
-fn image_data_url_estimate_adjustment(item: &ResponseItem) -> (i64, i64) {
-    let mut payload_bytes = 0i64;
-    let mut replacement_bytes = 0i64;
-
-    let mut accumulate = |image_url: &str, detail: Option<ImageDetail>| {
-        if let Some(payload_len) = parse_base64_image_data_url(image_url).map(str::len) {
-            payload_bytes =
-                payload_bytes.saturating_add(i64::try_from(payload_len).unwrap_or(i64::MAX));
-            replacement_bytes =
-                replacement_bytes.saturating_add(estimate_image_bytes(image_url, detail));
-        }
-    };
-
-    match item {
-        ResponseItem::Message { content, .. } => {
-            for content_item in content {
-                if let ContentItem::InputImage { image_url, detail } = content_item {
-                    accumulate(image_url, *detail);
-                }
-            }
-        }
-        ResponseItem::FunctionCallOutput { output, .. }
-        | ResponseItem::CustomToolCallOutput { output, .. } => {
-            if let FunctionCallOutputBody::ContentItems(items) = &output.body {
-                for content_item in items {
-                    if let FunctionCallOutputContentItem::InputImage { image_url, detail } =
-                        content_item
-                    {
-                        accumulate(image_url, *detail);
-                    }
-                }
-            }
-        }
-        _ => {}
-    }
-
-    (payload_bytes, replacement_bytes)
+fn estimate_audio_bytes(audio_url: &str) -> i64 {
+    i64::try_from(approx_bytes_for_tokens(estimate_audio_token_count(
+        audio_url,
+    )))
+    .unwrap_or(i64::MAX)
 }
 
-/// Scans one response item for inline base64 audio data URLs and returns:
-/// - total base64 payload bytes to subtract from raw serialized size
-/// - total replacement byte estimate for those audio inputs
-fn audio_data_url_estimate_adjustment(item: &ResponseItem) -> (i64, i64) {
-    let mut payload_bytes = 0i64;
-    let mut replacement_bytes = 0i64;
-
-    let mut accumulate = |audio_url: &str| {
-        if let Some(payload_len) = parse_base64_audio_data_url(audio_url).map(str::len) {
-            payload_bytes =
-                payload_bytes.saturating_add(i64::try_from(payload_len).unwrap_or(i64::MAX));
-            replacement_bytes = replacement_bytes.saturating_add(
-                i64::try_from(approx_bytes_for_tokens(estimate_audio_token_count(
-                    audio_url,
-                )))
-                .unwrap_or(i64::MAX),
-            );
-        }
-    };
-
-    match item {
-        ResponseItem::Message { content, .. } => {
-            for content_item in content {
-                if let ContentItem::InputAudio { audio_url } = content_item {
-                    accumulate(audio_url);
+fn estimate_function_output_bytes(output: &FunctionCallOutputBody) -> i64 {
+    match output {
+        FunctionCallOutputBody::Text(text) => text_bytes(text),
+        FunctionCallOutputBody::ContentItems(items) => items
+            .iter()
+            .map(|part| match part {
+                FunctionCallOutputContentItem::InputText { text } => text_bytes(text),
+                FunctionCallOutputContentItem::InputImage { image_url, detail } => {
+                    estimate_image_bytes(image_url, *detail)
                 }
-            }
-        }
-        ResponseItem::FunctionCallOutput { output, .. }
-        | ResponseItem::CustomToolCallOutput { output, .. } => {
-            if let FunctionCallOutputBody::ContentItems(items) = &output.body {
-                for content_item in items {
-                    if let FunctionCallOutputContentItem::InputAudio { audio_url } = content_item {
-                        accumulate(audio_url);
-                    }
+                FunctionCallOutputContentItem::InputAudio { audio_url } => {
+                    estimate_audio_bytes(audio_url)
                 }
-            }
-        }
-        _ => {}
+                FunctionCallOutputContentItem::EncryptedContent { encrypted_content } => {
+                    i64::try_from(estimate_encrypted_function_output_length(
+                        encrypted_content.len(),
+                    ))
+                    .unwrap_or(i64::MAX)
+                }
+            })
+            .fold(0i64, i64::saturating_add),
     }
-
-    (payload_bytes, replacement_bytes)
-}
-
-fn encrypted_function_output_estimate_adjustment(item: &ResponseItem) -> (i64, i64) {
-    let mut payload_bytes = 0i64;
-    let mut replacement_bytes = 0i64;
-    let mut accumulate = |encrypted_content: &str| {
-        payload_bytes = payload_bytes
-            .saturating_add(i64::try_from(encrypted_content.len()).unwrap_or(i64::MAX));
-        replacement_bytes = replacement_bytes.saturating_add(
-            i64::try_from(estimate_encrypted_function_output_length(
-                encrypted_content.len(),
-            ))
-            .unwrap_or(i64::MAX),
-        );
-    };
-
-    match item {
-        ResponseItem::FunctionCallOutput { output, .. } => {
-            if let FunctionCallOutputBody::ContentItems(items) = &output.body {
-                for item in items {
-                    if let FunctionCallOutputContentItem::EncryptedContent { encrypted_content } =
-                        item
-                    {
-                        accumulate(encrypted_content);
-                    }
-                }
-            }
-        }
-        ResponseItem::AgentMessage { content, .. } => {
-            for item in content {
-                if let AgentMessageInputContent::EncryptedContent { encrypted_content } = item {
-                    accumulate(encrypted_content);
-                }
-            }
-        }
-        _ => {}
-    }
-
-    (payload_bytes, replacement_bytes)
 }
 
 fn is_model_generated_item(item: &ResponseItem) -> bool {

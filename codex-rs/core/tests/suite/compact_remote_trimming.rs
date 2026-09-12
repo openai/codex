@@ -15,6 +15,78 @@ fn compact_response() -> String {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_v2_token_estimate_ignores_message_bookkeeping_and_json_escaping()
+-> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_auto_env_builder(
+        test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
+    )
+    .await?;
+    let escaped_text = "a \"quoted\" line\nand\\path";
+    let plain_text = "x".repeat(escaped_text.len());
+    let mut estimates = Vec::new();
+    for (id, text, metadata) in [
+        (
+            "msg_1",
+            plain_text.as_str(),
+            json!({
+                "turn_id": "turn-1",
+                "create_time": 1,
+                "content_item_kinds": ["unknown"],
+            }),
+        ),
+        (
+            "msg_019f0000-0000-7000-8000-000000000001",
+            escaped_text,
+            json!({
+                "turn_id": "019f0000-0000-7000-8000-000000000002",
+                "create_time": 1_700_000_000.123,
+                "content_item_kinds": ["user.text"],
+            }),
+        ),
+    ] {
+        let codex = harness
+            .test()
+            .thread_manager
+            .start_thread(StartThreadOptions {
+                environments: Some(vec![
+                    harness.test().executor_environment().selection().clone(),
+                ]),
+                ..StartThreadOptions::new(harness.test().config.clone())
+            })
+            .await?
+            .thread;
+        let message = json!({
+            "type": "message",
+            "id": id,
+            "role": "user",
+            "content": [{"type": "input_text", "text": text}],
+            "internal_chat_message_metadata_passthrough": metadata,
+        });
+        codex
+            .inject_response_items(vec![serde_json::from_value(message.clone())?])
+            .await?;
+        let mock = mount_sse_once(harness.server(), compact_response()).await;
+        codex.submit(Op::Compact).await?;
+        wait_for_turn_complete(&codex).await;
+
+        estimates.push(codex.token_usage_info().await.context("token usage")?);
+        assert_eq!(
+            mock.single_request()
+                .input()
+                .into_iter()
+                .find(|item| item["id"] == id),
+            Some(message),
+        );
+        codex.shutdown_and_wait().await?;
+    }
+
+    assert_eq!(estimates[0], estimates[1]);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_compact_v2_trims_tool_search_output_to_empty_tools_array() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
