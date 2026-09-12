@@ -1,5 +1,6 @@
 //! Collects a feedback note with audience-specific disclosure and independent log consent.
 //! The editor and submission controls remain visible when the disclosure must scroll.
+//! Unbracketed paste bursts insert newlines; Enter submits after the burst ends.
 
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -15,11 +16,13 @@ use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::Widget;
 use std::cell::Cell;
 use std::cell::RefCell;
+use std::time::Instant;
 
 use crate::app_event::AppEvent;
 use crate::app_event::FeedbackCategory;
 use crate::app_event_sender::AppEventSender;
 use crate::key_hint;
+use crate::key_hint::has_ctrl_or_alt;
 use crate::render::renderable::Renderable;
 use crate::terminal_hyperlinks::mark_underlined_hyperlink;
 use crate::wrapping::RtOptions;
@@ -28,6 +31,7 @@ use crate::wrapping::word_wrap_lines;
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
 use super::feedback_view::FeedbackAudience;
+use super::paste_burst::PasteBurst;
 use super::popup_consts::accept_cancel_hint_line;
 use super::textarea::TextArea;
 use super::textarea::TextAreaState;
@@ -52,6 +56,7 @@ pub(crate) struct FeedbackNoteView {
     // UI state
     textarea: TextArea,
     textarea_state: RefCell<TextAreaState>,
+    paste_burst: PasteBurst,
     intro_scroll: Cell<usize>,
     intro_page_height: Cell<usize>,
     complete: bool,
@@ -73,6 +78,7 @@ impl FeedbackNoteView {
             feedback_audience,
             textarea: TextArea::new(),
             textarea_state: RefCell::new(TextAreaState::default()),
+            paste_burst: PasteBurst::default(),
             intro_scroll: Cell::new(0),
             intro_page_height: Cell::new(1),
             complete: false,
@@ -90,10 +96,8 @@ impl FeedbackNoteView {
         });
         self.complete = true;
     }
-}
 
-impl BottomPaneView for FeedbackNoteView {
-    fn handle_key_event(&mut self, key_event: KeyEvent) {
+    fn handle_key_event_at(&mut self, key_event: KeyEvent, now: Instant) {
         match key_event {
             KeyEvent {
                 code: KeyCode::PageUp,
@@ -122,21 +126,51 @@ impl BottomPaneView for FeedbackNoteView {
             }
             KeyEvent {
                 code: KeyCode::Enter,
-                modifiers: KeyModifiers::NONE,
+                modifiers,
                 ..
             } => {
-                self.submit();
+                if self.paste_burst.direct_insert_newline_should_insert(now) {
+                    self.paste_burst.extend_window(now);
+                    self.textarea.insert_str("\n");
+                } else if modifiers == KeyModifiers::NONE {
+                    self.submit();
+                } else {
+                    self.textarea.input(key_event);
+                }
             }
             KeyEvent {
-                code: KeyCode::Enter,
+                code: KeyCode::Char(_),
+                modifiers,
                 ..
-            } => {
+            } if !has_ctrl_or_alt(modifiers) => {
+                let paste_like_burst = self.paste_burst.on_plain_char_no_hold(now).is_some();
                 self.textarea.input(key_event);
+                if paste_like_burst {
+                    self.paste_burst.extend_window(now);
+                }
+            }
+            KeyEvent {
+                code: KeyCode::Tab,
+                modifiers,
+                ..
+            } if !has_ctrl_or_alt(modifiers) => {
+                let in_paste_burst = self.paste_burst.direct_insert_newline_should_insert(now);
+                self.textarea.input(key_event);
+                if in_paste_burst {
+                    self.paste_burst.extend_window(now);
+                }
             }
             other => {
                 self.textarea.input(other);
+                self.paste_burst.clear_after_explicit_paste();
             }
         }
+    }
+}
+
+impl BottomPaneView for FeedbackNoteView {
+    fn handle_key_event(&mut self, key_event: KeyEvent) {
+        self.handle_key_event_at(key_event, Instant::now());
     }
 
     fn on_ctrl_c(&mut self) -> CancellationEvent {
@@ -153,6 +187,7 @@ impl BottomPaneView for FeedbackNoteView {
             return false;
         }
         self.textarea.insert_str(&pasted);
+        self.paste_burst.clear_after_explicit_paste();
         true
     }
 }
