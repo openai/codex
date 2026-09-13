@@ -236,7 +236,9 @@ async fn disconnected_command_center_keeps_input_and_blocks_actions() -> Result<
     assert!(
         !std::iter::from_fn(|| events.try_recv().ok()).any(|event| matches!(
             event,
-            AppEvent::NewAgentsOverviewSession { .. } | AppEvent::OpenResumePicker
+            AppEvent::NewAgentsOverviewSession { .. }
+                | AppEvent::NewAgentsOverviewWorktree { .. }
+                | AppEvent::OpenResumePicker
         ))
     );
     assert_snapshot!(

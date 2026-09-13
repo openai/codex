@@ -40,7 +40,12 @@ See the Codex keymap documentation for supported actions and examples."
 
 #[test]
 fn new_agents_defaults_preserve_existing_custom_bindings() {
-    for (action, alias) in [("archive", "a"), ("delete", "delete"), ("hide", "h")] {
+    for (action, alias) in [
+        ("archive", "a"),
+        ("delete", "delete"),
+        ("hide", "h"),
+        ("new_worktree", "w"),
+    ] {
         for (context, existing, suffix) in [
             ("agents", "stop", ""),
             ("list", "move_down", ""),
@@ -65,6 +70,7 @@ fn new_agents_defaults_preserve_existing_custom_bindings() {
                 "archive" => &runtime.agents.archive,
                 "delete" => &runtime.agents.delete,
                 "hide" => &runtime.agents.hide,
+                "new_worktree" => &runtime.agents.new_worktree,
                 _ => unreachable!(),
             };
             assert!(

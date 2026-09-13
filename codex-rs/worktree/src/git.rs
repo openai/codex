@@ -94,6 +94,51 @@ pub(crate) fn git_path_from_bytes(bytes: &[u8]) -> Result<PathBuf> {
     }
 }
 
+/// Resolves the cached repository default without fetching or inheriting Git selectors.
+/// Prefer a remote HEAD (origin first), then conventional main/master refs.
+pub fn default_worktree_base(cwd: &Path) -> Result<String> {
+    let output = git_output(
+        cwd,
+        GitOperation::Metadata,
+        [
+            "for-each-ref",
+            "--format=%(refname) %(symref)",
+            "refs/remotes",
+            "refs/heads",
+        ],
+    )?;
+    // Unrelated refs may contain non-UTF-8 bytes. Decode only the chosen base,
+    // because CreateWorktree accepts a UTF-8 revision.
+    let branches = output
+        .stdout
+        .split(|byte| *byte == b'\n')
+        .filter_map(|line| {
+            let line = line.strip_suffix(b"\r").unwrap_or(line);
+            let separator = line.iter().position(|byte| *byte == b' ')?;
+            Some((&line[..separator], &line[separator + 1..]))
+        })
+        .collect::<Vec<_>>();
+    let base = branches
+        .iter()
+        .filter(|(name, target)| name.ends_with(b"/HEAD") && !target.is_empty())
+        .min_by_key(|(name, _)| (!name.starts_with(b"refs/remotes/origin/"), *name))
+        .map(|(_, target)| *target)
+        .or_else(|| {
+            [
+                b"refs/remotes/origin/main".as_slice(),
+                b"refs/remotes/origin/master".as_slice(),
+                b"refs/heads/main".as_slice(),
+                b"refs/heads/master".as_slice(),
+            ]
+            .into_iter()
+            .find(|candidate| branches.iter().any(|(branch, _)| branch == candidate))
+        })
+        .context("Could not determine the project's default branch.")?;
+    std::str::from_utf8(base)
+        .context("The project's default branch is not valid UTF-8.")
+        .map(str::to_owned)
+}
+
 fn base_git_command(cwd: &Path) -> Command {
     let mut command = Command::new("git");
     // Git wrappers export repository-local state to their children. Select this

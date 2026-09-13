@@ -20,6 +20,7 @@ use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 
+pub use git::default_worktree_base;
 pub use settings::DEFAULT_WORKTREE_KEEP_COUNT;
 pub use settings::WorktreeSettings;
 

@@ -20,9 +20,9 @@ expression: "render_bottom_popup(&app.chat_widget, 12)"
 
 
 
-
-
   n new
+  w new
+  worktree
   f search
   ctrl+c
   quit

@@ -1,4 +1,4 @@
-//! Request-level coverage for command-center session defaults.
+//! Request-level coverage for command-center session defaults and worktree creation.
 
 use super::*;
 use crate::app::agents_overview::AGENTS_OVERVIEW_VIEW_ID;
@@ -717,5 +717,241 @@ async fn command_center_new_restores_blank_drafts_and_builtin_permissions() -> R
     assert!(recorded_params(&requests, "turn/start").is_empty());
     server.shutdown().await?;
     proxy.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn command_center_new_checkout_and_worktree_preserve_source_and_default_branch() -> Result<()>
+{
+    use codex_worktree::CreateWorktree;
+    use codex_worktree::WorktreeManager;
+    use codex_worktree::WorktreeSettings;
+    for (remote_only, stale_local) in [(false, false), (true, false), (false, true)] {
+        let directory = tempdir()?;
+        let source = directory.path().join("project");
+        std::fs::create_dir_all(source.join("subdir"))?;
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .args(["-c", "commit.gpgSign=false"])
+                .args(args)
+                .current_dir(&source)
+                .env("GIT_AUTHOR_NAME", "Test")
+                .env("GIT_AUTHOR_EMAIL", "test@example.com")
+                .env("GIT_COMMITTER_NAME", "Test")
+                .env("GIT_COMMITTER_EMAIL", "test@example.com")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&["init", "-b", "main"]);
+        std::fs::write(source.join("subdir/file"), "default branch")?;
+        git(&["add", "."]);
+        git(&["commit", "-m", "default"]);
+        if remote_only {
+            git(&["update-ref", "refs/remotes/origin/release/default", "HEAD"]);
+            git(&[
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/release/default",
+            ]);
+        }
+        git(&["checkout", "-b", "feature"]);
+        std::fs::write(source.join("subdir/file"), "feature commit")?;
+        git(&["commit", "-am", "feature"]);
+        if remote_only {
+            git(&["branch", "-D", "main"]);
+        }
+        if stale_local {
+            git(&["update-ref", "refs/remotes/origin/main", "main"]);
+            git(&[
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/main",
+            ]);
+            git(&["branch", "-f", "main", "feature"]);
+        }
+        let home = directory.path().join("home");
+        std::fs::create_dir(&home)?;
+        std::fs::write(
+            home.join("config.toml"),
+            format!(
+                "approvals_reviewer = \"auto_review\"\nsandbox_mode = \"workspace-write\"\napproval_policy = \"on-request\"\nwindows.sandbox = \"unelevated\"\n[projects.{:?}]\ntrust_level = \"trusted\"\n",
+                source.canonicalize()?.display().to_string(),
+            ),
+        )?;
+        let manager =
+            WorktreeManager::new(WorktreeSettings::for_cli(&home, /*desktop*/ None).unwrap());
+        let selected = manager
+            .create(&CreateWorktree {
+                source_cwd: source.join("subdir"),
+                base: Some("feature".into()),
+            })
+            .unwrap();
+        manager
+            .bind_thread(&selected.root, "existing-owner")
+            .unwrap();
+        std::fs::write(selected.cwd.join("file"), "dirty edit")?;
+        std::fs::write(selected.cwd.join("untracked"), "untracked")?;
+        for receiver_closed in [true, false] {
+            let unclaimed = manager
+                .create(&CreateWorktree {
+                    source_cwd: source.join("subdir"),
+                    base: Some("feature".into()),
+                })
+                .unwrap();
+            let root = unclaimed.root.clone();
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            let receiver = (!receiver_closed).then_some(rx);
+            AppEventSender::new(tx).send(AppEvent::AgentsOverviewWorktreeCreated(Ok(
+                PendingWorktree {
+                    manager: manager.clone(),
+                    checkout: Some(unclaimed),
+                },
+            )));
+            drop(receiver);
+            assert!(!root.exists());
+            assert_eq!(manager.list(&source).unwrap().len(), 1);
+        }
+        let (mut app, mut events, _) = make_test_app_with_channels().await;
+        app.config.codex_home = home.clone().abs();
+        app.config.cwd = selected.cwd.clone().abs();
+        app.harness_overrides.cwd = Some(selected.cwd.clone());
+        app.cli_kv_overrides
+            .push(("features.worktrees".into(), TomlValue::Boolean(true)));
+        app.config.features.enable(Feature::Worktrees)?;
+        trust_launch_folder(&mut app);
+        let (mut server, requests, proxy) = start_recording_app_server_with_history(
+            &app.config,
+            HistoryCapabilities::Current,
+            /*blocked_thread_list*/ None,
+            /*failed_thread_name*/ None,
+            crate::app_server_session::ThreadParamsMode::Embedded,
+            LoaderOverrides::default(),
+        )
+        .await?;
+        let mut tui = make_test_tui()?;
+        let new_session = app.new_agents_overview_session(
+            &mut tui,
+            &mut server,
+            Some(selected.cwd.clone().abs()),
+        );
+        let size = std::mem::size_of_val(&new_session);
+        assert!(
+            size < 64 * 1024,
+            "new-session wrapper future is {size} bytes"
+        );
+        new_session.await?;
+        let first = app.chat_widget.thread_id().expect("new checkout session");
+        assert!(!crate::session_resume::cwds_differ(
+            app.chat_widget.config_ref().cwd.as_path(),
+            &selected.cwd
+        ));
+        assert_eq!(
+            manager.owner(&selected.root).unwrap(),
+            Some("existing-owner".into())
+        );
+        // Exercise the menu's ordered events, not the separate profile-selection API.
+        app.chat_widget
+            .set_feature_enabled(Feature::GuardianApproval, /*enabled*/ true);
+        app.chat_widget.open_permissions_popup();
+        app.chat_widget.handle_key_event(KeyCode::Up.into());
+        app.chat_widget.handle_key_event(KeyCode::Enter.into());
+        while let Ok(event) = events.try_recv() {
+            Box::pin(app.handle_event(&mut tui, &mut server, event)).await?;
+        }
+        assert_eq!(
+            app.chat_widget.config_ref().approvals_reviewer,
+            ApprovalsReviewer::User
+        );
+        app.new_agents_overview_worktree(&mut tui, &mut server, Some(selected.cwd.clone().abs()))
+            .await;
+        assert!(app.pending_managed_worktree_creation);
+        let result = tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                if let Some(AppEvent::AgentsOverviewWorktreeCreated(result)) = events.recv().await {
+                    break result;
+                }
+            }
+        })
+        .await?
+        .map_err(|message| color_eyre::eyre::eyre!(message))?;
+        let checkout = result.checkout.as_ref().unwrap().clone();
+        assert_eq!(
+            std::fs::read_to_string(checkout.cwd.join("file"))?,
+            "default branch"
+        );
+        assert!(!checkout.cwd.join("untracked").exists());
+        assert_eq!(checkout.cwd, checkout.root.join("subdir"));
+        Box::pin(app.handle_event(
+            &mut tui,
+            &mut server,
+            AppEvent::AgentsOverviewWorktreeCreated(Ok(result)),
+        ))
+        .await?;
+        let second = app.chat_widget.thread_id().expect("new worktree session");
+        assert_ne!(first, second);
+        assert_eq!(
+            recorded_params(&requests, "thread/start").last().unwrap()["approvalsReviewer"],
+            serde_json::json!("user")
+        );
+        assert_eq!(
+            app.chat_widget.config_ref().approvals_reviewer,
+            ApprovalsReviewer::User
+        );
+        assert_eq!(
+            manager.owner(&checkout.root).unwrap(),
+            Some(second.to_string())
+        );
+        assert_eq!(recorded_params(&requests, "turn/start").len(), 0);
+        assert_eq!(
+            std::fs::read_to_string(selected.cwd.join("file"))?,
+            "dirty edit"
+        );
+        server.shutdown().await?;
+        proxy.await??;
+        if !remote_only && !stale_local {
+            let unused = manager
+                .create(&CreateWorktree {
+                    source_cwd: source.join("subdir"),
+                    base: Some("main".into()),
+                })
+                .unwrap();
+            let (mut failed_server, _, failed_proxy) = start_recording_app_server_with_history(
+                &app.config,
+                HistoryCapabilities::ThreadStartFails,
+                /*blocked_thread_list*/ None,
+                /*failed_thread_name*/ None,
+                crate::app_server_session::ThreadParamsMode::Embedded,
+                LoaderOverrides::default(),
+            )
+            .await?;
+            let view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
+            app.chat_widget.show_bottom_pane_view(Box::new(view));
+            app.start_agents_overview_session(
+                &mut tui,
+                &mut failed_server,
+                Some(unused.cwd.clone().abs()),
+                Some((manager.clone(), unused.clone())),
+            )
+            .await?;
+            assert_eq!(app.chat_widget.thread_id(), Some(second));
+            assert_eq!(manager.owner(&unused.root).unwrap(), None);
+            assert!(unused.root.exists());
+            let rendered = crate::chatwidget::tests::helpers::render_bottom_popup(
+                &app.chat_widget,
+                /*width*/ 500,
+            );
+            insta::assert_snapshot!(
+                "command_center_retained_worktree_error",
+                rendered.replace(&unused.root.display().to_string(), "<worktree>")
+            );
+            failed_server.shutdown().await?;
+            failed_proxy.await??;
+        }
+    }
     Ok(())
 }

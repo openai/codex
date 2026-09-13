@@ -4090,6 +4090,7 @@
               "delete": null,
               "hide": null,
               "new_task": null,
+              "new_worktree": null,
               "rename": null,
               "resume": null,
               "search": null,
@@ -4430,6 +4431,14 @@
             }
           ],
           "description": "Open a new session in the selected checkout."
+        },
+        "new_worktree": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Open a new session in a worktree from the project default branch."
         },
         "rename": {
           "allOf": [
@@ -4932,6 +4941,7 @@
             "delete": null,
             "hide": null,
             "new_task": null,
+            "new_worktree": null,
             "rename": null,
             "resume": null,
             "search": null,

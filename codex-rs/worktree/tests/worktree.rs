@@ -4,6 +4,7 @@ use codex_worktree::CreateWorktree;
 use codex_worktree::ManagedWorktree;
 use codex_worktree::WorktreeManager;
 use codex_worktree::WorktreeSettings;
+use codex_worktree::default_worktree_base;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -434,12 +435,10 @@ fn creation_ignores_inherited_git_environment() {
         let settings =
             WorktreeSettings::from_desktop_config(&root.join("codex-home"), /*desktop*/ None)
                 .expect("fixture operation succeeds");
-        let worktree = create_worktree(
-            &WorktreeManager::new(settings),
-            &source_cwd,
-            /*base*/ None,
-        )
-        .expect("fixture operation succeeds");
+        let base = default_worktree_base(&source_cwd).expect("resolve source default");
+        assert_eq!(base, "refs/remotes/origin/source-default");
+        let worktree = create_worktree(&WorktreeManager::new(settings), &source_cwd, Some(&base))
+            .expect("fixture operation succeeds");
         assert_eq!(worktree.source_root, source);
         assert_eq!(worktree.source_cwd, source_cwd);
         assert_eq!(
@@ -462,6 +461,17 @@ fn creation_ignores_inherited_git_environment() {
     .expect("fixture operation succeeds");
     run_git(&fixture.repository, &["add", "."]);
     commit(&fixture.repository, "checkout filter attributes");
+    for (repository, branch) in [
+        (&fixture.repository, "source-default"),
+        (&other, "other-default"),
+    ] {
+        let target = format!("refs/remotes/origin/{branch}");
+        run_git(repository, &["update-ref", &target, "HEAD"]);
+        run_git(
+            repository,
+            &["symbolic-ref", "refs/remotes/origin/HEAD", &target],
+        );
+    }
     let mut child = Command::new(std::env::current_exe().expect("current test executable"));
     child
         .args(["--exact", "creation_ignores_inherited_git_environment", "--nocapture"])

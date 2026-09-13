@@ -27,6 +27,8 @@ impl AgentsOverviewView {
             ))
         } else if state.connection_notice.is_some() {
             Some("ctrl+c quit · actions paused until the list is refreshed".into())
+        } else if state.creating_worktree {
+            Some("Creating worktree…  ctrl+c quit".into())
         } else {
             None
         };
@@ -40,9 +42,15 @@ impl AgentsOverviewView {
         if width < 24 {
             let hints = [
                 ("new_task", &self.agents_keymap.new_task, "new"),
+                (
+                    "new_worktree",
+                    &self.agents_keymap.new_worktree,
+                    "new worktree",
+                ),
                 ("search", &self.agents_keymap.search, "search"),
             ]
             .into_iter()
+            .filter(|(action, _, _)| *action != "new_worktree" || self.worktrees_enabled)
             .filter_map(|(action, bindings, label)| {
                 self.agents_keymap
                     .primary_hint(action, bindings)
@@ -65,6 +73,7 @@ impl AgentsOverviewView {
                     &self.agents_keymap.resume,
                     &self.agents_keymap.search,
                     &self.agents_keymap.new_task,
+                    &self.agents_keymap.new_worktree,
                     &self.agents_keymap.rename,
                     &self.agents_keymap.stop,
                     &self.agents_keymap.archive,
@@ -124,6 +133,12 @@ impl AgentsOverviewView {
                 .primary_hint("new_task", &self.agents_keymap.new_task),
             "new",
             true,
+        );
+        add_hint(
+            self.agents_keymap
+                .primary_hint("new_worktree", &self.agents_keymap.new_worktree),
+            "new worktree",
+            self.worktrees_enabled,
         );
         add_hint(
             self.agents_keymap
@@ -254,7 +269,9 @@ impl Renderable for AgentsOverviewView {
             }
         });
         let attention = format!("{needs_you} need input");
-        if let Some(notice) = self.state().connection_notice {
+        if self.state().creating_worktree {
+            Line::from("Creating worktree…".cyan()).render(inset(summary), buf);
+        } else if let Some(notice) = self.state().connection_notice {
             Line::from(notice.cyan()).render(inset(summary), buf);
         } else if self.state().refresh_failed {
             Line::from("Error loading tasks".red()).render(inset(summary), buf);

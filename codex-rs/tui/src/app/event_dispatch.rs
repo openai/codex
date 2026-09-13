@@ -37,6 +37,7 @@ impl App {
                     | AppEvent::CommitRealtimeTranscriptHistory
                     | AppEvent::ResetTranscriptForThreadSwitch
                     | AppEvent::ManagedWorktreeCreated(_)
+                    | AppEvent::AgentsOverviewWorktreeCreated(_)
                     | AppEvent::AppendMessageHistoryEntry { .. }
                     | AppEvent::BeginInitialHistoryReplayBuffer
                     | AppEvent::BeginThreadSwitchHistoryReplayBuffer
@@ -2310,6 +2311,9 @@ impl App {
                 }
                 self.config.approvals_reviewer = policy;
                 self.chat_widget.set_approvals_reviewer(policy);
+                if let Some(profile) = self.runtime_permission_profile_override.as_mut() {
+                    profile.approvals_reviewer = policy;
+                }
                 self.sync_active_thread_permission_settings_to_cached_session()
                     .await;
                 if let Err(err) = crate::config_update::write_config_batch(
@@ -2446,6 +2450,24 @@ impl App {
             }
             AppEvent::NewAgentsOverviewSession { cwd } => {
                 return Box::pin(self.new_agents_overview_session(tui, app_server, cwd)).await;
+            }
+            AppEvent::NewAgentsOverviewWorktree { cwd } => {
+                Box::pin(self.new_agents_overview_worktree(tui, app_server, cwd)).await;
+            }
+            AppEvent::AgentsOverviewWorktreeCreated(result) => {
+                self.pending_managed_worktree_creation = false;
+                self.agents_overview.view_state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).creating_worktree = false;
+                match result {
+                    Ok(mut pending) => {
+                        let Some(checkout) = pending.checkout.take() else {
+                            return Ok(AppRunControl::Continue);
+                        };
+                        let manager = pending.manager.clone();
+                        let cwd = AbsolutePathBuf::try_from(checkout.cwd.clone())?;
+                        return Box::pin(self.start_agents_overview_session(tui, app_server, Some(cwd), Some((manager, checkout)))).await;
+                    }
+                    Err(error) => self.add_agents_overview_error(error),
+                }
             }
             AppEvent::RenameAgentsOverviewThread { thread_id, name } => {
                 match app_server.thread_set_name(thread_id, name.clone()).await {

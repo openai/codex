@@ -3,6 +3,7 @@
 
 #[path = "agents_overview_new.rs"]
 mod new;
+pub(crate) use new::PendingWorktree;
 
 #[path = "agents_overview_errors.rs"]
 mod errors;

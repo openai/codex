@@ -166,3 +166,33 @@ fn write_marker_script(path: &Path, marker: &Path) -> Result<()> {
     fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
     Ok(())
 }
+
+#[cfg(unix)]
+#[test]
+fn default_base_ignores_unrelated_non_utf8_refs() -> Result<()> {
+    let (_directory, root) = repository()?;
+    let head = git_stdout(&root, ["rev-parse", "HEAD"])?;
+    // Packed refs work even on filesystems that cannot store non-UTF-8 filenames.
+    fs::write(
+        root.join(".git/packed-refs"),
+        [head.as_bytes(), b" refs/heads/unrelated-\xff\n"].concat(),
+    )?;
+    assert_eq!(super::default_worktree_base(&root)?, "refs/heads/main");
+    setup_git(
+        &root,
+        &["update-ref", "refs/remotes/origin/release/stable", "HEAD"],
+    )?;
+    setup_git(
+        &root,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/release/stable",
+        ],
+    )?;
+    assert_eq!(
+        super::default_worktree_base(&root)?,
+        "refs/remotes/origin/release/stable"
+    );
+    Ok(())
+}

@@ -23,6 +23,6 @@ expression: "render_bottom_popup(&app.chat_widget,\n48).replace(&test_path_displ
 
 
   ↑↓ navigate o resume enter open n new
-  f search g group: project r rename x stop
-  f5 f8 hide f5 f6 archive f5 f7 delete
-  ctrl+c quit
+  w new worktree f search g group: project
+  r rename x stop f5 f8 hide f5 f6 archive
+  f5 f7 delete ctrl+c quit

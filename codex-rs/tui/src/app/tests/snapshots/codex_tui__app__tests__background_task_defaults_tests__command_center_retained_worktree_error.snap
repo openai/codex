@@ -1,0 +1,10 @@
+---
+source: tui/src/app/tests/background_task_defaults_tests.rs
+expression: "rendered.replace(&unused.root.display().to_string(), \"<worktree>\")"
+---
+  Unable to complete action
+  Failed to start session: thread/start failed during TUI bootstrap: thread/start failed: replacement unavailable (code -32603) A checkout was retained at <worktree>; remove it with `git worktree remove <checkout-path>` from the source repository if it is no longer needed.
+
+› 1. Return to command center
+
+  Press enter to confirm or esc to go back

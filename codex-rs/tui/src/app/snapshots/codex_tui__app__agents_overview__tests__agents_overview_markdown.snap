@@ -40,5 +40,5 @@ expression: "cached.replace(&format!(\"{project}  1\"),\n&format!(\"/tmp/project
 "                                                      │                                         "
 "                                                      │                                         "
 "                                                      │                                         "
-"  ↑↓ navigate o resume enter open n new f search g group: project r rename x stop h hide        "
-"  a archive del delete ctrl+c quit                                                              "
+"  ↑↓ navigate o resume enter open n new w new worktree f search g group: project r rename       "
+"  x stop h hide a archive del delete ctrl+c quit                                                "

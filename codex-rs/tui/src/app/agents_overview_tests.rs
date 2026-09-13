@@ -2,6 +2,25 @@ use super::super::agents_overview_view::AgentsOverviewGrouping;
 use super::*;
 
 #[tokio::test]
+async fn overview_worktree_creation_busy_state() {
+    let mut app = make_test_app().await;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    app.app_event_tx = AppEventSender::new(tx);
+    app.agents_overview
+        .view_state
+        .lock()
+        .unwrap()
+        .creating_worktree = true;
+    let mut view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
+    for key in ['n', 'w', 'o', 'r', 'x', 'h', 'a'] {
+        view.handle_key_event(KeyCode::Char(key).into());
+    }
+    assert!(rx.try_recv().is_err());
+    app.chat_widget.show_bottom_pane_view(Box::new(view));
+    insta::assert_snapshot!(render_bottom_popup(&app.chat_widget, /*width*/ 80));
+}
+
+#[tokio::test]
 async fn overview_thread_colors_match_footer_and_respect_color_suppression() {
     let mut app = make_test_app().await;
     let id = ThreadId::from_u128(/*value*/ 42);
@@ -2630,6 +2649,7 @@ async fn command_center_escape_cancels_editors_and_never_closes_list() {
 #[tokio::test]
 async fn command_center_new_actions_use_selection_and_leave_metadata_text_alone() {
     let mut app = make_test_app().await;
+    app.config.features.enable(Feature::Worktrees).unwrap();
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     app.app_event_tx = AppEventSender::new(tx);
     let id = ThreadId::new();
@@ -2645,6 +2665,10 @@ async fn command_center_new_actions_use_selection_and_leave_metadata_text_alone(
         view.handle_key_event(KeyCode::Char('n').into());
         assert!(
             matches!(rx.try_recv(), Ok(AppEvent::NewAgentsOverviewSession { cwd: Some(cwd) }) if cwd == target.cwd)
+        );
+        view.handle_key_event(KeyCode::Char('w').into());
+        assert!(
+            matches!(rx.try_recv(), Ok(AppEvent::NewAgentsOverviewWorktree { cwd: Some(cwd) }) if cwd == target.cwd)
         );
         view.handle_key_event(KeyCode::Char('g').into());
     }
@@ -2663,4 +2687,8 @@ async fn command_center_new_actions_use_selection_and_leave_metadata_text_alone(
         rx.try_recv(),
         Ok(AppEvent::NewAgentsOverviewSession { cwd: None })
     ));
+    app.config.features.disable(Feature::Worktrees).unwrap();
+    let mut disabled = app.agents_overview_view(vec![target], Some(id));
+    disabled.handle_key_event(KeyCode::Char('w').into());
+    assert!(rx.try_recv().is_err());
 }

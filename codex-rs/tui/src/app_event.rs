@@ -287,6 +287,11 @@ pub(crate) enum AppEvent {
     NewAgentsOverviewSession {
         cwd: Option<AbsolutePathBuf>,
     },
+    /// Create an empty session in a worktree from the selected project's default branch.
+    NewAgentsOverviewWorktree {
+        cwd: Option<AbsolutePathBuf>,
+    },
+    AgentsOverviewWorktreeCreated(Result<crate::app::PendingWorktree, String>),
     /// Rename a task directly from the shared dashboard.
     RenameAgentsOverviewThread {
         thread_id: ThreadId,

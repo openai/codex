@@ -5,6 +5,7 @@ expression: agents
 Resume | o | Agents resume Resume Open the session resume picker. o Default
 Search | f | Agents search Search Search the available agent tasks. f Default
 New Task | n | Agents new_task New Task Open a new session in the selected checkout. n Default
+New Worktree | w | Agents new_worktree New Worktree Open a new session in a worktree from the project default branch. w Default
 Rename | r | Agents rename Rename Rename the selected task. r Default
 Stop | x | Agents stop Stop Stop the selected running task. x Default
 Archive | a | Agents archive Archive Archive the selected task and its child agents. a Default

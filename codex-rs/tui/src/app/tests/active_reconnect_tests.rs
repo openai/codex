@@ -238,6 +238,12 @@ async fn reconnect_restores_history_permissions_and_keeps_old_input_paused() -> 
                 .note_turn_finished(&TurnStatus::Completed, before_disconnect);
         }
         app.schedule_recap_check(id, Instant::now());
+        app.pending_managed_worktree_creation = true;
+        app.agents_overview
+            .view_state
+            .lock()
+            .unwrap()
+            .creating_worktree = true;
         let old_sender = app.app_event_tx.clone();
         let connected = reconnect(
             app.app_server_target.clone(),
@@ -257,6 +263,14 @@ async fn reconnect_restores_history_permissions_and_keeps_old_input_paused() -> 
         app.finish_reconnect(&mut tui, &mut session, &mut events, connected, "2.1.0")
             .await?;
         assert!(app.pending_server_profiles.is_empty());
+        assert!(!app.pending_managed_worktree_creation);
+        assert!(
+            !app.agents_overview
+                .view_state
+                .lock()
+                .unwrap()
+                .creating_worktree
+        );
         assert!(!app.reconnect.offline);
         assert!(!app.thread_unavailable(id));
         assert_eq!(app.last_subagent_backfill_attempt, None);
