@@ -60,6 +60,7 @@
 //! Recall moves the cursor to the end. Question editors copy primary history on recall/search;
 //! draft capture cancels previews, and restoration resets traversal.
 //! Ctrl+R searches history in the footer and previews matches in the composer.
+//! Typing and pasting edit the active search query, including large pastes and image paths.
 //! Enter accepts the preview; Esc restores the original draft.
 //! Vim undo/redo snapshots complete drafts and groups direct edits with active Vim transactions.
 //! An active edit keeps one separately capped snapshot; canceling does not evict committed history.
@@ -1208,17 +1209,25 @@ impl ChatComposer {
     ///
     /// Behavior:
     ///
-    /// - If the paste is larger than `LARGE_PASTE_CHAR_THRESHOLD` chars, inserts a placeholder
-    ///   element (expanded on submit) and stores the full text in `pending_pastes`.
+    /// - If history search is active, inserts nonempty text into its query and ignores empty pastes.
+    /// - If Vim search is active, inserts text into its query.
+    /// - Otherwise, if the paste is larger than `LARGE_PASTE_CHAR_THRESHOLD` chars, inserts a
+    ///   placeholder element (expanded on submit) and stores the full text in `pending_pastes`.
     /// - Otherwise, if the paste looks like an image path, attaches the image and inserts a
     ///   trailing space so the user can keep typing naturally.
     /// - Otherwise, inserts the pasted text directly into the textarea.
     ///
-    /// In all cases, clears any paste-burst Enter suppression state so a real paste cannot affect
-    /// the next user Enter key, then syncs popup state.
+    /// For composer edits, clears any paste-burst Enter suppression state so a real paste cannot
+    /// affect the next user Enter key, then syncs popup state.
     pub fn handle_paste(&mut self, pasted: String) -> bool {
         let pasted = pasted.replace("\r\n", "\n").replace('\r', "\n");
         let pasted = sanitize_user_text(pasted.into());
+        if self.history_search.is_some() {
+            if !pasted.is_empty() {
+                self.update_history_search_query(|query| query.push_str(&pasted));
+            }
+            return true;
+        }
         if let Some(query) = self.draft.textarea.vim_query_mut() {
             query.editor.insert_str(&pasted);
             return true;

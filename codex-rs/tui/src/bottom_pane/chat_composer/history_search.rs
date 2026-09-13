@@ -13,7 +13,7 @@
 //! traversal invariants stay with `ChatComposerHistory`.
 //!
 //! A search session starts idle with an empty footer query, so opening Ctrl+R never previews the
-//! latest history entry by itself. Typing a query restarts traversal from newest to oldest,
+//! latest history entry by itself. Typing or pasting a query restarts traversal from newest to oldest,
 //! repeated Ctrl+R/Up and Ctrl+S/Down move between unique matches, `Enter` accepts the current
 //! preview as an editable draft, and `Esc` or Ctrl+C restores the exact draft that existed before
 //! search started.
@@ -61,10 +61,18 @@ pub(super) struct HistorySearchSession {
     original_vim_history: VimHistory,
     /// Active and completed Vim commands suspended during temporary draft replacement.
     original_vim_state: VimPersistentState,
-    /// Footer-owned query text typed while Ctrl+R search is active.
+    /// Footer-owned query text typed or pasted while Ctrl+R search is active.
     query: String,
     /// User-visible search status used to choose footer hints and composer preview behavior.
     status: HistorySearchStatus,
+}
+
+impl HistorySearchSession {
+    /// Renders newlines and tabs as visible markers for the footer and cursor placement.
+    /// Matching continues to use the original query.
+    fn display_query(&self) -> String {
+        self.query.replace('\n', "↵").replace('\t', "⇥")
+    }
 }
 
 /// User-visible phase of the active Ctrl+R search session.
@@ -213,11 +221,9 @@ impl ChatComposer {
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } => {
-                if let Some(search) = self.history_search.as_ref() {
-                    let mut query = search.query.clone();
+                self.update_history_search_query(|query| {
                     query.pop();
-                    self.update_history_search_query(query);
-                }
+                });
                 (InputResult::None, true)
             }
             KeyEvent {
@@ -225,7 +231,7 @@ impl ChatComposer {
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } => {
-                self.update_history_search_query(String::new());
+                self.update_history_search_query(String::clear);
                 (InputResult::None, true)
             }
             KeyEvent {
@@ -233,11 +239,7 @@ impl ChatComposer {
                 modifiers,
                 ..
             } if !has_ctrl_or_alt(modifiers) => {
-                if let Some(search) = self.history_search.as_ref() {
-                    let mut query = search.query.clone();
-                    query.push(ch);
-                    self.update_history_search_query(query);
-                }
+                self.update_history_search_query(|query| query.push(ch));
                 (InputResult::None, true)
             }
             _ => (InputResult::None, true),
@@ -270,18 +272,16 @@ impl ChatComposer {
         InputResult::None
     }
 
-    fn update_history_search_query(&mut self, query: String) {
-        let Some(original_draft) = self
-            .history_search
-            .as_ref()
-            .map(|search| search.original_draft.clone())
-        else {
+    /// Edits the footer query and restarts history traversal from the newest entry.
+    /// An empty query restores the original draft and leaves search open.
+    pub(super) fn update_history_search_query(&mut self, edit: impl FnOnce(&mut String)) {
+        let Some(search) = self.history_search.as_mut() else {
             return;
         };
-        if let Some(search) = self.history_search.as_mut() {
-            search.query = query.clone();
-            search.status = HistorySearchStatus::Searching;
-        }
+        edit(&mut search.query);
+        search.status = HistorySearchStatus::Searching;
+        let query = search.query.clone();
+        let original_draft = search.original_draft.clone();
         self.restore_draft(original_draft);
         if query.is_empty() {
             self.history.reset_search();
@@ -367,14 +367,15 @@ impl ChatComposer {
     /// Builds the footer line shown while reverse history search is active.
     ///
     /// The footer displays the query as the editable field and uses the status to decide whether
-    /// to show searching, match actions, or no-match feedback. The line is intentionally separate
-    /// from cursor placement so rendering can fall back to normal footer layout if a small terminal
-    /// cannot allocate a distinct hint row.
+    /// to show searching, match actions, or no-match feedback. Newlines and tabs use visible markers
+    /// while matching keeps the original query. The line is intentionally separate from cursor
+    /// placement so rendering can fall back to normal footer layout if a small terminal cannot
+    /// allocate a distinct hint row.
     pub(super) fn history_search_footer_line(&self) -> Option<Line<'static>> {
         let search = self.history_search.as_ref()?;
         let mut line = Line::from(vec![
             "reverse-i-search: ".dim(),
-            search.query.clone().cyan(),
+            search.display_query().cyan(),
         ]);
         match search.status {
             HistorySearchStatus::Idle => {}
@@ -502,7 +503,8 @@ impl ChatComposer {
             return None;
         }
         let prompt_width = Line::from("reverse-i-search: ").width() as u16;
-        let query_width = Line::from(search.query.clone()).width() as u16;
+        let query_width =
+            u16::try_from(Line::from(search.display_query()).width()).unwrap_or(u16::MAX);
         let desired_x = area
             .x
             .saturating_add(prompt_width)
@@ -511,6 +513,10 @@ impl ChatComposer {
         Some((desired_x.min(max_x), area.y))
     }
 }
+
+#[cfg(test)]
+#[path = "history_search_paste_tests.rs"]
+mod paste_tests;
 
 #[cfg(test)]
 mod tests {

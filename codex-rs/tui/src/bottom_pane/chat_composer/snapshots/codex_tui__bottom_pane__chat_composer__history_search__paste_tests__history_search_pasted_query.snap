@@ -1,0 +1,10 @@
+---
+source: tui/src/bottom_pane/chat_composer/history_search_paste_tests.rs
+assertion_line: 51
+expression: terminal.backend()
+---
+"                                                                      "
+"› git status                                                          "
+"                                                                      "
+"                                                                      "
+"  reverse-i-search: git status  enter accept · esc cancel             "
