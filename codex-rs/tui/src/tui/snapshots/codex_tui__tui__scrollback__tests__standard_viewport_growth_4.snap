@@ -1,0 +1,10 @@
+---
+source: tui/src/tui/scrollback_tests.rs
+expression: screen.contents()
+---
+
+
+
+
+composer-1
+composer-2
