@@ -70,11 +70,6 @@ async fn lifecycle_shortcuts_target_filtered_task_in_any_state() {
             active_flags: Vec::new(),
         },
     ] {
-        app.agents_overview
-            .view_state
-            .lock()
-            .unwrap()
-            .focus_composer();
         let target = ThreadId::new();
         let mut view = app.agents_overview_view(
             vec![
@@ -89,7 +84,7 @@ async fn lifecycle_shortcuts_target_filtered_task_in_any_state() {
             Some(target),
         );
         view.handle_key_event(KeyCode::Esc.into());
-        view.handle_key_event(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL));
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE));
         for character in "Target".chars() {
             view.handle_key_event(KeyCode::Char(character).into());
         }
@@ -133,7 +128,7 @@ async fn hidden_task_stays_hidden_through_activity_and_seed_until_explicit_resum
     app.chat_widget.show_bottom_pane_view(Box::new(view));
     app.chat_widget.handle_key_event(KeyCode::Esc.into());
     app.chat_widget
-        .handle_key_event(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL));
+        .handle_key_event(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
     let hide = std::iter::from_fn(|| rx.try_recv().ok())
         .find(|event| matches!(event, AppEvent::HideAgentsOverviewThread { .. }))
         .expect("shortcut requests hiding the task");
@@ -236,9 +231,7 @@ async fn lifecycle_removes_background_and_current_tasks_without_losing_the_dashb
         (AgentsOverviewAction::Delete, "delete_task", true),
     ] {
         let key = match action {
-            AgentsOverviewAction::Archive => {
-                KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL)
-            }
+            AgentsOverviewAction::Archive => KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
             AgentsOverviewAction::Delete => KeyCode::Delete.into(),
         };
         let (mut app, mut rx, _op_rx) =
@@ -357,7 +350,7 @@ async fn lifecycle_removes_background_and_current_tasks_without_losing_the_dashb
         };
         let mut tui = crate::tui::test_support::make_test_tui()?;
         tui.pause_events();
-        app.open_agents_overview(&app_server, AgentsOverviewFocus::List);
+        app.open_agents_overview(&app_server);
         if action == AgentsOverviewAction::Archive {
             let rollout = app_server
                 .thread_read(id, /*include_turns*/ false)
@@ -402,7 +395,7 @@ async fn lifecycle_removes_background_and_current_tasks_without_losing_the_dashb
             .await?;
             app.enqueue_primary_thread_session(resumed.session, resumed.turns)
                 .await?;
-            app.open_agents_overview(&app_server, AgentsOverviewFocus::List);
+            app.open_agents_overview(&app_server);
         }
         let background = ThreadId::from_string(
             &app_test_support::create_fake_rollout(
@@ -586,20 +579,28 @@ async fn disabled_footer_shortcuts_stay_bold_when_wrapped() {
     let mut buffer = ratatui::buffer::Buffer::empty(area);
     view.render(area, &mut buffer);
     let delete_key = crate::key_hint::plain(KeyCode::Delete).display_label();
-    for key in ["ctrl+x", "ctrl+w", "ctrl+e", delete_key.as_str()] {
+    for (key, label) in [
+        ("x", "x stop"),
+        ("h", "h hide"),
+        ("a", "a archive"),
+        (delete_key.as_str(), delete_key.as_str()),
+    ] {
         let cells = buffer
             .content()
-            .windows(key.len())
+            .windows(label.len())
             .find(|cells| {
                 cells
                     .iter()
                     .map(ratatui::buffer::Cell::symbol)
                     .collect::<String>()
-                    == key
+                    == label
             })
             .expect("footer shortcut");
         assert_eq!(
-            cells.iter().map(|cell| cell.modifier).collect::<Vec<_>>(),
+            cells[..key.len()]
+                .iter()
+                .map(|cell| cell.modifier)
+                .collect::<Vec<_>>(),
             vec![ratatui::style::Modifier::BOLD | ratatui::style::Modifier::DIM; key.len()]
         );
     }

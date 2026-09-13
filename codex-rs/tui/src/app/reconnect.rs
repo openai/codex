@@ -182,6 +182,8 @@ impl App {
                 self.chat_widget.restore_user_message_to_composer(message);
             }
             self.reconnect.offline = true;
+            // Cached blank sessions are usable only while this connection owns a subscription.
+            self.agents_overview.blank_sessions.clear();
             self.reconnect.failed = false;
             if self.pending_server_version_notice.take().is_some() {
                 self.reconnect.seen_version_notice = None;

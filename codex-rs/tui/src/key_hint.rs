@@ -107,6 +107,8 @@ impl KeyBinding {
     pub(crate) fn display_label(&self) -> String {
         let modifiers = modifiers_to_string(self.modifiers);
         let key = match self.key {
+            #[cfg(test)]
+            KeyCode::Delete => "del".to_string(),
             KeyCode::Enter => "enter".to_string(),
             KeyCode::Char(' ') => "space".to_string(),
             KeyCode::Up => "↑".to_string(),

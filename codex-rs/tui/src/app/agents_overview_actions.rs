@@ -3,7 +3,6 @@
 //! Removing the current root leaves an unattached dashboard, even when it is empty.
 
 use super::App;
-use super::agents_overview_view::AgentsOverviewFocus;
 use crate::app_event::AgentsOverviewAction;
 use crate::app_event::AppEvent;
 use crate::app_server_session::AppServerSession;
@@ -284,7 +283,7 @@ impl App {
                 /*initial_user_message*/ None,
             );
             self.replace_chat_widget(ChatWidget::new_with_app_event(init));
-            self.open_agents_overview(app_server, AgentsOverviewFocus::List);
+            self.open_agents_overview(app_server);
         } else {
             self.repaint_agents_overview();
             if attempted {

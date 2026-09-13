@@ -4429,7 +4429,7 @@
               "$ref": "#/definitions/KeybindingsSpec"
             }
           ],
-          "description": "Start composing a new agent task."
+          "description": "Open a new session in the selected checkout."
         },
         "rename": {
           "allOf": [

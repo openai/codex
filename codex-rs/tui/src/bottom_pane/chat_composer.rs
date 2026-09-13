@@ -18,7 +18,6 @@
 //! # Key Event Routing
 //!
 //! Plain Left opens agents when the local-daemon composer is empty and available for input.
-//! The agents dashboard uses the matching empty-editor guards for Right to open a task.
 //! Explicit editor remaps take precedence.
 //! Most key handling goes through [`ChatComposer::handle_key_event`], which dispatches to a
 //! popup-specific handler if a popup is visible and otherwise to

@@ -1274,20 +1274,8 @@ impl RuntimeKeymap {
             chord_hints: Arc::clone(&chords),
         };
 
-        let resume_default_is_shadowed = keymap.agents.resume.is_none()
-            && (configured_context_alias_is_used(&keymap.agents, "ctrl-o")
-                || configured_context_alias_is_used(&keymap.list, "ctrl-o")
-                || chords.bindings.iter().any(|binding| {
-                    binding.action.context.overlaps(KeymapContext::Agents)
-                        && binding.chord.prefix.parts()
-                            == key_hint::ctrl(KeyCode::Char('o')).parts()
-                }));
         let mut agents = AgentsKeymap {
-            resume: if resume_default_is_shadowed {
-                Vec::new()
-            } else {
-                resolve_local!(keymap, defaults, agents, resume)
-            },
+            resume: resolve_local!(keymap, defaults, agents, resume),
             search: resolve_local!(keymap, defaults, agents, search),
             new_task: resolve_local!(keymap, defaults, agents, new_task),
             rename: resolve_local!(keymap, defaults, agents, rename),
@@ -1299,15 +1287,21 @@ impl RuntimeKeymap {
             chord_hints: Arc::clone(&chords),
         };
 
-        // Newly added defaults yield to existing user bindings in the dashboard.
+        // New defaults yield to explicit bindings, including existing list shortcuts.
         for (configured, bindings, alias) in [
-            (
-                keymap.agents.archive.as_ref(),
-                &mut agents.archive,
-                "ctrl-e",
-            ),
+            (keymap.agents.resume.as_ref(), &mut agents.resume, "o"),
+            (keymap.agents.search.as_ref(), &mut agents.search, "f"),
+            (keymap.agents.new_task.as_ref(), &mut agents.new_task, "n"),
+            (keymap.agents.rename.as_ref(), &mut agents.rename, "r"),
+            (keymap.agents.stop.as_ref(), &mut agents.stop, "x"),
+            (keymap.agents.archive.as_ref(), &mut agents.archive, "a"),
             (keymap.agents.delete.as_ref(), &mut agents.delete, "delete"),
-            (keymap.agents.hide.as_ref(), &mut agents.hide, "ctrl-w"),
+            (keymap.agents.hide.as_ref(), &mut agents.hide, "h"),
+            (
+                keymap.agents.toggle_grouping.as_ref(),
+                &mut agents.toggle_grouping,
+                "g",
+            ),
         ] {
             if configured.is_none()
                 && (configured_context_alias_is_used(&keymap.agents, alias)
@@ -1816,15 +1810,15 @@ impl RuntimeKeymap {
                 chord_hints: Arc::default(),
             },
             agents: AgentsKeymap {
-                resume: default_bindings![ctrl(KeyCode::Char('o'))],
-                search: default_bindings![ctrl(KeyCode::Char('f'))],
-                new_task: default_bindings![ctrl(KeyCode::Char('n'))],
-                rename: default_bindings![ctrl(KeyCode::Char('r'))],
-                stop: default_bindings![ctrl(KeyCode::Char('x'))],
-                archive: default_bindings![ctrl(KeyCode::Char('e'))],
+                resume: default_bindings![plain(KeyCode::Char('o'))],
+                search: default_bindings![plain(KeyCode::Char('f'))],
+                new_task: default_bindings![plain(KeyCode::Char('n'))],
+                rename: default_bindings![plain(KeyCode::Char('r'))],
+                stop: default_bindings![plain(KeyCode::Char('x'))],
+                archive: default_bindings![plain(KeyCode::Char('a'))],
                 delete: default_bindings![plain(KeyCode::Delete)],
-                hide: default_bindings![ctrl(KeyCode::Char('w'))],
-                toggle_grouping: default_bindings![ctrl(KeyCode::Char('s'))],
+                hide: default_bindings![plain(KeyCode::Char('h'))],
+                toggle_grouping: default_bindings![plain(KeyCode::Char('g'))],
                 chord_hints: Arc::default(),
             },
             approval: ApprovalKeymap {
@@ -2203,14 +2197,12 @@ impl RuntimeKeymap {
                 ));
             }
             if bindings.iter().any(|binding| {
-                matches!(binding.parts(), (KeyCode::Char(_), modifiers)
-                    if modifiers.is_empty()
-                        || modifiers == KeyModifiers::SHIFT
-                        || crate::key_hint::is_altgr(modifiers))
-                    || binding.parts() == (KeyCode::Backspace, KeyModifiers::NONE)
+                let (code, modifiers) = binding.normalized_parts();
+                (code == KeyCode::Backspace && modifiers == KeyModifiers::NONE)
+                    || (matches!(code, KeyCode::Char(_)) && crate::key_hint::is_altgr(modifiers))
             }) {
                 return Err(format!(
-                    "tui.keymap.agents.{action}: printable keys and backspace are reserved for task input"
+                    "tui.keymap.agents.{action}: AltGr and backspace are reserved for editing"
                 ));
             }
         }
@@ -3579,15 +3571,11 @@ mod tests {
         let runtime = RuntimeKeymap::from_config(&keymap).expect("list shortcut remains usable");
         assert_eq!(
             runtime.agents.rename,
-            vec![key_hint::ctrl(KeyCode::Char('r'))]
+            vec![key_hint::plain(KeyCode::Char('r'))]
         );
 
         keymap.agents.search = Some(one("s"));
-        assert!(
-            RuntimeKeymap::from_config(&keymap)
-                .expect_err("printable shortcut is reserved for input")
-                .contains("printable keys")
-        );
+        assert!(RuntimeKeymap::from_config(&keymap).is_ok());
 
         keymap.agents.search = None;
         keymap.agents.stop = Some(one("backspace"));
@@ -3616,18 +3604,22 @@ mod tests {
                 .expect_err("backspace is reserved for task input")
                 .contains("backspace")
         );
+        for binding in ["alt-backspace", "ctrl-backspace"] {
+            keymap.agents.stop = Some(one(binding));
+            assert!(RuntimeKeymap::from_config(&keymap).is_ok());
+        }
     }
 
     #[test]
     fn agents_resume_default_yields_to_existing_custom_shortcuts() {
-        for binding in ["ctrl-o", "ctrl-o f6"] {
+        for binding in ["o", "o f6"] {
             let mut keymap = TuiKeymap::default();
             keymap.agents.search = Some(one(binding));
             let runtime =
                 RuntimeKeymap::from_config(&keymap).expect("existing keymap remains valid");
             assert!(runtime.agents.resume.is_empty());
 
-            keymap.agents.resume = Some(one("ctrl-o"));
+            keymap.agents.resume = Some(one("o"));
             assert!(RuntimeKeymap::from_config(&keymap).is_err());
         }
     }

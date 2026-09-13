@@ -12,7 +12,8 @@ expression: "render_bottom_popup(&app.chat_widget,\n96).replace(&format!(\"{proj
                                                       │
                                                       │ Last message
                                                       │ let explanation = "A long code line
-                                                      │ …
+                                                      │ should wrap inside the task details
+                                                      │ panel.";
                                                       │
                                                       │ Project
                                                       │ /tmp/project
@@ -21,8 +22,7 @@ expression: "render_bottom_popup(&app.chat_widget,\n96).replace(&format!(\"{proj
                                                       │ Prompt
                                                       │ long prompt long prompt long prompt
                                                       │ …
-  New task
-
-› Describe a new task
-
-   enter create task    ctrl+j newline    esc tasks    → open task
+                                                      │
+                                                      │
+  ↑↓ navigate o resume enter open n new f search g group: project r rename x stop h hide
+  a archive del delete ctrl+c quit

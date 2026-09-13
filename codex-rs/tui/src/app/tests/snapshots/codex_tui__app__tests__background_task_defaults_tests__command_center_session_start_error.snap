@@ -1,0 +1,11 @@
+---
+source: tui/src/app/tests/background_task_defaults_tests.rs
+expression: "crate::chatwidget::tests::helpers::render_bottom_popup(&app.chat_widget, 80,)"
+---
+  Unable to complete action
+  Failed to start session: thread/start failed during TUI bootstrap: thread/
+  start failed: replacement unavailable (code -32603)
+
+› 1. Return to command center
+
+  Press enter to confirm or esc to go back

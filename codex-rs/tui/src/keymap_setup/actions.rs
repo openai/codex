@@ -215,7 +215,7 @@ pub(super) const KEYMAP_ACTIONS: &[KeymapActionDescriptor] = &[
     action("list", "List", "cancel", "Cancel and close selection views."),
     action("agents", "Agents", "resume", "Open the session resume picker."),
     action("agents", "Agents", "search", "Search the available agent tasks."),
-    action("agents", "Agents", "new_task", "Start composing a new agent task."),
+    action("agents", "Agents", "new_task", "Open a new session in the selected checkout."),
     action("agents", "Agents", "rename", "Rename the selected task."),
     action("agents", "Agents", "stop", "Stop the selected running task."),
     action("agents", "Agents", "archive", "Archive the selected task and its child agents."),

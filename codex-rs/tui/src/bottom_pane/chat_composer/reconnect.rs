@@ -1,14 +1,9 @@
-//! Offline editing and event-channel rebinding retain the draft in place.
+//! Offline editing retains the draft in place.
 //! Paste Enter handling is shared with normal submission so buffered newlines survive both paths.
 
 use super::*;
 
 impl ChatComposer {
-    /// Rebind retained editors after the app replaces its event channel.
-    pub(crate) fn set_app_event_sender(&mut self, sender: AppEventSender) {
-        self.app_event_tx = sender;
-    }
-
     /// Preserve Enter inside a paste burst without attempting submission.
     pub(crate) fn handle_paste_enter(&mut self, now: Instant) -> bool {
         let in_slash_context = self.slash_commands_enabled()

@@ -1,5 +1,5 @@
 //! Dashboard for inspecting and managing the TUI's retained daemon tasks.
-//! The shared view state retains the new-task editor across metadata refreshes.
+//! Search and rename input survive metadata refreshes; root Escape never exits.
 
 #[path = "agents_overview_grouping.rs"]
 mod grouping;
@@ -18,7 +18,6 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::BottomPaneView;
 use crate::bottom_pane::CancellationEvent;
-use crate::bottom_pane::ChatComposer;
 use crate::bottom_pane::ViewCompletion;
 use crate::key_hint::KeyBindingListExt;
 use crate::key_hint::ShortcutHint;
@@ -133,11 +132,8 @@ impl AgentsOverviewProjectGroup {
 
 #[derive(Default)]
 pub(super) struct AgentsOverviewViewState {
-    // Search and rename never borrow the new-task draft.
     pub(super) input: String,
-    pub(super) composer: Option<ChatComposer>,
     pub(super) key_chord_hint: Option<Vec<(String, String)>>,
-    pub(super) focus: AgentsOverviewFocus,
     pub(super) refresh_failed: bool,
     pub(super) connection_notice: Option<&'static str>,
     pub(super) server_version_notice: Option<String>,
@@ -149,37 +145,9 @@ pub(super) struct AgentsOverviewViewState {
     pub(super) completion: Option<ViewCompletion>,
 }
 
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
-pub(super) enum AgentsOverviewFocus {
-    #[default]
-    Composer,
-    List,
-}
-
 impl AgentsOverviewViewState {
-    pub(super) fn focus_composer(&mut self) {
-        self.focus = AgentsOverviewFocus::Composer;
-        if let Some(composer) = self.composer.as_mut() {
-            composer.resume_text_entry();
-        }
-    }
-
-    fn editing_metadata(&self) -> bool {
+    pub(super) fn editing_metadata(&self) -> bool {
         self.searching || self.renaming
-    }
-
-    fn composing(&self) -> bool {
-        self.focus == AgentsOverviewFocus::Composer && !self.searching && !self.renaming
-    }
-
-    fn composer_owns_escape(&self) -> bool {
-        self.composer.as_ref().is_some_and(|composer| {
-            composer.popup_active()
-                || (composer.is_vim_enabled()
-                    && !composer
-                        .keymap_contexts()
-                        .contains(KeymapContext::VimNormal))
-        })
     }
 }
 
@@ -192,8 +160,6 @@ pub(super) struct AgentsOverviewView {
     app_event_tx: AppEventSender,
     keymap: ListKeymap,
     agents_keymap: AgentsKeymap,
-    composer_hints: Vec<(String, String)>,
-    composer_keymap: crate::keymap::ComposerKeymap,
 }
 
 impl AgentsOverviewView {
@@ -210,18 +176,6 @@ impl AgentsOverviewView {
             .and_then(|thread_id| rows.iter().position(|row| row.thread_id == thread_id))
             .or_else(|| rows.iter().position(|row| row.is_current))
             .unwrap_or(0);
-        let composer_hints = [
-            (KeymapContext::Composer, "submit", "create task"),
-            (KeymapContext::Editor, "insert_newline", "newline"),
-        ]
-        .into_iter()
-        .filter_map(|(context, action, label)| {
-            keymap
-                .primary_hint(context, action)
-                .map(|hint| (hint.display_label().replace(" + ", "+"), label.to_string()))
-        })
-        .chain([("esc".to_string(), "tasks".to_string())])
-        .collect();
         let project_groups = rows
             .iter()
             .map(|row| AgentsOverviewProjectGroup::for_thread(&row.thread, worktrees_enabled))
@@ -235,8 +189,6 @@ impl AgentsOverviewView {
             app_event_tx,
             keymap: keymap.list,
             agents_keymap: keymap.agents,
-            composer_hints,
-            composer_keymap: keymap.composer,
         };
         view.state().completion = None;
         let visible = view.visible_indices();
@@ -543,10 +495,6 @@ impl AgentsOverviewView {
 }
 
 impl BottomPaneView for AgentsOverviewView {
-    fn next_frame_delay(&self) -> Option<std::time::Duration> {
-        self.state().composer.as_ref()?.footer_flash_delay()
-    }
-
     fn view_id(&self) -> Option<&'static str> {
         Some(AGENTS_OVERVIEW_VIEW_ID)
     }
@@ -556,15 +504,7 @@ impl BottomPaneView for AgentsOverviewView {
     }
 
     fn keymap_contexts(&self) -> KeymapContextSet {
-        let state = self.state();
-        if state.composing() {
-            state
-                .composer
-                .as_ref()
-                .map_or_else(KeymapContextSet::default, ChatComposer::keymap_contexts)
-        } else {
-            KeymapContextSet::new(KeymapContext::List).with(KeymapContext::Agents)
-        }
+        KeymapContextSet::new(KeymapContext::List).with(KeymapContext::Agents)
     }
 
     fn completion(&self) -> Option<ViewCompletion> {
@@ -586,13 +526,14 @@ impl BottomPaneView for AgentsOverviewView {
             state.renaming = false;
             state.search.clear();
             state.input.clear();
-            return CancellationEvent::Handled;
-        }
-        if let Some(composer) = state.composer.as_mut()
-            && (composer.cancel_vim_search()
-                || composer.cancel_history_search()
-                || composer.clear_for_ctrl_c().is_some())
-        {
+            drop(state);
+            if self.selected >= self.rows.len() {
+                self.selected = self
+                    .visible_indices()
+                    .first()
+                    .copied()
+                    .unwrap_or(usize::MAX);
+            }
             return CancellationEvent::Handled;
         }
         CancellationEvent::NotHandled
@@ -604,39 +545,19 @@ impl BottomPaneView for AgentsOverviewView {
                 input.push_str(&crate::history_cell::sanitize_user_text(pasted.into()))
             });
         }
-        let mut state = self.state();
-        if state.focus == AgentsOverviewFocus::List {
-            state.focus_composer();
-        }
-        state
-            .composer
-            .as_mut()
-            .is_some_and(|composer| composer.handle_paste(pasted))
-    }
-
-    fn flush_paste_burst_if_due(&mut self) -> bool {
-        self.state()
-            .composer
-            .as_mut()
-            .is_some_and(ChatComposer::flush_paste_burst_if_due)
-    }
-
-    fn is_in_paste_burst(&self) -> bool {
-        self.state()
-            .composer
-            .as_ref()
-            .is_some_and(ChatComposer::is_in_paste_burst)
+        false
     }
 
     fn handle_key_event(&mut self, key: KeyEvent) {
         if key.kind == crossterm::event::KeyEventKind::Release {
             return;
         }
-        if self.state().composing() {
-            self.handle_composer_key(key);
+        if key.code == KeyCode::Esc {
+            self.on_ctrl_c();
             return;
         }
         if key.code == KeyCode::Backspace
+            && self.state().editing_metadata()
             && key.modifiers.is_empty()
             && self.keymap.action_for(key).is_none()
         {
@@ -647,29 +568,13 @@ impl BottomPaneView for AgentsOverviewView {
         }
         if is_plain_text_key_event(key)
             && let KeyCode::Char(character) = key.code
+            && self.state().editing_metadata()
         {
-            if self.state().editing_metadata() {
-                self.edit_input(|input| input.push(character));
-                return;
-            }
-            if !self
-                .state()
-                .composer
-                .as_ref()
-                .is_some_and(ChatComposer::is_vim_enabled)
-            {
-                self.state().focus_composer();
-                self.handle_composer_key(key);
-                return;
-            }
+            self.edit_input(|input| input.push(character));
+            return;
         }
 
-        if self.agents_keymap.search.is_pressed(key) || {
-            let state = self.state();
-            state.connection_notice.is_some()
-                && state.searching
-                && self.keymap.action_for(key) == Some(ListAction::Cancel)
-        } {
+        if self.agents_keymap.search.is_pressed(key) {
             let mut state = self.state();
             if !state.renaming {
                 state.searching = !state.searching;
@@ -681,7 +586,6 @@ impl BottomPaneView for AgentsOverviewView {
         }
 
         if self.state().connection_notice.is_some()
-            && !self.agents_keymap.new_task.is_pressed(key)
             && self.keymap.action_for(key) != Some(ListAction::Cancel)
         {
             match self.keymap.action_for(key) {
@@ -706,12 +610,9 @@ impl BottomPaneView for AgentsOverviewView {
             return;
         }
         if self.agents_keymap.new_task.is_pressed(key) {
-            let mut state = self.state();
-            state.search.clear();
-            state.searching = false;
-            state.renaming = false;
-            state.input.clear();
-            state.focus_composer();
+            self.app_event_tx.send(AppEvent::NewAgentsOverviewSession {
+                cwd: self.selected_row().map(|row| row.thread.cwd.clone()),
+            });
             return;
         }
         if self.agents_keymap.rename.is_pressed(key) {
@@ -777,17 +678,7 @@ impl BottomPaneView for AgentsOverviewView {
                 }
                 ListAction::Accept => self.activate(),
                 ListAction::Cancel => {
-                    let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-                    if state.searching {
-                        state.search.clear();
-                        state.searching = false;
-                        self.selected = 0;
-                    } else if !state.input.is_empty() || state.renaming {
-                        state.input.clear();
-                        state.renaming = false;
-                    } else {
-                        state.focus_composer();
-                    }
+                    self.on_ctrl_c();
                 }
                 ListAction::PageUp | ListAction::PageDown => {
                     for _ in 0..5 {

@@ -195,6 +195,9 @@ impl App {
         thread_id: ThreadId,
         settings: &ThreadSettings,
     ) {
+        if let Some(blank) = self.agents_overview.blank_sessions.get_mut(&thread_id) {
+            apply_thread_settings_to_session(&mut blank.session, settings);
+        }
         if self.primary_thread_id == Some(thread_id)
             && let Some(session) = self.primary_session_configured.as_mut()
         {

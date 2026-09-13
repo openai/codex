@@ -39,7 +39,7 @@ impl App {
 
             if !app_server.thread_settings_update(ThreadSettingsUpdateParams {
                 thread_id: thread_id.to_string(),
-                permissions: Some(selection.profile_id),
+                permissions: Some(selection.profile_id.clone()),
                 approval_policy: selection.approval_policy,
                 approvals_reviewer: selection.approvals_reviewer.map(Into::into),
                 ..Default::default()
@@ -55,6 +55,7 @@ impl App {
             self.chat_widget.set_approval_policy(AskForApproval::from(config.permissions.approval_policy.value()));
             self.config.permissions = config.permissions.clone();
             self.set_approvals_reviewer_in_app_and_widget(config.approvals_reviewer);
+            self.agents_overview.selected_permission_profiles.insert(thread_id, selection.profile_id);
             self.runtime_approval_policy_override = selection.approval_policy.map(RuntimeApprovalPolicyOverride::Explicit);
             self.runtime_permission_profile_override = Some(RuntimePermissionProfileOverride::from_config(&config));
             self.sync_active_thread_permission_settings_to_cached_session().await;

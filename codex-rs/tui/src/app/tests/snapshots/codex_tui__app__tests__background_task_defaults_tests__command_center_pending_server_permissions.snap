@@ -1,0 +1,10 @@
+---
+source: tui/src/app/tests/background_task_defaults_tests.rs
+expression: "crate::chatwidget::tests::helpers::render_bottom_popup(&app.chat_widget, 80)"
+---
+  Unable to complete action
+  Wait for permissions to update before starting a session.
+
+› 1. Return to command center
+
+  Press enter to confirm or esc to go back

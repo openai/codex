@@ -3,7 +3,6 @@
 //! This module contains the exhaustive `AppEvent` dispatcher and exit-mode handling. Large domain
 //! actions are delegated to focused app submodules so the central match remains the routing layer.
 
-use super::agents_overview_view::AgentsOverviewFocus;
 use super::rate_limit_refresh::RateLimitReadStatus;
 use super::rate_limit_refresh::RateLimitRefreshOutcome;
 use super::resize_reflow::trailing_run_start;
@@ -36,8 +35,6 @@ impl App {
                 &event,
                 AppEvent::InsertHistoryCell(_)
                     | AppEvent::CommitRealtimeTranscriptHistory
-                    | AppEvent::AgentsOverviewError(_)
-                    | AppEvent::ViewAgentsOverviewUnsentPrompt(_)
                     | AppEvent::ResetTranscriptForThreadSwitch
                     | AppEvent::ManagedWorktreeCreated(_)
                     | AppEvent::AppendMessageHistoryEntry { .. }
@@ -2428,19 +2425,7 @@ impl App {
                 }
             }
             AppEvent::OpenAgentsOverview => {
-                self.open_agents_overview(app_server, AgentsOverviewFocus::List);
-            }
-            AppEvent::AgentsOverviewError(message) => {
-                self.add_agents_overview_error(message);
-            }
-            AppEvent::ViewAgentsOverviewUnsentPrompt(text) => {
-                let _ = tui.enter_alt_screen();
-                self.overlay = Some(Overlay::new_static_with_lines(
-                    text.lines().map(|line| Line::from(line.to_string())).collect(),
-                    "Unsent task".to_string(),
-                    self.keymap.pager.clone(),
-                ));
-                tui.frame_requester().schedule_frame();
+                self.open_agents_overview(app_server);
             }
             AppEvent::AgentsOverviewThreadsLoaded { request_id, result } => {
                 self.apply_agents_overview_thread_refresh(app_server, request_id, result);
@@ -2453,15 +2438,14 @@ impl App {
                     AppRunControl::Continue
                         if self.primary_thread_id.is_none()
                             && self.chat_widget.selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID).is_none() => {
-                        self.open_agents_overview(app_server, AgentsOverviewFocus::List);
+                        self.open_agents_overview(app_server);
                     }
                     AppRunControl::Continue => {}
                     AppRunControl::Exit(reason) => return Ok(AppRunControl::Exit(reason)),
                 }
             }
-            AppEvent::DispatchAgentsOverviewTask { prompt, cwd } => {
-                self.dispatch_agents_overview_task(tui, app_server, prompt, cwd)
-                    .await;
+            AppEvent::NewAgentsOverviewSession { cwd } => {
+                return Box::pin(self.new_agents_overview_session(tui, app_server, cwd)).await;
             }
             AppEvent::RenameAgentsOverviewThread { thread_id, name } => {
                 match app_server.thread_set_name(thread_id, name.clone()).await {
@@ -3253,7 +3237,7 @@ impl App {
                     /*initial_user_message*/ None,
                 );
                 self.replace_chat_widget(ChatWidget::new_with_app_event(init));
-                self.open_agents_overview(app_server, AgentsOverviewFocus::List);
+                self.open_agents_overview(app_server);
                 AppRunControl::Continue
             }
             Err(err) => {
@@ -3313,7 +3297,7 @@ impl App {
                     /*initial_user_message*/ None,
                 );
                 self.replace_chat_widget(ChatWidget::new_with_app_event(init));
-                self.open_agents_overview(app_server, AgentsOverviewFocus::List);
+                self.open_agents_overview(app_server);
                 AppRunControl::Continue
             }
             Err(err) => {

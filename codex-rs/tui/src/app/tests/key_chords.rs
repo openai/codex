@@ -586,10 +586,9 @@ async fn physical_chords_route_list_and_mixed_request_input_modals() -> Result<(
 #[tokio::test]
 async fn dashboard_chord_hint_survives_refresh_and_clears_on_cancel() -> Result<()> {
     let mut app = make_test_app().await;
-    app.keymap = RuntimeKeymap::from_config(&toml::from_str(
-        "[editor]\ninsert_newline = [\"ctrl-x n\"]",
-    )?)
-    .unwrap();
+    app.keymap =
+        RuntimeKeymap::from_config(&toml::from_str("[agents]\nnew_task = [\"ctrl-x n\"]")?)
+            .unwrap();
     let mut tui = crate::tui::test_support::make_test_tui()?;
     let view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
     app.chat_widget.show_bottom_pane_view(Box::new(view));
@@ -598,12 +597,41 @@ async fn dashboard_chord_hint_survives_refresh_and_clears_on_cancel() -> Result<
     let _ = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
     insta::assert_snapshot!(
         render_bottom_popup(&app.chat_widget, /*width*/ 80).lines().last().unwrap(),
-        @"   ctrl + x … waiting for next key    esc cancel"
+        @"  ctrl + x … waiting for next key  esc cancel"
     );
     assert_eq!(
         app.route_key_chord_event(&mut tui, KeyCode::Esc.into()),
         None
     );
     assert_eq!(render_bottom_popup(&app.chat_widget, /*width*/ 80), before);
+    Ok(())
+}
+
+#[tokio::test]
+async fn command_center_chords_do_not_capture_search_text() -> Result<()> {
+    let mut app = make_test_app().await;
+    app.keymap = RuntimeKeymap::from_config(&toml::from_str(
+        "[agents]\nnew_task = 'n n'\n[ list ]\naccept = 'ctrl-x enter'",
+    )?)
+    .unwrap();
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
+    app.chat_widget.show_bottom_pane_view(Box::new(view));
+    app.chat_widget.handle_key_event(KeyCode::Char('f').into());
+    for key in "new".chars() {
+        let event = KeyCode::Char(key).into();
+        assert_eq!(app.route_key_chord_event(&mut tui, event), Some(event));
+        app.chat_widget.handle_key_event(event);
+    }
+    assert!(render_bottom_popup(&app.chat_widget, /*width*/ 80).contains("Search › new"));
+    assert_eq!(app.route_key_chord_event(&mut tui, ctrl('x')), None);
+    assert!(app.key_chord_matcher.is_pending());
+    app.route_key_chord_event(&mut tui, KeyCode::Esc.into());
+    app.chat_widget.handle_key_event(KeyCode::Esc.into());
+    assert_eq!(
+        app.route_key_chord_event(&mut tui, KeyCode::Char('n').into()),
+        None
+    );
+    assert!(app.key_chord_matcher.is_pending());
     Ok(())
 }

@@ -3,7 +3,6 @@
 //! Owns the main app run loop from app-server bootstrap through terminal shutdown. Startup input
 //! remains isolated from protected interactive requests until the initialized composer owns it.
 
-use super::agents_overview_view::AgentsOverviewFocus;
 use super::reconnect::ReconnectState;
 use super::*;
 use crate::session_start::SessionStartAction;
@@ -835,7 +834,7 @@ See the Codex keymap documentation for supported actions and examples."
             );
         }
         if start_in_agents_overview {
-            app.open_agents_overview(&app_server, AgentsOverviewFocus::Composer);
+            app.open_agents_overview(&app_server);
         } else if !matches!(app.app_server_target, AppServerTarget::Embedded) {
             app.refresh_agents_overview_threads(&app_server);
         }

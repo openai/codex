@@ -576,6 +576,15 @@ impl ChatWidget {
             return;
         }
 
+        if self
+            .bottom_pane
+            .selected_index_for_active_view(crate::app::AGENTS_OVERVIEW_VIEW_ID)
+            .is_some()
+        {
+            self.request_quit_without_confirmation();
+            return;
+        }
+
         if !DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED {
             if self.is_cancellable_work_active() {
                 self.quit_shortcut_expires_at = None;

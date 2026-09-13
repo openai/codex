@@ -2,12 +2,12 @@
 source: tui/src/keymap_setup.rs
 expression: agents
 ---
-Resume | ctrl-o | Agents resume Resume Open the session resume picker. ctrl-o Default
-Search | ctrl-f | Agents search Search Search the available agent tasks. ctrl-f Default
-New Task | ctrl-n | Agents new_task New Task Start composing a new agent task. ctrl-n Default
-Rename | ctrl-r | Agents rename Rename Rename the selected task. ctrl-r Default
-Stop | ctrl-x | Agents stop Stop Stop the selected running task. ctrl-x Default
-Archive | ctrl-e | Agents archive Archive Archive the selected task and its child agents. ctrl-e Default
+Resume | o | Agents resume Resume Open the session resume picker. o Default
+Search | f | Agents search Search Search the available agent tasks. f Default
+New Task | n | Agents new_task New Task Open a new session in the selected checkout. n Default
+Rename | r | Agents rename Rename Rename the selected task. r Default
+Stop | x | Agents stop Stop Stop the selected running task. x Default
+Archive | a | Agents archive Archive Archive the selected task and its child agents. a Default
 Delete | delete | Agents delete Delete Permanently delete the selected task and its child agents. delete Default
-Hide | ctrl-w | Agents hide Hide Hide the selected task until explicitly resumed. ctrl-w Default
-Toggle Grouping | ctrl-s | Agents toggle_grouping Toggle Grouping Cycle task grouping by project, status, or model. ctrl-s Default
+Hide | h | Agents hide Hide Hide the selected task until explicitly resumed. h Default
+Toggle Grouping | g | Agents toggle_grouping Toggle Grouping Cycle task grouping by project, status, or model. g Default

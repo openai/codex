@@ -21,8 +21,8 @@ expression: "render_bottom_popup(&app.chat_widget, 100)"
                                                           │
                                                           │
                                                           │
-  New task
-
-› Describe a new task
-
-   enter create task    ctrl+j newline    esc tasks    → open task
+                                                          │
+                                                          │
+                                                          │
+  ↑↓ navigate o resume enter open n new f search g group: project r rename x stop h hide a archive
+  del delete ctrl+c quit

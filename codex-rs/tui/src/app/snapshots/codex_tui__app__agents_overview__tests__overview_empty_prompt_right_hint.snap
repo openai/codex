@@ -2,4 +2,4 @@
 source: tui/src/app/agents_overview_tests.rs
 expression: rendered.lines().last().unwrap()
 ---
-   enter create task    ctrl+j newline    esc tasks    → open task
+  a archive del delete ctrl+c quit

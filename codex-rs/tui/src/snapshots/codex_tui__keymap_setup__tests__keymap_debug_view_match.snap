@@ -12,4 +12,3 @@ Raw event: code=Char('o'), modifiers=ctrl, kind=Press
 
 Assigned actions:
   - global.copy (Copy) - Copy the last agent response to the clipboard. [Default]
-  - agents.resume (Resume) - Open the session resume picker. [Default]

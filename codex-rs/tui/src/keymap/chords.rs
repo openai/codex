@@ -467,9 +467,10 @@ Windows. Choose a different chord and retry.",
     if matches!(prefix_key, KeyCode::Char(_))
         && !crate::key_hint::has_ctrl_or_alt(prefix_modifiers)
         && !binding.action.context.allows_plain_chord_prefix()
+        && binding.action.context != KeymapContext::Agents
     {
         return Err(format!(
-            "Invalid `{path}` = `{}`: a chord prefix outside Vim must use ctrl, \
+            "Invalid `{path}` = `{}`: a chord prefix outside Vim or the command center must use ctrl, \
 alt, or a non-character key so ordinary text input is not intercepted.",
             binding.spec
         ));

@@ -41,6 +41,15 @@ impl App {
         else {
             return;
         };
+        if matches!(
+            notification,
+            ServerNotification::TurnStarted(_)
+                | ServerNotification::ThreadClosed(_)
+                | ServerNotification::ThreadArchived(_)
+                | ServerNotification::ThreadDeleted(_)
+        ) {
+            self.agents_overview.blank_sessions.remove(&thread_id);
+        }
         self.track_agents_overview_activity(thread_id, notification);
         let thread = self
             .agents_overview
@@ -67,6 +76,9 @@ impl App {
                 self.agents_overview.threads.insert(thread_id, Some(thread));
             }
             ServerNotification::ThreadArchived(_) | ServerNotification::ThreadDeleted(_) => {
+                self.agents_overview
+                    .selected_permission_profiles
+                    .remove(&thread_id);
                 self.agents_overview.activity.remove(&thread_id);
                 self.agents_overview.last_messages.remove(&thread_id);
                 self.agents_overview.usage.remove(&thread_id);
@@ -101,6 +113,21 @@ impl App {
                 }
             }
             ServerNotification::ThreadSettingsUpdated(settings) => {
+                if !self.pending_server_profiles.contains_key(&thread_id)
+                    && self
+                        .agents_overview
+                        .selected_permission_profiles
+                        .get(&thread_id)
+                        != settings
+                            .thread_settings
+                            .active_permission_profile
+                            .as_ref()
+                            .map(|profile| &profile.id)
+                {
+                    self.agents_overview
+                        .selected_permission_profiles
+                        .remove(&thread_id);
+                }
                 if let Some(thread) = thread {
                     thread.cwd.clone_from(&settings.thread_settings.cwd);
                     thread.model = Some(settings.thread_settings.model.clone());

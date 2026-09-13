@@ -206,7 +206,7 @@ async fn disconnected_command_center_keeps_input_and_blocks_actions() -> Result<
     app.handle_tui_event(
         &mut tui,
         &mut session,
-        TuiEvent::Key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL)),
+        TuiEvent::Key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE)),
     )
     .await?;
     app.handle_tui_event(
@@ -218,9 +218,9 @@ async fn disconnected_command_center_keeps_input_and_blocks_actions() -> Result<
     assert!(app.begin_reconnect());
     for key in [
         KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
-        KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL),
-        KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL),
-        KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL),
+        KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
+        KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE),
+        KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE),
     ] {
         app.handle_tui_event(&mut tui, &mut session, TuiEvent::Key(key))
             .await?;
@@ -233,21 +233,10 @@ async fn disconnected_command_center_keeps_input_and_blocks_actions() -> Result<
         TuiEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
     )
     .await?;
-    assert_eq!(
-        app.agents_overview
-            .view_state
-            .lock()
-            .unwrap()
-            .composer
-            .as_ref()
-            .unwrap()
-            .current_text_with_pending(),
-        "task draft!"
-    );
     assert!(
         !std::iter::from_fn(|| events.try_recv().ok()).any(|event| matches!(
             event,
-            AppEvent::DispatchAgentsOverviewTask { .. } | AppEvent::OpenResumePicker
+            AppEvent::NewAgentsOverviewSession { .. } | AppEvent::OpenResumePicker
         ))
     );
     assert_snapshot!(

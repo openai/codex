@@ -1,6 +1,6 @@
 ---
 source: tui/src/app/agents_overview_usage_tests.rs
-expression: "render_bottom_popup(&app.chat_widget,\n96).replace(&format!(\"{project}  2\"),\n&group).replace(&project, \"/tmp/project\").replace(\"fwd del\", \"del\")"
+expression: "render_bottom_popup(&app.chat_widget,\n96).replace(&format!(\"{project}  2\"),\n&group).replace(&project, \"/tmp/project\").replace(\"del\", \"del\")"
 ---
   Agent command center
   1 need input   0 working   1 ready
@@ -20,9 +20,9 @@ expression: "render_bottom_popup(&app.chat_widget,\n96).replace(&format!(\"{proj
                                                       │ Tokens: 13K in · 4K out
                                                       │ Est. usage: 5 credits · ~$0.20
                                                       │
+                                                      │ Prompt
+                                                      │ Review parser
                                                       │
-  New task
-
-› Describe a new task
-
-   enter create task    ctrl+j newline    esc tasks    → open task
+                                                      │
+  ↑↓ navigate o resume enter open n new f search g group: project r rename x stop h hide
+  a archive del delete ctrl+c quit

@@ -1737,10 +1737,6 @@ impl ChatWidget {
         self.bottom_pane.composer_is_empty() && !self.bottom_pane.is_in_paste_burst()
     }
 
-    pub(crate) fn composer_is_vim_enabled(&self) -> bool {
-        self.bottom_pane.composer_is_vim_enabled()
-    }
-
     #[cfg(test)]
     pub(crate) fn is_task_running_for_test(&self) -> bool {
         self.bottom_pane.is_task_running()

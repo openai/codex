@@ -2,7 +2,6 @@
 //! Keeps CLI/runtime cwd precedence, remote-workspace checks, and interactive prompts aligned.
 //! Carries local preferences alongside the resolved configuration for session replacement.
 
-use super::agents_overview_view::AgentsOverviewFocus;
 use super::*;
 use crate::onboarding::onboarding_screen::check_directory_trust;
 use crate::startup_hooks_review::StartupHooksReviewOutcome;
@@ -183,7 +182,7 @@ impl App {
                 .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
                 .is_none()
             {
-                self.open_agents_overview(app_server, AgentsOverviewFocus::List);
+                self.open_agents_overview(app_server);
             }
             return Err(AppRunControl::Continue);
         }

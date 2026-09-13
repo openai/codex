@@ -21,8 +21,8 @@ expression: "render_bottom_popup(&app.chat_widget,\n96).replace(&format!(\"{proj
                                                       │ No prompt available.
                                                       │
                                                       │
-  New task
-
-› Keep this draft
-
-   enter create task    ctrl+j newline    esc tasks
+                                                      │
+                                                      │
+                                                      │
+  ↑↓ navigate o resume enter open n new f search g group: project r rename x stop h hide
+  a archive del delete ctrl+c quit

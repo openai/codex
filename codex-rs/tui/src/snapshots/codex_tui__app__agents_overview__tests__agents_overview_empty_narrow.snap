@@ -17,12 +17,12 @@ expression: rendered
 
 
 
-  New task
 
-› Describe a new task
 
-  ↑↓ navigate ctrl+o resume → open
-  ctrl+n new task ctrl+f search
-  ctrl+s group: project ctrl+r rename
-  ctrl+x stop ctrl+w hide ctrl+e archive
-  del delete esc back
+
+
+
+
+  ↑↓ navigate o resume enter open n new
+  f search g group: project r rename x stop
+  h hide a archive del delete ctrl+c quit

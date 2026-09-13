@@ -212,6 +212,11 @@ impl App {
             self.chat_widget.set_approvals_reviewer(reviewer);
         }
         self.chat_widget.set_permission_network(network);
+        if let Some(thread_id) = self.chat_widget.thread_id() {
+            self.agents_overview
+                .selected_permission_profiles
+                .insert(thread_id, profile_id.clone());
+        }
         self.runtime_permission_profile_override =
             Some(RuntimePermissionProfileOverride::from_config(&self.config));
         self.sync_active_thread_permission_settings_to_cached_session()
@@ -290,6 +295,9 @@ impl App {
                 .approvals_reviewer
                 .is_none_or(|reviewer| config.approvals_reviewer == reviewer)
         {
+            self.agents_overview
+                .selected_permission_profiles
+                .insert(thread_id, selection.profile_id);
             return;
         }
         let params = ThreadSettingsUpdateParams {
@@ -301,6 +309,9 @@ impl App {
         };
         match app_server.thread_settings_update(params).await {
             Ok(true) => {
+                self.agents_overview
+                    .selected_permission_profiles
+                    .insert(thread_id, selection.profile_id.clone());
                 self.pending_server_profiles
                     .insert(thread_id, selection.clone());
                 self.chat_widget.add_info_message(

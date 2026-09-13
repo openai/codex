@@ -1,25 +1,67 @@
 //! Layout rendering and cursor placement for the agent dashboard.
-//! The prompt and its cursor reserve the same height for wrapped footer hints.
+//! Only search and rename reserve an editor row; list actions share a wrapped footer.
 
 use super::*;
-use crossterm::cursor::SetCursorStyle;
 
 impl AgentsOverviewView {
     pub(super) fn footer_lines(&self, width: u16) -> Vec<Line<'static>> {
-        if self.state().connection_notice.is_some() {
-            return vec![
-                "ctrl+c clear input, then quit · actions paused until the list is refreshed"
-                    .dim()
-                    .into(),
-            ];
+        let state = self.state();
+        let message = if let Some(items) = &state.key_chord_hint {
+            Some(
+                items
+                    .iter()
+                    .map(|(key, label)| format!("{key} {label}"))
+                    .collect::<Vec<_>>()
+                    .join("  "),
+            )
+        } else if state.editing_metadata() && state.connection_notice.is_some() {
+            Some("esc cancel · actions paused until reconnected".into())
+        } else if state.editing_metadata() {
+            Some(format!(
+                "{} {}  esc cancel",
+                self.keymap
+                    .primary_hint(ListAction::Accept)
+                    .map(crate::key_hint::ShortcutHint::display_label)
+                    .unwrap_or_default(),
+                if state.renaming { "rename" } else { "open" }
+            ))
+        } else if state.connection_notice.is_some() {
+            Some("ctrl+c quit · actions paused until the list is refreshed".into())
+        } else {
+            None
+        };
+        drop(state);
+        if let Some(message) = message {
+            return textwrap::wrap(&message, usize::from(width.max(1)))
+                .into_iter()
+                .map(|line| line.into_owned().dim().into())
+                .collect();
+        }
+        if width < 24 {
+            let hints = [
+                ("new_task", &self.agents_keymap.new_task, "new"),
+                ("search", &self.agents_keymap.search, "search"),
+            ]
+            .into_iter()
+            .filter_map(|(action, bindings, label)| {
+                self.agents_keymap
+                    .primary_hint(action, bindings)
+                    .map(|hint| format!("{} {label}", hint.display_label()))
+            });
+            return hints
+                .chain(["ctrl+c quit".into()])
+                .flat_map(|hint| {
+                    textwrap::wrap(&hint, usize::from(width.max(1)))
+                        .into_iter()
+                        .map(|line| line.into_owned().dim().into())
+                        .collect::<Vec<_>>()
+                })
+                .collect();
         }
         let list_hint = |action| {
             self.keymap.primary_hint(action).filter(|hint| {
                 !matches!(hint, ShortcutHint::Single(binding)
-                if is_plain_text_key_event(KeyEvent::new(
-                    binding.parts().0,
-                    binding.parts().1,
-                )) || [
+                if [
                     &self.agents_keymap.resume,
                     &self.agents_keymap.search,
                     &self.agents_keymap.new_task,
@@ -75,15 +117,12 @@ impl AgentsOverviewView {
             "resume",
             true,
         );
-        let open_hint = (!self.state().editing_metadata())
-            .then(|| list_hint(ListAction::MoveRight))
-            .flatten()
-            .or_else(|| list_hint(ListAction::Accept));
+        let open_hint = list_hint(ListAction::Accept);
         add_hint(open_hint, "open", true);
         add_hint(
             self.agents_keymap
                 .primary_hint("new_task", &self.agents_keymap.new_task),
-            "new task",
+            "new",
             true,
         );
         add_hint(
@@ -126,7 +165,10 @@ impl AgentsOverviewView {
                 self.selected_row().is_some(),
             );
         }
-        add_hint(list_hint(ListAction::Cancel), "back", true);
+        if self.state().editing_metadata() {
+            add_hint(list_hint(ListAction::Cancel), "cancel", true);
+        }
+        hints.push(vec!["ctrl+c".bold(), " quit".dim()].into());
         let separator = if hints.iter().map(Line::width).sum::<usize>()
             + hints.len().saturating_sub(1) * 2
             <= usize::from(width)
@@ -157,26 +199,12 @@ impl Renderable for AgentsOverviewView {
         24
     }
 
-    fn cursor_style(&self, area: Rect) -> SetCursorStyle {
-        let state = self.state();
-        if state.composing()
-            && let Some(composer) = &state.composer
-        {
-            composer.cursor_style(area)
-        } else {
-            SetCursorStyle::DefaultUserShape
-        }
-    }
-
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         if area.width < 12 || area.height < 8 {
             return None;
         }
-        let [_, _, _, _, _, prompt, _] = self.layout_areas(area);
+        let [_, _, _, _, prompt, _] = self.layout_areas(area);
         let state = self.state();
-        if state.composing() {
-            return state.composer.as_ref()?.cursor_pos(prompt);
-        }
         if !state.editing_metadata() {
             return None;
         }
@@ -197,7 +225,7 @@ impl Renderable for AgentsOverviewView {
             return;
         }
         Clear.render(area, buf);
-        let [header, summary, divider, body, title, prompt, footer] = self.layout_areas(area);
+        let [header, summary, divider, body, prompt, footer] = self.layout_areas(area);
         let inset =
             |rect: Rect| rect.inner(Margin::new(/*horizontal*/ 2, /*vertical*/ 0));
         if let Some(notice) = &self.state().server_version_notice {
@@ -276,14 +304,6 @@ impl Renderable for AgentsOverviewView {
         if state.editing_metadata() {
             Line::from(vec![label.cyan().bold(), input[visible_start..].into()])
                 .render(inset(prompt), buf);
-        } else {
-            Line::from("New task".dim()).render(inset(title), buf);
-            if let Some(composer) = &state.composer {
-                composer.render(prompt, buf);
-            }
-        }
-        if state.composing() {
-            return;
         }
         drop(state);
         Paragraph::new(self.footer_lines(inset(footer).width)).render(inset(footer), buf);
