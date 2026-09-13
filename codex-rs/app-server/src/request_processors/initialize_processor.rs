@@ -174,6 +174,22 @@ impl InitializeRequestProcessor {
             *suffix = Some(user_agent_suffix);
         }
 
+        #[cfg(windows)]
+        if matches!(session.origin, ConnectionOrigin::Stdio) && name == "Codex Desktop" {
+            // Uninstall ownership must not depend on account sign-in or sandbox setup.
+            // Keep this bounded attempt ahead of the response; background registration can race uninstall.
+            let home = codex_home.clone();
+            if !matches!(
+                tokio::task::spawn_blocking(move || {
+                    codex_windows_sandbox::register_desktop_installation(&home)
+                })
+                .await,
+                Ok(Ok(()))
+            ) {
+                tracing::warn!("could not register desktop uninstall ownership");
+            }
+        }
+
         let user_agent = get_codex_user_agent();
         let response = InitializeResponse {
             user_agent,

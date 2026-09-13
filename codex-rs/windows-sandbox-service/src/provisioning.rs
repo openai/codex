@@ -8,7 +8,6 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
 use codex_windows_sandbox::SandboxProvisioningResponse;
-use codex_windows_sandbox::WindowsSandboxProvisioningSettings;
 use codex_windows_sandbox::run_elevated_provisioning_setup_with_retained_handles;
 use codex_windows_sandbox::sandbox_setup_is_complete_with_settings;
 use windows_sys::Win32::Storage::FileSystem as filesystem;
@@ -16,28 +15,31 @@ use windows_sys::Win32::Storage::FileSystem as filesystem;
 use crate::installation_record::InstallationRecord;
 use crate::ipc::ClientIdentity;
 use crate::ipc::OwnedHandle;
+use crate::ipc::ServiceRequest;
 
 pub(crate) fn run(
     identity: ClientIdentity,
-    settings: WindowsSandboxProvisioningSettings,
-    on_authenticated_user: &dyn Fn(&InstallationRecord, OwnedHandle) -> Result<()>,
+    request: ServiceRequest,
+    register_installation: &dyn Fn(InstallationRecord, OwnedHandle) -> Result<()>,
 ) -> Result<SandboxProvisioningResponse> {
     // A policy-rejected request must not choose the uninstall owner. Use the
     // token already authenticated above instead of impersonating the pipe again.
-    let previous = crate::installation_record::load()?.filter(|record| {
-        record.user_sid == identity.user_sid && record.codex_home == identity.codex_home
-    });
-    let installation = InstallationRecord {
-        codex_home: identity.codex_home.clone(),
-        user_sid: identity.user_sid,
-        session_id: identity.session_id,
-        desktop_installation: previous
-            .and_then(|record| record.desktop_installation)
-            .or(identity.desktop_installation),
+    register_installation(
+        InstallationRecord {
+            codex_home: identity.codex_home.clone(),
+            user_sid: identity.user_sid,
+            session_id: identity.session_id,
+            desktop_installation: identity.desktop_installation,
+        },
+        identity.token,
+    )?;
+    let request = match request {
+        ServiceRequest::RegisterInstallation { .. } => {
+            return Ok(SandboxProvisioningResponse::Ok);
+        }
+        ServiceRequest::ProvisionSandbox(request) => request,
     };
-    on_authenticated_user(&installation, identity.token)?;
-    if sandbox_setup_is_complete_with_settings(&identity.codex_home, &settings) {
-        crate::service::record_provisioned_user(&installation)?;
+    if sandbox_setup_is_complete_with_settings(&identity.codex_home, &request.settings) {
         return Ok(SandboxProvisioningResponse::Ok);
     }
     let helper = std::env::current_exe()
@@ -63,11 +65,10 @@ pub(crate) fn run(
     match run_elevated_provisioning_setup_with_retained_handles(
         &identity.codex_home,
         &identity.account,
-        settings,
+        request.settings,
         &retained_handles,
     ) {
         Ok(()) => {
-            crate::service::record_provisioned_user(&installation)?;
             crate::service::log_information(
                 crate::service::EVENT_PROVISIONING_SUCCEEDED,
                 "Codex sandbox provisioning completed successfully.",

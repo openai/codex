@@ -3,20 +3,26 @@
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
+use codex_windows_sandbox::DirectoryOpenDisposition;
+use codex_windows_sandbox::create_directory_guard;
 use codex_windows_sandbox::string_from_sid_bytes;
+use std::ffi::OsString;
 use std::ffi::c_void;
 use std::mem::size_of;
-use std::path::Path;
+use std::os::windows::ffi::OsStringExt;
+use std::os::windows::io::BorrowedHandle;
+use std::os::windows::io::IntoRawHandle;
 use std::path::PathBuf;
 use std::ptr;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Security as security;
+use windows_sys::Win32::Storage::FileSystem as filesystem;
 use windows_sys::Win32::System::Pipes as pipes;
 use windows_sys::Win32::System::Threading as threading;
 
 use super::home::OwnedHandle;
 use super::home::prepare_codex_home;
-use super::request::ProvisioningRequest;
+use super::request::ServiceRequest;
 
 pub(crate) struct ClientIdentity {
     pub(crate) account: String,
@@ -25,7 +31,7 @@ pub(crate) struct ClientIdentity {
     pub(crate) session_id: u32,
     pub(crate) token: OwnedHandle,
     pub(crate) desktop_installation: Option<crate::installation_record::DesktopInstallation>,
-    // Retained by both the service and helper throughout provisioning.
+    // Pins and guards remain live through registration and the provisioning helper.
     pub(crate) directory_handles: Vec<OwnedHandle>,
 }
 
@@ -33,7 +39,7 @@ pub(super) fn authenticate_client(
     pipe: HANDLE,
     authorized_process: &crate::package_identity::AuthorizedClientProcess,
     sandbox_sid: &[u8],
-    request: &ProvisioningRequest,
+    request: &ServiceRequest,
 ) -> Result<(ClientIdentity, Result<()>)> {
     std::thread::scope(|scope| {
         scope
@@ -43,17 +49,20 @@ pub(super) fn authenticate_client(
                         .context("impersonate provisioning client");
                 }
 
-                let identity = authenticate_impersonated_client(
-                    authorized_process,
-                    sandbox_sid,
-                    &request.codex_home,
-                )?;
-                let policy_result = crate::machine_policy::validate_provisioning_settings(
-                    &identity.codex_home,
-                    &request.settings,
-                    &request.listeners,
-                    identity.token.0,
-                );
+                let identity =
+                    authenticate_impersonated_client(authorized_process, sandbox_sid, request)?;
+                let policy_result = match request {
+                    // Registration does not provision resources or change sandbox policy.
+                    ServiceRequest::RegisterInstallation { .. } => Ok(()),
+                    ServiceRequest::ProvisionSandbox(request) => {
+                        crate::machine_policy::validate_provisioning_settings(
+                            &identity.codex_home,
+                            &request.settings,
+                            &request.listeners,
+                            identity.token.0,
+                        )
+                    }
+                };
                 Ok((identity, policy_result))
             })
             .join()
@@ -64,7 +73,7 @@ pub(super) fn authenticate_client(
 fn authenticate_impersonated_client(
     authorized_process: &crate::package_identity::AuthorizedClientProcess,
     sandbox_sid: &[u8],
-    requested_home: &Path,
+    request: &ServiceRequest,
 ) -> Result<ClientIdentity> {
     let mut raw_token = 0;
     if unsafe {
@@ -152,7 +161,57 @@ fn authenticate_impersonated_client(
     })
     .map_err(anyhow::Error::msg)?;
     let account = account_name(sid)?;
-    let (codex_home, handles) = prepare_codex_home(requested_home)?;
+    let requested_home = match request {
+        ServiceRequest::RegisterInstallation { codex_home } => codex_home,
+        ServiceRequest::ProvisionSandbox(request) => &request.codex_home,
+    };
+    let (codex_home, handles) = match request {
+        ServiceRequest::ProvisionSandbox(_) => prepare_codex_home(requested_home)?,
+        ServiceRequest::RegisterInstallation { .. } => {
+            // Registration must not create the sandbox directories or change their ACLs.
+            codex_windows_sandbox::validate_local_directory_path(requested_home)?;
+            let mut handles = Vec::new();
+            super::home::pin_existing_ancestors(requested_home, &mut handles)?;
+            // Uninstall removes sandbox files as SYSTEM; read access cannot grant that authority.
+            let home = super::home::pin_directory(
+                requested_home,
+                filesystem::FILE_ADD_FILE
+                    | filesystem::FILE_ADD_SUBDIRECTORY
+                    | filesystem::WRITE_DAC,
+                DirectoryOpenDisposition::OpenExisting,
+            )?;
+            // Bind the guard to the authorized directory before resolving its pathname.
+            let guard = create_directory_guard(unsafe { BorrowedHandle::borrow_raw(home.0 as _) })?;
+            drop(super::home::pin_directory(
+                requested_home,
+                filesystem::FILE_READ_ATTRIBUTES,
+                DirectoryOpenDisposition::OpenExisting,
+            )?);
+            // Preserve the authorized directory's literal name (including trailing dots).
+            let mut buffer = vec![0_u16; 260];
+            let path = loop {
+                let length = unsafe {
+                    filesystem::GetFinalPathNameByHandleW(
+                        home.0,
+                        buffer.as_mut_ptr(),
+                        buffer.len() as u32,
+                        filesystem::FILE_NAME_NORMALIZED | filesystem::VOLUME_NAME_DOS,
+                    )
+                };
+                if length == 0 {
+                    return Err(std::io::Error::last_os_error())
+                        .context("resolve authorized desktop home");
+                }
+                if (length as usize) < buffer.len() {
+                    break PathBuf::from(OsString::from_wide(&buffer[..length as usize]));
+                }
+                buffer.resize(length as usize, /*value*/ 0);
+            };
+            handles.push(home);
+            handles.push(OwnedHandle(guard.into_raw_handle() as HANDLE));
+            (path, handles)
+        }
+    };
     let desktop_installation =
         crate::installation_record::read_desktop_installation(&codex_home, token.0)
             .inspect_err(|_| {

@@ -175,14 +175,7 @@ fn service_main_inner(state: &ServiceState) -> Result<()> {
             Ok(())
         },
         |installation, user_token| {
-            if let Err(error) = package_lifecycle.watch_authenticated_user(installation, user_token)
-            {
-                log_error(
-                    EVENT_SERVICE_FAILED,
-                    &format!("unable to observe package uninstall: {error:#}"),
-                );
-            }
-            Ok(())
+            package_lifecycle.register_authenticated_user(installation, user_token)
         },
         || {
             let session = state.changed_session.swap(u32::MAX, Ordering::AcqRel);
@@ -274,15 +267,6 @@ unsafe extern "system" fn service_control_handler(
 
 pub(crate) fn log_information(event_id: u32, message: &str) {
     log_event(EVENTLOG_INFORMATION_TYPE, event_id, message);
-}
-
-pub(crate) fn record_provisioned_user(
-    installation: &crate::installation_record::InstallationRecord,
-) -> Result<()> {
-    if SERVICE_STATE.get().is_some() {
-        crate::installation_record::save(installation)?;
-    }
-    Ok(())
 }
 
 pub(crate) fn log_error(event_id: u32, message: &str) {

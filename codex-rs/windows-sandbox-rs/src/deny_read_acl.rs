@@ -81,7 +81,7 @@ pub unsafe fn apply_deny_read_acls(paths: &[PathBuf], psid: *mut c_void) -> Resu
             Ok(added) => added,
             Err(err) => {
                 for added_path in &added_in_this_call {
-                    revoke_ace(added_path, psid);
+                    let _ = revoke_ace(added_path, psid);
                 }
                 return Err(err);
             }

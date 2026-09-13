@@ -119,9 +119,44 @@ pub fn provision_windows_sandbox_via_service(
         },
     };
 
-    let deadline = Instant::now() + PROVISIONING_TIMEOUT;
+    match send_service_request(request, PROVISIONING_TIMEOUT)? {
+        crate::SandboxProvisioningResponse::Ok => {
+            Ok(WindowsSandboxProvisioningOutcome::Provisioned)
+        }
+        crate::SandboxProvisioningResponse::Unavailable => {
+            Ok(WindowsSandboxProvisioningOutcome::Unavailable)
+        }
+        crate::SandboxProvisioningResponse::Error { message } => Err(anyhow!(message)),
+    }
+}
+
+/// Records desktop uninstall ownership without creating or enabling a sandbox.
+pub fn register_desktop_installation(codex_home: &Path) -> anyhow::Result<()> {
+    let request = crate::FramedProvisioningMessage {
+        version: crate::PROVISIONING_PROTOCOL_VERSION,
+        message: crate::ProvisioningMessage::RegisterInstallationRequest {
+            codex_home: codex_home
+                .to_str()
+                .context("desktop home is not valid UTF-8")?
+                .to_owned(),
+        },
+    };
+    match send_service_request(request, Duration::from_secs(5))? {
+        crate::SandboxProvisioningResponse::Ok => Ok(()),
+        crate::SandboxProvisioningResponse::Unavailable => {
+            bail!("desktop uninstall registration service is unavailable")
+        }
+        crate::SandboxProvisioningResponse::Error { message } => Err(anyhow!(message)),
+    }
+}
+
+fn send_service_request(
+    request: crate::FramedProvisioningMessage,
+    timeout: Duration,
+) -> anyhow::Result<crate::SandboxProvisioningResponse> {
+    let deadline = Instant::now() + timeout;
     let Some(mut pipe) = connect(deadline)? else {
-        return Ok(WindowsSandboxProvisioningOutcome::Unavailable);
+        return Ok(crate::SandboxProvisioningResponse::Unavailable);
     };
     let response = (|| -> anyhow::Result<crate::FramedProvisioningMessage> {
         verify_server(pipe.as_raw_handle() as HANDLE)
@@ -156,26 +191,18 @@ pub fn provision_windows_sandbox_via_service(
                 )
             }) =>
         {
-            return Ok(WindowsSandboxProvisioningOutcome::Unavailable);
+            return Ok(crate::SandboxProvisioningResponse::Unavailable);
         }
         Err(error) => return Err(error),
     };
 
     if response.version != crate::PROVISIONING_PROTOCOL_VERSION {
-        return Ok(WindowsSandboxProvisioningOutcome::Unavailable);
+        return Ok(crate::SandboxProvisioningResponse::Unavailable);
     }
     let crate::ProvisioningMessage::ProvisionSandboxResponse { payload } = response.message else {
         bail!("unexpected sandbox provisioning response message");
     };
-    match payload {
-        crate::SandboxProvisioningResponse::Ok => {
-            Ok(WindowsSandboxProvisioningOutcome::Provisioned)
-        }
-        crate::SandboxProvisioningResponse::Unavailable => {
-            Ok(WindowsSandboxProvisioningOutcome::Unavailable)
-        }
-        crate::SandboxProvisioningResponse::Error { message } => Err(anyhow!(message)),
-    }
+    Ok(payload)
 }
 
 fn connect(deadline: Instant) -> anyhow::Result<Option<File>> {

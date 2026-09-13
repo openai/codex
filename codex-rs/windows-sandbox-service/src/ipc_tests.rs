@@ -1,6 +1,7 @@
 use super::OwnedHandle;
 use super::PipeConnection;
 use super::ProvisioningRequest;
+use super::ServiceRequest;
 use super::accept_pipe_connection;
 use super::is_config_parse_error;
 use super::pin_existing_ancestors;
@@ -17,6 +18,7 @@ use codex_windows_sandbox::WindowsSandboxProxyListeners;
 use codex_windows_sandbox::read_provisioning_frame;
 use codex_windows_sandbox::to_wide;
 use codex_windows_sandbox::write_provisioning_frame;
+use pretty_assertions::assert_eq;
 use std::path::Path;
 use std::path::PathBuf;
 use std::ptr;
@@ -113,11 +115,11 @@ fn provisioning_request_preserves_home_spaces_and_unicode() {
     });
     assert_eq!(
         validate_request(&request).unwrap(),
-        ProvisioningRequest {
+        ServiceRequest::ProvisionSandbox(ProvisioningRequest {
             codex_home: PathBuf::from("D:\\Codex Homes\\Jos\u{00e9}\\.codex"),
             listeners: WindowsSandboxProxyListeners::default(),
             settings: WindowsSandboxProvisioningSettings::default(),
-        }
+        })
     );
 }
 
@@ -139,7 +141,7 @@ fn structured_provisioning_request_carries_normalized_proxy_settings() {
         });
         assert_eq!(
             validate_request(&request).unwrap(),
-            ProvisioningRequest {
+            ServiceRequest::ProvisionSandbox(ProvisioningRequest {
                 codex_home: PathBuf::from("D:\\Codex Homes\\Jos\u{00e9}\\.codex"),
                 listeners: WindowsSandboxProxyListeners {
                     http_ports: vec![http_port],
@@ -149,7 +151,7 @@ fn structured_provisioning_request_carries_normalized_proxy_settings() {
                     proxy_ports,
                     allow_local_binding: true,
                 },
-            },
+            }),
         );
     }
 }
@@ -176,11 +178,11 @@ fn structured_provisioning_request_accepts_independent_and_additional_proxy_port
         });
         assert_eq!(
             validate_request(&request).unwrap(),
-            ProvisioningRequest {
+            ServiceRequest::ProvisionSandbox(ProvisioningRequest {
                 codex_home: PathBuf::from(r"C:\Users\alice\.codex"),
                 settings,
                 listeners,
-            }
+            })
         );
     }
 }
@@ -194,11 +196,11 @@ fn structured_provisioning_request_accepts_disabled_listeners() {
     });
     assert_eq!(
         validate_request(&request).unwrap(),
-        ProvisioningRequest {
+        ServiceRequest::ProvisionSandbox(ProvisioningRequest {
             codex_home: PathBuf::from(r"C:\Users\alice\.codex"),
             listeners: WindowsSandboxProxyListeners::default(),
             settings: WindowsSandboxProvisioningSettings::default(),
-        }
+        })
     );
 }
 
@@ -495,4 +497,25 @@ fn pipe_descriptor_denies_sandbox_group_before_interactive_users() {
     let deny = descriptor.find("(D;;GA;;;S-1-5-21-11-12-13-14)").unwrap();
     let interactive = descriptor.find("(A;;0x0012019b;;;IU)").unwrap();
     assert!(deny < interactive);
+}
+
+#[test]
+fn installation_registration_requires_no_sandbox_settings() {
+    let mut frame = Vec::new();
+    write_provisioning_frame(
+        &mut frame,
+        &FramedProvisioningMessage {
+            version: PROVISIONING_PROTOCOL_VERSION,
+            message: ProvisioningMessage::RegisterInstallationRequest {
+                codex_home: r"C:\Users\alice\.codex".to_string(),
+            },
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        validate_request(&frame).unwrap(),
+        ServiceRequest::RegisterInstallation {
+            codex_home: PathBuf::from(r"C:\Users\alice\.codex")
+        },
+    );
 }

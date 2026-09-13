@@ -19,19 +19,9 @@ use windows_sys::Win32::Foundation as foundation;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Storage::FileSystem as filesystem;
 
+use super::ServiceUnavailable;
+
 const DRIVE_FIXED: u32 = 3;
-
-/// The service does not support this drive; the interactive helper may still work.
-#[derive(Debug)]
-pub(super) struct UnsupportedHomeDrive;
-
-impl std::fmt::Display for UnsupportedHomeDrive {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("Codex home must be located on a fixed local drive")
-    }
-}
-
-impl std::error::Error for UnsupportedHomeDrive {}
 
 pub(crate) struct OwnedHandle(pub(crate) HANDLE);
 
@@ -53,7 +43,7 @@ pub(super) fn prepare_codex_home(requested: &Path) -> Result<(PathBuf, Vec<Owned
     if unsafe { filesystem::GetDriveTypeW(to_wide(requested_root.as_os_str()).as_ptr()) }
         != DRIVE_FIXED
     {
-        return Err(UnsupportedHomeDrive.into());
+        return Err(ServiceUnavailable("Codex home must be located on a fixed local drive").into());
     }
     let parent = requested
         .parent()
@@ -73,16 +63,17 @@ pub(super) fn prepare_codex_home(requested: &Path) -> Result<(PathBuf, Vec<Owned
         .last()
         .context("find the root of the requested Codex home")?;
     if unsafe { filesystem::GetDriveTypeW(to_wide(root.as_os_str()).as_ptr()) } != DRIVE_FIXED {
-        return Err(UnsupportedHomeDrive.into());
+        return Err(ServiceUnavailable("Codex home must be located on a fixed local drive").into());
     }
     if home != requested {
         pin_existing_ancestors(&home, &mut handles)?;
     }
+    let sandbox_bin = home.join(".sandbox-bin");
     for (index, directory) in [
         home.as_path(),
         &home.join(".sandbox"),
         &home.join(".sandbox-secrets"),
-        &home.join(".sandbox-bin"),
+        &sandbox_bin,
     ]
     .into_iter()
     .enumerate()
@@ -94,6 +85,18 @@ pub(super) fn prepare_codex_home(requested: &Path) -> Result<(PathBuf, Vec<Owned
             access |= filesystem::WRITE_DAC;
         }
         let handle = pin_directory(directory, access, DirectoryOpenDisposition::OpenOrCreate)
+            .map_err(|error| {
+                // Older elevated installs omitted WRITE_DAC; let the interactive helper repair it.
+                if directory == sandbox_bin.as_path()
+                    && error.downcast_ref::<std::io::Error>().is_some_and(|error| {
+                        error.raw_os_error() == Some(foundation::ERROR_ACCESS_DENIED as i32)
+                    })
+                {
+                    error.context(ServiceUnavailable("sandbox binary directory needs elevated repair"))
+                } else {
+                    error
+                }
+            })
             .with_context(|| {
             if index == 0 {
                 format!(
@@ -153,7 +156,7 @@ pub(crate) fn pin_existing_ancestors(path: &Path, handles: &mut Vec<OwnedHandle>
     Ok(())
 }
 
-fn pin_directory(
+pub(crate) fn pin_directory(
     path: &Path,
     access: u32,
     disposition: DirectoryOpenDisposition,

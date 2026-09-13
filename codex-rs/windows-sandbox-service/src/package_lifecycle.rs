@@ -2,6 +2,8 @@
 
 use std::cell::RefCell;
 use std::io;
+use std::os::windows::io::BorrowedHandle;
+use std::os::windows::io::IntoRawHandle;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -10,6 +12,8 @@ use std::sync::atomic::Ordering;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::ensure;
+use codex_windows_sandbox::DirectoryOpenDisposition;
+use codex_windows_sandbox::create_directory_guard;
 use codex_windows_sandbox::string_from_sid_bytes;
 use windows::ApplicationModel::Package;
 use windows::ApplicationModel::PackageCatalog;
@@ -22,12 +26,12 @@ use windows::Win32::System::WinRT::RoUninitialize;
 use windows::core::HSTRING;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Security as security;
+use windows_sys::Win32::Storage::FileSystem as filesystem;
 use windows_sys::Win32::System::RemoteDesktop::WTS_CURRENT_SERVER_HANDLE;
 use windows_sys::Win32::System::RemoteDesktop::WTSEnumerateSessionsW;
 use windows_sys::Win32::System::RemoteDesktop::WTSFreeMemory;
 use windows_sys::Win32::System::RemoteDesktop::WTSQueryUserToken;
 
-use crate::installation_record::DesktopInstallation;
 use crate::installation_record::InstallationRecord;
 use crate::ipc::OwnedHandle;
 
@@ -35,8 +39,9 @@ mod cleanup;
 
 struct UserInstallation {
     codex_home: Option<PathBuf>,
+    // Ancestors, home, then a guard that prevents in-place junction conversion.
     directory_handles: Vec<OwnedHandle>,
-    desktop_installation: Option<DesktopInstallation>,
+    record: InstallationRecord,
     user_token: OwnedHandle,
     catalog: PackageCatalog,
     token: EventRegistrationToken,
@@ -59,22 +64,59 @@ impl PackageLifecycle {
         })
     }
 
-    pub(crate) fn watch_authenticated_user(
+    pub(crate) fn register_authenticated_user(
         &self,
-        installation: &InstallationRecord,
+        mut record: InstallationRecord,
         user_token: OwnedHandle,
     ) -> Result<()> {
-        if self.installation.borrow().is_some() {
+        let mut active = self.installation.borrow_mut();
+        let previous = match active.as_ref() {
+            Some(installation) => Some(installation.record.clone()),
+            None => crate::installation_record::load()?,
+        };
+        if let Some(previous) = previous {
+            // A missing watcher does not retire its owner; other clients can use elevated setup.
+            ensure!(
+                previous.user_sid == record.user_sid && previous.codex_home == record.codex_home,
+                crate::ipc::ServiceUnavailable(
+                    "installation is already registered to a different owner or home"
+                )
+            );
+            record.desktop_installation = previous
+                .desktop_installation
+                .or(record.desktop_installation);
+        }
+        crate::installation_record::save(&record)?;
+        if let Some(installation) = active.as_mut()
+            && installation.codex_home.is_some()
+        {
+            // A restored watcher must immediately use newly registered desktop ownership.
+            installation.record = record;
             return Ok(());
         }
 
         with_owner_impersonation(user_token.0, || {
             let mut directory_handles = Vec::new();
             let codex_home = match crate::ipc::pin_existing_ancestors(
-                &installation.codex_home,
+                &record.codex_home,
                 &mut directory_handles,
-            ) {
-                Ok(()) => Some(installation.codex_home.clone()),
+            )
+            .and_then(|()| {
+                let home = directory_handles
+                    .last()
+                    .context("pin the registered home")?;
+                let guard =
+                    create_directory_guard(unsafe { BorrowedHandle::borrow_raw(home.0 as _) })?;
+                // Reject a conversion that happened before the handle-relative guard was created.
+                drop(crate::ipc::pin_directory(
+                    &record.codex_home,
+                    filesystem::FILE_READ_ATTRIBUTES,
+                    DirectoryOpenDisposition::OpenExisting,
+                )?);
+                directory_handles.push(OwnedHandle(guard.into_raw_handle() as HANDLE));
+                Ok(())
+            }) {
+                Ok(()) => Some(record.codex_home.clone()),
                 Err(error) => {
                     directory_handles.clear();
                     crate::service::log_error(
@@ -86,8 +128,15 @@ impl PackageLifecycle {
                     None
                 }
             };
-            let catalog = PackageCatalog::OpenForCurrentUser()
-                .context("open the authenticated user's package catalog")?;
+            if let Some(installation) = active.as_mut() {
+                installation.codex_home = codex_home;
+                installation.directory_handles = directory_handles;
+                installation.record = record;
+                return Ok(());
+            }
+            let catalog = PackageCatalog::OpenForCurrentUser().context(
+                crate::ipc::ServiceUnavailable("open the authenticated user's package catalog"),
+            )?;
             let package_name = self.package_name.clone();
             let uninstalling = Arc::clone(&self.uninstalling);
             let token = catalog
@@ -102,15 +151,17 @@ impl PackageLifecycle {
                     }
                     Ok(())
                 }))
-                .context("subscribe to authenticated package uninstall notifications")?;
-            self.installation.replace(Some(UserInstallation {
+                .context(crate::ipc::ServiceUnavailable(
+                    "subscribe to authenticated package uninstall notifications",
+                ))?;
+            active.replace(UserInstallation {
                 codex_home,
                 directory_handles,
-                desktop_installation: installation.desktop_installation.clone(),
+                record,
                 user_token,
                 catalog,
                 token,
-            }));
+            });
             Ok(())
         })
     }
@@ -173,14 +224,13 @@ impl PackageLifecycle {
             "logged-in user does not match the recorded sandbox owner"
         );
 
-        self.watch_authenticated_user(&record, token)?;
-        if session_id != record.session_id {
-            crate::installation_record::save(&crate::installation_record::InstallationRecord {
+        self.register_authenticated_user(
+            InstallationRecord {
                 session_id,
                 ..record
-            })?;
-        }
-        Ok(())
+            },
+            token,
+        )
     }
 
     pub(crate) fn clean_up(&self) -> Result<()> {

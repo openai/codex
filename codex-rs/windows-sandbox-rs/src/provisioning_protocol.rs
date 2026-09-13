@@ -25,6 +25,10 @@ pub struct FramedProvisioningMessage {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ProvisioningMessage {
+    /// Records uninstall ownership without provisioning sandbox resources.
+    RegisterInstallationRequest {
+        codex_home: String,
+    },
     ProvisionSandboxRequest {
         payload: SandboxProvisioningRequest,
     },

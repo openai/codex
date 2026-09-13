@@ -25,6 +25,9 @@ codex-windows-sandbox = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 toml = { workspace = true }
 
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+
 [target.'cfg(windows)'.dependencies.windows]
 version = "0.58"
 features = [

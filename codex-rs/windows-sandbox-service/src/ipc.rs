@@ -1,6 +1,6 @@
 //! Authenticated local IPC for the Windows sandbox provisioning service.
-//! Configuration parse failures and unsupported home drives defer provisioning to
-//! the client's elevated helper.
+//! Expected service limitations defer provisioning to the client's elevated helper;
+//! authentication and policy rejections remain errors.
 //! Shutdown wakeups are retried until the listener connects or stops.
 
 mod authentication;
@@ -21,9 +21,11 @@ use codex_windows_sandbox::string_from_sid_bytes;
 use codex_windows_sandbox::to_wide;
 use codex_windows_sandbox::write_provisioning_frame;
 pub(crate) use home::OwnedHandle;
+pub(crate) use home::pin_directory;
 pub(crate) use home::pin_existing_ancestors;
 #[cfg(test)]
 use request::ProvisioningRequest;
+pub(crate) use request::ServiceRequest;
 use request::validate_request;
 use std::mem::size_of;
 use std::ptr;
@@ -48,6 +50,18 @@ const MAX_RESPONSE_MESSAGE_BYTES: usize = 512;
 const REQUEST_IDLE_TIMEOUT: Duration = Duration::from_secs(5);
 const PIPE_USER_ACCESS: &str = "0x0012019b";
 
+/// The service cannot complete this request; the interactive setup helper may still work.
+#[derive(Debug)]
+pub(crate) struct ServiceUnavailable(pub(crate) &'static str);
+
+impl std::fmt::Display for ServiceUnavailable {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.0)
+    }
+}
+
+impl std::error::Error for ServiceUnavailable {}
+
 struct SecurityDescriptor(security::PSECURITY_DESCRIPTOR);
 
 impl Drop for SecurityDescriptor {
@@ -65,7 +79,7 @@ enum PipeConnection {
 pub(crate) fn run(
     shutdown: Arc<AtomicBool>,
     on_ready: impl FnOnce() -> Result<()>,
-    on_authenticated_user: impl Fn(&InstallationRecord, OwnedHandle) -> Result<()>,
+    register_installation: impl Fn(InstallationRecord, OwnedHandle) -> Result<()>,
     on_session_change: impl Fn() -> Result<()>,
 ) -> Result<()> {
     let sandbox_sid = ensure_sandbox_users_group()?;
@@ -134,11 +148,12 @@ pub(crate) fn run(
             &authorized_process,
             &sandbox_sid,
             &shutdown,
-            &on_authenticated_user,
+            &register_installation,
         );
         let response = match result {
             Ok(response) => response,
-            Err(error) if error.is::<home::UnsupportedHomeDrive>() => {
+            Err(error) if error.is::<ServiceUnavailable>() => {
+                eprintln!("sandbox provisioning service unavailable: {error:#}");
                 SandboxProvisioningResponse::Unavailable
             }
             Err(error) => {
@@ -253,7 +268,7 @@ fn handle_request(
     authorized_process: &crate::package_identity::AuthorizedClientProcess,
     sandbox_sid: &[u8],
     shutdown: &AtomicBool,
-    on_authenticated_user: &dyn Fn(&InstallationRecord, OwnedHandle) -> Result<()>,
+    register_installation: &dyn Fn(InstallationRecord, OwnedHandle) -> Result<()>,
 ) -> Result<SandboxProvisioningResponse> {
     let deadline = Instant::now() + REQUEST_IDLE_TIMEOUT;
     let mut request = [0_u8; MAX_REQUEST_BYTES];
@@ -335,7 +350,7 @@ fn handle_request(
         return Err(error)
             .context("requested sandbox settings violate administrator-controlled machine policy");
     }
-    crate::provisioning::run(identity, request.settings, on_authenticated_user)
+    crate::provisioning::run(identity, request, register_installation)
 }
 
 fn is_config_parse_error(error: &anyhow::Error) -> bool {

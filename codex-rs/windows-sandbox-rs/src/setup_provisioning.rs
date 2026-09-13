@@ -813,13 +813,14 @@ fn lock_persistent_sandbox_dirs(payload: &Payload, sandbox_group_sid: &[u8]) -> 
 }
 
 fn lock_sandbox_bin_dir(payload: &Payload, sandbox_group_sid: &[u8]) -> Result<()> {
+    // The owner's unelevated refresh must be able to reapply this protected DACL.
     lock_sandbox_dir(
         &sandbox_bin_dir(&payload.codex_home),
         &payload.real_user,
         sandbox_group_sid,
         GRANT_ACCESS,
         FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
-        FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
+        FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE | WRITE_DAC,
         DaclInheritance::Protected,
         payload.mode,
     )

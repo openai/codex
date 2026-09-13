@@ -13,13 +13,19 @@ use std::path::PathBuf;
 use super::MAX_REQUEST_BYTES;
 
 #[derive(Debug, Eq, PartialEq)]
-pub(super) struct ProvisioningRequest {
-    pub(super) codex_home: PathBuf,
-    pub(super) listeners: WindowsSandboxProxyListeners,
-    pub(super) settings: WindowsSandboxProvisioningSettings,
+pub(crate) enum ServiceRequest {
+    RegisterInstallation { codex_home: PathBuf },
+    ProvisionSandbox(ProvisioningRequest),
 }
 
-pub(super) fn validate_request(request: &[u8]) -> Result<ProvisioningRequest> {
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct ProvisioningRequest {
+    pub(super) codex_home: PathBuf,
+    pub(super) listeners: WindowsSandboxProxyListeners,
+    pub(crate) settings: WindowsSandboxProvisioningSettings,
+}
+
+pub(super) fn validate_request(request: &[u8]) -> Result<ServiceRequest> {
     if request.len() > MAX_REQUEST_BYTES {
         bail!("provisioning request exceeds size limit");
     }
@@ -36,12 +42,17 @@ pub(super) fn validate_request(request: &[u8]) -> Result<ProvisioningRequest> {
             frame.version
         );
     }
-    let ProvisioningMessage::ProvisionSandboxRequest { payload: request } = frame.message else {
-        bail!("expected a sandbox provisioning request");
+    let request = match frame.message {
+        ProvisioningMessage::RegisterInstallationRequest { codex_home } => {
+            validate_home(&codex_home)?;
+            return Ok(ServiceRequest::RegisterInstallation {
+                codex_home: PathBuf::from(codex_home),
+            });
+        }
+        ProvisioningMessage::ProvisionSandboxRequest { payload } => payload,
+        ProvisioningMessage::ProvisionSandboxResponse { .. } => bail!("expected a service request"),
     };
-    if request.codex_home.is_empty() || request.codex_home.contains(['\0', '\r', '\n']) {
-        bail!("Codex home is empty or contains an invalid control character");
-    }
+    validate_home(&request.codex_home)?;
     let mut settings = request.settings;
     let mut listeners = request.listeners;
     for ports in [
@@ -63,9 +74,16 @@ pub(super) fn validate_request(request: &[u8]) -> Result<ProvisioningRequest> {
     {
         bail!("provisioning listener is absent from the proxy settings");
     }
-    Ok(ProvisioningRequest {
+    Ok(ServiceRequest::ProvisionSandbox(ProvisioningRequest {
         codex_home: PathBuf::from(request.codex_home),
         listeners,
         settings,
-    })
+    }))
+}
+
+fn validate_home(home: &str) -> Result<()> {
+    if home.is_empty() || home.contains(['\0', '\r', '\n']) {
+        bail!("Codex home is empty or contains an invalid control character");
+    }
+    Ok(())
 }
