@@ -495,7 +495,7 @@ impl Session {
         // 2. If StrictAutoReview || Guardian enabled, then Guardian. Else, user.
         let resolution = match run_permission_request_hooks(
             self,
-            ctx.review_context.turn(),
+            &ctx.review_context,
             &permission_request_run_id,
             action.permission_request_payload(),
         )

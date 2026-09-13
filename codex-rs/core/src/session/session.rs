@@ -1,5 +1,6 @@
 use super::input_queue::InputQueue;
 use super::mcp_refresh::McpRefresh;
+use super::step_context::StepContext;
 use super::step_settings::ModelInfoOverrides;
 use super::step_settings::StepSettings;
 use super::step_settings::StepSettingsConstraints;
@@ -15,9 +16,11 @@ use crate::hook_mcp_executor::CoreHookMcpExecutor;
 use crate::mcp_tool_call::McpToolApprovalMetadata;
 use crate::responses_metadata::CodexResponsesMetadata;
 use crate::responses_metadata::CodexResponsesRequestKind;
+use crate::responses_metadata::CompactionTurnMetadata;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::shell_snapshot::SnapshotCredentialBrokerState;
 use crate::state::ActiveTurn;
+use crate::turn_metadata::ExecutionMetadata;
 use codex_extension_api::ExtensionDataInit;
 use codex_http_client::ClientRouteClass;
 use codex_http_client::RouteAwareClientPool;
@@ -644,15 +647,64 @@ impl Session {
 
     pub(crate) async fn responses_metadata(
         &self,
-        turn_context: &TurnContext,
+        step_context: &StepContext,
         request_kind: CodexResponsesRequestKind,
+    ) -> CodexResponsesMetadata {
+        let (window_id, window_number, context_window_id) = self.current_window().await;
+        let mut responses_metadata = step_context.turn.turn_metadata_state.to_responses_metadata(
+            self.installation_id.clone(),
+            window_id,
+            request_kind,
+        );
+        ExecutionMetadata::from_settings(&step_context.settings).apply_to(&mut responses_metadata);
+        responses_metadata.tool_namespaces_info = if step_context
+            .turn
+            .config
+            .tool_registry
+            .turn_metadata_includes_tool_info
+            && step_context.settings.model_info.use_responses_lite
+        {
+            step_context.tool_router.tool_namespaces_info().cloned()
+        } else {
+            None
+        };
+        self.with_window_and_fork_metadata(
+            &step_context.turn,
+            responses_metadata,
+            window_number,
+            context_window_id,
+        )
+    }
+
+    // TODO(CDXENT-454): Build the compaction request and metadata from the captured execution.
+    // Remote compaction currently attaches only finalized tool inventory because the rest of the
+    // request remains turn-backed; local compaction does not have a finalized request inventory.
+    pub(crate) async fn compaction_responses_metadata(
+        &self,
+        turn_context: &TurnContext,
+        compaction_metadata: CompactionTurnMetadata,
     ) -> CodexResponsesMetadata {
         let (window_id, window_number, context_window_id) = self.current_window().await;
         let responses_metadata = turn_context.turn_metadata_state.to_responses_metadata(
             self.installation_id.clone(),
             window_id,
-            request_kind,
+            CodexResponsesRequestKind::Compaction(compaction_metadata),
         );
+        self.with_window_and_fork_metadata(
+            turn_context,
+            responses_metadata,
+            window_number,
+            context_window_id,
+        )
+    }
+
+    fn with_window_and_fork_metadata(
+        &self,
+        turn_context: &TurnContext,
+        responses_metadata: CodexResponsesMetadata,
+        window_number: u64,
+        context_window_id: uuid::Uuid,
+    ) -> CodexResponsesMetadata {
         CodexResponsesMetadata {
             window_number: Some(window_number),
             context_window_id: Some(context_window_id),

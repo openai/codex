@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
@@ -20,6 +19,7 @@ use codex_history::InitialHistory;
 use codex_history::RolloutItem;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
+use codex_models_manager::bundled_models_response;
 use codex_plugin::PluginHookSource;
 use codex_plugin::PluginId;
 use codex_protocol::items::parse_hook_prompt_fragment;
@@ -28,6 +28,8 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -36,9 +38,13 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadSettingsOverrides;
+use codex_protocol::protocol::TurnSettingsUpdate;
+use codex_protocol::protocol::TurnSettingsUpdateOutcome;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
+use codex_protocol::request_user_input::RequestUserInputAnswer;
+use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
 use codex_thread_store::InMemoryThreadStore;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -70,10 +76,12 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::test_target_os;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
 use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -3601,6 +3609,143 @@ async fn pre_tool_use_json_deny_blocks_exec_command_before_execution() -> Result
             .as_str()
             .is_some_and(|turn_id| !turn_id.is_empty())
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn pre_tool_use_hook_model_tracks_step_after_a_turn_update() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let request_user_input_call_id = "pause-before-pretooluse-exec-command";
+    let call_id = "pretooluse-exec-command";
+    let model_a = "pretooluse-attribution-a";
+    let model_b = "pretooluse-attribution-b";
+    let command = "echo attribution";
+    let args = serde_json::json!({ "cmd": command });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    request_user_input_call_id,
+                    "request_user_input",
+                    r#"{"questions":[{"id":"continue","header":"Continue","question":"Continue?","options":[{"label":"Yes (Recommended)","description":"Run it."},{"label":"No","description":"Stop."}]}]}"#,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                core_test_support::responses::ev_function_call(
+                    call_id,
+                    "exec_command",
+                    &serde_json::to_string(&args)?,
+                ),
+                ev_completed("resp-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-3"),
+                ev_assistant_message("msg-1", "hook blocked it"),
+                ev_completed("resp-3"),
+            ]),
+        ],
+    )
+    .await;
+
+    let base_model = bundled_models_response()
+        .expect("bundled models should parse")
+        .models
+        .into_iter()
+        .find(|model| model.slug == "gpt-5.4")
+        .expect("bundled gpt-5.4 model");
+    let models = [model_a, model_b]
+        .into_iter()
+        .map(|slug| {
+            let mut model = base_model.clone();
+            model.slug = slug.to_string();
+            model
+        })
+        .collect();
+    let mut builder = test_codex()
+        .with_model(model_a)
+        .with_pre_build_hook(|home| {
+            write_pre_tool_use_hook(home, Some("^Bash$"), "json_deny", "blocked by pre hook")
+                .expect("failed to write pre tool use hook test fixture");
+        })
+        .with_config(move |config| {
+            trust_discovered_hooks(config);
+            for feature in [
+                Feature::StepModelSwitching,
+                Feature::DefaultModeRequestUserInput,
+            ] {
+                config
+                    .features
+                    .enable(feature)
+                    .expect("test config should allow feature update");
+            }
+            config.model_catalog = Some(ModelsResponse { models });
+        });
+    let test = builder.build(&server).await?;
+
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::Disabled, test.config.cwd.as_path());
+    test.codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "run the blocked shell command".to_string(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                ..Default::default()
+            }),
+        )
+        .await?;
+
+    let request = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::RequestUserInput(request) => Some(request.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(request.call_id, request_user_input_call_id);
+    let (reply, outcome) = oneshot::channel();
+    test.codex
+        .submit(Op::TurnSettings {
+            turn_id: request.turn_id.clone(),
+            update: TurnSettingsUpdate {
+                model: Some(model_b.to_string()),
+                effort: Some(Some(ReasoningEffort::High)),
+                ..Default::default()
+            },
+            reply,
+        })
+        .await?;
+    assert_eq!(outcome.await?, TurnSettingsUpdateOutcome::Applied);
+    test.codex
+        .submit(Op::UserInputAnswer {
+            id: request.turn_id,
+            response: RequestUserInputResponse {
+                answers: HashMap::from([(
+                    "continue".to_string(),
+                    RequestUserInputAnswer {
+                        answers: vec!["Yes (Recommended)".to_string()],
+                    },
+                )]),
+            },
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    assert_eq!(responses.requests().len(), 3);
+    let hook_inputs = read_pre_tool_use_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(hook_inputs[0]["model"], model_b);
 
     Ok(())
 }

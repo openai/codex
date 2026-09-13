@@ -13,7 +13,6 @@ use crate::hook_runtime::PreCompactHookOutcome;
 use crate::hook_runtime::run_post_compact_hooks;
 use crate::hook_runtime::run_pre_compact_hooks;
 use crate::responses_metadata::CodexResponsesMetadata;
-use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::responses_metadata::CompactionTurnMetadata;
 use crate::session::RequestEffortUsage;
 use crate::session::session::Session;
@@ -258,10 +257,7 @@ async fn run_compact_task_inner_impl(
     // request tracking)
     // survives retries within this compact turn.
     let responses_metadata = sess
-        .responses_metadata(
-            turn_context.as_ref(),
-            CodexResponsesRequestKind::Compaction(compaction_metadata),
-        )
+        .compaction_responses_metadata(turn_context.as_ref(), compaction_metadata)
         .await;
 
     let compaction_response_id = loop {

@@ -3,6 +3,7 @@ use super::*;
 use crate::responses_metadata::ANALYTICS_ENABLED_KEY;
 use crate::responses_metadata::AUTO_REVIEW_ENABLED_KEY;
 use crate::responses_metadata::CONTEXT_WINDOW_ID_KEY;
+use crate::responses_metadata::CodexResponsesMetadata;
 use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::responses_metadata::CompactionTurnMetadata;
 use crate::responses_metadata::FORKED_FROM_ORDINAL_EXCLUSIVE_KEY;
@@ -15,12 +16,12 @@ use crate::responses_metadata::ROOT_TURN_ID_KEY;
 use crate::responses_metadata::SANDBOX_MODE_KEY;
 use crate::responses_metadata::TOOL_NAMESPACES_INFO_KEY;
 use crate::responses_metadata::TURN_TRIGGER_KEY;
-use crate::responses_metadata::TurnToolFunctionInfo;
-use crate::responses_metadata::TurnToolNamespaceInfo;
-use crate::responses_metadata::TurnToolSource;
 use crate::responses_metadata::WINDOW_ID_KEY;
 use crate::responses_metadata::WINDOW_NUMBER_KEY;
 use crate::responses_metadata::validate_extra_metadata;
+use crate::session::step_context::StepContext;
+use crate::session::tests::make_session_and_context;
+use crate::session::tests::update_turn_settings_for_test;
 use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
@@ -46,31 +47,31 @@ use std::time::Duration;
 use tempfile::TempDir;
 use tokio::process::Command;
 
-fn test_mcp_turn_metadata_context() -> McpTurnMetadataContext<'static> {
-    McpTurnMetadataContext {
+fn test_mcp_turn_metadata_context() -> ExecutionMetadata<'static> {
+    ExecutionMetadata {
         model: "gpt-5.4",
         reasoning_effort: Some(ReasoningEffortConfig::High),
         node_repl_disabled: false,
+        auto_review_enabled: true,
+        node_repl_auto_review_required: true,
     }
 }
 
-fn test_responses_metadata_json(
+fn test_turn_responses_metadata(
     state: &TurnMetadataState,
     window_id: &str,
-    request_kind: CodexResponsesRequestKind,
-) -> String {
-    state
-        .to_responses_metadata(
-            "installation-a".to_string(),
-            window_id.to_string(),
-            request_kind,
-        )
-        .turn_metadata_json()
-        .expect("turn metadata json")
+) -> CodexResponsesMetadata {
+    state.to_responses_metadata(
+        "installation-a".to_string(),
+        window_id.to_string(),
+        CodexResponsesRequestKind::Turn,
+    )
 }
 
 fn test_turn_responses_metadata_json(state: &TurnMetadataState, window_id: &str) -> String {
-    test_responses_metadata_json(state, window_id, CodexResponsesRequestKind::Turn)
+    test_turn_responses_metadata(state, window_id)
+        .turn_metadata_json()
+        .expect("turn metadata json")
 }
 
 fn test_compaction_responses_metadata_json(
@@ -78,11 +79,14 @@ fn test_compaction_responses_metadata_json(
     window_id: &str,
     compaction: CompactionTurnMetadata,
 ) -> String {
-    test_responses_metadata_json(
-        state,
-        window_id,
-        CodexResponsesRequestKind::Compaction(compaction),
-    )
+    state
+        .to_responses_metadata(
+            "installation-a".to_string(),
+            window_id.to_string(),
+            CodexResponsesRequestKind::Compaction(compaction),
+        )
+        .turn_metadata_json()
+        .expect("turn metadata json")
 }
 
 fn test_turn_metadata_header(state: &TurnMetadataState) -> String {
@@ -547,12 +551,19 @@ fn turn_metadata_state_includes_model_and_reasoning_effort_only_in_request_meta(
     assert!(meta.get("request_kind").is_none());
     assert_eq!(meta["model"].as_str(), Some("gpt-5.4"));
     assert_eq!(meta["reasoning_effort"].as_str(), Some("high"));
+    assert_eq!(meta[AUTO_REVIEW_ENABLED_KEY].as_bool(), Some(true));
+    assert_eq!(
+        meta[NODE_REPL_AUTO_REVIEW_REQUIRED_KEY].as_bool(),
+        Some(true)
+    );
 
     let meta_without_reasoning_effort = state
-        .current_meta_value_for_mcp_request(McpTurnMetadataContext {
+        .current_meta_value_for_mcp_request(ExecutionMetadata {
             model: "gpt-5.4",
             reasoning_effort: None,
             node_repl_disabled: false,
+            auto_review_enabled: false,
+            node_repl_auto_review_required: false,
         })
         .expect("turn metadata should be present");
     assert_eq!(
@@ -564,6 +575,35 @@ fn turn_metadata_state_includes_model_and_reasoning_effort_only_in_request_meta(
             .get("reasoning_effort")
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn execution_metadata_applies_captured_settings_to_responses_metadata() {
+    let (_session, mut turn) = make_session_and_context().await;
+    let config = Arc::make_mut(&mut turn.config);
+    config.approvals_reviewer = codex_protocol::config_types::ApprovalsReviewer::AutoReview;
+    config.permissions.approval_policy =
+        crate::config::Constrained::allow_any(codex_protocol::protocol::AskForApproval::OnRequest);
+    update_turn_settings_for_test(&mut turn, |settings| {
+        let model_info = Arc::make_mut(&mut settings.model_info);
+        model_info.slug = "captured-step-model".to_string();
+        model_info.node_repl_auto_review_required = true;
+        model_info.node_repl_disabled = true;
+    });
+    let step_context = StepContext::for_test(Arc::new(turn));
+
+    let mut metadata = step_context.turn.turn_metadata_state.to_responses_metadata(
+        "installation-a".to_string(),
+        "window-a".to_string(),
+        CodexResponsesRequestKind::Turn,
+    );
+    ExecutionMetadata::from_settings(&step_context.settings).apply_to(&mut metadata);
+    let metadata = metadata.turn_metadata_value().expect("turn metadata");
+
+    assert_eq!(metadata["model"], "captured-step-model");
+    assert_eq!(metadata[AUTO_REVIEW_ENABLED_KEY], true);
+    assert_eq!(metadata[NODE_REPL_AUTO_REVIEW_REQUIRED_KEY], true);
+    assert_eq!(metadata[NODE_REPL_DISABLED_KEY], true);
 }
 
 #[test]
@@ -816,25 +856,6 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
         ),
     ]));
     state.set_turn_started_at_unix_ms(/*turn_started_at_unix_ms*/ 1_700_000_000_123);
-    state.set_tool_namespaces_info(BTreeMap::from([(
-        "mcp__calendar".to_string(),
-        TurnToolNamespaceInfo {
-            name: "mcp__calendar".to_string(),
-            functions: BTreeMap::from([(
-                "lookup".to_string(),
-                TurnToolFunctionInfo {
-                    name: "lookup".to_string(),
-                    direct: true,
-                    code_mode_name: Some("mcp__calendar__lookup".to_string()),
-                    deferred: false,
-                    source: TurnToolSource::Mcp {
-                        server_name: "calendar".to_string(),
-                    },
-                },
-            )]),
-        },
-    )]));
-
     let header = test_turn_metadata_header(&state);
     assert!(header.is_ascii());
     assert!(!header.contains("東京"));
@@ -851,26 +872,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
     assert_eq!(json["thread_id"].as_str(), Some("thread-a"));
     assert!(json.get(LEGACY_CODE_MODE_TOOL_NAMES_KEY).is_none());
     assert_eq!(json["agent_name"].as_str(), Some("/root"));
-    assert_eq!(
-        json[TOOL_NAMESPACES_INFO_KEY],
-        serde_json::json!({
-            "mcp__calendar": {
-                "name": "mcp__calendar",
-                "functions": {
-                    "lookup": {
-                        "name": "lookup",
-                        "direct": true,
-                        "code_mode_name": "mcp__calendar__lookup",
-                        "deferred": false,
-                        "source": {
-                            "kind": "mcp",
-                            "server_name": "calendar",
-                        },
-                    },
-                },
-            },
-        })
-    );
+    assert!(json.get(TOOL_NAMESPACES_INFO_KEY).is_none());
     assert!(json.get(INSTALLATION_ID_KEY).is_none());
     assert!(json.get("x-codex-installation-id").is_none());
     assert!(json.get("x-codex-parent-thread-id").is_none());
@@ -921,13 +923,8 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
         Some("thread-a:1")
     );
 
-    let compatibility_headers = state
-        .to_responses_metadata(
-            "installation-a".to_string(),
-            "thread-a:1".to_string(),
-            CodexResponsesRequestKind::Turn,
-        )
-        .compatibility_headers();
+    let compatibility_headers =
+        test_turn_responses_metadata(&state, "thread-a:1").compatibility_headers();
     let compatibility_metadata: Value = serde_json::from_str(
         compatibility_headers
             .get("x-codex-turn-metadata")

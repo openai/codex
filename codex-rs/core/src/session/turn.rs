@@ -517,7 +517,7 @@ pub(crate) async fn run_turn(
             .await;
 
             let responses_metadata = sess
-                .responses_metadata(turn_context.as_ref(), CodexResponsesRequestKind::Turn)
+                .responses_metadata(step_context.as_ref(), CodexResponsesRequestKind::Turn)
                 .await;
             run_sampling_request(
                 Arc::clone(&sess),

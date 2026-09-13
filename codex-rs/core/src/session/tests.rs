@@ -5862,16 +5862,17 @@ pub(crate) async fn build_world_state_from_turn_context(
 
 #[tokio::test]
 async fn responses_metadata_uses_selected_harness_analytics_client() {
-    let (mut session, mut turn_context) = make_session_and_context().await;
     for enabled in [true, false] {
+        let (mut session, mut turn_context) = make_session_and_context().await;
         session.services.analytics_events_client = AnalyticsEventsClient::new(
             Arc::clone(&session.services.auth_manager),
             turn_context.config.chatgpt_base_url.clone(),
             Some(enabled),
         );
         Arc::make_mut(&mut turn_context.config).analytics_enabled = Some(!enabled);
+        let step_context = StepContext::for_test(Arc::new(turn_context));
         let metadata = session
-            .responses_metadata(&turn_context, CodexResponsesRequestKind::Turn)
+            .responses_metadata(&step_context, CodexResponsesRequestKind::Turn)
             .await;
         assert_eq!(metadata.analytics_enabled, Some(enabled));
     }

@@ -20,7 +20,7 @@ use crate::tools::hook_names::HookToolName;
 use crate::tools::lifecycle::process_mcp_tool_result;
 use crate::tools::sandboxing::ApprovalAction;
 use crate::tools::sandboxing::ToolError;
-use crate::turn_metadata::McpTurnMetadataContext;
+use crate::turn_metadata::ExecutionMetadata;
 use codex_analytics::AppInvocation;
 use codex_analytics::InvocationType;
 use codex_analytics::build_track_events_context;
@@ -1252,11 +1252,9 @@ fn build_mcp_tool_call_request_meta(
     if let Some(turn_metadata) = step_context
         .turn
         .turn_metadata_state
-        .current_meta_value_for_mcp_request(McpTurnMetadataContext {
-            model: step_context.settings.model_info.slug.as_str(),
-            reasoning_effort: step_context.settings.effective_reasoning_effort(),
-            node_repl_disabled: step_context.settings.model_info.node_repl_disabled,
-        })
+        .current_meta_value_for_mcp_request(ExecutionMetadata::from_settings(
+            &step_context.settings,
+        ))
     {
         request_meta.insert(
             crate::X_CODEX_TURN_METADATA_HEADER.to_string(),

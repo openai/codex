@@ -45,7 +45,6 @@ use serde_json::json;
 use crate::WaitForEnvironmentToolConfig;
 use crate::config::CurrentTimeReminderConfig;
 use crate::environment_selection::TurnEnvironmentState;
-use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::responses_metadata::TurnToolFunctionInfo;
 use crate::responses_metadata::TurnToolNamespacesInfo;
 use crate::responses_metadata::TurnToolSource;
@@ -1596,13 +1595,6 @@ async fn candidate_model_plan_leaves_selected_model_and_inventory_unchanged() {
         turn.model_info(),
         ToolPlanInputs::default(),
     ));
-    let selected_inventory = selected
-        .tool_namespaces_info
-        .clone()
-        .expect("selected plan inventory");
-    turn.turn_metadata_state
-        .set_tool_namespaces_info(selected_inventory.clone());
-
     let mut candidate_model = selected_model.as_ref().clone();
     candidate_model.tool_mode = Some(ToolMode::CodeModeOnly);
     candidate_model.shell_type = ConfigShellToolType::UnifiedExec;
@@ -1633,12 +1625,6 @@ async fn candidate_model_plan_leaves_selected_model_and_inventory_unchanged() {
             source: TurnToolSource::Harness,
         }
     );
-    let metadata = turn.turn_metadata_state.to_responses_metadata(
-        "installation".to_string(),
-        "window".to_string(),
-        CodexResponsesRequestKind::Turn,
-    );
-    assert_eq!(metadata.tool_namespaces_info, Some(selected_inventory));
     assert_eq!(turn.model_info(), &selected_model);
     assert_eq!(
         ToolPlanProbe::from_router(plan_with_model(

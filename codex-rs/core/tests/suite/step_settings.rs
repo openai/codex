@@ -169,14 +169,6 @@ fn direct_tool_settings_test() -> TestCodexBuilder {
     })
 }
 
-fn advertises_apply_patch(request: &Value) -> bool {
-    request["tools"]
-        .as_array()
-        .expect("provider tools")
-        .iter()
-        .any(|tool| tool["type"] == "custom" && tool["name"] == "apply_patch")
-}
-
 fn paused_response(response_id: &str, call_id: &str) -> String {
     sse(vec![
         ev_response_created(response_id),
@@ -286,6 +278,15 @@ fn request_turn_id(request: &ResponsesRequest) -> String {
         .as_str()
         .expect("request should include turn_id")
         .to_string()
+}
+
+fn request_turn_metadata(request: &ResponsesRequest) -> Value {
+    serde_json::from_str(
+        request.body_json()["client_metadata"]["x-codex-turn-metadata"]
+            .as_str()
+            .expect("request should include turn metadata"),
+    )
+    .expect("valid turn metadata")
 }
 
 // Dynamic tools return the original payload, so handler truncation cannot hide a recorder bug.
@@ -1569,7 +1570,9 @@ async fn captured_model_replans_tools_and_retains_the_issuing_request_router() -
             for feature in [Feature::ShellTool, Feature::UnifiedExec] {
                 config.features.enable(feature).expect("enable shell tools");
             }
+            config.tool_registry.turn_metadata_includes_tool_info = true;
             for model in &mut config.model_catalog.as_mut().expect("models").models {
+                model.use_responses_lite = true;
                 model.shell_type = if model.slug == MODEL_B {
                     ConfigShellToolType::Disabled
                 } else {
@@ -1635,7 +1638,35 @@ async fn captured_model_replans_tools_and_retains_the_issuing_request_router() -
     assert_eq!(
         requests
             .iter()
-            .map(advertises_apply_patch)
+            .map(|request| {
+                core_test_support::responses::namespace_child_tool(
+                    &request["input"][0],
+                    "functions",
+                    "apply_patch",
+                )
+                .is_some()
+            })
+            .collect::<Vec<_>>(),
+        vec![false, true, false],
+    );
+    let metadata = requests
+        .iter()
+        .map(|request| {
+            serde_json::from_str::<Value>(
+                request["client_metadata"]["x-codex-turn-metadata"]
+                    .as_str()
+                    .expect("request metadata"),
+            )
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    assert_eq!(
+        metadata
+            .iter()
+            .map(|metadata| {
+                metadata["tool_namespaces_info"]["functions"]["functions"]
+                    .get("apply_patch")
+                    .is_some()
+            })
             .collect::<Vec<_>>(),
         vec![false, true, false],
     );
@@ -1643,12 +1674,16 @@ async fn captured_model_replans_tools_and_retains_the_issuing_request_router() -
         requests
             .iter()
             .map(|request| {
-                request["tools"]
-                    .as_array()
-                    .expect("provider tools")
-                    .iter()
-                    .filter_map(|tool| tool["name"].as_str())
-                    .filter(|name| matches!(*name, "exec_command" | "write_stdin"))
+                ["exec_command", "write_stdin"]
+                    .into_iter()
+                    .filter(|name| {
+                        core_test_support::responses::namespace_child_tool(
+                            &request["input"][0],
+                            "functions",
+                            name,
+                        )
+                        .is_some()
+                    })
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>(),
@@ -1779,7 +1814,7 @@ async fn captured_model_enables_and_executes_code_mode() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn response_metadata_uses_the_captured_model_after_a_turn_update() -> Result<()> {
+async fn response_metadata_uses_the_captured_step_after_a_turn_update() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -1800,15 +1835,19 @@ async fn response_metadata_uses_the_captured_model_after_a_turn_update() -> Resu
     .await;
     let test = step_settings_test().build_with_auto_env(&server).await?;
     let request = start_paused_turn(&test.codex).await?;
-    apply_turn_settings(
-        &test.codex,
-        &request.turn_id,
-        TurnSettingsUpdate {
-            model: Some(MODEL_B.to_string()),
-            ..Default::default()
-        },
-    )
-    .await?;
+    assert_eq!(
+        submit_turn_settings(
+            &test.codex,
+            &request.turn_id,
+            TurnSettingsUpdate {
+                model: Some(MODEL_B.to_string()),
+                effort: Some(Some(ReasoningEffort::High)),
+                ..Default::default()
+            },
+        )
+        .await?,
+        TurnSettingsUpdateOutcome::Applied
+    );
     answer_paused_turn(&test.codex, &request.turn_id).await?;
 
     let mut reroutes = Vec::new();
@@ -1835,6 +1874,29 @@ async fn response_metadata_uses_the_captured_model_after_a_turn_update() -> Resu
             .map(|request| request.body_json()["model"].clone())
             .collect::<Vec<_>>(),
         vec![json!(MODEL_A), json!(MODEL_B)]
+    );
+    assert_eq!(
+        response_mock
+            .requests()
+            .iter()
+            .map(request_turn_metadata)
+            .map(|metadata| {
+                json!({
+                    "model": metadata["model"],
+                    "reasoning_effort": metadata["reasoning_effort"],
+                })
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            json!({
+                "model": MODEL_A,
+                "reasoning_effort": "low",
+            }),
+            json!({
+                "model": MODEL_B,
+                "reasoning_effort": "high",
+            }),
+        ]
     );
     // B's matching response header is not a reroute from the turn's initial A.
     // Buffering metadata likewise belongs to the captured B step.

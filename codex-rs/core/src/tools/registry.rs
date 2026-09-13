@@ -567,7 +567,7 @@ impl ToolRegistry {
         if let Some(pre_tool_use_payload) = tool.pre_tool_use_payload(&invocation) {
             match run_pre_tool_use_hooks(
                 &invocation.session,
-                &invocation.turn,
+                invocation.step_context.as_ref(),
                 invocation.call_id.clone(),
                 &pre_tool_use_payload.tool_name,
                 &pre_tool_use_payload.tool_input,
@@ -683,7 +683,7 @@ impl ToolRegistry {
             Some(
                 run_post_tool_use_hooks(
                     &invocation.session,
-                    &invocation.turn,
+                    invocation.step_context.as_ref(),
                     post_tool_use_payload.tool_use_id,
                     post_tool_use_payload.tool_name.name().to_string(),
                     post_tool_use_payload.tool_name.matcher_aliases().to_vec(),

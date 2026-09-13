@@ -98,7 +98,7 @@ pub(crate) async fn finalize(
         ReasoningSummary::None,
         /*service_tier*/ None,
         &session
-            .responses_metadata(&step.turn, CodexResponsesRequestKind::Turn)
+            .responses_metadata(step, CodexResponsesRequestKind::Turn)
             .await,
     )?;
     let mut existing = super::request_budget::estimate_request_tokens(&request)
