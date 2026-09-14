@@ -185,7 +185,7 @@ impl MasterPty for ConPtyMasterPty {
 
 impl SlavePty for ConPtySlavePty {
     fn spawn_command(&self, cmd: CommandBuilder) -> anyhow::Result<Box<dyn Child + Send + Sync>> {
-        let inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock().unwrap();
         let child = inner.con.spawn_command(cmd)?;
         Ok(Box::new(child))
     }
