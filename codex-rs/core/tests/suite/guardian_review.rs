@@ -16,6 +16,7 @@ use codex_core::config::CurrentTimeReminderConfig;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::ToolFinishInput;
 use codex_extension_api::ToolLifecycleContributor;
 use codex_extension_api::ToolLifecycleFuture;
 use codex_extension_api::ToolStartInput;
@@ -57,6 +58,7 @@ use core_test_support::responses::assert_root_turn;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
+use core_test_support::responses::ev_custom_tool_call;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
@@ -140,7 +142,7 @@ impl TimeProvider for RecordingTimeProvider {
 #[test_case(CodexAuth::create_dummy_chatgpt_auth_for_testing(), "OpenAI", "/backend-api/codex", true, "/backend-api/codex/guardian", true; "chatgpt_uses_guardian_when_enabled")]
 #[test_case(CodexAuth::create_dummy_chatgpt_auth_for_testing(), "OpenAI", "/v1", true, "/v1/responses", true; "custom_openai_url_uses_responses")]
 #[test_case(CodexAuth::create_dummy_chatgpt_auth_for_testing(), "Custom", "/backend-api/codex", true, "/backend-api/codex/responses", true; "custom_provider_uses_responses")]
-#[test_case(CodexAuth::create_dummy_chatgpt_auth_for_testing(), "OpenAI", "/backend-api/codex", true, "/backend-api/codex/guardian", false; "server_without_response_id")]
+#[test_case(CodexAuth::create_dummy_chatgpt_auth_for_testing(), "OpenAI", "/backend-api/codex", true, "/backend-api/codex/guardian", false; "retry_without_response_id_keeps_last_parent")]
 async fn guardian_session_inherits_parent_http_fallback(
     auth: CodexAuth,
     provider_name: &str,
@@ -163,7 +165,7 @@ async fn guardian_session_inherits_parent_http_fallback(
     let responses = mount_sse_sequence(
         &server,
         vec![
-            // A failed sampling attempt must not supply the retried action's parent ID.
+            // A started response remains a billing parent until a later response supplies an ID.
             sse(vec![json!({"type": "response.created", "response": {
                 "id": "failed-parent"
             }})]),
@@ -254,7 +256,13 @@ async fn guardian_session_inherits_parent_http_fallback(
             body["client_metadata"].get("guardian_credits_requested"),
         ),
         (
-            (credits_enabled && response_id_present).then(|| json!(parent_response_id)),
+            credits_enabled.then(|| {
+                json!(if response_id_present {
+                    parent_response_id
+                } else {
+                    "failed-parent"
+                })
+            }),
             None
         )
     );
@@ -288,6 +296,189 @@ async fn guardian_session_inherits_parent_http_fallback(
     );
     test.codex.shutdown_and_wait().await?;
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_parent_id_survives_code_mode_response_handoff() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    #[derive(Default)]
+    struct PauseCommands {
+        started: tokio::sync::Notify,
+        resume: tokio::sync::Notify,
+        finished: tokio::sync::Notify,
+    }
+    impl ToolLifecycleContributor for PauseCommands {
+        fn on_tool_start<'a>(&'a self, input: ToolStartInput<'a>) -> ToolLifecycleFuture<'a> {
+            Box::pin(async move {
+                if input.tool_name.name == "exec_command" {
+                    self.started.notify_one();
+                    self.resume.notified().await;
+                }
+            })
+        }
+
+        fn on_tool_finish<'a>(&'a self, input: ToolFinishInput<'a>) -> ToolLifecycleFuture<'a> {
+            Box::pin(async move {
+                if input.tool_name.name == "exec_command" {
+                    self.finished.notify_one();
+                }
+            })
+        }
+    }
+
+    let code = r#"
+yield_control();
+for (const phase of ["before", "after"]) {
+    try {
+        await tools.exec_command({
+            cmd: `echo ${phase}`,
+            sandbox_permissions: "require_escalated",
+            justification: "Check Guardian parent metadata across a response handoff."
+        });
+    } catch (_) {}
+}
+"#;
+    let deny = sse(vec![
+        ev_assistant_message("assessment", r#"{"outcome":"deny"}"#),
+        ev_completed("review"),
+    ]);
+    let (release_created, created_gate) = tokio::sync::oneshot::channel();
+    let (release_completed, completed_gate) = tokio::sync::oneshot::channel();
+    let (streaming, _) = start_streaming_sse_server(vec![
+        vec![StreamingSseChunk {
+            gate: None,
+            body: sse(vec![
+                ev_response_created("parent-a"),
+                ev_custom_tool_call("cell", "exec", code),
+                ev_completed("parent-a"),
+            ]),
+        }],
+        vec![
+            StreamingSseChunk {
+                gate: Some(created_gate),
+                body: sse(vec![
+                    ev_response_created("parent-b"),
+                    ev_assistant_message("b-ready", "B is ready"),
+                ]),
+            },
+            StreamingSseChunk {
+                gate: Some(completed_gate),
+                body: sse(vec![ev_completed("parent-b")]),
+            },
+        ],
+        vec![StreamingSseChunk { gate: None, body: deny.clone() }],
+        vec![StreamingSseChunk { gate: None, body: deny.clone() }],
+        // A fresh turn without response.created must not inherit the preceding turn's ID.
+        vec![StreamingSseChunk {
+            gate: None,
+            body: sse(vec![
+                ev_function_call(
+                    "fresh-command", "exec_command",
+                    r#"{"cmd":"echo fresh","sandbox_permissions":"require_escalated","justification":"Check a fresh turn."}"#,
+                ),
+                ev_completed("fresh-parent"),
+            ]),
+        }],
+        vec![StreamingSseChunk { gate: None, body: deny }],
+        vec![StreamingSseChunk {
+            gate: None,
+            body: sse(vec![ev_completed("fresh-complete")]),
+        }],
+    ]).await;
+    let pause = Arc::new(PauseCommands::default());
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    extensions.tool_lifecycle_contributor(pause.clone());
+    let server = start_mock_server().await;
+    let base_url = format!("{}/backend-api/codex", streaming.uri());
+    let test = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_extensions(Arc::new(extensions.build()))
+        .with_pre_build_hook(|home| {
+            fs::write(
+                home.join("config.toml"),
+                "[features.guardianv2]\nfree_guardian = true\n",
+            )
+            .expect("write Guardian config");
+        })
+        .with_config(move |config| {
+            config.features.enable(Feature::CodeMode).unwrap();
+            // The streaming server records raw request bodies for the JSON assertions below.
+            config
+                .features
+                .disable(Feature::EnableRequestCompression)
+                .unwrap();
+            config.model_provider.base_url = Some(base_url);
+            config.model_provider.supports_websockets = false;
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+            config.approvals_reviewer = ApprovalsReviewer::User;
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    test.codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "Start the cell and review both commands.".into(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+                ..Default::default()
+            }),
+        )
+        .await?;
+
+    tokio::time::timeout(Duration::from_secs(30), async {
+        // B is in flight, but has not emitted its ID. The cell can still request review.
+        streaming.wait_for_request_count(/*count*/ 2).await;
+        pause.started.notified().await;
+        pause.resume.notify_one();
+        pause.finished.notified().await;
+
+        release_created.send(()).unwrap();
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::AgentMessage(message) if message.message == "B is ready")
+        }).await;
+        pause.started.notified().await;
+        pause.resume.notify_one();
+        pause.finished.notified().await;
+        release_completed.send(()).unwrap();
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
+
+        test.codex
+            .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "Start a fresh turn.".into(),
+                text_elements: Vec::new(),
+            }]))
+            .await?;
+        pause.started.notified().await;
+        pause.resume.notify_one();
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
+        anyhow::Ok(())
+    })
+    .await??;
+
+    let requests = streaming.requests().await;
+    let reviews = requests
+        .iter()
+        .map(|body| serde_json::from_slice::<Value>(body).unwrap())
+        .filter(|body| body["client_metadata"]["x-openai-subagent"] == "guardian")
+        .map(|body| body["client_metadata"].get("parent_response_id").cloned())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        reviews,
+        vec![Some(json!("parent-a")), Some(json!("parent-b")), None]
+    );
+    test.codex.shutdown_and_wait().await?;
+    streaming.shutdown().await;
     Ok(())
 }
 

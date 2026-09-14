@@ -1564,10 +1564,8 @@ async fn run_sampling_request(
     let mut original_input = None;
     let mut executed_tool_calls_by_output = HashMap::new();
     loop {
-        // A retry must not attribute the next tool call to the previous response.
-        turn_context
-            .extension_data
-            .remove::<codex_api::ResponseId>();
+        // Running code-mode cells can request review while this response is in flight.
+        // Keep the latest received ID until response.created replaces it.
         let prompt_input = if let Some(input) = initial_input.take() {
             input
         } else {

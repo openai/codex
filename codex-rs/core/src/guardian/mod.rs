@@ -78,7 +78,7 @@ pub(crate) const GUARDIAN_MAX_NODE_REPL_TOOL_RESULT_TOKENS: usize = 6_000;
 /// MCP elicitation reviews continue to use turn-only inputs.
 #[derive(Clone)]
 pub(crate) struct GuardianReviewContext {
-    /// The response currently handled in this execution context.
+    /// The latest response ID received in this turn when review was requested.
     pub(crate) parent_response_id: Option<String>,
     turn: Arc<TurnContext>,
     environments: TurnEnvironmentSnapshot,

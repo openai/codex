@@ -72,7 +72,7 @@ pub struct MemorySummarizeOutput {
     pub memory_summary: String,
 }
 
-/// The server response currently being handled, shared with tool-review extensions.
+/// The latest server response ID received in this turn, shared with tool-review extensions.
 #[derive(Clone, Debug)]
 pub struct ResponseId(pub String);
 
