@@ -1,4 +1,7 @@
 mod execution_scope;
+#[cfg(test)]
+#[path = "proxy/managed_routing_tests.rs"]
+mod managed_routing_tests;
 
 use crate::attribution::PROXY_ATTRIBUTION_TOKEN_ENV_KEY;
 use crate::config;
@@ -56,7 +59,6 @@ struct ReservedListeners {
 }
 
 impl ReservedListeners {
-    #[cfg(not(target_os = "windows"))]
     fn new(http: StdTcpListener, socks: Option<StdTcpListener>) -> Self {
         Self {
             http: Mutex::new(Some(http)),
@@ -110,7 +112,6 @@ impl ReservedListenerSet {
             })
     }
 
-    #[cfg(not(target_os = "windows"))]
     fn into_reserved_listeners(self) -> Arc<ReservedListeners> {
         Arc::new(ReservedListeners::new(
             self.http_listener,
@@ -124,12 +125,23 @@ impl ReservedListenerSet {
     }
 }
 
+/// Selects how managed sandbox clients reach their logical proxy instance.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ManagedProxyRouting {
+    /// Use shared SID-attributed ingress when available and dedicated listeners otherwise.
+    #[default]
+    SharedIngress,
+    /// Reserve private loopback TCP ports for sandboxes that enforce endpoint access directly.
+    DedicatedListeners,
+}
+
 #[derive(Clone)]
 pub struct NetworkProxyBuilder {
     state: Option<Arc<NetworkProxyState>>,
     http_addr: Option<SocketAddr>,
     socks_addr: Option<SocketAddr>,
     managed_by_codex: bool,
+    managed_proxy_routing: ManagedProxyRouting,
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
     blocked_request_observer: Option<Arc<dyn BlockedRequestObserver>>,
 }
@@ -141,6 +153,7 @@ impl Default for NetworkProxyBuilder {
             http_addr: None,
             socks_addr: None,
             managed_by_codex: true,
+            managed_proxy_routing: ManagedProxyRouting::default(),
             policy_decider: None,
             blocked_request_observer: None,
         }
@@ -165,6 +178,11 @@ impl NetworkProxyBuilder {
 
     pub fn managed_by_codex(mut self, managed_by_codex: bool) -> Self {
         self.managed_by_codex = managed_by_codex;
+        self
+    }
+
+    pub fn managed_proxy_routing(mut self, managed_proxy_routing: ManagedProxyRouting) -> Self {
+        self.managed_proxy_routing = managed_proxy_routing;
         self
     }
 
@@ -222,6 +240,8 @@ impl NetworkProxyBuilder {
         {
             let runtime = config::resolve_runtime(&current_cfg)?;
             #[cfg(target_os = "windows")]
+            let shared_ingress_addrs = if self.managed_proxy_routing
+                == ManagedProxyRouting::SharedIngress
             {
                 let (managed_http_addr, managed_socks_addr) =
                     config::clamp_bind_addrs(runtime.http_addr, runtime.socks_addr, &current_cfg);
@@ -233,10 +253,15 @@ impl NetworkProxyBuilder {
                 let http_addr = ingress.http_addr();
                 let socks_addr = ingress.socks_addr();
                 windows_ingress = Some(ingress);
-                (http_addr, socks_addr, None)
-            }
+                Some((http_addr, socks_addr))
+            } else {
+                None
+            };
             #[cfg(not(target_os = "windows"))]
-            {
+            let shared_ingress_addrs: Option<(SocketAddr, SocketAddr)> = None;
+            if let Some((http_addr, socks_addr)) = shared_ingress_addrs {
+                (http_addr, socks_addr, None)
+            } else {
                 let reserved = reserve_loopback_ephemeral_listeners(current_cfg.enable_socks5)
                     .context("reserve managed loopback proxy listeners")?;
                 let http_addr = reserved.http_addr()?;
@@ -294,6 +319,7 @@ impl NetworkProxyBuilder {
             socks5_udp_enabled: current_cfg.enable_socks5_udp,
             runtime_settings: Arc::new(RwLock::new(runtime_settings)),
             reserved_listeners,
+            managed_proxy_routing: self.managed_proxy_routing,
             policy_decider: self.policy_decider,
             environment_proxies: Arc::new(Mutex::new(HashMap::new())),
             execution_scope: None,
@@ -534,6 +560,7 @@ pub struct NetworkProxy {
     socks5_udp_enabled: bool,
     runtime_settings: Arc<RwLock<NetworkProxyRuntimeSettings>>,
     reserved_listeners: Option<Arc<ReservedListeners>>,
+    managed_proxy_routing: ManagedProxyRouting,
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
     environment_proxies: Arc<Mutex<HashMap<String, EnvironmentProxy>>>,
     execution_scope: Option<Arc<ExecutionScope>>,
@@ -556,6 +583,7 @@ impl PartialEq for NetworkProxy {
     fn eq(&self, other: &Self) -> bool {
         self.http_addr == other.http_addr
             && self.socks_addr() == other.socks_addr()
+            && self.managed_proxy_routing == other.managed_proxy_routing
             && self.runtime_settings() == other.runtime_settings()
     }
 }
