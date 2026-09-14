@@ -81,6 +81,12 @@ pub(crate) const UNIFIED_EXEC_OUTPUT_MAX_BYTES: usize = 1024 * 1024; // 1 MiB
 pub(crate) const UNIFIED_EXEC_OUTPUT_MAX_TOKENS: usize = UNIFIED_EXEC_OUTPUT_MAX_BYTES / 4;
 pub(crate) const MAX_UNIFIED_EXEC_PROCESSES: usize = 64;
 
+const MAX_TRACE_ID_BYTES: usize = 256;
+
+fn trace_id(id: &str) -> Option<&str> {
+    (!id.is_empty() && id.len() <= MAX_TRACE_ID_BYTES).then_some(id)
+}
+
 pub(crate) struct UnifiedExecContext {
     pub session: Arc<Session>,
     pub step_context: Arc<StepContext>,

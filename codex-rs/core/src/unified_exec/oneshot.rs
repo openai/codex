@@ -8,12 +8,14 @@ use std::sync::OnceLock;
 
 use tokio::time::Duration;
 use tokio::time::Instant;
+use tracing::Instrument;
 
 use super::ExecCommandRequest;
 use super::UnifiedExecContext;
 use super::UnifiedExecError;
 use super::UnifiedExecProcess;
 use super::UnifiedExecProcessManager;
+use super::trace_id;
 use crate::tools::context::ExecCommandToolOutput;
 
 pub(super) struct Completion<'a> {
@@ -23,6 +25,19 @@ pub(super) struct Completion<'a> {
 }
 
 impl UnifiedExecProcessManager {
+    #[tracing::instrument(
+        name = "unified_exec.exec_command",
+        level = "info",
+        skip_all,
+        fields(
+            conversation.id = %context.session.thread_id,
+            turn_id = trace_id(&context.step_context.turn.sub_id),
+            call_id = trace_id(&context.call_id),
+            unified_exec_process_id = request.process_id,
+            mode = "oneshot",
+            outcome = tracing::field::Empty,
+        )
+    )]
     pub(crate) async fn exec_command_to_completion(
         request: ExecCommandRequest,
         context: &UnifiedExecContext,
@@ -35,14 +50,17 @@ impl UnifiedExecProcessManager {
             context.call_id.clone(),
         );
         let _cancel_on_drop = context.cancellation_token.clone().drop_guard();
-        tokio::spawn(async move {
+        let task = async move {
             let manager = &context.session.services.unified_exec_manager;
             let process_id = request.process_id;
             if Instant::now().checked_add(timeout).is_none() {
                 manager.release_process_id(process_id).await;
-                return Err(UnifiedExecError::process_failed(
-                    "timeout_ms is too large".into(),
-                ));
+                return (
+                    Err(UnifiedExecError::process_failed(
+                        "timeout_ms is too large".into(),
+                    )),
+                    "failed",
+                );
             }
 
             let process = OnceLock::new();
@@ -68,20 +86,38 @@ impl UnifiedExecProcessManager {
                             drop(execution);
                             manager.release_process_id(process_id).await;
                         }
-                        Err(UnifiedExecError::process_failed("command cancelled".into()))
+                        return (
+                            Err(UnifiedExecError::process_failed("command cancelled".into())),
+                            "cancelled",
+                        );
                     }
                     result = &mut execution => result,
                 }
             };
 
-            result.map(|mut output| {
+            let outcome = if completion.timed_out {
+                "timed_out"
+            } else if result.is_ok() {
+                "exited"
+            } else {
+                "failed"
+            };
+            let result = result.map(|mut output| {
                 if completion.timed_out {
                     output.process_id = None;
                 }
                 output
-            })
-        })
-        .await
-        .map_err(|err| UnifiedExecError::process_failed(err.to_string()))?
+            });
+            (result, outcome)
+        };
+        let (result, outcome) = match tokio::spawn(task.in_current_span()).await {
+            Ok(result) => result,
+            Err(err) => (
+                Err(UnifiedExecError::process_failed(err.to_string())),
+                "failed",
+            ),
+        };
+        tracing::Span::current().record("outcome", outcome);
+        result
     }
 }
