@@ -52,6 +52,8 @@ async fn command_approval_holds_an_elicitation_until_response() {
                 .request_command_approval(
                     turn_context.as_ref(),
                     ExecApprovalKind::Command,
+                    crate::guardian::GuardianReviewContext::from(turn_context.clone())
+                        .model_context(),
                     "call-1".to_string(),
                     /*approval_id*/ None,
                     /*environment_id*/ None,

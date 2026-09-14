@@ -276,11 +276,13 @@ struct InitialExecCommandGuard {
 
 impl InitialExecCommandGuard {
     async fn finish_plugin_metrics(&mut self, context: &UnifiedExecContext, exit_code: i32) {
+        let model_context = context.step_context.model_context();
         finish_and_track_measurements(
             self.metrics_sidecar.take(),
             exit_code,
             &context.session,
             &context.step_context.turn,
+            &model_context,
             &context.call_id,
         )
         .await;
@@ -530,13 +532,15 @@ impl UnifiedExecProcessManager {
         });
 
         let transcript = Arc::new(tokio::sync::Mutex::new(HeadTailBuffer::default()));
-        let event_ctx = ToolEventCtx::new(
+        let model_context = context.step_context.model_context();
+        let mut event_ctx = ToolEventCtx::new(
             context.session.as_ref(),
             context.step_context.turn.as_ref(),
             &context.step_context.settings.model_info,
             &context.call_id,
             /*turn_diff_tracker*/ None,
         );
+        event_ctx.model_context = Some(&model_context);
         let plugin_attribution = if request.turn_environment.environment.is_remote() {
             let file_system = request.turn_environment.environment.get_filesystem();
             context
@@ -727,6 +731,7 @@ impl UnifiedExecProcessManager {
                         exit_code.unwrap_or(-1),
                         &context.session,
                         &context.step_context.turn,
+                        &model_context,
                         &context.call_id,
                     )
                     .await;

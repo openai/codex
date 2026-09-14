@@ -208,6 +208,10 @@ pub struct GuardianAssessmentEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub review_reason: Option<GuardianReviewReason>,
+    #[serde(skip)]
+    #[schemars(skip)]
+    #[ts(skip)]
+    pub model_context: Option<crate::items::ModelInvocationContext>,
     /// Stable identifier for this guardian review lifecycle.
     pub id: String,
     /// Thread item being reviewed, when the review maps to a concrete item.
@@ -264,6 +268,10 @@ pub enum ExecApprovalKind {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ExecApprovalRequestEvent {
+    #[serde(skip)]
+    #[schemars(skip)]
+    #[ts(skip)]
+    pub model_context: Option<crate::items::ModelInvocationContext>,
     /// Missing on older events, which retain command approval semantics.
     #[serde(default)]
     pub kind: ExecApprovalKind,

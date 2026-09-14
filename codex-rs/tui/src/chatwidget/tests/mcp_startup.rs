@@ -535,6 +535,7 @@ async fn mcp_startup_complete_preserves_review_status() {
 
     chat.on_guardian_assessment(GuardianAssessmentEvent {
         review_reason: None,
+        model_context: None,
         id: "guardian-1".to_string(),
         target_item_id: Some("guardian-target-1".to_string()),
         plugin_id: None,

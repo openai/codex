@@ -420,6 +420,8 @@ async fn api_key_auth_sends_only_plugin_events_to_codex_backend() {
         TrackEventRequest::PluginMeasurement(CodexPluginMeasurementEventRequest {
             event_type: "codex_plugin_measurement_event",
             event_params: CodexPluginMeasurementEventParams {
+                model_slug: None,
+                reasoning_effort: None,
                 thread_id: thread_id.to_string(),
                 turn_id: "turn-1".to_string(),
                 item_id: "item-1".to_string(),
@@ -712,6 +714,8 @@ fn track_plugin_measurements_rejects_unbounded_inputs_before_queueing() {
         turn_id: "turn-1".to_string(),
         item_id: "item-1".to_string(),
         originator: "codex_cli_rs".to_string(),
+        model_slug: None,
+        reasoning_effort: None,
         plugin_id: "sample@openai-curated".to_string(),
         execution_id: "execution-1".to_string(),
         operation: "security_scan".to_string(),

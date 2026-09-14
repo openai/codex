@@ -17,6 +17,7 @@ use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::items::CommandExecutionItem;
 use codex_protocol::items::CommandExecutionStatus;
 use codex_protocol::items::FileChangeItem;
+use codex_protocol::items::ModelInvocationContext;
 use codex_protocol::items::TurnItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::parse_command::ParsedCommand;
@@ -43,6 +44,7 @@ pub(super) fn truncate_rejection_message(message: &str) -> String {
 
 #[derive(Clone, Copy)]
 pub(crate) struct ToolEventCtx<'a> {
+    pub model_context: Option<&'a ModelInvocationContext>,
     pub session: &'a Session,
     pub turn: &'a TurnContext,
     /// Model captured by the step that issued this call, including delayed completion events.
@@ -60,6 +62,7 @@ impl<'a> ToolEventCtx<'a> {
         turn_diff_tracker: Option<&'a SharedTurnDiffTracker>,
     ) -> Self {
         Self {
+            model_context: None,
             session,
             turn,
             model_info,
@@ -168,6 +171,7 @@ async fn emit_exec_command_begin(ctx: ToolEventCtx<'_>, exec_input: &ExecCommand
             ctx.turn,
             &TurnItem::CommandExecution(CommandExecutionItem {
                 id: ctx.call_id.to_string(),
+                model_context: ctx.model_context.cloned(),
                 plugin_id,
                 script_path,
                 process_id: exec_input.process_id.map(str::to_owned),
@@ -581,6 +585,7 @@ async fn emit_exec_end(
             ctx.turn,
             TurnItem::CommandExecution(CommandExecutionItem {
                 id: ctx.call_id.to_string(),
+                model_context: ctx.model_context.cloned(),
                 plugin_id,
                 script_path,
                 process_id: exec_input.process_id.map(str::to_owned),

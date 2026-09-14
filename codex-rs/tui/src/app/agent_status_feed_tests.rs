@@ -10,6 +10,7 @@ fn agent_status_uses_bounded_buffered_activity() {
     store.push_notification(ServerNotification::ItemCompleted(
         ItemCompletedNotification {
             item: ThreadItem::CommandExecution {
+                model_context: None,
                 id: "command-1".to_string(),
                 command: "cargo test -p codex-tui".to_string(),
                 cwd: AbsolutePathBuf::try_from("/workspace")

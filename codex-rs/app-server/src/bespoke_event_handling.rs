@@ -92,6 +92,7 @@ use codex_core::ThreadManager;
 use codex_features::Feature;
 use codex_protocol::ThreadId;
 use codex_protocol::items::CollabAgentTool as CoreCollabAgentTool;
+use codex_protocol::items::ModelInvocationContext;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::models::AdditionalPermissionProfile as CoreAdditionalPermissionProfile;
 use codex_protocol::plan_tool::UpdatePlanArgs;
@@ -129,6 +130,7 @@ enum CommandExecutionApprovalPresentation {
 
 #[derive(Debug, PartialEq)]
 struct CommandExecutionCompletionItem {
+    model_context: Option<ModelInvocationContext>,
     plugin_id: Option<String>,
     script_path: Option<String>,
     command: String,
@@ -294,6 +296,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             ) {
                 Some(ThreadItem::CommandExecution {
                     id,
+                    model_context,
                     plugin_id,
                     script_path,
                     command,
@@ -303,6 +306,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 }) => Some((
                     id,
                     CommandExecutionCompletionItem {
+                        model_context,
                         plugin_id,
                         script_path,
                         command,
@@ -324,6 +328,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     &conversation_id,
                     assessment_turn_id.clone(),
                     target_item_id.clone(),
+                    completion_item.model_context.clone(),
                     completion_item.plugin_id.clone(),
                     completion_item.script_path.clone(),
                     completion_item.command.clone(),
@@ -669,6 +674,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .map(CommandExecutionApprovalDecision::from)
                 .collect::<Vec<_>>();
             let ExecApprovalRequestEvent {
+                model_context,
                 kind,
                 call_id,
                 plugin_id,
@@ -723,6 +729,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 CommandExecutionApprovalPresentation::Network(network_approval_context)
             } else {
                 let completion_item = CommandExecutionCompletionItem {
+                    model_context,
                     plugin_id,
                     script_path,
                     command: command_presentation.command,
@@ -751,6 +758,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     &conversation_id,
                     event_turn_id.clone(),
                     call_id.clone(),
+                    completion_item.model_context.clone(),
                     completion_item.plugin_id.clone(),
                     completion_item.script_path.clone(),
                     completion_item.command.clone(),
@@ -1389,6 +1397,7 @@ async fn start_command_execution_item(
     conversation_id: &ThreadId,
     turn_id: String,
     item_id: String,
+    model_context: Option<ModelInvocationContext>,
     plugin_id: Option<String>,
     script_path: Option<String>,
     command: String,
@@ -1412,6 +1421,7 @@ async fn start_command_execution_item(
             started_at_ms: now_unix_timestamp_ms(),
             item: ThreadItem::CommandExecution {
                 id: item_id,
+                model_context,
                 plugin_id,
                 script_path,
                 command,
@@ -1456,6 +1466,7 @@ async fn complete_command_execution_item(
 
     let item = ThreadItem::CommandExecution {
         id: item_id,
+        model_context: completion_item.model_context,
         plugin_id: completion_item.plugin_id,
         script_path: completion_item.script_path,
         command: completion_item.command,
@@ -2183,6 +2194,7 @@ mod tests {
 
     fn command_execution_completion_item(command: &str) -> CommandExecutionCompletionItem {
         CommandExecutionCompletionItem {
+            model_context: None,
             plugin_id: Some("sample@openai-curated".to_string()),
             script_path: Some("scripts/run.py".to_string()),
             command: command.to_string(),
@@ -2217,6 +2229,7 @@ mod tests {
         };
         GuardianAssessmentEvent {
             review_reason: None,
+            model_context: None,
             id: format!("review-{id}"),
             target_item_id: Some(id.to_string()),
             plugin_id: Some("sample@openai-curated".to_string()),
@@ -2285,6 +2298,7 @@ mod tests {
             "turn-from-event",
             &GuardianAssessmentEvent {
                 review_reason: None,
+                model_context: None,
                 id: "review-1".to_string(),
                 target_item_id: Some("item-1".to_string()),
                 plugin_id: None,
@@ -2334,6 +2348,7 @@ mod tests {
             "turn-from-event",
             &GuardianAssessmentEvent {
                 review_reason: None,
+                model_context: None,
                 id: "review-2".to_string(),
                 target_item_id: Some("item-2".to_string()),
                 plugin_id: None,
@@ -2391,6 +2406,7 @@ mod tests {
             "turn-from-event",
             &GuardianAssessmentEvent {
                 review_reason: None,
+                model_context: None,
                 id: "review-3".to_string(),
                 target_item_id: None,
                 plugin_id: None,
@@ -2446,6 +2462,7 @@ mod tests {
             &conversation_id,
             "turn-1".to_string(),
             "cmd-1".to_string(),
+            completion_item.model_context.clone(),
             completion_item.plugin_id.clone(),
             completion_item.script_path.clone(),
             completion_item.command.clone(),
@@ -2466,6 +2483,7 @@ mod tests {
                 assert_eq!(
                     payload.item,
                     ThreadItem::CommandExecution {
+                        model_context: None,
                         id: "cmd-1".to_string(),
                         plugin_id: completion_item.plugin_id.clone(),
                         script_path: completion_item.script_path.clone(),
@@ -2488,6 +2506,7 @@ mod tests {
             &conversation_id,
             "turn-1".to_string(),
             "cmd-1".to_string(),
+            completion_item.model_context.clone(),
             completion_item.plugin_id.clone(),
             completion_item.script_path.clone(),
             completion_item.command.clone(),
@@ -2524,6 +2543,7 @@ mod tests {
             &conversation_id,
             "turn-1".to_string(),
             "cmd-1".to_string(),
+            completion_item.model_context.clone(),
             completion_item.plugin_id.clone(),
             completion_item.script_path.clone(),
             completion_item.command.clone(),

@@ -4,6 +4,7 @@ use crate::tools::sandboxing::ToolCtx;
 use codex_analytics::PluginMeasurementsInput;
 use codex_core_plugins::PluginMetricsSidecar;
 use codex_exec_server::Environment;
+use codex_protocol::items::ModelInvocationContext;
 use codex_utils_path_uri::PathUri;
 
 /// Creates a metrics sidecar for one plugin command.
@@ -34,6 +35,7 @@ pub(crate) async fn finish_and_track_measurements(
     exit_code: i32,
     session: &Session,
     turn: &TurnContext,
+    model_context: &ModelInvocationContext,
     item_id: &str,
 ) {
     let Some(metrics_sidecar) = metrics_sidecar else {
@@ -50,6 +52,8 @@ pub(crate) async fn finish_and_track_measurements(
             turn_id: turn.sub_id.clone(),
             item_id: item_id.to_string(),
             originator: turn.originator.clone(),
+            model_slug: Some(model_context.model_slug.clone()),
+            reasoning_effort: model_context.reasoning_effort.clone(),
             plugin_id: batch.plugin_id,
             execution_id: batch.execution_id,
             operation: batch.operation,

@@ -178,6 +178,7 @@ pub(crate) fn spawn_exit_watcher(
     let session_ref = Arc::clone(&context.session);
     let turn_ref = Arc::clone(&context.step_context.turn);
     let model_info = Arc::clone(&context.step_context.settings.model_info);
+    let model_context = context.step_context.model_context();
     let call_id = context.call_id.clone();
     let exit_token = process.cancellation_token();
     let output_drained = process.output_drained_notify();
@@ -223,6 +224,7 @@ pub(crate) fn spawn_exit_watcher(
                 exit_code,
                 &session_ref,
                 &turn_ref,
+                &model_context,
                 &call_id,
             )
             .await;

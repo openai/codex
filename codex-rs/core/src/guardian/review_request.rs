@@ -44,6 +44,7 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
             Ok(request) => request.clone(),
             Err(decision) => return Err(decision),
         };
+        let model_context = context.model_context();
         let turn = Arc::clone(context.turn());
         let GuardianReviewOptions {
             plugin_attribution_override,
@@ -101,6 +102,7 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
                 reviewed_action: guardian_reviewed_action(&request),
                 action: guardian_assessment_action(&request),
                 review_reason,
+                model_context,
             });
         session
             .send_event(

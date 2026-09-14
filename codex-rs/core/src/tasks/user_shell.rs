@@ -188,6 +188,7 @@ pub(crate) async fn execute_user_shell_command(
         .emit_turn_item_started(
             turn_context.as_ref(),
             &TurnItem::CommandExecution(CommandExecutionItem {
+                model_context: None,
                 id: call_id.clone(),
                 plugin_id: None,
                 script_path: None,
@@ -271,6 +272,7 @@ pub(crate) async fn execute_user_shell_command(
                 .emit_turn_item_completed(
                     turn_context.as_ref(),
                     TurnItem::CommandExecution(CommandExecutionItem {
+                        model_context: None,
                         id: call_id,
                         plugin_id: None,
                         script_path: None,
@@ -296,6 +298,7 @@ pub(crate) async fn execute_user_shell_command(
                 .emit_turn_item_completed(
                     turn_context.as_ref(),
                     TurnItem::CommandExecution(CommandExecutionItem {
+                        model_context: None,
                         id: call_id.clone(),
                         plugin_id: None,
                         script_path: None,
@@ -341,6 +344,7 @@ pub(crate) async fn execute_user_shell_command(
                 .emit_turn_item_completed(
                     turn_context.as_ref(),
                     TurnItem::CommandExecution(CommandExecutionItem {
+                        model_context: None,
                         id: call_id,
                         plugin_id: None,
                         script_path: None,

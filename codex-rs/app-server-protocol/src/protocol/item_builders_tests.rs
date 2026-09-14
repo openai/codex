@@ -131,6 +131,7 @@ fn guardian_stdin_reviews_preserve_parent_command_history() {
 
     let assessment = GuardianAssessmentEvent {
         review_reason: None,
+        model_context: None,
         id: "review-stdin".into(),
         target_item_id: Some("terminal-command".into()),
         plugin_id: None,

@@ -778,6 +778,8 @@ pub(crate) enum WebSearchActionKind {
 
 #[derive(Serialize)]
 pub(crate) struct CodexCommandExecutionEventParams {
+    pub(crate) model_slug: Option<String>,
+    pub(crate) reasoning_effort: Option<String>,
     #[serde(flatten)]
     pub(crate) base: CodexToolItemEventBase,
     pub(crate) plugin_id: Option<String>,
@@ -803,6 +805,8 @@ pub(crate) struct CodexPluginMeasurementEventParams {
     pub(crate) turn_id: String,
     pub(crate) item_id: String,
     pub(crate) originator: String,
+    pub(crate) model_slug: Option<String>,
+    pub(crate) reasoning_effort: Option<String>,
     pub(crate) plugin_id: String,
     pub(crate) execution_id: String,
     pub(crate) operation: String,

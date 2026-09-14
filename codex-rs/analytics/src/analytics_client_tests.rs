@@ -869,6 +869,8 @@ fn plugin_measurements(rows: Vec<PluginMeasurementRow>) -> PluginMeasurementsInp
         turn_id: "turn-1".to_string(),
         item_id: "item-1".to_string(),
         originator: "codex_cli_rs".to_string(),
+        model_slug: None,
+        reasoning_effort: None,
         plugin_id: "sample@openai-curated".to_string(),
         execution_id: "execution-1".to_string(),
         operation: "security_scan".to_string(),
@@ -946,6 +948,7 @@ fn sample_command_execution_item_with_id(
     duration_ms: Option<i64>,
 ) -> ThreadItem {
     ThreadItem::CommandExecution {
+        model_context: None,
         id: id.to_string(),
         plugin_id: None,
         script_path: None,
@@ -1790,6 +1793,8 @@ fn command_execution_event_serializes_expected_shape() {
     let event = TrackEventRequest::CommandExecution(CodexCommandExecutionEventRequest {
         event_type: "codex_command_execution_event",
         event_params: CodexCommandExecutionEventParams {
+            model_slug: None,
+            reasoning_effort: None,
             base: CodexToolItemEventBase {
                 thread_id: "thread-1".to_string(),
                 session_id: "session-thread-1".to_string(),
@@ -1848,6 +1853,8 @@ fn command_execution_event_serializes_expected_shape() {
         json!({
             "event_type": "codex_command_execution_event",
             "event_params": {
+                "model_slug": null,
+                "reasoning_effort": null,
                 "thread_id": "thread-1",
                 "session_id": "session-thread-1",
                 "turn_id": "turn-1",
@@ -2781,23 +2788,35 @@ async fn item_lifecycle_notifications_publish_command_execution_event() {
             &mut events,
         )
         .await;
-    reducer
-        .ingest(
-            AnalyticsFact::Notification(Box::new(ServerNotification::ItemStarted(
-                ItemStartedNotification {
-                    thread_id: "thread-1".to_string(),
-                    turn_id: "turn-1".to_string(),
-                    started_at_ms: 1_000,
-                    item: sample_command_execution_item(
-                        CommandExecutionStatus::InProgress,
-                        /*exit_code*/ None,
-                        /*duration_ms*/ None,
-                    ),
-                },
-            ))),
-            &mut events,
-        )
-        .await;
+    for model in ["invoking-model", "later-model"] {
+        reducer
+            .ingest(
+                AnalyticsFact::Notification(Box::new(ServerNotification::ItemStarted(
+                    ItemStartedNotification {
+                        thread_id: "thread-1".to_string(),
+                        turn_id: "turn-1".to_string(),
+                        started_at_ms: 1_000,
+                        item: {
+                            let mut item = sample_command_execution_item(
+                                CommandExecutionStatus::InProgress,
+                                /*exit_code*/ None,
+                                /*duration_ms*/ None,
+                            );
+                            if let ThreadItem::CommandExecution { model_context, .. } = &mut item {
+                                *model_context =
+                                    Some(codex_protocol::items::ModelInvocationContext {
+                                        model_slug: model.to_string(),
+                                        reasoning_effort: Some("max".to_string()),
+                                    });
+                            }
+                            item
+                        },
+                    },
+                ))),
+                &mut events,
+            )
+            .await;
+    }
     assert!(
         events.is_empty(),
         "tool item event should emit on completion"
@@ -2844,6 +2863,8 @@ async fn item_lifecycle_notifications_publish_command_execution_event() {
 
     let payload = serde_json::to_value(&events).expect("serialize events");
     assert_eq!(payload.as_array().expect("events array").len(), 1);
+    assert_eq!(payload[0]["event_params"]["model_slug"], "invoking-model");
+    assert_eq!(payload[0]["event_params"]["reasoning_effort"], "max");
     assert_eq!(payload[0]["event_type"], "codex_command_execution_event");
     assert_eq!(payload[0]["event_params"]["thread_id"], "thread-1");
     assert_eq!(payload[0]["event_params"]["session_id"], "session-thread-1");
@@ -2899,7 +2920,7 @@ async fn plugin_measurement_batch_emits_directly_and_filters_invalid_rows() {
     for index in 0..9 {
         too_many_dimensions.insert(format!("dimension_{index}"), "allowed".to_string());
     }
-    let measurements = plugin_measurements(vec![
+    let mut measurements = plugin_measurements(vec![
         PluginMeasurementRow {
             measurement_name: "finding_count".to_string(),
             number_value: 3.0,
@@ -2921,6 +2942,8 @@ async fn plugin_measurement_batch_emits_directly_and_filters_invalid_rows() {
             dimensions: BTreeMap::new(),
         },
     ]);
+    measurements.model_slug = Some("invoking-model".to_string());
+    measurements.reasoning_effort = Some("max".to_string());
     reducer
         .ingest(
             AnalyticsFact::Custom(CustomAnalyticsFact::PluginMeasurements(measurements)),
@@ -2942,6 +2965,8 @@ async fn plugin_measurement_batch_emits_directly_and_filters_invalid_rows() {
                     "operation": "security_scan",
                     "measurement_name": "finding_count",
                     "originator": "codex_cli_rs",
+                    "model_slug": "invoking-model",
+                    "reasoning_effort": "max",
                     "number_value": 3.0,
                     "dimensions": {"severity": "high"},
                 },
@@ -2957,6 +2982,8 @@ async fn plugin_measurement_batch_emits_directly_and_filters_invalid_rows() {
                     "operation": "security_scan",
                     "measurement_name": "files_scanned",
                     "originator": "codex_cli_rs",
+                    "model_slug": "invoking-model",
+                    "reasoning_effort": "max",
                     "number_value": 17.0,
                     "dimensions": null,
                 },

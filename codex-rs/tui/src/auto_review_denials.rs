@@ -95,6 +95,7 @@ mod tests {
     fn denied_event(id: usize) -> GuardianAssessmentEvent {
         GuardianAssessmentEvent {
             review_reason: None,
+            model_context: None,
             id: format!("review-{id}"),
             target_item_id: None,
             plugin_id: None,

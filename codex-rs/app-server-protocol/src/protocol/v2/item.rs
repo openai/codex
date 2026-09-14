@@ -287,6 +287,10 @@ pub enum ThreadItem {
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     CommandExecution {
+        #[serde(skip)]
+        #[schemars(skip)]
+        #[ts(skip)]
+        model_context: Option<codex_protocol::items::ModelInvocationContext>,
         id: String,
         /// Trusted first-party plugin id when this command resolves to one plugin script.
         #[serde(default)]
@@ -910,6 +914,7 @@ impl From<CoreTurnItem> for ThreadItem {
                 );
                 ThreadItem::CommandExecution {
                     id: command.id,
+                    model_context: command.model_context,
                     plugin_id: command.plugin_id,
                     script_path: command.script_path,
                     command: presentation.command,

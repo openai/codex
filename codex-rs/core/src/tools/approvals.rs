@@ -701,6 +701,7 @@ impl Session {
                     self.request_command_approval(
                         ctx.review_context.turn(),
                         ExecApprovalKind::Command,
+                        ctx.review_context.model_context(),
                         ctx.call_id.clone(),
                         /*approval_id*/ None,
                         Some(environment_id.clone()),
@@ -730,6 +731,7 @@ impl Session {
                 self.request_command_approval(
                     ctx.review_context.turn(),
                     ExecApprovalKind::WriteStdin,
+                    ctx.review_context.model_context(),
                     id.clone(),
                     Some(approval_id.clone()),
                     Some(environment_id.clone()),
@@ -761,6 +763,7 @@ impl Session {
                 self.request_command_approval(
                     ctx.review_context.turn(),
                     ExecApprovalKind::Command,
+                    ctx.review_context.model_context(),
                     ctx.call_id.clone(),
                     Some(approval_id.clone()),
                     Some(environment_id.clone()),
@@ -833,6 +836,7 @@ impl Session {
                 self.request_command_approval(
                     ctx.review_context.turn(),
                     ExecApprovalKind::Command,
+                    ctx.review_context.model_context(),
                     ctx.call_id.clone(),
                     /*approval_id*/ None,
                     Some(environment_id.clone()),

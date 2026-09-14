@@ -12,6 +12,7 @@ use codex_extension_api::ExtensionData;
 use codex_otel::SessionTelemetry;
 use codex_protocol::approvals::GuardianAssessmentAction;
 use codex_protocol::approvals::GuardianReviewReason;
+use codex_protocol::items::ModelInvocationContext;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::GuardianAssessmentDecisionSource;
 use codex_protocol::protocol::GuardianAssessmentEvent;
@@ -36,6 +37,7 @@ pub struct ReviewMetadata {
     pub reviewed_action: GuardianReviewedAction,
     pub action: GuardianAssessmentAction,
     pub review_reason: GuardianReviewReason,
+    pub model_context: ModelInvocationContext,
 }
 
 pub struct ReviewReport {
@@ -58,6 +60,7 @@ impl ReviewReport {
         );
         let started = GuardianAssessmentEvent {
             review_reason: Some(metadata.review_reason),
+            model_context: Some(metadata.model_context),
             id: metadata.review_id,
             target_item_id: metadata.target_item_id,
             plugin_id: metadata.plugin_id,

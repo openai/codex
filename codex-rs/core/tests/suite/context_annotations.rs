@@ -76,6 +76,7 @@ async fn first_request_item_types_roles_and_content_annotations() -> Result<()> 
         .submit(Op::ApproveGuardianDeniedAction {
             event: GuardianAssessmentEvent {
                 review_reason: None,
+                model_context: None,
                 id: "guardian-review".to_string(),
                 target_item_id: None,
                 plugin_id: None,

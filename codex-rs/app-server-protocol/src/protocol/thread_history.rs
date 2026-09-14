@@ -2255,6 +2255,7 @@ mod tests {
                 .to_string(),
         }];
         let command_item = CoreTurnItem::CommandExecution(CoreCommandExecutionItem {
+            model_context: None,
             id: "exec-1".to_string(),
             plugin_id: Some("sample@openai-curated".to_string()),
             script_path: Some("scripts/run.py".to_string()),
@@ -2340,6 +2341,7 @@ mod tests {
         assert_eq!(
             build_turns_from_rollout_items(&items[..2])[0].items,
             vec![ThreadItem::CommandExecution {
+                model_context: None,
                 id: "exec-1".to_string(),
                 plugin_id: Some("sample@openai-curated".to_string()),
                 script_path: Some("scripts/run.py".to_string()),
@@ -2365,6 +2367,7 @@ mod tests {
         assert_eq!(
             turns[0].items,
             vec![ThreadItem::CommandExecution {
+                model_context: None,
                 id: "exec-1".to_string(),
                 plugin_id: Some("sample@openai-curated".to_string()),
                 script_path: Some("scripts/run.py".to_string()),
@@ -3051,6 +3054,7 @@ mod tests {
         assert_eq!(
             turns[0].items[2],
             ThreadItem::CommandExecution {
+                model_context: None,
                 id: "exec-1".into(),
                 plugin_id: None,
                 script_path: None,
@@ -3321,6 +3325,7 @@ mod tests {
         assert_eq!(
             turns[0].items[1],
             ThreadItem::CommandExecution {
+                model_context: None,
                 id: "exec-declined".into(),
                 plugin_id: None,
                 script_path: None,
@@ -3372,6 +3377,7 @@ mod tests {
             }),
             EventMsg::GuardianAssessment(GuardianAssessmentEvent {
                 review_reason: None,
+                model_context: None,
                 id: "review-guardian-exec".into(),
                 target_item_id: Some("guardian-exec".into()),
                 plugin_id: Some("sample@openai-curated".into()),
@@ -3394,6 +3400,7 @@ mod tests {
             }),
             EventMsg::GuardianAssessment(GuardianAssessmentEvent {
                 review_reason: None,
+                model_context: None,
                 id: "review-guardian-exec".into(),
                 target_item_id: Some("guardian-exec".into()),
                 plugin_id: Some("sample@openai-curated".into()),
@@ -3428,6 +3435,7 @@ mod tests {
         assert_eq!(
             turns[0].items[1],
             ThreadItem::CommandExecution {
+                model_context: None,
                 id: "guardian-exec".into(),
                 plugin_id: Some("sample@openai-curated".into()),
                 script_path: Some("scripts/run.py".into()),
@@ -3467,6 +3475,7 @@ mod tests {
             }),
             EventMsg::GuardianAssessment(GuardianAssessmentEvent {
                 review_reason: None,
+                model_context: None,
                 id: "review-guardian-execve".into(),
                 target_item_id: Some("guardian-execve".into()),
                 plugin_id: Some("sample@openai-curated".into()),
@@ -3500,6 +3509,7 @@ mod tests {
         assert_eq!(
             turns[0].items[1],
             ThreadItem::CommandExecution {
+                model_context: None,
                 id: "guardian-execve".into(),
                 plugin_id: Some("sample@openai-curated".into()),
                 script_path: Some("scripts/run.py".into()),
@@ -3701,6 +3711,7 @@ mod tests {
         assert_eq!(
             turns[0].items[1],
             ThreadItem::CommandExecution {
+                model_context: None,
                 id: "exec-late".into(),
                 plugin_id: None,
                 script_path: None,
