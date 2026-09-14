@@ -157,9 +157,9 @@ impl ToolExecutor<ToolInvocation> for McpHandler {
                 .map(str::to_string),
         });
 
-        ToolSearchInfo::from_spec(
+        ToolSearchInfo::from_shared_spec(
             build_mcp_search_text(&self.tool_info),
-            self.spec(),
+            Arc::clone(&self.spec),
             source_info,
         )
     }

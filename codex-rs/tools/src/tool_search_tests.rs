@@ -3,6 +3,69 @@ use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 
 #[test]
+fn shared_search_specs_preserve_results_and_release_the_source() {
+    let function = ResponsesApiTool {
+        name: "lookup".to_string(),
+        description: "Look up an item".to_string(),
+        strict: true,
+        defer_loading: None,
+        parameters: JsonSchema::object(
+            BTreeMap::new(),
+            /*required*/ None,
+            /*additional_properties*/ None,
+        ),
+        output_schema: Some(serde_json::json!({"type": "object"}).into()),
+    };
+    let custom = crate::FreeformTool {
+        name: "patch".to_string(),
+        description: "Apply a patch".to_string(),
+        defer_loading: None,
+        format: crate::FreeformToolFormat {
+            r#type: "grammar".to_string(),
+            syntax: "lark".to_string(),
+            definition: "start: \"patch\"".to_string(),
+        },
+    };
+    for spec in [
+        ToolSpec::Function(function.clone()),
+        ToolSpec::Freeform(custom.clone()),
+        ToolSpec::Namespace(ResponsesApiNamespace {
+            name: "example".to_string(),
+            description: String::new(),
+            tools: vec![
+                ResponsesApiNamespaceTool::Function(function),
+                ResponsesApiNamespaceTool::Custom(custom),
+            ],
+        }),
+    ] {
+        let expected =
+            ToolSearchInfo::from_spec("query".to_string(), spec.clone(), /*source_info*/ None)
+                .unwrap()
+                .entry
+                .to_loadable_spec();
+        let spec = Arc::new(spec);
+        let weak = Arc::downgrade(&spec);
+        let info = ToolSearchInfo::from_shared_spec(
+            "query".to_string(),
+            Arc::clone(&spec),
+            /*source_info*/ None,
+        )
+        .unwrap();
+        drop(spec);
+        assert!(
+            weak.upgrade().is_some(),
+            "search retains the original spec rather than a deep copy"
+        );
+        assert_eq!(info.entry.to_loadable_spec(), expected);
+        drop(info);
+        assert!(
+            weak.upgrade().is_none(),
+            "search does not keep discarded catalogs alive"
+        );
+    }
+}
+
+#[test]
 fn top_level_function_search_results_use_the_default_namespace() {
     let function_tool = ResponsesApiTool {
         name: "lookup_order".to_string(),
@@ -23,7 +86,10 @@ fn top_level_function_search_results_use_the_default_namespace() {
     .expect("top-level function should be searchable");
 
     assert_eq!(
-        (search_info.entry.search_text, search_info.entry.output),
+        (
+            search_info.entry.search_text.clone(),
+            search_info.entry.to_loadable_spec()
+        ),
         (
             "lookup_order lookup order Look up an order".to_string(),
             LoadableToolSpec::Namespace(ResponsesApiNamespace {
@@ -58,7 +124,10 @@ fn top_level_custom_tools_are_searchable() {
     .expect("top-level custom tool should be searchable");
 
     assert_eq!(
-        (search_info.entry.search_text, search_info.entry.output),
+        (
+            search_info.entry.search_text.clone(),
+            search_info.entry.to_loadable_spec()
+        ),
         (
             "apply_patch Apply a patch lark".to_string(),
             LoadableToolSpec::Namespace(ResponsesApiNamespace {
@@ -159,7 +228,7 @@ fn mixed_namespaced_function_and_custom_tools_are_searchable() {
         "editor Editing tools lookup_order lookup order Look up an order apply_patch Apply a patch lark"
     );
     assert_eq!(
-        search_info.entry.output,
+        search_info.entry.to_loadable_spec(),
         LoadableToolSpec::Namespace(crate::ResponsesApiNamespace {
             name: "editor".to_string(),
             description: "Editing tools".to_string(),

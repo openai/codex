@@ -7,11 +7,22 @@ use crate::ToolSearchSourceInfo;
 use crate::ToolSpec;
 use crate::default_namespace_description;
 use codex_protocol::DEFAULT_FUNCTION_NAMESPACE;
+use std::sync::Arc;
 
 #[derive(Clone, PartialEq)]
 pub struct ToolSearchEntry {
     pub search_text: String,
-    pub output: LoadableToolSpec,
+    spec: Arc<ToolSpec>,
+}
+
+impl ToolSearchEntry {
+    /// Materialize only selected results; output schemas remain shared until discarded.
+    pub fn to_loadable_spec(&self) -> LoadableToolSpec {
+        let Some(output) = normalize_search_spec(self.spec.as_ref().clone()) else {
+            unreachable!("search entries contain only loadable tools");
+        };
+        output
+    }
 }
 
 #[derive(Clone, PartialEq)]
@@ -21,6 +32,21 @@ pub struct ToolSearchInfo {
 }
 
 impl ToolSearchInfo {
+    /// Keep the immutable catalog snapshot alive without duplicating its schemas.
+    pub fn from_shared_spec(
+        search_text: String,
+        spec: Arc<ToolSpec>,
+        source_info: Option<ToolSearchSourceInfo>,
+    ) -> Option<Self> {
+        match spec.as_ref() {
+            ToolSpec::Function(_) | ToolSpec::Freeform(_) | ToolSpec::Namespace(_) => Some(Self {
+                entry: ToolSearchEntry { search_text, spec },
+                source_info,
+            }),
+            ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } => None,
+        }
+    }
+
     pub fn from_tool_spec(
         spec: ToolSpec,
         source_info: Option<ToolSearchSourceInfo>,
@@ -34,54 +60,52 @@ impl ToolSearchInfo {
         spec: ToolSpec,
         source_info: Option<ToolSearchSourceInfo>,
     ) -> Option<Self> {
-        let output = match spec {
-            ToolSpec::Function(mut tool) => {
-                tool.defer_loading = Some(true);
-                tool.output_schema = None;
-                LoadableToolSpec::Namespace(ResponsesApiNamespace {
-                    name: DEFAULT_FUNCTION_NAMESPACE.to_string(),
-                    description: default_namespace_description(DEFAULT_FUNCTION_NAMESPACE),
-                    tools: vec![ResponsesApiNamespaceTool::Function(tool)],
-                })
-            }
-            ToolSpec::Freeform(mut tool) => {
-                tool.defer_loading = Some(true);
-                LoadableToolSpec::Namespace(ResponsesApiNamespace {
-                    name: DEFAULT_FUNCTION_NAMESPACE.to_string(),
-                    description: default_namespace_description(DEFAULT_FUNCTION_NAMESPACE),
-                    tools: vec![ResponsesApiNamespaceTool::Custom(tool)],
-                })
-            }
-            ToolSpec::Namespace(mut namespace) => {
-                if namespace.description.trim().is_empty() {
-                    namespace.description = default_namespace_description(&namespace.name);
-                }
-                for tool in &mut namespace.tools {
-                    match tool {
-                        ResponsesApiNamespaceTool::Function(tool) => {
-                            tool.defer_loading = Some(true);
-                            tool.output_schema = None;
-                        }
-                        ResponsesApiNamespaceTool::Custom(tool) => {
-                            tool.defer_loading = Some(true);
-                        }
-                    }
-                }
-                LoadableToolSpec::Namespace(namespace)
-            }
-            ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } => {
-                return None;
-            }
-        };
-
+        // Dynamic-tool cache entries compare normalized specs by value.
+        // Preserve that behavior; shared MCP specs normalize only when selected.
+        let output = normalize_search_spec(spec)?;
         Some(Self {
             entry: ToolSearchEntry {
                 search_text,
-                output,
+                spec: Arc::new(output.into()),
             },
             source_info,
         })
     }
+}
+
+fn normalize_search_spec(spec: ToolSpec) -> Option<LoadableToolSpec> {
+    let mut namespace = match spec {
+        ToolSpec::Function(tool) => ResponsesApiNamespace {
+            name: DEFAULT_FUNCTION_NAMESPACE.to_string(),
+            description: default_namespace_description(DEFAULT_FUNCTION_NAMESPACE),
+            tools: vec![ResponsesApiNamespaceTool::Function(tool)],
+        },
+        ToolSpec::Freeform(tool) => ResponsesApiNamespace {
+            name: DEFAULT_FUNCTION_NAMESPACE.to_string(),
+            description: default_namespace_description(DEFAULT_FUNCTION_NAMESPACE),
+            tools: vec![ResponsesApiNamespaceTool::Custom(tool)],
+        },
+        ToolSpec::Namespace(namespace) => namespace,
+        ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } => {
+            return None;
+        }
+    };
+
+    if namespace.description.trim().is_empty() {
+        namespace.description = default_namespace_description(&namespace.name);
+    }
+    for tool in &mut namespace.tools {
+        match tool {
+            ResponsesApiNamespaceTool::Function(tool) => {
+                tool.defer_loading = Some(true);
+                tool.output_schema = None;
+            }
+            ResponsesApiNamespaceTool::Custom(tool) => {
+                tool.defer_loading = Some(true);
+            }
+        }
+    }
+    Some(LoadableToolSpec::Namespace(namespace))
 }
 
 fn default_tool_search_text(spec: &ToolSpec) -> String {
