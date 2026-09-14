@@ -11,6 +11,7 @@ use super::Options;
 use super::Parser;
 use super::Tag;
 use super::Writer;
+use super::math::MathMarkdown;
 use std::ops::Range;
 use std::path::Path;
 
@@ -40,10 +41,11 @@ pub(crate) fn render_streaming_markdown_lines_with_width_and_cwd(
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TABLES);
     let citations = FileCitations::new(input, options);
-    let parser = Parser::new_ext(&citations.markdown, options);
+    let math = MathMarkdown::new(&citations.markdown, options);
+    let parser = Parser::new_ext(&math.markdown, options);
     let has_reference_link_definition = parser.reference_definitions().iter().next().is_some();
     let parser = TopLevelBlockTracker {
-        iter: DecodedTextMerge::new(citations.events(parser, cwd)),
+        iter: DecodedTextMerge::new(citations.events(math.events(parser.into_offset_iter()), cwd)),
         depth: 0,
         block_count: 0,
         last_start: 0,
@@ -53,7 +55,15 @@ pub(crate) fn render_streaming_markdown_lines_with_width_and_cwd(
     writer.run();
     StreamingMarkdownRender {
         lines: writer.text,
-        last_top_level_block_start: (writer.iter.block_count > 1).then_some(writer.iter.last_start),
+        last_top_level_block_start: (writer.iter.block_count > 1)
+            .then_some(writer.iter.last_start)
+            // A cached suffix must not mistake a display closer for a new opener.
+            .filter(|boundary| {
+                !math
+                    .display_ranges
+                    .iter()
+                    .any(|range| range.start < *boundary && *boundary < range.end)
+            }),
         has_reference_link_definition,
         first_top_level_block_is_html: writer.iter.first_is_html,
     }

@@ -1,0 +1,7 @@
+---
+source: tui/src/markdown_render/math_tests.rs
+expression: "plain(r\"Words $\\alpha^2 + \\beta_1$ more words and $\\sqrt{x}$.\", 16)"
+---
+Words α² + β₁
+more words and
+√(x).

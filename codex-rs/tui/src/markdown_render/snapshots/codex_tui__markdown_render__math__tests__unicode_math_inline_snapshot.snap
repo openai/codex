@@ -1,0 +1,10 @@
+---
+source: tui/src/markdown_render/math_tests.rs
+assertion_line: 16
+expression: "plain(r\"Inline $\\alpha^2 + \\beta_{10}$ on $\\mathbb{R}^n$.\nRoot $\\sqrt{x^2+y^2}$ and fraction $a/\\frac{b}{c}$.\nUnsupported: $\\unknown{x_y}$ and $\\frac{a}{b}^2$.\nAngles: <$x$>, <\\(\\alpha\\)>, and <$\\unknown{x}$>.\nCode: `$\\alpha$`; money: $5 and $10; shell: $HOME.\",\n80)"
+---
+Inline α² + β₁₀ on ℝⁿ.
+Root √(x²+y²) and fraction a/((b)/(c)).
+Unsupported: $\unknown{x_y}$ and $\frac{a}{b}^2$.
+Angles: <x>, <α>, and <$\unknown{x}$>.
+Code: $\alpha$; money: $5 and $10; shell: $HOME.

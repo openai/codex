@@ -110,11 +110,11 @@ impl<'a> FileCitations<'a> {
     /// Adapt before `DecodedTextMerge`, while plain text still has exact source offsets.
     pub(super) fn events<'s>(
         &'s self,
-        parser: Parser<'s>,
+        events: impl Iterator<Item = (Event<'s>, Range<usize>)>,
         cwd: Option<&'s Path>,
     ) -> impl Iterator<Item = (Event<'s>, Range<usize>)> {
         let mut citations = self.citations.iter().peekable();
-        parser.into_offset_iter().flat_map(move |(event, range)| {
+        events.flat_map(move |(event, range)| {
             while citations
                 .next_if(|(span, _)| span.end <= range.start)
                 .is_some()

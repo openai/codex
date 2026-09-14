@@ -218,3 +218,7 @@ pub(super) fn render_source(
 #[cfg(test)]
 #[path = "render_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "inline_math_tests.rs"]
+mod inline_math_tests;
