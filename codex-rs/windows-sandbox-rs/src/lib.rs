@@ -97,6 +97,8 @@ mod resolved_permissions;
 #[cfg(target_os = "windows")]
 mod token;
 #[cfg(target_os = "windows")]
+mod token_user;
+#[cfg(target_os = "windows")]
 mod wfp;
 #[cfg(target_os = "windows")]
 mod wfp_setup;

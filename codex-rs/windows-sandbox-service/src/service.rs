@@ -40,6 +40,8 @@ use windows_sys::Win32::System::Services::SERVICE_WIN32_OWN_PROCESS;
 use windows_sys::Win32::System::Services::SetServiceStatus;
 use windows_sys::Win32::System::Services::StartServiceCtrlDispatcherW;
 
+mod runtime_lifecycle;
+
 pub(crate) const SERVICE_NAME: &str = "CodexSandboxService";
 const EVENT_SERVICE_STARTED: u32 = 1000;
 const EVENT_SERVICE_STOP_REQUESTED: u32 = 1001;
@@ -109,7 +111,7 @@ pub(crate) fn run_foreground() -> Result<()> {
             eprintln!("{SERVICE_NAME} listening on {}", crate::ipc::PIPE_NAME);
             Ok(())
         },
-        |_, _| Ok(()),
+        |installation, _| Ok(installation),
         || Ok(()),
     )
 }
@@ -156,46 +158,7 @@ fn service_main_inner(state: &ServiceState) -> Result<()> {
     state.report_status(SERVICE_START_PENDING, NO_ERROR)?;
     let package_lifecycle =
         crate::package_lifecycle::PackageLifecycle::new(Arc::clone(&state.uninstalling))?;
-    crate::ipc::run(
-        Arc::clone(&state.shutdown),
-        || {
-            state.report_status(SERVICE_RUNNING, NO_ERROR)?;
-            if let Some(record) = crate::installation_record::load()?
-                && let Err(error) = package_lifecycle.restore_logged_in_owner(record.session_id)
-            {
-                log_error(
-                    EVENT_SERVICE_FAILED,
-                    &format!("unable to restore package uninstall listener: {error:#}"),
-                );
-            }
-            log_information(
-                EVENT_SERVICE_STARTED,
-                "The Codex sandbox service is running.",
-            );
-            Ok(())
-        },
-        |installation, user_token| {
-            package_lifecycle.register_authenticated_user(installation, user_token)
-        },
-        || {
-            let session = state.changed_session.swap(u32::MAX, Ordering::AcqRel);
-            if session == u32::MAX {
-                return Ok(());
-            }
-            if let Err(error) = package_lifecycle.restore_authenticated_user(session) {
-                log_error(
-                    EVENT_SERVICE_FAILED,
-                    &format!("unable to restore package uninstall listener: {error:#}"),
-                );
-            }
-            Ok(())
-        },
-    )
-    .context("run the sandbox provisioning broker")?;
-
-    if state.stop_requested.load(Ordering::Acquire) && state.uninstalling.load(Ordering::Acquire) {
-        package_lifecycle.clean_up()?;
-    }
+    runtime_lifecycle::run(state, &package_lifecycle)?;
     log_information(
         EVENT_SERVICE_STOPPED,
         "The Codex sandbox service has stopped.",
@@ -226,11 +189,7 @@ unsafe extern "system" fn service_control_handler(
                     EVENT_SERVICE_STOP_REQUESTED,
                     "The Codex sandbox service was asked to stop.",
                 );
-                std::thread::spawn(move || {
-                    crate::ipc::wake(crate::ipc::PIPE_NAME, || {
-                        state.current_status.load(Ordering::Acquire) == SERVICE_STOPPED
-                    });
-                });
+                wake_listener();
             }
             NO_ERROR
         }
@@ -252,16 +211,22 @@ unsafe extern "system" fn service_control_handler(
                     state
                         .changed_session
                         .store(event.dwSessionId, Ordering::Release);
-                    std::thread::spawn(move || {
-                        crate::ipc::wake(crate::ipc::PIPE_NAME, || {
-                            state.current_status.load(Ordering::Acquire) == SERVICE_STOPPED
-                        });
-                    });
+                    wake_listener();
                 }
             }
             NO_ERROR
         }
         _ => ERROR_CALL_NOT_IMPLEMENTED,
+    }
+}
+
+fn wake_listener() {
+    if let Some(state) = SERVICE_STATE.get() {
+        std::thread::spawn(move || {
+            crate::ipc::wake(crate::ipc::PIPE_NAME, || {
+                state.current_status.load(Ordering::Acquire) == SERVICE_STOPPED
+            });
+        });
     }
 }
 

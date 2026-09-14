@@ -20,7 +20,7 @@ use crate::ipc::ServiceRequest;
 pub(crate) fn run(
     identity: ClientIdentity,
     request: ServiceRequest,
-    register_installation: &dyn Fn(InstallationRecord, OwnedHandle) -> Result<()>,
+    register_installation: &dyn Fn(InstallationRecord, OwnedHandle) -> Result<InstallationRecord>,
 ) -> Result<SandboxProvisioningResponse> {
     // A policy-rejected request must not choose the uninstall owner. Use the
     // token already authenticated above instead of impersonating the pipe again.

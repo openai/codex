@@ -43,22 +43,13 @@ impl WindowsSandboxRequestProcessor {
     ) -> Result<(), JSONRPCErrorError> {
         // Validate requirements before acknowledging setup so callers do not get a
         // `started` response for a Windows sandbox mode that cannot be persisted.
-        let command_cwd = params
-            .cwd
-            .map(PathBuf::from)
-            .unwrap_or_else(|| self.config.cwd.to_path_buf());
-        let config = self
-            .config_manager
-            .load_for_cwd(
-                /*request_overrides*/ None,
-                ConfigOverrides {
-                    cwd: Some(command_cwd.clone()),
-                    ..Default::default()
-                },
-                Some(command_cwd.clone()),
-            )
-            .await
-            .map_err(|err| config_load_error(&err))?;
+        let (config, command_cwd) = load_setup_config(
+            &self.config_manager,
+            self.config.cwd.as_path(),
+            params.cwd.map(PathBuf::from),
+        )
+        .await
+        .map_err(|err| config_load_error(&err))?;
         let setup_mode = resolve_allowed_windows_sandbox_setup_mode(
             config.config_layer_stack.requirements(),
             params.mode,
@@ -180,6 +171,29 @@ impl WindowsSandboxRequestProcessor {
         Ok(())
     }
 }
+
+async fn load_setup_config(
+    manager: &ConfigManager,
+    fallback_cwd: &std::path::Path,
+    requested_cwd: Option<PathBuf>,
+) -> std::io::Result<(Config, PathBuf)> {
+    let cwd = requested_cwd.unwrap_or_else(|| fallback_cwd.to_path_buf());
+    let config = manager
+        .load_for_cwd(
+            /*request_overrides*/ None,
+            ConfigOverrides {
+                cwd: Some(cwd.clone()),
+                ..Default::default()
+            },
+            Some(cwd.clone()),
+        )
+        .await?;
+    Ok((config, cwd))
+}
+
+#[cfg(test)]
+#[path = "windows_sandbox_setup_config_tests.rs"]
+mod setup_config_tests;
 
 /// Resolves the requested API mode after checking that managed requirements allow it.
 fn resolve_allowed_windows_sandbox_setup_mode(

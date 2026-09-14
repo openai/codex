@@ -7,8 +7,7 @@
 //! and elevated capture. The legacy restricted‑token path spawns the child directly
 //! and does not use these helpers.
 
-use crate::helper_materialization::HelperExecutable;
-use crate::helper_materialization::resolve_helper_for_launch;
+use crate::helper_materialization::resolve_command_runner;
 use crate::winutil::resolve_sid;
 use crate::winutil::string_from_sid_bytes;
 use crate::winutil::to_wide;
@@ -41,7 +40,7 @@ pub const PIPE_ACCESS_OUTBOUND: u32 = 0x0000_0002;
 /// Resolves the elevated command runner path, preferring the copied helper under
 /// `.sandbox-bin` and falling back to the legacy sibling lookup when needed.
 pub fn find_runner_exe(codex_home: &Path, log_dir: Option<&Path>) -> PathBuf {
-    resolve_helper_for_launch(HelperExecutable::CommandRunner, codex_home, log_dir)
+    resolve_command_runner(codex_home, log_dir)
 }
 
 /// Generates a unique named-pipe path used to communicate with the runner process.

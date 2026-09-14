@@ -5,6 +5,7 @@
 
 mod authentication;
 mod home;
+mod listener;
 mod request;
 
 use anyhow::Context;
@@ -16,8 +17,6 @@ use codex_windows_sandbox::FramedProvisioningMessage;
 use codex_windows_sandbox::PROVISIONING_PROTOCOL_VERSION;
 use codex_windows_sandbox::ProvisioningMessage;
 use codex_windows_sandbox::SandboxProvisioningResponse;
-use codex_windows_sandbox::ensure_sandbox_users_group;
-use codex_windows_sandbox::string_from_sid_bytes;
 use codex_windows_sandbox::to_wide;
 use codex_windows_sandbox::write_provisioning_frame;
 pub(crate) use home::OwnedHandle;
@@ -36,8 +35,6 @@ use std::time::Duration;
 use std::time::Instant;
 use windows_sys::Win32::Foundation as foundation;
 use windows_sys::Win32::Foundation::HANDLE;
-use windows_sys::Win32::Security as security;
-use windows_sys::Win32::Security::Authorization as authorization;
 use windows_sys::Win32::Storage::FileSystem as filesystem;
 use windows_sys::Win32::System::Pipes as pipes;
 
@@ -62,14 +59,6 @@ impl std::fmt::Display for ServiceUnavailable {
 
 impl std::error::Error for ServiceUnavailable {}
 
-struct SecurityDescriptor(security::PSECURITY_DESCRIPTOR);
-
-impl Drop for SecurityDescriptor {
-    fn drop(&mut self) {
-        unsafe { foundation::LocalFree(self.0 as foundation::HLOCAL) };
-    }
-}
-
 #[derive(Debug, Eq, PartialEq)]
 enum PipeConnection {
     Connected,
@@ -79,54 +68,14 @@ enum PipeConnection {
 pub(crate) fn run(
     shutdown: Arc<AtomicBool>,
     on_ready: impl FnOnce() -> Result<()>,
-    register_installation: impl Fn(InstallationRecord, OwnedHandle) -> Result<()>,
+    register_installation: impl Fn(InstallationRecord, OwnedHandle) -> Result<InstallationRecord>,
     on_session_change: impl Fn() -> Result<()>,
 ) -> Result<()> {
-    let sandbox_sid = ensure_sandbox_users_group()?;
-    let sid_string = string_from_sid_bytes(&sandbox_sid).map_err(anyhow::Error::msg)?;
-    let sddl = pipe_security_descriptor(&sid_string);
-    let mut descriptor: security::PSECURITY_DESCRIPTOR = ptr::null_mut();
-    if unsafe {
-        authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW(
-            to_wide(sddl).as_ptr(),
-            authorization::SDDL_REVISION_1,
-            &mut descriptor,
-            ptr::null_mut(),
-        )
-    } == 0
-    {
-        return Err(std::io::Error::last_os_error()).context("create provisioning pipe DACL");
-    }
-    let descriptor = SecurityDescriptor(descriptor);
-    let attributes = security::SECURITY_ATTRIBUTES {
-        nLength: size_of::<security::SECURITY_ATTRIBUTES>() as u32,
-        lpSecurityDescriptor: descriptor.0,
-        bInheritHandle: 0,
-    };
-
-    let pipe = unsafe {
-        pipes::CreateNamedPipeW(
-            to_wide(PIPE_NAME).as_ptr(),
-            filesystem::PIPE_ACCESS_DUPLEX | filesystem::FILE_FLAG_FIRST_PIPE_INSTANCE,
-            pipes::PIPE_TYPE_BYTE
-                | pipes::PIPE_READMODE_BYTE
-                | pipes::PIPE_WAIT
-                | pipes::PIPE_REJECT_REMOTE_CLIENTS,
-            1,
-            1024,
-            MAX_REQUEST_BYTES as u32,
-            0,
-            &attributes,
-        )
-    };
-    if pipe == foundation::INVALID_HANDLE_VALUE {
-        return Err(std::io::Error::last_os_error()).context("create provisioning pipe");
-    }
-    let pipe = OwnedHandle(pipe);
+    let listener = listener::ProvisioningListener::open()?;
     on_ready().context("publish provisioning listener readiness")?;
 
     while !shutdown.load(Ordering::Acquire) {
-        let connection = accept_pipe_connection(pipe.0)?;
+        let connection = accept_pipe_connection(listener.pipe.0)?;
         if shutdown.load(Ordering::Acquire) {
             break;
         }
@@ -136,17 +85,18 @@ pub(crate) fn run(
             continue;
         }
 
-        let authorized_process = match crate::package_identity::authorize_client_process(pipe.0) {
-            Ok(process) => process,
-            Err(_) => {
-                unsafe { pipes::DisconnectNamedPipe(pipe.0) };
-                continue;
-            }
-        };
+        let authorized_process =
+            match crate::package_identity::authorize_client_process(listener.pipe.0) {
+                Ok(process) => process,
+                Err(_) => {
+                    unsafe { pipes::DisconnectNamedPipe(listener.pipe.0) };
+                    continue;
+                }
+            };
         let result = handle_request(
-            pipe.0,
+            listener.pipe.0,
             &authorized_process,
-            &sandbox_sid,
+            &listener.sandbox_sid,
             &shutdown,
             &register_installation,
         );
@@ -158,60 +108,76 @@ pub(crate) fn run(
             }
             Err(error) => {
                 eprintln!("sandbox provisioning request failed: {error}");
-                let mut message = String::new();
-                for character in error.to_string().chars() {
-                    let character = if character.is_control() {
-                        ' '
-                    } else {
-                        character
-                    };
-                    if message.len() + character.len_utf8() > MAX_RESPONSE_MESSAGE_BYTES {
-                        break;
-                    }
-                    message.push(character);
+                SandboxProvisioningResponse::Error {
+                    message: response_error_message(&error),
                 }
-                SandboxProvisioningResponse::Error { message }
             }
         };
         let response = FramedProvisioningMessage {
             version: PROVISIONING_PROTOCOL_VERSION,
             message: ProvisioningMessage::ProvisionSandboxResponse { payload: response },
         };
-        let mut frame = Vec::new();
-        write_provisioning_frame(&mut frame, &response)
-            .context("serialize sandbox provisioning response")?;
-        let mut written = 0;
-        let sent = unsafe {
-            filesystem::WriteFile(
-                pipe.0,
-                frame.as_ptr(),
-                frame.len() as u32,
-                &mut written,
-                ptr::null_mut(),
-            )
-        };
-        if sent != 0 {
-            let deadline = Instant::now() + Duration::from_secs(1);
-            while !shutdown.load(Ordering::Acquire) && Instant::now() < deadline {
-                if unsafe {
-                    pipes::PeekNamedPipe(
-                        pipe.0,
-                        ptr::null_mut(),
-                        0,
-                        ptr::null_mut(),
-                        ptr::null_mut(),
-                        ptr::null_mut(),
-                    )
-                } == 0
-                {
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            }
-        }
-        unsafe { pipes::DisconnectNamedPipe(pipe.0) };
+        write_response(&listener.pipe, &response, &shutdown)?;
+        unsafe { pipes::DisconnectNamedPipe(listener.pipe.0) };
     }
     Ok(())
+}
+
+/// Sends one frame, then waits briefly for the client to close before disconnecting.
+fn write_response(
+    pipe: &OwnedHandle,
+    response: &FramedProvisioningMessage,
+    shutdown: &AtomicBool,
+) -> Result<()> {
+    let mut frame = Vec::new();
+    write_provisioning_frame(&mut frame, response)
+        .context("serialize sandbox provisioning response")?;
+    let mut written = 0;
+    let sent = unsafe {
+        filesystem::WriteFile(
+            pipe.0,
+            frame.as_ptr(),
+            frame.len() as u32,
+            &mut written,
+            ptr::null_mut(),
+        )
+    };
+    if sent != 0 {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !shutdown.load(Ordering::Acquire) && Instant::now() < deadline {
+            if unsafe {
+                pipes::PeekNamedPipe(
+                    pipe.0,
+                    ptr::null_mut(),
+                    0,
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                )
+            } == 0
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    Ok(())
+}
+
+fn response_error_message(error: &anyhow::Error) -> String {
+    let mut message = String::new();
+    for character in error.to_string().chars() {
+        let character = if character.is_control() {
+            ' '
+        } else {
+            character
+        };
+        if message.len() + character.len_utf8() > MAX_RESPONSE_MESSAGE_BYTES {
+            break;
+        }
+        message.push(character);
+    }
+    message
 }
 
 fn accept_pipe_connection(pipe: HANDLE) -> Result<PipeConnection> {
@@ -268,7 +234,7 @@ fn handle_request(
     authorized_process: &crate::package_identity::AuthorizedClientProcess,
     sandbox_sid: &[u8],
     shutdown: &AtomicBool,
-    register_installation: &dyn Fn(InstallationRecord, OwnedHandle) -> Result<()>,
+    register_installation: &dyn Fn(InstallationRecord, OwnedHandle) -> Result<InstallationRecord>,
 ) -> Result<SandboxProvisioningResponse> {
     let deadline = Instant::now() + REQUEST_IDLE_TIMEOUT;
     let mut request = [0_u8; MAX_REQUEST_BYTES];

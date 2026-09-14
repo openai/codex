@@ -519,6 +519,10 @@ fn real_main(setup_mode: &mut Option<SetupMode>) -> Result<()> {
             ),
         )));
     }
+    run_payload(&payload)
+}
+
+fn run_payload(payload: &Payload) -> Result<()> {
     let sbx_dir = sandbox_dir(&payload.codex_home);
     std::fs::create_dir_all(&sbx_dir).map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
@@ -532,7 +536,7 @@ fn real_main(setup_mode: &mut Option<SetupMode>) -> Result<()> {
             format!("open log in {} failed: {err}", sbx_dir.display()),
         ))
     })?;
-    let result = run_setup(&payload, &mut log, &sbx_dir);
+    let result = run_setup(payload, &mut log, &sbx_dir);
     if let Err(err) = &result {
         let _ = log_line(&mut log, &format!("setup error: {err:?}"));
         log_note(&format!("setup error: {err:?}"), Some(sbx_dir.as_path()));

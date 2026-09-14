@@ -37,12 +37,16 @@ pub struct InstallationRecord {
 }
 
 pub fn load() -> Result<Option<InstallationRecord>> {
+    load_from(INSTALLATION_KEY)
+}
+
+pub(crate) fn load_from(key: &str) -> Result<Option<InstallationRecord>> {
     let mut value = [0_u16; MAX_VALUE_UNITS];
     let mut value_length = std::mem::size_of_val(&value) as u32;
     let status = unsafe {
         registry::RegGetValueW(
             registry::HKEY_LOCAL_MACHINE,
-            to_wide(INSTALLATION_KEY).as_ptr(),
+            to_wide(key).as_ptr(),
             to_wide(INSTALLATION_VALUE).as_ptr(),
             registry::RRF_RT_REG_SZ,
             ptr::null_mut(),
@@ -72,6 +76,10 @@ pub fn load() -> Result<Option<InstallationRecord>> {
 }
 
 pub fn save(record: &InstallationRecord) -> Result<()> {
+    save_to(INSTALLATION_KEY, record)
+}
+
+pub(crate) fn save_to(key: &str, record: &InstallationRecord) -> Result<()> {
     let value = to_wide(
         serde_json::to_string(record).context("serialize protected sandbox installation record")?,
     );
@@ -82,7 +90,7 @@ pub fn save(record: &InstallationRecord) -> Result<()> {
     let status = unsafe {
         registry::RegSetKeyValueW(
             registry::HKEY_LOCAL_MACHINE,
-            to_wide(INSTALLATION_KEY).as_ptr(),
+            to_wide(key).as_ptr(),
             to_wide(INSTALLATION_VALUE).as_ptr(),
             registry::REG_SZ,
             value.as_ptr().cast(),

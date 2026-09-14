@@ -68,7 +68,7 @@ impl PackageLifecycle {
         &self,
         mut record: InstallationRecord,
         user_token: OwnedHandle,
-    ) -> Result<()> {
+    ) -> Result<InstallationRecord> {
         let mut active = self.installation.borrow_mut();
         let previous = match active.as_ref() {
             Some(installation) => Some(installation.record.clone()),
@@ -91,10 +91,11 @@ impl PackageLifecycle {
             && installation.codex_home.is_some()
         {
             // A restored watcher must immediately use newly registered desktop ownership.
-            installation.record = record;
-            return Ok(());
+            installation.record = record.clone();
+            return Ok(record);
         }
 
+        let saved_record = record.clone();
         with_owner_impersonation(user_token.0, || {
             let mut directory_handles = Vec::new();
             let codex_home = match crate::ipc::pin_existing_ancestors(
@@ -163,7 +164,8 @@ impl PackageLifecycle {
                 token,
             });
             Ok(())
-        })
+        })?;
+        Ok(saved_record)
     }
 
     pub(crate) fn restore_logged_in_owner(&self, recorded_session_id: u32) -> Result<()> {
@@ -231,6 +233,7 @@ impl PackageLifecycle {
             },
             token,
         )
+        .map(|_| ())
     }
 
     pub(crate) fn clean_up(&self) -> Result<()> {
