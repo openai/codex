@@ -87,6 +87,7 @@ pub(crate) async fn run_codex_thread_interactive(
     thread_extension_init.insert(isolation);
     thread_extension_init.insert(crate::guardian::GuardianReviewSessionHost::default());
     let (session, io) = Session::spawn(SessionSpawnArgs {
+        startup: None,
         config,
         allow_provider_model_fallback: false,
         instructions,

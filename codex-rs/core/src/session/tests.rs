@@ -5787,6 +5787,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
     ));
     let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
     let result = Session::new(
+        /*startup*/ None,
         session_configuration,
         /*environment_selections*/ &[],
         Arc::clone(&config),
@@ -6270,6 +6271,7 @@ async fn make_session_with_config_and_rx(
     let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
 
     let session = Session::new(
+        /*startup*/ None,
         session_configuration,
         &default_environments,
         Arc::clone(&config),
@@ -6399,6 +6401,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
     let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
 
     let session = Session::new(
+        /*startup*/ None,
         session_configuration,
         &default_environments,
         Arc::clone(&config),

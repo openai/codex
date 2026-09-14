@@ -1,3 +1,5 @@
+mod managed;
+
 use crate::CodexAppsToolsCache;
 use crate::agent::AgentControl;
 use crate::agents_md_manager::SessionInstructions;
@@ -291,6 +293,7 @@ impl StartThreadOptions {
 }
 
 struct ThreadSpawnRequest {
+    startup: Option<Arc<crate::session::startup::SessionStartup>>,
     options: StartThreadOptions,
     auth_manager: Arc<AuthManager>,
     agent_control: AgentControl,
@@ -310,6 +313,7 @@ impl ThreadSpawnRequest {
         agent_control: AgentControl,
     ) -> Self {
         Self {
+            startup: None,
             options,
             auth_manager,
             agent_control,
@@ -987,7 +991,10 @@ impl ThreadManager {
     }
 
     pub async fn start_thread(&self, options: StartThreadOptions) -> CodexResult<NewThread> {
-        Box::pin(self.start_thread_inner(options, /*forked_from_thread_id*/ None)).await
+        Box::pin(self.start_thread_inner(
+            options, /*forked_from_thread_id*/ None, /*startup*/ None,
+        ))
+        .await
     }
 
     /// Starts a fresh internal session associated with an existing parent thread.
@@ -1059,6 +1066,7 @@ impl ThreadManager {
         &self,
         mut options: StartThreadOptions,
         forked_from_thread_id: Option<ThreadId>,
+        startup: Option<Arc<crate::session::startup::SessionStartup>>,
     ) -> CodexResult<NewThread> {
         let agent_control = self.agent_control_for_config(&options.config);
         let (resumed_session_source, resumed_thread_source) = options
@@ -1075,6 +1083,7 @@ impl ThreadManager {
         let mut request =
             ThreadSpawnRequest::new(options, Arc::clone(&self.state.auth_manager), agent_control);
         request.forked_from_thread_id = forked_from_thread_id;
+        request.startup = startup;
         Box::pin(self.state.spawn_thread(request)).await
     }
 
@@ -1111,7 +1120,7 @@ impl ThreadManager {
                 inherited_multi_agent_version,
             ),
         );
-        self.start_thread_inner(options, Some(forked_from_thread_id))
+        self.start_thread_inner(options, Some(forked_from_thread_id), /*startup*/ None)
             .await
     }
 
@@ -1924,6 +1933,7 @@ impl ThreadManagerState {
     /// Spawn a new thread with optional history and register it with the manager.
     async fn spawn_thread(&self, request: ThreadSpawnRequest) -> CodexResult<NewThread> {
         let ThreadSpawnRequest {
+            startup,
             options,
             auth_manager,
             agent_control,
@@ -2094,6 +2104,7 @@ impl ThreadManagerState {
             codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile
         };
         let (session, io) = Session::spawn(SessionSpawnArgs {
+            startup,
             config,
             allow_provider_model_fallback,
             instructions,

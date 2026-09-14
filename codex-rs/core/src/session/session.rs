@@ -725,6 +725,7 @@ impl Session {
     #[instrument(name = "session_init", level = "info", skip_all)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn new(
+        startup: Option<Arc<super::startup::SessionStartup>>,
         mut session_configuration: SessionConfiguration,
         environment_selections: &[TurnEnvironmentSelection],
         config: Arc<Config>,
@@ -960,10 +961,15 @@ impl Session {
         // - load history metadata (skipped for subagents)
         let thread_persistence_fut = async {
             if config.ephemeral {
-                Ok::<_, anyhow::Error>(LiveThreadInitGuard::new(/*live_thread*/ None))
+                Ok::<_, anyhow::Error>((None, LiveThreadInitGuard::new(/*live_thread*/ None)))
             } else {
-                let mut guard = LiveThreadInitGuard::default();
-                match &initial_history {
+                let mut local_guard = LiveThreadInitGuard::default();
+                let mut managed_guard = match &startup {
+                    Some(startup) => Some(startup.persistence.lock().await),
+                    None => None,
+                };
+                let guard = managed_guard.as_deref_mut().unwrap_or(&mut local_guard);
+                let live_thread = match &initial_history {
                     InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => {
                         let params = CreateThreadParams {
                             session_id,
@@ -1009,7 +1015,7 @@ impl Session {
                                 Arc::clone(&thread_store),
                                 params,
                                 items,
-                                &mut guard,
+                                guard,
                             )
                             .await?
                         } else {
@@ -1043,8 +1049,7 @@ impl Session {
                             .await?
                     }
                 };
-                // The completed result can wait in join! while the other startup work is pending.
-                Ok(guard)
+                Ok((Some(live_thread), local_guard))
             }
         }
         .instrument(info_span!(
@@ -1126,11 +1131,10 @@ impl Session {
         let (thread_persistence_result, state_db_ctx, (auth, mcp_projection)) =
             tokio::join!(thread_persistence_fut, state_db_fut, auth_and_mcp_fut);
 
-        let mut live_thread_init = thread_persistence_result.map_err(|e| {
+        let (live_thread, mut live_thread_init) = thread_persistence_result.map_err(|e| {
             error!("failed to initialize thread persistence: {e:#}");
             e
         })?;
-        let live_thread = live_thread_init.as_ref().cloned();
         let session_result: anyhow::Result<Arc<Self>> = async {
             let rollout_path = if let Some(live_thread) = live_thread.as_ref() {
                 live_thread.local_rollout_path().await?
@@ -1710,6 +1714,9 @@ impl Session {
                 forked_from_ordinal_exclusive,
                 next_internal_sub_id: AtomicU64::new(0),
             });
+            if let Some(startup) = &startup {
+                let _ = startup.session.set(Arc::clone(&sess));
+            }
             if let Some(network_policy_decider_session) = network_policy_decider_session {
                 let mut guard = network_policy_decider_session.write().await;
                 *guard = Arc::downgrade(&sess);
