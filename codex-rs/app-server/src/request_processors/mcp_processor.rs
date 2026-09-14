@@ -346,13 +346,13 @@ impl McpRequestProcessor {
             None => HashMap::new(),
         };
         let McpServerStatusSnapshot {
-            server_infos,
-            server_capabilities,
-            tools_by_server,
-            tools_errors,
-            resources,
-            resource_templates,
-            auth_statuses,
+            mut server_infos,
+            mut server_capabilities,
+            mut tools_by_server,
+            mut tools_errors,
+            mut resources,
+            mut resource_templates,
+            mut auth_statuses,
             mut server_names,
         } = snapshot;
         server_names.extend(runtime_statuses.keys().cloned());
@@ -401,15 +401,14 @@ impl McpRequestProcessor {
                         | McpServerSource::Extension { .. } => None,
                     },
                 ),
-                server_info: server_infos.get(name).cloned(),
-                server_capabilities: server_capabilities.get(name).cloned(),
-                tools: tools_by_server.get(name).cloned().unwrap_or_default(),
-                tools_error: tools_errors.get(name).cloned(),
-                resources: resources.get(name).cloned().unwrap_or_default(),
-                resource_templates: resource_templates.get(name).cloned().unwrap_or_default(),
+                server_info: server_infos.remove(name),
+                server_capabilities: server_capabilities.remove(name),
+                tools: tools_by_server.remove(name).unwrap_or_default(),
+                tools_error: tools_errors.remove(name),
+                resources: resources.remove(name).unwrap_or_default(),
+                resource_templates: resource_templates.remove(name).unwrap_or_default(),
                 auth_status: auth_statuses
-                    .get(name)
-                    .cloned()
+                    .remove(name)
                     .unwrap_or(CoreMcpAuthStatus::Unsupported)
                     .into(),
             })
