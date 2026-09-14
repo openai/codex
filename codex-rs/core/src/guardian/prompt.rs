@@ -13,6 +13,9 @@ use codex_guardian_context::PlannedActionKind;
 use codex_guardian_context::SectionError;
 use codex_guardian_context::SectionHistory;
 use codex_guardian_context::SectionInput;
+pub(crate) use codex_guardian_context::TranscriptCursor as GuardianTranscriptCursor;
+pub(crate) use codex_guardian_context::TranscriptMode as GuardianPromptMode;
+use codex_guardian_context::TranscriptSelection;
 use codex_guardian_context::default_registry;
 use codex_protocol::models::ResponseItem;
 
@@ -42,19 +45,6 @@ pub(crate) struct GuardianPromptItems {
     pub(crate) context: ComposedContext,
     pub(crate) transcript_cursor: GuardianTranscriptCursor,
     pub(crate) node_repl_evidence_sequence: u64,
-}
-
-/// Points to the end of the transcript that the guardian has already reviewed.
-/// The saved count is only reusable when `parent_history_version` still matches.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct GuardianTranscriptCursor {
-    pub(crate) parent_history_version: u64,
-    pub(crate) transcript_entry_count: usize,
-}
-
-pub(crate) enum GuardianPromptMode {
-    Full,
-    Delta { cursor: GuardianTranscriptCursor },
 }
 
 /// Builds the guardian user content items from:
@@ -180,41 +170,23 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
         permissions.as_ref(),
         node_repl_context.as_ref(),
     )?;
-    let transcript_entries = sections.transcript_entries();
-    let transcript_cursor = GuardianTranscriptCursor {
-        parent_history_version: history.review_history_version(),
-        transcript_entry_count: transcript_entries.len(),
-    };
-
-    let prompt_shape = match mode {
-        GuardianPromptMode::Full => GuardianPromptShape::Full,
-        GuardianPromptMode::Delta { cursor } => {
-            if cursor.parent_history_version == transcript_cursor.parent_history_version
-                && cursor.transcript_entry_count <= transcript_cursor.transcript_entry_count
-            {
-                GuardianPromptShape::Delta {
-                    already_seen_entry_count: cursor.transcript_entry_count,
-                }
-            } else {
-                GuardianPromptShape::Full
-            }
-        }
-    };
+    let (selection, transcript_cursor) = mode.select(
+        sections.transcript_entries(),
+        history.review_history_version(),
+    );
     let session_id = session.thread_id.to_string();
-    let (transcript_entries, offset, placeholder, presentation) = match prompt_shape {
-        GuardianPromptShape::Full => (
-            transcript_entries,
+    let (transcript_entries, offset, placeholder, presentation) = match selection {
+        TranscriptSelection::Full(entries) => (
+            entries,
             0,
             "<no retained transcript entries>",
             ContextPresentation::SyncFull {
                 session_id: &session_id,
             },
         ),
-        GuardianPromptShape::Delta {
-            already_seen_entry_count,
-        } => (
-            &transcript_entries[already_seen_entry_count..],
-            already_seen_entry_count,
+        TranscriptSelection::Delta { entries, offset } => (
+            entries,
+            offset,
             "<no retained transcript delta entries>",
             ContextPresentation::SyncDelta {
                 session_id: &session_id,
@@ -255,11 +227,6 @@ fn parent_turn_permissions(context: &GuardianReviewContext) -> PermissionContext
             .collect(),
         denied_globs: file_system_policy.get_unreadable_globs_with_cwd(&cwd),
     }
-}
-
-enum GuardianPromptShape {
-    Full,
-    Delta { already_seen_entry_count: usize },
 }
 
 /// Exercises the sync profile through the host's existing transcript tests.
