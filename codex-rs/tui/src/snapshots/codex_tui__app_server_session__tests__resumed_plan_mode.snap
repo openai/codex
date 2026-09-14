@@ -1,0 +1,7 @@
+---
+source: tui/src/app_server_session.rs
+expression: "crate::chatwidget::tests::helpers::render_bottom_popup(&chat, 40)"
+---
+› Ask Codex to do anything
+
+  gpt-5.4 default · /tmp/pr… Plan mode

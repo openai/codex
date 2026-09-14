@@ -761,6 +761,34 @@ impl Session {
         });
         // TODO (aibrahim): Consolidate config.model and config.model_reasoning_effort into config.collaboration_mode
         // to avoid extracting these fields separately and constructing CollaborationMode here.
+        let persisted_collaboration_mode = match &conversation_history {
+            InitialHistory::Resumed(resumed) => resumed
+                .history
+                .iter()
+                .rev()
+                .find_map(|item| match item {
+                    RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event))
+                        if event.thread_id == Some(resumed.conversation_id) =>
+                    {
+                        Some(&event.thread_settings.collaboration_mode)
+                    }
+                    _ => None,
+                })
+                .or_else(|| {
+                    resumed
+                        .history
+                        .iter()
+                        .rev()
+                        .find_map(|item| match item {
+                            RolloutItem::TurnContext(context) => {
+                                Some(context.collaboration_mode.as_ref())
+                            }
+                            _ => None,
+                        })
+                        .flatten()
+                }),
+            InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => None,
+        };
         let collaboration_mode = CollaborationMode {
             mode: ModeKind::Default,
             settings: Settings {
@@ -769,6 +797,13 @@ impl Session {
                 developer_instructions: None,
             },
         };
+        let collaboration_mode = persisted_collaboration_mode.map_or(collaboration_mode, |saved| {
+            saved.with_updates(
+                Some(model.clone()),
+                Some(config.model_reasoning_effort.clone()),
+                /*developer_instructions*/ None,
+            )
+        });
         let fast_mode_enabled = config.features.enabled(Feature::FastMode);
         let initial_service_tier_warning = unsupported_service_tier_warning(
             config.service_tier.as_deref(),

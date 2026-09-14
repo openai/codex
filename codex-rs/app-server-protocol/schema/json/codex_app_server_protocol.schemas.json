@@ -23344,6 +23344,17 @@
             ],
             "description": "Reviewer currently used for approval requests on this thread."
           },
+          "collaborationMode": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/CollaborationMode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Effective collaboration mode. Absent when resuming from an older server."
+          },
           "cwd": {
             "$ref": "#/definitions/v2/AbsolutePathBuf"
           },

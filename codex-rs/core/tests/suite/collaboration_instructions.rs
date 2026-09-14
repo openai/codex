@@ -951,13 +951,14 @@ async fn resume_replays_collaboration_instructions() -> Result<()> {
     .await;
 
     let mut builder = test_codex();
-    let initial = builder.build(&server).await?;
+    let initial = builder.build_with_auto_env(&server).await?;
 
     let collab_text = "resume instructions";
+    let mode = collab_mode_for_model(ModeKind::Plan, "gpt-5.5", Some(collab_text));
     core_test_support::submit_thread_settings(
         &initial.codex,
         ThreadSettingsOverrides {
-            collaboration_mode: Some(collab_mode_with_instructions(Some(collab_text))),
+            collaboration_mode: Some(mode),
             ..Default::default()
         },
     )
@@ -973,6 +974,15 @@ async fn resume_replays_collaboration_instructions() -> Result<()> {
     wait_for_event(&initial.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let resumed = builder.restart(&server, &initial).await?;
+    assert_eq!(
+        resumed
+            .codex
+            .config_snapshot()
+            .await
+            .collaboration_mode
+            .mode,
+        ModeKind::Plan
+    );
     resumed
         .codex
         .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {

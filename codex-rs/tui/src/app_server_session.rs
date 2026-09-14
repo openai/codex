@@ -2342,7 +2342,7 @@ async fn thread_session_state_from_thread_resume_response(
             thread_params_mode,
         )
     };
-    thread_session_state_from_thread_response(
+    let mut session = thread_session_state_from_thread_response(
         &response.thread.id,
         response.thread.forked_from_id.clone(),
         response.thread.name.clone(),
@@ -2361,7 +2361,9 @@ async fn thread_session_state_from_thread_resume_response(
         config.personality,
         local_settings,
     )
-    .await
+    .await?;
+    session.collaboration_mode = response.collaboration_mode.clone().map(Box::new);
+    Ok(session)
 }
 
 async fn thread_session_state_from_thread_fork_response(
@@ -3993,6 +3995,14 @@ mod tests {
                 .into(),
             active_permission_profile: None,
             reasoning_effort: None,
+            collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                mode: codex_protocol::config_types::ModeKind::Plan,
+                settings: codex_protocol::config_types::Settings {
+                    model: "gpt-5.4".to_string(),
+                    reasoning_effort: None,
+                    developer_instructions: Some("Keep planning".to_string()),
+                },
+            }),
             multi_agent_mode: Default::default(),
             initial_turns_page: None,
             turns_backwards_cursor: None,
@@ -4020,6 +4030,30 @@ mod tests {
         assert_eq!(started.turns.len(), 1);
         assert_eq!(started.turns[0], response.thread.turns[0]);
         assert!(!started.blocks_direct_input);
+
+        // The first prompt after resume must preserve the server's restored mode.
+        let (mut chat, _sender, _events, mut commands) =
+            crate::chatwidget::tests::helpers::make_chatwidget_manual_with_sender().await;
+        chat.handle_thread_session(started.session);
+        insta::assert_snapshot!(
+            "resumed_plan_mode",
+            crate::chatwidget::tests::helpers::normalize_snapshot_paths(
+                crate::chatwidget::tests::helpers::render_bottom_popup(&chat, /*width*/ 40),
+            )
+        );
+        chat.handle_paste("Continue planning".to_string());
+        chat.handle_key_event(crossterm::event::KeyCode::Enter.into());
+        let submitted_mode = std::iter::from_fn(|| commands.try_recv().ok()).find_map(|command| {
+            if let crate::app_command::AppCommand::UserTurn {
+                collaboration_mode, ..
+            } = command
+            {
+                Some(collaboration_mode)
+            } else {
+                None
+            }
+        });
+        assert_eq!(submitted_mode, Some(response.collaboration_mode.clone()));
 
         let embedded_config = ConfigBuilder::default()
             .codex_home(temp_dir.path().join("embedded-codex-home"))

@@ -51,11 +51,20 @@ async fn reconnect_restores_history_permissions_and_keeps_old_input_paused() -> 
         app.chat_widget.set_collaboration_mask(
             crate::collaboration_modes::plan_mask(app.model_catalog.as_ref()).unwrap(),
         );
-        let expected_mode = app.chat_widget.effective_collaboration_mode().with_updates(
+        let cached_mode = app.chat_widget.effective_collaboration_mode().with_updates(
             Some("gpt-test".into()),
             Some(None),
             /*developer_instructions*/ None,
         );
+        // A newer server can report a mode changed by another client while disconnected.
+        let server_mode = (!recovered_queue).then(|| CollaborationMode {
+            mode: ModeKind::Default,
+            settings: Settings {
+                developer_instructions: Some("Updated by another client".into()),
+                ..cached_mode.settings.clone()
+            },
+        });
+        let expected_mode = server_mode.clone().unwrap_or(cached_mode);
         let expected_submitted_mode = expected_mode.clone();
         assert!(!app.model_catalog.collaboration_modes.is_empty());
         if edit_offline {
@@ -118,8 +127,12 @@ async fn reconnect_restores_history_permissions_and_keeps_old_input_paused() -> 
                         let params = request.params.as_ref().unwrap();
                         assert_eq!(params["threadId"], id.to_string());
                         assert!(params["model"].is_null());
-                        Some(json!({"result": {"thread": thread, "model": "gpt-test", "modelProvider": "test-provider", "cwd": cwd,
-                            "approvalPolicy": "never", "approvalsReviewer": "user", "sandbox": {"type": "dangerFullAccess"}, "reasoningEffort": null}}))
+                        let mut result = json!({"thread": thread, "model": "gpt-test", "modelProvider": "test-provider", "cwd": cwd,
+                            "approvalPolicy": "never", "approvalsReviewer": "user", "sandbox": {"type": "dangerFullAccess"}, "reasoningEffort": null});
+                        if let Some(mode) = &server_mode {
+                            result["collaborationMode"] = json!(mode);
+                        }
+                        Some(json!({"result": result}))
                     }
                     "thread/read" => Some(json!({"result": {"thread": thread}})),
                     "thread/list" | "thread/loaded/list" => Some(json!({"result": {"data": [], "nextCursor": null}})),
