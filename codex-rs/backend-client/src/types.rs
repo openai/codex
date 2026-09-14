@@ -136,6 +136,8 @@ pub struct AccountsCheckResponse {
 #[derive(Clone, Debug, Deserialize)]
 pub struct AccountEntry {
     pub id: String,
+    pub workspace_backend_origin: Option<String>,
+    pub account_routing_override: Option<String>,
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
@@ -198,6 +200,8 @@ impl<'de> Deserialize<'de> for AccountsCheckResponse {
                     let account = accounts.remove(account_id)?.account;
                     Some(AccountEntry {
                         id: account.account_id?,
+                        workspace_backend_origin: None,
+                        account_routing_override: None,
                         name: account.name,
                         profile_picture_url: account.profile_picture_url,
                         structure: account.structure,

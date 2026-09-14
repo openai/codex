@@ -163,6 +163,7 @@ async fn personal_access_token_without_email_supports_auth_status_and_account_re
 
     let authapi_base_url = server.uri();
     let mut mcp = TestAppServer::builder()
+        .with_mock_chatgpt_backend()
         .with_codex_home(codex_home.path())
         .without_auto_env()
         .with_env_overrides(&[
@@ -219,6 +220,12 @@ async fn personal_access_token_without_email_supports_auth_status_and_account_re
     assert_eq!(
         to_response::<GetAccountResponse>(response)?,
         GetAccountResponse {
+            workspace_routing: Some(codex_app_server_protocol::WorkspaceRouting {
+                chatgpt_account_id: "account-123".to_string(),
+                backend_origin: "https://chatgpt.com".to_string(),
+                account_routing_override:
+                    codex_app_server_protocol::AccountRoutingOverride::NoConstraint,
+            }),
             account: Some(Account::Chatgpt {
                 email: None,
                 plan_type: AccountPlanType::EnterpriseCbpAutomation,

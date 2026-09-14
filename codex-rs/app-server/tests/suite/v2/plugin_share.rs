@@ -389,7 +389,8 @@ plugin_sharing = false
             .received_requests()
             .await
             .expect("wiremock should record requests")
-            .is_empty()
+            .iter()
+            .all(|request| request.url.path() == "/backend-api/wham/accounts/check")
     );
     Ok(())
 }

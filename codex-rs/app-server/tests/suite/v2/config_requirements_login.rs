@@ -170,6 +170,7 @@ command = "print-token"
                 uses_codex_managed_credentials: false
             }),
             requires_openai_auth: false,
+            workspace_routing: None,
         }
     );
     assert!(

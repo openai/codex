@@ -184,6 +184,7 @@ impl TestAppServer {
             env_overrides: Vec::new(),
             args: vec![DISABLE_PLUGIN_STARTUP_TASKS_ARG.to_string()],
             exec_server_delay: None,
+            mock_chatgpt_backend: false,
         }
     }
 
@@ -1856,6 +1857,7 @@ pub struct TestAppServerBuilder {
     env_overrides: Vec<(String, Option<String>)>,
     args: Vec<String>,
     exec_server_delay: Option<Duration>,
+    mock_chatgpt_backend: bool,
 }
 
 enum TestAppServerEnvironment {
@@ -1864,6 +1866,11 @@ enum TestAppServerEnvironment {
 }
 
 impl TestAppServerBuilder {
+    pub fn with_mock_chatgpt_backend(mut self) -> Self {
+        self.mock_chatgpt_backend = true;
+        self
+    }
+
     /// Uses this existing CODEX_HOME instead of a temporary one.
     pub fn with_codex_home(mut self, codex_home: &Path) -> Self {
         self.codex_home = Some(codex_home.to_path_buf());
@@ -1958,6 +1965,7 @@ impl TestAppServerBuilder {
             mut env_overrides,
             args,
             exec_server_delay,
+            mock_chatgpt_backend,
         } = self;
         let (codex_home, owned_codex_home) = match codex_home {
             Some(codex_home) => (codex_home, None),
@@ -1969,7 +1977,9 @@ impl TestAppServerBuilder {
                 )
             }
         };
-        let attribution_settings_server = if codex_home.join("auth.json").is_file() {
+        let attribution_settings_server = if mock_chatgpt_backend
+            || codex_home.join("auth.json").is_file()
+        {
             let config_path = codex_home.join("config.toml");
             let config = std::fs::read_to_string(&config_path)?;
             if config
@@ -1979,6 +1989,12 @@ impl TestAppServerBuilder {
                 None
             } else {
                 let settings_server = MockServer::start().await;
+                crate::mount_workspace_routing(&settings_server).await;
+                Mock::given(method("GET"))
+                    .and(path("/backend-api/wham/config/bundle"))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+                    .mount(&settings_server)
+                    .await;
                 Mock::given(method("GET"))
                     .and(path("/backend-api/wham/settings/user"))
                     .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({

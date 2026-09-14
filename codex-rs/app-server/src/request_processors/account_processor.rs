@@ -5,6 +5,7 @@ use super::bedrock_auth::ensure_user_model_provider_can_be_bedrock;
 use super::*;
 use crate::auth_mode::auth_mode_to_api;
 use crate::external_auth::ExternalAuthBridge;
+use crate::outgoing_message::AccountNotification;
 use chrono::DateTime;
 use codex_app_server_protocol::DesktopOnboardingEntrypoint;
 use codex_app_server_protocol::GetAccountRateLimitsParams;
@@ -14,6 +15,7 @@ use codex_model_provider::is_supported_amazon_bedrock_region;
 
 mod bedrock_setup;
 mod rate_limit_resets;
+mod workspace_routing;
 
 // Duration before a browser ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -91,6 +93,9 @@ pub(crate) struct AccountRequestProcessor {
     config: Arc<Config>,
     config_manager: ConfigManager,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
+    workspace_routing: Arc<Mutex<Option<workspace_routing::CachedWorkspaceRouting>>>,
+    workspace_routing_fetch: Arc<Semaphore>,
+    workspace_routing_shutdown: CancellationToken,
 }
 
 impl AccountRequestProcessor {
@@ -101,14 +106,26 @@ impl AccountRequestProcessor {
         config: Arc<Config>,
         config_manager: ConfigManager,
     ) -> Self {
-        Self {
+        let processor = Self {
             auth_manager,
             thread_manager,
             outgoing,
             config,
             config_manager,
             active_login: Arc::new(Mutex::new(None)),
-        }
+            workspace_routing: Arc::new(Mutex::new(None)),
+            workspace_routing_fetch: Arc::new(Semaphore::new(/*permits*/ 1)),
+            workspace_routing_shutdown: CancellationToken::new(),
+        };
+        let startup = processor.clone();
+        tokio::spawn(async move {
+            let _ = startup
+                .get_account_response(GetAccountParams {
+                    refresh_token: false,
+                })
+                .await;
+        });
+        processor
     }
 
     pub(crate) async fn login_account(
@@ -196,6 +213,7 @@ impl AccountRequestProcessor {
     }
 
     pub(crate) fn clear_external_auth(&self) {
+        self.workspace_routing_shutdown.cancel();
         self.auth_manager.clear_external_auth();
     }
 
@@ -638,10 +656,7 @@ impl AccountRequestProcessor {
             });
         }
 
-        let outgoing_clone = self.outgoing.clone();
-        let config_manager = self.config_manager.clone();
-        let thread_manager = Arc::clone(&self.thread_manager);
-        let config = Arc::clone(&self.config);
+        let processor = self.clone();
         let active_login = self.active_login.clone();
         let auth_url = server.auth_url.clone();
         tokio::spawn(async move {
@@ -667,19 +682,14 @@ impl AccountRequestProcessor {
                 }
             };
 
-            Self::send_chatgpt_login_completion_notifications(
-                &outgoing_clone,
-                config_manager,
-                thread_manager,
-                config,
-                AccountLoginCompletedNotification {
+            processor
+                .send_chatgpt_login_completion_notifications(AccountLoginCompletedNotification {
                     login_id: Some(login_id.to_string()),
                     success,
                     error: error_msg,
                     onboarding_entrypoint,
-                },
-            )
-            .await;
+                })
+                .await;
 
             // Clear the active login if it matches this attempt. It may have been replaced or cancelled.
             let mut guard = active_login.lock().await;
@@ -728,10 +738,7 @@ impl AccountRequestProcessor {
         let verification_url = device_code.verification_url.clone();
         let user_code = device_code.user_code.clone();
 
-        let outgoing_clone = self.outgoing.clone();
-        let config_manager = self.config_manager.clone();
-        let thread_manager = Arc::clone(&self.thread_manager);
-        let config = Arc::clone(&self.config);
+        let processor = self.clone();
         let active_login = self.active_login.clone();
         tokio::spawn(async move {
             let (success, error_msg) = tokio::select! {
@@ -746,19 +753,14 @@ impl AccountRequestProcessor {
                 }
             };
 
-            Self::send_chatgpt_login_completion_notifications(
-                &outgoing_clone,
-                config_manager,
-                thread_manager,
-                config,
-                AccountLoginCompletedNotification {
+            processor
+                .send_chatgpt_login_completion_notifications(AccountLoginCompletedNotification {
                     login_id: Some(login_id.to_string()),
                     success,
                     error: error_msg,
                     onboarding_entrypoint: None,
-                },
-            )
-            .await;
+                })
+                .await;
 
             let mut guard = active_login.lock().await;
             if guard.as_ref().map(ActiveLogin::login_id) == Some(login_id) {
@@ -878,74 +880,85 @@ impl AccountRequestProcessor {
     }
 
     async fn send_login_success_notifications(&self, login_id: Option<Uuid>) {
-        Self::maybe_refresh_plugin_caches_for_current_config(
-            &self.config_manager,
-            &self.thread_manager,
-            self.auth_manager.auth_cached(),
-        )
-        .await;
-
-        let payload_login_completed = AccountLoginCompletedNotification {
+        self.send_account_login_notifications(AccountLoginCompletedNotification {
             login_id: login_id.map(|id| id.to_string()),
             success: true,
             error: None,
             onboarding_entrypoint: None,
-        };
-        self.outgoing
-            .send_server_notification(ServerNotification::AccountLoginCompleted(
-                payload_login_completed,
-            ))
-            .await;
-
-        self.outgoing
-            .send_server_notification(ServerNotification::AccountUpdated(
-                self.current_account_updated_notification(),
-            ))
-            .await;
+        })
+        .await;
     }
 
-    async fn send_chatgpt_login_completion_notifications(
-        outgoing: &OutgoingMessageSender,
-        config_manager: ConfigManager,
-        thread_manager: Arc<ThreadManager>,
-        config: Arc<Config>,
-        payload_v2: AccountLoginCompletedNotification,
+    async fn send_account_login_notifications(
+        &self,
+        mut payload: AccountLoginCompletedNotification,
     ) {
-        let success = payload_v2.success;
-        outgoing
-            .send_server_notification(ServerNotification::AccountLoginCompleted(payload_v2))
+        let auth_changes = self.auth_manager.auth_change_state_receiver();
+        let owner_generation = auth_changes.borrow().owner_generation;
+        if payload.success
+            && let Err(error) = self
+                .get_account_response(GetAccountParams {
+                    refresh_token: false,
+                })
+                .await
+        {
+            payload.success = false;
+            payload.error = Some(error.message);
+        }
+        if payload.success && auth_changes.borrow().owner_generation == owner_generation {
+            Self::maybe_refresh_plugin_caches_for_current_config(
+                &self.config_manager,
+                &self.thread_manager,
+                self.auth_manager.auth_cached(),
+            )
+            .await;
+        }
+
+        let success = payload.success;
+        self.outgoing
+            .send_account_notification(
+                /*connection_id*/ None,
+                &auth_changes,
+                owner_generation,
+                AccountNotification::LoginCompleted(payload),
+            )
             .await;
 
         if success {
-            let auth_manager = thread_manager.auth_manager();
-            auth_manager.reload().await;
-            config_manager.replace_cloud_config_bundle_loader(
-                auth_manager.clone(),
-                config.chatgpt_base_url.clone(),
-                config.http_client_factory(),
-            );
-            config_manager
-                .sync_default_client_residency_requirement()
-                .await;
-
-            let auth = auth_manager.auth_cached();
-            Self::maybe_refresh_plugin_caches_for_current_config(
-                &config_manager,
-                &thread_manager,
-                auth.clone(),
-            )
-            .await;
-            let payload_v2 = AccountUpdatedNotification {
-                auth_mode: auth
-                    .as_ref()
-                    .map(CodexAuth::api_auth_mode)
-                    .map(auth_mode_to_api),
-                plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
-            };
-            outgoing
-                .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
+            let notification = self.current_account_updated_notification();
+            self.outgoing
+                .send_account_notification(
+                    /*connection_id*/ None,
+                    &auth_changes,
+                    owner_generation,
+                    AccountNotification::Updated(notification),
+                )
                 .await;
         }
+    }
+
+    async fn send_chatgpt_login_completion_notifications(
+        &self,
+        mut payload_v2: AccountLoginCompletedNotification,
+    ) {
+        if payload_v2.success {
+            self.auth_manager.reload().await;
+            let auth_changes = self.auth_manager.auth_change_state_receiver();
+            let owner_generation = auth_changes.borrow().owner_generation;
+            self.config_manager.replace_cloud_config_bundle_loader(
+                self.auth_manager.clone(),
+                self.config.chatgpt_base_url.clone(),
+                self.config.http_client_factory(),
+            );
+            self.config_manager
+                .sync_default_client_residency_requirement()
+                .await;
+            if auth_changes.borrow().owner_generation != owner_generation {
+                payload_v2.success = false;
+                payload_v2.error = Some("account changed before sign-in completed".into());
+            }
+        }
+        self.send_account_login_notifications(payload_v2).await;
     }
 
     async fn logout_common(&self) -> std::result::Result<Option<AuthMode>, JSONRPCErrorError> {
@@ -974,6 +987,7 @@ impl AccountRequestProcessor {
         }
 
         self.config_manager.clear_cloud_config_bundle_loader();
+        *self.workspace_routing.lock().await = None;
 
         Self::maybe_refresh_plugin_caches_for_current_config(
             &self.config_manager,
@@ -1101,29 +1115,6 @@ impl AccountRequestProcessor {
         };
 
         Ok(response)
-    }
-
-    async fn get_account_response(
-        &self,
-        params: GetAccountParams,
-    ) -> Result<GetAccountResponse, JSONRPCErrorError> {
-        let do_refresh = params.refresh_token;
-
-        self.refresh_token_if_requested(do_refresh).await;
-
-        let config = self.load_latest_config().await;
-        let provider =
-            create_model_provider(config.model_provider, Some(self.auth_manager.clone()));
-        let account_state = match provider.account_state() {
-            Ok(account_state) => account_state,
-            Err(err) => return Err(invalid_request(err.to_string())),
-        };
-        let account = account_state.account.map(Account::from);
-
-        Ok(GetAccountResponse {
-            account,
-            requires_openai_auth: account_state.requires_openai_auth,
-        })
     }
 
     async fn get_account_rate_limits_response(

@@ -15,6 +15,24 @@ use codex_login::token_data::parse_chatgpt_jwt_claims;
 use codex_protocol::auth::AuthMode;
 use serde_json::json;
 
+pub async fn mount_workspace_routing(server: &wiremock::MockServer) {
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path("/backend-api/wham/accounts/check"))
+        .respond_with(|request: &wiremock::Request| {
+            let account_id = request
+                .headers
+                .get("chatgpt-account-id")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("account-123");
+            wiremock::ResponseTemplate::new(200).set_body_json(json!({
+                "accounts": [{"id": account_id, "workspace_backend_origin": "https://chatgpt.com",
+                    "account_routing_override": "NO_CONSTRAINT"}],
+            }))
+        })
+        .mount(server)
+        .await;
+}
+
 /// Builder for writing a fake ChatGPT auth.json in tests.
 #[derive(Debug, Clone)]
 pub struct ChatGptAuthFixture {
