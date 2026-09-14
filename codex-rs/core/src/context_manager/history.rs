@@ -82,6 +82,8 @@ pub(crate) struct ContextManager {
     retain_inherited_user_messages: bool,
     /// Bumped whenever history is rewritten, such as compaction or rollback.
     history_version: u64,
+    /// Last destructive history replacement; ordinary input and compaction preserve it.
+    pub(crate) reset_version: u64,
     /// Monotonic user-input/reset revision, independent of compaction's history generation.
     user_message_revision: u64,
     token_info: Option<TokenUsageInfo>,
@@ -180,6 +182,7 @@ impl ContextManager {
             guardian_context_mode: GuardianContextMode::Legacy,
             retain_inherited_user_messages: false,
             history_version: 0,
+            reset_version: 0,
             user_message_revision: 0,
             token_info: TokenUsageInfo::new_or_append(
                 &None, &None, /*model_context_window*/ None,
@@ -497,6 +500,7 @@ impl ContextManager {
         }
         self.items = Arc::new(items);
         self.history_version = self.history_version.saturating_add(1);
+        self.reset_version = self.history_version;
         self.world_state_baseline = None;
     }
 

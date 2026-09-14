@@ -206,6 +206,7 @@ pub struct GuardianReviewSessionReuseKey {
     // Only include settings that affect spawned-session behavior and parent
     // history rewrites that invalidate existing reviewer context.
     parent_history_version: u64,
+    parent_reset_version: u64,
     root_authorization_version: Option<crate::codex_thread::GuardianAuthorizationVersion>,
     node_repl_auto_review_required: bool,
     node_repl_policy: String,
@@ -242,6 +243,7 @@ impl GuardianReviewSessionReuseKey {
     ) -> Self {
         Self {
             root_authorization_version: None,
+            parent_reset_version: 0,
             parent_history_version: match ReviewContextPolicy::for_context(
                 context_mode,
                 &spawn_config.features,
