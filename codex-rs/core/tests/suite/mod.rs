@@ -131,6 +131,7 @@ mod openai_file_mcp;
 mod otel;
 mod override_updates;
 mod pending_input;
+mod pending_input_persistence;
 mod permissions_messages;
 mod personality;
 mod plugins;

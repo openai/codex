@@ -68,6 +68,20 @@ pub enum PersistContext {
     Standard,
     /// A turn is about to begin sampling after its input has been recorded.
     TurnStart,
+    /// Accepted user input is being recorded before an active turn's next sampling request.
+    /// This does not apply to tool outputs, cancellation, or task cleanup.
+    SteeredUserInput,
+}
+
+impl PersistContext {
+    /// Whether a store may enqueue this checkpoint before returning and fence it at a later
+    /// durability barrier. Stores may still choose to persist synchronously.
+    pub fn allows_background_persistence(self) -> bool {
+        match self {
+            Self::Standard => false,
+            Self::TurnStart | Self::SteeredUserInput => true,
+        }
+    }
 }
 
 /// Storage-neutral thread persistence boundary.
@@ -122,9 +136,10 @@ pub trait ThreadStore: Any + Send + Sync {
 
     /// Materializes the thread if persistence is lazy, then persists all queued items.
     ///
-    /// Standard persistence must complete before returning. Turn-start persistence may complete
-    /// in the background when the implementation enqueues it before returning, fences it with
-    /// subsequent flush or shutdown operations, and surfaces failures through those operations.
+    /// Standard persistence must complete before returning. Contexts that allow background
+    /// persistence may complete asynchronously when the implementation enqueues the checkpoint
+    /// before returning, fences it with subsequent flush or shutdown operations, and surfaces
+    /// failures through those operations.
     fn persist_thread(
         &self,
         thread_id: ThreadId,

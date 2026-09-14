@@ -290,7 +290,7 @@ impl LiveThread {
     }
 
     pub async fn persist(&self, context: PersistContext) -> ThreadStoreResult<()> {
-        if context == PersistContext::TurnStart {
+        if context.allows_background_persistence() {
             self.flush_pending_metadata_update_for_existing_history()
                 .await?;
         }
