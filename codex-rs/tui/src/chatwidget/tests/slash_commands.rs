@@ -2655,7 +2655,7 @@ async fn copy_shortcut_can_be_remapped() {
 }
 
 #[tokio::test]
-async fn slash_copy_stores_clipboard_lease_and_preserves_it_on_failure() {
+async fn slash_copy_preserves_native_lease_after_terminal_copy_or_failure() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.transcript.last_agent_markdown = Some("copy me".to_string());
 
@@ -2672,6 +2672,11 @@ async fn slash_copy_stores_clipboard_lease_and_preserves_it_on_failure() {
         rendered.contains("Copied last message to clipboard"),
         "expected success message, got {rendered:?}"
     );
+
+    chat.copy_last_agent_markdown_with(|_| Ok(None));
+    assert!(chat.clipboard_lease.is_some());
+    let rendered = lines_to_single_string(&drain_insert_history(&mut rx)[0]);
+    assert!(rendered.contains("Copied last message to clipboard"));
 
     chat.copy_last_agent_markdown_with(|markdown| {
         assert_eq!(markdown, "copy me");
@@ -2694,6 +2699,11 @@ async fn slash_copy_stores_clipboard_lease_and_preserves_it_on_failure() {
     assert!(chat.clipboard_lease.is_some());
     let rendered = lines_to_single_string(&drain_insert_history(&mut rx)[0]);
     assert!(rendered.contains("Copied python code to clipboard"));
+
+    chat.copy_selection_with("terminal copy", "code", |_| Ok(None));
+    assert!(chat.clipboard_lease.is_some());
+    let rendered = lines_to_single_string(&drain_insert_history(&mut rx)[0]);
+    assert!(rendered.contains("Copied code to clipboard"));
 
     chat.copy_selection_with("print('blocked')\n", "python code", |content| {
         assert_eq!(content, "print('blocked')\n");

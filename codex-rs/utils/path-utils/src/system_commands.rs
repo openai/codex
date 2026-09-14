@@ -1,7 +1,8 @@
 //! Installed helper discovery for automatic work before workspace trust.
 //!
 //! Only OS and conventional package-manager locations are trusted, never ambient
-//! PATH or the working directory. Custom installations fall back to no helper.
+//! PATH or the working directory. Nix system profiles must resolve into the
+//! trusted store. Custom installations fall back to no helper.
 //! This assumes the installed software directories themselves are trusted; it
 //! does not defend against an attacker who can modify system installations.
 
@@ -77,6 +78,8 @@ fn system_directories() -> Vec<PathBuf> {
         "/opt/homebrew/bin",
         "/usr/local/bin",
         "/opt/local/bin",
+        "/run/current-system/sw/bin",
+        "/nix/var/nix/profiles/default/bin",
         "/Library/Developer/CommandLineTools/usr/bin",
         "/Applications/Xcode.app/Contents/Developer/usr/bin",
         "/usr/bin",
@@ -87,8 +90,15 @@ fn system_directories() -> Vec<PathBuf> {
     .into_iter()
     .map(PathBuf::from);
     #[cfg(target_os = "linux")]
-    let directories =
-        directories.chain(crate::is_wsl().then(|| PathBuf::from("/mnt/c/Windows/System32")));
+    let directories = directories.chain(
+        crate::is_wsl()
+            .then_some([
+                PathBuf::from("/mnt/c/Windows/System32"),
+                PathBuf::from("/mnt/c/Windows/System32/WindowsPowerShell/v1.0"),
+            ])
+            .into_iter()
+            .flatten(),
+    );
     #[cfg(windows)]
     let directories = installation_roots().into_iter().flat_map(|root| {
         vec![

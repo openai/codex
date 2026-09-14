@@ -1,0 +1,5 @@
+---
+source: codex-rs/tui/src/clipboard_copy.rs
+expression: error
+---
+native clipboard: native unavailable; WSL fallback: powershell unavailable; terminal clipboard: tmux clipboard: tmux unavailable; OSC 52 fallback: osc blocked

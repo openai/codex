@@ -306,7 +306,9 @@ impl ChatWidget {
         match self.transcript.last_agent_markdown.clone() {
             Some(markdown) if !markdown.is_empty() => match copy_fn(&markdown) {
                 Ok(lease) => {
-                    self.clipboard_lease = lease;
+                    if let Some(lease) = lease {
+                        self.clipboard_lease = Some(lease);
+                    }
                     self.add_to_history(history_cell::new_info_event(
                         "Copied last message to clipboard".into(),
                         /*hint*/ None,
@@ -435,7 +437,9 @@ impl ChatWidget {
     ) {
         match copy_fn(text) {
             Ok(lease) => {
-                self.clipboard_lease = lease;
+                if let Some(lease) = lease {
+                    self.clipboard_lease = Some(lease);
+                }
                 self.add_info_message(format!("Copied {label} to clipboard"), /*hint*/ None);
             }
             Err(error) => self.add_error_message(format!("Copy failed: {error}")),

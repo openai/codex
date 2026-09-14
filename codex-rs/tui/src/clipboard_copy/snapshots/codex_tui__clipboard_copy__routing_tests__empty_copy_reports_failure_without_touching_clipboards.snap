@@ -1,0 +1,6 @@
+---
+source: tui/src/clipboard_copy.rs
+assertion_line: 570
+expression: "result.err().expect(\"empty selection should fail\")"
+---
+nothing to copy: the selected content is empty
