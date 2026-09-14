@@ -1,6 +1,7 @@
 use crate::JsonSchema;
 use crate::ToolDefinition;
 use crate::ToolName;
+use crate::ToolOutputSchema;
 use crate::parse_agent_plugin_mcp_tool;
 use crate::parse_dynamic_tool;
 use crate::parse_mcp_tool;
@@ -8,7 +9,6 @@ use codex_protocol::DEFAULT_FUNCTION_NAMESPACE;
 use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
 use serde::Deserialize;
 use serde::Serialize;
-use serde_json::Value;
 
 const MAX_SERIALIZED_MCP_TOOL_BYTES: usize = 8_000;
 
@@ -40,7 +40,7 @@ pub struct ResponsesApiTool {
     pub defer_loading: Option<bool>,
     pub parameters: JsonSchema,
     #[serde(skip)]
-    pub output_schema: Option<Value>,
+    pub output_schema: Option<ToolOutputSchema>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]

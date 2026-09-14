@@ -58,7 +58,7 @@ fn tool_definition_to_responses_api_tool_omits_false_defer_loading() {
                 Some(vec!["order_id".to_string()]),
                 Some(false.into())
             ),
-            output_schema: Some(json!({"type": "object"})),
+            output_schema: Some(json!({"type": "object"}).into()),
             defer_loading: false,
         }),
         ResponsesApiTool {
@@ -74,7 +74,7 @@ fn tool_definition_to_responses_api_tool_omits_false_defer_loading() {
                 Some(vec!["order_id".to_string()]),
                 Some(false.into())
             ),
-            output_schema: Some(json!({"type": "object"})),
+            output_schema: Some(json!({"type": "object"}).into()),
         }
     );
 }

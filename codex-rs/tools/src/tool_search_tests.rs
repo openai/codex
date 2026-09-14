@@ -14,7 +14,7 @@ fn top_level_function_search_results_use_the_default_namespace() {
             /*required*/ None,
             /*additional_properties*/ None,
         ),
-        output_schema: Some(serde_json::json!({ "type": "object" })),
+        output_schema: Some(serde_json::json!({ "type": "object" }).into()),
     };
     let search_info = ToolSearchInfo::from_tool_spec(
         ToolSpec::Function(function_tool.clone()),
@@ -130,7 +130,7 @@ fn mixed_namespaced_function_and_custom_tools_are_searchable() {
             /*required*/ None,
             /*additional_properties*/ None,
         ),
-        output_schema: Some(serde_json::json!({"type": "object"})),
+        output_schema: Some(serde_json::json!({"type": "object"}).into()),
     };
     let custom_tool = crate::FreeformTool {
         name: "apply_patch".to_string(),

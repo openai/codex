@@ -46,7 +46,7 @@ pub fn create_view_image_tool(options: ViewImageToolOptions) -> ToolSpec {
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(properties, Some(vec!["path".to_string()]), Some(false.into())),
-        output_schema: Some(view_image_output_schema(options)),
+        output_schema: Some(view_image_output_schema(options).into()),
     })
 }
 

@@ -12,9 +12,12 @@ fn tool_definition() -> ToolDefinition {
             /*required*/ None,
             /*additional_properties*/ None,
         ),
-        output_schema: Some(serde_json::json!({
-            "type": "object",
-        })),
+        output_schema: Some(
+            serde_json::json!({
+                "type": "object",
+            })
+            .into(),
+        ),
         defer_loading: false,
     }
 }

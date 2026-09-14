@@ -14,7 +14,7 @@ pub fn create_get_context_remaining_tool() -> ToolSpec {
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(BTreeMap::new(), /*required*/ None, Some(false.into())),
-        output_schema: Some(get_context_remaining_output_schema()),
+        output_schema: Some(get_context_remaining_output_schema().into()),
     })
 }
 

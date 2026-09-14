@@ -75,7 +75,7 @@ impl ToolExecutor<ToolInvocation> for CurrentTimeHandler {
                     },
                     "required": ["current_time"],
                     "additionalProperties": false
-                })),
+                }).into()),
             })],
         })
     }

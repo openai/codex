@@ -1,5 +1,5 @@
 use crate::JsonSchema;
-use serde_json::Value as JsonValue;
+use crate::ToolOutputSchema;
 
 /// Tool metadata and schemas that downstream crates can adapt into higher-level
 /// tool specs.
@@ -8,7 +8,7 @@ pub struct ToolDefinition {
     pub name: String,
     pub description: String,
     pub input_schema: JsonSchema,
-    pub output_schema: Option<JsonValue>,
+    pub output_schema: Option<ToolOutputSchema>,
     pub defer_loading: bool,
 }
 

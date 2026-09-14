@@ -1,4 +1,5 @@
 use crate::ToolDefinition;
+use crate::ToolOutputSchema;
 use crate::parse_tool_input_schema;
 use codex_utils_string::take_bytes_at_char_boundary;
 use serde_json::Value as JsonValue;
@@ -35,12 +36,6 @@ fn parse_mcp_tool_with_description_limit(
     }
 
     let input_schema = parse_tool_input_schema(&serialized_input_schema)?;
-    let structured_content_schema = tool
-        .output_schema
-        .as_ref()
-        .map(|output_schema| serde_json::Value::Object(output_schema.as_ref().clone()))
-        .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new()));
-
     Ok(ToolDefinition {
         name: tool.name.to_string(),
         description: tool
@@ -52,15 +47,15 @@ fn parse_mcp_tool_with_description_limit(
             })
             .unwrap_or_default(),
         input_schema,
-        output_schema: Some(mcp_call_tool_result_output_schema(
-            structured_content_schema,
+        output_schema: Some(ToolOutputSchema::from_mcp_output_schema(
+            tool.output_schema.clone(),
         )),
         defer_loading: false,
     })
 }
 
 pub fn mcp_call_tool_result_output_schema(structured_content_schema: JsonValue) -> JsonValue {
-    json!({
+    let mut schema = json!({
         "type": "object",
         "properties": {
             "content": {
@@ -69,7 +64,7 @@ pub fn mcp_call_tool_result_output_schema(structured_content_schema: JsonValue) 
                     "type": "object"
                 }
             },
-            "structuredContent": structured_content_schema,
+            "structuredContent": null,
             "isError": {
                 "type": "boolean"
             },
@@ -79,7 +74,11 @@ pub fn mcp_call_tool_result_output_schema(structured_content_schema: JsonValue) 
         },
         "required": ["content"],
         "additionalProperties": false
-    })
+    });
+    // Replacing the placeholder keeps the existing property order while moving
+    // the supplied schema instead of cloning it through json!.
+    schema["properties"]["structuredContent"] = structured_content_schema;
+    schema
 }
 
 #[cfg(test)]
