@@ -45,6 +45,7 @@ use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SandboxPermissions;
@@ -1130,7 +1131,9 @@ fn collect_guardian_transcript_entries_preserves_named_unpaired_tool_sources() {
     if let ResponseItem::FunctionCallOutput { output, .. } = &mut items[0] {
         *output = codex_protocol::models::FunctionCallOutputPayload::from_content_items(vec![
             FunctionCallOutputContentItem::InputImage {
-                image_url: "data:image/png;base64,image".to_string(),
+                image: ImageReference::Inline {
+                    image_url: "data:image/png;base64,image".to_string(),
+                },
                 detail: None,
             },
         ]);

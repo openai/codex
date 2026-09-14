@@ -7,6 +7,7 @@ use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
@@ -1077,7 +1078,9 @@ fn transcript_preserves_outputs_with_call_ids_or_explicit_names() {
     if let ResponseItem::FunctionCallOutput { output, .. } = &mut items[0] {
         *output = FunctionCallOutputPayload::from_content_items(vec![
             FunctionCallOutputContentItem::InputImage {
-                image_url: "data:image/png;base64,image".to_owned(),
+                image: ImageReference::Inline {
+                    image_url: "data:image/png;base64,image".to_owned(),
+                },
                 detail: None,
             },
         ]);
@@ -1222,7 +1225,9 @@ fn transcript_omits_media_payloads_and_keeps_readable_content() {
                     text: "Review this screenshot.".to_string(),
                 },
                 ContentItem::InputImage {
-                    image_url: format!("data:image/png;base64,{oversized_image}"),
+                    image: ImageReference::Inline {
+                        image_url: format!("data:image/png;base64,{oversized_image}"),
+                    },
                     detail: None,
                 },
                 ContentItem::InputAudio {
@@ -1242,7 +1247,9 @@ fn transcript_omits_media_payloads_and_keeps_readable_content() {
                     text: "Screenshot captured.".to_string(),
                 },
                 FunctionCallOutputContentItem::InputImage {
-                    image_url: "data:image/png;base64,tool-image".to_string(),
+                    image: ImageReference::Inline {
+                        image_url: "data:image/png;base64,tool-image".to_string(),
+                    },
                     detail: None,
                 },
                 FunctionCallOutputContentItem::InputAudio {

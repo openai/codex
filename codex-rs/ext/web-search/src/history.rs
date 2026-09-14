@@ -84,6 +84,7 @@ mod tests {
     use codex_api::SearchInput;
     use codex_protocol::ResponseItemId;
     use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ImageReference;
     use codex_protocol::models::ResponseItem;
     use pretty_assertions::assert_eq;
 
@@ -158,7 +159,9 @@ mod tests {
                     text: "previous user".to_string(),
                 },
                 ContentItem::InputImage {
-                    image_url: "data:image/png;base64,image".to_string(),
+                    image: ImageReference::Inline {
+                        image_url: "data:image/png;base64,image".to_string(),
+                    },
                     detail: None,
                 },
             ],

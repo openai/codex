@@ -18,6 +18,7 @@ use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::LocalShellExecAction;
@@ -715,7 +716,9 @@ fn for_prompt_annotated_preserves_metadata_while_normalizing_item() {
                     text: "keep".to_string(),
                 },
                 ContentItem::InputImage {
-                    image_url: "data:image/png;base64,abc".to_string(),
+                    image: ImageReference::Inline {
+                        image_url: "data:image/png;base64,abc".to_string(),
+                    },
                     detail: None,
                 },
             ],
@@ -796,7 +799,9 @@ fn for_prompt_strips_media_when_model_does_not_support_it() {
                     text: "look at this".to_string(),
                 },
                 ContentItem::InputImage {
-                    image_url: "https://example.com/img.png".to_string(),
+                    image: ImageReference::Inline {
+                        image_url: "https://example.com/img.png".to_string(),
+                    },
                     detail: Some(DEFAULT_IMAGE_DETAIL),
                 },
                 ContentItem::InputAudio {
@@ -838,7 +843,9 @@ fn for_prompt_strips_media_when_model_does_not_support_it() {
                     text: "image result".to_string(),
                 },
                 FunctionCallOutputContentItem::InputImage {
-                    image_url: "https://example.com/result.png".to_string(),
+                    image: ImageReference::Inline {
+                        image_url: "https://example.com/result.png".to_string(),
+                    },
                     detail: Some(DEFAULT_IMAGE_DETAIL),
                 },
                 FunctionCallOutputContentItem::InputAudio {
@@ -865,7 +872,9 @@ fn for_prompt_strips_media_when_model_does_not_support_it() {
                     text: "js repl result".to_string(),
                 },
                 FunctionCallOutputContentItem::InputImage {
-                    image_url: "https://example.com/js-repl-result.png".to_string(),
+                    image: ImageReference::Inline {
+                        image_url: "https://example.com/js-repl-result.png".to_string(),
+                    },
                     detail: Some(DEFAULT_IMAGE_DETAIL),
                 },
                 FunctionCallOutputContentItem::InputAudio {
@@ -991,7 +1000,9 @@ fn for_prompt_strips_media_when_model_does_not_support_it() {
                 text: "look".to_string(),
             },
             ContentItem::InputImage {
-                image_url: "https://example.com/img.png".to_string(),
+                image: ImageReference::Inline {
+                    image_url: "https://example.com/img.png".to_string(),
+                },
                 detail: Some(DEFAULT_IMAGE_DETAIL),
             },
         ],
@@ -2414,7 +2425,7 @@ fn image_data_url_payload_does_not_dominate_message_estimate() {
                 text: "Here is the screenshot".to_string(),
             },
             ContentItem::InputImage {
-                image_url,
+                image: ImageReference::Inline { image_url },
                 detail: Some(DEFAULT_IMAGE_DETAIL),
             },
         ],
@@ -2455,7 +2466,7 @@ fn image_data_url_payload_does_not_dominate_function_call_output_estimate() {
                 text: "Screenshot captured".to_string(),
             },
             FunctionCallOutputContentItem::InputImage {
-                image_url,
+                image: ImageReference::Inline { image_url },
                 detail: Some(DEFAULT_IMAGE_DETAIL),
             },
         ]),
@@ -2484,7 +2495,7 @@ fn image_data_url_payload_does_not_dominate_custom_tool_call_output_estimate() {
                 text: "Screenshot captured".to_string(),
             },
             FunctionCallOutputContentItem::InputImage {
-                image_url,
+                image: ImageReference::Inline { image_url },
                 detail: Some(DEFAULT_IMAGE_DETAIL),
             },
         ]),
@@ -2628,7 +2639,9 @@ fn non_base64_image_urls_use_image_estimates() {
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputImage {
-            image_url: "https://example.com/foo.png".to_string(),
+            image: ImageReference::Inline {
+                image_url: "https://example.com/foo.png".to_string(),
+            },
             detail: Some(DEFAULT_IMAGE_DETAIL),
         }],
         phase: None,
@@ -2641,7 +2654,9 @@ fn non_base64_image_urls_use_image_estimates() {
         namespace: None,
         output: FunctionCallOutputPayload::from_content_items(vec![
             FunctionCallOutputContentItem::InputImage {
-                image_url: "file:///tmp/foo.png".to_string(),
+                image: ImageReference::Inline {
+                    image_url: "file:///tmp/foo.png".to_string(),
+                },
                 detail: Some(DEFAULT_IMAGE_DETAIL),
             },
         ]),
@@ -2746,7 +2761,10 @@ fn data_url_without_base64_marker_uses_image_estimate() {
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputImage {
-            image_url: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'/>".to_string(),
+            image: ImageReference::Inline {
+                image_url: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'/>"
+                    .to_string(),
+            },
             detail: Some(DEFAULT_IMAGE_DETAIL),
         }],
         phase: None,
@@ -2771,7 +2789,7 @@ fn non_image_base64_data_url_uses_image_estimate() {
         namespace: None,
         output: FunctionCallOutputPayload::from_content_items(vec![
             FunctionCallOutputContentItem::InputImage {
-                image_url,
+                image: ImageReference::Inline { image_url },
                 detail: Some(DEFAULT_IMAGE_DETAIL),
             },
         ]),
@@ -2791,7 +2809,7 @@ fn mixed_case_data_url_markers_are_adjusted() {
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputImage {
-            image_url,
+            image: ImageReference::Inline { image_url },
             detail: Some(DEFAULT_IMAGE_DETAIL),
         }],
         phase: None,
@@ -2818,11 +2836,15 @@ fn multiple_inline_images_apply_multiple_fixed_costs() {
                 text: "images".to_string(),
             },
             ContentItem::InputImage {
-                image_url: image_url_one,
+                image: ImageReference::Inline {
+                    image_url: image_url_one,
+                },
                 detail: Some(DEFAULT_IMAGE_DETAIL),
             },
             ContentItem::InputImage {
-                image_url: image_url_two,
+                image: ImageReference::Inline {
+                    image_url: image_url_two,
+                },
                 detail: Some(DEFAULT_IMAGE_DETAIL),
             },
         ],
@@ -2858,7 +2880,7 @@ fn original_detail_images_scale_with_dimensions() {
         namespace: None,
         output: FunctionCallOutputPayload::from_content_items(vec![
             FunctionCallOutputContentItem::InputImage {
-                image_url,
+                image: ImageReference::Inline { image_url },
                 detail: Some(ImageDetail::Original),
             },
         ]),
@@ -2891,7 +2913,7 @@ fn original_detail_images_are_capped_at_max_patch_count() {
         namespace: None,
         output: FunctionCallOutputPayload::from_content_items(vec![
             FunctionCallOutputContentItem::InputImage {
-                image_url,
+                image: ImageReference::Inline { image_url },
                 detail: Some(ImageDetail::Original),
             },
         ]),
@@ -2927,7 +2949,7 @@ fn original_detail_webp_images_scale_with_dimensions() {
         namespace: None,
         output: FunctionCallOutputPayload::from_content_items(vec![
             FunctionCallOutputContentItem::InputImage {
-                image_url,
+                image: ImageReference::Inline { image_url },
                 detail: Some(ImageDetail::Original),
             },
         ]),

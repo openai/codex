@@ -40,6 +40,7 @@ use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::LocalShellExecAction;
 use codex_protocol::models::LocalShellStatus;
@@ -1078,7 +1079,9 @@ async fn resume_replays_legacy_js_repl_image_rollout_shapes() {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputImage {
-                    image_url: legacy_image_url.to_string(),
+                    image: ImageReference::Inline {
+                        image_url: legacy_image_url.to_string(),
+                    },
                     detail: Some(DEFAULT_IMAGE_DETAIL),
                 }],
                 phase: None,
@@ -1218,7 +1221,9 @@ async fn resume_replays_image_tool_outputs_with_detail() {
                 namespace: None,
                 output: FunctionCallOutputPayload::from_content_items(vec![
                     FunctionCallOutputContentItem::InputImage {
-                        image_url: image_url.to_string(),
+                        image: ImageReference::Inline {
+                            image_url: image_url.to_string(),
+                        },
                         detail: Some(ImageDetail::Original),
                     },
                 ]),
@@ -1247,7 +1252,9 @@ async fn resume_replays_image_tool_outputs_with_detail() {
                 name: None,
                 output: FunctionCallOutputPayload::from_content_items(vec![
                     FunctionCallOutputContentItem::InputImage {
-                        image_url: image_url.to_string(),
+                        image: ImageReference::Inline {
+                            image_url: image_url.to_string(),
+                        },
                         detail: Some(ImageDetail::Original),
                     },
                 ]),

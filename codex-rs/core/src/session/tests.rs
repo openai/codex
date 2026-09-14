@@ -74,6 +74,7 @@ use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::openai_models::ModelServiceTier;
@@ -2575,11 +2576,15 @@ async fn prepares_image_failures_before_history_insertion() {
                     text: "before".to_string(),
                 },
                 FunctionCallOutputContentItem::InputImage {
-                    image_url: "data:image/png;base64,%%%".to_string(),
+                    image: ImageReference::Inline {
+                        image_url: "data:image/png;base64,%%%".to_string(),
+                    },
                     detail: Some(ImageDetail::High),
                 },
                 FunctionCallOutputContentItem::InputImage {
-                    image_url: "https://example.com/image.png".to_string(),
+                    image: ImageReference::Inline {
+                        image_url: "https://example.com/image.png".to_string(),
+                    },
                     detail: Some(ImageDetail::High),
                 },
             ]),
@@ -2644,11 +2649,15 @@ async fn prepares_resumed_history_before_installing_it() {
         role: "user".to_string(),
         content: vec![
             ContentItem::InputImage {
-                image_url: "data:image/png;base64,%%%".to_string(),
+                image: ImageReference::Inline {
+                    image_url: "data:image/png;base64,%%%".to_string(),
+                },
                 detail: Some(ImageDetail::High),
             },
             ContentItem::InputImage {
-                image_url: "https://example.com/image.png".to_string(),
+                image: ImageReference::Inline {
+                    image_url: "https://example.com/image.png".to_string(),
+                },
                 detail: Some(ImageDetail::High),
             },
             ContentItem::InputText {
@@ -11270,7 +11279,9 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
                 text: "late pending input".to_string(),
             },
             ContentItem::InputImage {
-                image_url: image_url.clone(),
+                image: ImageReference::Inline {
+                    image_url: image_url.clone(),
+                },
                 detail: Some(ImageDetail::Original),
             },
         ],

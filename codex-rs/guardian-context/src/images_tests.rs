@@ -5,12 +5,15 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
 use pretty_assertions::assert_eq;
 
 fn image(url: &str) -> ContentItem {
     ContentItem::InputImage {
-        image_url: url.into(),
+        image: ImageReference::Inline {
+            image_url: url.into(),
+        },
         detail: Some(ImageDetail::High),
     }
 }
@@ -32,7 +35,9 @@ fn image_selection_preserves_source_policy_order_and_both_limits() {
             namespace: None,
             output: FunctionCallOutputPayload::from_content_items(vec![
                 FunctionCallOutputContentItem::InputImage {
-                    image_url: "tool".into(),
+                    image: ImageReference::Inline {
+                        image_url: "tool".into(),
+                    },
                     detail: Some(ImageDetail::High),
                 },
             ]),

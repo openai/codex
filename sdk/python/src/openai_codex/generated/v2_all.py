@@ -7784,8 +7784,8 @@ class InputImageContentItem(BaseModel):
         populate_by_name=True,
     )
     detail: ImageDetail | None = None
-    image_url: str
     type: Annotated[Literal["input_image"], Field(title="InputImageContentItemType")]
+    image_url: str
 
 
 class ContentItem(
@@ -7796,9 +7796,7 @@ class ContentItem(
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    root: (
-        InputTextContentItem | InputImageContentItem | InputAudioContentItem | OutputTextContentItem
-    )
+    root: InputTextContentItem | InputImageContentItem | InputAudioContentItem | OutputTextContentItem
 
 
 class ExperimentalFeature(BaseModel):
@@ -7980,10 +7978,10 @@ class InputImageFunctionCallOutputContentItem(BaseModel):
         populate_by_name=True,
     )
     detail: ImageDetail | None = None
-    image_url: str
     type: Annotated[
         Literal["input_image"], Field(title="InputImageFunctionCallOutputContentItemType")
     ]
+    image_url: str
 
 
 class FunctionCallOutputContentItem(

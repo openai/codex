@@ -42,6 +42,7 @@ use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ImageDetail;
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::InputModality;
@@ -5662,7 +5663,9 @@ async fn code_mode_node_repl_screenshots_can_be_captured_without_guardian_transc
     assert_eq!(
         evidence.images(),
         vec![ContentItem::InputImage {
-            image_url: SCREENSHOT.to_owned(),
+            image: ImageReference::Inline {
+                image_url: SCREENSHOT.to_owned()
+            },
             detail: Some(ImageDetail::Low),
         }]
     );

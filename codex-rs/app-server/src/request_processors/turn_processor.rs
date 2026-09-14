@@ -8,6 +8,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ImageReference;
 use codex_protocol::protocol::AdditionalContextEntry as CoreAdditionalContextEntry;
 use codex_protocol::protocol::AdditionalContextKind as CoreAdditionalContextKind;
 use codex_protocol::protocol::TurnSettingsUpdate;
@@ -36,7 +37,7 @@ fn validate_response_item_image_urls(items: &[ResponseItem]) -> Result<(), JSONR
         ResponseItem::Message { content, .. } => content.iter().any(|item| {
             matches!(
                 item,
-                ContentItem::InputImage { image_url, .. } if is_remote_image_url(image_url)
+                ContentItem::InputImage { image: ImageReference::Inline { image_url }, .. } if is_remote_image_url(image_url)
             )
         }),
         ResponseItem::FunctionCallOutput { output, .. }
@@ -45,7 +46,7 @@ fn validate_response_item_image_urls(items: &[ResponseItem]) -> Result<(), JSONR
                 content.iter().any(|item| {
                     matches!(
                         item,
-                        FunctionCallOutputContentItem::InputImage { image_url, .. }
+                        FunctionCallOutputContentItem::InputImage { image: ImageReference::Inline { image_url }, .. }
                             if is_remote_image_url(image_url)
                     )
                 })

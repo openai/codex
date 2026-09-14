@@ -1,5 +1,6 @@
 use super::*;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::SearchToolCallParams;
 use core_test_support::assert_regex_match;
 use pretty_assertions::assert_eq;
@@ -217,7 +218,9 @@ fn mcp_tool_output_response_item_preserves_content_items() {
                             text: "Wall time: 0.5000 seconds\nOutput:".to_string(),
                         },
                         FunctionCallOutputContentItem::InputImage {
-                            image_url: image_url.to_string(),
+                            image: ImageReference::Inline {
+                                image_url: image_url.to_string()
+                            },
                             detail: Some(DEFAULT_IMAGE_DETAIL),
                         },
                     ]
@@ -295,7 +298,9 @@ fn custom_tool_calls_can_derive_text_from_content_items() {
                 text: "line 1".to_string(),
             },
             FunctionCallOutputContentItem::InputImage {
-                image_url: "data:image/png;base64,AAA".to_string(),
+                image: ImageReference::Inline {
+                    image_url: "data:image/png;base64,AAA".to_string(),
+                },
                 detail: Some(DEFAULT_IMAGE_DETAIL),
             },
             FunctionCallOutputContentItem::InputText {
@@ -315,7 +320,9 @@ fn custom_tool_calls_can_derive_text_from_content_items() {
                     text: "line 1".to_string(),
                 },
                 FunctionCallOutputContentItem::InputImage {
-                    image_url: "data:image/png;base64,AAA".to_string(),
+                    image: ImageReference::Inline {
+                        image_url: "data:image/png;base64,AAA".to_string(),
+                    },
                     detail: Some(DEFAULT_IMAGE_DETAIL),
                 },
                 FunctionCallOutputContentItem::InputText {

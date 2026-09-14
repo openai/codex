@@ -575,11 +575,29 @@ def generate_v2_all(schema_dir: Path) -> None:
             ],
             cwd=sdk_root(),
         )
+    _preserve_inline_image_class_names(out_path)
     _require_nullable_chatgpt_account_email(out_path)
     _preserve_reasoning_effort_enum(out_path)
     _preserve_thread_source_enum(out_path)
     _preserve_plan_type_enum(out_path)
     _normalize_generated_timestamps(out_path)
+
+
+def _preserve_inline_image_class_names(out_path: Path) -> None:
+    """Keep the public class names used before ImageReference was introduced."""
+    source = out_path.read_text()
+    stable_names = {
+        "ImageUrlContentItem": "InputImageContentItem",
+        "ImageUrlFunctionCallOutputContentItem": "InputImageFunctionCallOutputContentItem",
+    }
+    for generated_name, stable_name in stable_names.items():
+        if source.count(f"class {generated_name}(") != 1:
+            raise RuntimeError(f"Generated SDK is missing a unique {generated_name} class")
+        if re.search(rf"\b{re.escape(stable_name)}\b", source):
+            raise RuntimeError(f"Generated SDK already defines {stable_name}")
+        source = re.sub(rf"\b{re.escape(generated_name)}\b", stable_name, source)
+
+    out_path.write_text(source)
 
 
 def _require_nullable_chatgpt_account_email(out_path: Path) -> None:

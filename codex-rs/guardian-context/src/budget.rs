@@ -5,6 +5,7 @@
 use std::io::Write;
 
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TruncationPolicy;
 
@@ -97,7 +98,10 @@ impl SectionCost {
             ContentItem::InputText { text } | ContentItem::OutputText { text } => {
                 self.text_bytes = self.text_bytes.saturating_add(text.len());
             }
-            ContentItem::InputImage { image_url, .. } => {
+            ContentItem::InputImage {
+                image: ImageReference::Inline { image_url },
+                ..
+            } => {
                 self.image_bytes = self.image_bytes.saturating_add(image_url.len());
                 self.image_count = self.image_count.saturating_add(1);
             }
@@ -206,7 +210,11 @@ pub(super) fn content_framing_tokens(item_count: usize) -> usize {
 
 fn adjusted_tokens(mut bytes: usize, content: &[ContentItem]) -> usize {
     for item in content {
-        if let ContentItem::InputImage { image_url, .. } = item {
+        if let ContentItem::InputImage {
+            image: ImageReference::Inline { image_url },
+            ..
+        } = item
+        {
             let payload = ByteCount::measure(|counter| serde_json::to_writer(counter, image_url));
             if payload == usize::MAX {
                 return usize::MAX;

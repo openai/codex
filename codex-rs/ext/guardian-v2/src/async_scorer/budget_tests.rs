@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::async_scorer::authorization::ScoreAuthorization;
+use codex_protocol::models::ImageReference;
 use pretty_assertions::assert_eq;
 
 #[derive(Clone, Copy)]
@@ -139,7 +140,7 @@ async fn assert_catalog_budget(evidence: BudgetEvidence) -> Result<()> {
                     unreachable!("user instruction is a message");
                 };
                 content.push(ContentItem::InputImage {
-                    image_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGPgEpEDAABoAD1UCKP3AAAAAElFTkSuQmCC".to_owned(),
+                    image: ImageReference::Inline { image_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGPgEpEDAABoAD1UCKP3AAAAAElFTkSuQmCC".to_owned() },
                     detail: None,
                 });
                 (None, vec!["optional old commentary ".repeat(/*n*/ 500)])

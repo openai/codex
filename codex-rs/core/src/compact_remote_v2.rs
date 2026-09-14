@@ -45,6 +45,8 @@ use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::ContentItem;
+#[cfg(test)]
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TokenUsage;
@@ -981,11 +983,15 @@ mod tests {
                     text: "user".to_string(),
                 },
                 ContentItem::InputImage {
-                    image_url: "data:image/png;base64,abc".to_string(),
+                    image: ImageReference::Inline {
+                        image_url: "data:image/png;base64,abc".to_string(),
+                    },
                     detail: None,
                 },
                 ContentItem::InputImage {
-                    image_url: "data:image/png;base64,def".to_string(),
+                    image: ImageReference::Inline {
+                        image_url: "data:image/png;base64,def".to_string(),
+                    },
                     detail: None,
                 },
             ],
@@ -1047,7 +1053,9 @@ mod tests {
                     text: "abcdef".to_string(),
                 },
                 ContentItem::InputImage {
-                    image_url: "data:image/png;base64,abc".to_string(),
+                    image: ImageReference::Inline {
+                        image_url: "data:image/png;base64,abc".to_string(),
+                    },
                     detail: None,
                 },
                 ContentItem::OutputText {
@@ -1057,7 +1065,9 @@ mod tests {
                     text: "discarded after the text budget is exhausted".to_string(),
                 },
                 ContentItem::InputImage {
-                    image_url: "data:image/png;base64,def".to_string(),
+                    image: ImageReference::Inline {
+                        image_url: "data:image/png;base64,def".to_string(),
+                    },
                     detail: None,
                 },
             ],
@@ -1089,14 +1099,18 @@ mod tests {
                         text: "abcdef".to_string(),
                     },
                     ContentItem::InputImage {
-                        image_url: "data:image/png;base64,abc".to_string(),
+                        image: ImageReference::Inline {
+                            image_url: "data:image/png;base64,abc".to_string()
+                        },
                         detail: None,
                     },
                     ContentItem::OutputText {
                         text: "uv…1 tokens truncated…yz".to_string(),
                     },
                     ContentItem::InputImage {
-                        image_url: "data:image/png;base64,def".to_string(),
+                        image: ImageReference::Inline {
+                            image_url: "data:image/png;base64,def".to_string()
+                        },
                         detail: None,
                     },
                 ],
@@ -1123,7 +1137,9 @@ mod tests {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputImage {
-                image_url: "data:image/png;base64,abc".to_string(),
+                image: ImageReference::Inline {
+                    image_url: "data:image/png;base64,abc".to_string(),
+                },
                 detail: None,
             }],
             phase: None,
@@ -1147,7 +1163,9 @@ mod tests {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputImage {
-                image_url: "data:image/png;base64,abc".to_string(),
+                image: ImageReference::Inline {
+                    image_url: "data:image/png;base64,abc".to_string(),
+                },
                 detail: None,
             }],
             phase: None,

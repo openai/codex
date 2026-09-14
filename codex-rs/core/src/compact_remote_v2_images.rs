@@ -4,6 +4,7 @@ use codex_context_fragments::set_annotated_content;
 use codex_context_fragments::to_annotated_content;
 use codex_history::ResponseItemEnvelope;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::is_image_close_tag_text;
 use codex_protocol::models::is_image_open_tag_text;
 use codex_protocol::models::is_local_image_open_tag_text;
@@ -17,9 +18,12 @@ pub(super) fn content_item_token_count(item: &ContentItem) -> usize {
         ContentItem::InputText { text } | ContentItem::OutputText { text } => {
             approx_token_count(text)
         }
-        ContentItem::InputImage { image_url, detail } => usize::try_from(
-            approx_tokens_from_byte_count_i64(estimate_image_bytes(image_url, *detail)),
-        )
+        ContentItem::InputImage {
+            image: ImageReference::Inline { image_url },
+            detail,
+        } => usize::try_from(approx_tokens_from_byte_count_i64(estimate_image_bytes(
+            image_url, *detail,
+        )))
         .unwrap_or(usize::MAX),
         ContentItem::InputAudio { .. } => 0,
     }

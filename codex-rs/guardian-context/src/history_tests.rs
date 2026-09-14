@@ -1,4 +1,5 @@
 use codex_protocol::models::ExecutedToolCall;
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::ReasoningItemContent;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -147,7 +148,9 @@ fn oversized_user_images_preserve_text_and_metadata_in_order() {
         content.insert(
             /*index*/ 1,
             ContentItem::InputImage {
-                image_url: format!("data:image/png;base64,{}", "A".repeat(image_bytes)),
+                image: ImageReference::Inline {
+                    image_url: format!("data:image/png;base64,{}", "A".repeat(image_bytes)),
+                },
                 detail: Some(codex_protocol::models::ImageDetail::Original),
             },
         );

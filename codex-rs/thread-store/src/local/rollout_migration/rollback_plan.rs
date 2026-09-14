@@ -12,6 +12,7 @@ use std::collections::HashSet;
 
 use codex_protocol::ResponseItemId;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::UserMessageEvent;
@@ -492,7 +493,10 @@ fn user_response_matches_event(content: &[ContentItem], event: &UserMessageEvent
     for item in content {
         match item {
             ContentItem::InputText { text: item_text } => text.push_str(item_text),
-            ContentItem::InputImage { image_url, .. } => images.push(image_url.as_str()),
+            ContentItem::InputImage {
+                image: ImageReference::Inline { image_url },
+                ..
+            } => images.push(image_url.as_str()),
             ContentItem::InputAudio { audio_url } => audio.push(audio_url.as_str()),
             ContentItem::OutputText { .. } => return false,
         }

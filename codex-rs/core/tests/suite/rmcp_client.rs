@@ -52,6 +52,7 @@ use codex_protocol::mcp_policy::McpServerRequirement;
 use codex_protocol::mcp_policy::PluginMcpRequirements;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ImageDetail;
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::PermissionProfileSnapshot;
 use codex_protocol::models::ResponseItem;
@@ -1549,7 +1550,9 @@ async fn interrupt_during_mcp_startup_preserves_user_input_in_history(
     };
     assert!(
         content.contains(&ContentItem::InputImage {
-            image_url: OPENAI_PNG.to_string(),
+            image: ImageReference::Inline {
+                image_url: OPENAI_PNG.to_string()
+            },
             detail: Some(ImageDetail::Original),
         }),
         "interrupted input must use the current model's unified image budget"

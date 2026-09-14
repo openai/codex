@@ -72,6 +72,7 @@ mod tests {
     use codex_client::TransportError;
     use codex_protocol::ResponseItemId;
     use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ImageReference;
     use codex_protocol::models::ResponseItem;
     use http::StatusCode;
     use pretty_assertions::assert_eq;
@@ -164,7 +165,9 @@ mod tests {
                                 text: "find this".to_string(),
                             },
                             ContentItem::InputImage {
-                                image_url: "https://example.com/image.png".to_string(),
+                                image: ImageReference::Inline {
+                                    image_url: "https://example.com/image.png".to_string(),
+                                },
                                 detail: None,
                             },
                         ],

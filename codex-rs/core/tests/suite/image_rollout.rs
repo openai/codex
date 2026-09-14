@@ -10,6 +10,7 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::ImageDetail;
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
@@ -69,7 +70,10 @@ fn find_user_message_with_image(text: &str) -> Option<ResponseItem> {
 fn extract_image_url(item: &ResponseItem) -> Option<String> {
     match item {
         ResponseItem::Message { content, .. } => content.iter().find_map(|span| match span {
-            ContentItem::InputImage { image_url, .. } => Some(image_url.clone()),
+            ContentItem::InputImage {
+                image: ImageReference::Inline { image_url },
+                ..
+            } => Some(image_url.clone()),
             _ => None,
         }),
         _ => None,
@@ -178,7 +182,7 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
                 ),
             },
             ContentItem::InputImage {
-                image_url,
+                image: ImageReference::Inline { image_url },
                 detail: Some(DEFAULT_IMAGE_DETAIL),
             },
             ContentItem::InputText {
@@ -269,7 +273,7 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
         role: "user".to_string(),
         content: vec![
             ContentItem::InputImage {
-                image_url,
+                image: ImageReference::Inline { image_url },
                 detail: Some(DEFAULT_IMAGE_DETAIL),
             },
             ContentItem::InputText {
@@ -341,7 +345,9 @@ async fn resumed_history_only_emits_resize_notices_for_new_images() -> anyhow::R
     historical_content.insert(
         /*index*/ 0,
         ContentItem::InputImage {
-            image_url: original_image_url.clone(),
+            image: ImageReference::Inline {
+                image_url: original_image_url.clone(),
+            },
             detail: Some(ImageDetail::High),
         },
     );
@@ -480,7 +486,9 @@ async fn resumed_history_only_emits_resize_notices_for_new_images() -> anyhow::R
             ResponseInputItem::Message {
                 role: "user".to_string(),
                 content: vec![ContentItem::InputImage {
-                    image_url: original_image_url,
+                    image: ImageReference::Inline {
+                        image_url: original_image_url,
+                    },
                     detail: Some(ImageDetail::High),
                 }],
                 phase: None,

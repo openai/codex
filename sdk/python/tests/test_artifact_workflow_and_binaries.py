@@ -536,6 +536,20 @@ def test_generated_chatgpt_account_email_is_required_nullable() -> None:
         ChatgptAccount.model_validate({"planType": "pro", "type": "chatgpt"})
 
 
+def test_generated_inline_image_class_names_remain_stable() -> None:
+    """Keep the existing Python class names when image references expand."""
+    from openai_codex.generated.v2_all import (
+        InputImageContentItem,
+        InputImageFunctionCallOutputContentItem,
+    )
+
+    assert InputImageContentItem.__name__ == "InputImageContentItem"
+    assert (
+        InputImageFunctionCallOutputContentItem.__name__
+        == "InputImageFunctionCallOutputContentItem"
+    )
+
+
 def test_runtime_package_template_has_no_checked_in_binaries() -> None:
     runtime_root = ROOT.parent / "python-runtime" / "src" / "codex_cli_bin"
     assert sorted(

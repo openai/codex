@@ -14,6 +14,7 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -173,7 +174,9 @@ async fn request_handlers_reject_remote_image_urls() -> Result<()> {
         namespace: None,
         output: FunctionCallOutputPayload::from_content_items(vec![
             FunctionCallOutputContentItem::InputImage {
-                image_url: "https://example.com/tool.png".to_string(),
+                image: ImageReference::Inline {
+                    image_url: "https://example.com/tool.png".to_string(),
+                },
                 detail: Some(ImageDetail::High),
             },
         ]),

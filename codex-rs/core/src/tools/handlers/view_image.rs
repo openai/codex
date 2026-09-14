@@ -7,6 +7,7 @@ use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::openai_models::InputModality;
 use codex_utils_image::data_url_from_bytes;
@@ -238,7 +239,9 @@ impl ToolOutput for ViewImageOutput {
     fn to_response_item(&self, call_id: &str, _payload: &ToolPayload) -> ResponseInputItem {
         let body =
             FunctionCallOutputBody::ContentItems(vec![FunctionCallOutputContentItem::InputImage {
-                image_url: self.image_url.clone(),
+                image: ImageReference::Inline {
+                    image_url: self.image_url.clone(),
+                },
                 detail: Some(self.image_detail),
             }]);
         let output = FunctionCallOutputPayload {

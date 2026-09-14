@@ -12,6 +12,7 @@ use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_tools::ResponsesApiNamespaceTool;
@@ -266,7 +267,9 @@ fn generated_output_returns_image_input_and_output_hint() {
         content_items,
         vec![
             FunctionCallOutputContentItem::InputImage {
-                image_url: format!("data:image/png;base64,{RESULT}"),
+                image: ImageReference::Inline {
+                    image_url: format!("data:image/png;base64,{RESULT}")
+                },
                 detail: Some(DEFAULT_IMAGE_DETAIL),
             },
             FunctionCallOutputContentItem::InputText { text: output_hint },
@@ -311,7 +314,9 @@ fn generated_output_omits_oversized_output_hint() {
     assert_eq!(
         content_items,
         vec![FunctionCallOutputContentItem::InputImage {
-            image_url: format!("data:image/png;base64,{RESULT}"),
+            image: ImageReference::Inline {
+                image_url: format!("data:image/png;base64,{RESULT}")
+            },
             detail: Some(DEFAULT_IMAGE_DETAIL),
         }]
     );
@@ -319,14 +324,18 @@ fn generated_output_omits_oversized_output_hint() {
 
 fn input_image(image: &str) -> ContentItem {
     ContentItem::InputImage {
-        image_url: format!("data:image/png;base64,{image}"),
+        image: ImageReference::Inline {
+            image_url: format!("data:image/png;base64,{image}"),
+        },
         detail: None,
     }
 }
 
 fn image_output(image: &str) -> FunctionCallOutputPayload {
     FunctionCallOutputPayload::from_content_items(vec![FunctionCallOutputContentItem::InputImage {
-        image_url: format!("data:image/png;base64,{image}"),
+        image: ImageReference::Inline {
+            image_url: format!("data:image/png;base64,{image}"),
+        },
         detail: None,
     }])
 }

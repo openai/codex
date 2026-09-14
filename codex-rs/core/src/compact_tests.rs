@@ -10,6 +10,7 @@ use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::ExecutedToolCall;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
@@ -207,7 +208,9 @@ fn content_items_to_text_joins_non_empty_segments() {
 #[test]
 fn content_items_to_text_ignores_image_only_content() {
     let items = vec![ContentItem::InputImage {
-        image_url: "file://image.png".to_string(),
+        image: ImageReference::Inline {
+            image_url: "file://image.png".to_string(),
+        },
         detail: Some(DEFAULT_IMAGE_DETAIL),
     }];
 

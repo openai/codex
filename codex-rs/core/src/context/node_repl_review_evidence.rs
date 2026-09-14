@@ -12,6 +12,7 @@ use codex_guardian_context::NodeReplContext;
 use codex_guardian_context::NodeReplResponse;
 pub use codex_guardian_context::NodeReplReviewEvidenceMode;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ImageReference;
 use codex_protocol::user_input::UserInput;
 use codex_protocol::user_input::UserInput::Image;
 use codex_protocol::user_input::UserInput::Text;
@@ -117,7 +118,9 @@ impl NodeReplReviewEvidence {
             .filter_map(|item| match item {
                 Image { image_url, detail } if seen_images.insert(image_url) => {
                     Some(ContentItem::InputImage {
-                        image_url: image_url.clone(),
+                        image: ImageReference::Inline {
+                            image_url: image_url.clone(),
+                        },
                         detail: *detail,
                     })
                 }

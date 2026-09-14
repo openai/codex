@@ -43,6 +43,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ImageDetail;
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::InterAgentCommunication;
@@ -850,9 +851,10 @@ fn estimate_response_item_model_visible_bytes(item: &ResponseItem) -> i64 {
                 ContentItem::InputText { text } | ContentItem::OutputText { text } => {
                     text_bytes(text)
                 }
-                ContentItem::InputImage { image_url, detail } => {
-                    estimate_image_bytes(image_url, *detail)
-                }
+                ContentItem::InputImage {
+                    image: ImageReference::Inline { image_url },
+                    detail,
+                } => estimate_image_bytes(image_url, *detail),
                 ContentItem::InputAudio { audio_url } => estimate_audio_bytes(audio_url),
             })
             .fold(0i64, i64::saturating_add),
@@ -1055,9 +1057,10 @@ fn estimate_function_output_bytes(output: &FunctionCallOutputBody) -> i64 {
             .iter()
             .map(|part| match part {
                 FunctionCallOutputContentItem::InputText { text } => text_bytes(text),
-                FunctionCallOutputContentItem::InputImage { image_url, detail } => {
-                    estimate_image_bytes(image_url, *detail)
-                }
+                FunctionCallOutputContentItem::InputImage {
+                    image: ImageReference::Inline { image_url },
+                    detail,
+                } => estimate_image_bytes(image_url, *detail),
                 FunctionCallOutputContentItem::InputAudio { audio_url } => {
                     estimate_audio_bytes(audio_url)
                 }

@@ -6,6 +6,7 @@
 
 use codex_context_fragments::ContextualUserFragment;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TruncationPolicy;
 use codex_protocol::user_input::UserInput;
@@ -214,7 +215,10 @@ impl CollectedContext {
                                 Ok(Budgeted::required(ContentItem::InputText { text }))
                             }
                             UserInput::Image { image_url, detail } => Ok(Budgeted::optional(
-                                ContentItem::InputImage { image_url, detail },
+                                ContentItem::InputImage {
+                                    image: ImageReference::Inline { image_url },
+                                    detail,
+                                },
                                 BudgetPriority::Image,
                             )),
                             _ => Err(SectionError::UnsupportedDelivery {
@@ -281,9 +285,10 @@ impl ComposedContext {
                         }));
                         continue;
                     }
-                    ContentItem::InputImage { image_url, detail } => {
-                        UserInput::Image { image_url, detail }
-                    }
+                    ContentItem::InputImage {
+                        image: ImageReference::Inline { image_url },
+                        detail,
+                    } => UserInput::Image { image_url, detail },
                     ContentItem::InputAudio { .. } | ContentItem::OutputText { .. } => {
                         return Err(SectionError::UnsupportedDelivery {
                             section: section.id,

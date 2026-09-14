@@ -5,6 +5,7 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_utils_image::data_url_from_bytes;
 use image::DynamicImage;
@@ -41,11 +42,15 @@ fn preparation_preserves_small_image_bytes_and_replaces_remote_urls() {
         role: "user".to_string(),
         content: vec![
             ContentItem::InputImage {
-                image_url: data_url,
+                image: ImageReference::Inline {
+                    image_url: data_url,
+                },
                 detail: Some(ImageDetail::High),
             },
             ContentItem::InputImage {
-                image_url: "https://example.com/image.png".to_string(),
+                image: ImageReference::Inline {
+                    image_url: "https://example.com/image.png".to_string(),
+                },
                 detail: Some(ImageDetail::Low),
             },
         ],
@@ -56,7 +61,9 @@ fn preparation_preserves_small_image_bytes_and_replaces_remote_urls() {
         id: None,
         role: "developer".to_string(),
         content: vec![ContentItem::InputImage {
-            image_url: "https://example.com/developer-image.png".to_string(),
+            image: ImageReference::Inline {
+                image_url: "https://example.com/developer-image.png".to_string(),
+            },
             detail: Some(ImageDetail::High),
         }],
         phase: None,
@@ -73,7 +80,10 @@ fn preparation_preserves_small_image_bytes_and_replaces_remote_urls() {
         panic!("expected message");
     };
     let [
-        ContentItem::InputImage { image_url, .. },
+        ContentItem::InputImage {
+            image: ImageReference::Inline { image_url },
+            ..
+        },
         ContentItem::InputText { text },
     ] = content.as_slice()
     else {
@@ -135,7 +145,10 @@ fn detail_policies_apply_the_expected_budgets() {
         let mut items = vec![ResponseItem::Message {
             id: None,
             role: "user".to_string(),
-            content: vec![ContentItem::InputImage { image_url, detail }],
+            content: vec![ContentItem::InputImage {
+                image: ImageReference::Inline { image_url },
+                detail,
+            }],
             phase: None,
             internal_chat_message_metadata_passthrough: None,
         }];
@@ -149,7 +162,13 @@ fn detail_policies_apply_the_expected_budgets() {
         let ResponseItem::Message { content, .. } = &items[0] else {
             panic!("expected message");
         };
-        let [ContentItem::InputImage { image_url, .. }] = content.as_slice() else {
+        let [
+            ContentItem::InputImage {
+                image: ImageReference::Inline { image_url },
+                ..
+            },
+        ] = content.as_slice()
+        else {
             panic!("expected image");
         };
         assert_eq!(decoded_image(image_url).1.dimensions(), expected_dimensions);
@@ -179,7 +198,7 @@ fn preparation_reports_tool_output_item_id() {
         namespace: None,
         output: FunctionCallOutputPayload::from_content_items(vec![
             FunctionCallOutputContentItem::InputImage {
-                image_url,
+                image: ImageReference::Inline { image_url },
                 detail: Some(ImageDetail::High),
             },
         ]),
@@ -215,15 +234,21 @@ fn resize_notices_preserve_original_image_positions_and_skip_failed_images() {
             role: "user".to_string(),
             content: vec![
                 ContentItem::InputImage {
-                    image_url: small_image_url,
+                    image: ImageReference::Inline {
+                        image_url: small_image_url,
+                    },
                     detail: Some(ImageDetail::High),
                 },
                 ContentItem::InputImage {
-                    image_url: "data:image/png;base64,%%%".to_string(),
+                    image: ImageReference::Inline {
+                        image_url: "data:image/png;base64,%%%".to_string(),
+                    },
                     detail: Some(ImageDetail::High),
                 },
                 ContentItem::InputImage {
-                    image_url: large_image_url.clone(),
+                    image: ImageReference::Inline {
+                        image_url: large_image_url.clone(),
+                    },
                     detail: Some(ImageDetail::High),
                 },
             ],
@@ -246,11 +271,15 @@ fn resize_notices_preserve_original_image_positions_and_skip_failed_images() {
             namespace: None,
             output: FunctionCallOutputPayload::from_content_items(vec![
                 FunctionCallOutputContentItem::InputImage {
-                    image_url: "data:image/png;base64,%%%".to_string(),
+                    image: ImageReference::Inline {
+                        image_url: "data:image/png;base64,%%%".to_string(),
+                    },
                     detail: Some(ImageDetail::High),
                 },
                 FunctionCallOutputContentItem::InputImage {
-                    image_url: large_image_url,
+                    image: ImageReference::Inline {
+                        image_url: large_image_url,
+                    },
                     detail: Some(ImageDetail::High),
                 },
             ]),
@@ -290,14 +319,20 @@ fn resize_notices_preserve_original_image_positions_and_skip_failed_images() {
     );
     let [
         ContentItem::InputImage {
-            image_url: small_message_image_url,
+            image:
+                ImageReference::Inline {
+                    image_url: small_message_image_url,
+                },
             ..
         },
         ContentItem::InputText {
             text: failed_message_image,
         },
         ContentItem::InputImage {
-            image_url: resized_message_image_url,
+            image:
+                ImageReference::Inline {
+                    image_url: resized_message_image_url,
+                },
             ..
         },
     ] = content.as_slice()
@@ -342,7 +377,10 @@ fn resize_notices_preserve_original_image_positions_and_skip_failed_images() {
             text: failed_tool_image,
         },
         FunctionCallOutputContentItem::InputImage {
-            image_url: resized_tool_image_url,
+            image:
+                ImageReference::Inline {
+                    image_url: resized_tool_image_url,
+                },
             ..
         },
     ] = output.content_items().expect("tool output content items")
@@ -394,19 +432,27 @@ fn preparation_replaces_only_failed_tool_images_and_preserves_metadata() {
                     text: "before".to_string(),
                 },
                 FunctionCallOutputContentItem::InputImage {
-                    image_url: "data:image/png;base64,%%%".to_string(),
+                    image: ImageReference::Inline {
+                        image_url: "data:image/png;base64,%%%".to_string(),
+                    },
                     detail: Some(ImageDetail::High),
                 },
                 FunctionCallOutputContentItem::InputImage {
-                    image_url: data_url_from_bytes("image/png", b"not an image"),
+                    image: ImageReference::Inline {
+                        image_url: data_url_from_bytes("image/png", b"not an image"),
+                    },
                     detail: Some(ImageDetail::High),
                 },
                 FunctionCallOutputContentItem::InputImage {
-                    image_url: valid_image_url.clone(),
+                    image: ImageReference::Inline {
+                        image_url: valid_image_url.clone(),
+                    },
                     detail: Some(ImageDetail::Low),
                 },
                 FunctionCallOutputContentItem::InputImage {
-                    image_url: valid_image_url,
+                    image: ImageReference::Inline {
+                        image_url: valid_image_url,
+                    },
                     detail: Some(ImageDetail::High),
                 },
             ]),
@@ -442,7 +488,9 @@ fn preparation_replaces_only_failed_tool_images_and_preserves_metadata() {
                         text: UNSUPPORTED_LOW_DETAIL_PLACEHOLDER.to_string(),
                     },
                     FunctionCallOutputContentItem::InputImage {
-                        image_url: expected_valid_image_url,
+                        image: ImageReference::Inline {
+                            image_url: expected_valid_image_url
+                        },
                         detail: Some(ImageDetail::High),
                     },
                 ]),

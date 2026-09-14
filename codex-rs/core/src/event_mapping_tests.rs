@@ -12,6 +12,7 @@ use codex_protocol::items::WebSearchItem;
 use codex_protocol::items::build_hook_prompt_message;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
@@ -83,11 +84,15 @@ fn parses_user_message_with_text_and_two_images() {
                 text: "Hello world".to_string(),
             },
             ContentItem::InputImage {
-                image_url: img1.clone(),
+                image: ImageReference::Inline {
+                    image_url: img1.clone(),
+                },
                 detail: Some(DEFAULT_IMAGE_DETAIL),
             },
             ContentItem::InputImage {
-                image_url: img2.clone(),
+                image: ImageReference::Inline {
+                    image_url: img2.clone(),
+                },
                 detail: Some(DEFAULT_IMAGE_DETAIL),
             },
         ],
@@ -131,7 +136,9 @@ fn skips_local_image_label_text() {
         content: vec![
             ContentItem::InputText { text: label },
             ContentItem::InputImage {
-                image_url: image_url.clone(),
+                image: ImageReference::Inline {
+                    image_url: image_url.clone(),
+                },
                 detail: Some(DEFAULT_IMAGE_DETAIL),
             },
             ContentItem::InputText {
@@ -258,7 +265,9 @@ fn skips_unnamed_image_label_text() {
         content: vec![
             ContentItem::InputText { text: label },
             ContentItem::InputImage {
-                image_url: image_url.clone(),
+                image: ImageReference::Inline {
+                    image_url: image_url.clone(),
+                },
                 detail: Some(DEFAULT_IMAGE_DETAIL),
             },
             ContentItem::InputText {

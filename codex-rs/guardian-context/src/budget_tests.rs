@@ -4,6 +4,7 @@ use super::*;
 use crate::Budgeted;
 use crate::composition::SectionOutput;
 use crate::composition::user_message as message;
+use codex_protocol::models::ImageReference;
 use pretty_assertions::assert_eq;
 
 #[test]
@@ -17,7 +18,9 @@ fn section_costs_keep_multimodal_payloads_separate() {
                         text: "évidence".to_owned(),
                     }),
                     Budgeted::required(ContentItem::InputImage {
-                        image_url: "data:image/png;base64,AAAA".to_owned(),
+                        image: ImageReference::Inline {
+                            image_url: "data:image/png;base64,AAAA".to_owned(),
+                        },
                         detail: None,
                     }),
                 ]),
@@ -59,7 +62,9 @@ fn section_costs_keep_multimodal_payloads_separate() {
 fn request_estimate_reserves_images_independently_of_encoded_size() {
     let image = |payload: &str| {
         message(vec![ContentItem::InputImage {
-            image_url: format!("data:image/png;base64,{payload}"),
+            image: ImageReference::Inline {
+                image_url: format!("data:image/png;base64,{payload}"),
+            },
             detail: None,
         }])
     };

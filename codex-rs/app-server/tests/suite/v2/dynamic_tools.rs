@@ -30,6 +30,7 @@ use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ImageReference;
 use codex_protocol::openai_models::InputModality;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses;
@@ -715,7 +716,9 @@ async fn dynamic_tool_call_round_trip_handles_content_items() -> Result<()> {
             text: "dynamic-ok".to_string(),
         },
         FunctionCallOutputContentItem::InputImage {
-            image_url: TINY_PNG_DATA_URL.to_string(),
+            image: ImageReference::Inline {
+                image_url: TINY_PNG_DATA_URL.to_string(),
+            },
             detail: Some(DEFAULT_IMAGE_DETAIL),
         },
         FunctionCallOutputContentItem::InputAudio {

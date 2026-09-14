@@ -35,6 +35,7 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::mcp::is_node_repl_backed_server;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ImageDetail;
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::InputModality;
@@ -502,7 +503,7 @@ async fn run_review_on_session(
                         _ => &[],
                     })
                     .filter_map(|item| match item {
-                        ContentItem::InputImage { image_url, .. } => Some(image_url.as_str()),
+                        ContentItem::InputImage { image: ImageReference::Inline { image_url }, .. } => Some(image_url.as_str()),
                         _ => None,
                     })
                     .collect::<HashSet<_>>();
@@ -550,7 +551,7 @@ async fn run_review_on_session(
                             return false;
                         };
                         content.iter().any(|item| {
-                            matches!(item, ContentItem::InputImage { image_url, .. }
+                            matches!(item, ContentItem::InputImage { image: ImageReference::Inline { image_url }, .. }
                                 if !reviewer_image_urls.contains(image_url.as_str()))
                         })
                     });

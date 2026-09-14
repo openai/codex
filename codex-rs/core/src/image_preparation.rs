@@ -15,6 +15,7 @@ use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_utils_image::ImageProcessingError;
@@ -185,7 +186,11 @@ fn prepare_message_content(
     let mut image_number = 0;
     let mut resized_images = Vec::new();
     for item in items {
-        if let ContentItem::InputImage { image_url, detail } = item.content_mut() {
+        if let ContentItem::InputImage {
+            image: ImageReference::Inline { image_url },
+            detail,
+        } = item.content_mut()
+        {
             image_number += 1;
             match prepare_image(image_url, detail, origin, metadata, mode) {
                 Ok(Some(resize)) if resize_notice_mode == ImageResizeNoticeMode::Enabled => {
@@ -226,7 +231,11 @@ fn prepare_tool_output_content(
     let mut image_number = 0;
     let mut resized_images = Vec::new();
     for item in items {
-        if let FunctionCallOutputContentItem::InputImage { image_url, detail } = item {
+        if let FunctionCallOutputContentItem::InputImage {
+            image: ImageReference::Inline { image_url },
+            detail,
+        } = item
+        {
             image_number += 1;
             match prepare_image(image_url, detail, origin, metadata, mode) {
                 Ok(Some(resize)) if resize_notice_mode == ImageResizeNoticeMode::Enabled => {

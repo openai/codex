@@ -38,6 +38,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::LocalShellExecAction;
@@ -1641,7 +1642,9 @@ async fn contributor_includes_transcript_images_by_default() -> Result<()> {
                     text: "Review what is shown on screen.".to_owned(),
                 },
                 ContentItem::InputImage {
-                    image_url: user_image.to_owned(),
+                    image: ImageReference::Inline {
+                        image_url: user_image.to_owned(),
+                    },
                     detail: Some(ImageDetail::High),
                 },
             ],
@@ -1667,7 +1670,9 @@ async fn contributor_includes_transcript_images_by_default() -> Result<()> {
                     text: "Screenshot captured.".to_owned(),
                 },
                 FunctionCallOutputContentItem::InputImage {
-                    image_url: tool_image.to_owned(),
+                    image: ImageReference::Inline {
+                        image_url: tool_image.to_owned(),
+                    },
                     detail: Some(ImageDetail::High),
                 },
             ]),

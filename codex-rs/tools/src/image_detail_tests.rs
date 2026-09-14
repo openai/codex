@@ -2,6 +2,7 @@ use super::*;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ImageDetail;
+use codex_protocol::models::ImageReference;
 use codex_protocol::openai_models::ModelInfo;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -88,11 +89,15 @@ fn sanitize_original_falls_back_to_high_without_support() {
             text: "header".to_string(),
         },
         FunctionCallOutputContentItem::InputImage {
-            image_url: "data:image/png;base64,AAA".to_string(),
+            image: ImageReference::Inline {
+                image_url: "data:image/png;base64,AAA".to_string(),
+            },
             detail: Some(ImageDetail::Original),
         },
         FunctionCallOutputContentItem::InputImage {
-            image_url: "data:image/png;base64,BBB".to_string(),
+            image: ImageReference::Inline {
+                image_url: "data:image/png;base64,BBB".to_string(),
+            },
             detail: Some(ImageDetail::Low),
         },
     ];
@@ -106,11 +111,15 @@ fn sanitize_original_falls_back_to_high_without_support() {
                 text: "header".to_string(),
             },
             FunctionCallOutputContentItem::InputImage {
-                image_url: "data:image/png;base64,AAA".to_string(),
+                image: ImageReference::Inline {
+                    image_url: "data:image/png;base64,AAA".to_string()
+                },
                 detail: Some(DEFAULT_IMAGE_DETAIL),
             },
             FunctionCallOutputContentItem::InputImage {
-                image_url: "data:image/png;base64,BBB".to_string(),
+                image: ImageReference::Inline {
+                    image_url: "data:image/png;base64,BBB".to_string()
+                },
                 detail: Some(ImageDetail::Low),
             },
         ]
