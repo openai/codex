@@ -1153,6 +1153,7 @@ impl ThreadRequestProcessor {
             session_start_source,
             thread_source,
             project_id,
+            daybreak_enabled,
             environments,
         } = params;
         if matches!(
@@ -1239,6 +1240,7 @@ impl ThreadRequestProcessor {
                 session_start_source,
                 thread_source.map(Into::into),
                 project_id,
+                daybreak_enabled,
                 environments,
                 service_name,
                 allow_provider_model_fallback,
@@ -1320,6 +1322,7 @@ impl ThreadRequestProcessor {
         session_start_source: Option<codex_app_server_protocol::ThreadStartSource>,
         thread_source: Option<codex_protocol::protocol::ThreadSource>,
         project_id: Option<String>,
+        daybreak_enabled: Option<bool>,
         environment_selections: Option<Vec<TurnEnvironmentSelection>>,
         service_name: Option<String>,
         allow_provider_model_fallback: bool,
@@ -1333,6 +1336,11 @@ impl ThreadRequestProcessor {
             .load_with_overrides(config_overrides.clone(), typesafe_overrides.clone())
             .await
             .map_err(|err| config_load_error(&err))?;
+        if config.ephemeral && daybreak_enabled.is_some() {
+            return Err(invalid_request(
+                "daybreakEnabled is not supported for ephemeral threads",
+            ));
+        }
         // Project-local config can launch host processes, so only the effective
         // permissions after managed constraints can imply project trust.
         let effective_permission_profile = config.permissions.effective_permission_profile();
@@ -1461,6 +1469,7 @@ impl ThreadRequestProcessor {
                 thread_store.as_ref(),
                 StoreThreadMetadataPatch {
                     project_id: project_id.clone().map(Some),
+                    daybreak_enabled,
                     ..Default::default()
                 },
                 "thread/start",
@@ -1543,6 +1552,7 @@ impl ThreadRequestProcessor {
             session_configured.rollout_path.clone(),
         );
         thread.project_id = project_id.clone();
+        thread.daybreak_enabled = daybreak_enabled;
 
         // Auto-attach a thread listener when starting a thread.
         log_listener_attach_result(
@@ -2801,6 +2811,17 @@ impl ThreadRequestProcessor {
         thread_id: ThreadId,
         include_turns: bool,
     ) -> Result<Thread, ThreadReadViewError> {
+        // Read staging first: persistence can consume it while the stored thread is read.
+        let pending_daybreak_enabled = self
+            .thread_store
+            .read_pending_thread_metadata(thread_id)
+            .await
+            .map_err(|err| {
+                ThreadReadViewError::Internal(format!(
+                    "failed to read pending thread metadata: {err}"
+                ))
+            })?
+            .and_then(|metadata| metadata.daybreak_enabled);
         let loaded_thread = self.thread_manager.get_thread(thread_id).await.ok();
         let mut thread = if include_turns {
             if let Some(loaded_thread) = loaded_thread.as_ref() {
@@ -2853,6 +2874,8 @@ impl ThreadRequestProcessor {
                 "thread not loaded: {thread_id}"
             )));
         };
+
+        thread.daybreak_enabled = thread.daybreak_enabled.or(pending_daybreak_enabled);
 
         let has_live_in_progress_turn = if let Some(loaded_thread) = loaded_thread.as_ref() {
             matches!(loaded_thread.agent_status().await, AgentStatus::Running)

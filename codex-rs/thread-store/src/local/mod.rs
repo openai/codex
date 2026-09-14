@@ -481,6 +481,19 @@ impl ThreadStore for LocalThreadStore {
         })
     }
 
+    fn read_pending_thread_metadata(
+        &self,
+        thread_id: ThreadId,
+    ) -> ThreadStoreFuture<'_, Option<ThreadMetadataPatch>> {
+        Box::pin(async move {
+            Ok(self
+                .pending_thread_metadata
+                .lock(thread_id)
+                .await
+                .and_then(|metadata| metadata.clone()))
+        })
+    }
+
     fn remove_pending_thread_metadata(&self, thread_id: ThreadId) -> ThreadStoreFuture<'_, ()> {
         Box::pin(async move {
             self.pending_thread_metadata.remove(thread_id).await;

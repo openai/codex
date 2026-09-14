@@ -1,3 +1,14 @@
+# Initial Daybreak choice (experimental)
+
+Persistent threads accept `daybreakEnabled` on `thread/start` with the
+`experimentalApi` opt-in. The response and `thread/started` notification both
+include the initial choice in `thread.daybreakEnabled`. The choice is staged
+with the thread's other initial metadata and saved when the thread is persisted.
+An unused thread is not guaranteed to survive restart. Omitted or null leaves
+the choice unset. Ephemeral threads cannot save it.
+Use `thread/metadata/update` for later changes. This preference does not select
+`turn/start.cyberAccessProgram` or grant access to an access program.
+
 # User verification cancellation (experimental)
 
 Local UI clients can cancel a native user-verification RPC by sending

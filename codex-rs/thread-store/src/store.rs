@@ -116,6 +116,14 @@ pub trait ThreadStore: Any + Send + Sync {
         })
     }
 
+    /// Reads metadata staged for a reserved thread without persisting it.
+    fn read_pending_thread_metadata(
+        &self,
+        _thread_id: ThreadId,
+    ) -> ThreadStoreFuture<'_, Option<ThreadMetadataPatch>> {
+        Box::pin(async { Ok(None) })
+    }
+
     /// Removes host-owned metadata staged for a reserved thread ID.
     fn remove_pending_thread_metadata(&self, _thread_id: ThreadId) -> ThreadStoreFuture<'_, ()> {
         Box::pin(async {

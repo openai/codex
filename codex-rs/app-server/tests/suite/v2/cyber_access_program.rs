@@ -4,6 +4,8 @@ use app_test_support::TestAppServer;
 use app_test_support::write_chatgpt_auth;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CyberAccessProgram;
+use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadMetadataUpdateParams;
@@ -13,6 +15,7 @@ use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
+use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
@@ -28,6 +31,102 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
+
+#[tokio::test]
+async fn thread_start_stages_daybreak_until_persistence() -> Result<()> {
+    core_test_support::skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    responses::mount_sse_sequence(
+        &server,
+        (0..3)
+            .map(|index| responses::sse(vec![responses::ev_completed(&format!("resp-{index}"))]))
+            .collect(),
+    )
+    .await;
+    let home = TempDir::new()?;
+    let mut app = start_chatgpt_app(home.path(), &server).await?;
+    let mut threads = Vec::new();
+    for daybreak_enabled in [Some(true), Some(false), None] {
+        let started = app
+            .start_thread(ThreadStartParams {
+                daybreak_enabled,
+                ..Default::default()
+            })
+            .await?;
+        assert_eq!(started.thread.daybreak_enabled, daybreak_enabled);
+        let notification: ThreadStartedNotification =
+            app.read_notification("thread/started").await?;
+        assert_eq!(notification.thread, started.thread);
+        let read: ThreadReadResponse = app
+            .request(|request_id| ClientRequest::ThreadRead {
+                request_id,
+                params: ThreadReadParams {
+                    thread_id: started.thread.id.clone(),
+                    include_turns: false,
+                },
+            })
+            .await?;
+        assert_eq!(read.thread.daybreak_enabled, daybreak_enabled);
+        let completed = app
+            .start_turn_and_wait_for_completion(TurnStartParams {
+                thread_id: started.thread.id.clone(),
+                input: vec![UserInput::Text {
+                    text: "start this task".to_owned(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            })
+            .await?;
+        assert_eq!(completed.turn.status, TurnStatus::Completed);
+        threads.push((started.thread.id, daybreak_enabled));
+    }
+    app.shutdown_gracefully().await?;
+
+    let mut restarted = start_chatgpt_app(home.path(), &server).await?;
+    for (thread_id, daybreak_enabled) in threads {
+        let read: ThreadReadResponse = restarted
+            .request(|request_id| ClientRequest::ThreadRead {
+                request_id,
+                params: ThreadReadParams {
+                    thread_id: thread_id.clone(),
+                    include_turns: false,
+                },
+            })
+            .await?;
+        assert_eq!(
+            (read.thread.id, read.thread.daybreak_enabled),
+            (thread_id, daybreak_enabled)
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_rejects_daybreak_for_ephemeral_threads() -> Result<()> {
+    core_test_support::skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let home = TempDir::new()?;
+    let mut app = start_chatgpt_app(home.path(), &server).await?;
+    let request_id = app
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
+            daybreak_enabled: Some(true),
+            ephemeral: Some(true),
+            ..Default::default()
+        })
+        .await?;
+    let error = app
+        .read_stream_until_error_message(RequestId::Integer(request_id))
+        .await?;
+    assert_eq!(
+        error.error,
+        JSONRPCErrorError {
+            code: -32600,
+            message: "daybreakEnabled is not supported for ephemeral threads".to_owned(),
+            data: None,
+        }
+    );
+    Ok(())
+}
 
 #[tokio::test]
 async fn turn_start_forwards_explicit_cyber_access_program() -> Result<()> {
@@ -54,7 +153,13 @@ async fn turn_start_forwards_explicit_cyber_access_program() -> Result<()> {
     .await;
     let home = TempDir::new()?;
     let mut app = start_chatgpt_app(home.path(), &server).await?;
-    let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+    let thread = app
+        .start_thread(ThreadStartParams {
+            daybreak_enabled: Some(true),
+            ..Default::default()
+        })
+        .await?
+        .thread;
     for program in programs {
         let completed = app
             .start_turn_and_wait_for_completion(TurnStartParams {
@@ -100,14 +205,24 @@ async fn daybreak_thread_metadata_persists_independently_across_restart_and_fork
     .await;
     let home = TempDir::new()?;
     let mut app = start_chatgpt_app(home.path(), &server).await?;
-    let first = app.start_thread(ThreadStartParams::default()).await?;
-    let second = app.start_thread(ThreadStartParams::default()).await?;
+    let first = app
+        .start_thread(ThreadStartParams {
+            daybreak_enabled: Some(false),
+            ..Default::default()
+        })
+        .await?;
+    let second = app
+        .start_thread(ThreadStartParams {
+            daybreak_enabled: Some(true),
+            ..Default::default()
+        })
+        .await?;
     assert_eq!(
         (
             first.thread.daybreak_enabled,
             second.thread.daybreak_enabled
         ),
-        (None, None)
+        (Some(false), Some(true))
     );
 
     for (thread_id, enabled) in [(&first.thread.id, true), (&second.thread.id, false)] {
