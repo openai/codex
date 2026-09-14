@@ -1456,7 +1456,8 @@ jobs:
           path: codex-rs/dist/${{ matrix.target }}/*
           if-no-files-found: error
 
-  # Separate opt-in candidates never enter the normal release download patterns.
+  # Keep provisioned packages separate from the legacy CLI/npm/installer layout.
+  # Desktop consumes the versioned codex-provisioned manifest from this release.
   provisioned-macos-candidate:
     needs: finalize-macos
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rust-v') && vars.CODEX_PROVISIONED_MACOS_CANDIDATE == 'true'
@@ -1538,6 +1539,7 @@ jobs:
       - build-windows
       - argument-comment-lint-release-assets
       - stage-npm-packages
+      - provisioned-macos-candidate
     if: >-
       ${{
         always() &&
@@ -1546,7 +1548,10 @@ jobs:
         needs.finalize-macos.result == 'success' &&
         needs.build-windows.result == 'success' &&
         needs.argument-comment-lint-release-assets.result == 'success' &&
-        needs.stage-npm-packages.result == 'success'
+        needs.stage-npm-packages.result == 'success' &&
+        (needs.provisioned-macos-candidate.result == 'success' ||
+          (vars.CODEX_PROVISIONED_MACOS_CANDIDATE != 'true' &&
+            needs.provisioned-macos-candidate.result == 'skipped'))
       }}
     name: release
     runs-on: ubuntu-latest
@@ -1592,6 +1597,17 @@ jobs:
           path: dist
           pattern: "{{aarch64,x86_64}-{apple-darwin{,-app-server},unknown-linux-musl{,-app-server},pc-windows-msvc},*-symbols,argument-comment-lint-*,python-runtime-wheel-*,npm-packages}"
 
+      - name: Download verified provisioned macOS packages
+        if: vars.CODEX_PROVISIONED_MACOS_CANDIDATE == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          pattern: "provisioned-macos-verified-candidate-*"
+
+      - name: Remove per-architecture checksum filenames before release upload
+        if: vars.CODEX_PROVISIONED_MACOS_CANDIDATE == 'true'
+        run: rm dist/provisioned-macos-verified-candidate-*/SHA256SUMS
+
       - name: List
         run: ls -R dist/
 
@@ -1602,7 +1618,7 @@ jobs:
           manifest="dist/codex-package_SHA256SUMS"
           tmp_manifest="$(mktemp)"
           find dist -type f \
-            \( -name 'codex-package-*.tar.gz' -o -name 'codex-app-server-package-*.tar.gz' \) \
+            \( -name 'codex-package-*.tar.gz' -o -name 'codex-app-server-package-*.tar.gz' -o -name 'codex-provisioned-package-*.tar.gz' \) \
             -print |
             sort |
             while IFS= read -r archive; do
@@ -1720,6 +1736,15 @@ jobs:
           configs: |
             .github/dotslash-config.json
             .github/dotslash-argument-comment-lint-config.json
+
+      - name: Publish the provisioned macOS package manifest
+        if: vars.CODEX_PROVISIONED_MACOS_CANDIDATE == 'true'
+        uses: facebook/dotslash-publish-release@9c9ec027515c34db9282a09a25a9cab5880b2c52 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag: ${{ github.ref_name }}
+          config: .github/dotslash-provisioned-config.json
 
   # Publish to npm using OIDC authentication.
   # July 31, 2025: https://github.blog/changelog/2025-07-31-npm-trusted-publishing-with-oidc-is-generally-available/

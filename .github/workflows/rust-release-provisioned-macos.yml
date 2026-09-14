@@ -1,4 +1,5 @@
-# Optional side artifacts only; no release, npm, installer, or DMG publication.
+# Verified side packages, published by rust-release.yml when enabled.
+# The legacy CLI, npm, installer and DMG packages are unchanged.
 # Required secrets in the codesigning environment:
 # - CODEX_CLI_PROVISIONING_PROFILE_BASE64: profile approved for public distribution.
 # - CODEX_CLI_PROVISIONING_PROFILE_SHA256: reviewed lowercase SHA-256 of that profile.
