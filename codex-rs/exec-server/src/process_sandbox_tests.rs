@@ -9,6 +9,10 @@ use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_network_proxy::NetworkPolicyAuditObserver;
 use codex_network_proxy::NetworkPolicyDecider;
 use codex_network_proxy::NetworkProxyConfig;
+#[cfg(target_os = "macos")]
+use codex_network_proxy::NetworkUnixSocketPermission;
+#[cfg(target_os = "macos")]
+use codex_network_proxy::NetworkUnixSocketPermissions;
 use codex_network_proxy::PROXY_ATTRIBUTION_TOKEN_ENV_KEY;
 use codex_network_proxy::RemoteNetworkProxyConfig;
 use codex_network_proxy::RemoteNetworkProxyLaunchConfig;
@@ -210,8 +214,7 @@ async fn sandbox_request_routes_custom_arg0_to_inner_helper() {
 }
 
 #[cfg(target_os = "macos")]
-#[tokio::test]
-async fn sandbox_request_allows_prepared_managed_proxy_port() {
+fn managed_network_sandbox_request() -> (ExecParams, ExecServerRuntimePaths) {
     let cwd: AbsolutePathBuf = std::env::current_dir()
         .expect("current directory")
         .try_into()
@@ -237,13 +240,38 @@ async fn sandbox_request_allows_prepared_managed_proxy_port() {
         arg0: None,
         sandbox: Some(sandbox),
         enforce_managed_network: true,
-        managed_network: Some(ManagedNetworkSandboxContext {
-            loopback_ports: vec![43123],
-            allow_local_binding: false,
-            ..Default::default()
-        }),
+        managed_network: None,
         network_proxy: None,
     };
+    (params, runtime_paths)
+}
+
+#[cfg(target_os = "macos")]
+fn seatbelt_policy_arg(command: &[String]) -> &str {
+    command
+        .windows(2)
+        .find_map(|args| (args[0] == "-p").then_some(args[1].as_str()))
+        .expect("Seatbelt policy argument")
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn sandbox_request_preserves_prepared_managed_network_policy() {
+    let (mut params, runtime_paths) = managed_network_sandbox_request();
+    let socket_dir = tempfile::tempdir().expect("temporary socket directory");
+    let allowed_socket = socket_dir
+        .path()
+        .canonicalize()
+        .expect("canonical socket directory")
+        .join("allowed.sock")
+        .to_string_lossy()
+        .into_owned();
+    params.managed_network = Some(ManagedNetworkSandboxContext {
+        loopback_ports: vec![43123],
+        allow_local_binding: false,
+        allow_unix_sockets: vec![allowed_socket.clone()],
+        dangerously_allow_all_unix_sockets: false,
+    });
 
     let prepared = prepare_exec_request(
         &params,
@@ -254,13 +282,151 @@ async fn sandbox_request_allows_prepared_managed_proxy_port() {
     )
     .await
     .expect("prepare managed-network sandbox request");
-    let policy = prepared
+    let policy = seatbelt_policy_arg(&prepared.command);
+    let unix_socket_definitions = prepared
         .command
-        .windows(2)
-        .find_map(|args| (args[0] == "-p").then_some(args[1].as_str()))
-        .expect("Seatbelt policy argument");
+        .iter()
+        .filter(|arg| arg.starts_with("-DUNIX_SOCKET_PATH_"))
+        .cloned()
+        .collect::<Vec<_>>();
 
     assert!(policy.contains("(allow network-outbound (remote ip \"localhost:43123\"))"));
+    assert!(policy.contains("(allow system-socket (socket-domain AF_UNIX))"));
+    assert!(policy.contains(
+        "(allow network-outbound (remote unix-socket (subpath (param \"UNIX_SOCKET_PATH_0\"))))"
+    ));
+    assert_eq!(
+        unix_socket_definitions,
+        vec![format!("-DUNIX_SOCKET_PATH_0={allowed_socket}")]
+    );
+    assert!(!policy.contains("(allow network-outbound (remote unix-socket))"));
+    assert!(!policy.contains("(allow network-outbound)\n"));
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn sandbox_request_only_allows_all_unix_sockets_when_configured() {
+    let (mut params, runtime_paths) = managed_network_sandbox_request();
+    params.managed_network = Some(ManagedNetworkSandboxContext {
+        loopback_ports: vec![43123],
+        ..ManagedNetworkSandboxContext::default()
+    });
+
+    for allow_all in [false, true] {
+        params
+            .managed_network
+            .as_mut()
+            .expect("managed network context")
+            .dangerously_allow_all_unix_sockets = allow_all;
+        let prepared = prepare_exec_request(
+            &params,
+            HashMap::new(),
+            Some(&runtime_paths),
+            /*network_policy_decider*/ None,
+            /*network_policy_audit_observer*/ None,
+        )
+        .await
+        .expect("prepare managed-network sandbox request");
+        let policy = seatbelt_policy_arg(&prepared.command);
+
+        assert_eq!(
+            (
+                policy.contains("(allow system-socket (socket-domain AF_UNIX))"),
+                policy.contains("(allow network-bind (local unix-socket))"),
+                policy.contains("(allow network-outbound (remote unix-socket))"),
+            ),
+            (allow_all, allow_all, allow_all)
+        );
+        assert!(!policy.contains("(allow network-outbound)\n"));
+        assert!(
+            !prepared
+                .command
+                .iter()
+                .any(|arg| arg.starts_with("-DUNIX_SOCKET_PATH_"))
+        );
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn sandbox_request_preserves_executor_local_proxy_unix_socket_policy() {
+    let (mut params, runtime_paths) = managed_network_sandbox_request();
+    let socket_dir = tempfile::tempdir().expect("temporary socket directory");
+    let socket_root = socket_dir
+        .path()
+        .canonicalize()
+        .expect("canonical socket directory");
+    let allowed_socket = socket_root
+        .join("allowed.sock")
+        .to_string_lossy()
+        .into_owned();
+    let denied_socket = socket_root
+        .join("denied.sock")
+        .to_string_lossy()
+        .into_owned();
+    let config = NetworkProxyConfig {
+        enabled: true,
+        enable_socks5: false,
+        unix_sockets: Some(NetworkUnixSocketPermissions {
+            entries: [
+                (allowed_socket.clone(), NetworkUnixSocketPermission::Allow),
+                (denied_socket, NetworkUnixSocketPermission::Deny),
+            ]
+            .into_iter()
+            .collect(),
+        }),
+        ..NetworkProxyConfig::default()
+    };
+    params.network_proxy = Some(RemoteNetworkProxyLaunchConfig::new(
+        RemoteNetworkProxyConfig::from_effective_config(&config)
+            .expect("supported remote proxy config"),
+    ));
+
+    let prepared = prepare_exec_request(
+        &params,
+        HashMap::new(),
+        Some(&runtime_paths),
+        /*network_policy_decider*/ None,
+        /*network_policy_audit_observer*/ None,
+    )
+    .await
+    .expect("prepare sandbox request with executor-local proxy");
+    let policy = seatbelt_policy_arg(&prepared.command);
+    let proxy_addr: SocketAddr = prepared
+        .env
+        .get("HTTP_PROXY")
+        .expect("HTTP proxy env")
+        .strip_prefix("http://")
+        .expect("HTTP proxy scheme")
+        .parse()
+        .expect("HTTP proxy address");
+    let proxy_port = proxy_addr.port();
+    let unix_socket_definitions = prepared
+        .command
+        .iter()
+        .filter(|arg| arg.starts_with("-DUNIX_SOCKET_PATH_"))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    assert!(policy.contains(&format!(
+        "(allow network-outbound (remote ip \"localhost:{proxy_port}\"))"
+    )));
+    assert!(policy.contains(
+        "(allow network-outbound (remote unix-socket (subpath (param \"UNIX_SOCKET_PATH_0\"))))"
+    ));
+    assert_eq!(
+        unix_socket_definitions,
+        vec![format!("-DUNIX_SOCKET_PATH_0={allowed_socket}")]
+    );
+    assert!(!policy.contains("(allow network-outbound (remote unix-socket))"));
+    assert!(!policy.contains("(allow network-outbound)\n"));
+
+    prepared
+        .network_proxy_handle
+        .expect("running executor proxy")
+        .shutdown()
+        .await
+        .expect("shut down executor proxy");
 }
 
 #[tokio::test]

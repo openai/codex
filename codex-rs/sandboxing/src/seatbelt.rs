@@ -130,6 +130,27 @@ impl Default for UnixDomainSocketPolicy {
     }
 }
 
+impl UnixDomainSocketPolicy {
+    fn from_allowlist(paths: &[String], extra_allowed: Vec<AbsolutePathBuf>) -> Self {
+        let mut allowed = paths
+            .iter()
+            .filter_map(|socket_path| {
+                match normalize_path_for_sandbox(Path::new(socket_path)) {
+                    Some(path) => Some(path),
+                    None => {
+                        warn!(
+                            "ignoring network.allow_unix_sockets entry because it could not be normalized: {socket_path}"
+                        );
+                        None
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
+        allowed.extend(extra_allowed);
+        Self::Restricted { allowed }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct UnixSocketPathParam {
     index: usize,
@@ -147,30 +168,22 @@ fn proxy_policy_inputs(
         .filter_map(|socket_path| normalize_path_for_sandbox(socket_path.as_path()))
         .collect::<Vec<_>>();
 
-    let unix_domain_socket_policy = match network {
-        Some(network) if network.dangerously_allow_all_unix_sockets() => {
+    // Prefer this command's prepared Unix-socket policy.
+    // Fall back to the live proxy only when no prepared context exists.
+    let unix_domain_socket_policy = match (managed_network, network) {
+        (Some(context), _) if context.dangerously_allow_all_unix_sockets => {
             UnixDomainSocketPolicy::AllowAll
         }
-        Some(network) => {
-            let mut allowed = network
-                .allow_unix_sockets()
-                .iter()
-                .filter_map(|socket_path| {
-                    match normalize_path_for_sandbox(Path::new(socket_path)) {
-                        Some(path) => Some(path),
-                        None => {
-                            warn!(
-                                "ignoring network.allow_unix_sockets entry because it could not be normalized: {socket_path}"
-                            );
-                            None
-                        }
-                    }
-                })
-                .collect::<Vec<_>>();
-            allowed.extend(extra_allowed);
-            UnixDomainSocketPolicy::Restricted { allowed }
+        (Some(context), _) => {
+            UnixDomainSocketPolicy::from_allowlist(&context.allow_unix_sockets, extra_allowed)
         }
-        None => UnixDomainSocketPolicy::Restricted {
+        (None, Some(network)) if network.dangerously_allow_all_unix_sockets() => {
+            UnixDomainSocketPolicy::AllowAll
+        }
+        (None, Some(network)) => {
+            UnixDomainSocketPolicy::from_allowlist(&network.allow_unix_sockets(), extra_allowed)
+        }
+        (None, None) => UnixDomainSocketPolicy::Restricted {
             allowed: extra_allowed,
         },
     };
