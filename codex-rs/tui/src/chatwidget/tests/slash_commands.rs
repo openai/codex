@@ -1574,6 +1574,8 @@ async fn completed_token_activity_refresh_waits_for_active_stream() {
     );
 
     chat.finalize_turn();
+    assert!(chat.usage_history_insertion_blocked());
+    chat.note_stream_consolidation_completed();
     assert!(!chat.usage_history_insertion_blocked());
     assert!(
         std::iter::from_fn(|| rx.try_recv().ok())

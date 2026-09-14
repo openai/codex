@@ -141,21 +141,7 @@ impl ChatWidget {
             .unwrap_or_default();
         self.transcript.saw_copy_source_this_turn = false;
         // If a stream is currently active, finalize it.
-        self.flush_answer_stream_with_separator();
-        if let Some(mut controller) = self.plan_stream_controller.take() {
-            let had_live_tail = controller.has_live_tail();
-            self.clear_active_stream_tail();
-            let (cell, source) = controller.finalize();
-            if !had_live_tail && let Some(cell) = cell {
-                self.add_boxed_history(cell);
-            }
-            if let Some(source) = source {
-                self.note_stream_consolidation_queued();
-                self.app_event_tx
-                    .send(AppEvent::ConsolidateProposedPlan(source));
-            }
-            self.request_pending_usage_output_insertion_after_stream_shutdown();
-        }
+        self.flush_answer_and_plan_streams();
         self.flush_unified_exec_wait_streak();
         if !from_replay {
             self.collect_runtime_metrics_delta();
@@ -322,6 +308,7 @@ impl ChatWidget {
     /// This does not clear MCP startup tracking, because MCP startup can overlap with turn cleanup
     /// and should continue to drive the bottom-pane running indicator while it is in progress.
     pub(super) fn finalize_turn(&mut self) {
+        self.flush_answer_and_plan_streams();
         if self.status_state.reasoning_resume_turn_id.is_some() {
             self.on_agent_reasoning_final();
         }
@@ -377,7 +364,6 @@ impl ChatWidget {
 
     fn on_error(&mut self, message: String) {
         self.input_queue.submit_pending_steers_after_interrupt = false;
-        self.flush_answer_stream_with_separator();
         self.finalize_turn();
         self.add_to_history(history_cell::new_error_event(message));
         self.set_ambient_pet_notification(

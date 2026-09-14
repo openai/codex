@@ -60,6 +60,25 @@ impl ChatWidget {
         }
     }
 
+    /// Preserve received answer and plan source before ordinary turn termination.
+    pub(super) fn flush_answer_and_plan_streams(&mut self) {
+        self.flush_answer_stream_with_separator();
+        if let Some(mut controller) = self.plan_stream_controller.take() {
+            let had_live_tail = controller.has_live_tail();
+            self.clear_active_stream_tail();
+            let (cell, source) = controller.finalize();
+            if !had_live_tail && let Some(cell) = cell {
+                self.add_boxed_history(cell);
+            }
+            if let Some(source) = source {
+                self.note_stream_consolidation_queued();
+                self.app_event_tx
+                    .send(AppEvent::ConsolidateProposedPlan(source));
+            }
+            self.request_pending_usage_output_insertion_after_stream_shutdown();
+        }
+    }
+
     pub(super) fn flush_answer_stream_with_separator(&mut self) {
         self.flush_answer_stream(/*completed_message*/ None);
     }
