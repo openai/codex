@@ -11280,6 +11280,13 @@ class ConfigRequirements(BaseModel):
     allowed_approval_policies: Annotated[
         list[AskForApproval] | None, Field(alias="allowedApprovalPolicies")
     ] = None
+    allowed_login_methods: Annotated[
+        list[ForcedLoginMethod] | None,
+        Field(
+            alias="allowedLoginMethods",
+            description="Effective login methods after managed, forced-login, and workspace restrictions. An empty list permits no login method. Older servers may omit this field.",
+        ),
+    ] = None
     allowed_permission_profiles: Annotated[
         dict[str, Any] | None, Field(alias="allowedPermissionProfiles")
     ] = None

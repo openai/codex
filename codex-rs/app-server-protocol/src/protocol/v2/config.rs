@@ -412,6 +412,9 @@ pub struct ConfigRequirements {
     pub model_provider: Option<String>,
     /// Complete required provider definitions, using config.toml field names.
     pub model_providers: Option<HashMap<String, JsonValue>>,
+    /// Effective login methods after managed, forced-login, and workspace restrictions.
+    /// An empty list permits no login method. Older servers may omit this field.
+    pub allowed_login_methods: Option<Vec<ForcedLoginMethod>>,
     pub cli_auth_credentials_store: Option<CliAuthCredentialsStoreMode>,
     pub chatgpt_base_url: Option<String>,
     pub additional_developer_instructions: Option<String>,

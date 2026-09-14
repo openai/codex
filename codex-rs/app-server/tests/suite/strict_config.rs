@@ -103,12 +103,24 @@ foo = "bar"
 
 #[test]
 fn managed_auth_requirements_fail_closed_for_standalone_app_server() -> Result<()> {
-    for requirements in [
-        "allowed_login_methods = []\n",
-        "allowed_login_methods = [\"chatgpt\"]\nallowed_chatgpt_workspaces = []\n",
+    for (requirements, config) in [
+        ("allowed_login_methods = []", ""),
+        (
+            "allowed_login_methods = ['chatgpt']\nallowed_chatgpt_workspaces = []",
+            "",
+        ),
+        (
+            "allowed_login_methods = ['api']",
+            "forced_login_method = 'chatgpt'",
+        ),
+        (
+            "allowed_login_methods = ['chatgpt']\nallowed_chatgpt_workspaces = ['managed']",
+            "forced_chatgpt_workspace_id = ['other']",
+        ),
     ] {
         let codex_home = TempDir::new()?;
         std::fs::write(codex_home.path().join("requirements.toml"), requirements)?;
+        std::fs::write(codex_home.path().join("config.toml"), config)?;
 
         let output = Command::new(codex_utils_cargo_bin::cargo_bin("codex-app-server")?)
             .env("CODEX_HOME", codex_home.path())

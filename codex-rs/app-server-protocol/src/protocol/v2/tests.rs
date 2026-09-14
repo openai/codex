@@ -2120,6 +2120,7 @@ fn config_requirements_granular_allowed_approval_policy_is_marked_experimental()
         crate::experimental_api::ExperimentalApi::experimental_reason(&ConfigRequirements {
             model_provider: None,
             model_providers: None,
+            allowed_login_methods: None,
             application: None,
             cli_auth_credentials_store: None,
             chatgpt_base_url: None,

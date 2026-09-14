@@ -2630,3 +2630,45 @@ exclude = ["AWS_*"]
 
     Ok(())
 }
+
+#[tokio::test]
+async fn allowed_login_methods_follow_current_forced_workspaces() -> Result<()> {
+    use codex_protocol::config_types::ForcedLoginMethod;
+
+    let tmp = tempdir()?;
+    std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "")?;
+    std::fs::write(
+        tmp.path().join("requirements.toml"),
+        "allowed_chatgpt_workspaces = ['managed']",
+    )?;
+    let service = ConfigManager::new_for_tests(
+        tmp.path().to_path_buf(),
+        Vec::new(),
+        LoaderOverrides::with_managed_config_path_for_tests(tmp.path().join("managed_config.toml")),
+        CloudConfigBundleLoader::default(),
+    );
+    let config = service.load_latest_config(/*fallback_cwd*/ None).await?;
+    let auth = codex_login::AuthManager::shared_from_config(
+        &config, /*enable_codex_api_key_env*/ false,
+    )
+    .await?;
+    for (workspaces, expected) in [
+        (
+            Some(vec!["managed".to_string()]),
+            vec![ForcedLoginMethod::Api, ForcedLoginMethod::Chatgpt],
+        ),
+        (
+            Some(vec!["other".to_string()]),
+            vec![ForcedLoginMethod::Api],
+        ),
+        (Some(Vec::new()), vec![ForcedLoginMethod::Api]),
+        (
+            None,
+            vec![ForcedLoginMethod::Api, ForcedLoginMethod::Chatgpt],
+        ),
+    ] {
+        auth.set_forced_chatgpt_workspace_id(workspaces);
+        assert_eq!(auth.allowed_login_methods(), expected);
+    }
+    Ok(())
+}

@@ -2691,7 +2691,8 @@ impl AuthManager {
         )
     }
 
-    fn allowed_login_methods(&self) -> Vec<ForcedLoginMethod> {
+    /// Returns the login methods permitted by the current effective authentication policy.
+    pub fn allowed_login_methods(&self) -> Vec<ForcedLoginMethod> {
         self.managed_auth_policy.allowed_login_methods(
             self.forced_login_method,
             self.forced_chatgpt_workspace_id().as_deref(),

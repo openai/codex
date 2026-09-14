@@ -414,6 +414,16 @@
             "null"
           ]
         },
+        "allowedLoginMethods": {
+          "description": "Effective login methods after managed, forced-login, and workspace restrictions. An empty list permits no login method. Older servers may omit this field.",
+          "items": {
+            "$ref": "#/definitions/ForcedLoginMethod"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "allowedPermissionProfiles": {
           "additionalProperties": {
             "type": "boolean"
@@ -761,6 +771,13 @@
         }
       },
       "type": "object"
+    },
+    "ForcedLoginMethod": {
+      "enum": [
+        "chatgpt",
+        "api"
+      ],
+      "type": "string"
     },
     "InAppBrowserRequirements": {
       "properties": {
