@@ -8,7 +8,7 @@
 /// lowercased haystack back to the original character index in `haystack`.
 /// This ensures the returned indices can be safely used with
 /// `str::chars().enumerate()` consumers for highlighting, even when
-/// lowercasing expands certain characters (e.g., ß → ss, İ → i̇).
+/// lowercasing expands certain characters (e.g., İ → i̇).
 pub fn fuzzy_match(haystack: &str, needle: &str) -> Option<(Vec<usize>, i32)> {
     if needle.is_empty() {
         return Some((Vec::new(), i32::MAX));
@@ -26,6 +26,7 @@ pub fn fuzzy_match(haystack: &str, needle: &str) -> Option<(Vec<usize>, i32)> {
     let lowered_needle: Vec<char> = needle.to_lowercase().chars().collect();
 
     let mut result_orig_indices: Vec<usize> = Vec::with_capacity(lowered_needle.len());
+    let mut first_lower_pos: Option<usize> = None;
     let mut last_lower_pos: Option<usize> = None;
     let mut cur = 0usize;
     for &nc in lowered_needle.iter() {
@@ -40,18 +41,12 @@ pub fn fuzzy_match(haystack: &str, needle: &str) -> Option<(Vec<usize>, i32)> {
         }
         let pos = found_at?;
         result_orig_indices.push(lowered_to_orig_char_idx[pos]);
+        first_lower_pos.get_or_insert(pos);
         last_lower_pos = Some(pos);
     }
 
-    let first_lower_pos = if result_orig_indices.is_empty() {
-        0usize
-    } else {
-        let target_orig = result_orig_indices[0];
-        lowered_to_orig_char_idx
-            .iter()
-            .position(|&oi| oi == target_orig)
-            .unwrap_or(0)
-    };
+    // Score using the actual lowered positions, even within a character expansion.
+    let first_lower_pos = first_lower_pos?;
     // last defaults to first for single-hit; score = extra span between first/last hit
     // minus needle len (≥0).
     // Strongly reward prefix matches by subtracting 100 when the first hit is at index 0.
